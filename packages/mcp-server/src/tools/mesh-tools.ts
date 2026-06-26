@@ -91,6 +91,7 @@ export {
 } from './mesh-tools-mission.js';
 
 export {
+    computeIdleDispatchAckRisk,
     meshApprove,
     meshCleanupSessions,
     meshLaunchSession,

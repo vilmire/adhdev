@@ -3901,6 +3901,14 @@ async function meshReviewInbox(ctx, args = {}) {
 }
 
 // src/tools/mesh-tools-session.ts
+function computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, sessionId) {
+  if (!sessionWasIdle || dispatchPreRecorded) return {};
+  return {
+    dispatchAcknowledgementRisk: true,
+    dispatchAcknowledgementRiskReason: "idle_dispatch_prerecord_failed",
+    dispatchAcknowledgementNote: `Session '${sessionId}' was idle at dispatch time and the dispatch row could not be pre-recorded, so its completion may be deduplicated as a prior turn and lost. Use mesh_status to verify; if the session remains idle or the completion never lands, launch a fresh session and retry.`
+  };
+}
 async function meshPruneStaleDirect(ctx, args = {}) {
   await refreshMeshFromDaemon(ctx);
   const execute = args.execute === true && args.dry_run !== true;
@@ -4245,6 +4253,11 @@ async function meshSendTask(ctx, args) {
         dispatchedToIdleSession: sessionWasIdle,
         dispatchedAt
       });
+      let dispatchPreRecorded = false;
+      try {
+        dispatchPreRecorded = (0, import_daemon_core3.getActiveDirectDispatches)(ctx.mesh.id).some((d) => d.taskId === taskId);
+      } catch {
+      }
       const dispatchResult = await commandForNode(ctx, node, "agent_command", {
         targetSessionId: args.session_id,
         agentType: resolvedProviderType,
@@ -4267,6 +4280,7 @@ async function meshSendTask(ctx, args) {
           (0, import_daemon_core3.deleteDirectDispatchesByTaskId)(ctx.mesh.id, [taskId]);
         } catch {
         }
+        dispatchPreRecorded = false;
         const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
         return JSON.stringify({
           ...source && typeof source === "object" ? source : {},
@@ -4316,11 +4330,10 @@ async function meshSendTask(ctx, args) {
         providerType: resolvedProviderType,
         nodeId: args.node_id,
         sessionId: args.session_id,
-        ...sessionWasIdle ? {
-          dispatchAcknowledgementRisk: true,
-          dispatchAcknowledgementRiskReason: "session_was_idle_at_dispatch",
-          dispatchAcknowledgementNote: `Session '${args.session_id}' was idle at dispatch time. If it does not transition to generating, this direct task was not acknowledged. Use mesh_status to verify; if the session remains idle, it may appear as stale direct work \u2014 launch a fresh session and retry.`
-        } : {}
+        // DISPATCH-ACK-RISK-STALE: only warn on a GENUINE residual loss risk — an idle
+        // session whose dispatch row did NOT survive pre-record. A successfully
+        // pre-recorded idle dispatch (the NOTIF-DROP / CANON-A path) is not at risk.
+        ...computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, args.session_id)
       });
     }
     const task = (0, import_daemon_core3.enqueueTask)(ctx.mesh.id, args.message, {

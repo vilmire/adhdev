@@ -83,6 +83,36 @@ import type {
  *    (audit history) is left intact, and a direct_dispatch_pruned ledger entry is appended on
  *    execute so the prune itself is auditable.
  */
+/**
+ * DISPATCH-ACK-RISK-STALE — compute the dispatch-acknowledgement risk fields for a
+ * direct (mesh_send_task --session_id) dispatch to an idle session.
+ *
+ * Before the NOTIF-DROP / CANON-A fix, ANY dispatch to an idle session was flagged
+ * `dispatchAcknowledgementRisk:true` because a fast completion could race ahead of the
+ * dispatch row and be swallowed by the prior-terminal providerSessionId dedup gate
+ * (mesh-event-forwarding.ts). Now that the dispatch row is atomically pre-recorded BEFORE
+ * inject, a successful pre-record makes sessionHasActiveAssignment=TRUE at completion time,
+ * so the dedup gate is skipped and the completion is delivered — there is NO residual loss
+ * risk. The stale warning made coordinators do needless verification polling.
+ *
+ * Risk is therefore true ONLY when the session was idle AND the dispatch row did not
+ * persist (pre-record failed / was rolled back) — the one case where the dedup gate can
+ * still swallow the completion. Returns the fields to spread into the success response, or
+ * an empty object when there is no risk to surface.
+ */
+export function computeIdleDispatchAckRisk(
+    sessionWasIdle: boolean,
+    dispatchPreRecorded: boolean,
+    sessionId: string,
+): Record<string, unknown> {
+    if (!sessionWasIdle || dispatchPreRecorded) return {};
+    return {
+        dispatchAcknowledgementRisk: true,
+        dispatchAcknowledgementRiskReason: 'idle_dispatch_prerecord_failed',
+        dispatchAcknowledgementNote: `Session '${sessionId}' was idle at dispatch time and the dispatch row could not be pre-recorded, so its completion may be deduplicated as a prior turn and lost. Use mesh_status to verify; if the session remains idle or the completion never lands, launch a fresh session and retry.`,
+    };
+}
+
 export async function meshPruneStaleDirect(
     ctx: MeshContext,
     args: { execute?: boolean; dry_run?: boolean; include_terminal?: boolean } = {},
@@ -514,6 +544,13 @@ export async function meshSendTask(
                     }),
                 });
             } catch { /* best-effort */ }
+            // DISPATCH-ACK-RISK-STALE: track whether the dispatch row was atomically
+            // pre-recorded. When it lands, sessionHasActiveAssignment becomes TRUE at
+            // completion time, so the prior-terminal dedup gate (mesh-event-forwarding.ts:551)
+            // is skipped and the idle-session completion WILL be delivered — i.e. there is no
+            // residual loss risk. The risk warning below must reflect THIS, not merely that the
+            // session was idle. A genuine residual risk remains only if the pre-record did not
+            // persist a row to gate on.
             insertDirectDispatch(ctx.mesh.id, {
                 taskId,
                 nodeId: args.node_id,
@@ -525,6 +562,14 @@ export async function meshSendTask(
                 dispatchedToIdleSession: sessionWasIdle,
                 dispatchedAt,
             });
+            // insertDirectDispatch swallows its own persistence errors (it never throws),
+            // so we cannot infer success from the absence of an exception. Verify the row
+            // actually exists — this is the exact predicate sessionHasActiveAssignment keys
+            // on, so it is the true signal of whether the dedup gate will be skipped.
+            let dispatchPreRecorded = false;
+            try {
+                dispatchPreRecorded = getActiveDirectDispatches(ctx.mesh.id).some(d => d.taskId === taskId);
+            } catch { /* read failed — treat as not-recorded → keep the conservative warning */ }
             // Stamp the mesh assignment via meshContext so the daemon can
             // attach it to the target instance BEFORE prompt injection.
             // setupMeshEventForwarding reads state.settings.meshNodeFor +
@@ -557,6 +602,7 @@ export async function meshSendTask(
                 // but the dispatch row is the discriminator sessionHasActiveAssignment keys on —
                 // leaving it would mask a genuinely-unrelated later idle as an active assignment.
                 try { deleteDirectDispatchesByTaskId(ctx.mesh.id, [taskId]); } catch { /* best-effort */ }
+                dispatchPreRecorded = false;
                 const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
                 return JSON.stringify({
                     ...(source && typeof source === 'object' ? source : {}),
@@ -605,11 +651,10 @@ export async function meshSendTask(
                 providerType: resolvedProviderType,
                 nodeId: args.node_id,
                 sessionId: args.session_id,
-                ...(sessionWasIdle ? {
-                    dispatchAcknowledgementRisk: true,
-                    dispatchAcknowledgementRiskReason: 'session_was_idle_at_dispatch',
-                    dispatchAcknowledgementNote: `Session '${args.session_id}' was idle at dispatch time. If it does not transition to generating, this direct task was not acknowledged. Use mesh_status to verify; if the session remains idle, it may appear as stale direct work — launch a fresh session and retry.`,
-                } : {}),
+                // DISPATCH-ACK-RISK-STALE: only warn on a GENUINE residual loss risk — an idle
+                // session whose dispatch row did NOT survive pre-record. A successfully
+                // pre-recorded idle dispatch (the NOTIF-DROP / CANON-A path) is not at risk.
+                ...computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, args.session_id),
             });
         }
 
