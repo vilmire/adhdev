@@ -927,21 +927,49 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         }
 
         if (sessionId && nodeId && providerType) {
+            // WORKTREE-BOOTSTRAP-DISPATCH-RACE: a freshly cloned worktree session emits
+            // agent:ready as soon as the CLI process reaches its idle prompt — which happens
+            // BEFORE the worktree bootstrap (npm install + native-addon repair: node-datachannel,
+            // better-sqlite3, ghostty-vt-node) has finished. Claiming a queued task on that early
+            // ready dispatches work into a session whose runtime is half-built: the child daemon
+            // dies loading the absent native addon → the worker session boots empty (no task ever
+            // injected), the queue row reports assigned-but-dead, and the work silently leaks to /
+            // gets re-routed onto the base node. Live evidence (the OPSRULES dispatch): node
+            // node_6df455dd emitted agent:ready at 10:36:28 but worktree_bootstrap_complete only at
+            // 10:36:56 — a 28s window in which a claim produced an empty session.
+            //
+            // Gate the claim on bootstrap state: if this node is a worktree whose bootstrap is still
+            // 'running', register the idle session (so it stays a claim candidate) but DEFER the
+            // claim. The claim re-fires on the next agent:ready / reconcile drain tick once bootstrap
+            // reaches a terminal state. 'failed' is left to flow through unchanged — a failed
+            // bootstrap surfaces its own coordinator event and a dispatch there fails loudly rather
+            // than silently, which is the correct, visible behavior (deferring forever would hide it).
+            let worktreeBootstrapPending = false;
+            try {
+                const mesh = getMeshWithCache(components, args.meshId);
+                const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId)) as { worktreeBootstrap?: { status?: string } } | undefined;
+                worktreeBootstrapPending = node?.worktreeBootstrap?.status === 'running';
+            } catch { /* best-effort: unknown bootstrap state → do not defer (prior behavior) */ }
+
             sweepExpiredRemoteIdleSessions();
             try {
                 MeshRuntimeStore.getInstance().setRemoteIdleSession(args.meshId, nodeId, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
             } catch { /* best-effort */ }
-            setImmediate(() => {
-                maybeAutoFastForwardIdleNode(components, { meshId: args.meshId, nodeId, sessionId, providerType })
-                    .finally(() => {
-                        try {
-                            const assigned = tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
-                            if (assigned) MeshRuntimeStore.getInstance().deleteRemoteIdleSession(args.meshId, nodeId, sessionId);
-                        } catch (e: any) {
-                            LOG.warn('MeshQueue', `Failed to assign idle queue task after maintenance for ${nodeId}: ${e?.message || e}`);
-                        }
-                    });
-            });
+            if (worktreeBootstrapPending) {
+                LOG.info('MeshQueue', `Deferring queue claim for worktree node ${nodeId} (${sessionId}): worktree bootstrap still running — early agent:ready precedes bootstrap completion; the idle session is registered and the claim will re-fire once bootstrap finishes (guards against dispatching into a half-built worktree → empty session / work leaking to the base node)`);
+            } else {
+                setImmediate(() => {
+                    maybeAutoFastForwardIdleNode(components, { meshId: args.meshId, nodeId, sessionId, providerType })
+                        .finally(() => {
+                            try {
+                                const assigned = tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
+                                if (assigned) MeshRuntimeStore.getInstance().deleteRemoteIdleSession(args.meshId, nodeId, sessionId);
+                            } catch (e: any) {
+                                LOG.warn('MeshQueue', `Failed to assign idle queue task after maintenance for ${nodeId}: ${e?.message || e}`);
+                            }
+                        });
+                });
+            }
         }
     } else if (args.event === 'agent:generating_started') {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
