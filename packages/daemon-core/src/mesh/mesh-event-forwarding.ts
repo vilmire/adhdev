@@ -825,7 +825,42 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             const isFalseIdle = isFalseIdleCompletion(args.metadataEvent);
             completedTaskForLedger = markSessionTerminal(sessionId, 'completed', eventTimestamp, { tentativeIfDirect: isFalseIdle });
             if (nodeId && providerType) {
-                runIdleMaintenanceThenAssignQueue(components, { meshId: args.meshId, nodeId, sessionId, providerType });
+                // OVEREAGER-REMOTE-IDLE (Defect A+B): re-register the now-idle remote session into
+                // the remote-idle store, symmetric with the agent:ready branch. Previously
+                // setRemoteIdleSession ran ONLY on agent:ready, while agent:generating_started
+                // DELETES the entry — so the FIRST turn a remote worker runs permanently evicts it
+                // from the store, and generating_completed never re-added it. A later
+                // mesh_enqueue_task's triggerMeshQueue then read getRemoteIdleSessions() == 0
+                // (remoteIdleSessionsChecked:0) for a session that is genuinely live-idle, needlessly
+                // auto-launching a second worker (Defect A). Worse, the two idle-session sources then
+                // disagreed: the enqueue drain saw 0 (store empty) and auto-launched + left the queue
+                // task pending, while THIS completing session's runIdleMaintenanceThenAssignQueue
+                // claimed the same still-pending row straight from SQL — so the task body injected into
+                // BOTH the reused idle session and the auto-launched one (Defect B). Re-registering here
+                // unifies the source: the next triggerMeshQueue drain sees the live idle session, reuses
+                // it (claimed:true, no auto-launch), and injects exactly once. Skip a false-idle
+                // (mid-turn / no-final-assistant) completion — that session is NOT genuinely idle.
+                if (!isFalseIdle) {
+                    sweepExpiredRemoteIdleSessions();
+                    try {
+                        MeshRuntimeStore.getInstance().setRemoteIdleSession(nodeId, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
+                    } catch { /* best-effort */ }
+                    setImmediate(() => {
+                        maybeAutoFastForwardIdleNode(components, { meshId: args.meshId, nodeId, sessionId, providerType })
+                            .finally(() => {
+                                try {
+                                    // Claim for THIS session first; on success drop the just-registered
+                                    // idle entry so the enqueue drain doesn't re-pick an already-busy session.
+                                    const assigned = tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
+                                    if (assigned) MeshRuntimeStore.getInstance().deleteRemoteIdleSession(nodeId, sessionId);
+                                } catch (e: any) {
+                                    LOG.warn('MeshQueue', `Failed to assign idle queue task after completion for ${nodeId}: ${e?.message || e}`);
+                                }
+                            });
+                    });
+                } else {
+                    runIdleMaintenanceThenAssignQueue(components, { meshId: args.meshId, nodeId, sessionId, providerType });
+                }
             }
             // M1-3: wake dependents of the completed task. The maintenance path above
             // only assigns to the completing session; dependents may be claimable by

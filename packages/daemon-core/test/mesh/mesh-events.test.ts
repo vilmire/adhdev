@@ -505,6 +505,99 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('re-registers the remote-idle session on agent:generating_completed so a later enqueue reuses it instead of auto-launching (OVEREAGER-REMOTE-IDLE Defect A+B)', async () => {
+    // Defect A+B root: setRemoteIdleSession used to run ONLY on agent:ready, while
+    // agent:generating_started DELETES the entry. So the FIRST turn a remote worker runs
+    // permanently evicts it from the remote-idle store, and generating_completed never
+    // re-added it. A later mesh_enqueue_task's triggerMeshQueue then saw
+    // getRemoteIdleSessions() == 0 (remoteIdleSessionsChecked:0) for a genuinely live-idle
+    // session — needlessly auto-launching a second worker (A) and, because the two idle
+    // sources disagreed, injecting the task body into BOTH sessions (B). The fix re-registers
+    // the now-idle session on a genuine completion, symmetric with agent:ready.
+    const meshId = `mesh_overeager_idle_reuse_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }] })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+        launchedByCoordinator: true,
+      })
+
+      setupMeshEventForwarding(components)
+
+      // The worker started a turn → remote-idle entry is cleared (matches production).
+      emit({
+        event: 'agent:generating_started',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        meshNodeId: 'node_child_1',
+        nodeId: 'node_child_1',
+      })
+      expect(MeshRuntimeStore.getInstance().getRemoteIdleSessions().some(s => s.sessionId === 'runtime-session-1')).toBe(false)
+
+      // The turn completed with a genuine final assistant → the session is live-idle again and
+      // MUST be re-registered so the next enqueue drain reuses it.
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        meshNodeId: 'node_child_1',
+        nodeId: 'node_child_1',
+        finalSummary: 'done',
+        timestamp: 9100,
+      })
+
+      const idle = MeshRuntimeStore.getInstance().getRemoteIdleSessions()
+        .find(s => s.sessionId === 'runtime-session-1')
+      expect(idle).toBeDefined()
+      expect(idle?.nodeId).toBe('node_child_1')
+      expect(idle?.providerType).toBe('claude-cli')
+
+      // A subsequent enqueue's triggerMeshQueue now SEES the live-idle remote session
+      // (remoteIdleSessionsChecked >= 1) rather than reporting 0 and auto-launching.
+      enqueueTask(meshId, 'reuse-vs-autolaunch task', { targetNodeId: 'node_child_1' })
+      const trigger = await triggerMeshQueue(components, meshId)
+      expect(trigger.remoteIdleSessionsChecked).toBeGreaterThanOrEqual(1)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('does NOT re-register a false-idle agent:generating_completed (no final assistant) into the remote-idle store', () => {
+    // A false-idle completion (mid-turn / no confirmed final assistant) means the session is
+    // NOT genuinely idle — re-registering it would let the enqueue drain dispatch into a
+    // session that is still working. Only a genuine completion re-registers.
+    const meshId = `mesh_overeager_false_idle_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }] })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+        launchedByCoordinator: true,
+      })
+
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'claude-cli',
+        meshNodeId: 'node_child_1',
+        nodeId: 'node_child_1',
+        // completionDiagnostic marks this as a false-idle (no confirmed final assistant).
+        completionDiagnostic: { finalAssistantPresent: false, blockReason: 'missing_final_assistant' },
+      })
+
+      expect(MeshRuntimeStore.getInstance().getRemoteIdleSessions().some(s => s.sessionId === 'runtime-session-1')).toBe(false)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('does NOT queue a silent agent:ready when the worker is co-located with its coordinator', () => {
     // The mirror of the regression above: when the worker's coordinator IS this daemon
     // (the auto-launch stamped no meshCoordinatorDaemonId, or it equals this daemon's id),
