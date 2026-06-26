@@ -1011,6 +1011,40 @@ describe('validateMeshTaskModeRequest — prose/negation vs command context', ()
         }
     });
 
+    describe('GUARDRAIL-I18N-FP: keyword glued to a non-ASCII letter is prose, not a command', () => {
+        // The forbidden-keyword regexes use `\b`, which excludes an ASCII-letter
+        // suffix ("deployed" never matches `\bdeploy\b`) but fires a boundary
+        // between a Latin letter and a CJK letter — so "deploy된" (Korean passive
+        // "deployed") used to match and, with the CJK suffix glued on, left the
+        // bare keyword at line-start, which read as a command. English passed,
+        // Korean was rejected: the exact i18n asymmetry of this defect. A keyword
+        // fused to any Unicode letter is now treated as word-internal prose.
+        const allowedGlued = [
+            'deploy된 워커의 상태만 확인해줘',
+            'release된 버전 확인',
+            'version-bump된 커밋 확인',
+            '현재 deploy된 워커 확인',
+            'release한 결과만 읽기전용으로 확인',
+            'npm publish된 패키지 메타데이터만 조회',
+            // node-datachannel build artifact path with a glued Korean particle.
+            'node_modules/node-datachannel/build/Release/foo.node가 있는지 확인',
+        ];
+        for (const msg of allowedGlued) {
+            it(`allows glued-suffix prose: ${msg}`, () => expectClean(msg));
+        }
+
+        it('keeps allowing the English mid-sentence equivalent', () => {
+            expectClean('inspect the deployed worker status only');
+        });
+
+        it('still blocks a genuine Korean-context deploy command', () => {
+            // The keyword is followed by whitespace (a real token boundary), so the
+            // glued-suffix guard does not apply — this is a real invocation.
+            expectViolation('npm run deploy 실행해줘', 'deploy_or_version_bump');
+            expectViolation('wrangler deploy 해줘', 'deploy_or_version_bump');
+        });
+    });
+
     describe('genuine deploy/version-bump instructions are STILL blocked after the fix', () => {
         it('blocks line-start version-bump script invocation', () => {
             expectViolation('./scripts/version-bump.sh patch', 'deploy_or_version_bump');

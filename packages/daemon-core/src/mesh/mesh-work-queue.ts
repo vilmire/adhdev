@@ -274,6 +274,38 @@ function isInsideQuotedSpan(text: string, matchStart: number, matchEnd: number):
 }
 
 /**
+ * True if the keyword at [matchStart, matchEnd) is glued directly to a Unicode
+ * *letter* on either side with no separator — i.e. it is word-internal, part of a
+ * larger word rather than a standalone command token.
+ *
+ * The keyword regexes use `\b` boundaries, which already exclude an *ASCII-letter*
+ * suffix/prefix: `\bdeploy\b` does NOT match the "deploy" inside "deployed"
+ * (`y`→`e` is not a boundary). But `\b` fires a boundary between a Latin letter
+ * and a non-Latin letter, so `deploy된` ("deployed", Korean passive), `release한`,
+ * or `version-bump됨` DO match even though they are single conjugated/compound
+ * words in prose, not shell commands. That is the exact i18n asymmetry behind
+ * GUARDRAIL-I18N-FP: the English "deployed worker" passes (mid-prose, no command
+ * context) while the Korean "deploy된 워커" was flagged because the glued CJK
+ * suffix left the bare keyword sitting at line-start, which the command-context
+ * heuristic reads as a command invocation.
+ *
+ * We restore the symmetry `\b` provides for ASCII: a forbidden keyword fused to
+ * ANY Unicode letter (Hangul, Han, Kana, accented Latin, …) is a word-internal
+ * occurrence → descriptive prose, never a command. A genuine command keyword is
+ * always followed by a non-letter — whitespace, end-of-input, a path separator,
+ * a flag/redirect, or a shell metachar (`npm run deploy`, `wrangler deploy\n`,
+ * `version-bump.sh`, `npm publish && ...`).
+ */
+function isGluedToLetterSuffix(text: string, matchStart: number, matchEnd: number): boolean {
+    // \p{L} = any Unicode letter; \p{M} = combining mark (e.g. Jamo/diacritics
+    // that compose with the adjacent letter). Either side counts as "glued".
+    const letterOrMark = /[\p{L}\p{M}]/u;
+    const next = matchEnd < text.length ? text[matchEnd] : '';
+    const prev = matchStart > 0 ? text[matchStart - 1] : '';
+    return letterOrMark.test(next) || letterOrMark.test(prev);
+}
+
+/**
  * Decides whether a forbidden keyword match at [matchStart, matchEnd) should
  * count as a real violation. A match counts only when it is in command context
  * and not negated, and is NOT merely a path segment or quoted (descriptive)
@@ -283,6 +315,10 @@ function isInsideQuotedSpan(text: string, matchStart: number, matchEnd: number):
 function isRealMutationMatch(text: string, matchStart: number, matchEnd: number): boolean {
     if (hasNegationBefore(text, matchStart)) return false;
     if (hasTrailingNegation(text, matchEnd)) return false;
+    // A keyword fused to a non-ASCII letter ("deploy된", "release한") is a single
+    // conjugated/compound word in prose, not a command — `\b` only guards the
+    // ASCII-letter case, so restore the same symmetry for all Unicode letters.
+    if (isGluedToLetterSuffix(text, matchStart, matchEnd)) return false;
     // A keyword that is part of a file path (build/Release, dist/release/) or
     // sits inside quoted prose (a commit-message citation, "포인터 bump") is a
     // description, not a command — suppress it even if it lands at line-start.
