@@ -3421,6 +3421,7 @@ async function meshEnqueueTask(ctx, args) {
     }
     {
       const queueTrigger = await triggerMeshQueueAndReport(ctx);
+      const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
       const dispatchPromises = [];
       for (const node of ctx.mesh.nodes) {
         const isLocalNode = isLocalControlPlaneNode(ctx, node);
@@ -3428,7 +3429,15 @@ async function meshEnqueueTask(ctx, args) {
         if (targetNodeId && node.id !== targetNodeId) continue;
         if (!(0, import_daemon_core3.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core3.buildMeshNodeCapabilityTags)(node))) continue;
         dispatchPromises.push(
-          ipcDispatchToRemoteAgent(ctx, node, { message: args.message }).then((result) => {
+          ipcDispatchToRemoteAgent(ctx, node, {
+            message: args.message,
+            meshContext: {
+              meshId: ctx.mesh.id,
+              nodeId: node.id,
+              taskId: task.id,
+              ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
+            }
+          }).then((result) => {
             if (result.success) {
               try {
                 const providerType = result.providerType;
