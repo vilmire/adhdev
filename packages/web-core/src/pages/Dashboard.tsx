@@ -9,7 +9,6 @@ import type { DaemonData } from '../types'
 import { isCliConv, isAcpConv, getCliConversationViewMode } from '../components/dashboard/types'
 import {
     applyCliViewModeOverrides,
-    reconcileCliViewModeOverrides,
 } from '../components/dashboard/cliViewModeOverrides'
 import { useWarmSessionChatTailControllers } from '../components/dashboard/session-chat-tail-controller'
 import { useHiddenTabs, isConversationHidden, getAutoHiddenConversationTargets } from '../hooks/useHiddenTabs'
@@ -180,10 +179,16 @@ export default function Dashboard() {
         }
     }, [conversations, autoMuteIfCoordinator])
     useWarmSessionChatTailControllers(visibleConversations, warmChatTailOptions)
-    useEffect(() => {
-        if (Object.keys(cliViewModeOverrides).length === 0) return
-        setCliViewModeOverrides((prev) => reconcileCliViewModeOverrides(prev, ides))
-    }, [ides, cliViewModeOverrides])
+    // NOTE: A user's explicit CLI view-mode choice (cliViewModeOverrides) is kept
+    // sticky on purpose — it is NOT reconciled away when an incoming status_report
+    // happens to echo the chosen mode. Dashboard `ides` updates arrive async from
+    // several transports (P2P, the 240s WS poll fallback, post-reconnect resync
+    // snapshots) and can be reordered; clearing the override on a single matching
+    // report reopened a window where a later *stale* snapshot carrying the previous
+    // mode would flip the view back (the intermittent terminal↔chat flap). The
+    // daemon's presentationMode only changes via set_cli_view_mode, so a sticky
+    // override always equals the true intended server state. The override is
+    // overwritten by the next explicit user toggle for that session.
     const liveSessionInboxState = useMemo(
         () => buildLiveSessionInboxStateMap(ides),
         [ides],

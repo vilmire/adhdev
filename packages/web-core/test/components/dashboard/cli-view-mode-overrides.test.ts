@@ -4,7 +4,6 @@ import {
   getCliViewModeForSession,
   isExpectedCliViewModeTransportError,
   shouldRetainOptimisticCliViewModeOverrideOnError,
-  reconcileCliViewModeOverrides,
   switchCliConversationViewModeOptimistically,
   type CliViewModeOverrideMap,
 } from '../../../src/components/dashboard/cliViewModeOverrides'
@@ -128,14 +127,21 @@ describe('cliViewModeOverrides', () => {
     expect(getCliViewModeForSession(entries, 'missing')).toBeNull()
   })
 
-  it('keeps an optimistic override when the server temporarily has no session mode for that id', () => {
-    const next = reconcileCliViewModeOverrides({ 'cli-1': 'chat' }, [])
-    expect(next).toEqual({ 'cli-1': 'chat' })
-  })
+  it('keeps the user override applied when a stale status_report still carries the previous mode', () => {
+    // Regression: terminal↔chat flap. User switched to chat (override set); a
+    // confirming chat report arrived, then a reordered/stale snapshot still
+    // carrying mode:'terminal' lands. The sticky override must keep the view on
+    // chat instead of flapping back to terminal.
+    const overrides: CliViewModeOverrideMap = { 'cli-1': 'chat' }
 
-  it('clears an optimistic override once the server reports the same mode', () => {
-    const next = reconcileCliViewModeOverrides({ 'cli-1': 'chat' }, [createEntry({ mode: 'chat' })])
-    expect(next).toEqual({})
+    // Fresh report confirms chat.
+    const confirmed = applyCliViewModeOverrides([createEntry({ mode: 'chat' })], overrides)
+    expect(getCliViewModeForSession(confirmed, 'cli-1')).toBe('chat')
+
+    // A later stale report still says terminal — the override must win.
+    const stale = applyCliViewModeOverrides([createEntry({ mode: 'terminal' })], overrides)
+    expect(stale[0]).toMatchObject({ sessionId: 'cli-1', mode: 'chat' })
+    expect(getCliViewModeForSession(stale, 'cli-1')).toBe('chat')
   })
 
   it('treats CLI view-mode timeout/not-connected errors as expected transport issues', () => {
