@@ -2035,11 +2035,38 @@ export class CliProviderInstance implements ProviderInstance {
         const previousStatus = this.lastStatus;
         if (newStatus !== this.lastStatus) {
             LOG.info('CLI', `[${this.type}] status: ${this.lastStatus} → ${newStatus}`);
-            if (this.lastStatus === 'idle' && newStatus === 'generating') {
+            // GENERATING-MISSING (win32 fresh-worktree first-turn): a freshly-launched session
+            // is in 'starting' until its startup-grace settles to idle. When the FIRST inject
+            // lands inside that grace window, the adapter can report status DIRECTLY
+            // starting → generating without an intervening 'idle' frame for
+            // detectStatusTransition() to observe. Previously only the idle→generating arm
+            // armed the bookkeeping, so a starting→generating frame fell straight through to the
+            // bare `this.lastStatus = newStatus` update: generatingStartedAt stayed 0 and no
+            // generating_started was queued. The fast turn's generating→idle completion was then
+            // suppressed by the startup-blip guard below (generatingStartedAt===0 &&
+            // !generatingDebouncePending) — so NO generating_started AND NO generating_completed
+            // ever fired and the mesh coordinator never learned the worker went idle.
+            //
+            // We extend the idle→generating arm to also fire on starting→generating, BUT ONLY
+            // when a real turn is in flight. The adapter script can also report 'generating' from
+            // pure startup PTY noise (no task dispatched) — antigravity/codex/hermes-cli all
+            // exercise that benign starting→generating→idle blip, which must NOT emit a
+            // completion (see "startup-phase spurious completion suppression" tests).
+            // hasAdapterPendingResponse() is the discriminator: a genuine inject sets the
+            // adapter's isWaitingForResponse / currentTurnScope (or leaves a partial response),
+            // whereas startup repaint noise leaves all of them empty. So an armed
+            // starting→generating means "the worker actually started its first turn", and a
+            // bare one stays a suppressed blip via the existing fall-through.
+            const startingToGeneratingWithActiveTurn = this.lastStatus === 'starting'
+                && newStatus === 'generating'
+                && this.hasAdapterPendingResponse();
+            if (((this.lastStatus === 'idle' && newStatus === 'generating') || startingToGeneratingWithActiveTurn)) {
                 // If a completion event is already pending and the turn has ended
                 // (generatingStartedAt===0), the PTY is painting its prompt area
                 // after completing. Ignore this blip — do not cancel the pending
-                // completion and do not advance lastStatus to generating.
+                // completion and do not advance lastStatus to generating. (On a true
+                // starting→generating the session is fresh: completedDebouncePending is
+                // null, so this blip guard is a no-op and we arm normally below.)
                 if (this.completedDebouncePending && this.generatingStartedAt === 0) {
                     LOG.debug('CLI', `[${this.type}] ignoring post-completion PTY generating blip (generatingStartedAt=0)`);
                     return;
