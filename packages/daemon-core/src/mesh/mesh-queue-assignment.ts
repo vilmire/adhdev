@@ -495,12 +495,24 @@ export function tryAssignQueueTask(
 
     // CONS3: same shared dispatch lifecycle as the remote branch — only the transport
     // (cliManager.handleCliCommand) differs.
+    // ARCH-REFACTOR R1: carry meshContext (incl. taskId) on the LOCAL dispatch too, so
+    // handleCliCommand's send_chat path binds this task to its turn (per-turn identity).
+    // Previously only the remote branch shipped meshContext.taskId; the local path relied
+    // on the last-write-wins session scalar, which races a follow-up task and made the
+    // completion echo the wrong taskId (the standalone NOTIF-MISDELIVER repro).
     deliverTaskToSession(
         () => components.cliManager.handleCliCommand('agent_command', {
             targetSessionId: sessionId,
             cliType: providerType,
             action: 'send_chat',
             message: task.message,
+            meshContext: {
+                meshId,
+                nodeId,
+                taskId: task.id,
+                ...(readNonEmptyString(loadConfig().machineId) ? { coordinatorDaemonId: readNonEmptyString(loadConfig().machineId) } : {}),
+                ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { coordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
+            },
         }),
         {
             meshId,

@@ -62,6 +62,12 @@ type CompletedDebouncePending = {
     loggedBlockReason?: string;
     loggedTranscriptProbe?: boolean;
     transcriptProbeHistory?: ExternalTranscriptProbe[];
+    // ARCH-REFACTOR R1: the taskId of the turn that produced this (debounced) completion,
+    // captured SYNCHRONOUSLY at the generating→idle transition. The actual completion
+    // event is emitted later by the debounce flush, by which point a follow-up task may
+    // already have started its own turn and overwritten engine.currentTurnTaskId — so the
+    // id must be snapshotted here, not re-read at flush time.
+    taskId?: string;
 };
 
 function isIdleStatus(value: unknown): boolean {
@@ -1641,11 +1647,29 @@ export class CliProviderInstance implements ProviderInstance {
             || this.settings.meshNodeId || this.settings.launchedByCoordinator);
     }
 
+    /**
+     * ARCH-REFACTOR R1: the taskId to attribute the CURRENTLY-completing turn to.
+     * Prefers the per-turn binding (engine.currentTurnTaskId, set when the turn was
+     * submitted and surviving until the next turn starts) over the last-write-wins
+     * session scalar (settings.meshActiveTaskId). The scalar is retained only as a
+     * backward-compat alias for the "current/last assignment" and is the source of the
+     * NOTIF-MISDELIVER / TASK-MSG-MISROUTE race: a second task attaching before this
+     * turn completes overwrites it. Returns undefined for a non-task ad-hoc turn.
+     */
+    private completingTurnTaskId(): string | undefined {
+        const turnTaskId = this.adapter?.currentTurnTaskId;
+        if (typeof turnTaskId === 'string' && turnTaskId.trim()) return turnTaskId;
+        const scalar = this.settings.meshActiveTaskId;
+        return typeof scalar === 'string' && scalar.trim() ? scalar : undefined;
+    }
+
     // EVTTRACE correlation context for this session's completion lifecycle. taskId is
     // the primary grep anchor; instanceId is the session fallback.
     private meshTraceCtx(event = 'agent:generating_completed'): Record<string, unknown> {
         return {
-            taskId: this.settings.meshActiveTaskId,
+            // ARCH-REFACTOR R1: trace the per-turn taskId (falling back to the scalar) so
+            // EvtTrace anchors on the same id the completion event actually carries.
+            taskId: this.completingTurnTaskId(),
             sessionId: this.instanceId,
             nodeId: this.settings.meshNodeId,
             meshId: this.settings.meshNodeFor,
@@ -1738,6 +1762,8 @@ export class CliProviderInstance implements ProviderInstance {
                 chatTitle: pending.chatTitle,
                 duration: pending.duration,
                 timestamp: pending.timestamp,
+                // ARCH-REFACTOR R1: attribute to the turn captured at idle-transition.
+                ...(pending.taskId ? { taskId: pending.taskId } : {}),
                 // When finalization is forced past the timeout on a `parsed_status:` block
                 // (the parser never confirmed a final assistant turn) we previously rode an
                 // empty `finalSummary` unconditionally. That empty value propagates to the
@@ -1767,6 +1793,8 @@ export class CliProviderInstance implements ProviderInstance {
             chatTitle: pending.chatTitle,
             duration: pending.duration,
             timestamp: pending.timestamp,
+            // ARCH-REFACTOR R1: attribute to the turn captured at idle-transition.
+            ...(pending.taskId ? { taskId: pending.taskId } : {}),
             finalSummary: this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages),
         });
         this.completedDebouncePending = null;
@@ -2227,6 +2255,10 @@ export class CliProviderInstance implements ProviderInstance {
                         timestamp: now,
                         firstObservedAt: now,
                         previousStatus: this.lastStatus,
+                        // ARCH-REFACTOR R1: snapshot the completing turn's taskId NOW (sync),
+                        // before any follow-up task's flush can start a new turn and move
+                        // engine.currentTurnTaskId.
+                        ...(this.completingTurnTaskId() ? { taskId: this.completingTurnTaskId() } : {}),
                     };
                     const ownsExternalHistory = !!(this.adapter as any)?.chatMessagesOwnedExternally;
                     // (FALSEIDLE-BGCHILD-a) Native-history providers flush immediately (the
@@ -2374,17 +2406,29 @@ export class CliProviderInstance implements ProviderInstance {
         // a mesh worker session. The consumer (updateDirectDispatchStatus) was switched
         // to key on task_id (CANON-B), but the producer never carried it — so every
         // forwarded metadataEvent.taskId arrived undefined and the coordinator fell back
-        // to a session_id match, which can flip a sibling dispatch row. The session
-        // already knows its own taskId via attachMeshAssignment (settings.meshActiveTaskId);
-        // surface it here so updateDirectDispatchStatus hits the exact PK row and the
-        // session_id fallback is never exercised. Non-mesh sessions get no taskId
-        // (regression guard) — isMeshWorkerSession() gates the injection.
-        if (this.isMeshWorkerSession() && this.settings.meshActiveTaskId) {
+        // to a session_id match, which can flip a sibling dispatch row. Surface it here so
+        // updateDirectDispatchStatus hits the exact PK row and the session_id fallback is
+        // never exercised. Non-mesh sessions get no taskId (regression guard) —
+        // isMeshWorkerSession() gates the injection.
+        //
+        // ARCH-REFACTOR R1 (per-turn identity): resolution order is
+        //   (1) an explicit taskId already on the event — the debounce-flush completion
+        //       path stamps the taskId captured at the generating→idle transition (the
+        //       turn that actually produced this completion);
+        //   (2) the per-turn binding (engine.currentTurnTaskId) for synchronously-emitted
+        //       events whose turn is still the current one;
+        //   (3) the legacy session scalar (settings.meshActiveTaskId) as a last-resort
+        //       backward-compat alias.
+        // The scalar is last because it is last-write-wins: a second task attaching while
+        // this turn was still running overwrites it, which is the exact NOTIF-MISDELIVER /
+        // TASK-MSG-MISROUTE race this refactor removes.
+        if (this.isMeshWorkerSession()) {
             const existingTaskId = typeof enrichedEvent.taskId === 'string' && enrichedEvent.taskId.trim()
                 ? enrichedEvent.taskId
                 : undefined;
             if (!existingTaskId) {
-                enrichedEvent.taskId = this.settings.meshActiveTaskId;
+                const resolved = this.completingTurnTaskId();
+                if (resolved) enrichedEvent.taskId = resolved;
             }
         }
         if (this.context?.emitProviderEvent) {

@@ -102,6 +102,15 @@ export class CliStateEngine {
     currentStatus: CliSessionStatus['status'] = 'starting';
     isWaitingForResponse = false;
     currentTurnScope: TurnParseScope | null = null;
+    // ARCH-REFACTOR R1 (per-turn task identity): the mesh taskId bound to the most
+    // recently STARTED turn. Unlike currentTurnScope (nulled the moment the turn
+    // settles, before the completion event is even built), this persists past
+    // completion and is only overwritten when the NEXT turn starts. That window is
+    // exactly what the completion path needs: when a turn settles to idle, this still
+    // holds THAT turn's taskId (the next task's turn cannot have started yet — it is
+    // queued in pendingOutbound and only flushed asynchronously after idle), so the
+    // completion event carries the correct id instead of the racy session scalar.
+    currentTurnTaskId: string | null = null;
     activeModal: { message: string; buttons: string[] } | null = null;
 
     // ── Approval ─────────────────────────────────────
@@ -232,6 +241,12 @@ export class CliStateEngine {
         this.finishRetryCount = 0;
         this.clearIdleFinishCandidate('send_message');
         this.currentTurnScope = turnScope;
+        // ARCH-REFACTOR R1: bind this turn's mesh taskId. A task-less (ad-hoc dashboard)
+        // turn carries no taskId → null here, which correctly clears any prior task's id
+        // so an ad-hoc turn's completion is never stamped with a stale taskId.
+        this.currentTurnTaskId = typeof turnScope.taskId === 'string' && turnScope.taskId.trim()
+            ? turnScope.taskId
+            : null;
         this.responseEpoch += 1;
     }
 

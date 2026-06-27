@@ -10,6 +10,12 @@ export interface TurnParseScope {
     startedAt: number;
     bufferStart: number;
     rawBufferStart: number;
+    // ARCH-REFACTOR R1 (per-turn task identity): the mesh task this turn was started
+    // for, bound to the turn at submit time. The completion event for this turn reads
+    // its taskId from here (via engine.currentTurnTaskId) instead of the last-write-wins
+    // session scalar (settings.meshActiveTaskId), so a second task that attaches before
+    // this turn completes can no longer make this turn's completion carry the wrong id.
+    taskId?: string;
 }
 
 function sliceFromOffset(text: string, start: number): string {

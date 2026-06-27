@@ -835,8 +835,14 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
 
         if (sessionId) {
-            // CANON-B: trust the taskId the completion echoed; only fall back to the
-            // most-recent-by-session heuristic when the worker carried none.
+            // CANON-B / ARCH-REFACTOR R1: trust the taskId the completion echoed. With R1's
+            // per-turn identity binding the worker stamps the COMPLETING turn's own taskId
+            // (not the racy session scalar), so the echoed id is authoritative and this is
+            // the path that should always be taken for an R1+ worker. The most-recent-by-
+            // session heuristic (resolveActiveDirectDispatchTaskId) is retained ONLY as a
+            // backward-compat fallback for legacy / version-skewed workers that carry no
+            // taskId — it is the very re-derive R1 exists to make unnecessary, and must not
+            // override a present echoed id, hence the `||` short-circuit order.
             directDispatchTaskIdForLedger = readNonEmptyString(args.metadataEvent.taskId)
                 || resolveActiveDirectDispatchTaskId(args.meshId, sessionId);
             // A false-idle completion of a direct dispatch is recorded but kept tentative (the

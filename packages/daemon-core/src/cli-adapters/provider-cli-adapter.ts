@@ -117,6 +117,10 @@ interface PendingOutboundMessage {
     content: string;
     queuedAt: number;
     source: 'sendMessage';
+    // ARCH-REFACTOR R1: the mesh taskId this queued message belongs to. Carried so that
+    // when the queue is flushed (once the prior turn settles) the new turn is bound to
+    // its OWN task, not whatever scalar the session happens to hold at flush time.
+    meshTaskId?: string;
 }
 
 export function appendBoundedText(current: string, chunk: string, maxChars: number): string {
@@ -1383,18 +1387,25 @@ export class ProviderCliAdapter implements CliAdapter {
         ), 50);
     }
 
-    async sendMessage(text: string, options: { force?: boolean } = {}): Promise<void> {
+    async sendMessage(text: string, options: { force?: boolean; meshTaskId?: string } = {}): Promise<void> {
         if (options.force === true) {
-            await this.forceSendMessage(text);
+            await this.forceSendMessage(text, options.meshTaskId);
             return;
         }
-        await this.sendMessageNow(text, true);
+        await this.sendMessageNow(text, true, options.meshTaskId);
     }
 
-    async forceSendMessage(text: string): Promise<void> {
+    async forceSendMessage(text: string, meshTaskId?: string): Promise<void> {
         if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
         const content = String(text || '');
         if (!content.trim()) return;
+        // ARCH-REFACTOR R1: a force-send (mesh coordinator dispatch / reconcile
+        // redelivery) bypasses the normal turnScope pipeline (raw PTY write), so there is
+        // no turnScope to carry the taskId. Bind it directly on the engine so the
+        // resulting turn's completion is still attributed to the right task.
+        if (typeof meshTaskId === 'string' && meshTaskId.trim()) {
+            this.engine.currentTurnTaskId = meshTaskId;
+        }
         // Modal-park guard (defense-in-depth — the primary guard is at the
         // cli-provider-instance force-forward chokepoint). A force-write writes raw
         // keystrokes into the PTY, bypassing the busy send-guard. If the session is
@@ -1435,7 +1446,7 @@ export class ProviderCliAdapter implements CliAdapter {
         await new Promise<void>(resolve => setTimeout(resolve, FORCE_SUBMIT_SETTLE_MS));
     }
 
-    private enqueuePendingOutboundMessage(text: string, reason: string): void {
+    private enqueuePendingOutboundMessage(text: string, reason: string, meshTaskId?: string): void {
         const content = String(text || '');
         const duplicate = this.pendingOutboundQueue.some((message) => message.content === content);
         if (duplicate) {
@@ -1448,6 +1459,7 @@ export class ProviderCliAdapter implements CliAdapter {
             content,
             queuedAt,
             source: 'sendMessage',
+            ...(typeof meshTaskId === 'string' && meshTaskId.trim() ? { meshTaskId } : {}),
         };
         this.pendingOutboundQueue.push(message);
         LOG.info('CLI', `[${this.cliType}] queued outbound message while busy (${reason}); queue=${this.pendingOutboundQueue.length}`);
@@ -1502,7 +1514,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 if (this.engine.currentStatus !== 'idle' || this.engine.isWaitingForResponse || this.engine.hasActionableApproval()) break;
                 const next = this.pendingOutboundQueue[0];
                 try {
-                    await this.sendMessageNow(next.content, false);
+                    await this.sendMessageNow(next.content, false, next.meshTaskId);
                     this.pendingOutboundQueue.shift();
                     this.onStatusChange?.();
                 } catch (error: any) {
@@ -1516,7 +1528,7 @@ export class ProviderCliAdapter implements CliAdapter {
         }
     }
 
-    private async sendMessageNow(text: string, allowQueue: boolean): Promise<void> {
+    private async sendMessageNow(text: string, allowQueue: boolean, meshTaskId?: string): Promise<void> {
         if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
         const allowInputDuringGeneration = this.provider.allowInputDuringGeneration === true;
         const allowInterventionPrompt = allowInputDuringGeneration
@@ -1540,7 +1552,7 @@ export class ProviderCliAdapter implements CliAdapter {
             : null;
         const queueReason = this.shouldQueuePendingOutboundMessage(parsedStatusBeforeSend);
         if (allowQueue && queueReason) {
-            this.enqueuePendingOutboundMessage(text, queueReason);
+            this.enqueuePendingOutboundMessage(text, queueReason, meshTaskId);
             return;
         }
         if (!allowInterventionPrompt) {
@@ -1568,7 +1580,7 @@ export class ProviderCliAdapter implements CliAdapter {
             // so the message is delivered late rather than dropped. A non-queueable caller
             // (e.g. an internal flush) still throws so it isn't silently swallowed.
             if (allowQueue) {
-                this.enqueuePendingOutboundMessage(text, 'not_ready_pending_prompt');
+                this.enqueuePendingOutboundMessage(text, 'not_ready_pending_prompt', meshTaskId);
                 return;
             }
             throw new Error(`${this.cliName} not ready (status: ${this.engine.currentStatus})`);
@@ -1591,7 +1603,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 && !parsedHasActionableModal;
             if (!terminalLooksIdle) {
                 if (allowQueue) {
-                    this.enqueuePendingOutboundMessage(text, `parsed_status_${parsedSessionStatus}`);
+                    this.enqueuePendingOutboundMessage(text, `parsed_status_${parsedSessionStatus}`, meshTaskId);
                     return;
                 }
                 throw new Error(`${this.cliName} is still processing the previous prompt`);
@@ -1604,7 +1616,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 && !this.engine.clearParsedIdleResponseGuard('send_message_parsed_idle_guard', parsedStatusBeforeSend, snap)
             ) {
                 if (allowQueue) {
-                    this.enqueuePendingOutboundMessage(text, 'waiting_for_response');
+                    this.enqueuePendingOutboundMessage(text, 'waiting_for_response', meshTaskId);
                     return;
                 }
                 throw new Error(`${this.cliName} is still processing the previous prompt`);
@@ -1616,6 +1628,10 @@ export class ProviderCliAdapter implements CliAdapter {
             startedAt: Date.now(),
             bufferStart: this.accumulatedBuffer.length,
             rawBufferStart: this.accumulatedRawBuffer.length,
+            // ARCH-REFACTOR R1: bind this turn to its mesh task. engine.onTurnStarted
+            // copies this into currentTurnTaskId so the turn's completion event carries
+            // the right id even if a later task overwrites the session scalar meanwhile.
+            ...(typeof meshTaskId === 'string' && meshTaskId.trim() ? { taskId: meshTaskId } : {}),
         };
         LOG.info('CLI', `[${this.cliType}] sendMessage turn scope buffer=${turnScope.bufferStart} raw=${turnScope.rawBufferStart} prompt=${JSON.stringify(text).slice(0, 120)}`);
         if (this.submitRetryTimer) {
@@ -1967,6 +1983,11 @@ export class ProviderCliAdapter implements CliAdapter {
 
     get currentTurnScope(): TurnParseScope | null { return this.engine.currentTurnScope; }
     set currentTurnScope(v: TurnParseScope | null) { this.engine.currentTurnScope = v; }
+    // ARCH-REFACTOR R1: the mesh taskId bound to the most recently started turn,
+    // surviving past turn settle until the next turn starts. The provider instance
+    // reads this when stamping completion events so they carry the completing turn's
+    // task rather than the racy last-write-wins session scalar.
+    get currentTurnTaskId(): string | null { return this.engine.currentTurnTaskId; }
 
     get responseEpoch(): number { return this.engine.responseEpoch; }
     set responseEpoch(v: number) { this.engine.responseEpoch = v; }

@@ -1553,11 +1553,25 @@ export class DaemonCliManager {
                     }
                     const message = input.textFallback;
                     if (!message) throw new Error('message required for send_chat');
+                    // ARCH-REFACTOR R1: thread the dispatched task's id into the turn so the
+                    // worker's completion event is bound to THIS task (per-turn identity),
+                    // not the last-write-wins session scalar. Carried for both local and
+                    // remote (P2P-echoed meshContext) dispatch; absent for plain ad-hoc chat.
+                    const meshTaskId = (meshContext && typeof meshContext === 'object'
+                        && typeof (meshContext as any).taskId === 'string' && (meshContext as any).taskId.trim())
+                        ? (meshContext as any).taskId as string
+                        : undefined;
                     const forceSend = args?.force === true || args?.forceSend === true;
+                    // Preserve the exact prior call shape when there is no taskId (plain
+                    // ad-hoc chat / non-mesh dispatch); only thread the per-turn taskId when
+                    // present, so existing non-mesh callers and their contracts are unchanged.
                     if (forceSend && typeof (adapter as any).forceSendMessage === 'function') {
-                        await (adapter as any).forceSendMessage(message);
+                        if (meshTaskId) await (adapter as any).forceSendMessage(message, meshTaskId);
+                        else await (adapter as any).forceSendMessage(message);
                     } else if (forceSend) {
-                        await adapter.sendMessage(message, { force: true });
+                        await adapter.sendMessage(message, meshTaskId ? { force: true, meshTaskId } : { force: true });
+                    } else if (meshTaskId) {
+                        await adapter.sendMessage(message, { meshTaskId });
                     } else {
                         await adapter.sendMessage(message);
                     }

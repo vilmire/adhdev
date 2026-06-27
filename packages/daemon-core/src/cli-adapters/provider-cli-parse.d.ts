@@ -4,6 +4,7 @@ export interface TurnParseScope {
     startedAt: number;
     bufferStart: number;
     rawBufferStart: number;
+    taskId?: string;
 }
 export declare function normalizeCliParsedMessages(parsedMessages: any[], options: {
     scope?: TurnParseScope | null;
