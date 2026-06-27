@@ -269,6 +269,37 @@ export function tryAssignQueueTask(
     const mesh = getMeshWithCache(components, meshId);
     const node = mesh?.nodes.find((n: any) => readMeshNodeId(n) === nodeId);
 
+    // WORKTREE-CLAIM-GATE-BYPASS: the SINGLE claim-time gate for the worktree-bootstrap defer.
+    // tryAssignQueueTask is the one funnel every claim path flows through — the event-driven
+    // agent:ready drain, the triggerMeshQueue idle-session drain (local + remote), the
+    // auto-launch claim, and the PHASE 3 reconcile re-drain all call it. The agent:ready handler
+    // (mesh-event-forwarding) deferred its OWN claim while a worktree node's bootstrap was still
+    // 'running', but it ALSO called setRemoteIdleSession first — registering the session as a
+    // claim candidate. A concurrent triggerMeshQueue drain then pulled that candidate and claimed
+    // through tryAssignQueueTask within ~0.16s, BYPASSING the event-handler-local defer: the task
+    // dispatched into a half-built worktree (native addons not yet installed → child daemon dies
+    // → empty session, totalMessages=0). The transport ack returns ok:true, so neither the
+    // assigned-stranded watchdog nor the pending-only PHASE 3 reconcile ever re-fires it → the
+    // session is stranded empty forever.
+    //
+    // Lowering the gate HERE makes the defer a property of the claim itself, not of one caller:
+    // a worktree node whose bootstrap is still 'running' can never be claimed from any path. The
+    // task stays pending (we return false WITHOUT touching its status — no fail/cancel), so the
+    // bootstrap_complete refire (triggerMeshQueue re-fired on worktree_bootstrap_complete) re-runs
+    // this claim and passes once status is no longer 'running'. The registered remote-idle session
+    // persists for REMOTE_IDLE_SESSION_TTL_MS (5min > observed ~2m8s bootstrap), so the refire
+    // still finds a live candidate to re-claim. Identity uses meshNodeIdMatches (the same shared
+    // 3-form normalizer the defer guard uses), never a raw === — canon-identity regression guard.
+    // Conservative: any non-'running' status (idle/complete/failed/absent/unknown) does NOT gate,
+    // so a base node and a fully-bootstrapped worktree keep prior behavior exactly.
+    const gateNode = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId)) as
+        | { worktreeBootstrap?: { status?: string } }
+        | undefined;
+    if (gateNode?.worktreeBootstrap?.status === 'running') {
+        LOG.info('MeshQueue', `Gating queue claim for worktree node ${nodeId} (${sessionId}): worktree bootstrap still running — task left pending; claim re-fires once bootstrap reaches a terminal state (guards against dispatching into a half-built worktree → empty session)`);
+        return false;
+    }
+
     // WTCLAIM (fix-B extended to the enqueue→claim path): a base-targeted task must never be
     // claimed by — and dispatched into — a co-located worktree-clone session, nor vice versa.
     // The drain candidate's nodeId is derived from settings.meshNodeId || settings.nodeId
