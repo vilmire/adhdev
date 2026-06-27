@@ -128,6 +128,31 @@ describe('mesh scheduling pipeline — orderEligibleNodes', () => {
         __clearMeshQueueForTests(meshId);
     });
 
+    it('least_loaded (the spread mode) absorbs round_robin rotation among equal ties', () => {
+        const meshId = `m-llrr-${randomUUID().slice(0, 8)}`;
+        // All three nodes equal (priority 0, load 0) — Spread must rotate the tie-break
+        // winner across bumped passes exactly like the legacy round_robin strategy, so a
+        // single 'spread' mode subsumes both former load-spreading strategies.
+        const specs = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+        const p1 = order(meshId, 'least_loaded', specs, { bumpCursor: true });
+        const p2 = order(meshId, 'least_loaded', specs, { bumpCursor: true });
+        const p3 = order(meshId, 'least_loaded', specs, { bumpCursor: true });
+        expect(p1).toEqual(['a', 'b', 'c']);
+        expect(p2).toEqual(['b', 'c', 'a']);
+        expect(p3).toEqual(['c', 'a', 'b']);
+        __clearMeshQueueForTests(meshId);
+    });
+
+    it('least_loaded still ranks load before rotating ties', () => {
+        const meshId = `m-llrr2-${randomUUID().slice(0, 8)}`;
+        const db = MeshRuntimeStore.getInstance();
+        loadNode(db, meshId, 'a', 2); // a is busy → always last regardless of rotation
+        const specs = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+        const p1 = order(meshId, 'least_loaded', specs, { bumpCursor: true });
+        expect(p1[2]).toBe('a');
+        __clearMeshQueueForTests(meshId);
+    });
+
     it('round_robin does NOT rotate within a single pass (no bump)', () => {
         const meshId = `m-rr2-${randomUUID().slice(0, 8)}`;
         const specs = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];

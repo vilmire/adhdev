@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { randomUUID } from 'crypto';
 import {
     loadRepoMeshJsonConfig,
     normalizeRepoMeshDeclarativeConfig,
@@ -11,8 +12,12 @@ import {
     mergeEffectiveOperatingNotes,
     applyRepoMeshConfig,
     buildMeshJsonConfigScaffold,
+    loadMeshJsonConfig,
+    validateMeshJsonConfig,
+    __resetMeshJsonConfigCacheForTests,
+    MESH_JSON_CONFIG_LOCATIONS,
 } from '../../src/config/mesh-json-config.js';
-import { DEFAULT_MESH_POLICY, mergeAndNormalizePolicy } from '../../src/repo-mesh-types.js';
+import { DEFAULT_MESH_POLICY, mergeAndNormalizePolicy, distributionToStrategy } from '../../src/repo-mesh-types.js';
 
 const tmpDirs: string[] = [];
 function makeWorkspace(): string {
@@ -221,5 +226,97 @@ describe('mesh-json-config — export scaffold', () => {
     it('omits the coordinator block when there is no prompt customization', () => {
         const scaffold = buildMeshJsonConfigScaffold({ policy: DEFAULT_MESH_POLICY, coordinator: {} });
         expect(scaffold.coordinator).toBeUndefined();
+    });
+});
+
+// ─── Scheduling overlay (policy.scheduling) ─────
+
+const schedRepos: string[] = [];
+function makeSchedRepo(): string {
+    const root = join(tmpdir(), `adhdev-meshjson-${randomUUID().slice(0, 8)}`);
+    mkdirSync(join(root, '.adhdev'), { recursive: true });
+    schedRepos.push(root);
+    return root;
+}
+
+function writeSchedMeshJson(root: string, body: unknown): void {
+    writeFileSync(join(root, '.adhdev', 'mesh.json'), JSON.stringify(body, null, 2), 'utf-8');
+    __resetMeshJsonConfigCacheForTests();
+}
+
+describe('.adhdev/mesh.json policy.scheduling loader (OPSRULES overlay)', () => {
+    afterEach(() => {
+        __resetMeshJsonConfigCacheForTests();
+        for (const r of schedRepos.splice(0)) {
+            try { rmSync(r, { recursive: true, force: true }); } catch { /* best-effort */ }
+        }
+    });
+
+    it('exposes the checked location list with mesh.json first', () => {
+        expect(MESH_JSON_CONFIG_LOCATIONS[0]).toBe('.adhdev/mesh.json');
+    });
+
+    it('returns unavailable when no repo file exists', () => {
+        const root = makeSchedRepo();
+        const result = loadMeshJsonConfig(root);
+        expect(result.sourceType).toBe('unavailable');
+        expect(result.config).toBeUndefined();
+    });
+
+    it('parses a valid spread scheduling block', () => {
+        const root = makeSchedRepo();
+        writeSchedMeshJson(root, { policy: { scheduling: { distribution: 'spread', maxParallel: 4, readonlyMultiplier: 3 } } });
+        const result = loadMeshJsonConfig(root);
+        expect(result.sourceType).toBe('repo_file');
+        expect(result.config?.scheduling).toEqual({ distribution: 'spread', maxParallel: 4, readonlyMultiplier: 3 });
+        // The distribution maps to the raw strategy the scheduler acts on.
+        expect(distributionToStrategy(result.config!.scheduling!.distribution!)).toBe('least_loaded');
+    });
+
+    it('parses in_order and maps to first_eligible', () => {
+        const root = makeSchedRepo();
+        writeSchedMeshJson(root, { policy: { scheduling: { distribution: 'in_order' } } });
+        const result = loadMeshJsonConfig(root);
+        expect(result.config?.scheduling?.distribution).toBe('in_order');
+        expect(distributionToStrategy('in_order')).toBe('first_eligible');
+    });
+
+    it('an empty / scheduling-less file yields a valid but empty overlay', () => {
+        const root = makeSchedRepo();
+        writeSchedMeshJson(root, { policy: {} });
+        const result = loadMeshJsonConfig(root);
+        expect(result.sourceType).toBe('repo_file');
+        expect(result.config?.scheduling).toBeUndefined();
+    });
+
+    it('rejects an invalid distribution value', () => {
+        expect(validateMeshJsonConfig({ policy: { scheduling: { distribution: 'sideways' } } }).valid).toBe(false);
+    });
+
+    it('rejects an out-of-range maxParallel', () => {
+        expect(validateMeshJsonConfig({ policy: { scheduling: { maxParallel: 99 } } }).valid).toBe(false);
+        expect(validateMeshJsonConfig({ policy: { scheduling: { maxParallel: 0 } } }).valid).toBe(false);
+    });
+
+    it('rejects an unknown field inside the scheduling block', () => {
+        expect(validateMeshJsonConfig({ policy: { scheduling: { distribution: 'spread', bogus: 1 } } }).valid).toBe(false);
+    });
+
+    it('marks a malformed file invalid rather than throwing', () => {
+        const root = makeSchedRepo();
+        writeFileSync(join(root, '.adhdev', 'mesh.json'), '{ not json', 'utf-8');
+        __resetMeshJsonConfigCacheForTests();
+        const result = loadMeshJsonConfig(root);
+        expect(result.sourceType).toBe('invalid');
+        expect(result.config).toBeUndefined();
+    });
+
+    it('re-reads when the file mtime changes (cache invalidation)', () => {
+        const root = makeSchedRepo();
+        writeSchedMeshJson(root, { policy: { scheduling: { distribution: 'spread' } } });
+        expect(loadMeshJsonConfig(root).config?.scheduling?.distribution).toBe('spread');
+        // Rewrite + reset cache to simulate an edit; the loader must reflect the new value.
+        writeSchedMeshJson(root, { policy: { scheduling: { distribution: 'in_order' } } });
+        expect(loadMeshJsonConfig(root).config?.scheduling?.distribution).toBe('in_order');
     });
 });

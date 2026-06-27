@@ -139,6 +139,71 @@ export function normalizeMeshSchedulingStrategy(value: unknown): RepoMeshSchedul
         : DEFAULT_MESH_SCHEDULING_STRATEGY;
 }
 
+// ─── User-facing distribution mode (2-mode façade over the 4-union) ──────────
+//
+// The raw RepoMeshSchedulingStrategy 4-union stays the persisted, escape-hatch
+// truth (a hand-edited meshes.json / .adhdev/mesh.json may write any of the four
+// and it is honored verbatim). The PRODUCT surface is just two modes:
+//
+//   - 'spread'   → distribute work evenly. Maps to 'least_loaded', which now also
+//                  absorbs the round_robin rotation as its internal tie-break (see
+//                  orderEligibleNodes), so a single mode covers both former
+//                  load-spreading strategies. schedulingPriority still acts as the
+//                  primary rank key automatically when set — no separate mode.
+//   - 'in_order' → assign in the order nodes were added. Maps to 'first_eligible'
+//                  (the strict no-change default).
+//
+// distributionToStrategy / strategyToDistribution are the canonical bridge the UI
+// and the .adhdev/mesh.json loader share so the 2-mode↔4-union mapping is defined
+// exactly once.
+export type RepoMeshDistribution = 'spread' | 'in_order';
+
+export const MESH_DISTRIBUTIONS: RepoMeshDistribution[] = ['spread', 'in_order'];
+
+/**
+ * Product default for the user-facing toggle. Note this is the *recommended* mode
+ * shown first, NOT the persisted default: a mesh that never sets schedulingStrategy
+ * stays 'first_eligible' (→ displays as 'in_order'), preserving strict no-change.
+ */
+export const DEFAULT_MESH_DISTRIBUTION: RepoMeshDistribution = 'spread';
+
+/** Normalize an unknown value to a valid distribution mode (defaults to 'spread'). */
+export function normalizeMeshDistribution(value: unknown): RepoMeshDistribution {
+    if (typeof value !== 'string') return DEFAULT_MESH_DISTRIBUTION;
+    const trimmed = value.trim();
+    return (MESH_DISTRIBUTIONS as string[]).includes(trimmed)
+        ? (trimmed as RepoMeshDistribution)
+        : DEFAULT_MESH_DISTRIBUTION;
+}
+
+/**
+ * Map a user-facing distribution mode to the raw scheduling strategy the scheduler
+ * acts on. 'spread' → 'least_loaded' (which absorbs round_robin rotation as its
+ * tie-break); 'in_order' → 'first_eligible'.
+ */
+export function distributionToStrategy(distribution: RepoMeshDistribution): RepoMeshSchedulingStrategy {
+    return distribution === 'spread' ? 'least_loaded' : 'first_eligible';
+}
+
+/**
+ * Map a raw scheduling strategy back to the 2-mode façade for display/migration.
+ *   - 'first_eligible'           → 'in_order'
+ *   - 'least_loaded'/'round_robin' → 'spread'
+ *   - 'priority_only'            → 'spread' when a node priority is actually
+ *     configured (priority ordering IS a spread behavior), else 'in_order'
+ *     (priority_only with no priorities is behaviorally identical to
+ *     first_eligible, so it must not flip a mesh into load-spreading on migration).
+ */
+export function strategyToDistribution(
+    strategy: unknown,
+    opts?: { priorityConfigured?: boolean },
+): RepoMeshDistribution {
+    const normalized = normalizeMeshSchedulingStrategy(strategy);
+    if (normalized === 'first_eligible') return 'in_order';
+    if (normalized === 'priority_only') return opts?.priorityConfigured ? 'spread' : 'in_order';
+    return 'spread';
+}
+
 /**
  * Resolve a node's soft scheduling priority — a single scalar used as the PRIORITY
  * stage rank key (higher = preferred). It is NOT an eligibility gate (the MAX-ALLOC
@@ -374,6 +439,28 @@ const DIRTY_WORKSPACE_BEHAVIORS = new Set<RepoMeshPolicy['dirtyWorkspaceBehavior
 /** Min/max bounds for the global write-task parallel cap. */
 export const MESH_MAX_PARALLEL_TASKS_MIN = 1;
 export const MESH_MAX_PARALLEL_TASKS_MAX = 8;
+
+/**
+ * Default multiplier applied to the write cap to derive the read-only diagnosis
+ * cap. Read-only (live_debug_readonly) tasks carry no isolation/merge cost so they
+ * run under a separate, looser cap; a missing/invalid readonlyMultiplier resolves
+ * to this value, preserving the historical `max(2, write × 2)` behavior.
+ */
+export const DEFAULT_MESH_READONLY_MULTIPLIER = 2;
+
+/**
+ * SINGLE source of truth for the read-only diagnosis cap derivation. Both the live
+ * claim path (maybeAutoLaunchOneQueueSession) and the observability projection
+ * (buildMeshSchedulingRuntime) read it through here so the exposed cap and the
+ * enforced cap can never drift. Floors at 2 so a write cap of 1 still allows two
+ * concurrent read-only diagnoses. An out-of-range multiplier falls back to the
+ * default (2) — identical to the previous inline `Math.max(2, maxParallel * 2)`.
+ */
+export function resolveMaxReadonlyParallelTasks(maxParallelTasks: number, multiplier?: unknown): number {
+    const raw = Number(multiplier);
+    const mult = Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_MESH_READONLY_MULTIPLIER;
+    return Math.max(2, Math.floor(maxParallelTasks) * mult);
+}
 
 /**
  * Resolve the effective global write-task parallel cap from a raw policy value,

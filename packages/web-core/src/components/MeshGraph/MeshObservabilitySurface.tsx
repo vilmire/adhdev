@@ -278,11 +278,14 @@ export function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
 // editors that live on the mesh detail page. Reuses the same Badge/theme/health
 // helpers as the graph detail panel so the visual language stays consistent.
 
+// Maps the raw daemon-reported strategy to the 2-mode product vocabulary (Spread /
+// In order). The legacy round_robin / priority_only values still surface (an
+// escape-hatch meshes.json may set them) and are labelled as Spread variants.
 const SCHEDULING_STRATEGY_LABELS: Record<string, string> = {
-    first_eligible: 'First eligible (no spread)',
-    least_loaded: 'Least loaded',
-    round_robin: 'Round robin',
-    priority_only: 'Priority only',
+    first_eligible: 'In order',
+    least_loaded: 'Spread',
+    round_robin: 'Spread (round-robin)',
+    priority_only: 'Spread (priority)',
 }
 
 /** Human-readable label for a structured claim-block reason code. */
@@ -303,7 +306,7 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
         return (
             <div className={`${meshTheme.cardClass} rounded-2xl p-4 text-[12px] ${meshTheme.textSecondary}`}>
                 Scheduling runtime not reported by this daemon (older build). Update the
-                coordinator daemon to surface strategy, parallel caps, and per-node load.
+                coordinator daemon to surface distribution, parallel caps, and per-node load.
             </div>
         )
     }
@@ -325,8 +328,8 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
                 />
             </div>
             <p className={`mt-2 text-[11px] ${meshTheme.textSecondary}`}>
-                The strategy only governs the tie-break when distributing untargeted work
-                across eligible nodes. Per-node load, priority, and provider caps are below.
+                Distribution only governs how untargeted work is spread across eligible
+                nodes. Per-node load, priority, and provider caps are below.
             </p>
         </div>
     )

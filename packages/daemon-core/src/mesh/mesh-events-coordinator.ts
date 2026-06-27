@@ -13,6 +13,7 @@ export {
 
 export {
     __orderEligibleNodesForTests,
+    __resolveSchedulingStrategyForTests,
     __resetIdleAutoFastForwardForTests,
     activeReadonlyAssignedCount,
     activeWriteAssignedCount,

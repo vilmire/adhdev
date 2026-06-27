@@ -16,7 +16,9 @@ import { IconRefresh } from './icons'
 import {
     readMeshPolicy,
     SESSION_CLEANUP_MODE_OPTIONS,
-    SCHEDULING_STRATEGY_OPTIONS,
+    DISTRIBUTION_OPTIONS,
+    distributionToStrategy,
+    strategyToDistribution,
     type MeshEntry,
     type MeshNode,
     type MeshProviderRole,
@@ -209,6 +211,13 @@ export function MeshDetailView({
 }: Props) {
     const policy = readMeshPolicy(selectedMesh)
     const nodes: MeshNode[] = selectedMesh.nodes || []
+    // Drives the priority_only → distribution display: a legacy 'priority_only' mesh
+    // shows as Spread only when a node priority is actually set (otherwise it is
+    // behaviorally identical to 'in_order').
+    const anyNodePriorityConfigured = nodes.some(n => {
+        const p = Number(n.policy?.schedulingPriority)
+        return Number.isFinite(p) && p !== 0
+    })
 
     return (
         <AppPage
@@ -361,16 +370,17 @@ export function MeshDetailView({
                     </FormField>
                 </div>
                 <fieldset className="mt-4 border-none p-0 m-0">
-                    <legend className="text-[13px] font-medium text-text-secondary mb-2">Distribution strategy</legend>
+                    <legend className="text-[13px] font-medium text-text-secondary mb-2">Distribution</legend>
                     <div className="flex flex-col gap-2">
-                        {SCHEDULING_STRATEGY_OPTIONS.map(opt => {
-                            const selected = (policy.schedulingStrategy || 'first_eligible') === opt.value
+                        {DISTRIBUTION_OPTIONS.map(opt => {
+                            const currentDistribution = strategyToDistribution(policy.schedulingStrategy, { priorityConfigured: anyNodePriorityConfigured })
+                            const selected = currentDistribution === opt.value
                             return (
                                 <label key={opt.value}
                                     className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors ${selected ? 'border-accent-primary/60 bg-accent-primary/10' : 'border-border-subtle bg-bg-secondary/60 hover:border-border-default'}`}>
-                                    <input type="radio" name="mesh-scheduling-strategy" className="mt-0.5 accent-[var(--accent-primary)]"
+                                    <input type="radio" name="mesh-distribution" className="mt-0.5 accent-[var(--accent-primary)]"
                                         value={opt.value} checked={selected} disabled={savingPolicy}
-                                        onChange={() => onUpdatePolicy({ schedulingStrategy: opt.value })} />
+                                        onChange={() => onUpdatePolicy({ schedulingStrategy: distributionToStrategy(opt.value) })} />
                                     <span className="min-w-0">
                                         <span className="block text-sm text-text-primary">{opt.label}</span>
                                         <span className="block text-[12px] text-text-muted">{opt.description}</span>
@@ -379,11 +389,6 @@ export function MeshDetailView({
                             )
                         })}
                     </div>
-                    {(policy.schedulingStrategy === 'priority_only' || policy.schedulingStrategy === 'least_loaded' || policy.schedulingStrategy === 'round_robin') && (
-                        <div className="mt-2 text-[12px] text-text-muted">
-                            Per-node scheduling priority is set in each node's <span className="text-text-secondary">Advanced</span> panel above.
-                        </div>
-                    )}
                 </fieldset>
                 {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">Saving…</div>}
             </Section>

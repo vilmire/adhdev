@@ -96,12 +96,51 @@ export const SESSION_CLEANUP_MODE_OPTIONS: Array<{ value: RepoMeshSessionCleanup
  *  no-change default. */
 export type MeshSchedulingStrategy = 'first_eligible' | 'least_loaded' | 'round_robin' | 'priority_only'
 
+/**
+ * @deprecated The raw 4-union is retained as an escape hatch (a hand-edited
+ * meshes.json / .adhdev/mesh.json may still write any of the four and it is honored),
+ * but the UI no longer exposes it — see DISTRIBUTION_OPTIONS for the 2-mode façade.
+ */
 export const SCHEDULING_STRATEGY_OPTIONS: Array<{ value: MeshSchedulingStrategy; label: string; description: string }> = [
     { value: 'first_eligible', label: 'First available (default)', description: 'Send work to the first eligible node in order. No load-spreading — preserves the original behavior.' },
     { value: 'least_loaded', label: 'Spread evenly (least-loaded)', description: 'Prefer the eligible node with the fewest active tasks so work spreads instead of piling on one node.' },
     { value: 'round_robin', label: 'Round-robin', description: 'Among the least-loaded nodes, rotate the winner each pass for fair distribution.' },
     { value: 'priority_only', label: 'Priority order', description: "Always send to the highest-priority eligible node (see each node's scheduling priority), ignoring load." },
 ]
+
+/**
+ * User-facing distribution mode — the 2-mode façade over the raw 4-union. Mirrors
+ * RepoMeshDistribution in daemon-core. The toggle writes the mapped raw strategy
+ * (distributionToStrategy) into the policy; reading maps the raw strategy back
+ * (strategyToDistribution).
+ */
+export type MeshDistribution = 'spread' | 'in_order'
+
+export const DISTRIBUTION_OPTIONS: Array<{ value: MeshDistribution; label: string; description: string }> = [
+    { value: 'spread', label: 'Spread', description: 'Distribute work evenly across eligible nodes (prefers the least-loaded, rotating ties fairly). Set a per-node scheduling priority in Advanced to bias the order.' },
+    { value: 'in_order', label: 'In order', description: 'Assign to nodes in the order they were added — the first eligible node takes the work. No load-spreading.' },
+]
+
+/** Map a distribution mode to the raw scheduling strategy persisted in policy. */
+export function distributionToStrategy(distribution: MeshDistribution): MeshSchedulingStrategy {
+    return distribution === 'spread' ? 'least_loaded' : 'first_eligible'
+}
+
+/**
+ * Map a raw scheduling strategy back to the 2-mode façade for the toggle. priority_only
+ * shows as 'spread' only when a node priority is actually configured (it is otherwise
+ * behaviorally identical to first_eligible). Mirrors daemon-core strategyToDistribution.
+ */
+export function strategyToDistribution(
+    strategy: MeshSchedulingStrategy | string | undefined,
+    opts?: { priorityConfigured?: boolean },
+): MeshDistribution {
+    const s = (strategy || 'first_eligible') as MeshSchedulingStrategy
+    if (s === 'first_eligible') return 'in_order'
+    if (s === 'priority_only') return opts?.priorityConfigured ? 'spread' : 'in_order'
+    if (s === 'least_loaded' || s === 'round_robin') return 'spread'
+    return 'in_order'
+}
 
 export const DEFAULT_MESH_POLICY: Record<string, any> = {
     requirePreTaskCheckpoint: false,

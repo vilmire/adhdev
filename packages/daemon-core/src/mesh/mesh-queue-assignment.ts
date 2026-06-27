@@ -13,8 +13,9 @@ import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-deliv
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
-import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy } from '../repo-mesh-types.js';
+import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, distributionToStrategy } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
+import { loadMeshJsonConfig, type MeshJsonSchedulingConfig } from '../config/mesh-json-config.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
@@ -812,11 +813,46 @@ function nodeActiveLoad(meshId: string, nodeId: string): number {
 }
 
 /**
- * The mesh-wide scheduling strategy. Defaults to 'first_eligible' (strict
- * no-change) for any mesh that does not set it. Only governs the final tie-break;
- * eligibility, capacity, and priority gates apply identically to every strategy.
+ * Resolve the canonical repo root for reading a mesh's in-tree `.adhdev/mesh.json`
+ * overlay. Prefers a base (non-worktree) node's repoRoot/workspace — the canonical
+ * checkout that carries the repo file — and falls back to any node so a worktree-only
+ * mesh still resolves a root. Returns '' when no node declares a path.
+ */
+function resolveMeshRepoRootForScheduling(mesh: any): string {
+    const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
+    const pickRoot = (n: any) => readNonEmptyString(n?.repoRoot) || readNonEmptyString(n?.workspace);
+    const base = nodes.find((n: any) => n?.isLocalWorktree !== true && pickRoot(n));
+    if (base) return pickRoot(base);
+    const anyNode = nodes.find((n: any) => pickRoot(n));
+    return anyNode ? pickRoot(anyNode) : '';
+}
+
+/**
+ * The repo-local `.adhdev/mesh.json` `policy.scheduling` overlay for this mesh, when
+ * present and valid. LOCAL-WINS: a value here overrides the stored mesh policy. Cached
+ * by mtime in the loader, so calling this on every reconcile tick is cheap.
+ */
+function resolveMeshSchedulingOverride(mesh: any): MeshJsonSchedulingConfig | undefined {
+    const repoRoot = resolveMeshRepoRootForScheduling(mesh);
+    if (!repoRoot) return undefined;
+    try {
+        return loadMeshJsonConfig(repoRoot).config?.scheduling;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * The mesh-wide scheduling strategy. Resolution order (LOCAL-WINS):
+ *   1. `.adhdev/mesh.json` policy.scheduling.distribution (2-mode → strategy), then
+ *   2. the stored mesh policy schedulingStrategy raw 4-union (escape hatch), then
+ *   3. 'first_eligible' (strict no-change default).
+ * Only governs the final tie-break; eligibility, capacity, and priority gates apply
+ * identically to every strategy.
  */
 function resolveSchedulingStrategy(mesh: any): RepoMeshSchedulingStrategy {
+    const override = resolveMeshSchedulingOverride(mesh);
+    if (override?.distribution) return distributionToStrategy(override.distribution);
     return normalizeMeshSchedulingStrategy(mesh?.policy?.schedulingStrategy);
 }
 
@@ -831,15 +867,27 @@ function resolveSchedulingStrategy(mesh: any): RepoMeshSchedulingStrategy {
  * - 'first_eligible' (default): returns the input order verbatim and does NOT touch
  *   the round-robin cursor — byte-for-byte the pre-feature behavior.
  * - 'priority_only': schedulingPriority desc, then input order (load ignored).
- * - 'least_loaded': schedulingPriority desc, then active load asc, then input order.
- * - 'round_robin': same as least_loaded, but among nodes tied at (priority, load)
- *   the input order is rotated by a per-mesh cursor that advances once per pass.
+ * - 'least_loaded' (the user-facing 'spread' mode): schedulingPriority desc, then
+ *   active load asc, then — among nodes still tied at (priority, load) — the input
+ *   order is rotated by a per-mesh cursor that advances once per pass. The rotation
+ *   tie-break is ALWAYS on for least_loaded so a single 'spread' mode subsumes the
+ *   former separate 'round_robin' strategy (two equal-load nodes still alternate
+ *   fairly across passes instead of the lower index always winning).
+ * - 'round_robin': retained as an escape-hatch alias; behaves identically to
+ *   'least_loaded' now that least_loaded carries the rotation.
  *
  * `nodes` carries the original config/array index so the tie-break can fall back to
  * deterministic input order. `bumpCursor` advances the round-robin cursor exactly
- * once per scheduling pass (only consulted for 'round_robin').
+ * once per scheduling pass (consulted for both 'least_loaded' and 'round_robin').
  */
 interface RankableNode { nodeId: string; node: any; index: number }
+
+/** Test-only: resolve a mesh's effective scheduling strategy through the full
+ *  LOCAL-WINS path (`.adhdev/mesh.json` distribution → strategy, else stored policy).
+ *  Exposed so the repo-file overlay wiring can be exercised by a direct call. */
+export function __resolveSchedulingStrategyForTests(mesh: any): RepoMeshSchedulingStrategy {
+    return resolveSchedulingStrategy(mesh);
+}
 
 /** Test-only: the pure node-ordering stage (PRIORITY → TIE-BREAK). Exposed so the
  *  scheduling pipeline can be unit-tested without standing up live CLI sessions. */
@@ -866,9 +914,11 @@ function orderEligibleNodes(
 
     // Round-robin rotation offset: rotate the deterministic input order by a
     // per-mesh cursor so the tie-break winner among equal (priority, load) nodes
-    // cycles across passes. The cursor advances once per scheduling pass.
+    // cycles across passes. The cursor advances once per scheduling pass. Applied
+    // to both 'least_loaded' (the 'spread' mode — rotation absorbed as its
+    // tie-break) and the legacy 'round_robin' alias.
     let rotation = 0;
-    if (strategy === 'round_robin') {
+    if (strategy === 'least_loaded' || strategy === 'round_robin') {
         const cursor = opts?.bumpCursor
             ? MeshRuntimeStore.getInstance().bumpSchedulerCursor(meshId)
             : MeshRuntimeStore.getInstance().getSchedulerCursor(meshId);
@@ -1069,11 +1119,19 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
     const pending = queue.filter(task => task.status === 'pending');
     if (!pending.length) return false;
 
-    const maxParallelTasks = Math.max(1, Math.floor(Number(mesh?.policy?.maxParallelTasks) || 2));
+    // Write cap + read-only cap resolved through the shared helpers, with the
+    // repo-local `.adhdev/mesh.json` overlay winning over the stored policy
+    // (LOCAL-WINS). Both the cap value and the read-only multiplier route through
+    // the same resolvers the observability projection uses, so the enforced and
+    // exposed caps can never drift.
+    const schedulingOverride = resolveMeshSchedulingOverride(mesh);
+    const maxParallelTasks = resolveMaxParallelTasks(
+        schedulingOverride?.maxParallel ?? mesh?.policy?.maxParallelTasks,
+    );
     // Read-only diagnoses carry no isolation/merge cost, so they are exempt from the
     // write-task parallel cap. To prevent runaway auto-launch they get their own,
-    // higher safety cap (2x the write cap).
-    const maxReadonlyParallelTasks = Math.max(2, maxParallelTasks * 2);
+    // higher safety cap (readonlyMultiplier × the write cap, default 2×).
+    const maxReadonlyParallelTasks = resolveMaxReadonlyParallelTasks(maxParallelTasks, schedulingOverride?.readonlyMultiplier);
     for (const task of pending) {
         const isReadonly = task.taskMode === 'live_debug_readonly';
         if (isReadonly) {

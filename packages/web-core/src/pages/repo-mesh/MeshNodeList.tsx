@@ -523,7 +523,8 @@ function NodeAdvancedPanel({
     const [priority, setPriority] = useState<string>(String(savedPriority))
     const [roles, setRoles] = useState<MeshProviderRole[]>(savedRoles)
 
-    // Priority only matters when the mesh distributes by priority/load.
+    // Priority only matters when the mesh distributes work (Spread mode); it has no
+    // effect under In order (first_eligible).
     const priorityRelevant = schedulingStrategy !== 'first_eligible'
 
     function addRole() {
@@ -564,7 +565,7 @@ function NodeAdvancedPanel({
                 <FormField label="Scheduling priority"
                     hint={priorityRelevant
                         ? 'Higher = preferred when the mesh distributes work. Not an eligibility gate.'
-                        : 'Used only when the mesh Distribution strategy spreads work (currently First available — no effect).'}>
+                        : 'Used only when Distribution is set to Spread (currently In order — no effect).'}>
                     <input type="number" step={1}
                         className="w-32 px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
                         value={priority}
