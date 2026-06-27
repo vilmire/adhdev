@@ -2,12 +2,14 @@ import { formatIdeType } from '../../utils/daemon-utils'
 import type { ActiveConversation } from './types'
 import { getConversationViewStates } from './DashboardMobileChatShared'
 import {
+    AGENT_GENERATING_PREVIEW_TEXT,
     getConversationDisplayLabel,
     getConversationHostIdeType,
     getConversationLastMessagePreview,
     getConversationMetaParts,
     getConversationNotificationLabel as getConversationNotificationDisplayLabel,
     getConversationProviderLabel,
+    isConversationAwaitingAssistantReply,
 } from './conversation-selectors'
 
 export function getConversationTitle(conversation: ActiveConversation): string {
@@ -54,6 +56,14 @@ export function getConversationMeshRoleTitle(conversation: ActiveConversation): 
 }
 
 export function getConversationPreviewText(conversation: ActiveConversation): string {
+    // While the agent is mid-turn the inbox snapshot transcript can still end at the
+    // user's prompt (the streamed reply only reaches the open chat via the live
+    // agent-stream channel). Surface a generating placeholder instead of echoing the
+    // user's own message back — but only until a real assistant reply becomes visible.
+    const { isGenerating } = getConversationViewStates(conversation)
+    if (isGenerating && isConversationAwaitingAssistantReply(conversation)) {
+        return AGENT_GENERATING_PREVIEW_TEXT
+    }
     const preview = getConversationLastMessagePreview(conversation)
     if (preview) return preview
     if (conversation.title) return conversation.title

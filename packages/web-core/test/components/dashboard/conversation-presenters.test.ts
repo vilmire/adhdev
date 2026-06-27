@@ -138,6 +138,56 @@ describe('conversation presenters', () => {
         expect(getConversationPreviewText(conversation)).toBe('Older transcript bubble')
     })
 
+    it('shows a generating placeholder instead of echoing the user prompt while the agent is mid-turn', () => {
+        // Inbox snapshot transcript still ends at the user prompt (the streamed reply
+        // only reaches the open chat via the live agent-stream channel), and the
+        // daemon-derived role tracks that same user message — the stale-inbox bug.
+        const generatingFromUser = createConversation({
+            status: 'generating',
+            messages: [
+                { role: 'user', content: 'Update and restart done. Verify the mission.' },
+            ],
+            lastMessageRole: 'user',
+            lastMessagePreview: 'Update and restart done. Verify the mission.',
+        })
+
+        expect(getConversationPreviewText(generatingFromUser)).toBe('Agent is generating…')
+    })
+
+    it('prefers a visible assistant reply over the generating placeholder', () => {
+        // Once any assistant text is visible (transcript tail or daemon summary) the
+        // real reply must win even while the status is still generating.
+        const generatingWithReply = createConversation({
+            status: 'generating',
+            messages: [
+                { role: 'user', content: 'Verify the mission.' },
+                { role: 'assistant', content: "I'll start by checking the mission state." },
+            ],
+        })
+        const generatingWithSummary = createConversation({
+            status: 'streaming',
+            messages: [
+                { role: 'user', content: 'Verify the mission.' },
+            ],
+            lastMessageRole: 'assistant',
+            lastMessagePreview: 'Checking the mission state and node health.',
+        })
+
+        expect(getConversationPreviewText(generatingWithReply)).toBe("I'll start by checking the mission state.")
+        expect(getConversationPreviewText(generatingWithSummary)).toBe('Checking the mission state and node health.')
+    })
+
+    it('keeps echoing the user prompt only for idle (non-generating) conversations', () => {
+        const idleFromUser = createConversation({
+            status: 'idle',
+            messages: [
+                { role: 'user', content: 'Standing by.' },
+            ],
+        })
+
+        expect(getConversationPreviewText(idleFromUser)).toBe('Standing by.')
+    })
+
     it('prefers the rich transcript tail over compact preview when transcript time is missing or tied', () => {
         const missingTimestamp = createConversation({
             lastMessagePreview: 'User prompt from compact status',

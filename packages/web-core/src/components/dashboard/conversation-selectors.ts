@@ -81,6 +81,29 @@ export function getConversationLastMessagePreview(conversation: ActiveConversati
     return ''
 }
 
+/** Inbox/card placeholder shown while the agent is mid-turn with no visible reply yet. */
+export const AGENT_GENERATING_PREVIEW_TEXT = 'Agent is generating…'
+
+/**
+ * True when the latest message we can surface for this conversation is still the
+ * user's own prompt — i.e. the agent has not produced a visible reply yet.
+ *
+ * During generation the assistant's streamed reply only reaches the open ChatPane
+ * through the live agent-stream channel; the inbox status snapshot's transcript
+ * (and the daemon-derived lastMessageRole computed from it) can still end at the
+ * user message. Echoing that user message back as the conversation "preview" is
+ * the stale-inbox bug, so callers pair this with the generating status to swap in
+ * AGENT_GENERATING_PREVIEW_TEXT. Returns false the moment an assistant reply is
+ * visible (transcript tail or daemon summary), so a real reply always wins.
+ */
+export function isConversationAwaitingAssistantReply(conversation: ActiveConversation): boolean {
+    if (normalizeTextContent(conversation.lastMessagePreview) && conversation.lastMessageRole === 'assistant') {
+        return false
+    }
+    const lastMessage = getConversationLastMessage(conversation)
+    return lastMessage?.role !== 'assistant'
+}
+
 export function compactConversationNotificationPreview(
     value: string,
     maxChars = DASHBOARD_NOTIFICATION_PREVIEW_MAX_CHARS,
