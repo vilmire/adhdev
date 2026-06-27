@@ -98,6 +98,7 @@ export {
   resolveWorktreePath,
 } from './git-worktree.js';
 export type {
+  WorktreeBaseSync,
   WorktreeCreateOptions,
   WorktreeCreateResult,
   WorktreeEntry,

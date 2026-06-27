@@ -35,12 +35,62 @@ export interface WorktreeCreateOptions {
     meshName: string;
     /** Override the auto-resolved target directory */
     targetDir?: string;
+    /**
+     * Remote to fetch+compare the base branch against before branching.
+     * Default: 'origin'.
+     */
+    remote?: string;
+    /**
+     * When true (default) and `baseBranch` is given, fetch the base branch from
+     * `remote` and, if the local base branch is strictly behind the remote
+     * (no divergence), branch the worktree from the remote-tracking ref instead
+     * of the stale local ref. The decision is always surfaced via `baseSync`.
+     * Set false to preserve the legacy "branch from local ref, never fetch"
+     * behavior.
+     */
+    syncBaseFromRemote?: boolean;
+}
+
+/**
+ * How the worktree's start point was resolved relative to the remote base.
+ * Surfaced so the coordinator can detect a stale base node before dispatching
+ * work onto a worktree built on a behind/diverged base.
+ */
+export interface WorktreeBaseSync {
+    /** The base branch name requested (e.g. 'main'). */
+    branch: string;
+    /** The remote compared against (e.g. 'origin'). */
+    remote: string;
+    /** The actual ref/commit-ish used as the worktree branch start point. */
+    startRef: string;
+    /** Whether `git fetch <remote> <branch>` succeeded. */
+    fetched: boolean;
+    /** Local base-branch SHA before clone, if the local ref exists. */
+    localSha?: string;
+    /** Remote-tracking base-branch SHA after fetch, if it exists. */
+    remoteSha?: string;
+    /** Commits the local base ref is behind the remote (0 when up-to-date/ahead). */
+    behindBy: number;
+    /** Commits the local base ref is ahead of the remote. */
+    aheadBy: number;
+    /** What was done with the base ref. */
+    action:
+        | 'up_to_date'
+        | 'local_behind_used_remote'
+        | 'local_ahead_used_local'
+        | 'diverged_used_local'
+        | 'no_remote_ref_used_local'
+        | 'no_local_ref_used_remote';
+    /** Human-readable warning when the base was stale/diverged. */
+    warning?: string;
 }
 
 export interface WorktreeCreateResult {
     success: true;
     worktreePath: string;
     branch: string;
+    /** Present when `baseBranch` was given and base sync resolution ran. */
+    baseSync?: WorktreeBaseSync;
 }
 
 export interface WorktreeEntry {
@@ -83,15 +133,139 @@ export function resolveWorktreePath(repoRoot: string, meshName: string, branch: 
     return path.join(parentDir, WORKTREE_DIR_NAME, safeMeshName, safeBranch);
 }
 
+// ─── Base sync (anti-stale-base) ─────────────────
+
+/** Run a git command, returning ok/stdout/stderr instead of throwing. */
+async function tryGit(cwd: string, args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+    try {
+        const { stdout, stderr } = await execFileAsync('git', args, {
+            cwd,
+            encoding: 'utf8',
+            timeout: GIT_TIMEOUT_MS,
+            maxBuffer: GIT_MAX_BUFFER,
+            windowsHide: true,
+        });
+        return { ok: true, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() };
+    } catch (error: any) {
+        return {
+            ok: false,
+            stdout: typeof error?.stdout === 'string' ? error.stdout.trim() : '',
+            stderr: typeof error?.stderr === 'string' ? error.stderr.trim() : (error?.message || ''),
+        };
+    }
+}
+
+/**
+ * Fetch the base branch from the remote and decide what to branch the new
+ * worktree from. Without this, `git worktree add -b <branch> main` always uses
+ * the local `refs/heads/main`, so a base node whose local main is behind a
+ * cross-machine-pushed origin/main produces a worktree on a STALE base —
+ * unaware of already-converged work, forcing a rebase before its push can
+ * fast-forward.
+ *
+ * Resolution (no history rewrite, never mutates the checked-out local branch):
+ *   - local strictly behind remote → branch from the remote-tracking ref.
+ *   - local ahead / up-to-date / no remote ref → branch from the local ref.
+ *   - diverged → branch from local + emit a warning for the coordinator.
+ */
+async function resolveWorktreeBaseStartPoint(
+    repoRoot: string,
+    baseBranch: string,
+    remote: string,
+): Promise<WorktreeBaseSync> {
+    const fetchResult = await tryGit(repoRoot, ['fetch', remote, baseBranch]);
+    const fetched = fetchResult.ok;
+
+    const localRev = await tryGit(repoRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${baseBranch}`]);
+    const remoteRev = await tryGit(repoRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${baseBranch}`]);
+    const localSha = localRev.ok && localRev.stdout ? localRev.stdout : undefined;
+    const remoteSha = remoteRev.ok && remoteRev.stdout ? remoteRev.stdout : undefined;
+    const remoteRef = `${remote}/${baseBranch}`;
+
+    const base: WorktreeBaseSync = {
+        branch: baseBranch,
+        remote,
+        startRef: baseBranch,
+        fetched,
+        localSha,
+        remoteSha,
+        behindBy: 0,
+        aheadBy: 0,
+        action: 'up_to_date',
+    };
+
+    const fetchWarn = fetched ? '' : ` (warning: git fetch ${remote} ${baseBranch} failed: ${fetchResult.stderr || 'unknown error'})`;
+
+    // No remote-tracking ref → nothing to compare; keep legacy local behavior.
+    if (!remoteSha) {
+        return {
+            ...base,
+            action: 'no_remote_ref_used_local',
+            ...(fetched ? {} : { warning: `Could not fetch ${remoteRef}${fetchWarn}; worktree branched from local ${baseBranch}.` }),
+        };
+    }
+
+    // Base branch only exists on the remote → branch from the remote ref.
+    if (!localSha) {
+        return {
+            ...base,
+            startRef: remoteRef,
+            action: 'no_local_ref_used_remote',
+        };
+    }
+
+    if (localSha === remoteSha) {
+        return base; // up_to_date
+    }
+
+    const localIsAncestor = (await tryGit(repoRoot, ['merge-base', '--is-ancestor', localSha, remoteSha])).ok;
+    const remoteIsAncestor = (await tryGit(repoRoot, ['merge-base', '--is-ancestor', remoteSha, localSha])).ok;
+    const behindBy = Number((await tryGit(repoRoot, ['rev-list', '--count', `${localSha}..${remoteSha}`])).stdout) || 0;
+    const aheadBy = Number((await tryGit(repoRoot, ['rev-list', '--count', `${remoteSha}..${localSha}`])).stdout) || 0;
+
+    if (localIsAncestor && !remoteIsAncestor) {
+        // Local strictly behind — THE stale-base fix: branch from the remote tip.
+        return {
+            ...base,
+            startRef: remoteRef,
+            behindBy,
+            aheadBy,
+            action: 'local_behind_used_remote',
+            warning: `Base node local ${baseBranch} was behind ${remoteRef} by ${behindBy} commit(s); worktree branched from ${remoteRef} (${remoteSha.slice(0, 8)}) instead of stale local ${localSha.slice(0, 8)}.${fetchWarn}`,
+        };
+    }
+
+    if (remoteIsAncestor) {
+        // Local ahead of remote (or remote is an ancestor) — local has the newer work.
+        return { ...base, behindBy, aheadBy, action: 'local_ahead_used_local' };
+    }
+
+    // Diverged: neither is an ancestor of the other. Don't silently pick a side —
+    // keep local (preserve local-only commits) and warn so the coordinator rebases.
+    return {
+        ...base,
+        behindBy,
+        aheadBy,
+        action: 'diverged_used_local',
+        warning: `Base node local ${baseBranch} (${localSha.slice(0, 8)}) has DIVERGED from ${remoteRef} (${remoteSha.slice(0, 8)}): behind ${behindBy}, ahead ${aheadBy}. Worktree branched from local; a rebase onto ${remoteRef} will be required before its push can fast-forward.${fetchWarn}`,
+    };
+}
+
 // ─── Create ─────────────────────────────────────
 
 /**
  * Create a new git worktree with a fresh branch.
  *
- * Runs: git worktree add <targetDir> -b <branch> [baseBranch]
+ * Runs: git worktree add <targetDir> -b <branch> [startRef]
+ *
+ * When `baseBranch` is given and `syncBaseFromRemote` is not disabled, the
+ * start point is resolved against the remote first (see
+ * resolveWorktreeBaseStartPoint) so a stale local base does not produce a stale
+ * worktree. The resolution is returned as `baseSync`.
  */
 export async function createWorktree(opts: WorktreeCreateOptions): Promise<WorktreeCreateResult> {
     const { repoRoot, branch, baseBranch, meshName } = opts;
+    const remote = (opts.remote || 'origin').trim() || 'origin';
     const targetDir = opts.targetDir || resolveWorktreePath(repoRoot, meshName, branch);
 
     if (existsSync(targetDir)) {
@@ -101,9 +275,16 @@ export async function createWorktree(opts: WorktreeCreateOptions): Promise<Workt
     // Ensure parent directory exists
     await mkdir(path.dirname(targetDir), { recursive: true });
 
+    let baseSync: WorktreeBaseSync | undefined;
+    let startRef = baseBranch;
+    if (baseBranch && opts.syncBaseFromRemote !== false) {
+        baseSync = await resolveWorktreeBaseStartPoint(repoRoot, baseBranch, remote);
+        startRef = baseSync.startRef;
+    }
+
     const args = ['worktree', 'add', targetDir, '-b', branch];
-    if (baseBranch) {
-        args.push(baseBranch);
+    if (startRef) {
+        args.push(startRef);
     }
 
     try {
@@ -130,6 +311,7 @@ export async function createWorktree(opts: WorktreeCreateOptions): Promise<Workt
         success: true,
         worktreePath: targetDir,
         branch,
+        ...(baseSync ? { baseSync } : {}),
     };
 }
 

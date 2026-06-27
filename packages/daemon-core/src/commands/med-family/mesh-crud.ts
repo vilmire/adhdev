@@ -553,6 +553,11 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 baseBranch,
                 meshName: mesh.name,
             });
+            if (result.baseSync?.warning) {
+                console.warn(`[mesh] clone_mesh_node base sync (${result.baseSync.action}): ${result.baseSync.warning}`);
+            } else if (result.baseSync && result.baseSync.action !== 'up_to_date') {
+                console.log(`[mesh] clone_mesh_node base sync: ${result.baseSync.action} (startRef=${result.baseSync.startRef})`);
+            }
 
             let node: any;
             if (meshRecord.inline) {
@@ -767,6 +772,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                     node,
                     worktreePath: result.worktreePath,
                     branch: result.branch,
+                    ...(result.baseSync ? { baseSync: result.baseSync } : {}),
+                    ...(result.baseSync?.warning ? { baseStaleWarning: result.baseSync.warning } : {}),
                     worktreeBootstrap: runningBootstrapState,
                     worktreeSetup: {
                         status: 'running',
@@ -783,6 +790,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 node,
                 worktreePath: result.worktreePath,
                 branch: result.branch,
+                ...(result.baseSync ? { baseSync: result.baseSync } : {}),
+                ...(result.baseSync?.warning ? { baseStaleWarning: result.baseSync.warning } : {}),
                 submodulesInitialized,
                 worktreeBootstrap: bootstrapState,
             };
