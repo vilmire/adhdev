@@ -203,6 +203,9 @@ function hasRecentIntentionalCleanupStop(meshId: string, sessionId?: string, nod
         const timestamp = new Date(entry.timestamp).getTime();
         if (!Number.isNaN(timestamp) && timestamp < cutoff) break;
         if (!isIntentionalCleanupStopEntry(entry)) continue;
+        // SESSION-ID IS SINGLE-FORM: a session id is one canonical UUID (crypto.randomUUID
+        // in the provider instance), carried verbatim across daemons — no serialization
+        // variants like node/daemon ids. Exact `===` is correct; no equivalence helper.
         if (sessionId && entry.sessionId === sessionId) return true;
         // Normalized node-id match (P4): the cleanup-stop entry's node id may be stored as
         // `nodeId` or `node_id` and the `nodeId` arg can be in either form — a raw `===`
@@ -435,6 +438,8 @@ function supersedesTruncatedTerminalSummary(args: {
 // task surfaces as status='unknown' / terminalKind=null in computeMeshTaskStats.
 function resolveActiveDirectDispatchTaskId(meshId: string, sessionId: string): string | undefined {
     try {
+        // SESSION-ID IS SINGLE-FORM (canonical crypto.randomUUID, carried verbatim across
+        // daemons) — exact `===` filter is correct; no node-id-style form normalization.
         const matches = getActiveDirectDispatches(meshId).filter(d => d.sessionId === sessionId);
         if (!matches.length) return undefined;
         // getActiveDirectDispatches returns rows ordered by dispatched_at ASC; the last is

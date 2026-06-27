@@ -506,6 +506,40 @@ describe('mesh-runtime-store', () => {
 
             __clearMeshQueueForTests(meshId);
         });
+
+        // R3 (a): the node-busy serialization gate must be FORM-AWARE. A write task
+        // claimed with an assigned_node_id stamped in the config-form (`daemon_mach_X`)
+        // must mark the node busy for a SECOND session that stamps the bare stamp-form
+        // (`mach_X`) of the SAME machine. The pre-fix hasActiveNodeAssignment bound a raw
+        // `assigned_node_id = ?` on a single form, so it missed the form-variant assigned
+        // row, saw the node as idle, and let a second write task claim it — breaking
+        // worktree isolation (duplicate claim / base leak). Mirrors the node-pinned
+        // SELECT's expandDaemonIdForms IN (...) matching.
+        it('marks a node busy across daemon-id forms (form-variant assigned_node_id)', () => {
+            const meshId = `mesh-nodebusy-idform-${randomUUID().slice(0, 8)}`;
+            const core = `mach_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+            const configForm = `daemon_${core}`; // first claim stamps the config-form
+            const stampForm = core;              // a sibling session stamps the bare form
+            const db = MeshRuntimeStore.getInstance();
+            db.insertQueueEntry({ id: 'w-first', meshId, message: 'write 1', status: 'pending', taskMode: 'code_change', createdAt: new Date(Date.now() - 2000).toISOString(), updatedAt: new Date(Date.now() - 2000).toISOString() });
+            db.insertQueueEntry({ id: 'w-second', meshId, message: 'write 2', status: 'pending', taskMode: 'code_change', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
+
+            // First write task claimed with the config-form node id → assigned_node_id = daemon_mach_X
+            const first = db.claimNextQueueTask(meshId, configForm, 'sess1');
+            expect(first?.id).toBe('w-first');
+            expect(first?.assignedNodeId).toBe(configForm);
+
+            // A second session on the SAME machine (bare stamp-form) must see the node
+            // busy and be blocked — even though the assigned row is in a different form.
+            expect(db.claimNextQueueTask(meshId, stampForm, 'sess2')).toBeNull();
+
+            // A session on a DIFFERENT machine is NOT falsely blocked (expansion stays
+            // within a single machine core) — it claims the still-pending second task.
+            const otherCore = `mach_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+            expect(db.claimNextQueueTask(meshId, otherCore, 'sess3')?.id).toBe('w-second');
+
+            __clearMeshQueueForTests(meshId);
+        });
     });
 
     // ── Read-only concurrent claim (P2: solution A) ──────────────────────────

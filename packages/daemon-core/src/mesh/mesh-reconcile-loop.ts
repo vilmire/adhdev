@@ -920,6 +920,10 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             // (unchanged behaviour — regression-0 for the common case).
             const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
             if (wantSession) {
+                // SESSION-ID IS SINGLE-FORM: a coordinator session id is one canonical
+                // UUID (crypto.randomUUID), carried verbatim end-to-end — no node/daemon-id
+                // style serialization variants. Exact `===` is the correct match; unlike
+                // the daemon-level set below it needs no equivalence helper.
                 const matched = targetCoordinators.filter(c => c.sessionId === wantSession);
                 if (matched.length === 0) {
                     // The originating coordinator session is not deliverable on this daemon

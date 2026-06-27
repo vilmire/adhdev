@@ -566,11 +566,23 @@ export class MeshRuntimeStore {
 
     /** A node may only execute one write task at a time (worktree isolation). */
     private hasActiveNodeAssignment(meshId: string, nodeId: string): boolean {
+        // The serialization gate (claimNextQueueTask's `!nodeBusy`) must see a node as
+        // busy when ANY active row's assigned_node_id matches in ANY equivalent
+        // daemon-id form (config-form `daemon_mach_X` vs stamp-form `mach_X`, or the
+        // standalone form). A raw `assigned_node_id = ?` on a single form silently
+        // misses a form-variant assigned row, making an already-assigned node look idle
+        // and letting a second write task claim it — duplicate claim / base leak. Mirror
+        // the node-pinned SELECT below (the `target_node_id IN (...)` query): expand to
+        // every equivalent form and bind an IN (...) set so the busy gate and the
+        // candidate SELECT use the SAME matching rule.
+        const nodeIdForms = expandDaemonIdForms(nodeId);
+        if (nodeIdForms.length === 0) return false;
+        const placeholders = nodeIdForms.map(() => '?').join(', ');
         const row = this.db.prepare(`
             SELECT 1 FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id = ?
+            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id IN (${placeholders})
             LIMIT 1
-        `).get(meshId, nodeId);
+        `).get(meshId, ...nodeIdForms);
         return row !== undefined;
     }
 
@@ -772,6 +784,12 @@ export class MeshRuntimeStore {
             // an empty session. Accept the candidate when the target resolves to the
             // same node under ANY equivalent form; keep targetSessionId an exact match.
             const targetMatches = (candidate: MeshWorkQueueEntry): boolean => {
+                // SESSION-ID IS SINGLE-FORM: unlike node/daemon ids (3 serialization
+                // forms requiring expandDaemonIdForms), a session id is a single
+                // canonical UUID minted once via crypto.randomUUID() in the provider
+                // instance (cli/acp/extension/ide) and carried verbatim across daemons
+                // (resolveEventSessionId applies no transformation). So an exact `!==`
+                // is correct here and needs no normalization helper.
                 if (candidate.targetSessionId && candidate.targetSessionId !== sessionId) return false;
                 if (
                     candidate.targetNodeId
