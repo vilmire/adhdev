@@ -125,6 +125,35 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         }
     },
 
+    // OPSRULES — emit a `.adhdev/mesh.json` DRAFT from the machine-local mesh
+    // entry. This is an export scaffold for the operator to review and commit to
+    // the repo, NOT an automatic data migration: nothing is written to disk and
+    // meshes.json is untouched. The returned `scaffold` (object) + `scaffoldJson`
+    // (2-space text) capture the local policy + coordinator prompt override/append.
+    export_mesh_json_config: async (_ctx: MedFamilyContext, args: any) => {
+        const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+        if (!meshId) return { success: false, error: 'meshId required' };
+        try {
+            const { getMesh } = await import('../../config/mesh-config.js');
+            const mesh = getMesh(meshId);
+            if (!mesh) return { success: false, error: 'Mesh not found' };
+            const { buildMeshJsonConfigScaffold, serializeMeshJsonConfigScaffold, MESH_JSON_CONFIG_LOCATIONS } =
+                await import('../../config/mesh-json-config.js');
+            const scaffold = buildMeshJsonConfigScaffold(mesh);
+            const scaffoldJson = serializeMeshJsonConfigScaffold(scaffold);
+            return {
+                success: true,
+                meshId,
+                suggestedPath: MESH_JSON_CONFIG_LOCATIONS[0],
+                scaffold,
+                scaffoldJson,
+                note: 'Draft only — review and commit to the repo at the suggested path. Nothing was written; meshes.json is unchanged (local-wins).',
+            };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
     delete_mesh: async (_ctx: MedFamilyContext, args: any) => {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };

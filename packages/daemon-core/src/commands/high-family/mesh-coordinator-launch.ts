@@ -174,6 +174,22 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         allowCoordinatorSession: true,
                     }) || (typeof coordinatorNode.workspace === 'string' ? coordinatorNode.workspace.trim() : '');
                     if (!workspace) return { success: false, error: 'Coordinator node workspace required', meshId, cliType };
+
+                    // OPSRULES — layer the repo-shared declarative mesh config
+                    // (.adhdev/mesh.json in the coordinator node workspace, else
+                    // the calling cwd) UNDER the machine-local mesh entry. The
+                    // merge is LOCAL-WINS and in-memory only: meshes.json on disk
+                    // is never mutated. The effective mesh feeds prompt building;
+                    // operating notes are merged with the runtime ledger below.
+                    const { loadRepoMeshJsonConfig, applyRepoMeshConfig, mergeEffectiveOperatingNotes } =
+                        await import('../../config/mesh-json-config.js');
+                    const repoMeshConfigLoad = loadRepoMeshJsonConfig(workspace);
+                    if (repoMeshConfigLoad.sourceType === 'invalid') {
+                        LOG.warn('MeshCoordinator', `Ignoring invalid ${repoMeshConfigLoad.source} (${repoMeshConfigLoad.path || '?'}): ${repoMeshConfigLoad.error}`);
+                    }
+                    const effectiveMesh = applyRepoMeshConfig(mesh, repoMeshConfigLoad.config);
+                    const buildEffectiveOperatingNotes = async (id: string) =>
+                        mergeEffectiveOperatingNotes(repoMeshConfigLoad.config?.operatingNotes, await buildOperatingNotesBestEffort(id));
                     if (!cliType) {
                         const resolved = await resolveProviderTypeFromPriority({
                             nodeId: String(normalizeMeshNodeId(coordinatorNode) || preferredCoordinatorNodeId || 'coordinator'),
@@ -229,7 +245,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         // Build coordinator prompt first — fail closed on errors.
                         let cliCmdSystemPrompt = '';
                         try {
-                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildOperatingNotesBestEffort(mesh.id) });
+                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id) });
                         } catch (error: any) {
                             const message = error?.message || String(error);
                             LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
@@ -447,7 +463,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // broken mesh state is visible instead of silently launching with weaker rules.
                     let systemPrompt = '';
                     try {
-                        systemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildOperatingNotesBestEffort(mesh.id) });
+                        systemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id) });
                     } catch (error: any) {
                         const message = error?.message || String(error);
                         LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
