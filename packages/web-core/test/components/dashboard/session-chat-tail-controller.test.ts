@@ -1599,6 +1599,133 @@ describe('SessionChatTailController registry', () => {
     ])
   })
 
+  it('keeps hydrated bubbles visible through a short user-only tail at the generating→idle transition (within recent-activity window)', () => {
+    // CHAT-DISAPPEAR-REAPPEAR: the daemon flips status to `idle` the instant
+    // generating ends, but can still ship a stale short user-only tail. `idle` is
+    // neither WARM_ACTIVE nor busy, so the pre-fix shrink-defense early-exited and
+    // let that short tail overwrite the hydrated assistant/system bubbles, making
+    // them disappear-then-reappear. Within the recent-activity window (just after a
+    // generating update) the shrink-defense must now defer the short tail.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    let nowMs = 1_000_000
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      fallbackRecentCount: 4,
+      now: () => nowMs,
+    })
+
+    controller.retain()
+    // Hydrate the full transcript via idle (applies immediately — no active stamp yet).
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'please run the command', id: 'msg-user', timestamp: 1 } as any,
+        { role: 'assistant', content: 'here is the answer', id: 'msg-assistant', timestamp: 2 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-hydrated',
+    }))
+
+    expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
+      'please run the command',
+      'here is the answer',
+    ])
+
+    // The session begins generating (re-emits the same hydrated tail) — this stamps
+    // the last-active-status time used for the transition window.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'please run the command', id: 'msg-user', timestamp: 1 } as any,
+        { role: 'assistant', content: 'here is the answer', id: 'msg-assistant', timestamp: 2 } as any,
+      ],
+      status: 'generating',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-generating',
+    }))
+
+    // 1s later: status flips to idle and a stale short user-only tail arrives.
+    // Still inside the recent-activity window → deferred (bubbles preserved).
+    nowMs += 1_000
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'please run the command', id: 'msg-user', timestamp: 1 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 1,
+      lastMessageSignature: 'sig-idle-short',
+    }))
+
+    expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
+      'please run the command',
+      'here is the answer',
+    ])
+  })
+
+  it('applies a short idle tail normally when the generating→idle window has elapsed (settled idle, no over-protection)', () => {
+    // No-regression: a legitimate tail shrink on a genuinely-settled idle session
+    // (e.g. the daemon re-windowed the tail long after generation finished) must
+    // still apply. Outside DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS the
+    // transition-window protection is OFF and `idle` behaves exactly as before.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    let nowMs = 1_000_000
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      fallbackRecentCount: 4,
+      now: () => nowMs,
+    })
+
+    controller.retain()
+    // Hydrate via idle, then a generating update to stamp the last-active time.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'please run the command', id: 'msg-user', timestamp: 1 } as any,
+        { role: 'assistant', content: 'here is the answer', id: 'msg-assistant', timestamp: 2 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-hydrated',
+    }))
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'please run the command', id: 'msg-user', timestamp: 1 } as any,
+        { role: 'assistant', content: 'here is the answer', id: 'msg-assistant', timestamp: 2 } as any,
+      ],
+      status: 'generating',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-generating',
+    }))
+
+    // Far past the recent-activity window (120_000ms): the session is settled idle.
+    nowMs += 5 * 60_000
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'please run the command', id: 'msg-user', timestamp: 1 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 1,
+      lastMessageSignature: 'sig-idle-settled-short',
+    }))
+
+    // Applied (shrink allowed) — settled idle is not over-protected.
+    expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
+      'please run the command',
+    ])
+  })
+
   it('exposes historyOffset=0 after a truncated live tail update before any history page is loaded', () => {
     // Regression guard for long Hermes/CLI chat invisibility: when a session has 100
     // total messages and the subscription fires with a 20-msg tail window, the snapshot

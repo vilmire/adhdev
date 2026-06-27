@@ -44,6 +44,12 @@ export interface SessionChatTailControllerOptions {
   subscriptionKey: string
   tailLimit?: number
   fallbackRecentCount?: number
+  /**
+   * Injectable wall-clock for the generating→idle shrink-defense window. Defaults
+   * to Date.now. Tests override it to drive the recent-activity window
+   * deterministically.
+   */
+  now?: () => number
 }
 
 export interface SessionChatTailControllerHandle extends SessionChatTailSnapshot {
@@ -188,13 +194,37 @@ function shouldDeferBusyTailUpdate(
   nextMessages: DashboardMessage[],
   status: unknown,
   messageSource: Record<string, unknown> | undefined,
+  withinRecentActiveWindow: boolean,
 ): boolean {
   // Engage the shrink-defense for any warm/active status (incl. waiting_approval)
   // OR any strictly-busy status (no_progress/long_generating are busy but not in
   // WARM_ACTIVE). Union of the two keeps every previously-protected busy state
   // protected while adding the approval window.
-  if (!shouldGuardTailShrinkForStatus(status) && !isBusyChatTailStatus(status)) return false
-  const existingCount = getExistingVisibleMessageCount(snapshot, fallbackRecentCount)
+  //
+  // (CHAT-DISAPPEAR-REAPPEAR) Also engage during the generating→idle TRANSITION
+  // WINDOW: when the daemon flips status to `idle` the instant generating ends, it
+  // can still ship a stale/short user-only tail that — without this guard — would
+  // overwrite the longer hydrated bubbles and make the assistant/system bubbles
+  // disappear-then-reappear. `idle` is neither WARM_ACTIVE nor busy, so we widen
+  // the gate to also fire for a short window after the last active-status update.
+  // OUTSIDE that window (genuinely-settled idle: new-chat/reset, old sessions) we
+  // keep the previous behaviour and let legitimate tail shrinks through.
+  //
+  // The transition window only protects an already-HYDRATED snapshot (real bubbles
+  // to lose). It must NOT engage for the fallback-count path used while not yet
+  // hydrated — otherwise the first real idle tail right after a deferred
+  // generating placeholder would be wrongly deferred against the fallback count.
+  const statusIsActive = shouldGuardTailShrinkForStatus(status) || isBusyChatTailStatus(status)
+  const transitionWindowEngaged = withinRecentActiveWindow && snapshot.hasLiveSnapshot
+  if (!statusIsActive && !transitionWindowEngaged) return false
+  // For the warm/busy path keep the existing fallback-inflated baseline. For the
+  // idle TRANSITION-window-only path compare against the ACTUAL hydrated bubble
+  // count (not the inflated fallback) so a legitimately GROWING idle tail right
+  // after generation is still applied — we only defend against a real shrink below
+  // what is currently on screen.
+  const existingCount = statusIsActive
+    ? getExistingVisibleMessageCount(snapshot, fallbackRecentCount)
+    : (Array.isArray(snapshot.liveMessages) ? snapshot.liveMessages.length : 0)
   if (existingCount <= 0) return false
 
   if (isTransientNonSubstantiveTail(nextMessages)) return true
@@ -265,12 +295,12 @@ function isTransientUnavailableEmptyTail(
 export type ChatTailUpdateDecision = 'apply' | 'defer-busy-shrink' | 'skip-transient-empty'
 
 /**
- * Single decision point for whether to accept an incoming tail update. This only
- * centralises the existing accept/reject gates into one named outcome; the gate
+ * Single decision point for whether to accept an incoming tail update. The gate
  * predicates (shouldDeferBusyTailUpdate / isTransientUnavailableEmptyTail) are
- * unchanged and evaluated in the exact same order, so the result is byte-identical
- * to the previous inline checks. The shrink-defense's waiting_approval coverage
- * (via shouldGuardTailShrinkForStatus) is preserved untouched.
+ * evaluated in the same order as before. The shrink-defense's waiting_approval
+ * coverage (via shouldGuardTailShrinkForStatus) is preserved untouched, and the
+ * generating→idle transition window (withinRecentActiveWindow) widens the
+ * shrink-defense to the moment immediately after generating ends.
  */
 function decideChatTailUpdate(
   snapshot: SessionChatTailSnapshot,
@@ -278,8 +308,9 @@ function decideChatTailUpdate(
   nextMessages: DashboardMessage[],
   status: unknown,
   messageSource: Record<string, unknown> | undefined,
+  withinRecentActiveWindow: boolean,
 ): ChatTailUpdateDecision {
-  if (shouldDeferBusyTailUpdate(snapshot, fallbackRecentCount, nextMessages, status, messageSource)) {
+  if (shouldDeferBusyTailUpdate(snapshot, fallbackRecentCount, nextMessages, status, messageSource, withinRecentActiveWindow)) {
     return 'defer-busy-shrink'
   }
   if (isTransientUnavailableEmptyTail(snapshot, fallbackRecentCount, nextMessages, messageSource)) {
@@ -313,6 +344,15 @@ export class SessionChatTailController {
   private retainCount = 0
   private loadHistoryPromise: Promise<void> | null = null
   private pendingDisconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private now: () => number
+  /**
+   * Wall-clock time (ms) of the last update whose status was warm/active or busy.
+   * Drives the generating→idle shrink-defense window: an `idle` update arriving
+   * within DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS of this stamp is still
+   * subjected to the shrink count-heuristic, blocking the transition-moment flicker.
+   * 0 means "no active update seen yet" (settled idle — no transition protection).
+   */
+  private lastActiveStatusAt = 0
 
   constructor(options: SessionChatTailControllerOptions) {
     this.manager = options.manager || subscriptionManager
@@ -322,6 +362,7 @@ export class SessionChatTailController {
     this.historySessionId = options.historySessionId
     this.subscriptionKey = options.subscriptionKey
     this.fallbackRecentCount = Math.max(0, options.fallbackRecentCount ?? 0)
+    this.now = options.now ?? (() => Date.now())
     this.snapshot = buildEmptySnapshot(Math.max(0, options.tailLimit ?? DEFAULT_TAIL_LIMIT))
   }
 
@@ -332,6 +373,7 @@ export class SessionChatTailController {
     if (options.manager) this.manager = options.manager
     if (options.sendData) this.sendData = options.sendData
     if (options.historySessionId) this.historySessionId = options.historySessionId
+    if (options.now) this.now = options.now
     if (options.fallbackRecentCount !== undefined) {
       this.fallbackRecentCount = Math.max(0, options.fallbackRecentCount)
     }
@@ -511,7 +553,21 @@ export class SessionChatTailController {
 
     const nextMessages = readChatTailUpdateMessages(update)
     const incomingMessageSource = (update as SessionChatTailUpdate & { messageSource?: Record<string, unknown> }).messageSource
-    if (decideChatTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status, incomingMessageSource) !== 'apply') {
+
+    // (CHAT-DISAPPEAR-REAPPEAR) Compute the generating→idle transition window using
+    // the PREVIOUS active-status stamp, then refresh the stamp for THIS update if it
+    // is itself warm/active or busy. An `idle` update that lands within
+    // DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS of the last active status is
+    // still subjected to the shrink-defense, so the stale short tail emitted at the
+    // instant generating ends cannot overwrite the hydrated bubbles.
+    const updateTime = this.now()
+    const withinRecentActiveWindow = this.lastActiveStatusAt > 0
+      && (updateTime - this.lastActiveStatusAt) <= DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS
+    if (shouldGuardTailShrinkForStatus(update.status) || isBusyChatTailStatus(update.status)) {
+      this.lastActiveStatusAt = updateTime
+    }
+
+    if (decideChatTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status, incomingMessageSource, withinRecentActiveWindow) !== 'apply') {
       return
     }
     const nextCursor: SessionChatTailCursor = { tailLimit: this.snapshot.cursor.tailLimit }
