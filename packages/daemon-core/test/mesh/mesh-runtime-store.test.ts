@@ -33,6 +33,7 @@ import {
     cancelTask,
     requeueTask,
     updateTaskStatus,
+    recordDirectDispatchTask,
     __clearMeshQueueForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 
@@ -1526,6 +1527,51 @@ describe('mesh-runtime-store', () => {
             expect(db.hasCompletionFingerprint(MESH_A, fp)).toBe(true);
             // And it is NOT visible to a different mesh.
             expect(db.hasCompletionFingerprint(MESH_B, fp)).toBe(false);
+        });
+    });
+
+    // R2 / NOTIF-DROP: a mission-attributed DIRECT dispatch (mesh_send_task) must record
+    // a confirmed delivery so the assigned-stranded watchdog does not reclaim a task the
+    // worker already completed and drop its completion notification. Live PROBE-B repro:
+    // the second direct dispatch to a reused session was reclaimed "never confirmed
+    // delivered → pending" after 5 min, dropping agent:generating_completed.
+    describe('direct dispatch confirmed delivery (NOTIF-DROP / R2)', () => {
+        const MESH = 'mesh_direct_delivery';
+        const MISSION = 'mission_xyz';
+
+        beforeEach(() => {
+            __resetMeshRuntimeStoreForTests();
+            __clearMeshQueueForTests(MESH);
+        });
+
+        it('recordDirectDispatchTask materialises a confirmed delivery → taskHasConfirmedDelivery is true', () => {
+            const taskId = randomUUID();
+            const entry = recordDirectDispatchTask(MESH, 'echo probe', {
+                id: taskId,
+                missionId: MISSION,
+                assignedNodeId: 'node_w',
+                assignedSessionId: 'sess_w',
+                dispatchedAt: new Date().toISOString(),
+            });
+            expect(entry).not.toBeNull();
+            expect(entry?.status).toBe('assigned');
+            // The watchdog gate: a confirmed delivery row keyed by this taskId must exist,
+            // otherwise recoverStrandedAssignedDispatches reclaims the completed task.
+            const store = MeshRuntimeStore.getInstance();
+            expect(store.taskHasConfirmedDelivery(MESH, taskId)).toBe(true);
+        });
+
+        it('does not record a delivery when the dispatch is not materialised (no missionId)', () => {
+            const taskId = randomUUID();
+            const entry = recordDirectDispatchTask(MESH, 'echo probe', {
+                id: taskId,
+                missionId: '',
+                assignedNodeId: 'node_w',
+                assignedSessionId: 'sess_w',
+            });
+            expect(entry).toBeNull();
+            const store = MeshRuntimeStore.getInstance();
+            expect(store.taskHasConfirmedDelivery(MESH, taskId)).toBe(false);
         });
     });
 });

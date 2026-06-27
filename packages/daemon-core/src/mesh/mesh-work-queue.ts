@@ -7,6 +7,7 @@ import { getMesh } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshLedgerKind } from './mesh-ledger.js';
+import { createSessionDelivery } from './mesh-delivery-policy.js';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -836,6 +837,28 @@ export function recordDirectDispatchTask(
             updatedAt: now,
         };
         MeshRuntimeStore.getInstance().insertQueueEntry(entry);
+        // R2 / NOTIF-DROP: a mission-attributed DIRECT dispatch (mesh_send_task) has
+        // already been handed to the transport by the time we materialise this assigned
+        // row — unlike a queue claim, there is no later delivery-confirmation write for
+        // it. Without a confirmed delivery record keyed by this taskId, the assigned-
+        // stranded watchdog (recoverStrandedAssignedDispatches → taskHasConfirmedDelivery)
+        // sees the row as never-confirmed after ASSIGNED_STRANDED_DEADLINE_MS and reclaims
+        // a task the worker already COMPLETED, dropping its agent:generating_completed
+        // (live PROBE-B repro: "never confirmed delivered → pending"). Record a confirmed
+        // delivery here so taskHasConfirmedDelivery() is true and the watchdog leaves the
+        // row to PHASE 4 completion reconcile. This point is only reached after the direct
+        // dispatch's result.success, so 'delivered' is the accurate state.
+        try {
+            createSessionDelivery({
+                meshId,
+                ...(opts.assignedNodeId ? { nodeId: opts.assignedNodeId } : {}),
+                ...(opts.assignedSessionId ? { sessionId: opts.assignedSessionId } : {}),
+                taskId,
+                kind: 'task',
+                message,
+                status: 'delivered',
+            });
+        } catch { /* best-effort — the assigned row is already recorded */ }
         return entry;
     });
 }
