@@ -100,6 +100,10 @@ interface SendMessageState {
     maxEchoWaitMs: number;
     retryDelayMs: number;
     didCommitUserTurn: boolean;
+    // Whether this was the session's first turn at the moment of dispatch — captured
+    // before commitSendUserTurn flips this.firstTurnSent, so a later stuck-retry still
+    // knows it is recovering the win32 premature-ready first-turn swallow.
+    isFirstTurn: boolean;
 }
 
 interface SendMessageCompletion {
@@ -171,6 +175,16 @@ export class ProviderCliAdapter implements CliAdapter {
     private providerSessionId: string | null = null;
     private responseTimeout: NodeJS.Timeout | null = null;
     private ready = false;
+    // WIN32-READY-HOLD: the ready barrier can release on screen/spec-FSM grace
+    // before win32 ConPTY's input layer is live. The first split write (text, then a
+    // separate trailing CR via waitForEchoAndSubmit) then has its submit CR swallowed,
+    // and every CR-only retry re-sends a bare CR the input layer keeps dropping — the
+    // first message is typed-but-never-submitted and lost. Routing only the FIRST turn
+    // through the atomic content+sendKey single write (submitImmediatePrompt) keeps the
+    // Enter in the same PTY write unit as the text, the invariant win32 ConPTY needs to
+    // recognize a submit, so the swallow is bypassed. Subsequent turns (input layer now
+    // proven live) keep the normal echo-gated path. Flips true on first committed turn.
+    private firstTurnSent = false;
     private startupBuffer = '';
     private startupParseGate = false;
     private startupSettleTimer: NodeJS.Timeout | null = null;
@@ -599,6 +613,9 @@ export class ProviderCliAdapter implements CliAdapter {
         this.resetTerminalScreen(DEFAULT_SESSION_HOST_ROWS, DEFAULT_SESSION_HOST_COLS);
         this.pendingTerminalQueryTail = '';
         this.ready = false;
+        // Each fresh spawn re-enters the premature-ready swallow window — the next
+        // turn is again a "first turn" and must use the win32-safe atomic send path.
+        this.firstTurnSent = false;
         await this.ptyProcess.ready;
         this.engine.onSpawnReady();
         this.scheduleStartupSettleCheck();
@@ -1210,6 +1227,9 @@ export class ProviderCliAdapter implements CliAdapter {
     private commitSendUserTurn(state: SendMessageState): void {
         if (state.didCommitUserTurn) return;
         state.didCommitUserTurn = true;
+        // The first turn has now been written atomically (win32-safe); later turns
+        // can use the normal echo-gated path now that the input layer is proven live.
+        this.firstTurnSent = true;
     }
 
     private armResponseTimeout(): void {
@@ -1240,12 +1260,31 @@ export class ProviderCliAdapter implements CliAdapter {
         });
     }
 
+    // WIN32-READY-HOLD: choose the retry write for a stuck prompt. When the FIRST turn
+    // is stuck on win32 — the premature-ready swallow window — the prompt text itself
+    // may have been partially eaten by a not-yet-live ConPTY input layer, so re-sending
+    // a bare CR keeps hitting nothing. Re-type the whole `text + sendKey` atomically
+    // once so the input layer (now live) receives a self-contained, submit-coupled
+    // write. All other cases keep the cheap bare-CR retry (the prompt is fully echoed
+    // and only the Enter is missing).
+    private writeStuckRetry(state: SendMessageState, mode: string): void {
+        const retypeFirstTurn = process.platform === 'win32' && state.isFirstTurn;
+        if (retypeFirstTurn) {
+            LOG.info('CLI', `[${this.cliType}] ${mode}: re-typing full prompt atomically (win32 first-turn swallow recovery)`);
+            void this.writeToPty(state.text + this.sendKey).catch((error) => {
+                LOG.warn('CLI', `[${this.cliType}] ${mode} re-type write failed: ${error?.message || error}`);
+            });
+            return;
+        }
+        this.writeSubmitKeyForRetry(mode);
+    }
+
     private retrySubmitIfStuck(state: SendMessageState, attempt: number): void {
         this.submitRetryTimer = null;
         if (!this.isSubmitStuck(state.normalizedPromptSnippet)) return;
         this.engine.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
         LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt ${attempt})`);
-        this.writeSubmitKeyForRetry('submit_retry');
+        this.writeStuckRetry(state, 'submit_retry');
         if (attempt >= 3) { this.engine.submitRetryUsed = true; return; }
         this.submitRetryTimer = setTimeout(() => this.retrySubmitIfStuck(state, attempt + 1), state.retryDelayMs);
     }
@@ -1255,7 +1294,7 @@ export class ProviderCliAdapter implements CliAdapter {
         if (!this.isSubmitStuck(state.normalizedPromptSnippet)) return;
         this.engine.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
         LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt 1)`);
-        this.writeSubmitKeyForRetry('immediate_retry');
+        this.writeStuckRetry(state, 'immediate_retry');
         this.engine.submitRetryUsed = true;
     }
 
@@ -1597,6 +1636,8 @@ export class ProviderCliAdapter implements CliAdapter {
             maxEchoWaitMs,
             retryDelayMs,
             didCommitUserTurn: false,
+            // Capture BEFORE the send commits — commitSendUserTurn flips firstTurnSent.
+            isFirstTurn: !this.firstTurnSent,
         };
         this.engine.responseSettleIgnoreUntil = Date.now() + submitDelayMs + this.timeouts.outputSettle + 250;
         await new Promise<void>((resolve, reject) => {
@@ -1615,7 +1656,15 @@ export class ProviderCliAdapter implements CliAdapter {
                 },
             };
 
-            if (this.submitStrategy === 'immediate') {
+            // WIN32-READY-HOLD: the very first turn after startup is the one exposed to
+            // the premature-ready swallow (ready released before win32 ConPTY input is
+            // live). Force it through the atomic content+sendKey single write so the
+            // submit CR can never be separated from the text it submits — the same path
+            // the `immediate` strategy already uses. Restricted to win32 + the first
+            // turn so Mac/linux echo-gated behavior and all later turns are unchanged.
+            const useAtomicFirstTurn = this.submitStrategy === 'immediate'
+                || (process.platform === 'win32' && sendState.isFirstTurn);
+            if (useAtomicFirstTurn) {
                 this.submitImmediatePrompt(sendState, completion);
                 return;
             }

@@ -2371,6 +2371,13 @@ export class DaemonCommandRouter {
                 sessionCleanupMode: refineSessionCleanupMode,
                 ...(refineSessionIds && refineSessionIds.length > 0 ? { sessionIds: refineSessionIds } : {}),
                 inlineMesh: args?.inlineMesh,
+                // REFINE-CLEANUP: refine reaches cleanup only AFTER a verified merge
+                // convergence, so any residual worktree dirtiness here is incidental
+                // (e.g. a bootstrap lockfile rewrite) — never unmerged work. `force`
+                // sets requireClean=false so a plain-dirty worktree no longer aborts
+                // removal with merged_cleanup_failed. Branch-ref deletion still keys off
+                // mergeConvergence (NOT the force flag), so no merged work can be lost.
+                force: true,
             });
             recordMeshRefineStage(refineStages, 'cleanup', removeResult?.success === false ? 'failed' : 'passed', cleanupStarted, {
                 removed: removeResult?.removed,

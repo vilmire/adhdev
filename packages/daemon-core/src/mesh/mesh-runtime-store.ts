@@ -4,6 +4,7 @@ import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { getLedgerDir } from './mesh-ledger.js';
 import { nodeSatisfiesRequiredTags } from './mesh-work-queue.js';
+import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms } from '@adhdev/mesh-shared';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
@@ -687,6 +688,15 @@ export class MeshRuntimeStore {
                 return null;
             }
 
+            // The node-pinned SELECT must match a row whose target_node_id was stamped
+            // in ANY equivalent daemon-id form (config-form `daemon_mach_X` vs the
+            // claiming session's stamp-form `mach_X`). A single `= ?` bind on the
+            // stamp-form silently fails to fetch a config-form row, leaving the task
+            // pending forever (the empty-session WORKTREE-CLAIM-GATE repro). Expand to
+            // every equivalent form and bind an IN (...) set; the per-candidate
+            // targetMatches() JS gate above re-validates each fetched row.
+            const nodeIdForms = expandDaemonIdForms(nodeId);
+            const nodePinnedPlaceholders = nodeIdForms.map(() => '?').join(', ');
             // Priority: session-targeted > node-targeted (no session) > unconstrained
             const rows = [
                 ...(
@@ -699,9 +709,9 @@ export class MeshRuntimeStore {
                 ...(
                 this.db.prepare(`
                     SELECT payload FROM mesh_queue
-                    WHERE mesh_id = ? AND status = 'pending' AND target_node_id = ? AND target_session_id IS NULL
+                    WHERE mesh_id = ? AND status = 'pending' AND target_node_id IN (${nodePinnedPlaceholders}) AND target_session_id IS NULL
                     ORDER BY created_at ASC
-                `).all(meshId, nodeId) as Array<{ payload: string }>
+                `).all(meshId, ...nodeIdForms) as Array<{ payload: string }>
                 ),
                 ...(
                 this.db.prepare(`
@@ -755,9 +765,21 @@ export class MeshRuntimeStore {
             // sibling worktree session on the same daemon absorb another node's/session's
             // pinned task. When a task carries an explicit target, require an exact match
             // here too — fail-closed.
+            // The target id may have been stamped in a different serialization /
+            // daemon-id form than the claiming session's nodeId (config-form
+            // `daemon_mach_X` vs stamp-form `mach_X`, or the 3-way id/nodeId/node_id
+            // node forms). A raw `!==` here permanently strands a node-pinned task as
+            // an empty session. Accept the candidate when the target resolves to the
+            // same node under ANY equivalent form; keep targetSessionId an exact match.
             const targetMatches = (candidate: MeshWorkQueueEntry): boolean => {
                 if (candidate.targetSessionId && candidate.targetSessionId !== sessionId) return false;
-                if (candidate.targetNodeId && candidate.targetNodeId !== nodeId) return false;
+                if (
+                    candidate.targetNodeId
+                    && !daemonIdsEquivalent(candidate.targetNodeId, nodeId)
+                    && !meshNodeIdMatches({ id: candidate.targetNodeId }, nodeId)
+                ) {
+                    return false;
+                }
                 return true;
             };
 

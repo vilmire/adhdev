@@ -267,7 +267,10 @@ export function tryAssignQueueTask(
     providerType: string
 ): boolean {
     const mesh = getMeshWithCache(components, meshId);
-    const node = mesh?.nodes.find((n: any) => readMeshNodeId(n) === nodeId);
+    // Match with the shared 3-form normalizer (id / nodeId / node_id), not raw
+    // `n.id` — a stamp-form nodeId vs the mesh node's config-form id must still
+    // resolve, mirroring the remote idle-session path below (:1341).
+    const node = mesh?.nodes.find((n: any) => meshNodeIdMatches(n, nodeId));
 
     // WORKTREE-CLAIM-GATE-BYPASS: the SINGLE claim-time gate for the worktree-bootstrap defer.
     // tryAssignQueueTask is the one funnel every claim path flows through — the event-driven
@@ -1317,7 +1320,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
 
         if (providerType) {
             localIdleSessionsChecked += 1;
-            localCandidates.push({ nodeId, sessionId, providerType, origin: 'local', node: mesh.nodes.find((n: any) => readMeshNodeId(n) === nodeId) });
+            localCandidates.push({ nodeId, sessionId, providerType, origin: 'local', node: mesh.nodes.find((n: any) => meshNodeIdMatches(n, nodeId)) });
         } else {
             skippedSessions.push({
                 nodeId,

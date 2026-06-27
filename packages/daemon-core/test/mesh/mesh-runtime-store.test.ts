@@ -467,6 +467,45 @@ describe('mesh-runtime-store', () => {
             const meshId = `mesh-claim-empty-${randomUUID().slice(0, 8)}`;
             expect(MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, 'node1', 'sess1')).toBeNull();
         });
+
+        // WORKTREE-CLAIM-GATE: a node-pinned task enqueued under the config-form
+        // daemon id (`daemon_mach_<hex>`) must still be claimable by a session that
+        // stamps the bare stamp-form (`mach_<hex>`) of the SAME machine. The pre-fix
+        // SQL pre-filter bound a single `target_node_id = ?` on the stamp-form, so it
+        // never SELECTed the config-form row and the worktree session came up empty.
+        // Exercises the real claimNextQueueTask path (SQL fetch + JS targetMatches).
+        it('claims a node-pinned task enqueued under config-form daemon id with a stamp-form session', () => {
+            const meshId = `mesh-claim-idform-${randomUUID().slice(0, 8)}`;
+            const core = `mach_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+            const configForm = `daemon_${core}`; // enqueue stamps the coordinator config-form
+            const stampForm = core;              // the worktree session stamps the bare form
+            const db = MeshRuntimeStore.getInstance();
+            db.insertQueueEntry({ id: 'node-pinned-idform', meshId, message: 'pinned to config-form node', status: 'pending', targetNodeId: configForm, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+
+            const claimed = db.claimNextQueueTask(meshId, stampForm, 'sess-worktree');
+            expect(claimed?.id).toBe('node-pinned-idform');
+            expect(claimed?.status).toBe('assigned');
+            expect(claimed?.assignedNodeId).toBe(stampForm);
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        // The same node-pinned task must still be REJECTED for a session on a
+        // DIFFERENT machine — id-form normalization must not collapse distinct cores.
+        it('does NOT claim a node-pinned config-form task with a session on a different machine', () => {
+            const meshId = `mesh-claim-idform-neg-${randomUUID().slice(0, 8)}`;
+            const targetCore = `mach_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+            const otherCore = `mach_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+            const db = MeshRuntimeStore.getInstance();
+            db.insertQueueEntry({ id: 'node-pinned-other', meshId, message: 'pinned elsewhere', status: 'pending', targetNodeId: `daemon_${targetCore}`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+
+            // A session on a different machine must not absorb the pinned task.
+            expect(db.claimNextQueueTask(meshId, otherCore, 'sess-other')).toBeNull();
+            // The original machine (any form) still claims it.
+            expect(db.claimNextQueueTask(meshId, targetCore, 'sess-target')?.id).toBe('node-pinned-other');
+
+            __clearMeshQueueForTests(meshId);
+        });
     });
 
     // ── Read-only concurrent claim (P2: solution A) ──────────────────────────
