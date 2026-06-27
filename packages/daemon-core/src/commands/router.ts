@@ -727,6 +727,72 @@ export class DaemonCommandRouter {
         return true;
     }
 
+    /**
+     * WORKTREE-BOOTSTRAP-COORD-STATE: mark a worktree node's bootstrap as reaching a
+     * terminal state (complete / failed) in THIS daemon's mesh view.
+     *
+     * Root cause this fixes: clone_mesh_node forwards the clone+bootstrap to the
+     * source node's daemon (the worktree's machine). persistWorktreeSetupState
+     * therefore flips worktreeBootstrap.status to 'complete' on the WORKER daemon's
+     * mesh object — never on the coordinator's. The coordinator only ever holds the
+     * 'running' state it stamped from the forwarded clone reply. The claim path's
+     * bootstrap gate (mesh-event-forwarding agent:ready / mesh-queue-assignment)
+     * reads the coordinator's mesh via getMeshWithCache, sees status==='running'
+     * forever, and DEFERS every claim — so the worktree_bootstrap_complete re-fire
+     * (triggerMeshQueue) loops against a gate that never opens: claim never lands,
+     * the idle session is re-registered each tick, and auto-launch keeps spawning
+     * fresh sessions (runaway worktree-session multiplication).
+     *
+     * Called from the worktree_bootstrap_complete/_failed event handler BEFORE the
+     * queue re-fire so the gate sees the terminal state and the deferred claim can
+     * finally land. Updates the inline cache (clone worktree nodes are inline-only)
+     * and, when the node also exists in local config, persists there too; both paths
+     * invalidate the aggregate status cache. Best-effort and idempotent.
+     */
+    public markWorktreeBootstrapTerminalState(meshId: string, nodeId: string, status: 'complete' | 'failed'): void {
+        if (!meshId || !nodeId) return;
+        const stamp = (mesh: any): boolean => {
+            if (!mesh || !Array.isArray(mesh.nodes)) return false;
+            const node = mesh.nodes.find((entry: any) => meshNodeIdMatches(entry, nodeId));
+            if (!node) return false;
+            const prev = (node.worktreeBootstrap && typeof node.worktreeBootstrap === 'object')
+                ? node.worktreeBootstrap as Record<string, unknown>
+                : {};
+            if (prev.status === status) return false;
+            node.worktreeBootstrap = {
+                ...prev,
+                status,
+                completedAt: prev.completedAt ?? new Date().toISOString(),
+            };
+            return true;
+        };
+        let changed = false;
+        // Inline cache (the authoritative view for inline-only clone worktree nodes).
+        try {
+            const cached = this.getCachedInlineMesh(meshId);
+            if (cached && stamp(cached)) {
+                cached.updatedAt = new Date().toISOString();
+                this.inlineMeshCache.set(meshId, cached);
+                changed = true;
+            }
+        } catch { /* best-effort */ }
+        if (changed) this.invalidateAggregateMeshStatus(meshId);
+        // Local config (a worktree node registered via addNode also lives here).
+        // Done in a detached dynamic-import chain so the method stays sync; both the
+        // stamp and the persist are best-effort, and the inline-cache stamp above is
+        // what the coordinator's claim gate reads.
+        void import('../config/mesh-config.js')
+            .then(({ getMesh, updateNode }) => {
+                const local = getMesh(meshId);
+                if (local && stamp(local)) {
+                    const node = local.nodes.find((entry: any) => meshNodeIdMatches(entry, nodeId));
+                    if (node) updateNode(meshId, node.id, { worktreeBootstrap: node.worktreeBootstrap } as any);
+                    this.invalidateAggregateMeshStatus(meshId);
+                }
+            })
+            .catch(() => { /* persistence is best-effort */ });
+    }
+
     private tombstoneRemovedInlineMeshNode(meshId: string, nodeId: string): void {
         if (!nodeId) return;
         let set = this.removedInlineMeshNodeIds.get(meshId);

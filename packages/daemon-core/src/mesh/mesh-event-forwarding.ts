@@ -1053,6 +1053,29 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         // is drained in every topology. 'failed' is re-fired too so a deferred-then-failed bootstrap
         // dispatches and fails loudly/visibly rather than stranding silently. Falls through to the
         // coordinator broadcast below — the bootstrap event is still delivered to the coordinator.
+        // WORKTREE-BOOTSTRAP-COORD-STATE: stamp the terminal bootstrap status onto the
+        // COORDINATOR's mesh view BEFORE re-firing the queue. The clone+bootstrap ran on
+        // the worker daemon (clone_mesh_node forwards to the source node's machine), so
+        // persistWorktreeSetupState only flipped status→'complete' on the worker's mesh
+        // object — the coordinator still holds the 'running' state it stamped from the
+        // forwarded clone reply. Without this, the claim gate (agent:ready defer above +
+        // mesh-queue-assignment) reads getMeshWithCache, sees 'running' forever, and
+        // defers every claim — so this very re-fire loops against a gate that never opens
+        // (claim never lands; idle session re-registered each tick; auto-launch spawns a
+        // fresh session every cycle → runaway worktree-session multiplication). Stamping
+        // the terminal state opens the gate so the deferred claim lands on this re-fire.
+        const bootstrapNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
+        if (bootstrapNodeId) {
+            try {
+                (components.router as any)?.markWorktreeBootstrapTerminalState?.(
+                    args.meshId,
+                    bootstrapNodeId,
+                    args.event === 'worktree_bootstrap_failed' ? 'failed' : 'complete',
+                );
+            } catch (e: any) {
+                LOG.warn('MeshQueue', `Failed to stamp terminal bootstrap state for ${bootstrapNodeId} (mesh ${args.meshId}): ${e?.message || e}`);
+            }
+        }
         setImmediate(() => {
             triggerMeshQueue(components, args.meshId).catch((e: any) => {
                 LOG.warn('MeshQueue', `Queue re-fire after ${args.event} failed (mesh ${args.meshId}): ${e?.message || e}`);
