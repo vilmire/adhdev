@@ -1145,17 +1145,27 @@ describe('claude-cli v4 FSM — APPROVESTUCK footer-marker approval gate (fixA)'
         '  ⏵⏵ accept edits on (shift+tab to cycle)',
     ].join('\n');
 
-    it('(unit) →approval when-clause requires ❯ 1. AND a decisive marker (Esc to cancel | proceed)', () => {
+    it('(unit) →approval when-clause requires ❯ 1. AND the footer-scoped "Esc to cancel" invariant', () => {
+        // APPROVAL-FALSE-POSITIVE fix: the decisive marker is now a REQUIRED footer-scoped
+        // "Esc to cancel" leg (promoted out of the prior any[]), and the whole-screen
+        // "Do you want to proceed?" leg is removed. "Esc to cancel" is the true invariant —
+        // present in footer+modal scope across all approval boxes — whereas
+        // "Do you want to proceed?" varies by approval kind (file-write boxes ask a different
+        // question) and, being whole-screen scoped, matched assistant body / scrollback /
+        // pasted commands → false approval. The footer scope binds the marker to the actual box.
         const t = spec.transitions.find(tr => tr.label === '→approval')!;
         const all = (t.when as any).all as any[];
         expect(Array.isArray(all)).toBe(true);
         const footerChoice = all.find(c => c.section === 'footer' && typeof c.matches === 'string' && c.matches.includes('1\\.'));
         expect(footerChoice).toBeTruthy();
-        const markerAny = all.find(c => Array.isArray(c.any));
-        expect(markerAny).toBeTruthy();
-        const markerSrc = (markerAny.any as any[]).map(c => c.matches).join(' | ');
-        expect(markerSrc).toMatch(/Esc to cancel/);
-        expect(markerSrc).toMatch(/Do you want to proceed/);
+        // The decisive marker is a direct, footer-scoped AND leg — no any[] fallback.
+        const escMarker = all.find(c => c.section === 'footer' && typeof c.matches === 'string' && /Esc to cancel/.test(c.matches));
+        expect(escMarker).toBeTruthy();
+        // The loose whole-screen "Do you want to proceed?" leg must be gone entirely.
+        const hasWholeScreenProceed = all.some(c =>
+            (typeof c.matches === 'string' && /Do you want to proceed/.test(c.matches) && c.section !== 'footer' && c.section !== 'modal')
+            || (Array.isArray(c.any) && c.any.some((s: any) => typeof s.matches === 'string' && /Do you want to proceed/.test(s.matches))));
+        expect(hasWholeScreenProceed).toBe(false);
     });
 
     it('does NOT false-enter approval on a composer-typed "❯ 1." line (no modal marker)', () => {
