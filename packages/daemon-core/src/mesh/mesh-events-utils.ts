@@ -277,6 +277,17 @@ export function buildMeshSystemMessage(args: {
     nodeLabel: string;
     metadataEvent: Record<string, unknown>;
     recoveryContext?: SessionRecoveryContext | null;
+    /**
+     * BOOTSTRAP-MSG: true when a queued task targeting this freshly-bootstrapped
+     * worktree node is pending/assigned and will be (or has just been) auto-claimed
+     * by the post-bootstrap queue re-fire. When set, the worktree_bootstrap_complete
+     * message drops the misleading "use mesh_launch_session" advice (which would
+     * spawn a DUPLICATE session alongside the auto-claimed one) and tells the
+     * coordinator the queue will handle it. Absent/false → no targeted task → keep
+     * the manual-launch advice. The caller computes this from the work queue; the
+     * builder stays pure so both branches are unit-testable via this flag.
+     */
+    worktreeHasQueuedTask?: boolean;
 }): string {
     const metadata = formatCompletionMetadata(args.metadataEvent);
     if (args.event === 'agent:generating_completed') {
@@ -350,7 +361,14 @@ export function buildMeshSystemMessage(args: {
     if (args.event === 'worktree_bootstrap_complete') {
         const worktreePath = readNonEmptyString(args.metadataEvent.worktreePath);
         const durationMs = typeof args.metadataEvent.durationMs === 'number' ? args.metadataEvent.durationMs : undefined;
-        return `[System] ${args.nodeLabel} worktree bootstrap completed${worktreePath ? ` at ${worktreePath}` : ''}${durationMs !== undefined ? ` in ${Math.round(durationMs / 1000)}s` : ''}. The worktree is ready — use \`mesh_launch_session\` to start an agent.`;
+        const prefix = `[System] ${args.nodeLabel} worktree bootstrap completed${worktreePath ? ` at ${worktreePath}` : ''}${durationMs !== undefined ? ` in ${Math.round(durationMs / 1000)}s` : ''}.`;
+        // BOOTSTRAP-MSG: a task already targeting this node is auto-claimed by the
+        // post-bootstrap queue re-fire (see mesh-event-forwarding worktree_bootstrap_complete
+        // handler). Advising mesh_launch_session here would spawn a duplicate session.
+        if (args.worktreeHasQueuedTask) {
+            return `${prefix} The worktree is ready; a queued task targeting this node will auto-claim it — no manual \`mesh_launch_session\` needed.`;
+        }
+        return `${prefix} The worktree is ready — use \`mesh_launch_session\` to start an agent.`;
     }
     if (args.event === 'worktree_bootstrap_failed') {
         const error = readNonEmptyString(args.metadataEvent.error);

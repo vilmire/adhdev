@@ -4,7 +4,7 @@ import { getMesh, getMeshByRepo, listMeshes } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { SessionRecoveryContext } from './mesh-ledger.js';
-import { updateSessionTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents } from './mesh-work-queue.js';
+import { updateSessionTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue } from './mesh-work-queue.js';
 import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
@@ -820,6 +820,10 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     // Fix B: direct-dispatch taskId used to attribute the terminal ledger entry when no
     // work-queue row matches (resolved BEFORE markSessionTerminal flips the dispatch terminal).
     let directDispatchTaskIdForLedger: string | undefined;
+    // BOOTSTRAP-MSG: whether a queued task already targets this node, so the
+    // worktree_bootstrap_complete [System] message reflects the auto-claim instead of
+    // advising a manual mesh_launch_session (which would spawn a duplicate session).
+    let worktreeHasQueuedTask = false;
     if (args.event === 'agent:generating_completed') {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
@@ -1076,6 +1080,20 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 LOG.warn('MeshQueue', `Failed to stamp terminal bootstrap state for ${bootstrapNodeId} (mesh ${args.meshId}): ${e?.message || e}`);
             }
         }
+        // BOOTSTRAP-MSG: detect whether the queue re-fire below has a task to auto-claim for
+        // this node BEFORE setImmediate(triggerMeshQueue) runs — at this point a deferred task
+        // is still 'pending' (it has not been claimed yet); 'assigned' covers a task already
+        // claimed by an earlier tick. Either case means a session is being/has been spun up by
+        // the queue, so the completion message must NOT advise a manual mesh_launch_session.
+        // Only meaningful for the 'complete' transition (a failed bootstrap claims nothing).
+        if (args.event === 'worktree_bootstrap_complete' && bootstrapNodeId) {
+            try {
+                worktreeHasQueuedTask = getQueue(args.meshId, { status: ['pending', 'assigned'] })
+                    .some((task) => meshNodeIdMatches({ id: task.targetNodeId } as MeshNodeIdentified, bootstrapNodeId));
+            } catch (e: any) {
+                LOG.warn('MeshQueue', `Failed to check queued task for ${bootstrapNodeId} (mesh ${args.meshId}): ${e?.message || e}`);
+            }
+        }
         setImmediate(() => {
             triggerMeshQueue(components, args.meshId).catch((e: any) => {
                 LOG.warn('MeshQueue', `Queue re-fire after ${args.event} failed (mesh ${args.meshId}): ${e?.message || e}`);
@@ -1204,6 +1222,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         nodeLabel: args.nodeLabel,
         metadataEvent: args.metadataEvent,
         recoveryContext,
+        worktreeHasQueuedTask,
     });
     if (!messageText) {
         // Lifecycle events that carry no coordinator-facing message (agent:ready /
