@@ -73,6 +73,11 @@ function makeInstance(initialLastStatus: string): Harness {
   instance.autoApproveBusy = false
   instance.agentReadyEmitted = false
   instance.suppressIdleHistoryReplay = false
+  // R4b: just-booted by default so the idle-stayed collapse window
+  // (STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS) is open. Tests that need the
+  // grace window CLOSED override this to a stale boot time.
+  instance.startedAt = Date.now()
+  instance.fastCollapseSynthesizedTaskId = null
 
   instance.adapter = {
     getStatus: () => ({ status: adapterStatus }),
@@ -265,6 +270,83 @@ describe('CliProviderInstance — fresh-session startup-grace generating miss', 
     setAdapterWaiting(true)
     setAdapterStatus('idle')
     instance.detectStatusTransition() // starting → idle mid-turn
+
+    expect(completionEvents(events).length).toBe(0)
+  })
+
+  // ── R4b GENERATING-BOUNDARY idle-stayed collapse (already-idle session, NO status change) ──
+  //
+  // The residual variant the FAST-COLLAPSE case above can't reach (the live rc.403 Probe1 miss):
+  // the launch settle already drained starting→idle BEFORE the first turn arrives, so the session
+  // is ALREADY 'idle' (lastStatus 'idle') when the turn is dispatched. The turn runs+completes
+  // inside the startup-grace window too fast for any poll to observe a 'generating' frame, so the
+  // adapter status stays 'idle' the WHOLE turn — there is NO status change (idle→idle).
+  // detectStatusTransition's change block is skipped entirely, so neither the starting→idle
+  // fast-collapse arm nor the idle→generating arm ever runs. The idle-stayed defense line
+  // (gated on the startup-grace age window) catches it and synthesizes the started+completed pair.
+
+  it('IDLE-COLLAPSE: already-idle first turn that completes within grace (no status change) emits started+completed', () => {
+    const { instance, events, setAdapterStatus, setAdapterWaiting } = makeInstance('idle')
+    // A turn STARTED and FINISHED while status stayed 'idle' the whole time. onTurnStarted bound
+    // the taskId (persists past completion); the turn is no longer in flight; generating was
+    // never armed (generatingStartedAt 0, no debounce pending).
+    instance.adapter.currentTurnTaskId = 'task-grace-1'
+    setAdapterWaiting(false)
+    setAdapterStatus('idle')
+    instance.detectStatusTransition() // idle → idle — NO status change; idle-stayed arm fires
+
+    const completions = completionEvents(events)
+    expect(completions.length).toBe(1)
+    expect(completions[0].completionDiagnostic?.reason).toBe('startup_grace_idle_turn_collapse')
+    // A well-formed started→completed pair (chat bubble + CANON-B dispatch ack).
+    expect(events.some((e) => e.event === 'agent:generating_started')).toBe(true)
+  })
+
+  it('IDLE-COLLAPSE IDEMPOTENT: re-polling the idle session does not re-emit the pair', () => {
+    const { instance, events, setAdapterStatus, setAdapterWaiting } = makeInstance('idle')
+    instance.adapter.currentTurnTaskId = 'task-grace-1'
+    setAdapterWaiting(false)
+    setAdapterStatus('idle')
+    instance.detectStatusTransition() // synthesize once
+    instance.detectStatusTransition() // re-poll — guarded by fastCollapseSynthesizedTaskId
+    instance.detectStatusTransition() // re-poll again
+
+    expect(completionEvents(events).length).toBe(1)
+    expect(events.filter((e) => e.event === 'agent:generating_started').length).toBe(1)
+  })
+
+  it('GUARD: already-idle session with NO turn started emits nothing (benign idle boot)', () => {
+    const { instance, setAdapterStatus, events } = makeInstance('idle')
+    // No turn started: currentTurnTaskId undefined. A quiet idle session inside the grace window
+    // must not synthesize a phantom completion.
+    setAdapterStatus('idle')
+    instance.detectStatusTransition()
+
+    expect(completionEvents(events).length).toBe(0)
+  })
+
+  it('GUARD: a finished first turn OUTSIDE the grace window is NOT mislabelled a startup collapse', () => {
+    const { instance, events, setAdapterStatus, setAdapterWaiting } = makeInstance('idle')
+    // Boot was long ago — the startup-grace window is closed. A later unobservably-fast turn
+    // must not be attributed to the startup-grace collapse here; the normal idle→busy→idle path
+    // (or other reconciliation) owns post-grace turns.
+    instance.startedAt = Date.now() - 30_000
+    instance.adapter.currentTurnTaskId = 'task-late-1'
+    setAdapterWaiting(false)
+    setAdapterStatus('idle')
+    instance.detectStatusTransition()
+
+    expect(completionEvents(events).length).toBe(0)
+  })
+
+  it('GUARD: already-idle with the turn STILL in flight emits no premature completion', () => {
+    const { instance, events, setAdapterStatus, setAdapterWaiting } = makeInstance('idle')
+    // Turn started but still running inside the grace window — must not fire a mid-turn
+    // completion. The real completion fires later via the normal generating→idle path.
+    instance.adapter.currentTurnTaskId = 'task-grace-1'
+    setAdapterWaiting(true)
+    setAdapterStatus('idle')
+    instance.detectStatusTransition()
 
     expect(completionEvents(events).length).toBe(0)
   })
