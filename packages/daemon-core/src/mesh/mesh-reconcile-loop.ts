@@ -55,7 +55,7 @@ import {
     ackUnresolvedDelegateForward,
     expireStaleUnresolvedDelegateForwards,
 } from './mesh-unresolved-forward-outbox.js';
-import { readNonEmptyString, readMeshCompletionSummary } from './mesh-events-utils.js';
+import { readNonEmptyString, readMeshCompletionSummary, buildMeshSystemMessage } from './mesh-events-utils.js';
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { expandDaemonIdForms, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getActiveDirectDispatches, getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-work-queue.js';
@@ -368,7 +368,30 @@ function injectPendingIntoCoordinator(
     coordinator: LiveCoordinator['instance'],
     pending: PendingMeshCoordinatorEvent,
 ): void {
-    if (!coordinator || !pending.coordinatorMessage) return;
+    if (!coordinator) return;
+    // NOTIF-DROP-SYNTH-NO-MESSAGE (defence-in-depth): a queued event with no coordinatorMessage
+    // used to be dropped here (drain-without-inject) — the row had already been consumed
+    // (drained=1) by the caller's drain, so silently returning lost it forever. The primary fix
+    // makes the transcript-reconcile synth always carry a coordinatorMessage, but as a backstop,
+    // lazily synthesize the [System] text for any force-inject (terminal: completion / approval /
+    // stop / refine·bootstrap) event that still arrives message-less, so it surfaces instead of
+    // vanishing. A NON-force lifecycle event (agent:ready / generating_started) legitimately
+    // carries no message and must NOT be injected (it is queued only to re-drive the claim state
+    // machine on pull) — for it we still return without injecting.
+    let coordinatorMessage = pending.coordinatorMessage;
+    if (!coordinatorMessage) {
+        if (!shouldForceInjectMeshEvent(pending.event)) return;
+        const metadataEvent = pending.metadataEvent && typeof pending.metadataEvent === 'object'
+            ? pending.metadataEvent
+            : {};
+        coordinatorMessage = buildMeshSystemMessage({
+            event: pending.event,
+            nodeLabel: pending.nodeLabel,
+            metadataEvent,
+        });
+        if (!coordinatorMessage) return; // builder produced nothing — nothing to surface
+        LOG.warn('MeshReconcile', `Lazily synthesized missing coordinatorMessage for ${pending.event} (mesh ${pending.meshId}) at inject time — a queued terminal event arrived message-less`);
+    }
     const force = shouldForceInjectMeshEvent(pending.event);
     // EVTTRACE: event surfaced to the coordinator (injected into its live CLI session).
     // This is the terminal happy-path stage. Observation only.
@@ -380,7 +403,7 @@ function injectPendingIntoCoordinator(
         event: pending.event,
     }, force ? 'force-inject' : 'inject');
     coordinator.onEvent('send_message', {
-        input: { text: pending.coordinatorMessage, textFallback: pending.coordinatorMessage },
+        input: { text: coordinatorMessage, textFallback: coordinatorMessage },
         ...(force ? { force: true } : {}),
     });
 }

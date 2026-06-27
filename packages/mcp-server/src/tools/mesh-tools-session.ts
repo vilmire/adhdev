@@ -355,6 +355,7 @@ export async function meshSendTask(
                             taskMode,
                             providerType,
                             targetSessionId: dispatchedSessionId,
+                            ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
                         }),
                     });
                     insertDirectDispatch(ctx.mesh.id, {
@@ -541,6 +542,7 @@ export async function meshSendTask(
                         providerType: resolvedProviderType,
                         targetSessionId: args.session_id,
                         dispatchedToIdleSession: sessionWasIdle,
+                        ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
                     }),
                 });
             } catch { /* best-effort */ }

@@ -3,7 +3,7 @@ import type { MeshLedgerKind } from './mesh-ledger.js';
 import { updateDirectDispatchStatus, cleanupTerminalDirectDispatches } from './mesh-work-queue.js';
 import { markSessionDeliveriesTerminal } from './mesh-delivery-policy.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
-import { readNonEmptyString, readRecord, resolveEventSessionId, readWorkerResultMetadata, isWeakCompletionEvidence } from './mesh-events-utils.js';
+import { readNonEmptyString, readRecord, resolveEventSessionId, readWorkerResultMetadata, isWeakCompletionEvidence, buildMeshSystemMessage } from './mesh-events-utils.js';
 import { meshNodeIdMatches, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 
 // ---------------------------------------------------------------------------
@@ -188,6 +188,15 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
     transcriptMessageAt?: string;
     completedAt?: string;
     targetCoordinatorDaemonId?: string;
+    /**
+     * NOTIF-DROP-SYNTH-NO-MESSAGE: the originating coordinator SESSION that dispatched this
+     * task (the `coordinatorSessionId` stamped onto the task_dispatched ledger payload at
+     * dispatch). Stamped onto the synthesized completion's targetCoordinatorSessionId so PHASE 2
+     * STRICT routing matches the exact coordinator session — instead of relying on the
+     * daemon-keyed fallback. When the caller does not pass it, it is recovered from the dispatch
+     * ledger entry below; absent on legacy rows → daemon-level routing (unchanged).
+     */
+    targetCoordinatorSessionId?: string;
     source?: string;
 }): { reconciled: boolean; kind?: MeshLedgerKind; alreadyTerminal?: boolean; workerResult?: unknown; ledgerEntryId?: string; reason?: string } {
     const finalSummary = readNonEmptyString(args.finalSummary);
@@ -282,27 +291,44 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
     updateDirectDispatchStatus(args.meshId, args.sessionId, kind === 'task_completed' ? 'completed' : 'failed', args.taskId);
     markSessionDeliveriesTerminal(args.meshId, args.sessionId, kind === 'task_completed' ? 'completed' : 'failed');
     setImmediate(() => cleanupTerminalDirectDispatches());
-    queuePendingMeshCoordinatorEvent({
-        event: kind === 'task_completed' ? 'agent:generating_completed' : 'agent:stopped',
-        meshId: args.meshId,
-        nodeLabel: nodeId ? `Node '${nodeId}'` : 'Remote agent',
-        nodeId: nodeId || undefined,
-        metadataEvent: {
-            targetSessionId: args.sessionId,
-            providerType: providerType || undefined,
-            providerSessionId: readNonEmptyString(args.providerSessionId),
-            finalSummary,
-            taskId: args.taskId,
-            workerResult,
-            completionDiagnostic: {
-                reason: 'direct_task_transcript_reconciliation',
-                terminalLedgerKind: kind,
-                terminalLedgerId: entry.id,
-            },
+    // NOTIF-DROP-SYNTH-NO-MESSAGE: the queued synth completion MUST carry a coordinatorMessage,
+    // or injectPendingIntoCoordinator early-returns (`!pending.coordinatorMessage`) and the row is
+    // drained-without-inject → no [System] surface. The ~8s-later native completion then collides
+    // on the taskId-anchored fingerprint and is blocked at INSERT, so the notification is lost
+    // forever. Build the SAME [System] message the native path builds (buildMeshSystemMessage) so
+    // the synth is itself a complete, deliverable completion. Routing is made STRICT too: stamp the
+    // originating coordinator session so PHASE 2 strict-match delivers to the exact coordinator
+    // session that dispatched the task instead of falling back to a daemon-level broadcast.
+    const eventName = kind === 'task_completed' ? 'agent:generating_completed' : 'agent:stopped';
+    const nodeLabel = nodeId ? `Node '${nodeId}'` : 'Remote agent';
+    const metadataEvent = {
+        targetSessionId: args.sessionId,
+        providerType: providerType || undefined,
+        providerSessionId: readNonEmptyString(args.providerSessionId),
+        finalSummary,
+        taskId: args.taskId,
+        workerResult,
+        completionDiagnostic: {
+            reason: 'direct_task_transcript_reconciliation',
+            terminalLedgerKind: kind,
+            terminalLedgerId: entry.id,
         },
-        coordinatorMessage: undefined,
+    };
+    // Originating coordinator session: prefer the explicit arg; otherwise recover it from the
+    // task_dispatched ledger payload (the MCP dispatch path stamps `coordinatorSessionId` there).
+    // Absent on legacy rows → undefined → daemon-level routing (unchanged, no regression).
+    const targetCoordinatorSessionId = readNonEmptyString(args.targetCoordinatorSessionId)
+        || readNonEmptyString(dispatch?.payload?.coordinatorSessionId);
+    queuePendingMeshCoordinatorEvent({
+        event: eventName,
+        meshId: args.meshId,
+        nodeLabel,
+        nodeId: nodeId || undefined,
+        metadataEvent,
+        coordinatorMessage: buildMeshSystemMessage({ event: eventName, nodeLabel, metadataEvent }),
         queuedAt: Date.now(),
         ...(readNonEmptyString(args.targetCoordinatorDaemonId) ? { targetCoordinatorDaemonId: readNonEmptyString(args.targetCoordinatorDaemonId) } : {}),
+        ...(targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}),
     });
 
     return { reconciled: true, kind, workerResult, ledgerEntryId: entry.id };

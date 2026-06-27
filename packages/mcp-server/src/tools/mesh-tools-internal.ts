@@ -391,6 +391,12 @@ export function buildDirectTaskPayload(
         /** When true, the target session was idle at time of dispatch. This flag helps
          *  mesh-active-work stale detection identify unacknowledged direct dispatches. */
         dispatchedToIdleSession?: boolean;
+        /** NOTIF-DROP-SYNTH-NO-MESSAGE: the originating coordinator SESSION that dispatched this
+         *  task. Persisted in the task_dispatched ledger so a later transcript-reconcile synth of
+         *  the completion can STRICT-route the [System] notification back to the exact coordinator
+         *  session (not just the daemon). Mirrors the `coordinatorSessionId` already stamped into
+         *  the worker's meshContext. */
+        coordinatorSessionId?: string;
     },
 ): Record<string, unknown> {
     const descriptor = summarizeTaskMessage(message);
@@ -405,6 +411,7 @@ export function buildDirectTaskPayload(
         ...(opts.providerType ? { providerType: opts.providerType } : {}),
         ...(opts.targetSessionId ? { targetSessionId: opts.targetSessionId } : {}),
         ...(opts.dispatchedToIdleSession !== undefined ? { dispatchedToIdleSession: opts.dispatchedToIdleSession } : {}),
+        ...(opts.coordinatorSessionId ? { coordinatorSessionId: opts.coordinatorSessionId } : {}),
     };
 }
 
