@@ -1650,7 +1650,8 @@ function buildDirectTaskPayload(message, via, opts) {
     ...opts.taskMode ? { taskMode: opts.taskMode } : {},
     ...opts.providerType ? { providerType: opts.providerType } : {},
     ...opts.targetSessionId ? { targetSessionId: opts.targetSessionId } : {},
-    ...opts.dispatchedToIdleSession !== void 0 ? { dispatchedToIdleSession: opts.dispatchedToIdleSession } : {}
+    ...opts.dispatchedToIdleSession !== void 0 ? { dispatchedToIdleSession: opts.dispatchedToIdleSession } : {},
+    ...opts.coordinatorSessionId ? { coordinatorSessionId: opts.coordinatorSessionId } : {}
   };
 }
 function findNode(mesh, nodeId) {
@@ -4089,7 +4090,8 @@ async function meshSendTask(ctx, args) {
               taskId,
               taskMode,
               providerType,
-              targetSessionId: dispatchedSessionId
+              targetSessionId: dispatchedSessionId,
+              ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}
             })
           });
           (0, import_daemon_core3.insertDirectDispatch)(ctx.mesh.id, {
@@ -4245,7 +4247,8 @@ async function meshSendTask(ctx, args) {
             taskMode,
             providerType: resolvedProviderType,
             targetSessionId: args.session_id,
-            dispatchedToIdleSession: sessionWasIdle
+            dispatchedToIdleSession: sessionWasIdle,
+            ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}
           })
         });
       } catch {
