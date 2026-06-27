@@ -1036,6 +1036,28 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 || resolveActiveDirectDispatchTaskId(args.meshId, sessionId);
             completedTaskForLedger = markSessionTerminal(sessionId, 'failed');
         }
+    } else if (args.event === 'worktree_bootstrap_complete' || args.event === 'worktree_bootstrap_failed') {
+        // WORKTREE-BOOTSTRAP-REFIRE: the agent:ready branch above DEFERS the queue claim while
+        // worktreeBootstrap.status === 'running' — a freshly cloned worktree emits agent:ready at
+        // its idle prompt BEFORE bootstrap finishes, and dispatching then produces a half-built
+        // session. The defer registers the idle session (setRemoteIdleSession) but schedules NO
+        // retry; it relies on "the next agent:ready / reconcile drain tick" to re-fire. But
+        // agent:ready is a one-shot (emitAgentReadyOnce, guarded by agentReadyEmitted) and the
+        // session stays idle→idle after bootstrap, so no new agent:ready edge ever fires → the
+        // deferred claim is stranded → the worker session boots empty (totalMessages=0) and the
+        // coordinator relaunch/stop-loops. Re-fire the queue drain on the terminal bootstrap
+        // transition: the idle session registered at defer time is now claimable (tryAssignQueueTask
+        // has no bootstrap gate of its own). This runs on whichever daemon processes the event —
+        // the local worker (when it co-hosts the coordinator) at emit time, or the remote
+        // coordinator after it pulls the queued event — so the registered local/remote idle session
+        // is drained in every topology. 'failed' is re-fired too so a deferred-then-failed bootstrap
+        // dispatches and fails loudly/visibly rather than stranding silently. Falls through to the
+        // coordinator broadcast below — the bootstrap event is still delivered to the coordinator.
+        setImmediate(() => {
+            triggerMeshQueue(components, args.meshId).catch((e: any) => {
+                LOG.warn('MeshQueue', `Queue re-fire after ${args.event} failed (mesh ${args.meshId}): ${e?.message || e}`);
+            });
+        });
     }
 
     const ledgerKind = EVENT_TO_LEDGER_KIND[args.event];
