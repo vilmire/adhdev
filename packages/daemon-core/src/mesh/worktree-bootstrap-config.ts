@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve as pathResolve } from 'path';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import * as yaml from 'js-yaml';
@@ -42,6 +42,44 @@ export interface WorktreeBootstrapState extends MeshAsyncJobLifecycle {
     staleInputsDigest?: Record<string, string>;
     /** M2-1: why an evaluated state resolved to stale (digest_mismatch | never_ran). */
     staleReason?: string;
+}
+
+// Fix (3) safety net: a worktree node whose bootstrap state is stuck 'running' far longer than
+// any real bootstrap (observed ~2m8s) is almost certainly one whose terminal-state stamp never
+// reached this daemon's mesh view — the claim/dispatch defer guards would otherwise gate it
+// forever. This backstop lets a dispatch through ONLY when BOTH hold: the 'running' state is
+// older than WORKTREE_BOOTSTRAP_STALE_RUNNING_MS AND the node's working tree is git-clean. The
+// clean co-requirement is the real guard — a genuinely in-progress bootstrap (npm install /
+// native-addon repair) leaves the tree mid-build, so a clean tree means the bootstrap work has
+// settled. The threshold is floored well above the observed real bootstrap so a slow-but-live
+// bootstrap is never downgraded. Conservative by design: when clean-ness cannot be verified (no
+// local workspace on disk, or git errors) it returns false and the gate stays closed.
+export const WORKTREE_BOOTSTRAP_STALE_RUNNING_MS = 10 * 60 * 1000;
+
+export function isWorktreeBootstrapStaleRunning(
+    node: { worktreeBootstrap?: { status?: string; startedAt?: string; updatedAt?: string; completedAt?: string }; workspace?: string } | undefined,
+    nowMs: number = Date.now(),
+): boolean {
+    const wb = node?.worktreeBootstrap;
+    if (!wb || wb.status !== 'running') return false;
+    const startedRaw = wb.updatedAt || wb.startedAt;
+    if (!startedRaw) return false;
+    const startedMs = Date.parse(startedRaw);
+    if (!Number.isFinite(startedMs)) return false;
+    if (nowMs - startedMs <= WORKTREE_BOOTSTRAP_STALE_RUNNING_MS) return false;
+    const workspace = typeof node?.workspace === 'string' ? node.workspace.trim() : '';
+    if (!workspace || !existsSync(workspace)) return false; // only verifiable for a local workspace
+    try {
+        const out = execFileSync(resolveWin32Executable('git'), ['status', '--porcelain'], {
+            cwd: workspace,
+            encoding: 'utf8',
+            timeout: 10_000,
+            windowsHide: true,
+        });
+        return String(out).trim() === '';
+    } catch {
+        return false; // cannot verify clean → stay conservative (gate remains closed)
+    }
 }
 
 export interface WorktreeBootstrapConfigLoadResult {

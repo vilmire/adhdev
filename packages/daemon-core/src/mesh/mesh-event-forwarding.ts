@@ -1071,10 +1071,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const bootstrapNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         if (bootstrapNodeId) {
             try {
+                // Fix (3): pass the worktree path so a hydrate-on-miss upsert (when this
+                // coordinator never received the clone reply) can seed an addressable node.
+                const bootstrapWorkspace = readNonEmptyString(args.metadataEvent.worktreePath)
+                    || readNonEmptyString(args.metadataEvent.workspace);
                 (components.router as any)?.markWorktreeBootstrapTerminalState?.(
                     args.meshId,
                     bootstrapNodeId,
                     args.event === 'worktree_bootstrap_failed' ? 'failed' : 'complete',
+                    bootstrapWorkspace ? { workspace: bootstrapWorkspace } : undefined,
                 );
             } catch (e: any) {
                 LOG.warn('MeshQueue', `Failed to stamp terminal bootstrap state for ${bootstrapNodeId} (mesh ${args.meshId}): ${e?.message || e}`);

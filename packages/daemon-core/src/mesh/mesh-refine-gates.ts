@@ -24,6 +24,14 @@ import { execFileSync } from 'node:child_process';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 import type { CommandRouterResult } from '../commands/router.js';
 
+// Fix (4): resolve the git executable to an absolute path once on win32. A bare `git` handed to
+// execFile(Sync)/execFileAsync is resolved by libuv's spawn search, which appends only .com/.exe
+// (no PATHEXT) over the inherited PATH — so a `git.cmd`/`git.exe` that `where` finds is missed and
+// the spawn ENOENTs (the live win32 refine/batch failure). resolveWin32Executable is the same helper
+// the validation/bootstrap spawn path already uses. No-op on non-win32 (returns 'git' verbatim), and
+// no shell:true is used anywhere here so there is no quoting risk.
+const GIT = process.platform === 'win32' ? resolveWin32Executable('git') : 'git';
+
 export type MeshCoordinatorConfigFormat = 'claude_mcp_json' | 'hermes_config_yaml';
 type MeshRefineValidationStatus = 'passed' | 'failed' | 'skipped';
 type MeshRefineValidationCommand = MeshRefineValidationCommandPlan;
@@ -388,13 +396,13 @@ async function computeGitPatchId(
     if (excludePaths.length > 0) {
         diffArgs.push('--', '.', ...excludePaths.map(path => `:(exclude)${path}`));
     }
-    const diff = execFileSync('git', diffArgs, {
+    const diff = execFileSync(GIT, diffArgs, {
         cwd,
         encoding: 'utf8',
         maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
     });
     if (!diff.trim()) return '';
-    const patchId = execFileSync('git', ['patch-id', '--stable'], {
+    const patchId = execFileSync(GIT, ['patch-id', '--stable'], {
         cwd,
         input: diff,
         encoding: 'utf8',
@@ -411,7 +419,7 @@ export async function runMeshRefinePatchEquivalenceGate(
     const startedAt = Date.now();
     try {
         const { execFileSync } = await import('node:child_process');
-        const git = (args: string[]) => execFileSync('git', args, {
+        const git = (args: string[]) => execFileSync(GIT, args, {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
@@ -568,7 +576,7 @@ export async function checkWorktreeChangesPatchEquivalentInRef(
     const startedAt = Date.now();
     try {
         const { execFileSync } = await import('node:child_process');
-        const git = (gitArgs: string[]) => execFileSync('git', gitArgs, {
+        const git = (gitArgs: string[]) => execFileSync(GIT, gitArgs, {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
@@ -664,7 +672,7 @@ export async function runMeshRefineEffectiveDiffGate(
     const startedAt = Date.now();
     try {
         const { execFileSync } = await import('node:child_process');
-        const git = (args: string[], opts?: { cwd?: string }) => execFileSync('git', args, {
+        const git = (args: string[], opts?: { cwd?: string }) => execFileSync(GIT, args, {
             cwd: opts?.cwd || repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
@@ -762,7 +770,7 @@ function buildPatchEquivalenceSubmoduleConflictHint(
 
 function readChangedGitlinkPaths(repoRoot: string, fromRef: string, toRef: string): string[] {
     try {
-        const output = execFileSync('git', ['diff', '--raw', '--no-abbrev', fromRef, toRef], {
+        const output = execFileSync(GIT, ['diff', '--raw', '--no-abbrev', fromRef, toRef], {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
@@ -787,7 +795,7 @@ function readChangedGitlinkPaths(repoRoot: string, fromRef: string, toRef: strin
 
 function readTreeObject(repoRoot: string, ref: string, path: string): string | undefined {
     try {
-        const output = execFileSync('git', ['ls-tree', ref, '--', path], {
+        const output = execFileSync(GIT, ['ls-tree', ref, '--', path], {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: 1024 * 1024,
@@ -805,7 +813,7 @@ function readTreeObject(repoRoot: string, ref: string, path: string): string | u
  * subdirectory exists — a temporary index file must live in the actual git dir.
  */
 function resolveGitDir(repoRoot: string): string {
-    const out = execFileSync('git', ['rev-parse', '--absolute-git-dir'], {
+    const out = execFileSync(GIT, ['rev-parse', '--absolute-git-dir'], {
         cwd: repoRoot,
         encoding: 'utf8',
         maxBuffer: 1024 * 1024,
@@ -852,10 +860,10 @@ function isSubmoduleFastForward(submoduleRepoPath: string, baseCommit: string, b
     try {
         if (!fs.existsSync(submoduleRepoPath)) return false;
         // Both commits must exist locally for the ancestry check to be meaningful.
-        execFileSync('git', ['cat-file', '-e', `${baseCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
-        execFileSync('git', ['cat-file', '-e', `${branchCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        execFileSync(GIT, ['cat-file', '-e', `${baseCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        execFileSync(GIT, ['cat-file', '-e', `${branchCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
         // exit 0 ⇒ baseCommit is an ancestor of branchCommit ⇒ branch fast-forwards base.
-        execFileSync('git', ['merge-base', '--is-ancestor', baseCommit, branchCommit], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        execFileSync(GIT, ['merge-base', '--is-ancestor', baseCommit, branchCommit], { cwd: submoduleRepoPath, stdio: 'ignore' });
         return true;
     } catch {
         return false;
@@ -869,7 +877,7 @@ function isSubmoduleFastForward(submoduleRepoPath: string, baseCommit: string, b
  */
 function readChangedPathKinds(repoRoot: string, fromRef: string, toRef: string): Array<{ path: string; isGitlink: boolean }> {
     try {
-        const output = execFileSync('git', ['diff', '--raw', '--no-abbrev', fromRef, toRef], {
+        const output = execFileSync(GIT, ['diff', '--raw', '--no-abbrev', fromRef, toRef], {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
@@ -962,7 +970,7 @@ export function evaluateGitlinkTrivialFastForward(
     // a genuine content conflict that must stay blocked.
     let mergeBase = '';
     try {
-        mergeBase = execFileSync('git', ['merge-base', baseHead, branchHead], {
+        mergeBase = execFileSync(GIT, ['merge-base', baseHead, branchHead], {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: 1024 * 1024,
@@ -1008,7 +1016,7 @@ function buildTreeWithGitlinksEqualized(
     placeholderCommit: string,
 ): string | undefined {
     try {
-        const tree = execFileSync('git', ['rev-parse', `${commitish}^{tree}`], {
+        const tree = execFileSync(GIT, ['rev-parse', `${commitish}^{tree}`], {
             cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
         }).trim();
         if (!tree) return undefined;
@@ -1017,12 +1025,12 @@ function buildTreeWithGitlinksEqualized(
         const tmpIndex = pathJoin(resolveGitDir(repoRoot), `adhdev-refine-eq-${commitish.slice(0, 12)}.index`);
         const env = { ...process.env, GIT_INDEX_FILE: tmpIndex };
         try {
-            execFileSync('git', ['read-tree', tree], { cwd: repoRoot, env, stdio: 'ignore' });
-            execFileSync('git', ['update-index', '--index-info'], {
+            execFileSync(GIT, ['read-tree', tree], { cwd: repoRoot, env, stdio: 'ignore' });
+            execFileSync(GIT, ['update-index', '--index-info'], {
                 cwd: repoRoot, env, input: `${updates}\n`, encoding: 'utf8',
                 stdio: ['pipe', 'ignore', 'ignore'],
             });
-            const newTree = execFileSync('git', ['write-tree'], { cwd: repoRoot, env, encoding: 'utf8' }).trim();
+            const newTree = execFileSync(GIT, ['write-tree'], { cwd: repoRoot, env, encoding: 'utf8' }).trim();
             return newTree || undefined;
         } finally {
             try { fs.rmSync(tmpIndex, { force: true }); } catch { /* ignore */ }
@@ -1068,7 +1076,7 @@ function synthesizeTrivialFastForwardMergeTree(
         // with the conflicting gitlinks neutralized. The placeholder is the
         // merge-base's value for a gitlink (or, failing that, any branch-side
         // commit) — it only needs to be identical across all three trees.
-        const mergeBase = execFileSync('git', ['merge-base', baseHead, branchHead], {
+        const mergeBase = execFileSync(GIT, ['merge-base', baseHead, branchHead], {
             cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
         }).trim();
 
@@ -1083,16 +1091,16 @@ function synthesizeTrivialFastForwardMergeTree(
                 try {
                     // merge-tree --write-tree needs commits (to derive a merge-base);
                     // synthesize ours/theirs as children of a common base commit.
-                    const baseEqCommit = execFileSync('git', ['commit-tree', baseEqTree, '-m', 'refine-ff-base'], {
+                    const baseEqCommit = execFileSync(GIT, ['commit-tree', baseEqTree, '-m', 'refine-ff-base'], {
                         cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
                     }).trim();
-                    const oursEqCommit = execFileSync('git', ['commit-tree', oursEqTree, '-p', baseEqCommit, '-m', 'refine-ff-ours'], {
+                    const oursEqCommit = execFileSync(GIT, ['commit-tree', oursEqTree, '-p', baseEqCommit, '-m', 'refine-ff-ours'], {
                         cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
                     }).trim();
-                    const theirsEqCommit = execFileSync('git', ['commit-tree', theirsEqTree, '-p', baseEqCommit, '-m', 'refine-ff-theirs'], {
+                    const theirsEqCommit = execFileSync(GIT, ['commit-tree', theirsEqTree, '-p', baseEqCommit, '-m', 'refine-ff-theirs'], {
                         cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
                     }).trim();
-                    const mergeOut = execFileSync('git', ['merge-tree', '--write-tree', oursEqCommit, theirsEqCommit], {
+                    const mergeOut = execFileSync(GIT, ['merge-tree', '--write-tree', oursEqCommit, theirsEqCommit], {
                         cwd: repoRoot, encoding: 'utf8', maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
                     }).trim();
                     mergedContentTree = mergeOut.split(/\s+/)[0] || undefined;
@@ -1109,7 +1117,7 @@ function synthesizeTrivialFastForwardMergeTree(
         // regular-file content of the merge is exactly baseHead's tree, so just
         // overlay the gitlinks. Also used when the real merge could not run.
         const contentTree = mergedContentTree
-            || execFileSync('git', ['rev-parse', `${baseHead}^{tree}`], {
+            || execFileSync(GIT, ['rev-parse', `${baseHead}^{tree}`], {
                 cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
             }).trim();
         if (!contentTree) return undefined;
@@ -1121,15 +1129,15 @@ function synthesizeTrivialFastForwardMergeTree(
         const tmpIndex = pathJoin(resolveGitDir(repoRoot), `adhdev-refine-ff-${baseHead.slice(0, 12)}-${branchHead.slice(0, 12)}.index`);
         const env = { ...process.env, GIT_INDEX_FILE: tmpIndex };
         try {
-            execFileSync('git', ['read-tree', contentTree], { cwd: repoRoot, env, stdio: 'ignore' });
-            execFileSync('git', ['update-index', '--index-info'], {
+            execFileSync(GIT, ['read-tree', contentTree], { cwd: repoRoot, env, stdio: 'ignore' });
+            execFileSync(GIT, ['update-index', '--index-info'], {
                 cwd: repoRoot,
                 env,
                 input: `${updates}\n`,
                 encoding: 'utf8',
                 stdio: ['pipe', 'ignore', 'ignore'],
             });
-            const newTree = execFileSync('git', ['write-tree'], { cwd: repoRoot, env, encoding: 'utf8' }).trim();
+            const newTree = execFileSync(GIT, ['write-tree'], { cwd: repoRoot, env, encoding: 'utf8' }).trim();
             return newTree || undefined;
         } finally {
             try { fs.rmSync(tmpIndex, { force: true }); } catch { /* ignore */ }
@@ -1175,7 +1183,7 @@ export async function alignRefinerySubmodulesAfterMerge(
         const { execFile } = await import('node:child_process');
         const { promisify } = await import('node:util');
         const execFileAsync = promisify(execFile);
-        const result = await execFileAsync('git', commandArgs, {
+        const result = await execFileAsync(GIT, commandArgs, {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
@@ -1228,7 +1236,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
         const { promisify } = await import('node:util');
         const execFileAsync = promisify(execFile);
         const runGit = async (cwd: string, args: string[]): Promise<string> => {
-            const { stdout } = await execFileAsync('git', args, {
+            const { stdout } = await execFileAsync(GIT, args, {
                 cwd,
                 encoding: 'utf8',
                 timeout: 30_000,
@@ -1243,7 +1251,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
         };
         const publishCommitToRemoteMain = async (submodulePath: string, commit: string, branch = 'main'): Promise<{ stdout: string; stderr: string; refspec: string }> => {
             const refspec = `${commit}:refs/heads/${branch}`;
-            const { stdout, stderr } = await execFileAsync('git', ['push', 'origin', refspec], {
+            const { stdout, stderr } = await execFileAsync(GIT, ['push', 'origin', refspec], {
                 cwd: submodulePath,
                 encoding: 'utf8',
                 timeout: 30_000,

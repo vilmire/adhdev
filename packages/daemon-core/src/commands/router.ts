@@ -749,8 +749,13 @@ export class DaemonCommandRouter {
      * and, when the node also exists in local config, persists there too; both paths
      * invalidate the aggregate status cache. Best-effort and idempotent.
      */
-    public markWorktreeBootstrapTerminalState(meshId: string, nodeId: string, status: 'complete' | 'failed'): void {
+    public markWorktreeBootstrapTerminalState(meshId: string, nodeId: string, status: 'complete' | 'failed', opts?: { workspace?: string }): void {
         if (!meshId || !nodeId) return;
+        const terminalBootstrap = (prev?: Record<string, unknown>): Record<string, unknown> => ({
+            ...(prev && typeof prev === 'object' ? prev : {}),
+            status,
+            completedAt: (prev as any)?.completedAt ?? new Date().toISOString(),
+        });
         const stamp = (mesh: any): boolean => {
             if (!mesh || !Array.isArray(mesh.nodes)) return false;
             const node = mesh.nodes.find((entry: any) => meshNodeIdMatches(entry, nodeId));
@@ -759,11 +764,7 @@ export class DaemonCommandRouter {
                 ? node.worktreeBootstrap as Record<string, unknown>
                 : {};
             if (prev.status === status) return false;
-            node.worktreeBootstrap = {
-                ...prev,
-                status,
-                completedAt: prev.completedAt ?? new Date().toISOString(),
-            };
+            node.worktreeBootstrap = terminalBootstrap(prev);
             return true;
         };
         let changed = false;
@@ -773,6 +774,31 @@ export class DaemonCommandRouter {
             if (cached && stamp(cached)) {
                 cached.updatedAt = new Date().toISOString();
                 this.inlineMeshCache.set(meshId, cached);
+                changed = true;
+            } else if (!cached || !(Array.isArray(cached.nodes) && cached.nodes.some((entry: any) => meshNodeIdMatches(entry, nodeId)))) {
+                // Fix (3) HYDRATE-ON-MISS: the terminal bootstrap event arrived for a node this
+                // coordinator's inline view does NOT hold — the clone reply that would have seeded
+                // the worktree node never reached this daemon (or the inline mesh for this id is
+                // empty). With no node entry the claim gate has nothing to open, so the deferred
+                // claim (mesh-event-forwarding agent:ready / mesh-queue-assignment) strands forever
+                // and the coordinator relaunch/stop-loops. Instead of returning early, upsert a
+                // minimal worktree node carrying the terminal bootstrap status from the event
+                // payload so the gate — which reads this same inline view — sees a non-'running'
+                // state and the registered idle session can finally claim. Identity is canonicalized
+                // by updateInlineMeshNode (id/nodeId folded via the shared 3-form normalizer), so the
+                // remote-clone node-id form resolves the same way every claim-path consumer matches.
+                const shell = (cached && typeof cached === 'object')
+                    ? cached
+                    : { id: meshId, nodes: [] as any[], updatedAt: new Date().toISOString() };
+                if (!Array.isArray(shell.nodes)) shell.nodes = [];
+                const hydratedNode: any = {
+                    id: nodeId,
+                    nodeId,
+                    isLocalWorktree: true,
+                    ...(opts?.workspace ? { workspace: opts.workspace } : {}),
+                    worktreeBootstrap: terminalBootstrap(),
+                };
+                this.updateInlineMeshNode(meshId, shell, hydratedNode);
                 changed = true;
             }
         } catch { /* best-effort */ }

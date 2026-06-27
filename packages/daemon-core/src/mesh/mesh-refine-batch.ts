@@ -1,7 +1,15 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 
 const execFileAsync = promisify(execFile);
+
+// Fix (4): on win32 a bare `git` handed to execFile is resolved by libuv's spawn search,
+// which appends only .com/.exe (no PATHEXT) and searches only the inherited PATH — so a
+// `git.cmd`/`git.exe` that `where` finds is missed and the spawn ENOENTs. resolveWin32Executable
+// (the same helper the validation/bootstrap spawn path already uses) resolves it to an absolute
+// path once at module load. No-op on non-win32 (returns 'git' verbatim) — no quoting/shell risk.
+const GIT = process.platform === 'win32' ? resolveWin32Executable('git') : 'git';
 
 /**
  * Change-area analysis for one worktree node, used to order sibling nodes for
@@ -56,7 +64,7 @@ function topLevel(path: string): string {
 async function resolveSubmodulePaths(repoRoot: string): Promise<Set<string>> {
     try {
         const { stdout } = await execFileAsync(
-            'git',
+            GIT,
             ['config', '--file', '.gitmodules', '--get-regexp', 'path'],
             { cwd: repoRoot, encoding: 'utf8' },
         );
@@ -111,20 +119,20 @@ export async function analyzeMeshRefineNodeChangeArea(args: {
         // that already landed on base via a sibling earlier in the batch.
         let mergeBase = baseRef;
         try {
-            const { stdout } = await execFileAsync('git', ['merge-base', baseRef, branchRef], { cwd: diffCwd, encoding: 'utf8' });
+            const { stdout } = await execFileAsync(GIT, ['merge-base', baseRef, branchRef], { cwd: diffCwd, encoding: 'utf8' });
             const resolved = stdout.trim();
             if (resolved) mergeBase = resolved;
         } catch { /* fall back to baseRef directly */ }
 
         const { stdout: countStdout } = await execFileAsync(
-            'git',
+            GIT,
             ['rev-list', '--count', `${mergeBase}..${branchRef}`],
             { cwd: diffCwd, encoding: 'utf8' },
         );
         base.aheadCount = Number.parseInt(countStdout.trim(), 10) || 0;
 
         const { stdout: nameStdout } = await execFileAsync(
-            'git',
+            GIT,
             ['diff', '--name-only', `${mergeBase}..${branchRef}`],
             { cwd: diffCwd, encoding: 'utf8' },
         );

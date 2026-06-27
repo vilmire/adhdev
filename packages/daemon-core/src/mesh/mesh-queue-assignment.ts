@@ -18,6 +18,8 @@ import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
+import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
 
 // ---------------------------------------------------------------------------
 // Idle auto fast-forward throttle state
@@ -295,12 +297,18 @@ export function tryAssignQueueTask(
     // 3-form normalizer the defer guard uses), never a raw === — canon-identity regression guard.
     // Conservative: any non-'running' status (idle/complete/failed/absent/unknown) does NOT gate,
     // so a base node and a fully-bootstrapped worktree keep prior behavior exactly.
-    const gateNode = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId)) as
-        | { worktreeBootstrap?: { status?: string } }
-        | undefined;
-    if (gateNode?.worktreeBootstrap?.status === 'running') {
-        LOG.info('MeshQueue', `Gating queue claim for worktree node ${nodeId} (${sessionId}): worktree bootstrap still running — task left pending; claim re-fires once bootstrap reaches a terminal state (guards against dispatching into a half-built worktree → empty session)`);
-        return false;
+    if ((node as { worktreeBootstrap?: { status?: string } } | undefined)?.worktreeBootstrap?.status === 'running') {
+        // Fix (3) safety net: a 'running' bootstrap that is far older than any real bootstrap AND
+        // whose worktree is git-clean is almost certainly one whose terminal-state stamp never
+        // reached this daemon — downgrade it so a dispatch is allowed instead of stranded forever.
+        // The conservative threshold + git-clean co-requirement prevents downgrading a genuinely
+        // in-progress bootstrap (which would re-introduce the half-built-worktree dispatch).
+        if (isWorktreeBootstrapStaleRunning(node)) {
+            LOG.warn('MeshQueue', `Worktree node ${nodeId} (${sessionId}) bootstrap stuck 'running' beyond the stale backstop and its worktree is git-clean — treating bootstrap as silently complete and allowing the claim (the terminal-state stamp likely never reached this daemon's mesh view)`);
+        } else {
+            LOG.info('MeshQueue', `Gating queue claim for worktree node ${nodeId} (${sessionId}): worktree bootstrap still running — task left pending; claim re-fires once bootstrap reaches a terminal state (guards against dispatching into a half-built worktree → empty session)`);
+            return false;
+        }
     }
 
     // WTCLAIM (fix-B extended to the enqueue→claim path): a base-targeted task must never be
@@ -532,6 +540,116 @@ const AUTO_LAUNCH_AWAIT_CLAIM_MS = 90_000;
 // completed) or a changed reason resets the de-dup so real transitions still record.
 const lastAutoLaunchLedgerKey = new Map<string, string>();
 const AUTO_LAUNCH_LEDGER_DEDUP_MAX = 2000;
+
+// Fix (1): actionable dispatch-skip notification.
+//
+// User-core gap: when a queued task cannot be dispatched the coordinator (Claude Code via
+// MCP) had no proactive signal — the skip was only recorded to task.autoLaunch + the ledger,
+// both of which the coordinator must poll to discover. For a skip that will NOT self-resolve
+// (a routing miss, no capable node, a convergence task pinned to a worktree, an unusable
+// provider, an unreachable remote, or a dirty workspace) the coordinator could sit waiting
+// for a dispatch that can never happen. We now actively surface those — and ONLY those — as a
+// pending coordinator event carrying a "why + how to act" message, routed to the originating
+// coordinator (sourceCoordinator*). Transient/back-pressure skips (cooldown, in-progress,
+// awaiting-claim, parallel/session caps, node not yet launch-ready, an active assignment) are
+// deliberately excluded: they clear on their own and would only spam the coordinator every 4s.
+const ACTIONABLE_SKIP_REASON_PREFIXES = [
+    'target_node_id_unmatched',
+    'no_node_satisfies_required_tags',
+    'mesh_convergence_target_is_worktree',
+    'remote_auto_launch_unsupported',
+    'remote_auto_launch_no_coordinator_daemon_id',
+    'missing_provider_priority',
+    'provider_loader_unavailable',
+    'provider_priority_unusable',
+    'provider_unusable',
+    'dirty_workspace',
+];
+
+// De-dup actionable-skip coordinator notifications: emit once per (mesh, task) until the
+// reason CHANGES, so the 4s reconcile loop re-marking the same skip does not re-notify. A
+// non-skip transition (or a genuine reason change) re-arms it. In-memory only — a daemon
+// restart re-notifies once, which is the correct behaviour after a restart.
+const lastActionableSkipNotified = new Map<string, string>();
+
+function isActionableSkipReason(reason?: string): boolean {
+    if (!reason) return false;
+    return ACTIONABLE_SKIP_REASON_PREFIXES.some(prefix => reason === prefix || reason.startsWith(prefix));
+}
+
+function actionableSkipGuidance(reason: string): { summary: string; nextAction: string } {
+    if (reason === 'target_node_id_unmatched') return {
+        summary: 'it is pinned to a target node id that matches no node in the mesh (the node may have been removed, or its id form does not resolve)',
+        nextAction: 'Verify the target node still exists with mesh_status, then re-enqueue without the node pin or with a valid node id (or re-clone the node).',
+    };
+    if (reason === 'no_node_satisfies_required_tags') return {
+        summary: "no node in the mesh can satisfy the task's required capability tags",
+        nextAction: "Relax the task's requiredTags, or add/launch a node whose provider produces the required capabilities.",
+    };
+    if (reason === 'mesh_convergence_target_is_worktree') return {
+        summary: 'it is a convergence task (base-only: merge → push → cleanup) but every candidate node is a worktree clone',
+        nextAction: 'Dispatch the convergence task to the base node, or run the deterministic fast-forward path (mesh_fast_forward_node / mesh_refine_node) instead.',
+    };
+    if (reason.startsWith('remote_auto_launch')) return {
+        summary: 'the target node is on a remote daemon this coordinator cannot auto-launch a session on (no dispatch transport, or no coordinator daemon id to stamp)',
+        nextAction: 'Launch a session on that node yourself with mesh_launch_session, or ensure the remote daemon is connected over P2P.',
+    };
+    if (reason.startsWith('provider') || reason === 'missing_provider_priority') return {
+        summary: 'the node has no usable provider for this task (provider priority missing/unusable, or the provider loader is unavailable)',
+        nextAction: "Check the node's providerPriority policy and that the required CLI/ACP provider is installed and enabled on that machine.",
+    };
+    if (reason === 'dirty_workspace') return {
+        summary: "the node's workspace is dirty, so auto-launch is blocked to avoid clobbering uncommitted changes",
+        nextAction: "Clean or commit the node's working tree (or fast-forward it); the task will then auto-assign.",
+    };
+    return {
+        summary: `it cannot be dispatched (${reason})`,
+        nextAction: 'Inspect the node/mesh state with mesh_status and resolve the blocker, or re-enqueue the task.',
+    };
+}
+
+/** Surface a non-self-resolving dispatch skip to the originating coordinator as a pending
+ *  event (so it is delivered actively, not only on poll). De-duped per (mesh, task, reason). */
+function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string, reason: string | undefined, nodeId?: string): void {
+    if (!isActionableSkipReason(reason)) return;
+    const dedupKey = `${meshId}:${taskId}`;
+    if (lastActionableSkipNotified.get(dedupKey) === reason) return;
+    lastActionableSkipNotified.set(dedupKey, reason!);
+    if (lastActionableSkipNotified.size > AUTO_LAUNCH_LEDGER_DEDUP_MAX) {
+        const oldest = lastActionableSkipNotified.keys().next().value;
+        if (oldest !== undefined) lastActionableSkipNotified.delete(oldest);
+    }
+    let task: MeshWorkQueueEntry | undefined;
+    try { task = getQueue(meshId).find(t => t.id === taskId); } catch { /* best-effort */ }
+    // The queue is owned by this coordinator daemon, so scope the event to this daemon's id;
+    // the originating coordinator SESSION (if known) further narrows delivery on this daemon.
+    const targetCoordinatorDaemonId = readNonEmptyString(loadConfig().machineId);
+    const targetCoordinatorSessionId = readNonEmptyString(task?.sourceCoordinatorSessionId);
+    const nodeLabel = readNonEmptyString(nodeId) || readNonEmptyString(task?.targetNodeId);
+    const { summary, nextAction } = actionableSkipGuidance(reason!);
+    const coordinatorMessage = `[System] A queued mesh task${nodeLabel ? ` for node ${nodeLabel}` : ''} is not being dispatched because ${summary}. ${nextAction} This is an actionable blocker — it will NOT clear on its own; the task stays pending until you resolve it.`;
+    try {
+        queuePendingMeshCoordinatorEvent({
+            event: 'mesh:dispatch_blocked',
+            meshId,
+            nodeLabel: nodeLabel || meshId,
+            ...(nodeLabel ? { nodeId: nodeLabel } : {}),
+            metadataEvent: {
+                source: 'mesh_queue_dispatch_skip',
+                taskId,
+                reason,
+                ...(nodeLabel ? { nodeId: nodeLabel } : {}),
+                coordinatorMessage,
+            },
+            coordinatorMessage,
+            queuedAt: Date.now(),
+            ...(targetCoordinatorDaemonId ? { targetCoordinatorDaemonId } : {}),
+            ...(targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}),
+        });
+    } catch (e: any) {
+        LOG.warn('MeshQueue', `Failed to surface actionable dispatch-skip (${reason}) for task ${taskId}: ${e?.message || e}`);
+    }
+}
 
 function sweepExpiredCooldowns(): void {
     const now = Date.now();
@@ -875,6 +993,14 @@ function markAutoLaunch(meshId: string, taskId: string, args: {
         reason: args.reason,
         error: args.error,
     });
+    // Fix (1): actively notify the coordinator of a non-self-resolving skip; re-arm the
+    // notification on any non-skip transition (started/completed) so a later genuine skip
+    // re-notifies.
+    if (args.status === 'skipped') {
+        notifyCoordinatorOfActionableSkip(meshId, taskId, args.reason, args.nodeId);
+    } else {
+        lastActionableSkipNotified.delete(`${meshId}:${taskId}`);
+    }
 }
 
 async function resolveUsableProvider(
@@ -1021,9 +1147,26 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
             // match a node but its tags excluded it (a genuine capability miss).
             const targetPinUnmatched = !!task.targetNodeId
                 && !(Array.isArray(mesh?.nodes) && mesh.nodes.some((n: any) => meshNodeIdMatches(n, task.targetNodeId)));
+            // Fix (2): a `convergence` task is base-only — the candidate filter above
+            // (`taskMode === 'convergence' && node.isLocalWorktree`) deliberately drops every
+            // worktree-clone node, so candidateNodes can empty out NOT because the target is
+            // missing or tag-incapable, but because every node the task could land on is a
+            // worktree. Reporting that as `target_node_id_unmatched` / `no_node_satisfies_
+            // required_tags` mislabels the cause and sends diagnosis down the wrong path.
+            // Detect it explicitly and report the same reason mesh_send_task uses for a direct
+            // convergence dispatch onto a worktree, so both surfaces agree.
+            const convergenceOntoWorktree = task.taskMode === 'convergence'
+                && Array.isArray(mesh?.nodes)
+                && (() => {
+                    const matched = (mesh.nodes as any[]).filter((n: any) =>
+                        !task.targetNodeId || meshNodeIdMatches(n, task.targetNodeId));
+                    return matched.length > 0 && matched.every((n: any) => n?.isLocalWorktree === true);
+                })();
             markAutoLaunch(meshId, task.id, {
                 status: 'skipped',
-                reason: targetPinUnmatched ? 'target_node_id_unmatched' : 'no_node_satisfies_required_tags',
+                reason: convergenceOntoWorktree
+                    ? 'mesh_convergence_target_is_worktree'
+                    : (targetPinUnmatched ? 'target_node_id_unmatched' : 'no_node_satisfies_required_tags'),
                 nodeId: task.targetNodeId,
             });
             continue;
