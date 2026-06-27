@@ -212,4 +212,60 @@ describe('CliProviderInstance — fresh-session startup-grace generating miss', 
 
     expect(completionEvents(events).length).toBe(0)
   })
+
+  // ── R4 GENERATING-BOUNDARY fast-collapse (starting → idle DIRECTLY, no generating frame) ──
+  //
+  // The deeper variant the REGRESSION case above can't reach: on a daemon whose claude-cli FSM
+  // spec lacks the starting→busy edge, a fast turn dispatched into the startup-grace window
+  // never moves the FSM to 'busy'/generating at all — the adapter reports starting → idle
+  // DIRECTLY (the startup-grace elapsed_ms fires after the turn already finished). The
+  // starting→generating arm above therefore never sees a 'generating' frame to arm on, and the
+  // only matching arm (newStatus 'idle' && lastStatus 'starting') used to emit agent:ready ONLY.
+  // The defense line synthesizes the started+completed pair when — and only when — a turn
+  // actually STARTED this boot (adapter.currentTurnTaskId, set by onTurnStarted, persists past
+  // completion) AND already FINISHED (hasAdapterPendingResponse() false), so it cannot fire on a
+  // benign idle boot, a queued-pending first turn that only runs after grace, or a turn still
+  // mid-flight at the grace expiry.
+
+  it('FAST-COLLAPSE: starting → idle directly (no generating frame) with a finished turn emits started+completed', () => {
+    const { instance, events, setAdapterStatus, setAdapterWaiting } = makeInstance('starting')
+    // A turn STARTED and FINISHED inside the startup-grace window: onTurnStarted bound the
+    // taskId (persists past completion), and the turn is no longer in flight.
+    instance.adapter.currentTurnTaskId = 'task-grace-1'
+    setAdapterWaiting(false)
+    setAdapterStatus('idle')
+    instance.detectStatusTransition() // starting → idle directly — FSM never reached generating
+
+    const completions = completionEvents(events)
+    expect(completions.length).toBe(1)
+    expect(completions[0].completionDiagnostic?.reason).toBe('startup_grace_fast_collapse')
+    // A well-formed started→completed pair (chat bubble + CANON-B dispatch ack).
+    expect(events.some((e) => e.event === 'agent:generating_started')).toBe(true)
+    // agent:ready is still emitted (preserved behavior).
+    expect(events.some((e) => e.event === 'agent:ready')).toBe(true)
+  })
+
+  it('GUARD: a genuine idle boot (starting → idle, no turn ever started) emits ready only, no completion', () => {
+    const { instance, events, setAdapterStatus } = makeInstance('starting')
+    // No turn started this boot: adapter.currentTurnTaskId stays undefined, nothing in flight.
+    setAdapterStatus('idle')
+    instance.detectStatusTransition() // starting → idle — pure startup, prompt drawn
+
+    expect(completionEvents(events).length).toBe(0)
+    expect(events.some((e) => e.event === 'agent:ready')).toBe(true)
+  })
+
+  it('GUARD: starting → idle while the turn is STILL in flight emits no premature completion', () => {
+    const { instance, events, setAdapterStatus, setAdapterWaiting } = makeInstance('starting')
+    // A turn started but is STILL running when startup-grace expires (hasAdapterPendingResponse
+    // true). Firing here would be a premature mid-turn completion; idle→busy self-corrects and
+    // the real completion fires later. The queued-pending case (turn not yet started →
+    // currentTurnTaskId undefined) is covered by the previous guard.
+    instance.adapter.currentTurnTaskId = 'task-grace-1'
+    setAdapterWaiting(true)
+    setAdapterStatus('idle')
+    instance.detectStatusTransition() // starting → idle mid-turn
+
+    expect(completionEvents(events).length).toBe(0)
+  })
 })

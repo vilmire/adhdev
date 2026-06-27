@@ -2276,6 +2276,75 @@ export class CliProviderInstance implements ProviderInstance {
                 }
             } else if (newStatus === 'idle' && this.lastStatus === 'starting') {
                 this.emitAgentReadyOnce(chatTitle, now);
+                // GENERATING-BOUNDARY fast-collapse (R4, win32 startup-grace first turn):
+                // a turn dispatched into the startup-grace window can START and FINISH while
+                // the FSM is still in 'starting'. On a daemon whose claude-cli spec has NOT yet
+                // synced the starting→busy edge (the primary cure lives in the spec's
+                // idle→busy.from), the FSM never reaches 'busy'/generating, so
+                // detectStatusTransition observes starting→idle DIRECTLY with no intervening
+                // 'generating' frame. The idle→generating arm — the only path that sets
+                // generatingStartedAt and arms the completion — never fired, so the completing
+                // turn's agent:generating_completed is never emitted and the mesh coordinator
+                // never learns the worker went idle. Synthesize the started+completed pair here.
+                //
+                // Discriminator (false-positive safe — must NOT fire on a benign boot):
+                //   adapter.currentTurnTaskId is set ONLY by onTurnStarted (a real turn STARTED
+                //   this boot) and persists past completion, so it cleanly separates the three
+                //   non-firing cases — a true idle boot (no turn → null), a queued-pending
+                //   first turn that only runs AFTER startup-grace drains the composer (onTurnStarted
+                //   not yet called → null; it completes normally later via idle→busy→idle), and a
+                //   turn STILL running at the 8s mark (hasAdapterPendingResponse() still true →
+                //   excluded so we don't fire a premature mid-turn completion; idle→busy self-
+                //   corrects once the FSM reaches idle). We fire only when a turn started AND has
+                //   already finished: started-this-boot && !still-in-flight.
+                const startedTurnTaskId = typeof (this.adapter as any)?.currentTurnTaskId === 'string'
+                    && (this.adapter as any).currentTurnTaskId.trim()
+                    ? (this.adapter as any).currentTurnTaskId as string
+                    : undefined;
+                const fastCollapsed = !!startedTurnTaskId
+                    && !this.hasAdapterPendingResponse()
+                    && !this.generatingStartedAt
+                    && !this.generatingDebouncePending;
+                if (fastCollapsed) {
+                    let fcFinalSummary: string | undefined;
+                    let fcEvidenceSource: CompletionFinalAssistantEvidence['source'] = 'unavailable';
+                    try {
+                        const parsedMessages = this.adapter?.getScriptParsedStatus()?.messages;
+                        const evidence = this.completionFinalAssistantEvidence(parsedMessages);
+                        fcEvidenceSource = evidence.source;
+                        fcFinalSummary = extractFinalSummaryFromMessages(evidence.messages as any);
+                    } catch { /* best-effort */ }
+                    const missingEvidence = ((this.provider as any).requiresFinalAssistantBeforeIdle === true || fcEvidenceSource === 'external-native') && !fcFinalSummary;
+                    // Mirror the short-generating idle path's suppression: a provider that
+                    // requires a final assistant (or external-native history) with NO confirmed
+                    // summary and NO mesh context emits nothing — the session is idle with no
+                    // confirmed turn, matching startup-blip semantics. With mesh context we still
+                    // emit so the coordinator can apply its own timeout/retry logic.
+                    const hasMeshContext = !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator);
+                    if (missingEvidence && !hasMeshContext) {
+                        LOG.info('CLI', `[${this.type}] startup-grace fast-collapse suppressed: missing final assistant evidence, no mesh context (source=${fcEvidenceSource})`);
+                    } else {
+                        LOG.info('CLI', `[${this.type}] startup-grace fast-collapse: synthesizing started+completed (taskId=${startedTurnTaskId} source=${fcEvidenceSource} hadFinalSummary=${!!fcFinalSummary})`);
+                        // Retroactive started so the started→completed pair (and the chat bubble)
+                        // is well-formed; pushEvent stamps the per-turn taskId for CANON-B ack.
+                        this.pushEvent({ event: 'agent:generating_started', chatTitle, timestamp: now });
+                        if (this.isMeshWorkerSession()) {
+                            traceMeshEventStage('fired', this.meshTraceCtx(), `startup-grace fast-collapse (source=${fcEvidenceSource})`);
+                        }
+                        this.pushEvent({
+                            event: 'agent:generating_completed',
+                            chatTitle,
+                            duration: 0,
+                            timestamp: now,
+                            finalSummary: fcFinalSummary,
+                            completionDiagnostic: {
+                                reason: 'startup_grace_fast_collapse',
+                                finalAssistantEvidenceSource: fcEvidenceSource,
+                                ...(missingEvidence ? { blockReason: 'missing_final_assistant' } : {}),
+                            },
+                        });
+                    }
+                }
             } else if (newStatus === 'error') {
                 if (this.generatingDebounceTimer) { clearTimeout(this.generatingDebounceTimer); this.generatingDebounceTimer = null; }
                 this.generatingDebouncePending = null;
