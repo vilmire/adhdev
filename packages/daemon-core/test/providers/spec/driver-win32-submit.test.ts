@@ -30,13 +30,76 @@ import type {
     PtyTransportFactory, PtyRuntimeTransport, PtySpawnOptions,
 } from '../../../src/cli-adapters/pty-transport.js';
 
+// Bracketed-paste + soft-newline sequences, kept in sync with fsm-driver.ts.
+const BP_OPEN = '\x1b[200~';
+const BP_CLOSE = '\x1b[201~';
+const SOFT_NL = '\x1b[27;2;13~';
+
 class DrivablePty implements PtyRuntimeTransport {
     readonly pid = 4242;
     readonly ready = Promise.resolve();
     readonly writes: string[] = [];
     private dataCb: ((chunk: string) => void) | null = null;
     private exitCb: ((info: { exitCode: number }) => void) | null = null;
-    write(data: string): void { this.writes.push(data); }
+    // FIX-B-v2 regression model: a real win32 Ink/ConPTY composer SUBMITS its
+    // current contents on every BARE '\n'/'\r' that arrives as composer input —
+    // UNLESS the newline is inside a bracketed-paste (ESC[200~ … ESC[201~) region or
+    // is encoded as a non-submitting soft-newline (ESC[27;2;13~), both of which
+    // insert a LITERAL newline into the composer without submitting. We track the
+    // running byte stream across writes so a paste region opened in one write and
+    // closed in another still suppresses its newlines, count one 'submit' per bare
+    // newline outside a paste, and — crucially — CLEAR the composer on each submit
+    // (the submitted content leaves the composer). So after a raw multi-line body,
+    // only the fragment after the LAST bare newline remains: exactly the observed
+    // win32 truncation. `composerText` reflects whatever is STANDING in the composer.
+    private inPaste = false;
+    private pending = ''; // partial ESC sequence carried across write boundaries
+    submits = 0;
+    composerText = ''; // content currently standing (un-submitted) in the composer
+    // The composer contents captured at the moment of the FIRST submit — i.e. what
+    // was actually sent to the agent. With the fix this is the full body; with the
+    // bug it is only the tail fragment after the last embedded newline.
+    firstSubmittedText: string | null = null;
+    write(data: string): void {
+        this.writes.push(data);
+        this.consumeWin32(data);
+    }
+    private consumeWin32(data: string): void {
+        const s = this.pending + data;
+        this.pending = '';
+        let i = 0;
+        while (i < s.length) {
+            const rest = s.slice(i);
+            // A possibly-incomplete ESC sequence at the tail: stash and wait for more.
+            if (rest[0] === '\x1b' && this.isPartialSeq(rest)) { this.pending = rest; return; }
+            if (rest.startsWith(BP_OPEN)) { this.inPaste = true; i += BP_OPEN.length; continue; }
+            if (rest.startsWith(BP_CLOSE)) { this.inPaste = false; i += BP_CLOSE.length; continue; }
+            if (rest.startsWith(SOFT_NL)) { this.composerText += '\n'; i += SOFT_NL.length; continue; }
+            const ch = s[i];
+            if (ch === '\r' || ch === '\n') {
+                if (this.inPaste) {
+                    this.composerText += '\n'; // newline inside paste = literal text
+                } else {
+                    if (this.firstSubmittedText === null) this.firstSubmittedText = this.composerText;
+                    this.submits += 1;        // bare newline outside paste → a submit
+                    this.composerText = '';   // submitted content leaves the composer
+                }
+                i += 1;
+                continue;
+            }
+            this.composerText += ch;
+            i += 1;
+        }
+    }
+    // True when `rest` begins an ESC sequence we recognise but only have a prefix of
+    // (so it might complete in the next write) — keeps a marker from being misread
+    // when it straddles a chunk boundary.
+    private isPartialSeq(rest: string): boolean {
+        for (const full of [BP_OPEN, BP_CLOSE, SOFT_NL]) {
+            if (full.startsWith(rest) && rest.length < full.length) return true;
+        }
+        return false;
+    }
     resize(): void { /* no-op */ }
     kill(): void { this.exitCb?.({ exitCode: 0 }); }
     onData(cb: (chunk: string) => void): void { this.dataCb = cb; }
@@ -108,10 +171,30 @@ interface CollectOpts {
     /** Set false to NOT echo the body back into the composer — simulates a body
      *  dropped during boot, exercising the echo-gate's hold/re-write path. */
     echoBody?: boolean;
+    /** Override ADHDEV_WIN32_SUBMIT_MODE for this dispatch (FIX-B-v2). Default 'paste'. */
+    submitMode?: 'paste' | 'soft_newline';
 }
 
-async function sendAndCollect(opts: CollectOpts = {}): Promise<string[]> {
+interface CollectResult {
+    /** All PTY writes issued AFTER dispatch (markers + body chunks + CRs). */
+    writes: string[];
+    /** Submits the modelled ConPTY composer counted (bare newlines outside a
+     *  bracketed-paste). With the FIX-B-v2 body write this is exactly 1 — the single
+     *  trailing CR. Without the fix, a multi-line body yields one per embedded \n. */
+    submits: number;
+    /** Composer TEXT the modelled composer accumulated — embedded body newlines that
+     *  did NOT submit appear as literal '\n'. The trailing submit CR is not text. */
+    composerText: string;
+    /** The composer contents at the moment of the first submit — what was actually
+     *  sent to the agent. The full body with the fix; the tail fragment with the bug. */
+    firstSubmittedText: string | null;
+}
+
+async function sendAndCollectPty(opts: CollectOpts = {}): Promise<CollectResult> {
     const { text = 'hello world', submitAfterMs, totalWaitMs = 700 } = opts;
+    const prevMode = process.env.ADHDEV_WIN32_SUBMIT_MODE;
+    if (opts.submitMode) process.env.ADHDEV_WIN32_SUBMIT_MODE = opts.submitMode;
+    else delete process.env.ADHDEV_WIN32_SUBMIT_MODE;
     const factory = new DrivableFactory();
     const driver = new FsmDriver({
         specPath: writeSpec(submitSpec()),
@@ -126,6 +209,8 @@ async function sendAndCollect(opts: CollectOpts = {}): Promise<string[]> {
         pty.feed('\n>\n? for shortcuts');
         await sleep(200);
         const before = pty.writes.length;
+        const submitsBefore = pty.submits;
+        const textBefore = pty.composerText;
         driver.dispatch({ kind: 'send_message', text });
         const start = Date.now();
         // Echo the body into the composer: the win32 submit echo-gate holds the first
@@ -140,10 +225,21 @@ async function sendAndCollect(opts: CollectOpts = {}): Promise<string[]> {
             pty.feed('\n\nesc to interrupt');
         }
         await sleep(Math.max(0, totalWaitMs - (Date.now() - start)));
-        return pty.writes.slice(before);
+        return {
+            writes: pty.writes.slice(before),
+            submits: pty.submits - submitsBefore,
+            composerText: pty.composerText.slice(textBefore.length),
+            firstSubmittedText: pty.firstSubmittedText,
+        };
     } finally {
         driver.shutdown();
+        if (prevMode === undefined) delete process.env.ADHDEV_WIN32_SUBMIT_MODE;
+        else process.env.ADHDEV_WIN32_SUBMIT_MODE = prevMode;
     }
+}
+
+async function sendAndCollect(opts: CollectOpts = {}): Promise<string[]> {
+    return (await sendAndCollectPty(opts)).writes;
 }
 
 const MULTILINE = 'line one\nline two\nline three';
@@ -198,6 +294,96 @@ describe('FsmDriver -- win32 submit', () => {
         expect(loneCr).toBe(1);
     });
 
+    // ── FIX-B-v2: embedded-newline per-line submit (prompt truncation) ────────
+    //
+    // RCA: on the real win32 Ink/ConPTY composer each embedded '\n' in the body
+    // SUBMITS the preceding line as its own composer entry. Writing the raw
+    // multi-line body therefore submitted every line but the last BEFORE the
+    // trailing echo-gated CR ever ran — the prompt was truncated to only the tail
+    // fragment after the last '\n' (failure_category=per_newline_submit). The fix
+    // writes the body so its embedded newlines never submit: bracketed-paste
+    // (default) or soft-newline (fallback). The single trailing CR stays the only
+    // submit. The DrivablePty mock now models per-newline submit so the regression
+    // is observable (the old toContain check could not see it).
+
+    it('REPRO (no fix): a raw multi-line body submits once PER embedded newline', () => {
+        // Drive the modelled ConPTY directly with the raw body — what the pre-fix
+        // writeWin32Body did (send_keys(text) with intact \n) — then the lone
+        // trailing submit CR. The composer submits per bare \n, so the head/middle
+        // lines are lost and only the tail survives as standing composer text.
+        const pty = new DrivablePty();
+        pty.write(MULTILINE); // raw body, embedded newlines intact
+        pty.write('\r');      // the single intended submit CR
+        // 3 lines → 2 embedded-newline submits + 1 trailing CR = 3 submits (the bug:
+        // far more than the intended 1; lines 1 and 2 were each submitted alone).
+        expect(pty.submits).toBe(3);
+        // The FIRST submit (the first embedded '\n') sent only 'line one' — and the
+        // body keeps getting chopped; by the trailing CR only the tail fragment
+        // remains. The agent never receives the whole prompt.
+        expect(pty.firstSubmittedText).toBe('line one');
+        expect(pty.composerText).toBe(''); // composer empty after the trailing submit
+    });
+
+    it('paste mode: a multi-line body submits EXACTLY once (trailing CR), full body preserved as composer text', async () => {
+        setPlatform('win32');
+        const { writes, submits, firstSubmittedText } = await sendAndCollectPty({
+            text: MULTILINE, submitMode: 'paste', submitAfterMs: 480, totalWaitMs: 1400,
+        });
+        // Exactly one submit — the trailing CR. Zero per-line submits.
+        expect(submits).toBe(1);
+        // The full multi-line body was standing in the composer when that single
+        // submit fired (embedded newlines preserved as text, not consumed as submits).
+        expect(firstSubmittedText).toBe(MULTILINE);
+        // The body went out wrapped in bracketed-paste markers as their own segments,
+        // and the markers were never fused with body bytes.
+        expect(writes).toContain('\x1b[200~');
+        expect(writes).toContain('\x1b[201~');
+        expect(writes).toContain(MULTILINE);
+        expect(writes.some(w => w.includes('\x1b[200~') && w !== '\x1b[200~')).toBe(false);
+    });
+
+    it('soft_newline mode: a multi-line body submits EXACTLY once, full body preserved', async () => {
+        setPlatform('win32');
+        const { writes, submits, firstSubmittedText } = await sendAndCollectPty({
+            text: MULTILINE, submitMode: 'soft_newline', submitAfterMs: 480, totalWaitMs: 1400,
+        });
+        expect(submits).toBe(1); // only the trailing CR
+        // Each embedded newline became a non-submitting soft-newline → the full body
+        // is one multi-line composer entry standing when the single submit fires.
+        expect(firstSubmittedText).toBe(MULTILINE);
+        // No raw bracketed-paste in this mode; soft-newline sequence carried the breaks.
+        expect(writes).not.toContain('\x1b[200~');
+        expect(writes.join('')).toContain('\x1b[27;2;13~');
+    });
+
+    it('single-line win32 body is unchanged by FIX-B-v2 (no paste wrap, one submit)', async () => {
+        setPlatform('win32');
+        const { writes, submits } = await sendAndCollectPty({
+            text: 'hello world', submitAfterMs: 320, totalWaitMs: 1200,
+        });
+        expect(submits).toBe(1);
+        expect(writes).toContain('hello world');
+        expect(writes).not.toContain('\x1b[200~'); // no wrap for a body with no newline
+    });
+
+    it('paste markers stay intact when a long multi-line body is chunked', async () => {
+        setPlatform('win32');
+        // > WIN32_PTY_WRITE_CHUNK_CHARS (1024) AND multi-line → chunked AND wrapped.
+        const text = Array.from({ length: 60 }, (_, i) => `step ${i}: do the thing carefully`).join('\n');
+        expect(text.length).toBeGreaterThan(1024);
+        const { writes, submits, firstSubmittedText } = await sendAndCollectPty({
+            text, submitMode: 'paste', submitAfterMs: 1100, totalWaitMs: 2100,
+        });
+        // The open/close markers are present and were each written as a STANDALONE
+        // segment (never split across, never merged with a body chunk).
+        expect(writes.filter(w => w === '\x1b[200~').length).toBe(1);
+        expect(writes.filter(w => w === '\x1b[201~').length).toBe(1);
+        // Despite chunking, the composer reassembled the entire body — including its
+        // leading lines — and it submitted exactly once.
+        expect(firstSubmittedText).toBe(text);
+        expect(submits).toBe(1);
+    });
+
     // ── DISPATCHTRUNC regression: long-message front-truncation ──────────────
     //
     // A long multi-step instruction was arriving front-truncated at remote
@@ -212,7 +398,10 @@ describe('FsmDriver -- win32 submit', () => {
         const text = Array.from({ length: 60 }, (_, i) => `step ${i}: do the thing carefully and report`).join('\n');
         expect(text.length).toBeGreaterThan(1024);
         const writes = await sendAndCollect({ text, submitAfterMs: 1100, totalWaitMs: 1900 });
-        const bodyWrites = writes.filter(w => w !== '\r');
+        // Body segments = everything that isn't a CR or a bracketed-paste marker (the
+        // multi-line body is paste-wrapped under FIX-B-v2; the markers are their own
+        // standalone segments — see the dedicated marker-integrity test above).
+        const bodyWrites = writes.filter(w => w !== '\r' && w !== BP_OPEN && w !== BP_CLOSE);
         // Chunked into ≥2 writes, and the chunks reassemble to EXACTLY the original
         // body — the leading content is fully present, nothing dropped.
         expect(bodyWrites.length).toBeGreaterThanOrEqual(2);

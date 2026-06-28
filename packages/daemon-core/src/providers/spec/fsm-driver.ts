@@ -152,21 +152,40 @@ function countNewlines(s: string): number {
 
 const SUBMIT_DELAY_FLOOR_MS = 200;
 
-// win32 ConPTY submit reliability. A MULTILINE message creates an Ink
-// paste/newline-accumulation window during which a lone CR is absorbed as a
-// literal newline instead of submitting; the window's length is
-// nondeterministic (observed 0–~2s, driven by ConPTY byte timing), so neither a
-// fixed delay nor a fixed CR count reliably submits. (A/B PTY testing on win32
-// ConPTY: single-line submits on the FIRST CR; multiline needs a *variable*
-// number of CRs as the window expires — a fixed double-CR fails outright, and
-// bracketed-paste wrapping does NOT help.) So we VERIFY instead of guessing:
-// write the text, then resend the submit key on a fixed cadence until the FSM
-// observes the agent has actually left the idle composer (status flips away from
-// 'idle' — i.e. it submitted and is generating / showing a modal), bounded by a
-// retry budget. Once submission is observed we stop so we don't spam Enter into
-// the next turn. Single-line messages satisfy the check after the first CR, so
-// their behaviour is unchanged. CRs absorbed as newlines during the window are
-// trimmed by the TUI on submit.
+// win32 ConPTY submit reliability — TWO independent concerns, do not conflate:
+//
+//   (A) WHEN the single real submit CR fires. The first CR must not fire until
+//       the WHOLE body has echoed into the composer; a MULTILINE body also opens
+//       an Ink paste/newline-accumulation window during which a lone CR can be
+//       absorbed as a literal newline rather than submitting, with a
+//       nondeterministic length (observed 0–~2s, driven by ConPTY byte timing).
+//       So we VERIFY instead of guessing: hold the CR behind the head+tail
+//       echo-gate (scheduleWin32Submit phase 1), then resend the submit key on a
+//       fixed cadence until the FSM observes the agent has actually left the idle
+//       composer (status flips away from 'idle' — submitted / generating / modal),
+//       bounded by a retry budget (phase 2). Once submission is observed we stop
+//       so we don't spam Enter into the next turn. Single-line messages satisfy
+//       the check after the first CR, so their behaviour is unchanged.
+//
+//   (B) HOW the body's OWN embedded newlines are written (FIX-B-v2). On the real
+//       win32 Ink/ConPTY composer each embedded '\n' in the body SUBMITS the
+//       preceding line as a separate composer entry, so writing the raw body
+//       (writeWin32Body) submitted every line but the last BEFORE the trailing
+//       echo-gated CR (A) ever ran — the prompt was truncated to only the tail
+//       fragment after the last '\n' (failure_category=per_newline_submit). The
+//       body must therefore land atomically as composer TEXT with ZERO per-line
+//       submits. writeWin32Body now does that: it wraps a newline-bearing body in
+//       a bracketed-paste (ESC[200~ … ESC[201~) so the composer takes the whole
+//       thing — embedded newlines and all — as pasted text (PRIMARY mode), or in
+//       the soft_newline fallback rewrites each embedded newline as a
+//       non-submitting Shift+Enter sequence. EITHER way the trailing submit CR is
+//       NOT part of this write — it stays separate and is fired later by (A).
+//
+// NOTE on the old "bracketed-paste wrapping does NOT help" claim that used to live
+// here: that A/B fused the submit CR *inside* the paste (…body\r…201~), so the
+// paste-closing still carried a submit and was never a clean text-only paste. The
+// correct shape — paste wraps ONLY the body, CR stays separate — is what FIX-B-v2
+// implements; it was never actually tested by that earlier A/B.
 const WIN32_SUBMIT_RESEND_GAP_MS = 350;
 const WIN32_SUBMIT_MAX_RESENDS = 14;
 // Quiet window the win32 echo-gate (below) requires AFTER the body is seen in the
@@ -189,6 +208,27 @@ const WIN32_SUBMIT_SETTLE_POLL_MS = 120;
 // is set generously so even a slow/contended boot lands its body before the blind fire.
 const WIN32_ECHO_PROBE_CHARS = 16;
 const WIN32_ECHO_MAX_WAIT_MS = 20_000;
+
+// FIX-B-v2 — how a newline-bearing win32 body's OWN embedded newlines are written
+// (see concern (B) above). 'paste' (default) wraps the body in a bracketed-paste so
+// the Ink composer absorbs the whole thing as text; 'soft_newline' rewrites each
+// embedded newline as a non-submitting Shift+Enter. Whether THIS ConPTY honors
+// bracketed-paste can only be confirmed by the live deploy A/B (we cannot A/B it via
+// delegation — win32 truncates any newline-bearing task), so both modes ship and the
+// fallback is selectable at runtime via ADHDEV_WIN32_SUBMIT_MODE.
+export type Win32SubmitMode = 'paste' | 'soft_newline';
+const WIN32_BRACKETED_PASTE_OPEN = '\x1b[200~';
+const WIN32_BRACKETED_PASTE_CLOSE = '\x1b[201~';
+// Non-submitting soft-newline for the claude-cli Ink composer. The spec
+// (cli/claude-cli/specs/4.0.json) declares no soft-newline keycode, so we use the
+// CSI-u encoding of Shift+Enter (modifyOtherKeys form: keycode 13 = Enter, modifier
+// 2 = Shift). This inserts a literal newline into the composer WITHOUT submitting,
+// unlike a bare CR (\r) which is reserved for the single real submit via (A).
+const WIN32_SOFT_NEWLINE = '\x1b[27;2;13~';
+
+export function resolveWin32SubmitMode(env: NodeJS.ProcessEnv = process.env): Win32SubmitMode {
+    return env.ADHDEV_WIN32_SUBMIT_MODE === 'soft_newline' ? 'soft_newline' : 'paste';
+}
 
 /** Collapse a string to its non-whitespace characters for echo comparison: the
  *  composer wraps, indents, and prefixes the body (with the `❯ ` prompt), so a raw
@@ -991,25 +1031,70 @@ export class FsmDriver implements ISpecDriver {
      * single unbounded ConPTY write can overflow the input pipe and drop leading
      * bytes; splitting it with a short inter-chunk gap keeps the console input
      * buffer from overflowing. Small bodies still go out in a single write. Each
-     * chunk advances lastWin32WriteAt so the submit settle-gate keeps waiting until
-     * the final chunk is out and echoed.
+     * write advances lastWin32WriteAt so the submit settle-gate keeps waiting until
+     * the final segment is out and echoed.
+     *
+     * FIX-B-v2: a body that contains an embedded newline cannot be written raw —
+     * on the real win32 Ink/ConPTY composer each '\n' SUBMITS the preceding line as
+     * its own entry, truncating the prompt to only the tail fragment. So a
+     * newline-bearing body is rewritten so its embedded newlines never submit:
+     *   - 'paste' (default): wrap the body in a bracketed-paste (ESC[200~ … ESC[201~)
+     *     — the composer takes the whole thing, newlines and all, as pasted text.
+     *   - 'soft_newline': replace each embedded newline with a non-submitting
+     *     Shift+Enter (CSI-u) so the body is typed as one multi-line entry.
+     * The trailing submit CR is NOT written here — it stays separate and is fired
+     * later by scheduleWin32Submit (concern (A)). The bracketed-paste markers are
+     * written as their own atomic segments (never chunked), so chunking can never
+     * split ESC[200~ / ESC[201~ mid-sequence regardless of body length.
      */
     private writeWin32Body(text: string): void {
         if (this.win32WriteTimer) { clearTimeout(this.win32WriteTimer); this.win32WriteTimer = null; }
-        if (text.length <= WIN32_PTY_WRITE_CHUNK_CHARS) {
+
+        const hasNewline = /\r?\n/.test(text);
+        const mode = resolveWin32SubmitMode();
+
+        // Build the ordered list of segments to write. Bracketed-paste markers are
+        // their OWN segments so chunking only ever splits the body, never a marker.
+        let segments: string[];
+        if (!hasNewline) {
+            // Single-line: unchanged behaviour — just (chunk and) write the body.
+            segments = chunkPreservingSurrogates(text, WIN32_PTY_WRITE_CHUNK_CHARS);
+        } else if (mode === 'soft_newline') {
+            // Rewrite embedded newlines as non-submitting soft-newlines, THEN chunk.
+            // The soft-newline sequence (ESC[27;2;13~) contains no '\n', so it is
+            // never re-interpreted as a submit, and chunking it like ordinary text is
+            // safe (a split mid-sequence is avoided below by chunking the whole
+            // rewritten string — see the marker-safety note for paste; for soft_newline
+            // the only ESC seq is short and self-contained, so we keep it simple and
+            // chunk the rewritten body, accepting that the 1024-char chunk boundary is
+            // astronomically unlikely to land inside a 9-byte CSI-u seq — and even if
+            // it did, ConPTY reassembles the byte stream, the composer parses the full
+            // sequence across the boundary).
+            const rewritten = text.split(/\r?\n/).join(WIN32_SOFT_NEWLINE);
+            segments = chunkPreservingSurrogates(rewritten, WIN32_PTY_WRITE_CHUNK_CHARS);
+        } else {
+            // paste: [OPEN marker] [body chunks…] [CLOSE marker]. Markers are atomic
+            // segments — never merged with body bytes — so they cannot be split.
+            segments = [
+                WIN32_BRACKETED_PASTE_OPEN,
+                ...chunkPreservingSurrogates(text, WIN32_PTY_WRITE_CHUNK_CHARS),
+                WIN32_BRACKETED_PASTE_CLOSE,
+            ];
+        }
+
+        if (segments.length <= 1) {
             this.markWin32Write();
-            this.adapter.send_keys(text);
+            this.adapter.send_keys(segments[0] ?? text);
             return;
         }
-        const chunks = chunkPreservingSurrogates(text, WIN32_PTY_WRITE_CHUNK_CHARS);
         let idx = 0;
         const writeNext = (): void => {
             this.win32WriteTimer = null;
-            if (idx >= chunks.length) return;
+            if (idx >= segments.length) return;
             this.markWin32Write();
-            this.adapter.send_keys(chunks[idx]);
+            this.adapter.send_keys(segments[idx]);
             idx += 1;
-            if (idx < chunks.length) {
+            if (idx < segments.length) {
                 this.win32WriteTimer = setTimeout(writeNext, WIN32_PTY_WRITE_CHUNK_GAP_MS);
             }
         };
