@@ -1156,14 +1156,43 @@ var MESH_MAGI_REVIEW_TOOL = {
       question: { type: "string", description: 'The single investigation question every agent answers \u2014 e.g. "What is the root cause of this defect?", "Refute this RCA.", "Why does this code do X?". Not only "review this".' },
       target: { type: "string", description: "What to investigate \u2014 file path(s), a bug symptom / error / stack trace, a code area / symbol, or omitted when the question is self-contained." },
       artifacts: { type: "array", items: { type: "string" }, description: "Inline content when not file-backed: a doc/diff, a log/error dump, or a prior single-worker RCA to refute." },
-      panel: { type: "string", description: 'Named panel from meshes.json (mesh_magi_panel_set). Falls back to a panel named "default" if omitted; errors clearly if none exists.' },
+      panel: { type: "string", description: 'Named panel from meshes.json (mesh_magi_panel_set). Falls back to a panel named "default" if omitted; errors clearly if none exists. Ignored when inline members are provided.' },
+      members: {
+        type: "array",
+        description: "Inline ad-hoc panel override (NOT persisted): same member shape as a configured panel. When present, the named panel is ignored. Maximize distinct providers AND machines for real independence.",
+        items: {
+          type: "object",
+          properties: {
+            nodeId: { type: "string", description: "Optional \u2014 pin to a specific mesh node id." },
+            capabilityTags: { type: "array", items: { type: "string" }, description: "Optional routing tags (ANDed with the provider tag) when nodeId is absent." },
+            provider: { type: "string", description: "REQUIRED \u2014 provider type, e.g. claude-cli / codex-cli / hermes-cli / gemini-cli." },
+            n: { type: "number", description: "Optional per-member replica count (default 1)." }
+          },
+          required: ["provider"]
+        }
+      },
       n: { type: "number", description: "Global replica override per member (clamped by the total-replica guard cap, default 12)." },
       mode: { type: "string", enum: ["rca", "investigation", "claim_audit", "design_review", "code_audit"], description: "Synthesis emphasis hint \u2014 affects labels only, never the agent count or schema." },
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
-      wait: { type: "boolean", description: "Default true \u2014 collect replica outputs and return the synthesis. (Poll-by-group is a deferred mode.)" },
+      include_stale: { type: "boolean", description: "Default false. By default, panel members whose node HEAD commit differs from the coordinator reference commit are EXCLUDED (they would investigate different code). Set true to fan out to them anyway \u2014 results will be git-skewed and a warning is surfaced. If exclusion drops the panel below 2 independent targets the call errors rather than degrading to N=1; include_stale=true is one way to recover." },
+      wait: { type: "boolean", description: "Default true \u2014 collect replica outputs and return the synthesis. Set false to dispatch async and return a consensusGroupId handle; collect later with mesh_magi_collect." },
       wait_timeout_ms: { type: "number", description: 'Max time to wait for replica completion before returning a partial "missing K of N" synthesis. Default ~4 min.' }
     },
     required: ["question"]
+  }
+};
+var MESH_MAGI_COLLECT_TOOL = {
+  name: "mesh_magi_collect",
+  description: "Collect + synthesize a previously dispatched MAGI fan-out by its consensus group id \u2014 the async companion to mesh_magi_review({ wait:false }). Rediscovers the replica tasks from the queue and runs the SAME diversity-weighted synthesis (consensus/disagreement/unique-evidence \u2192 needs_verification list). Defaults to a SNAPSHOT (wait=false): returns whatever replicas are terminal right now, with a pending note if some are still generating; pass wait=true to block for the rest. Read-only. Drive off mission completion / pendingCoordinatorEvents rather than polling this in a tight loop.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      consensus_group_id: { type: "string", description: "The consensusGroupId returned by a wait=false mesh_magi_review." },
+      require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
+      wait: { type: "boolean", description: "Default false (snapshot). Set true to block for outstanding replicas up to wait_timeout_ms before synthesizing." },
+      wait_timeout_ms: { type: "number", description: "When wait=true, max time to wait for remaining replica completion. Default ~4 min." }
+    },
+    required: ["consensus_group_id"]
   }
 };
 var MESH_MAGI_PANEL_SET_TOOL = {
@@ -1249,6 +1278,7 @@ var ALL_MESH_TOOLS = [
   MESH_MISSION_LIST_TOOL,
   MESH_REVIEW_INBOX_TOOL,
   MESH_MAGI_REVIEW_TOOL,
+  MESH_MAGI_COLLECT_TOOL,
   MESH_MAGI_PANEL_SET_TOOL,
   MESH_MAGI_PANEL_LIST_TOOL
 ];
@@ -3422,6 +3452,20 @@ async function meshStatus(ctx, args = {}) {
         response.asyncRefineJobs = asyncRefineJobs;
       }
     }
+    const magiActivity = (0, import_daemon_core4.buildMeshMagiActivity)({ meshId: mesh.id, ledgerEntries });
+    if (magiActivity.length > 0) {
+      const fold = (0, import_daemon_core4.summarizeMeshMagiActivity)(magiActivity);
+      if (compact) {
+        if (fold.groups.length > 0) response.magiActivity = fold.groups;
+        response.magiActivitySummary = {
+          total: fold.total,
+          byStatus: fold.byStatus,
+          ...fold.staleSynthesized > 0 ? { staleSynthesized: fold.staleSynthesized } : {}
+        };
+      } else {
+        response.magiActivity = magiActivity;
+      }
+    }
     if (pendingEvents.length > 0) {
       response.pendingCoordinatorEvents = pendingEvents;
     }
@@ -4255,6 +4299,7 @@ function synthesizeMagiResponses(responses, opts = {}) {
     independenceBanner = `independence not achieved \u2014 the answering replicas span ${distinctProviders} provider(s) and ${distinctNodes} machine(s); their agreements are source-coupled and routed to needs_verification.`;
   }
   const openQuestions = [...new Set(answered.flatMap((r) => r.response.open_questions))];
+  const gitSkew = computeMagiGitSkew(answered);
   return {
     replicasExpected,
     replicasAnswered,
@@ -4265,18 +4310,49 @@ function synthesizeMagiResponses(responses, opts = {}) {
     clusters: built,
     needsVerification,
     agreed,
-    openQuestions
+    openQuestions,
+    replicas: responses.map((r) => r.source),
+    gitSkew
+  };
+}
+function computeMagiGitSkew(answered) {
+  const branches = /* @__PURE__ */ new Set();
+  let divergentReplicas = 0;
+  for (const { source } of answered) {
+    const git = source.git;
+    if (!git) continue;
+    const branch = typeof git.branch === "string" && git.branch.trim() ? git.branch.trim() : void 0;
+    if (branch) branches.add(branch);
+    if ((git.ahead ?? 0) > 0 || (git.behind ?? 0) > 0) divergentReplicas++;
+  }
+  const branchList = [...branches].sort();
+  const skewed = branchList.length > 1 || divergentReplicas > 0;
+  return {
+    skewed,
+    distinctBranches: branchList.length,
+    branches: branchList,
+    divergentReplicas,
+    ...skewed ? {
+      note: branchList.length > 1 ? `replicas span ${branchList.length} branches (${branchList.join(", ")}) \u2014 evidence compares different code; treat agreement with caution.` : `${divergentReplicas} replica(s) diverge from upstream (ahead/behind) \u2014 not all replicas are on identical code.`
+    } : {}
   };
 }
 function replicaCountFor(member, panel, globalN) {
   const n = member.n ?? panel.defaultN ?? globalN ?? 1;
   return Math.max(1, Math.floor(n));
 }
+function nodeHeadCommit(node) {
+  const h = node?.git?.headCommit;
+  return typeof h === "string" && h.trim() ? h.trim() : void 0;
+}
 function buildMagiFanoutPlan(panel, nodes, opts = {}) {
   const cap = Math.max(1, Math.floor(opts.maxReplicas ?? MAGI_MAX_REPLICAS));
   const members = Array.isArray(panel.members) ? panel.members : [];
+  const referenceCommit = typeof opts.referenceCommit === "string" && opts.referenceCommit.trim() ? opts.referenceCommit.trim() : void 0;
+  const includeStale = opts.includeStale === true;
   const replicas = [];
   const unavailableMembers = [];
+  const memberResolutions = [];
   const targetKeys = /* @__PURE__ */ new Set();
   const providerSet = /* @__PURE__ */ new Set();
   const nodeTargetSet = /* @__PURE__ */ new Set();
@@ -4287,16 +4363,17 @@ function buildMagiFanoutPlan(panel, nodes, opts = {}) {
     const requiredTags = (0, import_daemon_core4.normalizeMeshCapabilityTags)([`provider=${provider}`, ...capabilityTags]);
     const count = replicaCountFor(member, panel, opts.n);
     let targetNodeId;
-    let available = false;
+    let candidateNodes = [];
     if (member.nodeId) {
       const node = nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, member.nodeId));
       if (node) {
         targetNodeId = node.id;
-        available = true;
+        candidateNodes = [node];
       }
     } else {
-      available = nodes.some((n) => (0, import_daemon_core4.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core4.buildMeshNodeCapabilityTags)(n)));
+      candidateNodes = nodes.filter((n) => (0, import_daemon_core4.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core4.buildMeshNodeCapabilityTags)(n)));
     }
+    const available = candidateNodes.length > 0;
     if (!available) {
       unavailableMembers.push({
         memberIndex,
@@ -4305,6 +4382,41 @@ function buildMagiFanoutPlan(panel, nodes, opts = {}) {
         capabilityTags,
         reason: member.nodeId ? `pinned node '${member.nodeId}' is not a member of this mesh` : `no mesh node satisfies required tags [${requiredTags.join(", ")}]`
       });
+      memberResolutions.push({ memberIndex, provider, nodeId: member.nodeId, capabilityTags, available: false, gitStale: false, excluded: true, reason: "unavailable" });
+      return;
+    }
+    let headCommit;
+    let gitStale = false;
+    if (referenceCommit) {
+      const freshCandidate = candidateNodes.find((n) => {
+        const h = nodeHeadCommit(n);
+        return !h || h === referenceCommit;
+      });
+      if (freshCandidate) {
+        headCommit = nodeHeadCommit(freshCandidate);
+        if (member.nodeId) targetNodeId = freshCandidate.id;
+        gitStale = false;
+      } else {
+        headCommit = nodeHeadCommit(candidateNodes[0]);
+        gitStale = true;
+      }
+    } else {
+      headCommit = nodeHeadCommit(candidateNodes.find((n) => nodeHeadCommit(n)) ?? candidateNodes[0]);
+    }
+    const resolution = {
+      memberIndex,
+      provider,
+      nodeId: targetNodeId ?? member.nodeId,
+      capabilityTags,
+      available: true,
+      ...headCommit ? { headCommit } : {},
+      gitStale,
+      excluded: false
+    };
+    if (gitStale && !includeStale) {
+      resolution.excluded = true;
+      resolution.reason = `git-stale: node HEAD ${headCommit ?? "(unknown)"} differs from reference ${referenceCommit}`;
+      memberResolutions.push(resolution);
       return;
     }
     totalRequested += count;
@@ -4312,6 +4424,7 @@ function buildMagiFanoutPlan(panel, nodes, opts = {}) {
     targetKeys.add(`${targetKey}|${provider}`);
     providerSet.add(provider);
     nodeTargetSet.add(targetKey);
+    memberResolutions.push(resolution);
     for (let i = 0; i < count; i++) {
       replicas.push({ memberIndex, provider, targetNodeId, capabilityTags, requiredTags });
     }
@@ -4320,6 +4433,8 @@ function buildMagiFanoutPlan(panel, nodes, opts = {}) {
   const capped = droppedReplicas > 0 ? replicas.slice(0, cap) : replicas;
   const distinctProviders = providerSet.size;
   const distinctNodeTargets = nodeTargetSet.size;
+  const staleMembers = memberResolutions.filter((m) => m.gitStale && m.excluded);
+  const includedStaleMembers = memberResolutions.filter((m) => m.gitStale && !m.excluded);
   return {
     replicas: capped,
     totalRequested,
@@ -4330,8 +4445,16 @@ function buildMagiFanoutPlan(panel, nodes, opts = {}) {
     distinctNodeTargets,
     enoughTargets: targetKeys.size >= MAGI_MIN_TARGETS,
     coupled: distinctProviders < 2 || distinctNodeTargets < 2,
-    unavailableMembers
+    unavailableMembers,
+    ...referenceCommit ? { referenceCommit } : {},
+    memberResolutions,
+    staleMembers,
+    includedStaleMembers
   };
+}
+function resolveMagiReferenceCommit(ctx) {
+  const node = resolveCoordinatorNode(ctx);
+  return nodeHeadCommit(node);
 }
 var MAGI_OUTPUT_CONTRACT = `When done, respond with ONLY a single JSON object (no prose, no code fence) matching this exact schema:
 {
@@ -4411,39 +4534,14 @@ async function meshMagiPanelSet(ctx, args) {
   }
 }
 function previewMagiPanel(config) {
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    throw new Error("invalid_magi_panel: config must be an object");
-  }
-  const raw = config;
-  const rawMembers = raw.members;
-  if (!Array.isArray(rawMembers) || rawMembers.length === 0) {
-    throw new Error("invalid_magi_panel: members must be a non-empty array");
-  }
-  const members = rawMembers.map((entry, idx) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new Error(`invalid_magi_panel: member[${idx}] must be an object`);
-    }
-    const m = entry;
-    const provider = typeof m.provider === "string" ? m.provider.trim() : "";
-    if (!provider) throw new Error(`invalid_magi_panel: member[${idx}].provider is required`);
-    const nodeId = typeof m.nodeId === "string" && m.nodeId.trim() ? m.nodeId.trim() : void 0;
-    const capabilityTags = (0, import_daemon_core4.normalizeMeshCapabilityTags)(m.capabilityTags);
-    const n = typeof m.n === "number" && Number.isFinite(m.n) && m.n >= 1 ? Math.floor(m.n) : void 0;
-    return {
-      provider,
-      ...nodeId ? { nodeId } : {},
-      ...capabilityTags.length ? { capabilityTags } : {},
-      ...n !== void 0 ? { n } : {}
-    };
-  });
-  const description = typeof raw.description === "string" && raw.description.trim() ? raw.description.trim().slice(0, 200) : void 0;
-  const defaultN = typeof raw.defaultN === "number" && Number.isFinite(raw.defaultN) && raw.defaultN >= 1 ? Math.floor(raw.defaultN) : void 0;
-  return {
-    ...description ? { description } : {},
+  return (0, import_daemon_core4.normalizeMagiPanel)(config);
+}
+function buildInlineMagiPanel(members, opts = {}) {
+  return (0, import_daemon_core4.normalizeMagiPanel)({
     members,
-    ...defaultN !== void 0 ? { defaultN } : {},
-    dedupExempt: raw.dedupExempt === false ? false : true
-  };
+    ...opts.defaultN !== void 0 ? { defaultN: opts.defaultN } : {},
+    description: opts.description ?? "inline ad-hoc panel"
+  });
 }
 async function meshMagiPanelList(ctx, args = {}) {
   await refreshMeshFromDaemon(ctx);
@@ -4453,51 +4551,85 @@ async function meshMagiPanelList(ctx, args = {}) {
   if (only && names.length === 0) {
     return JSON.stringify({ success: false, code: "magi_panel_not_found", error: `panel '${only}' is not configured`, configuredPanels: Object.keys(all) });
   }
+  const referenceCommit = resolveMagiReferenceCommit(ctx);
   const panels = names.map((name) => {
     const panel = all[name];
-    const plan = buildMagiFanoutPlan(panel, ctx.mesh.nodes, {});
+    const plan = buildMagiFanoutPlan(panel, ctx.mesh.nodes, { referenceCommit });
     return {
       name,
       description: panel.description,
-      members: panel.members,
+      // Per-member gitStale boolean alongside the raw member definition.
+      members: panel.members.map((m, i) => {
+        const res = plan.memberResolutions.find((r) => r.memberIndex === i);
+        return {
+          ...m,
+          gitStale: res?.gitStale === true,
+          ...res?.headCommit ? { headCommit: res.headCommit } : {}
+        };
+      }),
       defaultN: panel.defaultN ?? 1,
       resolution: {
+        referenceCommit: referenceCommit ?? null,
         totalReplicas: plan.totalAfterCap,
         distinctTargets: plan.distinctTargets,
         distinctProviders: plan.distinctProviders,
         distinctMachines: plan.distinctNodeTargets,
         enoughTargets: plan.enoughTargets,
         coupled: plan.coupled,
-        unavailableMembers: plan.unavailableMembers
+        unavailableMembers: plan.unavailableMembers,
+        staleMembers: plan.staleMembers
       },
+      ...plan.staleMembers.length > 0 ? { gitStaleWarning: `${plan.staleMembers.length} member(s) are git-stale (HEAD differs from reference ${referenceCommit ?? "(unknown)"}) and are excluded by default; pass include_stale=true to mesh_magi_review to include them.` } : {},
       ...plan.coupled ? { warning: "This panel collapses to a single provider or single machine \u2014 its agreements would be flagged source-coupled." } : {},
-      ...!plan.enoughTargets ? { error: `Resolves to ${plan.distinctTargets} distinct (node, provider) target(s); MAGI requires \u2265${MAGI_MIN_TARGETS}.` } : {}
+      ...!plan.enoughTargets ? { error: `Resolves to ${plan.distinctTargets} distinct (node, provider) target(s) after git-stale exclusion; MAGI requires \u2265${MAGI_MIN_TARGETS}.` } : {}
     };
   });
-  return JSON.stringify({ success: true, count: panels.length, panels }, null, 2);
+  return JSON.stringify({ success: true, count: panels.length, ...referenceCommit ? { referenceCommit } : {}, panels }, null, 2);
 }
 async function meshMagiReview(ctx, args) {
   const question = readString(args.question);
   if (!question) return JSON.stringify({ success: false, error: "question required" });
   await refreshMeshFromDaemon(ctx);
-  const panelName = readString(args.panel) || "default";
-  const panel = (0, import_daemon_core4.getMagiPanel)(panelName);
+  const hasInlineMembers = Array.isArray(args.members) && args.members.length > 0;
+  let panel;
+  let panelName;
+  if (hasInlineMembers) {
+    panelName = "(inline)";
+    try {
+      panel = buildInlineMagiPanel(args.members, { defaultN: args.n });
+    } catch (e) {
+      return JSON.stringify({
+        success: false,
+        code: "invalid_magi_panel",
+        error: e?.message || String(e),
+        hint: "Inline members use the same shape as a configured panel: [{ provider (REQUIRED), nodeId?, capabilityTags?, n? }]."
+      });
+    }
+  } else {
+    panelName = readString(args.panel) || "default";
+    panel = (0, import_daemon_core4.getMagiPanel)(panelName);
+  }
   if (!panel) {
     return JSON.stringify({
       success: false,
       code: "magi_panel_missing",
-      error: `MAGI panel '${panelName}' is not configured. Define it first with mesh_magi_panel_set, and inspect resolution with mesh_magi_panel_list.`,
+      error: `MAGI panel '${panelName}' is not configured. Define it first with mesh_magi_panel_set, pass inline members, and inspect resolution with mesh_magi_panel_list.`,
       configuredPanels: Object.keys((0, import_daemon_core4.listMagiPanels)())
     });
   }
-  const plan = buildMagiFanoutPlan(panel, ctx.mesh.nodes, { n: args.n });
+  const includeStale = (args.include_stale ?? args.includeStale) === true;
+  const referenceCommit = resolveMagiReferenceCommit(ctx);
+  const plan = buildMagiFanoutPlan(panel, ctx.mesh.nodes, { n: args.n, referenceCommit, includeStale });
   if (!plan.enoughTargets) {
+    const droppedByStale = plan.staleMembers.length > 0;
     return JSON.stringify({
       success: false,
-      code: "magi_insufficient_targets",
-      error: `Panel '${panelName}' resolves to ${plan.distinctTargets} available (node, provider) target(s); MAGI requires \u2265${MAGI_MIN_TARGETS} and never silently degrades to N=1.`,
+      code: droppedByStale ? "magi_insufficient_targets_after_stale_exclusion" : "magi_insufficient_targets",
+      error: droppedByStale ? `Panel '${panelName}' resolves to only ${plan.distinctTargets} independent (node, provider) target(s) AFTER excluding ${plan.staleMembers.length} git-stale member(s) (HEAD differs from reference ${referenceCommit ?? "(unknown)"}); MAGI requires \u2265${MAGI_MIN_TARGETS} and never silently degrades to N=1.` : `Panel '${panelName}' resolves to ${plan.distinctTargets} available (node, provider) target(s); MAGI requires \u2265${MAGI_MIN_TARGETS} and never silently degrades to N=1.`,
+      ...referenceCommit ? { referenceCommit } : {},
       unavailableMembers: plan.unavailableMembers,
-      hint: "Use mesh_magi_panel_list to see resolution, mesh_magi_panel_set to fix members, mesh_status to confirm nodes/providers are online."
+      ...droppedByStale ? { staleMembers: plan.staleMembers } : {},
+      hint: droppedByStale ? "Bring the stale node(s) to the reference commit, or pass include_stale=true to mesh_magi_review to fan out to them anyway (results will be git-skewed). Use mesh_magi_panel_list to inspect resolution." : "Use mesh_magi_panel_list to see resolution, mesh_magi_panel_set to fix members, mesh_status to confirm nodes/providers are online."
     }, null, 2);
   }
   const mode = readString(args.mode);
@@ -4538,6 +4670,13 @@ Target: ${args.target}` : ""}`
   if (replicaRecords.length < MAGI_MIN_TARGETS) {
     return JSON.stringify({ success: false, code: "magi_enqueue_failed", error: "fewer than 2 replicas enqueued successfully", consensusGroupId, missionId: mission.id });
   }
+  persistMagiDispatched(ctx, {
+    consensusGroupId,
+    missionId: mission.id,
+    panel: panelName,
+    question,
+    replicaCount: replicaRecords.length
+  });
   const queueTrigger = await triggerMeshQueueAndReport(ctx);
   if (ctx.transport instanceof IpcTransport) {
     await eagerlyDispatchRemoteReplicas(ctx, replicaRecords, prompt, mission.id, consensusGroupId);
@@ -4547,6 +4686,7 @@ Target: ${args.target}` : ""}`
     consensusGroupId,
     missionId: mission.id,
     panel: panelName,
+    ...hasInlineMembers ? { inline: true } : {},
     question,
     replicaCount: replicaRecords.length,
     replicas: replicaRecords.map((r) => ({ taskId: r.taskId, provider: r.provider, targetNodeId: r.targetNodeId })),
@@ -4556,6 +4696,17 @@ Target: ${args.target}` : ""}`
       coupled: plan.coupled,
       ...plan.coupled ? { banner: "Panel collapsed to a single provider or machine \u2014 agreements will be flagged source-coupled." } : {}
     },
+    ...plan.referenceCommit ? { referenceCommit: plan.referenceCommit } : {},
+    // Surface git-stale handling: which members were excluded (default), or included
+    // despite being stale (include_stale=true) — the latter makes results git-skewed.
+    ...plan.staleMembers.length > 0 ? {
+      gitStaleExcluded: plan.staleMembers,
+      gitStaleWarning: `${plan.staleMembers.length} git-stale member(s) (HEAD \u2260 reference ${plan.referenceCommit ?? "(unknown)"}) were excluded from this fan-out; pass include_stale=true to include them.`
+    } : {},
+    ...plan.includedStaleMembers.length > 0 ? {
+      gitStaleIncluded: plan.includedStaleMembers,
+      gitStaleWarning: `include_stale=true: ${plan.includedStaleMembers.length} git-stale member(s) (HEAD \u2260 reference ${plan.referenceCommit ?? "(unknown)"}) were INCLUDED \u2014 their evidence compares different code, so synthesis will be git-skewed.`
+    } : {},
     ...plan.droppedReplicas > 0 ? {
       cappedReplicas: plan.droppedReplicas,
       cappedNote: `Total replicas requested (${plan.totalRequested}) exceeded the guard cap (${MAGI_MAX_REPLICAS}); ${plan.droppedReplicas} dropped (logged, not silent).`
@@ -4567,7 +4718,8 @@ Target: ${args.target}` : ""}`
     return JSON.stringify({
       ...baseResult,
       waited: false,
-      nextAction: "Replicas are running. Synthesis runs when you re-collect; drive off mission completion / pendingCoordinatorEvents rather than polling chat."
+      pollWith: { tool: "mesh_magi_collect", args: { consensus_group_id: consensusGroupId } },
+      nextAction: `Replicas are running. Drive off mission completion / pendingCoordinatorEvents rather than polling chat, then collect + synthesize once with mesh_magi_collect({ consensus_group_id: '${consensusGroupId}' }).`
     }, null, 2);
   }
   const collected = await collectMagiResponses(ctx, {
@@ -4578,6 +4730,14 @@ Target: ${args.target}` : ""}`
     replicasExpected: replicaRecords.length,
     requireIndependentEvidence
   });
+  persistMagiSynthesis(ctx, {
+    consensusGroupId,
+    missionId: mission.id,
+    panel: panelName,
+    question,
+    staleReplicas: collected.staleCount,
+    synthesis
+  });
   return JSON.stringify({
     ...baseResult,
     waited: true,
@@ -4586,38 +4746,164 @@ Target: ${args.target}` : ""}`
       timedOut: collected.timedOut,
       answered: synthesis.replicasAnswered,
       missing: synthesis.replicasMissing,
-      ...synthesis.replicasMissing > 0 ? { missingNote: `Partial synthesis \u2014 ${synthesis.replicasMissing} of ${replicaRecords.length} replicas did not return a parseable response (timed out / failed / unparseable).` } : {}
+      staleReplicas: collected.staleCount,
+      ...collected.staleCount > 0 ? { staleNote: `${collected.staleCount} replica(s) were detected STALE \u2014 assigned to a node/session no longer present in the live mesh; collection stopped early rather than waiting out the timeout.` } : {},
+      ...synthesis.replicasMissing > 0 ? { missingNote: `Partial synthesis \u2014 ${synthesis.replicasMissing} of ${replicaRecords.length} replicas did not return a parseable response (timed out / failed / unparseable / stale).` } : {}
+    },
+    synthesis
+  }, null, 2);
+}
+async function meshMagiCollect(ctx, args) {
+  const consensusGroupId = readString(args.consensus_group_id) || readString(args.consensusGroupId);
+  if (!consensusGroupId) return JSON.stringify({ success: false, error: "consensus_group_id required" });
+  await refreshMeshFromDaemon(ctx);
+  const replicaTasks = findMagiReplicaTasks((0, import_daemon_core4.getQueue)(ctx.mesh.id), consensusGroupId);
+  if (replicaTasks.length === 0) {
+    return JSON.stringify({
+      success: false,
+      code: "magi_group_not_found",
+      error: `No MAGI replicas found for consensus group '${consensusGroupId}'. It may have been pruned, or the id is wrong.`,
+      consensusGroupId
+    });
+  }
+  const requireIndependentEvidence = (args.require_independent_evidence ?? args.requireIndependentEvidence) !== false;
+  const wait = args.wait === true;
+  const timeoutMs = wait ? Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(args.wait_timeout_ms ?? args.waitTimeoutMs) || MAGI_DEFAULT_WAIT_MS)) : 0;
+  const replicaTaskIds = replicaTasks.map((t) => readString(t.id)).filter(Boolean);
+  const collected = await collectMagiResponses(ctx, { replicaTaskIds, timeoutMs });
+  const synthesis = synthesizeMagiResponses(collected.responses, {
+    replicasExpected: replicaTaskIds.length,
+    requireIndependentEvidence
+  });
+  persistMagiSynthesis(ctx, {
+    consensusGroupId,
+    missionId: readString(replicaTasks[0]?.missionId),
+    staleReplicas: collected.staleCount,
+    synthesis
+  });
+  return JSON.stringify({
+    success: true,
+    consensusGroupId,
+    replicaCount: replicaTaskIds.length,
+    waited: wait,
+    collection: {
+      terminal: collected.terminal,
+      timedOut: collected.timedOut,
+      answered: synthesis.replicasAnswered,
+      missing: synthesis.replicasMissing,
+      staleReplicas: collected.staleCount,
+      ...collected.staleCount > 0 ? { staleNote: `${collected.staleCount} replica(s) were detected STALE \u2014 assigned to a node/session no longer present in the live mesh.` } : {},
+      ...!collected.terminal ? { pendingNote: "Not all replicas are terminal yet \u2014 this is a partial snapshot. Re-collect once mission/pendingCoordinatorEvents report more completions." } : {}
     },
     synthesis
   }, null, 2);
 }
 var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+var MAGI_TERMINAL_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
+function findMagiReplicaTasks(queue, consensusGroupId) {
+  const groupId = typeof consensusGroupId === "string" ? consensusGroupId.trim() : "";
+  if (!groupId) return [];
+  return (Array.isArray(queue) ? queue : []).filter((t) => readString(t?.consensusGroupId) === groupId);
+}
+function classifyStaleReplicas(annotatedTasks, terminal = MAGI_TERMINAL_STATUSES) {
+  const staleTaskIds = /* @__PURE__ */ new Set();
+  const staleReasons = {};
+  for (const t of Array.isArray(annotatedTasks) ? annotatedTasks : []) {
+    if (terminal.has(String(t?.status))) continue;
+    if (t?.staleAssigned === true) {
+      const id = readString(t.id);
+      if (!id) continue;
+      staleTaskIds.add(id);
+      staleReasons[id] = readString(t.staleReason) || "assigned node/session is not present in the live mesh";
+    }
+  }
+  return { staleTaskIds, staleReasons };
+}
+function persistMagiDispatched(ctx, args) {
+  try {
+    (0, import_daemon_core4.appendLedgerEntry)(ctx.mesh.id, {
+      kind: "magi_dispatched",
+      payload: {
+        source: "magi",
+        consensusGroupId: args.consensusGroupId,
+        ...args.missionId ? { missionId: args.missionId } : {},
+        ...args.panel ? { panel: args.panel } : {},
+        ...args.question ? { question: args.question.slice(0, 300) } : {},
+        replicaCount: args.replicaCount
+      }
+    });
+  } catch {
+  }
+}
+function persistMagiSynthesis(ctx, args) {
+  try {
+    (0, import_daemon_core4.appendLedgerEntry)(ctx.mesh.id, {
+      kind: "magi_synthesis",
+      payload: {
+        source: "magi",
+        consensusGroupId: args.consensusGroupId,
+        ...args.missionId ? { missionId: args.missionId } : {},
+        ...args.panel ? { panel: args.panel } : {},
+        ...args.question ? { question: args.question.slice(0, 300) } : {},
+        ...typeof args.staleReplicas === "number" ? { staleReplicas: args.staleReplicas } : {},
+        synthesis: args.synthesis
+      }
+    });
+  } catch {
+  }
+}
+function extractNodeGitRef(node) {
+  const git = node?.git;
+  if (!git || typeof git !== "object") return void 0;
+  const ref = {};
+  if (typeof git.branch === "string" || git.branch === null) ref.branch = git.branch;
+  const headCommit = nodeHeadCommit(node);
+  if (headCommit) ref.headCommit = headCommit;
+  if (typeof git.ahead === "number" && Number.isFinite(git.ahead)) ref.ahead = git.ahead;
+  if (typeof git.behind === "number" && Number.isFinite(git.behind)) ref.behind = git.behind;
+  if (typeof git.dirty === "boolean") ref.dirty = git.dirty;
+  return Object.keys(ref).length > 0 ? ref : void 0;
+}
 async function collectMagiResponses(ctx, args) {
   const ids = new Set(args.replicaTaskIds);
   const deadline = Date.now() + args.timeoutMs;
-  const TERMINAL = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
+  const TERMINAL = MAGI_TERMINAL_STATUSES;
   let terminal = false;
   for (; ; ) {
-    const tasks2 = (0, import_daemon_core4.getQueue)(ctx.mesh.id).filter((t) => ids.has(t.id));
-    const allTerminal = tasks2.length === ids.size && tasks2.every((t) => TERMINAL.has(String(t.status)));
-    if (allTerminal) {
+    const tasks2 = annotateQueueStaleness((0, import_daemon_core4.getQueue)(ctx.mesh.id).filter((t) => ids.has(t.id)), ctx.mesh);
+    const allPresent = tasks2.length === ids.size;
+    if (allPresent && tasks2.every((t) => TERMINAL.has(String(t.status)))) {
       terminal = true;
+      break;
+    }
+    const nonTerminal = tasks2.filter((t) => !TERMINAL.has(String(t.status)));
+    const { staleTaskIds: staleTaskIds2 } = classifyStaleReplicas(tasks2, TERMINAL);
+    if (allPresent && nonTerminal.length > 0 && staleTaskIds2.size === nonTerminal.length) {
       break;
     }
     if (Date.now() >= deadline) break;
     await sleep(Math.min(MAGI_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
   }
-  const tasks = (0, import_daemon_core4.getQueue)(ctx.mesh.id).filter((t) => ids.has(t.id));
+  const tasks = annotateQueueStaleness((0, import_daemon_core4.getQueue)(ctx.mesh.id).filter((t) => ids.has(t.id)), ctx.mesh);
+  const { staleTaskIds, staleReasons } = classifyStaleReplicas(tasks, TERMINAL);
   const responses = [];
   for (const task of tasks) {
+    const sourceNodeId = task.assignedNodeId || task.targetNodeId || void 0;
+    const gitRef = extractNodeGitRef(sourceNodeId ? ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, sourceNodeId)) : void 0);
     const source = {
       taskId: task.id,
-      nodeId: task.assignedNodeId || task.targetNodeId || void 0,
+      nodeId: sourceNodeId,
       provider: task.assignedProviderType || void 0,
-      ok: false
+      ok: false,
+      ...gitRef ? { git: gitRef } : {}
     };
     if (task.status !== "completed" || !task.assignedNodeId || !task.assignedSessionId) {
-      source.error = task.status === "completed" ? "no_session_to_read" : `replica_${task.status || "incomplete"}`;
+      if (staleTaskIds.has(task.id)) {
+        source.stale = true;
+        source.error = `stale: ${staleReasons[task.id]}`;
+      } else {
+        source.error = task.status === "completed" ? "no_session_to_read" : `replica_${task.status || "incomplete"}`;
+      }
       responses.push({ source, response: { claims: [], top_findings: [], open_questions: [] } });
       continue;
     }
@@ -4644,7 +4930,7 @@ async function collectMagiResponses(ctx, args) {
       responses.push({ source, response: { claims: [], top_findings: [], open_questions: [] } });
     }
   }
-  return { responses, terminal, timedOut: !terminal };
+  return { responses, terminal, timedOut: !terminal, staleCount: staleTaskIds.size };
 }
 async function eagerlyDispatchRemoteReplicas(ctx, replicas, prompt, missionId, consensusGroupId) {
   const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
@@ -6953,6 +7239,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_magi_review":
             text = await meshMagiReview(meshCtx, a);
+            break;
+          case "mesh_magi_collect":
+            text = await meshMagiCollect(meshCtx, a);
             break;
           case "mesh_magi_panel_set":
             text = await meshMagiPanelSet(meshCtx, a);
