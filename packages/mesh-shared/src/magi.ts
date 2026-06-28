@@ -116,9 +116,11 @@ export interface MagiResponseSource {
     git?: MagiReplicaGitRef
 }
 
-/** Compact git ref of the node a replica ran on (subset of GitCompactSummary). */
+/** Compact git ref of the node a replica ran on (subset of GitRepoStatus). */
 export interface MagiReplicaGitRef {
     branch?: string | null
+    /** HEAD commit sha of the node's workspace — the exact code the replica saw. */
+    headCommit?: string | null
     ahead?: number
     behind?: number
     dirty?: boolean
