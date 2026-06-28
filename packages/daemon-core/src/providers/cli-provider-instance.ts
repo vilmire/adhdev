@@ -140,15 +140,18 @@ const NATIVE_HISTORY_MESH_IDLE_SETTLE_MS = 4000;
 // DUPLICATE_DISPATCH_WINDOW_MS (mesh-tools) so the daemon's bubble-level guard
 // covers the same retry horizon as the MCP-level dispatch dedup.
 const USER_INPUT_ACK_DEDUP_WINDOW_MS = 60_000;
-// GENERATING-BOUNDARY (R4b): age-since-boot window inside which a "first turn that
-// ran+completed without the FSM ever observing a 'generating' frame" is attributed
-// to the startup-grace collapse and synthesized (reason 'startup_grace_idle_turn_collapse').
-// The spec's startup-grace exit is elapsed_ms=8000; a turn dispatched into that window
-// can complete a little after it drains, so the window is the 8s grace plus a settle
-// buffer. The strong discriminator is generatingStartedAt===0 (generating was never
-// observed) AND a started-but-finished turn — the window only keeps the synthesized
-// reason honest and scopes the synthesis to boot, so a much-later unobservably-fast turn
-// is not mislabelled a startup collapse.
+// GENERATING-BOUNDARY (R4c): window — measured from the startup-grace COLLAPSE moment
+// (startupGraceCollapseAt), not boot — inside which a "first turn that ran+completed
+// without the FSM ever observing a 'generating' frame" is attributed to the startup-grace
+// collapse and synthesized (reason 'startup_grace_idle_turn_collapse').
+// The spec's startup-grace exit is elapsed_ms=8000, so the FSM spends ~8s in 'starting'
+// before collapsing to idle; a turn can be dispatched a few seconds AFTER that collapse
+// (the live R4b miss: collapse at boot+8s, dispatch at boot+12.4s — already past a 12s
+// boot-anchored window before the turn even started). Anchoring on the collapse moment
+// makes the window cover dispatch-delay + turn-duration. The strong discriminator is
+// generatingStartedAt===0 (generating was never observed) AND a started-but-finished turn
+// — the window only keeps the synthesized reason honest and scopes the synthesis to the
+// boot collapse, so a much-later unobservably-fast turn is not mislabelled a startup collapse.
 const STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS = 12_000;
 
 /** Events that signal a dispatched mesh task has reached a terminal state.
@@ -481,6 +484,16 @@ export class CliProviderInstance implements ProviderInstance {
     // steadily while the session sits idle, so this guard makes the synthesis fire
     // AT MOST ONCE per collapsed turn.
     private fastCollapseSynthesizedTaskId: string | null = null;
+    // GENERATING-BOUNDARY (R4c): the wall-clock moment the FSM's starting→idle
+    // startup-grace collapse was observed (set ONCE, on the first starting→idle
+    // transition this boot). The idle-stayed collapse window is anchored on THIS,
+    // not on instance/boot time (this.startedAt): the FSM spends the full 8s
+    // startup-grace sitting in 'starting' before collapsing, and a turn can be
+    // dispatched a few seconds AFTER the collapse — measuring the window from boot
+    // would have it already closed by the time that turn lands+completes (the live
+    // R4b miss: collapse at boot+8s, dispatch at boot+12.4s > the 12s boot window).
+    // Anchoring on the collapse moment makes the window cover dispatch-delay+turn.
+    private startupGraceCollapseAt: number | null = null;
     private settings: Record<string, any> = {};
     private monitor: StatusMonitor;
     private generatingDebounceTimer: NodeJS.Timeout | null = null;
@@ -2382,6 +2395,11 @@ export class CliProviderInstance implements ProviderInstance {
                 }
             } else if (newStatus === 'idle' && this.lastStatus === 'starting') {
                 this.emitAgentReadyOnce(chatTitle, now);
+                // GENERATING-BOUNDARY (R4c): stamp the collapse moment ONCE so the
+                // idle-stayed window below is anchored on the startup-grace collapse,
+                // not on boot. Set only the first time so a later starting re-entry
+                // cannot slide the window forward.
+                if (this.startupGraceCollapseAt === null) this.startupGraceCollapseAt = now;
                 // GENERATING-BOUNDARY fast-collapse (R4, win32 startup-grace first turn):
                 // a turn dispatched into the startup-grace window can START and FINISH while
                 // the FSM is still in 'starting'. On a daemon whose claude-cli spec has NOT yet
@@ -2453,7 +2471,8 @@ export class CliProviderInstance implements ProviderInstance {
         if (
             newStatus === 'idle'
             && previousStatus === 'idle'
-            && (now - this.startedAt) < STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS
+            && this.startupGraceCollapseAt !== null
+            && (now - this.startupGraceCollapseAt) < STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS
         ) {
             this.maybeSynthesizeStartupGraceCollapse(chatTitle, now, 'startup_grace_idle_turn_collapse');
         }

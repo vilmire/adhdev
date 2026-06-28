@@ -73,10 +73,17 @@ function makeInstance(initialLastStatus: string): Harness {
   instance.autoApproveBusy = false
   instance.agentReadyEmitted = false
   instance.suppressIdleHistoryReplay = false
-  // R4b: just-booted by default so the idle-stayed collapse window
-  // (STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS) is open. Tests that need the
-  // grace window CLOSED override this to a stale boot time.
+  // R4b: just-booted by default. (R4c anchors the idle-stayed window on the
+  // startup-grace COLLAPSE moment, not boot, so startedAt no longer gates that
+  // window — kept here only for the field's other readers.)
   instance.startedAt = Date.now()
+  // R4c: the idle-stayed collapse window (STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS) is
+  // measured from the starting→idle collapse moment. An already-idle session
+  // (initialLastStatus 'idle') has, by construction, already passed that collapse,
+  // so stamp it recent (window open). A 'starting' session has NOT collapsed yet —
+  // it stays null until detectStatusTransition observes starting→idle. Tests that
+  // need the window CLOSED override this to a stale collapse time.
+  instance.startupGraceCollapseAt = initialLastStatus === 'idle' ? Date.now() : null
   instance.fastCollapseSynthesizedTaskId = null
 
   instance.adapter = {
@@ -315,6 +322,40 @@ describe('CliProviderInstance — fresh-session startup-grace generating miss', 
     expect(events.filter((e) => e.event === 'agent:generating_started').length).toBe(1)
   })
 
+  // ── R4c GENERATING-BOUNDARY collapse-anchored window (the live R4b idle-stayed miss) ──
+  //
+  // The live failure R4b's idle-stayed path was MEANT to cover but didn't: the FSM spends the
+  // full 8s startup-grace sitting in 'starting' before collapsing starting→idle, and the first
+  // turn is dispatched a few seconds AFTER that collapse (live: collapse at boot+8s, dispatch at
+  // boot+12.4s). With the window anchored on BOOT (the R4b bug), boot is already >12s ago by the
+  // time the turn lands+completes, so the idle-stayed guard's window was closed and
+  // maybeSynthesizeStartupGraceCollapse was never even called — 0 events emitted live. Anchoring
+  // the window on the COLLAPSE moment (R4c) keeps it open for dispatch-delay + turn-duration.
+  it('R4c COLLAPSE-ANCHOR: a turn dispatched after the 8s starting-grace is spent still synthesizes (boot-anchored window would have missed it)', () => {
+    const { instance, events, setAdapterStatus, setAdapterWaiting } = makeInstance('starting')
+    // Boot was 13s ago — PAST the 12s boot-anchored window. The OLD R4b guard
+    // (now - startedAt < 12s) would be FALSE here and synthesize nothing (the live miss).
+    instance.startedAt = Date.now() - 13_000
+
+    // 1) The FSM finally collapses starting→idle after spending its 8s startup-grace in
+    //    'starting'. This stamps startupGraceCollapseAt = now (the collapse moment).
+    setAdapterStatus('idle')
+    instance.detectStatusTransition() // starting → idle (startup-grace collapse)
+    expect(instance.startupGraceCollapseAt).not.toBeNull()
+
+    // 2) The first turn arrives a few seconds AFTER the collapse, runs+completes while status
+    //    stays 'idle' the whole time (no generating frame observed) — the idle→idle no-change poll.
+    instance.adapter.currentTurnTaskId = 'task-grace-1'
+    setAdapterWaiting(false)
+    setAdapterStatus('idle')
+    instance.detectStatusTransition() // idle → idle — collapse-anchored window STILL open
+
+    const completions = completionEvents(events)
+    expect(completions.length).toBe(1)
+    expect(completions[0].completionDiagnostic?.reason).toBe('startup_grace_idle_turn_collapse')
+    expect(events.some((e) => e.event === 'agent:generating_started')).toBe(true)
+  })
+
   it('GUARD: already-idle session with NO turn started emits nothing (benign idle boot)', () => {
     const { instance, setAdapterStatus, events } = makeInstance('idle')
     // No turn started: currentTurnTaskId undefined. A quiet idle session inside the grace window
@@ -327,10 +368,11 @@ describe('CliProviderInstance — fresh-session startup-grace generating miss', 
 
   it('GUARD: a finished first turn OUTSIDE the grace window is NOT mislabelled a startup collapse', () => {
     const { instance, events, setAdapterStatus, setAdapterWaiting } = makeInstance('idle')
-    // Boot was long ago — the startup-grace window is closed. A later unobservably-fast turn
-    // must not be attributed to the startup-grace collapse here; the normal idle→busy→idle path
-    // (or other reconciliation) owns post-grace turns.
+    // The startup-grace COLLAPSE was long ago — the (collapse-anchored R4c) window is closed.
+    // A later unobservably-fast turn must not be attributed to the startup-grace collapse here;
+    // the normal idle→busy→idle path (or other reconciliation) owns post-grace turns.
     instance.startedAt = Date.now() - 30_000
+    instance.startupGraceCollapseAt = Date.now() - 30_000
     instance.adapter.currentTurnTaskId = 'task-late-1'
     setAdapterWaiting(false)
     setAdapterStatus('idle')
