@@ -45,9 +45,11 @@ import type {
     MagiClaim,
     MagiClaimCluster,
     MagiClusterMember,
+    MagiGitSkew,
     MagiMode,
     MagiPanel,
     MagiPanelMember,
+    MagiReplicaGitRef,
     MagiResponseSource,
     MagiSynthesis,
     MagiSynthesizedResponse,
@@ -325,6 +327,7 @@ export function synthesizeMagiResponses(
     }
 
     const openQuestions = [...new Set(answered.flatMap(r => r.response.open_questions))];
+    const gitSkew = computeMagiGitSkew(answered);
 
     return {
         replicasExpected,
@@ -337,6 +340,41 @@ export function synthesizeMagiResponses(
         needsVerification,
         agreed,
         openQuestions,
+        replicas: responses.map(r => r.source),
+        gitSkew,
+    };
+}
+
+/**
+ * deltaA — cross-replica git skew. The answering replicas may have run on nodes at
+ * different branches or with local divergence (ahead/behind). When they do, the panel
+ * was NOT all looking at the same code, so file:line evidence and "agreement" are
+ * git-skewed and should be read with that caveat. Pure over the answering replicas'
+ * captured git refs (source.git); refs are best-effort, so a replica with no known
+ * branch simply does not contribute one.
+ */
+export function computeMagiGitSkew(answered: MagiSynthesizedResponse[]): MagiGitSkew {
+    const branches = new Set<string>();
+    let divergentReplicas = 0;
+    for (const { source } of answered) {
+        const git = source.git;
+        if (!git) continue;
+        const branch = typeof git.branch === 'string' && git.branch.trim() ? git.branch.trim() : undefined;
+        if (branch) branches.add(branch);
+        if ((git.ahead ?? 0) > 0 || (git.behind ?? 0) > 0) divergentReplicas++;
+    }
+    const branchList = [...branches].sort();
+    const skewed = branchList.length > 1 || divergentReplicas > 0;
+    return {
+        skewed,
+        distinctBranches: branchList.length,
+        branches: branchList,
+        divergentReplicas,
+        ...(skewed ? {
+            note: branchList.length > 1
+                ? `replicas span ${branchList.length} branches (${branchList.join(', ')}) — evidence compares different code; treat agreement with caution.`
+                : `${divergentReplicas} replica(s) diverge from upstream (ahead/behind) — not all replicas are on identical code.`,
+        } : {}),
     };
 }
 
@@ -722,6 +760,16 @@ export async function meshMagiReview(
         return JSON.stringify({ success: false, code: 'magi_enqueue_failed', error: 'fewer than 2 replicas enqueued successfully', consensusGroupId, missionId: mission.id });
     }
 
+    // deltaE: persist the fan-out so the group is visible in mesh_status (running) and
+    // survives a coordinator restart even before any synthesis is collected.
+    persistMagiDispatched(ctx, {
+        consensusGroupId,
+        missionId: mission.id,
+        panel: panelName,
+        question,
+        replicaCount: replicaRecords.length,
+    });
+
     // 5. Trigger local queue pickup; eager P2P push for remote (IPC) targets.
     const queueTrigger = await triggerMeshQueueAndReport(ctx);
     if (ctx.transport instanceof IpcTransport) {
@@ -768,6 +816,16 @@ export async function meshMagiReview(
     const synthesis = synthesizeMagiResponses(collected.responses, {
         replicasExpected: replicaRecords.length,
         requireIndependentEvidence,
+    });
+
+    // deltaE: persist the synthesis (retrievable by consensusGroupId; folds into mesh_status).
+    persistMagiSynthesis(ctx, {
+        consensusGroupId,
+        missionId: mission.id,
+        panel: panelName,
+        question,
+        staleReplicas: collected.staleCount,
+        synthesis,
     });
 
     return JSON.stringify({
@@ -837,6 +895,15 @@ export async function meshMagiCollect(
         requireIndependentEvidence,
     });
 
+    // deltaE: persist the synthesis (panel/question are merged from the earlier
+    // magi_dispatched entry by consensusGroupId, so they need not be re-derived here).
+    persistMagiSynthesis(ctx, {
+        consensusGroupId,
+        missionId: readString(replicaTasks[0]?.missionId),
+        staleReplicas: collected.staleCount,
+        synthesis,
+    });
+
     return JSON.stringify({
         success: true,
         consensusGroupId,
@@ -899,6 +966,74 @@ export function classifyStaleReplicas(
     return { staleTaskIds, staleReasons };
 }
 
+// ─── Persistence (deltaE) ───────────────────────
+
+/**
+ * Persist the MAGI fan-out as a `magi_dispatched` ledger entry so the consensus group
+ * is visible in mesh_status (status=running) and survives a coordinator restart even
+ * before any synthesis is collected. Best-effort — a ledger write failure never aborts
+ * the review.
+ */
+function persistMagiDispatched(
+    ctx: MeshContext,
+    args: { consensusGroupId: string; missionId?: string; panel?: string; question?: string; replicaCount: number },
+): void {
+    try {
+        appendLedgerEntry(ctx.mesh.id, {
+            kind: 'magi_dispatched',
+            payload: {
+                source: 'magi',
+                consensusGroupId: args.consensusGroupId,
+                ...(args.missionId ? { missionId: args.missionId } : {}),
+                ...(args.panel ? { panel: args.panel } : {}),
+                ...(args.question ? { question: args.question.slice(0, 300) } : {}),
+                replicaCount: args.replicaCount,
+            },
+        });
+    } catch { /* ledger write is best-effort */ }
+}
+
+/**
+ * Persist the synthesis as a `magi_synthesis` ledger entry, retrievable by
+ * consensusGroupId (getMeshMagiActivityByGroup) and foldable into mesh_status. The full
+ * synthesis is stored; mesh_status bounds it on read. Best-effort.
+ */
+function persistMagiSynthesis(
+    ctx: MeshContext,
+    args: { consensusGroupId: string; missionId?: string; panel?: string; question?: string; staleReplicas?: number; synthesis: MagiSynthesis },
+): void {
+    try {
+        appendLedgerEntry(ctx.mesh.id, {
+            kind: 'magi_synthesis',
+            payload: {
+                source: 'magi',
+                consensusGroupId: args.consensusGroupId,
+                ...(args.missionId ? { missionId: args.missionId } : {}),
+                ...(args.panel ? { panel: args.panel } : {}),
+                ...(args.question ? { question: args.question.slice(0, 300) } : {}),
+                ...(typeof args.staleReplicas === 'number' ? { staleReplicas: args.staleReplicas } : {}),
+                synthesis: args.synthesis,
+            },
+        });
+    } catch { /* ledger write is best-effort */ }
+}
+
+/**
+ * Pull a compact git ref off a live mesh node (its GitCompactSummary, populated by the
+ * daemon git monitor) for deltaA git-skew. Returns undefined when the node carries no
+ * git summary — refs are best-effort, never fabricated.
+ */
+function extractNodeGitRef(node: any): MagiReplicaGitRef | undefined {
+    const git = node?.git;
+    if (!git || typeof git !== 'object') return undefined;
+    const ref: MagiReplicaGitRef = {};
+    if (typeof git.branch === 'string' || git.branch === null) ref.branch = git.branch;
+    if (typeof git.ahead === 'number' && Number.isFinite(git.ahead)) ref.ahead = git.ahead;
+    if (typeof git.behind === 'number' && Number.isFinite(git.behind)) ref.behind = git.behind;
+    if (typeof git.dirty === 'boolean') ref.dirty = git.dirty;
+    return Object.keys(ref).length > 0 ? ref : undefined;
+}
+
 async function collectMagiResponses(
     ctx: MeshContext,
     args: { replicaTaskIds: string[]; timeoutMs: number },
@@ -930,11 +1065,17 @@ async function collectMagiResponses(
     const { staleTaskIds, staleReasons } = classifyStaleReplicas(tasks, TERMINAL);
     const responses: MagiSynthesizedResponse[] = [];
     for (const task of tasks as any[]) {
+        const sourceNodeId = task.assignedNodeId || task.targetNodeId || undefined;
+        // deltaA: capture the replica node's git ref so synthesis can flag cross-replica
+        // git skew. Best-effort, from the live node's compact git summary — no extra git
+        // command in the collection hot path.
+        const gitRef = extractNodeGitRef(sourceNodeId ? ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, sourceNodeId)) : undefined);
         const source: MagiResponseSource = {
             taskId: task.id,
-            nodeId: task.assignedNodeId || task.targetNodeId || undefined,
+            nodeId: sourceNodeId,
             provider: task.assignedProviderType || undefined,
             ok: false,
+            ...(gitRef ? { git: gitRef } : {}),
         };
         if (task.status !== 'completed' || !task.assignedNodeId || !task.assignedSessionId) {
             if (staleTaskIds.has(task.id)) {

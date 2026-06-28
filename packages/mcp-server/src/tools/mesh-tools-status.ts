@@ -14,6 +14,8 @@ import {
     buildCoordinatorP2pRelayFailure,
     buildMeshActiveWork,
     buildMeshAsyncRefineJobs,
+    buildMeshMagiActivity,
+    summarizeMeshMagiActivity,
     buildMeshNodeProbeFreshness,
     buildMeshSchedulingRuntime,
     buildNodeCapabilityExposure,
@@ -669,6 +671,27 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
                 response.asyncRefineJobs = asyncRefineJobs;
             }
         }
+
+        // deltaE: fold persisted MAGI cross-verification activity into mesh_status so a
+        // coordinator (and the dashboard's extractMagiActivity) can read the synthesis
+        // fields — needs_verification counts, independence banner, and git skew —
+        // without re-running collection. Bounded like asyncRefineJobs: running groups
+        // always shown, synthesized groups only when recent (stale ones folded to a count).
+        const magiActivity = buildMeshMagiActivity({ meshId: mesh.id, ledgerEntries });
+        if (magiActivity.length > 0) {
+            const fold = summarizeMeshMagiActivity(magiActivity);
+            if (compact) {
+                if (fold.groups.length > 0) response.magiActivity = fold.groups;
+                response.magiActivitySummary = {
+                    total: fold.total,
+                    byStatus: fold.byStatus,
+                    ...(fold.staleSynthesized > 0 ? { staleSynthesized: fold.staleSynthesized } : {}),
+                };
+            } else {
+                response.magiActivity = magiActivity;
+            }
+        }
+
         if (pendingEvents.length > 0) {
             response.pendingCoordinatorEvents = pendingEvents;
         }
