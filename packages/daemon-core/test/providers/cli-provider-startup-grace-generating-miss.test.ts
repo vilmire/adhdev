@@ -356,6 +356,53 @@ describe('CliProviderInstance — fresh-session startup-grace generating miss', 
     expect(events.some((e) => e.event === 'agent:generating_started')).toBe(true)
   })
 
+  // ── R4d GENERATING-BOUNDARY turn-start-anchored window (the live rc.405 Probe2 miss) ──
+  //
+  // R4c anchored the window on the collapse moment but measured its END against `now` (the
+  // poll/completion time). maybeSynthesizeStartupGraceCollapse only fires once the turn has
+  // FINISHED (!hasAdapterPendingResponse()), so the first eligible poll is at completion. When
+  // the first turn is dispatched a few seconds AFTER the collapse AND runs for a non-trivial
+  // duration, the completion lands PAST the 12s now-anchored window even though it was a genuine
+  // startup-grace first turn — live: collapse→dispatch +5.2s, turn ~11s → completion at
+  // collapse+16.2s > 12s, so R4c synthesized nothing and the completion arrived only via the
+  // coordinator's "Synthesized missing completion" fallback. R4d additionally anchors the window
+  // on when the first turn STARTED (engine.currentTurnStartedAt), so a turn that STARTED within
+  // the collapse window is attributed to the startup collapse no matter how long it then ran.
+  it('R4d TURN-START-ANCHOR: a delayed-dispatch first turn whose duration overruns the now-window still synthesizes', () => {
+    const { instance, events, setAdapterStatus, setAdapterWaiting } = makeInstance('idle')
+    // Collapse was 16.2s ago → the R4c now-anchored window ((now - collapse) < 12s) is CLOSED.
+    instance.startupGraceCollapseAt = Date.now() - 16_200
+    instance.adapter.currentTurnTaskId = 'task-grace-1'
+    // The turn STARTED 11s ago == collapse+5.2s — WITHIN 12s of the collapse. It has since
+    // finished (waiting false) without ever arming a 'generating' frame.
+    instance.adapter.currentTurnStartedAt = Date.now() - 11_000
+    setAdapterWaiting(false)
+    setAdapterStatus('idle')
+    instance.detectStatusTransition() // idle → idle; now-window closed but turn-start window open
+
+    const completions = completionEvents(events)
+    // FIXED: the turn-start-anchored window keeps the synthesis honest while covering
+    // dispatch-delay + full turn-duration. (Before R4d this emitted 0 — the live Probe2 miss.)
+    expect(completions.length).toBe(1)
+    expect(completions[0].completionDiagnostic?.reason).toBe('startup_grace_idle_turn_collapse')
+    expect(events.some((e) => e.event === 'agent:generating_started')).toBe(true)
+  })
+
+  it('GUARD: a turn that STARTED long after the collapse (turn-start window closed) is not synthesized', () => {
+    const { instance, events, setAdapterStatus, setAdapterWaiting } = makeInstance('idle')
+    // Both windows closed: collapse 60s ago (now-window closed) AND the turn started 55s after
+    // the collapse (turn-start window closed). A much-later unobservably-fast turn must not be
+    // mislabelled a startup-grace collapse — the normal idle→busy→idle path owns post-grace turns.
+    instance.startupGraceCollapseAt = Date.now() - 60_000
+    instance.adapter.currentTurnTaskId = 'task-late-1'
+    instance.adapter.currentTurnStartedAt = Date.now() - 5_000 // == collapse+55s, > 12s window
+    setAdapterWaiting(false)
+    setAdapterStatus('idle')
+    instance.detectStatusTransition()
+
+    expect(completionEvents(events).length).toBe(0)
+  })
+
   it('GUARD: already-idle session with NO turn started emits nothing (benign idle boot)', () => {
     const { instance, setAdapterStatus, events } = makeInstance('idle')
     // No turn started: currentTurnTaskId undefined. A quiet idle session inside the grace window

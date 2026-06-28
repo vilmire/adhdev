@@ -111,6 +111,13 @@ export class CliStateEngine {
     // queued in pendingOutbound and only flushed asynchronously after idle), so the
     // completion event carries the correct id instead of the racy session scalar.
     currentTurnTaskId: string | null = null;
+    // GENERATING-BOUNDARY (R4d): wall-clock when the most recently STARTED turn began
+    // (set by onTurnStarted, persists past completion until the next turn starts).
+    // The startup-grace idle-stayed synthesis anchors its window on when the FIRST turn
+    // STARTED — not on when it finished — so a turn dispatched a few seconds after the
+    // grace collapse and then running for a non-trivial duration is still attributed to
+    // the startup collapse even though its COMPLETION lands past a now-anchored window.
+    currentTurnStartedAt = 0;
     activeModal: { message: string; buttons: string[] } | null = null;
 
     // ── Approval ─────────────────────────────────────
@@ -247,6 +254,9 @@ export class CliStateEngine {
         this.currentTurnTaskId = typeof turnScope.taskId === 'string' && turnScope.taskId.trim()
             ? turnScope.taskId
             : null;
+        // R4d: stamp the turn-start moment so the startup-grace idle-stayed synthesis can
+        // anchor its window on dispatch time rather than completion time.
+        this.currentTurnStartedAt = Date.now();
         this.responseEpoch += 1;
     }
 

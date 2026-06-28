@@ -1988,6 +1988,11 @@ export class ProviderCliAdapter implements CliAdapter {
     // reads this when stamping completion events so they carry the completing turn's
     // task rather than the racy last-write-wins session scalar.
     get currentTurnTaskId(): string | null { return this.engine.currentTurnTaskId; }
+    // R4d: wall-clock when the most recently started turn began (persists past settle).
+    // The provider instance's startup-grace idle-stayed synthesis anchors its window on
+    // this so a delayed-dispatch first turn whose duration overruns the now-anchored
+    // window is still attributed to the startup collapse.
+    get currentTurnStartedAt(): number { return this.engine.currentTurnStartedAt; }
 
     get responseEpoch(): number { return this.engine.responseEpoch; }
     set responseEpoch(v: number) { this.engine.responseEpoch = v; }

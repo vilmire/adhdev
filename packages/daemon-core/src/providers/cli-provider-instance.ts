@@ -148,7 +148,9 @@ const USER_INPUT_ACK_DEDUP_WINDOW_MS = 60_000;
 // before collapsing to idle; a turn can be dispatched a few seconds AFTER that collapse
 // (the live R4b miss: collapse at boot+8s, dispatch at boot+12.4s — already past a 12s
 // boot-anchored window before the turn even started). Anchoring on the collapse moment
-// makes the window cover dispatch-delay + turn-duration. The strong discriminator is
+// covers dispatch-delay; R4d additionally anchors on the turn-START moment
+// (engine.currentTurnStartedAt) so a non-trivial turn-DURATION cannot push the completion
+// past a now-anchored window (the live rc.405 Probe2 miss). The strong discriminator is
 // generatingStartedAt===0 (generating was never observed) AND a started-but-finished turn
 // — the window only keeps the synthesized reason honest and scopes the synthesis to the
 // boot collapse, so a much-later unobservably-fast turn is not mislabelled a startup collapse.
@@ -2468,11 +2470,35 @@ export class CliProviderInstance implements ProviderInstance {
         // idle. Normal turns that DO reach 'busy' set generatingStartedAt and are
         // excluded; a queued-pending first turn that only runs after grace falls
         // outside the window and completes normally via idle→busy→idle.
+        //
+        // R4d (the live rc.405 Probe2 miss): R4c anchored the window on the collapse
+        // moment but still measured its END against `now` (the poll/completion time). The
+        // helper only fires once the turn has FINISHED (!hasAdapterPendingResponse()), so
+        // the first eligible poll happens at completion. When the first turn is dispatched
+        // a few seconds after the collapse AND runs for a non-trivial duration, that
+        // completion lands PAST the 12s now-anchored window even though the turn was a
+        // genuine startup-grace first turn (live: collapse→dispatch +5.2s, turn ~11s →
+        // completion at collapse+16.2s > 12s). Anchor the window on when the first turn
+        // STARTED (engine.currentTurnStartedAt, set by onTurnStarted) instead: a turn that
+        // STARTED within the collapse window is a startup-grace first turn no matter how
+        // long it then ran. The now-anchored check is retained as a union so a fast turn
+        // (dispatched+completed quickly within 12s of collapse) keeps firing too; both
+        // close for a much-later turn, preserving the "don't mislabel a late fast turn"
+        // honesty the window exists for.
+        const firstTurnStartedAt = typeof (this.adapter as any)?.currentTurnStartedAt === 'number'
+            ? (this.adapter as any).currentTurnStartedAt as number
+            : 0;
+        const collapsedAt = this.startupGraceCollapseAt;
+        const turnStartedWithinCollapseWindow = collapsedAt !== null
+            && firstTurnStartedAt > 0
+            && firstTurnStartedAt >= collapsedAt
+            && (firstTurnStartedAt - collapsedAt) < STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS;
+        const nowWithinCollapseWindow = collapsedAt !== null
+            && (now - collapsedAt) < STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS;
         if (
             newStatus === 'idle'
             && previousStatus === 'idle'
-            && this.startupGraceCollapseAt !== null
-            && (now - this.startupGraceCollapseAt) < STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS
+            && (turnStartedWithinCollapseWindow || nowWithinCollapseWindow)
         ) {
             this.maybeSynthesizeStartupGraceCollapse(chatTitle, now, 'startup_grace_idle_turn_collapse');
         }
