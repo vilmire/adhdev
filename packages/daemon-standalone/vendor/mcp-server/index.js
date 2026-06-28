@@ -1147,6 +1147,70 @@ var MESH_REVIEW_INBOX_TOOL = {
     required: []
   }
 };
+var MESH_MAGI_REVIEW_TOOL = {
+  name: "mesh_magi_review",
+  description: 'Cross-verify a read-only investigation across a standing panel of independent mesh agents (different machines/providers), instead of sending a SINGLE read-only worker. Drop-in for any read-only investigation \u2014 bug RCA, defect/regression measurement, "why does this code do X?", or doc/design/API review. Fans the SAME question out to N independent (node \xD7 provider) replicas, then synthesizes consensus/disagreement/unique evidence into a needs_verification list \u2014 NOT a majority vote (high agreement among coupled agents \u2260 correct). Read-only is FORCED (no execute/write flag exists). COST: multiplies token spend by the total replica count (the call is the opt-in). Requires a configured panel (mesh_magi_panel_set) resolving to \u22652 (node, provider) targets; never silently degrades to N=1.',
+  inputSchema: {
+    type: "object",
+    properties: {
+      question: { type: "string", description: 'The single investigation question every agent answers \u2014 e.g. "What is the root cause of this defect?", "Refute this RCA.", "Why does this code do X?". Not only "review this".' },
+      target: { type: "string", description: "What to investigate \u2014 file path(s), a bug symptom / error / stack trace, a code area / symbol, or omitted when the question is self-contained." },
+      artifacts: { type: "array", items: { type: "string" }, description: "Inline content when not file-backed: a doc/diff, a log/error dump, or a prior single-worker RCA to refute." },
+      panel: { type: "string", description: 'Named panel from meshes.json (mesh_magi_panel_set). Falls back to a panel named "default" if omitted; errors clearly if none exists.' },
+      n: { type: "number", description: "Global replica override per member (clamped by the total-replica guard cap, default 12)." },
+      mode: { type: "string", enum: ["rca", "investigation", "claim_audit", "design_review", "code_audit"], description: "Synthesis emphasis hint \u2014 affects labels only, never the agent count or schema." },
+      require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
+      wait: { type: "boolean", description: "Default true \u2014 collect replica outputs and return the synthesis. (Poll-by-group is a deferred mode.)" },
+      wait_timeout_ms: { type: "number", description: 'Max time to wait for replica completion before returning a partial "missing K of N" synthesis. Default ~4 min.' }
+    },
+    required: ["question"]
+  }
+};
+var MESH_MAGI_PANEL_SET_TOOL = {
+  name: "mesh_magi_panel_set",
+  description: "Upsert a named MAGI panel into machine-local ~/.adhdev/meshes.json. A panel is a standing set of independent (node \xD7 provider) members that a future mesh_magi_review fans the same question out to. Maximize DISTINCT providers AND distinct machines \u2014 that diversity is exactly what synthesis rewards; a single-provider/single-machine panel still runs but its agreements are flagged source-coupled. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false) and never clobbers an existing panel unless overwrite=true.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      panel_name: { type: "string", description: 'Panel name key, e.g. "design-review".' },
+      config: {
+        type: "object",
+        description: "Panel config: { description?, members:[{ provider (REQUIRED), nodeId?, capabilityTags?, n? }], defaultN? }.",
+        properties: {
+          description: { type: "string" },
+          members: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                nodeId: { type: "string", description: "Optional \u2014 pin to a specific mesh node id." },
+                capabilityTags: { type: "array", items: { type: "string" }, description: "Optional routing tags (ANDed with the provider tag) when nodeId is absent." },
+                provider: { type: "string", description: "REQUIRED \u2014 provider type, e.g. claude-cli / codex-cli / hermes-cli / gemini-cli." },
+                n: { type: "number", description: "Optional per-member replica count (default 1)." }
+              },
+              required: ["provider"]
+            }
+          },
+          defaultN: { type: "number", description: "Replicas per member when member.n is absent (default 1)." }
+        },
+        required: ["members"]
+      },
+      write: { type: "boolean", description: "When true, persist to meshes.json. Defaults false (dry-run preview of the normalized panel)." },
+      overwrite: { type: "boolean", description: "When true, replace an existing panel of the same name. Defaults false." }
+    },
+    required: ["panel_name", "config"]
+  }
+};
+var MESH_MAGI_PANEL_LIST_TOOL = {
+  name: "mesh_magi_panel_list",
+  description: "List configured MAGI panels and resolve each member's (node, provider) availability against the current mesh. Read-only. Use to confirm a panel resolves to \u22652 independent targets before mesh_magi_review, and to see whether a panel would collapse to a single provider/machine (source-coupled).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      panel: { type: "string", description: "Optional \u2014 list only this panel. Omit to list all configured panels." }
+    }
+  }
+};
 var ALL_MESH_TOOLS = [
   MESH_STATUS_TOOL,
   MESH_LIST_NODES_TOOL,
@@ -1183,7 +1247,10 @@ var ALL_MESH_TOOLS = [
   MESH_RECONCILE_LEDGER_TOOL,
   MESH_MISSION_UPSERT_TOOL,
   MESH_MISSION_LIST_TOOL,
-  MESH_REVIEW_INBOX_TOOL
+  MESH_REVIEW_INBOX_TOOL,
+  MESH_MAGI_REVIEW_TOOL,
+  MESH_MAGI_PANEL_SET_TOOL,
+  MESH_MAGI_PANEL_LIST_TOOL
 ];
 
 // src/tools/mesh-compact.ts
@@ -3687,13 +3754,50 @@ async function meshQueueRequeue(ctx, args) {
     const targetNodeId = (args.target_node_id || args.targetNodeId || "").trim() || void 0;
     const targetSessionId = (args.target_session_id || args.targetSessionId || "").trim() || void 0;
     const keepTargetSession = args.keep_target_session === true || args.keepTargetSession === true;
+    const clearTargetNode = args.clear_target_node === true || args.clearTargetNode === true;
+    const clearTargetSession = targetSessionId ? false : !keepTargetSession;
+    const force = args.force === true;
+    if (ctx.transport instanceof IpcTransport) {
+      const raw = await ctx.transport.command("requeue_mesh_queue_task", {
+        meshId: ctx.mesh.id,
+        taskId,
+        reason: args.reason,
+        ...targetNodeId ? { targetNodeId } : {},
+        ...targetSessionId ? { targetSessionId } : {},
+        clearTargetNode,
+        clearTargetSession,
+        force
+      });
+      const result = unwrapCommandPayload(raw) || {};
+      if (result.success === false) {
+        return JSON.stringify(result, null, 2);
+      }
+      const task2 = result.task;
+      if (!task2) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
+      if (task2.status === "failed" && task2.cancelReason?.startsWith("max_retries_exceeded")) {
+        return JSON.stringify({
+          success: false,
+          code: "max_retries_exceeded",
+          error: task2.cancelReason,
+          task: task2,
+          hint: "Use force=true to bypass the retry cap for explicit operator recovery."
+        }, null, 2);
+      }
+      const triggerPreferredNodeId2 = targetNodeId || task2.targetNodeId || void 0;
+      ctx.transport.command("trigger_mesh_queue", {
+        meshId: ctx.mesh.id,
+        ...triggerPreferredNodeId2 ? { preferredNodeId: triggerPreferredNodeId2 } : {}
+      }).catch(() => {
+      });
+      return JSON.stringify({ success: true, task: task2 }, null, 2);
+    }
     const task = (0, import_daemon_core4.requeueTask)(ctx.mesh.id, taskId, {
       reason: args.reason,
       targetNodeId,
       targetSessionId,
-      clearTargetNode: args.clear_target_node === true || args.clearTargetNode === true,
-      clearTargetSession: targetSessionId ? false : !keepTargetSession,
-      force: args.force === true
+      clearTargetNode,
+      clearTargetSession,
+      force
     });
     if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
     if (task.status === "failed" && task.cancelReason?.startsWith("max_retries_exceeded")) {
@@ -3914,6 +4018,677 @@ async function meshReviewInbox(ctx, args = {}) {
     inlineMesh: ctx.mesh
   });
   return JSON.stringify(result, null, 2);
+}
+
+// src/tools/mesh-tools-magi.ts
+var MAGI_MAX_REPLICAS = 12;
+var MAGI_MIN_TARGETS = 2;
+var MAGI_CLUSTER_JACCARD = 0.5;
+var MAGI_DEFAULT_WAIT_MS = 18e4;
+var MAGI_MAX_WAIT_MS = 6e5;
+var MAGI_POLL_INTERVAL_MS = 5e3;
+var VALID_STANCES = /* @__PURE__ */ new Set(["support", "oppose", "uncertain"]);
+function coerceClaim(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw;
+  const claim = typeof r.claim === "string" ? r.claim.trim() : "";
+  if (!claim) return null;
+  const stance = typeof r.stance === "string" && VALID_STANCES.has(r.stance) ? r.stance : "uncertain";
+  const evidence = Array.isArray(r.evidence) ? r.evidence.map((e) => typeof e === "string" ? e.trim() : "").filter(Boolean) : [];
+  const confidence = typeof r.confidence === "number" && Number.isFinite(r.confidence) ? Math.min(1, Math.max(0, r.confidence)) : 0.5;
+  return { claim, stance, evidence, confidence };
+}
+function coerceResponse(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw;
+  if (!Array.isArray(r.claims)) return null;
+  const claims = r.claims.map(coerceClaim).filter((c) => c !== null);
+  const top_findings = Array.isArray(r.top_findings) ? r.top_findings.map((f) => typeof f === "string" ? f.trim() : "").filter(Boolean) : [];
+  const open_questions = Array.isArray(r.open_questions) ? r.open_questions.map((q) => typeof q === "string" ? q.trim() : "").filter(Boolean) : [];
+  if (claims.length === 0 && top_findings.length === 0) return null;
+  return { claims, top_findings, open_questions };
+}
+function extractJsonObjectCandidates(text) {
+  const candidates = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && start >= 0) {
+          candidates.push(text.slice(start, i + 1));
+          start = -1;
+        }
+      }
+    }
+  }
+  return candidates.sort((a, b) => b.length - a.length);
+}
+function parseMagiResponse(text) {
+  if (typeof text !== "string" || !text.trim()) return null;
+  const direct = (() => {
+    try {
+      return coerceResponse(JSON.parse(text));
+    } catch {
+      return null;
+    }
+  })();
+  if (direct) return direct;
+  for (const candidate of extractJsonObjectCandidates(text)) {
+    if (!candidate.includes('"claims"') && !candidate.includes('"top_findings"')) continue;
+    try {
+      const parsed = coerceResponse(JSON.parse(candidate));
+      if (parsed) return parsed;
+    } catch {
+    }
+  }
+  return null;
+}
+var CLAIM_STOPWORDS = /* @__PURE__ */ new Set([
+  "the",
+  "a",
+  "an",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "to",
+  "of",
+  "in",
+  "on",
+  "at",
+  "and",
+  "or",
+  "for",
+  "this",
+  "that",
+  "it",
+  "its",
+  "as",
+  "by",
+  "with"
+]);
+function claimTokenSet(claim) {
+  const tokens = claim.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 2 && !CLAIM_STOPWORDS.has(t));
+  return new Set(tokens);
+}
+function jaccard(a, b) {
+  if (a.size === 0 && b.size === 0) return 0;
+  let intersection = 0;
+  for (const t of a) if (b.has(t)) intersection++;
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+function isSpecificEvidence(ev) {
+  return /[\w/.\\-]+:\d+/.test(ev) || /[\w-]+\.[a-z]{1,5}\b/i.test(ev);
+}
+function normalizeEvidence(ev) {
+  return ev.toLowerCase().replace(/\s+/g, " ").trim();
+}
+function rankNeedsVerification(c) {
+  switch (c.category) {
+    case "contested":
+      return 0;
+    case "dissent":
+      return 1;
+    case "source_coupled":
+      return 2;
+    case "singleton":
+      return 3;
+    default:
+      return 4;
+  }
+}
+function synthesizeMagiResponses(responses, opts = {}) {
+  const answered = responses.filter((r) => r.source.ok && r.response);
+  const requireEvidence = opts.requireIndependentEvidence !== false;
+  const clusters = [];
+  for (const { source, response } of answered) {
+    for (const claim of response.claims) {
+      const tokens = claimTokenSet(claim.claim);
+      const specific = new Set(claim.evidence.filter(isSpecificEvidence).map(normalizeEvidence));
+      let best = null;
+      let bestScore = 0;
+      for (const cluster of clusters) {
+        const evidenceMerge = [...specific].some((e) => cluster.specificEvidence.has(e));
+        const score = evidenceMerge ? 1 : jaccard(tokens, cluster.tokens);
+        if (score > bestScore) {
+          bestScore = score;
+          best = cluster;
+        }
+      }
+      const member = {
+        taskId: source.taskId,
+        nodeId: source.nodeId,
+        provider: source.provider,
+        claim: claim.claim,
+        stance: claim.stance,
+        evidence: claim.evidence,
+        confidence: claim.confidence
+      };
+      if (best && bestScore >= MAGI_CLUSTER_JACCARD) {
+        best.members.push(member);
+        for (const t of tokens) best.tokens.add(t);
+        for (const e of specific) best.specificEvidence.add(e);
+      } else {
+        clusters.push({ members: [member], tokens: new Set(tokens), specificEvidence: new Set(specific) });
+      }
+    }
+  }
+  const built = clusters.map((cluster) => {
+    const stance = { support: 0, oppose: 0, uncertain: 0 };
+    for (const m of cluster.members) stance[m.stance]++;
+    const distinctProviders2 = new Set(cluster.members.map((m) => m.provider).filter(Boolean)).size;
+    const distinctNodes2 = new Set(cluster.members.map((m) => m.nodeId).filter(Boolean)).size;
+    const distinctEvidence = new Set(cluster.members.flatMap((m) => m.evidence.map(normalizeEvidence)).filter(Boolean)).size;
+    const distinctAgents = new Set(cluster.members.map((m) => m.taskId)).size;
+    const maxConfidence = cluster.members.reduce((mx, m) => Math.max(mx, m.confidence), 0);
+    const independenceScore = Math.max(distinctProviders2, 1) * Math.max(distinctNodes2, 1);
+    const highIndependence = distinctProviders2 >= 2 && distinctNodes2 >= 2;
+    const representative = cluster.members.map((m) => m.claim).sort((a, b) => b.length - a.length)[0];
+    const reasons = [];
+    let category;
+    const hasSupport = stance.support > 0;
+    const hasOppose = stance.oppose > 0;
+    if (distinctAgents <= 1) {
+      category = "singleton";
+      reasons.push("raised by exactly one agent \u2014 cannot be cross-checked");
+    } else if (hasSupport && hasOppose) {
+      if (stance.support > stance.oppose) {
+        category = "dissent";
+        reasons.push(`minority opposition (${stance.oppose} oppose vs ${stance.support} support)`);
+      } else {
+        category = "contested";
+        reasons.push(`stances split (${stance.support} support / ${stance.oppose} oppose / ${stance.uncertain} uncertain)`);
+      }
+    } else if (highIndependence) {
+      category = "agreed";
+    } else {
+      category = "source_coupled";
+      reasons.push(`apparent agreement but low independence (${distinctProviders2} provider(s) \xD7 ${distinctNodes2} machine(s))`);
+    }
+    let needsVerification2 = category === "contested" || category === "dissent" || category === "singleton" || category === "source_coupled";
+    if (requireEvidence && distinctEvidence === 0 && maxConfidence >= 0.5 && category === "agreed") {
+      needsVerification2 = true;
+      reasons.push("no independent file:line/source evidence for a high-confidence claim");
+    }
+    return {
+      claim: representative,
+      category,
+      members: cluster.members,
+      stance,
+      distinctProviders: distinctProviders2,
+      distinctNodes: distinctNodes2,
+      distinctEvidence,
+      independenceScore,
+      needsVerification: needsVerification2,
+      reasons
+    };
+  });
+  const needsVerification = built.filter((c) => c.needsVerification).sort((a, b) => rankNeedsVerification(a) - rankNeedsVerification(b) || a.independenceScore - b.independenceScore);
+  const agreed = built.filter((c) => c.category === "agreed" && !c.needsVerification);
+  const distinctProviders = new Set(answered.map((r) => r.source.provider).filter(Boolean)).size;
+  const distinctNodes = new Set(answered.map((r) => r.source.nodeId).filter(Boolean)).size;
+  const replicasExpected = opts.replicasExpected ?? responses.length;
+  const replicasAnswered = answered.length;
+  let independenceBanner = null;
+  if (replicasAnswered >= 1 && (distinctProviders < 2 || distinctNodes < 2)) {
+    independenceBanner = `independence not achieved \u2014 the answering replicas span ${distinctProviders} provider(s) and ${distinctNodes} machine(s); their agreements are source-coupled and routed to needs_verification.`;
+  }
+  const openQuestions = [...new Set(answered.flatMap((r) => r.response.open_questions))];
+  return {
+    replicasExpected,
+    replicasAnswered,
+    replicasMissing: Math.max(0, replicasExpected - replicasAnswered),
+    distinctProviders,
+    distinctNodes,
+    independenceBanner,
+    clusters: built,
+    needsVerification,
+    agreed,
+    openQuestions
+  };
+}
+function replicaCountFor(member, panel, globalN) {
+  const n = member.n ?? panel.defaultN ?? globalN ?? 1;
+  return Math.max(1, Math.floor(n));
+}
+function buildMagiFanoutPlan(panel, nodes, opts = {}) {
+  const cap = Math.max(1, Math.floor(opts.maxReplicas ?? MAGI_MAX_REPLICAS));
+  const members = Array.isArray(panel.members) ? panel.members : [];
+  const replicas = [];
+  const unavailableMembers = [];
+  const targetKeys = /* @__PURE__ */ new Set();
+  const providerSet = /* @__PURE__ */ new Set();
+  const nodeTargetSet = /* @__PURE__ */ new Set();
+  let totalRequested = 0;
+  members.forEach((member, memberIndex) => {
+    const provider = member.provider;
+    const capabilityTags = (0, import_daemon_core4.normalizeMeshCapabilityTags)(member.capabilityTags);
+    const requiredTags = (0, import_daemon_core4.normalizeMeshCapabilityTags)([`provider=${provider}`, ...capabilityTags]);
+    const count = replicaCountFor(member, panel, opts.n);
+    let targetNodeId;
+    let available = false;
+    if (member.nodeId) {
+      const node = nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, member.nodeId));
+      if (node) {
+        targetNodeId = node.id;
+        available = true;
+      }
+    } else {
+      available = nodes.some((n) => (0, import_daemon_core4.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core4.buildMeshNodeCapabilityTags)(n)));
+    }
+    if (!available) {
+      unavailableMembers.push({
+        memberIndex,
+        provider,
+        nodeId: member.nodeId,
+        capabilityTags,
+        reason: member.nodeId ? `pinned node '${member.nodeId}' is not a member of this mesh` : `no mesh node satisfies required tags [${requiredTags.join(", ")}]`
+      });
+      return;
+    }
+    totalRequested += count;
+    const targetKey = targetNodeId ? `node:${targetNodeId}` : `tags:${[...requiredTags].sort().join(",")}`;
+    targetKeys.add(`${targetKey}|${provider}`);
+    providerSet.add(provider);
+    nodeTargetSet.add(targetKey);
+    for (let i = 0; i < count; i++) {
+      replicas.push({ memberIndex, provider, targetNodeId, capabilityTags, requiredTags });
+    }
+  });
+  const droppedReplicas = Math.max(0, replicas.length - cap);
+  const capped = droppedReplicas > 0 ? replicas.slice(0, cap) : replicas;
+  const distinctProviders = providerSet.size;
+  const distinctNodeTargets = nodeTargetSet.size;
+  return {
+    replicas: capped,
+    totalRequested,
+    totalAfterCap: capped.length,
+    droppedReplicas,
+    distinctTargets: targetKeys.size,
+    distinctProviders,
+    distinctNodeTargets,
+    enoughTargets: targetKeys.size >= MAGI_MIN_TARGETS,
+    coupled: distinctProviders < 2 || distinctNodeTargets < 2,
+    unavailableMembers
+  };
+}
+var MAGI_OUTPUT_CONTRACT = `When done, respond with ONLY a single JSON object (no prose, no code fence) matching this exact schema:
+{
+  "claims": [ { "claim": "string", "stance": "support | oppose | uncertain", "evidence": ["file:line or external source"], "confidence": 0.0 } ],
+  "top_findings": ["string"],
+  "open_questions": ["string"]
+}
+Each claim MUST carry concrete evidence (file:line or a cited source) where possible \u2014 unevidenced high-confidence claims are flagged for re-verification. "stance" is your stance toward the claim being true. Do not invent agreement; report uncertainty honestly.`;
+function buildMagiTaskPrompt(args) {
+  const parts = [];
+  parts.push("You are one independent member of a multi-agent cross-verification quorum (MAGI). Several other agents on different machines/providers are answering the SAME question independently; your job is a rigorous, READ-ONLY investigation. Do NOT write, edit, commit, or push anything.");
+  if (args.mode) parts.push(`Investigation mode: ${args.mode}.`);
+  parts.push(`
+## Question
+${args.question.trim()}`);
+  if (args.target && args.target.trim()) parts.push(`
+## Target to investigate
+${args.target.trim()}`);
+  if (Array.isArray(args.artifacts) && args.artifacts.length > 0) {
+    parts.push(`
+## Artifacts
+${args.artifacts.map((a) => String(a)).join("\n\n---\n\n")}`);
+  }
+  parts.push(`
+## Output
+${MAGI_OUTPUT_CONTRACT}`);
+  return parts.join("\n");
+}
+function extractAssistantText(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const p = payload;
+  const messages = Array.isArray(p.messages) ? p.messages : Array.isArray(p.chat) ? p.chat : Array.isArray(p.transcript) ? p.transcript : [];
+  const texts = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") continue;
+    const role = String(msg.role || msg.from || "").toLowerCase();
+    if (role && role !== "assistant" && role !== "agent" && role !== "model") continue;
+    const content = msg.content ?? msg.text ?? msg.message;
+    if (typeof content === "string") texts.push(content);
+    else if (Array.isArray(content)) {
+      for (const part of content) {
+        if (typeof part === "string") texts.push(part);
+        else if (part && typeof part === "object" && typeof part.text === "string") texts.push(part.text);
+      }
+    }
+  }
+  if (texts.length > 0) return texts[texts.length - 1];
+  return readString(p.finalSummary) || readString(p.lastMessagePreview) || readString(p.text) || "";
+}
+async function meshMagiPanelSet(ctx, args) {
+  const panelName = readString(args.panel_name) || readString(args.panelName);
+  if (!panelName) return JSON.stringify({ success: false, error: "panel_name required" });
+  const write = args.write === true;
+  try {
+    if (!write) {
+      const preview = previewMagiPanel(args.config);
+      return JSON.stringify({
+        success: true,
+        dryRun: true,
+        panelName,
+        panel: preview,
+        note: "Dry-run only \u2014 no file written. Re-run with write=true to persist to ~/.adhdev/meshes.json."
+      }, null, 2);
+    }
+    const panel = (0, import_daemon_core4.upsertMagiPanel)(panelName, args.config, { overwrite: args.overwrite === true });
+    return JSON.stringify({
+      success: true,
+      written: true,
+      panelName,
+      panel,
+      nextAction: "Verify resolution with mesh_magi_panel_list, then invoke mesh_magi_review({ panel, question, target })."
+    }, null, 2);
+  } catch (e) {
+    const message = e?.message || String(e);
+    const code = message.includes("magi_panel_exists") ? "magi_panel_exists" : message.includes("invalid_magi_panel") ? "invalid_magi_panel" : void 0;
+    return JSON.stringify({ success: false, ...code ? { code } : {}, error: message });
+  }
+}
+function previewMagiPanel(config) {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error("invalid_magi_panel: config must be an object");
+  }
+  const raw = config;
+  const rawMembers = raw.members;
+  if (!Array.isArray(rawMembers) || rawMembers.length === 0) {
+    throw new Error("invalid_magi_panel: members must be a non-empty array");
+  }
+  const members = rawMembers.map((entry, idx) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`invalid_magi_panel: member[${idx}] must be an object`);
+    }
+    const m = entry;
+    const provider = typeof m.provider === "string" ? m.provider.trim() : "";
+    if (!provider) throw new Error(`invalid_magi_panel: member[${idx}].provider is required`);
+    const nodeId = typeof m.nodeId === "string" && m.nodeId.trim() ? m.nodeId.trim() : void 0;
+    const capabilityTags = (0, import_daemon_core4.normalizeMeshCapabilityTags)(m.capabilityTags);
+    const n = typeof m.n === "number" && Number.isFinite(m.n) && m.n >= 1 ? Math.floor(m.n) : void 0;
+    return {
+      provider,
+      ...nodeId ? { nodeId } : {},
+      ...capabilityTags.length ? { capabilityTags } : {},
+      ...n !== void 0 ? { n } : {}
+    };
+  });
+  const description = typeof raw.description === "string" && raw.description.trim() ? raw.description.trim().slice(0, 200) : void 0;
+  const defaultN = typeof raw.defaultN === "number" && Number.isFinite(raw.defaultN) && raw.defaultN >= 1 ? Math.floor(raw.defaultN) : void 0;
+  return {
+    ...description ? { description } : {},
+    members,
+    ...defaultN !== void 0 ? { defaultN } : {},
+    dedupExempt: raw.dedupExempt === false ? false : true
+  };
+}
+async function meshMagiPanelList(ctx, args = {}) {
+  await refreshMeshFromDaemon(ctx);
+  const all = (0, import_daemon_core4.listMagiPanels)();
+  const only = readString(args.panel);
+  const names = only ? all[only] ? [only] : [] : Object.keys(all);
+  if (only && names.length === 0) {
+    return JSON.stringify({ success: false, code: "magi_panel_not_found", error: `panel '${only}' is not configured`, configuredPanels: Object.keys(all) });
+  }
+  const panels = names.map((name) => {
+    const panel = all[name];
+    const plan = buildMagiFanoutPlan(panel, ctx.mesh.nodes, {});
+    return {
+      name,
+      description: panel.description,
+      members: panel.members,
+      defaultN: panel.defaultN ?? 1,
+      resolution: {
+        totalReplicas: plan.totalAfterCap,
+        distinctTargets: plan.distinctTargets,
+        distinctProviders: plan.distinctProviders,
+        distinctMachines: plan.distinctNodeTargets,
+        enoughTargets: plan.enoughTargets,
+        coupled: plan.coupled,
+        unavailableMembers: plan.unavailableMembers
+      },
+      ...plan.coupled ? { warning: "This panel collapses to a single provider or single machine \u2014 its agreements would be flagged source-coupled." } : {},
+      ...!plan.enoughTargets ? { error: `Resolves to ${plan.distinctTargets} distinct (node, provider) target(s); MAGI requires \u2265${MAGI_MIN_TARGETS}.` } : {}
+    };
+  });
+  return JSON.stringify({ success: true, count: panels.length, panels }, null, 2);
+}
+async function meshMagiReview(ctx, args) {
+  const question = readString(args.question);
+  if (!question) return JSON.stringify({ success: false, error: "question required" });
+  await refreshMeshFromDaemon(ctx);
+  const panelName = readString(args.panel) || "default";
+  const panel = (0, import_daemon_core4.getMagiPanel)(panelName);
+  if (!panel) {
+    return JSON.stringify({
+      success: false,
+      code: "magi_panel_missing",
+      error: `MAGI panel '${panelName}' is not configured. Define it first with mesh_magi_panel_set, and inspect resolution with mesh_magi_panel_list.`,
+      configuredPanels: Object.keys((0, import_daemon_core4.listMagiPanels)())
+    });
+  }
+  const plan = buildMagiFanoutPlan(panel, ctx.mesh.nodes, { n: args.n });
+  if (!plan.enoughTargets) {
+    return JSON.stringify({
+      success: false,
+      code: "magi_insufficient_targets",
+      error: `Panel '${panelName}' resolves to ${plan.distinctTargets} available (node, provider) target(s); MAGI requires \u2265${MAGI_MIN_TARGETS} and never silently degrades to N=1.`,
+      unavailableMembers: plan.unavailableMembers,
+      hint: "Use mesh_magi_panel_list to see resolution, mesh_magi_panel_set to fix members, mesh_status to confirm nodes/providers are online."
+    }, null, 2);
+  }
+  const mode = readString(args.mode);
+  const requireIndependentEvidence = (args.require_independent_evidence ?? args.requireIndependentEvidence) !== false;
+  const wait = args.wait !== false;
+  const waitTimeoutMs = Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(args.wait_timeout_ms ?? args.waitTimeoutMs) || MAGI_DEFAULT_WAIT_MS));
+  const consensusGroupId = `magi_${(0, import_node_crypto.randomUUID)().replace(/-/g, "")}`;
+  const titleQ = question.length > 80 ? `${question.slice(0, 77)}...` : question;
+  const mission = (0, import_daemon_core4.upsertMeshMission)(ctx.mesh.id, {
+    title: `MAGI: ${titleQ}`,
+    goal: `Cross-verify (read-only) across panel '${panelName}': ${question}${args.target ? `
+Target: ${args.target}` : ""}`
+  });
+  const prompt = buildMagiTaskPrompt({ question, target: args.target, artifacts: args.artifacts, mode: mode || void 0 });
+  const replicaRecords = [];
+  for (const replica of plan.replicas) {
+    try {
+      const task = (0, import_daemon_core4.enqueueTask)(ctx.mesh.id, prompt, {
+        readonly: true,
+        taskMode: "live_debug_readonly",
+        requiredTags: replica.requiredTags,
+        missionId: mission.id,
+        consensusGroupId,
+        ...replica.targetNodeId ? { targetNodeId: replica.targetNodeId } : {},
+        ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
+      });
+      replicaRecords.push({ taskId: task.id, provider: replica.provider, targetNodeId: replica.targetNodeId, requiredTags: replica.requiredTags });
+    } catch (e) {
+      try {
+        (0, import_daemon_core4.appendLedgerEntry)(ctx.mesh.id, {
+          kind: "magi_replica_enqueue_failed",
+          payload: { consensusGroupId, missionId: mission.id, provider: replica.provider, error: e?.message || String(e) }
+        });
+      } catch {
+      }
+    }
+  }
+  if (replicaRecords.length < MAGI_MIN_TARGETS) {
+    return JSON.stringify({ success: false, code: "magi_enqueue_failed", error: "fewer than 2 replicas enqueued successfully", consensusGroupId, missionId: mission.id });
+  }
+  const queueTrigger = await triggerMeshQueueAndReport(ctx);
+  if (ctx.transport instanceof IpcTransport) {
+    await eagerlyDispatchRemoteReplicas(ctx, replicaRecords, prompt, mission.id, consensusGroupId);
+  }
+  const baseResult = {
+    success: true,
+    consensusGroupId,
+    missionId: mission.id,
+    panel: panelName,
+    question,
+    replicaCount: replicaRecords.length,
+    replicas: replicaRecords.map((r) => ({ taskId: r.taskId, provider: r.provider, targetNodeId: r.targetNodeId })),
+    independence: {
+      distinctProviders: plan.distinctProviders,
+      distinctMachines: plan.distinctNodeTargets,
+      coupled: plan.coupled,
+      ...plan.coupled ? { banner: "Panel collapsed to a single provider or machine \u2014 agreements will be flagged source-coupled." } : {}
+    },
+    ...plan.droppedReplicas > 0 ? {
+      cappedReplicas: plan.droppedReplicas,
+      cappedNote: `Total replicas requested (${plan.totalRequested}) exceeded the guard cap (${MAGI_MAX_REPLICAS}); ${plan.droppedReplicas} dropped (logged, not silent).`
+    } : {},
+    costNote: `MAGI dispatched ${replicaRecords.length} read-only sessions \u2014 token spend scales with the replica count.`,
+    queueTrigger
+  };
+  if (!wait) {
+    return JSON.stringify({
+      ...baseResult,
+      waited: false,
+      nextAction: "Replicas are running. Synthesis runs when you re-collect; drive off mission completion / pendingCoordinatorEvents rather than polling chat."
+    }, null, 2);
+  }
+  const collected = await collectMagiResponses(ctx, {
+    replicaTaskIds: replicaRecords.map((r) => r.taskId),
+    timeoutMs: waitTimeoutMs
+  });
+  const synthesis = synthesizeMagiResponses(collected.responses, {
+    replicasExpected: replicaRecords.length,
+    requireIndependentEvidence
+  });
+  return JSON.stringify({
+    ...baseResult,
+    waited: true,
+    collection: {
+      terminal: collected.terminal,
+      timedOut: collected.timedOut,
+      answered: synthesis.replicasAnswered,
+      missing: synthesis.replicasMissing,
+      ...synthesis.replicasMissing > 0 ? { missingNote: `Partial synthesis \u2014 ${synthesis.replicasMissing} of ${replicaRecords.length} replicas did not return a parseable response (timed out / failed / unparseable).` } : {}
+    },
+    synthesis
+  }, null, 2);
+}
+var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function collectMagiResponses(ctx, args) {
+  const ids = new Set(args.replicaTaskIds);
+  const deadline = Date.now() + args.timeoutMs;
+  const TERMINAL = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
+  let terminal = false;
+  for (; ; ) {
+    const tasks2 = (0, import_daemon_core4.getQueue)(ctx.mesh.id).filter((t) => ids.has(t.id));
+    const allTerminal = tasks2.length === ids.size && tasks2.every((t) => TERMINAL.has(String(t.status)));
+    if (allTerminal) {
+      terminal = true;
+      break;
+    }
+    if (Date.now() >= deadline) break;
+    await sleep(Math.min(MAGI_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
+  }
+  const tasks = (0, import_daemon_core4.getQueue)(ctx.mesh.id).filter((t) => ids.has(t.id));
+  const responses = [];
+  for (const task of tasks) {
+    const source = {
+      taskId: task.id,
+      nodeId: task.assignedNodeId || task.targetNodeId || void 0,
+      provider: task.assignedProviderType || void 0,
+      ok: false
+    };
+    if (task.status !== "completed" || !task.assignedNodeId || !task.assignedSessionId) {
+      source.error = task.status === "completed" ? "no_session_to_read" : `replica_${task.status || "incomplete"}`;
+      responses.push({ source, response: { claims: [], top_findings: [], open_questions: [] } });
+      continue;
+    }
+    try {
+      const node = ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, task.assignedNodeId));
+      if (!node) throw new Error("assigned node not in mesh");
+      const result = await commandForNode(ctx, node, "read_chat", {
+        sessionId: task.assignedSessionId,
+        targetSessionId: task.assignedSessionId,
+        workspace: node.workspace,
+        tailLimit: 6
+      });
+      const payload = unwrapCommandPayload(result);
+      const text = extractAssistantText(payload);
+      const parsed = parseMagiResponse(text);
+      if (parsed) {
+        responses.push({ source: { ...source, ok: true }, response: parsed });
+      } else {
+        source.error = "unparseable_output";
+        responses.push({ source, response: { claims: [], top_findings: [], open_questions: [] } });
+      }
+    } catch (e) {
+      source.error = `read_failed: ${e?.message || String(e)}`;
+      responses.push({ source, response: { claims: [], top_findings: [], open_questions: [] } });
+    }
+  }
+  return { responses, terminal, timedOut: !terminal };
+}
+async function eagerlyDispatchRemoteReplicas(ctx, replicas, prompt, missionId, consensusGroupId) {
+  const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
+  const dispatches = [];
+  for (const replica of replicas) {
+    const node = replica.targetNodeId ? ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, replica.targetNodeId)) : void 0;
+    if (!node || isLocalControlPlaneNode(ctx, node) || !node.daemonId) continue;
+    if (!(0, import_daemon_core4.nodeSatisfiesRequiredTags)(replica.requiredTags, (0, import_daemon_core4.buildMeshNodeCapabilityTags)(node))) continue;
+    dispatches.push(
+      ipcDispatchToRemoteAgent(ctx, node, {
+        message: prompt,
+        meshContext: {
+          meshId: ctx.mesh.id,
+          nodeId: node.id,
+          taskId: replica.taskId,
+          ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
+        }
+      }).then((result) => {
+        if (result?.success) {
+          try {
+            (0, import_daemon_core4.appendLedgerEntry)(ctx.mesh.id, {
+              kind: "task_dispatched",
+              nodeId: node.id,
+              sessionId: result.sessionId,
+              providerType: result.providerType,
+              payload: {
+                source: "magi",
+                via: "p2p_direct",
+                taskId: replica.taskId,
+                missionId,
+                consensusGroupId,
+                ...summarizeTaskMessage(prompt),
+                targetSessionId: result.sessionId
+              }
+            });
+          } catch {
+          }
+        }
+      }).catch(() => {
+      })
+    );
+  }
+  Promise.all(dispatches).catch(() => {
+  });
 }
 
 // src/tools/mesh-tools-session.ts
@@ -6175,6 +6950,15 @@ async function startMcpServer(opts) {
             break;
           case "mesh_review_inbox":
             text = await meshReviewInbox(meshCtx, a);
+            break;
+          case "mesh_magi_review":
+            text = await meshMagiReview(meshCtx, a);
+            break;
+          case "mesh_magi_panel_set":
+            text = await meshMagiPanelSet(meshCtx, a);
+            break;
+          case "mesh_magi_panel_list":
+            text = await meshMagiPanelList(meshCtx, a);
             break;
           default:
             return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
