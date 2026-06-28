@@ -22,6 +22,7 @@ import type {
     RepoMeshHostMetadata,
     RepoMeshDaemonRole,
 } from '../repo-mesh-types.js';
+import type { MagiPanel, MagiPanelMember } from '@adhdev/mesh-shared';
 import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 
@@ -583,4 +584,119 @@ export function updateNode(
     mesh.updatedAt = new Date().toISOString();
     saveMeshConfig(config);
     return node;
+}
+
+// ─── MAGI Panels (machine-local cross-verification quorums) ──
+
+/** Hard cap on members per panel — a sanity bound, not the per-invocation replica cap. */
+const MAX_MAGI_PANEL_MEMBERS = 24;
+
+function normalizeReplicaCount(value: unknown): number | undefined {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+    const n = Math.floor(value);
+    return n >= 1 ? n : undefined;
+}
+
+/**
+ * Validate + normalize a panel config before persisting. Mirrors the node-config
+ * normalization style (mesh-config addNode/updateNode): trims strings, drops
+ * empties, requires a provider per member, clamps replica counts. Throws on
+ * structurally invalid input so the calling tool returns a clear error rather than
+ * writing a malformed panel.
+ */
+function normalizeMagiPanel(config: unknown): MagiPanel {
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+        throw new Error('invalid_magi_panel: config must be an object');
+    }
+    const raw = config as Record<string, unknown>;
+    const rawMembers = raw.members;
+    if (!Array.isArray(rawMembers) || rawMembers.length === 0) {
+        throw new Error('invalid_magi_panel: members must be a non-empty array');
+    }
+    if (rawMembers.length > MAX_MAGI_PANEL_MEMBERS) {
+        throw new Error(`invalid_magi_panel: too many members (max ${MAX_MAGI_PANEL_MEMBERS})`);
+    }
+    const members: MagiPanelMember[] = rawMembers.map((entry, idx) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+            throw new Error(`invalid_magi_panel: member[${idx}] must be an object`);
+        }
+        const m = entry as Record<string, unknown>;
+        const provider = typeof m.provider === 'string' ? m.provider.trim() : '';
+        if (!provider) {
+            throw new Error(`invalid_magi_panel: member[${idx}].provider is required`);
+        }
+        const nodeId = typeof m.nodeId === 'string' && m.nodeId.trim() ? m.nodeId.trim() : undefined;
+        const capabilityTags = normalizeCapabilityTags(m.capabilityTags);
+        const n = normalizeReplicaCount(m.n);
+        return {
+            provider,
+            ...(nodeId ? { nodeId } : {}),
+            ...(capabilityTags ? { capabilityTags } : {}),
+            ...(n !== undefined ? { n } : {}),
+        };
+    });
+    const description = typeof raw.description === 'string' && raw.description.trim()
+        ? raw.description.trim().slice(0, 200)
+        : undefined;
+    const defaultN = normalizeReplicaCount(raw.defaultN);
+    return {
+        ...(description ? { description } : {}),
+        members,
+        ...(defaultN !== undefined ? { defaultN } : {}),
+        // dedupExempt is always meaningful for a MAGI panel (intentional same-prompt
+        // fan-out). Persist it true unless the caller explicitly disables it.
+        dedupExempt: raw.dedupExempt === false ? false : true,
+    };
+}
+
+function normalizePanelName(name: unknown): string {
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) throw new Error('invalid_magi_panel: panel name is required');
+    return trimmed.slice(0, 100);
+}
+
+/** All configured MAGI panels (machine-local), keyed by name. Empty when none. */
+export function listMagiPanels(): Record<string, MagiPanel> {
+    return loadMeshConfig().magiPanels ?? {};
+}
+
+/** A single panel by name, or undefined when not configured. */
+export function getMagiPanel(name: string): MagiPanel | undefined {
+    const key = typeof name === 'string' ? name.trim() : '';
+    if (!key) return undefined;
+    return loadMeshConfig().magiPanels?.[key];
+}
+
+/**
+ * Upsert a named panel into meshes.json. Defaults to refusing to clobber an
+ * existing panel (overwrite=false) — mirrors the mesh_init write/overwrite
+ * precedent. Returns the normalized, persisted panel.
+ */
+export function upsertMagiPanel(
+    name: string,
+    config: unknown,
+    opts: { overwrite?: boolean } = {},
+): MagiPanel {
+    const key = normalizePanelName(name);
+    const panel = normalizeMagiPanel(config);
+    const stored = loadMeshConfig();
+    const panels = stored.magiPanels ?? {};
+    if (panels[key] && opts.overwrite !== true) {
+        throw new Error(`magi_panel_exists: panel '${key}' already exists — pass overwrite=true to replace it`);
+    }
+    panels[key] = panel;
+    stored.magiPanels = panels;
+    saveMeshConfig(stored);
+    return panel;
+}
+
+/** Remove a named panel. Returns true when a panel was removed. */
+export function removeMagiPanel(name: string): boolean {
+    const key = typeof name === 'string' ? name.trim() : '';
+    if (!key) return false;
+    const stored = loadMeshConfig();
+    if (!stored.magiPanels || !stored.magiPanels[key]) return false;
+    delete stored.magiPanels[key];
+    saveMeshConfig(stored);
+    return true;
 }

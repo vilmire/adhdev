@@ -192,8 +192,18 @@ export type { SavedProviderSessionEntry } from './config/saved-sessions.js';
 export {
   listMeshes, getMesh, getMeshByRepo, createMesh, updateMesh, deleteMesh,
   addNode, removeNode, updateNode, normalizeRepoIdentity,
+  listMagiPanels, getMagiPanel, upsertMagiPanel, removeMagiPanel,
 } from './config/mesh-config.js';
 export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './config/mesh-config.js';
+// MAGI panel / common-output / synthesis types (re-exported from the mesh-shared
+// leaf so the mcp-server — which depends only on @adhdev/daemon-core — can consume
+// them without taking a direct @adhdev/mesh-shared dependency).
+export type {
+  MagiPanel, MagiPanelMember, MagiPanelMap, MagiMode,
+  MagiClaim, MagiClaimStance, MagiAgentResponse,
+  MagiResponseSource, MagiSynthesizedResponse,
+  MagiClusterCategory, MagiClusterMember, MagiClaimCluster, MagiSynthesis,
+} from '@adhdev/mesh-shared';
 
 // ── Mesh shared daemon-id / node-id helpers (re-export so external tooling —
 //    e.g. the mcp-server, which depends only on @adhdev/daemon-core — can

@@ -496,6 +496,13 @@ export interface MeshWorkQueueEntry {
     /** M1/M3: mission this task belongs to (joins mesh_missions). */
     missionId?: string;
     /**
+     * MAGI: consensus group id shared by every replica of one mesh_magi_review
+     * fan-out. Marks the task as part of an INTENTIONAL same-prompt quorum so the
+     * completion-event dedup (mesh-events-pending) never collapses grouped
+     * replicas. Absent on ordinary tasks. Rides in the payload JSON (no column).
+     */
+    consensusGroupId?: string;
+    /**
      * M1: why this task is held back (e.g. "dependency_failed:<taskId>").
      * Only set by the system on dependency failure under the 'block' policy;
      * waiting-on-dependency state is computed at view time, not stored.
@@ -763,6 +770,8 @@ export function enqueueTask(
         dependsOn?: string[];
         /** M1/M3: mission this task belongs to. */
         missionId?: string;
+        /** MAGI: consensus group id shared by every replica of a mesh_magi_review fan-out. */
+        consensusGroupId?: string;
         /** Explicit task id for batch/template flows (M5). Random UUID when omitted. */
         id?: string;
         /** (3) Originating coordinator session id (for session-anchored completion routing). */
@@ -806,6 +815,7 @@ export function enqueueTask(
             requiredTags: resolvedRequiredTags,
             ...(dependsOn.length > 0 ? { dependsOn } : {}),
             ...(typeof opts?.missionId === 'string' && opts.missionId.trim() ? { missionId: opts.missionId.trim() } : {}),
+            ...(typeof opts?.consensusGroupId === 'string' && opts.consensusGroupId.trim() ? { consensusGroupId: opts.consensusGroupId.trim() } : {}),
             ...(typeof opts?.sourceCoordinatorSessionId === 'string' && opts.sourceCoordinatorSessionId.trim()
                 ? { sourceCoordinatorSessionId: opts.sourceCoordinatorSessionId.trim() }
                 : {}),

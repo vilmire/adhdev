@@ -13,6 +13,7 @@
 
 import type { GitRepoStatus, GitCompactSummary } from './git/git-types.js';
 import type { MeshMissionSummary, MeshMissionSlimSummary } from './mesh/mesh-missions.js';
+import type { MagiPanelMap } from '@adhdev/mesh-shared';
 
 // ─── Core Mesh Types ────────────────────────────
 
@@ -705,6 +706,13 @@ export interface RepoMeshCoordinatorConfig {
  */
 export interface LocalMeshConfig {
     meshes: LocalMeshEntry[];
+    /**
+     * MAGI cross-verification panels (machine-local). Keyed by panel name; each
+     * binds concrete `(node × provider)` members — machine-dependent facts — so
+     * panels live here in meshes.json, never in the repo-shared .adhdev/mesh.json.
+     * Optional: absent on configs written before MAGI existed.
+     */
+    magiPanels?: MagiPanelMap;
 }
 
 export interface LocalMeshEntry {

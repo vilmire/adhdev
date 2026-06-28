@@ -719,13 +719,29 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     // coordinator has no local instance and keeps relying on the relayed fields — unchanged.
     const enrichedMetadataEvent = ((): Record<string, unknown> => {
         const last = sourceSession ? getLastDisplayMessage(sourceSession.getState()) : null;
-        if (!last || !last.preview) return args.metadataEvent;
-        return {
-            ...args.metadataEvent,
-            lastMessagePreview: last.preview,
-            lastMessageRole: last.role,
-            ...(last.receivedAt > 0 ? { lastMessageAt: last.receivedAt } : {}),
-        };
+        const base = (!last || !last.preview)
+            ? args.metadataEvent
+            : {
+                ...args.metadataEvent,
+                lastMessagePreview: last.preview,
+                lastMessageRole: last.role,
+                ...(last.receivedAt > 0 ? { lastMessageAt: last.receivedAt } : {}),
+            };
+        // MAGI: stamp the queue task's consensusGroupId onto the completion metadata
+        // so the intentional-fan-out dedup exemption (buildPendingEventFingerprint)
+        // can see it. The work queue is owned by THIS host/coordinator daemon — where
+        // both the lookup and the dedup run — so the local lookup covers local and
+        // relayed workers alike. Best-effort: never fail the event path on a miss, and
+        // never clobber a consensusGroupId the worker already relayed.
+        if (readNonEmptyString((base as Record<string, unknown>).consensusGroupId)) return base;
+        const eventTaskId = readNonEmptyString(args.metadataEvent.taskId);
+        if (!eventTaskId) return base;
+        try {
+            const entry = MeshRuntimeStore.getInstance().findQueueEntryById(args.meshId, eventTaskId);
+            const consensusGroupId = readNonEmptyString((entry as { consensusGroupId?: unknown } | null)?.consensusGroupId);
+            if (consensusGroupId) return { ...base, consensusGroupId };
+        } catch { /* queue lookup is best-effort; absence just falls back to the generic fingerprint */ }
+        return base;
     })();
 
     // R2: cloud P2P dashboard metadata sync. The cloud daemon used to do this from its own

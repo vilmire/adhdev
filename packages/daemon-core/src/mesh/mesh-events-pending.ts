@@ -121,6 +121,21 @@ export function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent)
             ].join('::');
         }
     }
+    // MAGI consensus-group exemption: a consensusGroupId marks an INTENTIONAL
+    // same-prompt fan-out across N replicas — the exact opposite of the accidental
+    // duplicates this dedup collapses. Anchor the fingerprint on the unique
+    // (taskId, consensusGroupId) so grouped replicas can NEVER be collapsed by any
+    // future prompt-content-based tightening of this builder. Mirrors the
+    // bootstrap-event exemption above and serves as the explicit fan-out marker.
+    // (Today this is belt-and-suspenders: each replica already gets a distinct
+    // taskId, so the generic key below would not collapse them either.)
+    const consensusGroupId = readNonEmptyString(metadata.consensusGroupId)
+        || readNonEmptyString(readRecord(metadata.payload)?.consensusGroupId);
+    if (consensusGroupId) {
+        const groupTaskId = readNonEmptyString(metadata.taskId)
+            || readNonEmptyString(readRecord(metadata.payload)?.taskId);
+        return [event.meshId, event.event, groupTaskId || '', consensusGroupId, 'group'].join('::');
+    }
     const sessionId = resolveEventSessionId(metadata);
     const providerSessionId = readNonEmptyString(metadata.providerSessionId);
     const taskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord(metadata.payload)?.taskId);
