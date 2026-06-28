@@ -214,6 +214,8 @@ export type { MeshGraphData, MeshGraphNode, MeshGraphEdge } from './components/M
 export { buildMeshGraph, isMeshGraphStructurallyComplete } from './utils/mesh-visualization'
 export type { MeshGraph, MeshGraphNode as MeshGraphNodeType, MeshGraphEdge as MeshGraphEdgeType } from './utils/mesh-visualization'
 export { canonicalizeRepoMeshStatus, extractRepoMeshStatus, repoMeshNodeHasLiveGitEvidence, summarizeRepoMeshCanonicalNodeDebug } from './utils/repo-mesh-status'
+export { extractMagiActivity, MAGI_SYNTHESIS_WIRING_GAP } from './utils/magi-activity'
+export type { MagiActivitySummary, MagiGroupActivity, MagiReplicaActivity, MagiReplicaCounts, MagiLedgerEvent } from './utils/magi-activity'
 export { useMeshGraphMetadataSubscription } from './hooks/useMeshGraphMetadataSubscription'
 export { RepoMeshContext, useRepoMeshContext, STANDALONE_FEATURES, CLOUD_FEATURES } from './context/RepoMeshContext'
 export type { RepoMeshContextValue, RepoMeshDaemonEntry, RepoMeshFeatures, LoadMeshStatusOptions, LaunchCoordinatorParams, LaunchCoordinatorResult } from './context/RepoMeshContext'

@@ -17,6 +17,7 @@ import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
 import { buildMeshGraph, type MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 import { canonicalizeRepoMeshStatus, summarizeRepoMeshCanonicalNodeDebug } from '../../utils/repo-mesh-status'
+import { extractMagiActivity, type MagiGroupActivity } from '../../utils/magi-activity'
 
 type DetailSelection =
     | { kind: 'node'; nodeId: string }
@@ -390,11 +391,69 @@ function MeshNodeRuntimeRow({ node }: { node: RepoMeshNodeStatus }) {
     )
 }
 
+function MagiGroupRow({ group }: { group: MagiGroupActivity }) {
+    const meshTheme = useContext(MeshGraphThemeContext)
+    const { counts } = group
+    return (
+        <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
+            <div className="flex flex-wrap items-center gap-2">
+                <span className={`min-w-0 truncate text-[12px] font-semibold ${meshTheme.textPrimary}`} title={group.question || group.consensusGroupId}>
+                    {group.question || group.missionTitle || group.consensusGroupId}
+                </span>
+                {group.missionStatus && <Badge label={group.missionStatus} tone={group.missionStatus === 'completed' ? 'good' : group.missionStatus === 'abandoned' ? 'danger' : 'info'} title="Mission status" />}
+                <Badge label={group.terminal ? 'done' : 'running'} tone={group.terminal ? 'good' : 'info'} title="Whether every replica has reached a terminal status" />
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <Badge label={`${counts.completed}/${group.replicaCount} done`} tone="default" title="Completed replicas vs total dispatched" />
+                {counts.pending > 0 && <Badge label={`${counts.pending} pending`} tone="default" />}
+                {counts.assigned > 0 && <Badge label={`${counts.assigned} running`} tone="info" />}
+                {counts.failed > 0 && <Badge label={`${counts.failed} failed`} tone="danger" />}
+                {counts.cancelled > 0 && <Badge label={`${counts.cancelled} cancelled`} tone="warn" />}
+                {group.source === 'queue' ? (
+                    <Badge
+                        label={group.coupled ? `coupled · ${group.distinctProviders}p × ${group.distinctNodes}m` : `independent · ${group.distinctProviders}p × ${group.distinctNodes}m`}
+                        tone={group.coupled ? 'warn' : 'good'}
+                        title={group.coupled
+                            ? 'Replicas collapse to a single provider or machine — eventual agreements would be flagged source-coupled by MAGI synthesis.'
+                            : 'Replicas span ≥2 providers and ≥2 machines — agreements would be independent.'}
+                    />
+                ) : (
+                    <Badge label="replicas aged out" tone="default" title="Per-replica tasks have left the bounded mesh_status queue tail; only the mission aggregate is reachable." />
+                )}
+            </div>
+        </div>
+    )
+}
+
+function MagiActivityCard({ status }: { status: RepoMeshStatus }) {
+    const meshTheme = useContext(MeshGraphThemeContext)
+    const magi = useMemo(() => extractMagiActivity(status), [status])
+    if (magi.totalGroups === 0 && magi.ledgerEvents.length === 0) return null
+    return (
+        <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
+            <div className="flex flex-wrap items-center gap-2">
+                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>MAGI cross-verification</span>
+                {magi.activeGroups > 0 && <Badge label={`${magi.activeGroups} running`} tone="info" />}
+                <Badge label={`${magi.totalGroups} quorum${magi.totalGroups === 1 ? '' : 's'}`} tone="default" />
+            </div>
+            <div className="mt-2 flex flex-col gap-2">
+                {magi.groups.map(group => <MagiGroupRow key={group.consensusGroupId} group={group} />)}
+            </div>
+            <p className={`mt-2 text-[11px] ${meshTheme.textSecondary}`}>
+                Showing the reachable subset — quorum missions, per-replica progress, and provider/machine
+                independence. Synthesis (claim clusters, the needs-verification list, open questions) is computed
+                inside the mesh_magi_review tool and not persisted, so it is not yet surfaced here.
+            </p>
+        </div>
+    )
+}
+
 function MeshStatusTab({ status }: { status: RepoMeshStatus }) {
     const meshTheme = useContext(MeshGraphThemeContext)
     return (
         <div className="flex flex-col gap-3 p-1">
             <MeshSchedulingCard scheduling={status.scheduling} />
+            <MagiActivityCard status={status} />
             <div className="flex flex-col gap-2">
                 <span className={`px-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
                     Nodes — runtime
