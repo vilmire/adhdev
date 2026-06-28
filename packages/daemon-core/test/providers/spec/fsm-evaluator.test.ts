@@ -110,7 +110,9 @@ describe('claude-cli v4 FSM', () => {
     });
 
     it('leaves starting → idle once grace elapses', () => {
-        const ev = evaluateFsm(spec, 'starting', banner, { row: 7, col: 1 }, undefined, clk(5000, 0));
+        // startup-grace is elapsed_ms:8000 (bumped 4s→8s by 624a208, R4 GENERATING-BOUNDARY).
+        // Fire past the grace window so the transition to idle is allowed.
+        const ev = evaluateFsm(spec, 'starting', banner, { row: 7, col: 1 }, undefined, clk(9000, 0));
         expect(ev.fired?.to).toBe('idle');
     });
 

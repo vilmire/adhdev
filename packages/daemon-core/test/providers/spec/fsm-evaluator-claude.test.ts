@@ -611,12 +611,14 @@ describe('claude-cli v4 FSM — FALSEIDLE2 ellipsis-less spinner + whole-screen 
         const m = (l: string) => spec.transitions.find(t => t.label === l)!.when as any;
         const i2b = m('idle→busy').matches;
         const b2i = m('busy→idle').all[0].not.matches;
-        // approval→busy was restructured by the AUTOAPPROVE fix into all:[{not: footer ❯ 1.},
-        // {section: body, matches: <spinner>}] (sticky-approval footer guard). The spinner
-        // regex now lives in that body clause, not a flat .matches — read it from there so the
-        // "all four spinner clauses use the identical regex" invariant still holds post-merge.
-        const a2b = m('approval→busy').all.find((c: any) => c.section === 'body').matches;
-        const a2i = m('approval→idle').all.find((c: any) => c.not && c.not.matches && c.not.matches.includes('2800')).not.matches;
+        // approval→busy (R4 AUTOAPPROVE/sticky-approval guard) is now all:[ {not: footer ❯ 1.},
+        // {not: footer Esc to cancel}, {not: Do you want to proceed?}, {stable_ms,cursor_above},
+        // {matches: <spinner>} ]. The spinner regex is the trailing flat positive clause (no
+        // section, no not) — read it from there so the "all four spinner clauses use the
+        // identical regex" invariant still holds post-merge.
+        const a2b = m('approval→busy').all.find((c: any) => c.matches && !c.section && !c.not).matches;
+        // approval→idle keeps the spinner as a negated body clause: {not:{section:'body',matches:<spinner>}}.
+        const a2i = m('approval→idle').all.find((c: any) => c.not && c.not.section === 'body' && c.not.matches).not.matches;
         expect(b2i).toBe(i2b);
         expect(a2b).toBe(i2b);
         expect(a2i).toBe(i2b);
@@ -953,8 +955,8 @@ describe('claude-cli v4 FSM — FALSEBUSY middle-dot body false-match', () => {
         const m = (l: string) => spec.transitions.find(t => t.label === l)!.when as any;
         const i2b = m('idle→busy').matches;
         const b2i = m('busy→idle').all[0].not.matches;
-        const a2b = m('approval→busy').all.find((c: any) => c.section === 'body').matches;
-        const a2i = m('approval→idle').all.find((c: any) => c.not && c.not.matches && c.not.matches.includes('2800')).not.matches;
+        const a2b = m('approval→busy').all.find((c: any) => c.matches && !c.section && !c.not).matches;
+        const a2i = m('approval→idle').all.find((c: any) => c.not && c.not.section === 'body' && c.not.matches).not.matches;
         expect(b2i).toBe(i2b);
         expect(a2b).toBe(i2b);
         expect(a2i).toBe(i2b);

@@ -908,10 +908,18 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       instance.detectStatusTransition()
       vi.advanceTimersByTime(35_000)
 
+      // R4d CANON-C (completion-gate decouple): a mesh worker session whose external-native
+      // transcript never finalizes its assistant turn no longer HOLDS for the 30s finalization
+      // timeout. The block carries allowTimeout (isTranscriptEvidenceGate), so the worker's idle
+      // notification is decoupled from the transcript evidence and emitted immediately — marked
+      // weak (decoupledImmediateEmit=true, finalAssistantPresent=false). It fires after the
+      // 4000ms settle window, NOT the COMPLETED_FINALIZATION_MAX_WAIT_MS timeout, so
+      // emittedAfterFinalizationTimeout is false.
       const completed = events.find((event) => event.event === 'agent:generating_completed')
       expect(completed).toMatchObject({
         completionDiagnostic: {
-          emittedAfterFinalizationTimeout: true,
+          emittedAfterFinalizationTimeout: false,
+          decoupledImmediateEmit: true,
           blockReason: 'missing_final_assistant',
           providerSessionId: '019ea42e-f1f8-7cb1-82fe-0b3b3f2ccc46',
           finalAssistantPresent: false,
@@ -1095,12 +1103,22 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       let status = 'generating'
       let parsedStatus = 'generating'
       let activeModal: any = null
+      // R4d SETTLE-VALLEY: a native-history (chatMessagesOwnedExternally) mesh worker whose
+      // idle was preceded by waiting_approval HOLDS completion until the transcript's final
+      // assistant turn is confirmed — otherwise the inter-approval valley would freeze a
+      // truncated weak summary. Surface a confirmed final assistant message in the parsed
+      // status so the finalization block clears (source='parsed') and a single GENUINE
+      // completion fires once the approval resolves to idle.
+      const parsedMessages = [
+        { role: 'user', content: 'commit the change', kind: 'standard' },
+        { role: 'assistant', content: 'Committed the change.', kind: 'standard' },
+      ]
       const adapter: any = {
         currentTurnScope: { responseEpoch: 1 },
         isWaitingForResponse: true,
         chatMessagesOwnedExternally: true,
         getStatus: () => ({ status, activeModal, messages: [] }),
-        getScriptParsedStatus: () => ({ status: parsedStatus, activeModal, messages: [] }),
+        getScriptParsedStatus: () => ({ status: parsedStatus, activeModal, messages: parsedMessages }),
         getPartialResponse: () => '',
         getRuntimeMetadata: () => null,
         getScreenText: () => '',
@@ -1133,7 +1151,9 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       parsedStatus = 'idle'
       activeModal = null
       instance.detectStatusTransition()
-      vi.advanceTimersByTime(3000)
+      // Advance past the 4000ms NATIVE_HISTORY_MESH_IDLE_SETTLE_MS valley settle window so the
+      // debounced completed flush runs; the confirmed final assistant clears the block → 1 emit.
+      vi.advanceTimersByTime(5000)
 
       expect(events.filter((event) => event.event === 'agent:waiting_approval')).toHaveLength(1)
       expect(events.filter((event) => event.event === 'agent:generating_completed')).toHaveLength(1)
