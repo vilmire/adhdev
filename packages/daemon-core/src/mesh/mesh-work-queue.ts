@@ -1086,6 +1086,9 @@ export function requeueTask(
         // STALE assigned row (dead session, dispatch never confirmed) is NOT in-flight
         // — its mark was cleared on the dispatch failure — so it still requeues as
         // before. An explicit operator override (`force`) bypasses this guard.
+        // MAGI-NOTE: the future consensus group fan-out (separate mission) intentionally
+        // re-dispatches a group-tagged task into multiple sessions and must be exempted
+        // from this single-flight guard; the exemption hook (group-id check) belongs here.
         if (!opts?.force && isTaskDispatchInFlight(meshId, taskId)) {
             LOG.warn('MeshQueue', `Refusing to requeue task ${taskId} on mesh ${meshId}: it is actively dispatched/generating (single-flight in-flight). Requeueing now would open a duplicate second dispatch into another session. Pass force to override.`);
             return entry;

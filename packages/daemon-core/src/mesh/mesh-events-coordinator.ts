@@ -17,6 +17,7 @@ export {
     __resetIdleAutoFastForwardForTests,
     activeReadonlyAssignedCount,
     activeWriteAssignedCount,
+    isSessionActivelyGenerating,
     triggerMeshQueue,
     tryAssignQueueTask,
 } from './mesh-queue-assignment.js';

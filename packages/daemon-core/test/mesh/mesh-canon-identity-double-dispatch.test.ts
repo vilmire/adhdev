@@ -16,6 +16,7 @@ import {
     isTaskDispatchInFlight,
     __resetTaskDispatchInFlightForTests,
 } from '../../src/mesh/mesh-task-inflight.js';
+import { isSessionActivelyGenerating } from '../../src/mesh/mesh-queue-assignment.js';
 
 // CANON-IDENTITY double-dispatch regression suite.
 //
@@ -127,6 +128,44 @@ describe('CANON-IDENTITY — single-flight requeue guard (C)', () => {
         reclaimStrandedAssignedTask(meshId, t.id, { reason: 'assigned_stranded_dispatch_unconfirmed' });
         expect(isTaskDispatchInFlight(meshId, t.id)).toBe(false);
         expect(getQueue(meshId).find(x => x.id === t.id)?.status).toBe('pending');
+    });
+});
+
+describe('CANON-IDENTITY — live-generating requeue hardening (restart-safe observation)', () => {
+    // The in-memory single-flight Set is lost on a daemon restart. The hardening recovers
+    // the "still generating" signal from observable session state (instanceManager) so a
+    // requeue is still refused for a live worker even when its in-flight mark is gone.
+    function mkComponents(sessions: Record<string, { status?: string; activeChat?: { status?: string } }>): any {
+        return {
+            instanceManager: {
+                getInstance(sessionId: string) {
+                    const state = sessions[sessionId];
+                    if (!state) return undefined;
+                    return { getState: () => ({ instanceId: sessionId, ...state }) };
+                },
+            },
+        };
+    }
+
+    it('reports a generating session as actively generating (would refuse a non-force requeue)', () => {
+        const components = mkComponents({ sessA: { status: 'generating' } });
+        expect(isSessionActivelyGenerating(components, 'sessA')).toBe(true);
+    });
+
+    it('honours an active chat status even when the top-level status is not busy', () => {
+        const components = mkComponents({ sessA: { status: 'idle', activeChat: { status: 'streaming' } } });
+        expect(isSessionActivelyGenerating(components, 'sessA')).toBe(true);
+    });
+
+    it('reports an idle session as NOT generating (a legitimate requeue proceeds)', () => {
+        const components = mkComponents({ sessA: { status: 'idle' } });
+        expect(isSessionActivelyGenerating(components, 'sessA')).toBe(false);
+    });
+
+    it('reports a dead/unknown session as NOT generating (stale assigned row still requeues)', () => {
+        const components = mkComponents({});
+        expect(isSessionActivelyGenerating(components, 'dead-session')).toBe(false);
+        expect(isSessionActivelyGenerating(components, '')).toBe(false);
     });
 });
 

@@ -67,7 +67,29 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'queue requeue');
         if (ownerFailure) return ownerFailure;
         try {
-            const { requeueTask } = await import('../../mesh/mesh-work-queue.js');
+            const { requeueTask, getQueue } = await import('../../mesh/mesh-work-queue.js');
+            // CANON-IDENTITY single-flight hardening (restart-safe): the in-memory in-flight
+            // mark requeueTask consults is process-local and is lost across a daemon restart.
+            // Independently of that mark, if the row is still 'assigned' to a session this
+            // daemon hosts that is actively generating, requeueing would flip it back to
+            // pending and let a SECOND session claim the SAME task (the duplicate dispatch).
+            // Refuse unless force. A genuinely dead/stale session is not generating, so this
+            // observation passes and a legitimate requeue proceeds. force=true (operator
+            // override) bypasses BOTH this and the in-memory guard.
+            // MAGI-NOTE: a future consensus group fan-out (separate mission) will exempt
+            // group-tagged tasks from this guard; the exemption hook belongs here.
+            if (args?.force !== true) {
+                const { isSessionActivelyGenerating } = await import('../../mesh/mesh-events.js');
+                const existing = getQueue(meshId).find((t: any) => t?.id === taskId) as { status?: string; assignedSessionId?: string } | undefined;
+                if (existing?.status === 'assigned' && existing.assignedSessionId
+                    && isSessionActivelyGenerating(ctx.deps as any, existing.assignedSessionId)) {
+                    return {
+                        success: false,
+                        error: `Task '${taskId}' is actively dispatched/generating (live session ${existing.assignedSessionId}); requeue refused to avoid a duplicate second dispatch. Pass force:true to override, or cancel and re-enqueue.`,
+                        task: existing,
+                    };
+                }
+            }
             const task = requeueTask(meshId, taskId, {
                 reason: typeof args?.reason === 'string' ? args.reason : undefined,
                 targetNodeId: typeof args?.targetNodeId === 'string' ? args.targetNodeId.trim() : undefined,

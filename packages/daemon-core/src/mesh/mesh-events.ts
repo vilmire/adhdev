@@ -27,6 +27,7 @@ export {
 export type { MeshQueueTriggerResult } from './mesh-events-coordinator.js';
 export {
     tryAssignQueueTask,
+    isSessionActivelyGenerating,
     triggerMeshQueue,
     handleMeshForwardEvent,
     setupMeshEventForwarding,

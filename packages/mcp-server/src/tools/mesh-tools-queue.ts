@@ -47,6 +47,7 @@ import {
     sanitizeQueueStatusFilter,
     summarizeTaskMessage,
     triggerMeshQueueAndReport,
+    unwrapCommandPayload,
 } from './mesh-tools-internal.js';
 import type {
     MeshContext,
@@ -484,13 +485,67 @@ export async function meshQueueRequeue(
         const targetNodeId = (args.target_node_id || args.targetNodeId || '').trim() || undefined;
         const targetSessionId = (args.target_session_id || args.targetSessionId || '').trim() || undefined;
         const keepTargetSession = args.keep_target_session === true || args.keepTargetSession === true;
+        const clearTargetNode = args.clear_target_node === true || args.clearTargetNode === true;
+        // clearTargetSession contract: an explicit target session pins the row (never cleared);
+        // otherwise clear the stale target session unless the caller asked to keep it.
+        const clearTargetSession = targetSessionId ? false : !keepTargetSession;
+        const force = args.force === true;
+
+        // CANON-IDENTITY cross-process single-flight: the in-flight guard set
+        // (daemon-core mesh-task-inflight) is process-LOCAL. In IpcTransport (cloud /
+        // multi-coordinator) mode this tool runs in the COORDINATOR process, but the
+        // dispatch that marks a task in-flight (tryAssignQueueTask → beginTaskDispatchInFlight)
+        // runs in the mesh-host DAEMON process. An in-process requeueTask here would consult a
+        // DIFFERENT (empty) Set, so isTaskDispatchInFlight is always false, the guard is a
+        // no-op, and a requeue-while-generating flips the row to pending → a SECOND session
+        // claims the SAME task (the double-dispatch). Delegate the requeue to the daemon so
+        // begin (dispatch) and check (requeue guard) are co-located in ONE process. The daemon
+        // handler (requeue_mesh_queue_task) implements the same guard + the refused signal,
+        // which we surface to the caller verbatim. LocalTransport (standalone) runs daemon and
+        // coordinator in the same process, so its in-process path already sees the right Set.
+        if (ctx.transport instanceof IpcTransport) {
+            const raw = await ctx.transport.command('requeue_mesh_queue_task', {
+                meshId: ctx.mesh.id,
+                taskId,
+                reason: args.reason,
+                ...(targetNodeId ? { targetNodeId } : {}),
+                ...(targetSessionId ? { targetSessionId } : {}),
+                clearTargetNode,
+                clearTargetSession,
+                force,
+            });
+            const result = unwrapCommandPayload(raw) || {};
+            // Refused (in-flight / live-generating guard) or daemon error → surface verbatim
+            // so the coordinator learns the requeue did NOT open a second dispatch.
+            if (result.success === false) {
+                return JSON.stringify(result, null, 2);
+            }
+            const task = result.task;
+            if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
+            if (task.status === 'failed' && task.cancelReason?.startsWith('max_retries_exceeded')) {
+                return JSON.stringify({
+                    success: false,
+                    code: 'max_retries_exceeded',
+                    error: task.cancelReason,
+                    task,
+                    hint: 'Use force=true to bypass the retry cap for explicit operator recovery.',
+                }, null, 2);
+            }
+            const triggerPreferredNodeId = targetNodeId || task.targetNodeId || undefined;
+            ctx.transport.command('trigger_mesh_queue', {
+                meshId: ctx.mesh.id,
+                ...(triggerPreferredNodeId ? { preferredNodeId: triggerPreferredNodeId } : {}),
+            }).catch(() => {});
+            return JSON.stringify({ success: true, task }, null, 2);
+        }
+
         const task = requeueTask(ctx.mesh.id, taskId, {
             reason: args.reason,
             targetNodeId,
             targetSessionId,
-            clearTargetNode: args.clear_target_node === true || args.clearTargetNode === true,
-            clearTargetSession: targetSessionId ? false : !keepTargetSession,
-            force: args.force === true,
+            clearTargetNode,
+            clearTargetSession,
+            force,
         });
         if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
         if (task.status === 'failed' && task.cancelReason?.startsWith('max_retries_exceeded')) {
