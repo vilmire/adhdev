@@ -18,6 +18,7 @@ import {
 } from '../../mesh/worktree-bootstrap-config.js';
 import { loadRepoSettings } from '../../config/repo-settings.js';
 import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../../mesh/mesh-events.js';
+import { noteRecentlyClonedNode } from '../../mesh/mesh-clone-grace.js';
 import { loadConfig } from '../../config/config.js';
 import {
     hydrateInlineMeshDirectTruth,
@@ -630,6 +631,13 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                     ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
                     _meshDirectDispatch: true,
                 });
+                // FALSE-BLOCKER-CLONE-QUEUE: open the transient grace window for the freshly
+                // cloned node on THIS coordinator daemon. The clone ran (and wrote the inline-
+                // cache node) on the remote source daemon; its inline entry has not propagated
+                // here yet, so a queue task pinned to it would transiently look like a permanent
+                // 'target_node_id_unmatched'. Recording its id marks the unmatch as transient.
+                const forwardedNodeId = (forwarded as { node?: { id?: unknown } } | null | undefined)?.node?.id;
+                if (typeof forwardedNodeId === 'string' && forwardedNodeId) noteRecentlyClonedNode(forwardedNodeId);
                 return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
             }
 
@@ -686,6 +694,12 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 if (inlineForReconcile) ctx.updateInlineMeshNode(meshId, inlineForReconcile, node);
                 ctx.invalidateAggregateMeshStatus(meshId);
             }
+
+            // FALSE-BLOCKER-CLONE-QUEUE: open the transient grace window for the freshly cloned
+            // node. A queue task pinned to it (target_node pin) enqueued before bootstrap
+            // completes / the inline-cache entry fully settles must be classified as a transient
+            // skip, not a permanent 'target_node_id_unmatched' actionable blocker.
+            if (typeof node?.id === 'string' && node.id) noteRecentlyClonedNode(node.id);
 
             const persistWorktreeSetupState = async (bootstrapState: WorktreeBootstrapState): Promise<void> => {
                 node.worktreeBootstrap = bootstrapState;

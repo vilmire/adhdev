@@ -18,8 +18,9 @@ import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { queuePendingMeshCoordinatorEvent, retractPendingDispatchBlockedEvent } from './mesh-events-pending.js';
 import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
+import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
 import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 
 /**
@@ -434,6 +435,13 @@ export function tryAssignQueueTask(
 
     LOG.info('MeshQueue', `Node ${nodeId} (${sessionId}) pulled task ${task.id}`);
 
+    // FALSE-BLOCKER-CLONE-QUEUE (stale-event clear): the task just claimed and will dispatch,
+    // so any actionable blocker previously paged for it (e.g. a 'target_node_id_unmatched'
+    // emitted during the clone/bootstrap propagation window before the node became
+    // claimable) is now stale — re-arm the de-dup ledger and retract any undelivered
+    // dispatch_blocked event so the coordinator does not keep seeing a resolved blocker.
+    retractActionableSkipIfPreviouslyNotified(meshId, task.id);
+
     // CANON-IDENTITY single-flight: mark the just-claimed task in-flight the moment it
     // is handed to a transport. The atomic claim already prevents a concurrent claim,
     // but this lets requeueTask distinguish a genuinely-generating task (refuse the
@@ -606,6 +614,16 @@ const ACTIONABLE_SKIP_REASON_PREFIXES = [
     'dirty_workspace',
 ];
 
+// FALSE-BLOCKER-CLONE-QUEUE: the TRANSIENT counterpart of 'target_node_id_unmatched'. A
+// queue task pinned to a freshly cloned worktree node can transiently find no matching node
+// (its inline-cache entry has not propagated to this coordinator daemon yet, and/or its
+// worktree bootstrap is still running). That unmatch SELF-RESOLVES — it is not the permanent
+// routing miss the actionable blocker exists for — so it is deliberately NOT listed in
+// ACTIONABLE_SKIP_REASON_PREFIXES: isActionableSkipReason() returns false for it, so no
+// "actionable blocker — will NOT clear on its own" coordinator page is emitted. The skip is
+// still recorded to task.autoLaunch + the ledger for diagnosability.
+const TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON = 'target_node_bootstrap_pending';
+
 // De-dup actionable-skip coordinator notifications: emit once per (mesh, task) until the
 // reason CHANGES, so the 4s reconcile loop re-marking the same skip does not re-notify. A
 // non-skip transition (or a genuine reason change) re-arms it. In-memory only — a daemon
@@ -615,6 +633,54 @@ const lastActionableSkipNotified = new Map<string, string>();
 function isActionableSkipReason(reason?: string): boolean {
     if (!reason) return false;
     return ACTIONABLE_SKIP_REASON_PREFIXES.some(prefix => reason === prefix || reason.startsWith(prefix));
+}
+
+/**
+ * FALSE-BLOCKER-CLONE-QUEUE: a target pin is TRANSIENTLY (not permanently) unresolved when
+ * the pinned node is a freshly cloned worktree that will auto-claim once its bootstrap
+ * completes / its inline-cache entry propagates — as opposed to a removed/dead node whose
+ * unmatch is a permanent, actionable routing miss. Two signals, either suffices:
+ *   (a) the node IS visible in the (cache-merged) mesh view but its worktree bootstrap is
+ *       still 'running' (and not stuck past the stale backstop), or
+ *   (b) the node is NOT visible here yet, but a clone for its id was issued within the grace
+ *       window (propagation/bootstrap latency) — see mesh-clone-grace.
+ * Conservative: a node neither bootstrap-running nor recently cloned → returns false, so a
+ * genuinely dead node keeps its permanent, actionable 'target_node_id_unmatched'.
+ */
+function isTargetNodeTransientlyUnresolved(mesh: any, task: MeshWorkQueueEntry): boolean {
+    const targetNodeId = readNonEmptyString(task.targetNodeId);
+    if (!targetNodeId) return false;
+    const node = Array.isArray(mesh?.nodes)
+        ? mesh.nodes.find((n: any) => meshNodeIdMatches(n, targetNodeId))
+        : undefined;
+    if (node
+        && (node as { worktreeBootstrap?: { status?: string } }).worktreeBootstrap?.status === 'running'
+        && !isWorktreeBootstrapStaleRunning(node)) {
+        return true;
+    }
+    return isWithinCloneBootstrapGrace(targetNodeId);
+}
+
+/**
+ * FALSE-BLOCKER-CLONE-QUEUE (stale-event clear): once a task whose actionable blocker we
+ * previously paged either gets claimed or transitions to a self-resolving state, re-arm the
+ * de-dup ledger (so a later genuine blocker re-notifies) AND retract any still-undelivered
+ * dispatch_blocked pending event, so the coordinator's pending queue no longer carries the
+ * stale "will NOT clear on its own" warning. Cheap: only touches the pending store when this
+ * (mesh, task) actually had a prior actionable notification recorded.
+ */
+function retractActionableSkipIfPreviouslyNotified(meshId: string, taskId: string): void {
+    const dedupKey = `${meshId}:${taskId}`;
+    if (!lastActionableSkipNotified.delete(dedupKey)) return; // nothing was paged → nothing to retract
+    try {
+        const coordinatorDaemonId = readNonEmptyString(loadConfig().machineId) || undefined;
+        const removed = retractPendingDispatchBlockedEvent(meshId, taskId, coordinatorDaemonId);
+        if (removed > 0) {
+            LOG.info('MeshQueue', `Retracted ${removed} stale dispatch-blocked event(s) for task ${taskId} (mesh ${meshId}) — its blocker resolved`);
+        }
+    } catch (e: any) {
+        LOG.warn('MeshQueue', `Failed to retract stale dispatch-blocked event for task ${taskId} (mesh ${meshId}): ${e?.message || e}`);
+    }
 }
 
 function actionableSkipGuidance(reason: string): { summary: string; nextAction: string } {
@@ -652,6 +718,12 @@ function actionableSkipGuidance(reason: string): { summary: string; nextAction: 
  *  event (so it is delivered actively, not only on poll). De-duped per (mesh, task, reason). */
 function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string, reason: string | undefined, nodeId?: string): void {
     if (!isActionableSkipReason(reason)) return;
+    // FALSE-BLOCKER-CLONE-QUEUE chokepoint defense: a 'target_node_id_unmatched' skip whose
+    // node was cloned within the grace window is a TRANSIENT propagation/bootstrap gap that
+    // auto-clears, not a permanent routing miss — never page the coordinator for it (the
+    // reason classifier upstream already routes the common case to the transient reason; this
+    // is the single-funnel backstop for any path that still labels it as the permanent reason).
+    if (reason === 'target_node_id_unmatched' && isWithinCloneBootstrapGrace(readNonEmptyString(nodeId))) return;
     const dedupKey = `${meshId}:${taskId}`;
     if (lastActionableSkipNotified.get(dedupKey) === reason) return;
     lastActionableSkipNotified.set(dedupKey, reason!);
@@ -1095,9 +1167,19 @@ function markAutoLaunch(meshId: string, taskId: string, args: {
     // notification on any non-skip transition (started/completed) so a later genuine skip
     // re-notifies.
     if (args.status === 'skipped') {
-        notifyCoordinatorOfActionableSkip(meshId, taskId, args.reason, args.nodeId);
+        if (isActionableSkipReason(args.reason)) {
+            notifyCoordinatorOfActionableSkip(meshId, taskId, args.reason, args.nodeId);
+        } else if (args.reason === TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON) {
+            // FALSE-BLOCKER-CLONE-QUEUE (stale-event clear): the unmatch is now known to be a
+            // self-resolving clone/bootstrap window — retract any earlier actionable blocker we
+            // paged for this same task. Other transient/back-pressure reasons (cooldown, caps)
+            // intentionally do NOT retract: they can mask a still-standing real blocker.
+            retractActionableSkipIfPreviouslyNotified(meshId, taskId);
+        }
     } else {
-        lastActionableSkipNotified.delete(`${meshId}:${taskId}`);
+        // started/completed: the task is progressing — re-arm the de-dup ledger and retract
+        // any still-undelivered stale blocker for it.
+        retractActionableSkipIfPreviouslyNotified(meshId, taskId);
     }
 }
 
@@ -1264,11 +1346,22 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                         !task.targetNodeId || meshNodeIdMatches(n, task.targetNodeId));
                     return matched.length > 0 && matched.every((n: any) => n?.isLocalWorktree === true);
                 })();
+            // FALSE-BLOCKER-CLONE-QUEUE: an unmatched target pin is only a PERMANENT routing
+            // miss when the node is genuinely absent — a freshly cloned worktree whose
+            // inline-cache entry has not propagated here yet (or whose bootstrap is still
+            // running) is TRANSIENTLY unresolved and auto-claims shortly. Report that as the
+            // transient (non-actionable) reason so the coordinator is not paged with a false
+            // "actionable blocker — will NOT clear on its own". A genuinely dead node is neither
+            // bootstrap-running nor inside the clone grace window → stays 'target_node_id_unmatched'.
+            const targetTransientlyUnresolved = targetPinUnmatched
+                && isTargetNodeTransientlyUnresolved(mesh, task);
             markAutoLaunch(meshId, task.id, {
                 status: 'skipped',
                 reason: convergenceOntoWorktree
                     ? 'mesh_convergence_target_is_worktree'
-                    : (targetPinUnmatched ? 'target_node_id_unmatched' : 'no_node_satisfies_required_tags'),
+                    : targetTransientlyUnresolved
+                        ? TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON
+                        : (targetPinUnmatched ? 'target_node_id_unmatched' : 'no_node_satisfies_required_tags'),
                 nodeId: task.targetNodeId,
             });
             continue;

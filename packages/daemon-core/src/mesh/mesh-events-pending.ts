@@ -541,6 +541,57 @@ export function drainPendingMeshCoordinatorEvents(
     return reconcilePendingMeshCoordinatorEvents(meshId, merged);
 }
 
+/**
+ * FALSE-BLOCKER-CLONE-QUEUE: retract any still-UNDELIVERED `mesh:dispatch_blocked`
+ * actionable-skip event for a task whose blocker has since resolved (the task was
+ * claimed, or its skip transitioned to a self-resolving transient reason). Without
+ * this, a `target_node_id_unmatched` blocker paged during the brief clone/bootstrap
+ * propagation window would linger in the coordinator's pending queue and surface as a
+ * false "actionable blocker — will NOT clear on its own" even after the task dispatched.
+ *
+ * Only removes events that have NOT yet been drained/delivered to the coordinator — an
+ * already-delivered message cannot be unsent, but de-dup re-arm (caller side) plus this
+ * retraction guarantee no NEW stale blocker accumulates. Best-effort across both the
+ * SQLite inbox and the JSONL legacy files (scoped + shared). Returns rows removed.
+ */
+export function retractPendingDispatchBlockedEvent(
+    meshId: string | undefined,
+    taskId: string | undefined,
+    coordinatorDaemonId?: string,
+): number {
+    if (!meshId || !taskId) return 0;
+    let removed = 0;
+    const matchesTask = (event: PendingMeshCoordinatorEvent | undefined): boolean => {
+        if (!event || event.event !== 'mesh:dispatch_blocked') return false;
+        const rowTaskId = readNonEmptyString((event.metadataEvent as Record<string, unknown> | undefined)?.taskId);
+        return rowTaskId === taskId;
+    };
+
+    // SQLite inbox: peek undrained rows for the mesh, hard-delete the matching ones by id.
+    try {
+        const store = MeshRuntimeStore.getInstance();
+        const ids: string[] = [];
+        for (const row of store.peekPendingEvents(meshId)) {
+            if (row.event !== 'mesh:dispatch_blocked') continue;
+            if (matchesTask(row.payload as PendingMeshCoordinatorEvent)) ids.push(row.id);
+        }
+        if (ids.length) removed += store.deletePendingEventsById(ids);
+    } catch { /* best-effort — JSONL retraction below still runs */ }
+
+    // JSONL legacy files: selectively drop matching lines (rewrites the rest back).
+    const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
+    const primaryDaemonId = daemonIds[0];
+    const paths = primaryDaemonId
+        ? [getPendingEventsPath(meshId, primaryDaemonId), getPendingEventsPath(meshId)]
+        : [getPendingEventsPath(meshId)];
+    for (const path of paths) {
+        try {
+            removed += selectiveDrainFile(path, matchesTask).length;
+        } catch { /* best-effort */ }
+    }
+    return removed;
+}
+
 /** Peek at pending coordinator events without draining (non-destructive). */
 export function getPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string | ReadonlyArray<string>): readonly PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];

@@ -31,6 +31,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { getPendingMeshCoordinatorEvents, __clearMeshPendingEventsForTests } from '../../src/mesh/mesh-events-pending.js'
+import { noteRecentlyClonedNode, __resetCloneBootstrapGraceForTests } from '../../src/mesh/mesh-clone-grace.js'
 
 const WT_A = 'node_wt_a'
 const WT_B = 'node_wt_b'
@@ -79,6 +80,7 @@ function cleanup(meshId: string) {
   __clearMeshQueueForTests(meshId)
   __clearMeshPendingEventsForTests(meshId)
   __resetMeshRuntimeStoreForTests()
+  __resetCloneBootstrapGraceForTests()
   meshConfigMocks.getMesh.mockReset()
   try { fs.rmSync(testTmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
 }
@@ -188,6 +190,70 @@ describe('Fix (1) — actionable dispatch-skip coordinator notification', () => 
       await triggerMeshQueue(components, meshId)
 
       expect(dispatchBlockedEvents(meshId).length).toBe(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+})
+
+describe('FALSE-BLOCKER-CLONE-QUEUE — transient clone/bootstrap skip is NOT an actionable blocker', () => {
+  afterEach(() => { vi.clearAllMocks() })
+
+  it('a task pinned to a freshly cloned (in-grace) node reports the transient reason and pages NO actionable blocker', async () => {
+    const meshId = `mesh_clone_grace_${randomUUID().slice(0, 8)}`
+    try {
+      // The cloned worktree node is not yet visible in the coordinator daemon's mesh view
+      // (its inline-cache entry has not propagated / bootstrap still running), but a clone
+      // for its id was just issued — so its unmatch is transient, not a permanent routing miss.
+      setMesh(meshId, [node(BASE_NODE)])
+      noteRecentlyClonedNode(WT_A)
+      const components = createComponents(meshId)
+      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: WT_A })
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(autoLaunchReason(meshId, task.id)).toBe('target_node_bootstrap_pending')
+      expect(dispatchBlockedEvents(meshId).length).toBe(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('regression: a genuinely dead node (never cloned) still pages an actionable target_node_id_unmatched blocker', async () => {
+    const meshId = `mesh_dead_node_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId, [node(BASE_NODE)])
+      const components = createComponents(meshId)
+      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: 'node_dead' })
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(autoLaunchReason(meshId, task.id)).toBe('target_node_id_unmatched')
+      expect(dispatchBlockedEvents(meshId).length).toBe(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('stale-event clear: once the unmatch becomes transient, an earlier actionable blocker is retracted', async () => {
+    const meshId = `mesh_stale_clear_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId, [node(BASE_NODE)])
+      const components = createComponents(meshId)
+      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: WT_A })
+
+      // Tick 1: node absent and NOT yet in grace → actionable blocker paged.
+      await triggerMeshQueue(components, meshId)
+      expect(autoLaunchReason(meshId, task.id)).toBe('target_node_id_unmatched')
+      expect(dispatchBlockedEvents(meshId).length).toBe(1)
+
+      // The clone now registers (grace opens) — the unmatch is known transient.
+      noteRecentlyClonedNode(WT_A)
+
+      // Tick 2: reason flips to transient AND the stale blocker is retracted.
+      await triggerMeshQueue(components, meshId)
+      expect(autoLaunchReason(meshId, task.id)).toBe('target_node_bootstrap_pending')
+      expect(dispatchBlockedEvents(meshId).length).toBe(0)
     } finally {
       cleanup(meshId)
     }
