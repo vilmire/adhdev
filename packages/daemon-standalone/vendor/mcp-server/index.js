@@ -4678,9 +4678,6 @@ Target: ${args.target}` : ""}`
     replicaCount: replicaRecords.length
   });
   const queueTrigger = await triggerMeshQueueAndReport(ctx);
-  if (ctx.transport instanceof IpcTransport) {
-    await eagerlyDispatchRemoteReplicas(ctx, replicaRecords, prompt, mission.id, consensusGroupId);
-  }
   const baseResult = {
     success: true,
     consensusGroupId,
@@ -4931,50 +4928,6 @@ async function collectMagiResponses(ctx, args) {
     }
   }
   return { responses, terminal, timedOut: !terminal, staleCount: staleTaskIds.size };
-}
-async function eagerlyDispatchRemoteReplicas(ctx, replicas, prompt, missionId, consensusGroupId) {
-  const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
-  const dispatches = [];
-  for (const replica of replicas) {
-    const node = replica.targetNodeId ? ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, replica.targetNodeId)) : void 0;
-    if (!node || isLocalControlPlaneNode(ctx, node) || !node.daemonId) continue;
-    if (!(0, import_daemon_core4.nodeSatisfiesRequiredTags)(replica.requiredTags, (0, import_daemon_core4.buildMeshNodeCapabilityTags)(node))) continue;
-    dispatches.push(
-      ipcDispatchToRemoteAgent(ctx, node, {
-        message: prompt,
-        meshContext: {
-          meshId: ctx.mesh.id,
-          nodeId: node.id,
-          taskId: replica.taskId,
-          ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
-        }
-      }).then((result) => {
-        if (result?.success) {
-          try {
-            (0, import_daemon_core4.appendLedgerEntry)(ctx.mesh.id, {
-              kind: "task_dispatched",
-              nodeId: node.id,
-              sessionId: result.sessionId,
-              providerType: result.providerType,
-              payload: {
-                source: "magi",
-                via: "p2p_direct",
-                taskId: replica.taskId,
-                missionId,
-                consensusGroupId,
-                ...summarizeTaskMessage(prompt),
-                targetSessionId: result.sessionId
-              }
-            });
-          } catch {
-          }
-        }
-      }).catch(() => {
-      })
-    );
-  }
-  Promise.all(dispatches).catch(() => {
-  });
 }
 
 // src/tools/mesh-tools-session.ts
