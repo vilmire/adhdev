@@ -32,6 +32,7 @@ import {
     readString,
     refreshMeshFromDaemon,
     resolveCoordinatorDaemonId,
+    resolveCoordinatorNode,
     summarizeTaskMessage,
     triggerMeshQueueAndReport,
     unwrapCommandPayload,
@@ -398,6 +399,23 @@ export interface MagiUnavailableMember {
     reason: string;
 }
 
+/** Per-member resolution detail (for mesh_magi_panel_list + the git-stale exclusion). */
+export interface MagiMemberResolution {
+    memberIndex: number;
+    provider: string;
+    nodeId?: string;
+    capabilityTags: string[];
+    /** Resolves to ≥1 live node (pinned present, or a tag match). */
+    available: boolean;
+    /** Representative resolved node HEAD commit (best-effort; absent when unknown). */
+    headCommit?: string;
+    /** True when available AND every candidate node's known HEAD differs from referenceCommit. */
+    gitStale: boolean;
+    /** Excluded from the fan-out (unavailable, or git-stale and not include_stale). */
+    excluded: boolean;
+    reason?: string;
+}
+
 export interface MagiFanoutPlan {
     replicas: MagiReplicaPlan[];
     totalRequested: number;
@@ -409,11 +427,25 @@ export interface MagiFanoutPlan {
     enoughTargets: boolean;
     coupled: boolean;
     unavailableMembers: MagiUnavailableMember[];
+    /** The commit the panel is being resolved against (coordinator HEAD); undefined when unknown. */
+    referenceCommit?: string;
+    /** Per-member resolution detail, aligned to panel.members order. */
+    memberResolutions: MagiMemberResolution[];
+    /** Members excluded because they are git-stale (different HEAD) and include_stale was not set. */
+    staleMembers: MagiMemberResolution[];
+    /** Git-stale members that were nonetheless INCLUDED because include_stale=true (warning surface). */
+    includedStaleMembers: MagiMemberResolution[];
 }
 
 function replicaCountFor(member: MagiPanelMember, panel: MagiPanel, globalN?: number): number {
     const n = member.n ?? panel.defaultN ?? globalN ?? 1;
     return Math.max(1, Math.floor(n));
+}
+
+/** Best-effort HEAD commit sha off a live node's git status (GitRepoStatus.headCommit). */
+function nodeHeadCommit(node: any): string | undefined {
+    const h = node?.git?.headCommit;
+    return typeof h === 'string' && h.trim() ? h.trim() : undefined;
 }
 
 /**
@@ -425,12 +457,15 @@ function replicaCountFor(member: MagiPanelMember, panel: MagiPanel, globalN?: nu
 export function buildMagiFanoutPlan(
     panel: MagiPanel,
     nodes: LocalMeshNodeEntry[],
-    opts: { n?: number; maxReplicas?: number } = {},
+    opts: { n?: number; maxReplicas?: number; referenceCommit?: string; includeStale?: boolean } = {},
 ): MagiFanoutPlan {
     const cap = Math.max(1, Math.floor(opts.maxReplicas ?? MAGI_MAX_REPLICAS));
     const members = Array.isArray(panel.members) ? panel.members : [];
+    const referenceCommit = typeof opts.referenceCommit === 'string' && opts.referenceCommit.trim() ? opts.referenceCommit.trim() : undefined;
+    const includeStale = opts.includeStale === true;
     const replicas: MagiReplicaPlan[] = [];
     const unavailableMembers: MagiUnavailableMember[] = [];
+    const memberResolutions: MagiMemberResolution[] = [];
     const targetKeys = new Set<string>();
     const providerSet = new Set<string>();
     const nodeTargetSet = new Set<string>();
@@ -442,19 +477,21 @@ export function buildMagiFanoutPlan(
         const requiredTags = normalizeMeshCapabilityTags([`provider=${provider}`, ...capabilityTags]);
         const count = replicaCountFor(member, panel, opts.n);
 
-        // Resolve availability against the mesh.
+        // Resolve availability against the mesh, and gather the candidate node(s) so we
+        // can assess git staleness against the reference commit.
         let targetNodeId: string | undefined;
-        let available = false;
+        let candidateNodes: any[] = [];
         if (member.nodeId) {
             const node = nodes.find(n => meshNodeIdMatches(n as any, member.nodeId!));
-            if (node) { targetNodeId = (node as any).id; available = true; }
+            if (node) { targetNodeId = (node as any).id; candidateNodes = [node]; }
         } else {
             // Match against each node's OWN advertised tags (provider derived from its
             // policy.providerPriority), NOT a provider we inject — passing `provider`
             // here would synthesize a provider= tag and make the filter always pass.
             // Mirrors the queue's availability check (mesh-tools-queue.ts).
-            available = nodes.some(n => nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(n)));
+            candidateNodes = nodes.filter(n => nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(n)));
         }
+        const available = candidateNodes.length > 0;
 
         if (!available) {
             unavailableMembers.push({
@@ -466,6 +503,51 @@ export function buildMagiFanoutPlan(
                     ? `pinned node '${member.nodeId}' is not a member of this mesh`
                     : `no mesh node satisfies required tags [${requiredTags.join(', ')}]`,
             });
+            memberResolutions.push({ memberIndex, provider, nodeId: member.nodeId, capabilityTags, available: false, gitStale: false, excluded: true, reason: 'unavailable' });
+            return;
+        }
+
+        // Git staleness vs the reference commit. A member is git-stale only when a
+        // reference commit is known AND every candidate node with a known HEAD differs
+        // from it (a node with no known HEAD can't be proven stale → treated as fresh,
+        // so we never silently exclude on missing telemetry). Prefer routing to a fresh
+        // candidate when one exists.
+        let headCommit: string | undefined;
+        let gitStale = false;
+        if (referenceCommit) {
+            const freshCandidate = candidateNodes.find(n => {
+                const h = nodeHeadCommit(n);
+                return !h || h === referenceCommit;
+            });
+            if (freshCandidate) {
+                headCommit = nodeHeadCommit(freshCandidate);
+                if (member.nodeId) targetNodeId = (freshCandidate as any).id;
+                gitStale = false;
+            } else {
+                headCommit = nodeHeadCommit(candidateNodes[0]);
+                gitStale = true;
+            }
+        } else {
+            headCommit = nodeHeadCommit(candidateNodes.find(n => nodeHeadCommit(n)) ?? candidateNodes[0]);
+        }
+
+        const resolution: MagiMemberResolution = {
+            memberIndex,
+            provider,
+            nodeId: targetNodeId ?? member.nodeId,
+            capabilityTags,
+            available: true,
+            ...(headCommit ? { headCommit } : {}),
+            gitStale,
+            excluded: false,
+        };
+
+        // Default-exclude a git-stale member (it would investigate different code than
+        // the reference); include_stale=true overrides but the caller surfaces a warning.
+        if (gitStale && !includeStale) {
+            resolution.excluded = true;
+            resolution.reason = `git-stale: node HEAD ${headCommit ?? '(unknown)'} differs from reference ${referenceCommit}`;
+            memberResolutions.push(resolution);
             return;
         }
 
@@ -474,6 +556,7 @@ export function buildMagiFanoutPlan(
         targetKeys.add(`${targetKey}|${provider}`);
         providerSet.add(provider);
         nodeTargetSet.add(targetKey);
+        memberResolutions.push(resolution);
         for (let i = 0; i < count; i++) {
             replicas.push({ memberIndex, provider, targetNodeId, capabilityTags, requiredTags });
         }
@@ -485,6 +568,11 @@ export function buildMagiFanoutPlan(
 
     const distinctProviders = providerSet.size;
     const distinctNodeTargets = nodeTargetSet.size;
+    // enoughTargets / coupled are computed over INCLUDED targets only — i.e. AFTER the
+    // git-stale exclusion — so the ≥2-independent-target guard re-checks post-exclusion
+    // and never silently degrades to N=1.
+    const staleMembers = memberResolutions.filter(m => m.gitStale && m.excluded);
+    const includedStaleMembers = memberResolutions.filter(m => m.gitStale && !m.excluded);
     return {
         replicas: capped,
         totalRequested,
@@ -496,7 +584,22 @@ export function buildMagiFanoutPlan(
         enoughTargets: targetKeys.size >= MAGI_MIN_TARGETS,
         coupled: distinctProviders < 2 || distinctNodeTargets < 2,
         unavailableMembers,
+        ...(referenceCommit ? { referenceCommit } : {}),
+        memberResolutions,
+        staleMembers,
+        includedStaleMembers,
     };
+}
+
+/**
+ * The commit the panel is resolved against for git-staleness: the coordinator node's
+ * HEAD (the code the investigation question originates from). Members on a different
+ * HEAD would investigate different code and are excluded by default. Undefined when the
+ * coordinator node carries no git HEAD telemetry → staleness is simply not computed.
+ */
+function resolveMagiReferenceCommit(ctx: MeshContext): string | undefined {
+    const node = resolveCoordinatorNode(ctx);
+    return nodeHeadCommit(node);
 }
 
 // ─── Task prompt (common-schema contract) ───────
@@ -630,15 +733,27 @@ export async function meshMagiPanelList(
     if (only && names.length === 0) {
         return JSON.stringify({ success: false, code: 'magi_panel_not_found', error: `panel '${only}' is not configured`, configuredPanels: Object.keys(all) });
     }
+    const referenceCommit = resolveMagiReferenceCommit(ctx);
     const panels = names.map(name => {
         const panel = all[name];
-        const plan = buildMagiFanoutPlan(panel, ctx.mesh.nodes, {});
+        // Resolve with the reference commit so the listing reflects which members are
+        // git-stale and would be excluded by default (panel_list itself never dispatches).
+        const plan = buildMagiFanoutPlan(panel, ctx.mesh.nodes, { referenceCommit });
         return {
             name,
             description: panel.description,
-            members: panel.members,
+            // Per-member gitStale boolean alongside the raw member definition.
+            members: panel.members.map((m, i) => {
+                const res = plan.memberResolutions.find(r => r.memberIndex === i);
+                return {
+                    ...m,
+                    gitStale: res?.gitStale === true,
+                    ...(res?.headCommit ? { headCommit: res.headCommit } : {}),
+                };
+            }),
             defaultN: panel.defaultN ?? 1,
             resolution: {
+                referenceCommit: referenceCommit ?? null,
                 totalReplicas: plan.totalAfterCap,
                 distinctTargets: plan.distinctTargets,
                 distinctProviders: plan.distinctProviders,
@@ -646,12 +761,14 @@ export async function meshMagiPanelList(
                 enoughTargets: plan.enoughTargets,
                 coupled: plan.coupled,
                 unavailableMembers: plan.unavailableMembers,
+                staleMembers: plan.staleMembers,
             },
+            ...(plan.staleMembers.length > 0 ? { gitStaleWarning: `${plan.staleMembers.length} member(s) are git-stale (HEAD differs from reference ${referenceCommit ?? '(unknown)'}) and are excluded by default; pass include_stale=true to mesh_magi_review to include them.` } : {}),
             ...(plan.coupled ? { warning: 'This panel collapses to a single provider or single machine — its agreements would be flagged source-coupled.' } : {}),
-            ...(!plan.enoughTargets ? { error: `Resolves to ${plan.distinctTargets} distinct (node, provider) target(s); MAGI requires ≥${MAGI_MIN_TARGETS}.` } : {}),
+            ...(!plan.enoughTargets ? { error: `Resolves to ${plan.distinctTargets} distinct (node, provider) target(s) after git-stale exclusion; MAGI requires ≥${MAGI_MIN_TARGETS}.` } : {}),
         };
     });
-    return JSON.stringify({ success: true, count: panels.length, panels }, null, 2);
+    return JSON.stringify({ success: true, count: panels.length, ...(referenceCommit ? { referenceCommit } : {}), panels }, null, 2);
 }
 
 export async function meshMagiReview(
@@ -666,6 +783,8 @@ export async function meshMagiReview(
         mode?: string;
         require_independent_evidence?: boolean;
         requireIndependentEvidence?: boolean;
+        include_stale?: boolean;
+        includeStale?: boolean;
         wait?: boolean;
         wait_timeout_ms?: number;
         waitTimeoutMs?: number;
@@ -706,15 +825,27 @@ export async function meshMagiReview(
         });
     }
 
-    // 2. Plan the fan-out and enforce the ≥2-target guard.
-    const plan = buildMagiFanoutPlan(panel, ctx.mesh.nodes, { n: args.n });
+    // 2. Plan the fan-out. Git-stale members (node HEAD differs from the coordinator's
+    // reference commit) are EXCLUDED by default — they would investigate different code;
+    // include_stale=true keeps them (with a warning). The ≥2-target guard below is
+    // re-checked AFTER this exclusion, so it never silently degrades to N=1.
+    const includeStale = (args.include_stale ?? args.includeStale) === true;
+    const referenceCommit = resolveMagiReferenceCommit(ctx);
+    const plan = buildMagiFanoutPlan(panel, ctx.mesh.nodes, { n: args.n, referenceCommit, includeStale });
     if (!plan.enoughTargets) {
+        const droppedByStale = plan.staleMembers.length > 0;
         return JSON.stringify({
             success: false,
-            code: 'magi_insufficient_targets',
-            error: `Panel '${panelName}' resolves to ${plan.distinctTargets} available (node, provider) target(s); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`,
+            code: droppedByStale ? 'magi_insufficient_targets_after_stale_exclusion' : 'magi_insufficient_targets',
+            error: droppedByStale
+                ? `Panel '${panelName}' resolves to only ${plan.distinctTargets} independent (node, provider) target(s) AFTER excluding ${plan.staleMembers.length} git-stale member(s) (HEAD differs from reference ${referenceCommit ?? '(unknown)'}); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`
+                : `Panel '${panelName}' resolves to ${plan.distinctTargets} available (node, provider) target(s); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`,
+            ...(referenceCommit ? { referenceCommit } : {}),
             unavailableMembers: plan.unavailableMembers,
-            hint: 'Use mesh_magi_panel_list to see resolution, mesh_magi_panel_set to fix members, mesh_status to confirm nodes/providers are online.',
+            ...(droppedByStale ? { staleMembers: plan.staleMembers } : {}),
+            hint: droppedByStale
+                ? 'Bring the stale node(s) to the reference commit, or pass include_stale=true to mesh_magi_review to fan out to them anyway (results will be git-skewed). Use mesh_magi_panel_list to inspect resolution.'
+                : 'Use mesh_magi_panel_list to see resolution, mesh_magi_panel_set to fix members, mesh_status to confirm nodes/providers are online.',
         }, null, 2);
     }
 
@@ -791,6 +922,17 @@ export async function meshMagiReview(
             coupled: plan.coupled,
             ...(plan.coupled ? { banner: 'Panel collapsed to a single provider or machine — agreements will be flagged source-coupled.' } : {}),
         },
+        ...(plan.referenceCommit ? { referenceCommit: plan.referenceCommit } : {}),
+        // Surface git-stale handling: which members were excluded (default), or included
+        // despite being stale (include_stale=true) — the latter makes results git-skewed.
+        ...(plan.staleMembers.length > 0 ? {
+            gitStaleExcluded: plan.staleMembers,
+            gitStaleWarning: `${plan.staleMembers.length} git-stale member(s) (HEAD ≠ reference ${plan.referenceCommit ?? '(unknown)'}) were excluded from this fan-out; pass include_stale=true to include them.`,
+        } : {}),
+        ...(plan.includedStaleMembers.length > 0 ? {
+            gitStaleIncluded: plan.includedStaleMembers,
+            gitStaleWarning: `include_stale=true: ${plan.includedStaleMembers.length} git-stale member(s) (HEAD ≠ reference ${plan.referenceCommit ?? '(unknown)'}) were INCLUDED — their evidence compares different code, so synthesis will be git-skewed.`,
+        } : {}),
         ...(plan.droppedReplicas > 0 ? {
             cappedReplicas: plan.droppedReplicas,
             cappedNote: `Total replicas requested (${plan.totalRequested}) exceeded the guard cap (${MAGI_MAX_REPLICAS}); ${plan.droppedReplicas} dropped (logged, not silent).`,
@@ -1028,6 +1170,8 @@ function extractNodeGitRef(node: any): MagiReplicaGitRef | undefined {
     if (!git || typeof git !== 'object') return undefined;
     const ref: MagiReplicaGitRef = {};
     if (typeof git.branch === 'string' || git.branch === null) ref.branch = git.branch;
+    const headCommit = nodeHeadCommit(node);
+    if (headCommit) ref.headCommit = headCommit;
     if (typeof git.ahead === 'number' && Number.isFinite(git.ahead)) ref.ahead = git.ahead;
     if (typeof git.behind === 'number' && Number.isFinite(git.behind)) ref.behind = git.behind;
     if (typeof git.dirty === 'boolean') ref.dirty = git.dirty;
