@@ -562,6 +562,75 @@ export const MESH_REVIEW_INBOX_TOOL = {
     },
 };
 
+// ─── MAGI — Multi-Agent Ground-truth Insight ──
+
+export const MESH_MAGI_REVIEW_TOOL = {
+    name: 'mesh_magi_review',
+    description: 'Cross-verify a read-only investigation across a standing panel of independent mesh agents (different machines/providers), instead of sending a SINGLE read-only worker. Drop-in for any read-only investigation — bug RCA, defect/regression measurement, "why does this code do X?", or doc/design/API review. Fans the SAME question out to N independent (node × provider) replicas, then synthesizes consensus/disagreement/unique evidence into a needs_verification list — NOT a majority vote (high agreement among coupled agents ≠ correct). Read-only is FORCED (no execute/write flag exists). COST: multiplies token spend by the total replica count (the call is the opt-in). Requires a configured panel (mesh_magi_panel_set) resolving to ≥2 (node, provider) targets; never silently degrades to N=1.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            question: { type: 'string', description: 'The single investigation question every agent answers — e.g. "What is the root cause of this defect?", "Refute this RCA.", "Why does this code do X?". Not only "review this".' },
+            target: { type: 'string', description: 'What to investigate — file path(s), a bug symptom / error / stack trace, a code area / symbol, or omitted when the question is self-contained.' },
+            artifacts: { type: 'array', items: { type: 'string' }, description: 'Inline content when not file-backed: a doc/diff, a log/error dump, or a prior single-worker RCA to refute.' },
+            panel: { type: 'string', description: 'Named panel from meshes.json (mesh_magi_panel_set). Falls back to a panel named "default" if omitted; errors clearly if none exists.' },
+            n: { type: 'number', description: 'Global replica override per member (clamped by the total-replica guard cap, default 12).' },
+            mode: { type: 'string', enum: ['rca', 'investigation', 'claim_audit', 'design_review', 'code_audit'], description: 'Synthesis emphasis hint — affects labels only, never the agent count or schema.' },
+            require_independent_evidence: { type: 'boolean', description: 'Default true — high-impact claims with no file:line/source evidence are routed to needs_verification.' },
+            wait: { type: 'boolean', description: 'Default true — collect replica outputs and return the synthesis. (Poll-by-group is a deferred mode.)' },
+            wait_timeout_ms: { type: 'number', description: 'Max time to wait for replica completion before returning a partial "missing K of N" synthesis. Default ~4 min.' },
+        },
+        required: ['question'],
+    },
+};
+
+export const MESH_MAGI_PANEL_SET_TOOL = {
+    name: 'mesh_magi_panel_set',
+    description: 'Upsert a named MAGI panel into machine-local ~/.adhdev/meshes.json. A panel is a standing set of independent (node × provider) members that a future mesh_magi_review fans the same question out to. Maximize DISTINCT providers AND distinct machines — that diversity is exactly what synthesis rewards; a single-provider/single-machine panel still runs but its agreements are flagged source-coupled. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false) and never clobbers an existing panel unless overwrite=true.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            panel_name: { type: 'string', description: 'Panel name key, e.g. "design-review".' },
+            config: {
+                type: 'object',
+                description: 'Panel config: { description?, members:[{ provider (REQUIRED), nodeId?, capabilityTags?, n? }], defaultN? }.',
+                properties: {
+                    description: { type: 'string' },
+                    members: {
+                        type: 'array',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                nodeId: { type: 'string', description: 'Optional — pin to a specific mesh node id.' },
+                                capabilityTags: { type: 'array', items: { type: 'string' }, description: 'Optional routing tags (ANDed with the provider tag) when nodeId is absent.' },
+                                provider: { type: 'string', description: 'REQUIRED — provider type, e.g. claude-cli / codex-cli / hermes-cli / gemini-cli.' },
+                                n: { type: 'number', description: 'Optional per-member replica count (default 1).' },
+                            },
+                            required: ['provider'],
+                        },
+                    },
+                    defaultN: { type: 'number', description: 'Replicas per member when member.n is absent (default 1).' },
+                },
+                required: ['members'],
+            },
+            write: { type: 'boolean', description: 'When true, persist to meshes.json. Defaults false (dry-run preview of the normalized panel).' },
+            overwrite: { type: 'boolean', description: 'When true, replace an existing panel of the same name. Defaults false.' },
+        },
+        required: ['panel_name', 'config'],
+    },
+};
+
+export const MESH_MAGI_PANEL_LIST_TOOL = {
+    name: 'mesh_magi_panel_list',
+    description: 'List configured MAGI panels and resolve each member\'s (node, provider) availability against the current mesh. Read-only. Use to confirm a panel resolves to ≥2 independent targets before mesh_magi_review, and to see whether a panel would collapse to a single provider/machine (source-coupled).',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            panel: { type: 'string', description: 'Optional — list only this panel. Omit to list all configured panels.' },
+        },
+    },
+};
+
 export const ALL_MESH_TOOLS = [
     MESH_STATUS_TOOL,
     MESH_LIST_NODES_TOOL,
@@ -599,4 +668,7 @@ export const ALL_MESH_TOOLS = [
     MESH_MISSION_UPSERT_TOOL,
     MESH_MISSION_LIST_TOOL,
     MESH_REVIEW_INBOX_TOOL,
+    MESH_MAGI_REVIEW_TOOL,
+    MESH_MAGI_PANEL_SET_TOOL,
+    MESH_MAGI_PANEL_LIST_TOOL,
 ];

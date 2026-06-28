@@ -91,6 +91,17 @@ export {
 } from './mesh-tools-mission.js';
 
 export {
+    MAGI_MAX_REPLICAS,
+    buildMagiFanoutPlan,
+    buildMagiTaskPrompt,
+    meshMagiPanelList,
+    meshMagiPanelSet,
+    meshMagiReview,
+    parseMagiResponse,
+    synthesizeMagiResponses,
+} from './mesh-tools-magi.js';
+
+export {
     computeIdleDispatchAckRisk,
     meshApprove,
     meshCleanupSessions,
