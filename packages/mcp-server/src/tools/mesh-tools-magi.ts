@@ -13,7 +13,6 @@
 // ./mesh-tools-internal.ts; mesh-tools.ts is the barrel.
 
 import {
-    IpcTransport,
     annotateQueueStaleness,
     appendLedgerEntry,
     buildMeshNodeCapabilityTags,
@@ -21,8 +20,6 @@ import {
     enqueueTask,
     getMagiPanel,
     getQueue,
-    isLocalControlPlaneNode,
-    ipcDispatchToRemoteAgent,
     listMagiPanels,
     meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
@@ -31,9 +28,7 @@ import {
     randomUUID,
     readString,
     refreshMeshFromDaemon,
-    resolveCoordinatorDaemonId,
     resolveCoordinatorNode,
-    summarizeTaskMessage,
     triggerMeshQueueAndReport,
     unwrapCommandPayload,
     upsertMagiPanel,
@@ -901,11 +896,17 @@ export async function meshMagiReview(
         replicaCount: replicaRecords.length,
     });
 
-    // 5. Trigger local queue pickup; eager P2P push for remote (IPC) targets.
+    // 5. Trigger queue pickup. This is the SOLE dispatch path for every replica,
+    // local AND remote. triggerMeshQueue (on the coordinator's local IPC) drains
+    // each pending replica task — including ones pinned to a remote node — to its
+    // target: a remote idle session is claimed and send_chat'd over P2P, and a
+    // pinned remote target with no idle session is auto-launched, then claims on
+    // ready. A previously-eager P2P push to remote replicas (eagerlyDispatchRemote-
+    // Replicas) was a SECOND, redundant send of the same prompt: the queue path
+    // already delivers the task, so both writes raced and each bypassed the
+    // recent-duplicate-send guard — the cross-machine MAGI double-send. Removed so
+    // every replica is dispatched exactly once via the queue.
     const queueTrigger = await triggerMeshQueueAndReport(ctx);
-    if (ctx.transport instanceof IpcTransport) {
-        await eagerlyDispatchRemoteReplicas(ctx, replicaRecords, prompt, mission.id, consensusGroupId);
-    }
 
     const baseResult = {
         success: true,
@@ -1255,60 +1256,4 @@ async function collectMagiResponses(
         }
     }
     return { responses, terminal, timedOut: !terminal, staleCount: staleTaskIds.size };
-}
-
-async function eagerlyDispatchRemoteReplicas(
-    ctx: MeshContext,
-    replicas: Array<{ taskId: string; provider: string; targetNodeId?: string; requiredTags: string[] }>,
-    prompt: string,
-    missionId: string,
-    consensusGroupId: string,
-): Promise<void> {
-    const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
-    const dispatches: Promise<void>[] = [];
-    for (const replica of replicas) {
-        // Only eager-push to a concrete remote target. Tag-routed replicas with no
-        // pinned node rely on the local queue trigger + reconcile (the coordinator
-        // tunes the live cross-machine path); we never broadcast a task to many nodes.
-        const node = replica.targetNodeId
-            ? ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, replica.targetNodeId!))
-            : undefined;
-        if (!node || isLocalControlPlaneNode(ctx, node) || !(node as any).daemonId) continue;
-        if (!nodeSatisfiesRequiredTags(replica.requiredTags, buildMeshNodeCapabilityTags(node))) continue;
-        dispatches.push(
-            ipcDispatchToRemoteAgent(ctx, node, {
-                message: prompt,
-                meshContext: {
-                    meshId: ctx.mesh.id,
-                    nodeId: (node as any).id,
-                    taskId: replica.taskId,
-                    ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
-                },
-            })
-                .then((result: any) => {
-                    if (result?.success) {
-                        try {
-                            appendLedgerEntry(ctx.mesh.id, {
-                                kind: 'task_dispatched',
-                                nodeId: (node as any).id,
-                                sessionId: result.sessionId,
-                                providerType: result.providerType,
-                                payload: {
-                                    source: 'magi',
-                                    via: 'p2p_direct',
-                                    taskId: replica.taskId,
-                                    missionId,
-                                    consensusGroupId,
-                                    ...summarizeTaskMessage(prompt),
-                                    targetSessionId: result.sessionId,
-                                },
-                            });
-                        } catch { /* best-effort */ }
-                    }
-                })
-                .catch(() => { /* dispatch failure leaves the task pending for reconcile */ }),
-        );
-    }
-    // Fire-and-forget — collection drives off task status, not this push.
-    Promise.all(dispatches).catch(() => {});
 }

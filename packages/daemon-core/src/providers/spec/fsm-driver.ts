@@ -1041,15 +1041,36 @@ export class FsmDriver implements ISpecDriver {
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         const startedAt = Date.now();
 
-        // Distinctive whitespace-collapsed TAIL of the body — what we look for in the
-        // composer to confirm the body landed. The tail (not the head) because a long
-        // multiline body scrolls its leading lines out of the composer viewport while
-        // the cursor — and therefore the body's end — stays visible. Empty body →
-        // nothing to confirm.
-        const probe = normalizeForEcho(body).slice(-WIN32_ECHO_PROBE_CHARS);
+        // FULL-BODY echo confirmation. A tail-only probe (slice(-N)) was insufficient
+        // for multi-line prompts: a multiline body echoes line-by-line, so its TAIL can
+        // appear in the composer (and the screen settle) while the HEAD / middle is still
+        // arriving. Releasing the first CR on the tail alone then submits a PARTIAL body:
+        // the early CR commits whatever has accumulated and the remainder is lost, so only
+        // the trailing segment survives (the cross-machine MAGI replica receiving only the
+        // prompt's boilerplate suffix). We now require BOTH the head probe AND the tail
+        // probe to be present in the echo before releasing the CR.
+        //
+        // Crucially, the head check runs against snapshotWithScrollback(), NOT the visible
+        // viewport: a tall body scrolls its leading lines off-screen (the very reason the
+        // original gate used the tail), so the head is only ever observable in the
+        // scrollback-inclusive buffer. The tail check stays on the visible snapshot (the
+        // cursor / body end is always on screen). Both present ⇒ the whole body, head
+        // through tail, has echoed — not just its end with a still-streaming middle.
+        // Single-line / short bodies have overlapping head and tail probes and the
+        // scrollback buffer is a superset of the viewport, so behaviour is unchanged. The
+        // WIN32_ECHO_MAX_WAIT_MS blind-fire backstop below still bounds the wait so a body
+        // that never fully confirms cannot hang.
+        const normBody = normalizeForEcho(body);
+        const headProbe = normBody.slice(0, WIN32_ECHO_PROBE_CHARS);
+        const tailProbe = normBody.slice(-WIN32_ECHO_PROBE_CHARS);
         const bodyEchoed = (): boolean => {
-            if (!probe) return true;
-            return normalizeForEcho(this.adapter.snapshot()).includes(probe);
+            if (!normBody) return true;
+            // Tail on the visible viewport (cursor end is always on screen); head on the
+            // scrollback-inclusive buffer (leading lines of a tall body scroll off-screen).
+            const visible = normalizeForEcho(this.adapter.snapshot());
+            if (!visible.includes(tailProbe)) return false;
+            const full = normalizeForEcho(this.adapter.snapshotWithScrollback());
+            return full.includes(headProbe);
         };
 
         const fire = (attempt: number): void => {
