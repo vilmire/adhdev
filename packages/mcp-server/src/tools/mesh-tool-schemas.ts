@@ -573,14 +573,43 @@ export const MESH_MAGI_REVIEW_TOOL = {
             question: { type: 'string', description: 'The single investigation question every agent answers — e.g. "What is the root cause of this defect?", "Refute this RCA.", "Why does this code do X?". Not only "review this".' },
             target: { type: 'string', description: 'What to investigate — file path(s), a bug symptom / error / stack trace, a code area / symbol, or omitted when the question is self-contained.' },
             artifacts: { type: 'array', items: { type: 'string' }, description: 'Inline content when not file-backed: a doc/diff, a log/error dump, or a prior single-worker RCA to refute.' },
-            panel: { type: 'string', description: 'Named panel from meshes.json (mesh_magi_panel_set). Falls back to a panel named "default" if omitted; errors clearly if none exists.' },
+            panel: { type: 'string', description: 'Named panel from meshes.json (mesh_magi_panel_set). Falls back to a panel named "default" if omitted; errors clearly if none exists. Ignored when inline members are provided.' },
+            members: {
+                type: 'array',
+                description: 'Inline ad-hoc panel override (NOT persisted): same member shape as a configured panel. When present, the named panel is ignored. Maximize distinct providers AND machines for real independence.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        nodeId: { type: 'string', description: 'Optional — pin to a specific mesh node id.' },
+                        capabilityTags: { type: 'array', items: { type: 'string' }, description: 'Optional routing tags (ANDed with the provider tag) when nodeId is absent.' },
+                        provider: { type: 'string', description: 'REQUIRED — provider type, e.g. claude-cli / codex-cli / hermes-cli / gemini-cli.' },
+                        n: { type: 'number', description: 'Optional per-member replica count (default 1).' },
+                    },
+                    required: ['provider'],
+                },
+            },
             n: { type: 'number', description: 'Global replica override per member (clamped by the total-replica guard cap, default 12).' },
             mode: { type: 'string', enum: ['rca', 'investigation', 'claim_audit', 'design_review', 'code_audit'], description: 'Synthesis emphasis hint — affects labels only, never the agent count or schema.' },
             require_independent_evidence: { type: 'boolean', description: 'Default true — high-impact claims with no file:line/source evidence are routed to needs_verification.' },
-            wait: { type: 'boolean', description: 'Default true — collect replica outputs and return the synthesis. (Poll-by-group is a deferred mode.)' },
+            wait: { type: 'boolean', description: 'Default true — collect replica outputs and return the synthesis. Set false to dispatch async and return a consensusGroupId handle; collect later with mesh_magi_collect.' },
             wait_timeout_ms: { type: 'number', description: 'Max time to wait for replica completion before returning a partial "missing K of N" synthesis. Default ~4 min.' },
         },
         required: ['question'],
+    },
+};
+
+export const MESH_MAGI_COLLECT_TOOL = {
+    name: 'mesh_magi_collect',
+    description: 'Collect + synthesize a previously dispatched MAGI fan-out by its consensus group id — the async companion to mesh_magi_review({ wait:false }). Rediscovers the replica tasks from the queue and runs the SAME diversity-weighted synthesis (consensus/disagreement/unique-evidence → needs_verification list). Defaults to a SNAPSHOT (wait=false): returns whatever replicas are terminal right now, with a pending note if some are still generating; pass wait=true to block for the rest. Read-only. Drive off mission completion / pendingCoordinatorEvents rather than polling this in a tight loop.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            consensus_group_id: { type: 'string', description: 'The consensusGroupId returned by a wait=false mesh_magi_review.' },
+            require_independent_evidence: { type: 'boolean', description: 'Default true — high-impact claims with no file:line/source evidence are routed to needs_verification.' },
+            wait: { type: 'boolean', description: 'Default false (snapshot). Set true to block for outstanding replicas up to wait_timeout_ms before synthesizing.' },
+            wait_timeout_ms: { type: 'number', description: 'When wait=true, max time to wait for remaining replica completion. Default ~4 min.' },
+        },
+        required: ['consensus_group_id'],
     },
 };
 
@@ -669,6 +698,7 @@ export const ALL_MESH_TOOLS = [
     MESH_MISSION_LIST_TOOL,
     MESH_REVIEW_INBOX_TOOL,
     MESH_MAGI_REVIEW_TOOL,
+    MESH_MAGI_COLLECT_TOOL,
     MESH_MAGI_PANEL_SET_TOOL,
     MESH_MAGI_PANEL_LIST_TOOL,
 ];

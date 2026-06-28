@@ -45,7 +45,7 @@ import {
   meshChangeImpactConfigSchema, meshValidateChangeImpactConfig, meshSuggestChangeImpactConfig,
   meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshRecordNote, meshReconcileLedger, meshMissionUpsert,
   meshMissionList, meshReviewInbox,
-  meshMagiReview, meshMagiPanelSet, meshMagiPanelList
+  meshMagiReview, meshMagiCollect, meshMagiPanelSet, meshMagiPanelList
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 
@@ -235,6 +235,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_mission_list': text = await meshMissionList(meshCtx, a as any); break;
           case 'mesh_review_inbox': text = await meshReviewInbox(meshCtx, a as any); break;
           case 'mesh_magi_review': text = await meshMagiReview(meshCtx, a as any); break;
+          case 'mesh_magi_collect': text = await meshMagiCollect(meshCtx, a as any); break;
           case 'mesh_magi_panel_set': text = await meshMagiPanelSet(meshCtx, a as any); break;
           case 'mesh_magi_panel_list': text = await meshMagiPanelList(meshCtx, a as any); break;
           default: return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };

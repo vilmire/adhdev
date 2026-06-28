@@ -92,8 +92,12 @@ export {
 
 export {
     MAGI_MAX_REPLICAS,
+    buildInlineMagiPanel,
     buildMagiFanoutPlan,
     buildMagiTaskPrompt,
+    classifyStaleReplicas,
+    findMagiReplicaTasks,
+    meshMagiCollect,
     meshMagiPanelList,
     meshMagiPanelSet,
     meshMagiReview,

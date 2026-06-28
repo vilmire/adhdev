@@ -14,6 +14,7 @@
 
 import {
     IpcTransport,
+    annotateQueueStaleness,
     appendLedgerEntry,
     buildMeshNodeCapabilityTags,
     commandForNode,
@@ -25,6 +26,7 @@ import {
     listMagiPanels,
     meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
+    normalizeMagiPanel,
     normalizeMeshCapabilityTags,
     randomUUID,
     readString,
@@ -555,41 +557,28 @@ export async function meshMagiPanelSet(
     }
 }
 
-/** Validate + normalize a panel config for dry-run preview (mirrors the accessor's normalizer). */
+/**
+ * Validate + normalize a panel config for dry-run preview. Delegates to the single
+ * source-of-truth normalizer (daemon-core normalizeMagiPanel) so dry-run preview,
+ * persisted upsert, and the inline-member ad-hoc path all share identical validation
+ * (provider required, tag dedup, replica clamp, member cap) — no duplicated rules.
+ */
 function previewMagiPanel(config: unknown): MagiPanel {
-    if (!config || typeof config !== 'object' || Array.isArray(config)) {
-        throw new Error('invalid_magi_panel: config must be an object');
-    }
-    const raw = config as Record<string, unknown>;
-    const rawMembers = raw.members;
-    if (!Array.isArray(rawMembers) || rawMembers.length === 0) {
-        throw new Error('invalid_magi_panel: members must be a non-empty array');
-    }
-    const members: MagiPanelMember[] = rawMembers.map((entry, idx) => {
-        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-            throw new Error(`invalid_magi_panel: member[${idx}] must be an object`);
-        }
-        const m = entry as Record<string, unknown>;
-        const provider = typeof m.provider === 'string' ? m.provider.trim() : '';
-        if (!provider) throw new Error(`invalid_magi_panel: member[${idx}].provider is required`);
-        const nodeId = typeof m.nodeId === 'string' && m.nodeId.trim() ? m.nodeId.trim() : undefined;
-        const capabilityTags = normalizeMeshCapabilityTags(m.capabilityTags);
-        const n = typeof m.n === 'number' && Number.isFinite(m.n) && m.n >= 1 ? Math.floor(m.n) : undefined;
-        return {
-            provider,
-            ...(nodeId ? { nodeId } : {}),
-            ...(capabilityTags.length ? { capabilityTags } : {}),
-            ...(n !== undefined ? { n } : {}),
-        };
-    });
-    const description = typeof raw.description === 'string' && raw.description.trim() ? raw.description.trim().slice(0, 200) : undefined;
-    const defaultN = typeof raw.defaultN === 'number' && Number.isFinite(raw.defaultN) && raw.defaultN >= 1 ? Math.floor(raw.defaultN) : undefined;
-    return {
-        ...(description ? { description } : {}),
+    return normalizeMagiPanel(config);
+}
+
+/**
+ * Build a one-off ad-hoc MAGI panel from inline `members` (mesh_magi_review members
+ * override) WITHOUT persisting anything to meshes.json. Same member shape and same
+ * normalizer as a named panel, so an inline panel resolves through the identical
+ * fan-out / synthesis pipeline. Pure. Throws invalid_magi_panel on a malformed list.
+ */
+export function buildInlineMagiPanel(members: unknown, opts: { defaultN?: number; description?: string } = {}): MagiPanel {
+    return normalizeMagiPanel({
         members,
-        ...(defaultN !== undefined ? { defaultN } : {}),
-        dedupExempt: raw.dedupExempt === false ? false : true,
-    };
+        ...(opts.defaultN !== undefined ? { defaultN: opts.defaultN } : {}),
+        description: opts.description ?? 'inline ad-hoc panel',
+    });
 }
 
 export async function meshMagiPanelList(
@@ -634,6 +623,7 @@ export async function meshMagiReview(
         target?: string;
         artifacts?: string[];
         panel?: string;
+        members?: unknown;
         n?: number;
         mode?: string;
         require_independent_evidence?: boolean;
@@ -648,14 +638,32 @@ export async function meshMagiReview(
 
     await refreshMeshFromDaemon(ctx);
 
-    // 1. Resolve panel (named, else "default").
-    const panelName = readString(args.panel) || 'default';
-    const panel = getMagiPanel(panelName);
+    // 1. Resolve the panel. Inline `members` take precedence (ad-hoc panel, not
+    // persisted); otherwise look up the named panel (falling back to "default").
+    const hasInlineMembers = Array.isArray(args.members) && args.members.length > 0;
+    let panel: MagiPanel | undefined;
+    let panelName: string;
+    if (hasInlineMembers) {
+        panelName = '(inline)';
+        try {
+            panel = buildInlineMagiPanel(args.members, { defaultN: args.n });
+        } catch (e: any) {
+            return JSON.stringify({
+                success: false,
+                code: 'invalid_magi_panel',
+                error: e?.message || String(e),
+                hint: 'Inline members use the same shape as a configured panel: [{ provider (REQUIRED), nodeId?, capabilityTags?, n? }].',
+            });
+        }
+    } else {
+        panelName = readString(args.panel) || 'default';
+        panel = getMagiPanel(panelName);
+    }
     if (!panel) {
         return JSON.stringify({
             success: false,
             code: 'magi_panel_missing',
-            error: `MAGI panel '${panelName}' is not configured. Define it first with mesh_magi_panel_set, and inspect resolution with mesh_magi_panel_list.`,
+            error: `MAGI panel '${panelName}' is not configured. Define it first with mesh_magi_panel_set, pass inline members, and inspect resolution with mesh_magi_panel_list.`,
             configuredPanels: Object.keys(listMagiPanels()),
         });
     }
@@ -725,6 +733,7 @@ export async function meshMagiReview(
         consensusGroupId,
         missionId: mission.id,
         panel: panelName,
+        ...(hasInlineMembers ? { inline: true } : {}),
         question,
         replicaCount: replicaRecords.length,
         replicas: replicaRecords.map(r => ({ taskId: r.taskId, provider: r.provider, targetNodeId: r.targetNodeId })),
@@ -746,7 +755,8 @@ export async function meshMagiReview(
         return JSON.stringify({
             ...baseResult,
             waited: false,
-            nextAction: 'Replicas are running. Synthesis runs when you re-collect; drive off mission completion / pendingCoordinatorEvents rather than polling chat.',
+            pollWith: { tool: 'mesh_magi_collect', args: { consensus_group_id: consensusGroupId } },
+            nextAction: `Replicas are running. Drive off mission completion / pendingCoordinatorEvents rather than polling chat, then collect + synthesize once with mesh_magi_collect({ consensus_group_id: '${consensusGroupId}' }).`,
         }, null, 2);
     }
 
@@ -768,7 +778,78 @@ export async function meshMagiReview(
             timedOut: collected.timedOut,
             answered: synthesis.replicasAnswered,
             missing: synthesis.replicasMissing,
-            ...(synthesis.replicasMissing > 0 ? { missingNote: `Partial synthesis — ${synthesis.replicasMissing} of ${replicaRecords.length} replicas did not return a parseable response (timed out / failed / unparseable).` } : {}),
+            staleReplicas: collected.staleCount,
+            ...(collected.staleCount > 0 ? { staleNote: `${collected.staleCount} replica(s) were detected STALE — assigned to a node/session no longer present in the live mesh; collection stopped early rather than waiting out the timeout.` } : {}),
+            ...(synthesis.replicasMissing > 0 ? { missingNote: `Partial synthesis — ${synthesis.replicasMissing} of ${replicaRecords.length} replicas did not return a parseable response (timed out / failed / unparseable / stale).` } : {}),
+        },
+        synthesis,
+    }, null, 2);
+}
+
+/**
+ * Poll-by-group collection (featureC). Re-collect + synthesize a previously
+ * dispatched MAGI fan-out by its consensus group id — the async companion to a
+ * wait=false mesh_magi_review. Rediscovers the replica tasks from the queue, then
+ * reuses the SAME collectMagiResponses + synthesizeMagiResponses code paths as the
+ * wait=true review (no duplicated collection/synthesis). Tolerates partial/stale
+ * replicas: when wait=false it snapshots whatever is terminal right now.
+ */
+export async function meshMagiCollect(
+    ctx: MeshContext,
+    args: {
+        consensus_group_id?: string;
+        consensusGroupId?: string;
+        require_independent_evidence?: boolean;
+        requireIndependentEvidence?: boolean;
+        wait?: boolean;
+        wait_timeout_ms?: number;
+        waitTimeoutMs?: number;
+    },
+): Promise<string> {
+    const consensusGroupId = readString(args.consensus_group_id) || readString(args.consensusGroupId);
+    if (!consensusGroupId) return JSON.stringify({ success: false, error: 'consensus_group_id required' });
+
+    await refreshMeshFromDaemon(ctx);
+
+    const replicaTasks = findMagiReplicaTasks(getQueue(ctx.mesh.id), consensusGroupId);
+    if (replicaTasks.length === 0) {
+        return JSON.stringify({
+            success: false,
+            code: 'magi_group_not_found',
+            error: `No MAGI replicas found for consensus group '${consensusGroupId}'. It may have been pruned, or the id is wrong.`,
+            consensusGroupId,
+        });
+    }
+
+    const requireIndependentEvidence = (args.require_independent_evidence ?? args.requireIndependentEvidence) !== false;
+    // Default to a SNAPSHOT (wait=false): poll-by-group is the async path, so the
+    // common case is "collect whatever finished so far". Pass wait=true to block for
+    // the remaining replicas up to wait_timeout_ms.
+    const wait = args.wait === true;
+    const timeoutMs = wait
+        ? Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(args.wait_timeout_ms ?? args.waitTimeoutMs) || MAGI_DEFAULT_WAIT_MS))
+        : 0;
+
+    const replicaTaskIds = replicaTasks.map((t: any) => readString(t.id)).filter(Boolean) as string[];
+    const collected = await collectMagiResponses(ctx, { replicaTaskIds, timeoutMs });
+    const synthesis = synthesizeMagiResponses(collected.responses, {
+        replicasExpected: replicaTaskIds.length,
+        requireIndependentEvidence,
+    });
+
+    return JSON.stringify({
+        success: true,
+        consensusGroupId,
+        replicaCount: replicaTaskIds.length,
+        waited: wait,
+        collection: {
+            terminal: collected.terminal,
+            timedOut: collected.timedOut,
+            answered: synthesis.replicasAnswered,
+            missing: synthesis.replicasMissing,
+            staleReplicas: collected.staleCount,
+            ...(collected.staleCount > 0 ? { staleNote: `${collected.staleCount} replica(s) were detected STALE — assigned to a node/session no longer present in the live mesh.` } : {}),
+            ...(!collected.terminal ? { pendingNote: 'Not all replicas are terminal yet — this is a partial snapshot. Re-collect once mission/pendingCoordinatorEvents report more completions.' } : {}),
         },
         synthesis,
     }, null, 2);
@@ -778,24 +859,75 @@ export async function meshMagiReview(
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
+const MAGI_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
+/**
+ * Discover the replica tasks of a MAGI fan-out by their shared consensus group id.
+ * Drives poll-by-group collection (mesh_magi_collect): a wait=false review returns
+ * the group id, and a later call rediscovers the replicas straight from the queue —
+ * no need to thread the original task-id list back through the caller. Pure given a
+ * queue snapshot.
+ */
+export function findMagiReplicaTasks(queue: any[], consensusGroupId: string): any[] {
+    const groupId = typeof consensusGroupId === 'string' ? consensusGroupId.trim() : '';
+    if (!groupId) return [];
+    return (Array.isArray(queue) ? queue : []).filter((t: any) => readString(t?.consensusGroupId) === groupId);
+}
+
+/**
+ * Classify which non-terminal replica tasks are STALE — assigned to a node/session
+ * absent from the live mesh (so they will never reach a terminal state). Reuses the
+ * shared queue staleness annotation (annotateQueueStaleness) so MAGI and the queue
+ * tools agree on what "stale" means. Pure given tasks already annotated. Returns the
+ * set of stale (won't-progress) non-terminal task ids and their reasons.
+ */
+export function classifyStaleReplicas(
+    annotatedTasks: any[],
+    terminal: Set<string> = MAGI_TERMINAL_STATUSES,
+): { staleTaskIds: Set<string>; staleReasons: Record<string, string> } {
+    const staleTaskIds = new Set<string>();
+    const staleReasons: Record<string, string> = {};
+    for (const t of Array.isArray(annotatedTasks) ? annotatedTasks : []) {
+        if (terminal.has(String(t?.status))) continue;
+        if (t?.staleAssigned === true) {
+            const id = readString(t.id);
+            if (!id) continue;
+            staleTaskIds.add(id);
+            staleReasons[id] = readString(t.staleReason) || 'assigned node/session is not present in the live mesh';
+        }
+    }
+    return { staleTaskIds, staleReasons };
+}
+
 async function collectMagiResponses(
     ctx: MeshContext,
     args: { replicaTaskIds: string[]; timeoutMs: number },
-): Promise<{ responses: MagiSynthesizedResponse[]; terminal: boolean; timedOut: boolean }> {
+): Promise<{ responses: MagiSynthesizedResponse[]; terminal: boolean; timedOut: boolean; staleCount: number }> {
     const ids = new Set(args.replicaTaskIds);
     const deadline = Date.now() + args.timeoutMs;
-    const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+    const TERMINAL = MAGI_TERMINAL_STATUSES;
     let terminal = false;
-    // Poll the queue until every replica is terminal or the deadline elapses.
+    // Poll the queue until every replica is terminal, every remaining replica is
+    // detected STALE (a dead assignment that will never complete — featureA), or the
+    // deadline elapses. Stale detection lets us stop early instead of blocking the
+    // full timeout on a replica whose node/session has gone away.
     for (;;) {
-        const tasks = getQueue(ctx.mesh.id).filter((t: any) => ids.has(t.id));
-        const allTerminal = tasks.length === ids.size && tasks.every((t: any) => TERMINAL.has(String(t.status)));
-        if (allTerminal) { terminal = true; break; }
+        const tasks = annotateQueueStaleness(getQueue(ctx.mesh.id).filter((t: any) => ids.has(t.id)), ctx.mesh);
+        const allPresent = tasks.length === ids.size;
+        if (allPresent && tasks.every((t: any) => TERMINAL.has(String(t.status)))) { terminal = true; break; }
+        const nonTerminal = tasks.filter((t: any) => !TERMINAL.has(String(t.status)));
+        const { staleTaskIds } = classifyStaleReplicas(tasks, TERMINAL);
+        if (allPresent && nonTerminal.length > 0 && staleTaskIds.size === nonTerminal.length) {
+            // Every replica still outstanding is stuck on a dead assignment — no point
+            // waiting out the clock. Stop now; the per-task pass below records them stale.
+            break;
+        }
         if (Date.now() >= deadline) break;
         await sleep(Math.min(MAGI_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
     }
 
-    const tasks = getQueue(ctx.mesh.id).filter((t: any) => ids.has(t.id));
+    const tasks = annotateQueueStaleness(getQueue(ctx.mesh.id).filter((t: any) => ids.has(t.id)), ctx.mesh);
+    const { staleTaskIds, staleReasons } = classifyStaleReplicas(tasks, TERMINAL);
     const responses: MagiSynthesizedResponse[] = [];
     for (const task of tasks as any[]) {
         const source: MagiResponseSource = {
@@ -805,7 +937,12 @@ async function collectMagiResponses(
             ok: false,
         };
         if (task.status !== 'completed' || !task.assignedNodeId || !task.assignedSessionId) {
-            source.error = task.status === 'completed' ? 'no_session_to_read' : `replica_${task.status || 'incomplete'}`;
+            if (staleTaskIds.has(task.id)) {
+                source.stale = true;
+                source.error = `stale: ${staleReasons[task.id]}`;
+            } else {
+                source.error = task.status === 'completed' ? 'no_session_to_read' : `replica_${task.status || 'incomplete'}`;
+            }
             responses.push({ source, response: { claims: [], top_findings: [], open_questions: [] } });
             continue;
         }
@@ -832,7 +969,7 @@ async function collectMagiResponses(
             responses.push({ source, response: { claims: [], top_findings: [], open_questions: [] } });
         }
     }
-    return { responses, terminal, timedOut: !terminal };
+    return { responses, terminal, timedOut: !terminal, staleCount: staleTaskIds.size };
 }
 
 async function eagerlyDispatchRemoteReplicas(

@@ -281,6 +281,7 @@ export {
     markStaleDirectDispatches,
     meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
+    normalizeMagiPanel,
     normalizeMeshCapabilityTags,
     pruneStaleDirectDispatches,
     readLedgerEntries,
