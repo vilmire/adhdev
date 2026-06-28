@@ -199,7 +199,7 @@ export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './con
 //    e.g. the mcp-server, which depends only on @adhdev/daemon-core — can
 //    canonicalize daemon-id and node-id forms without taking a direct
 //    @adhdev/mesh-shared dependency). ──
-export { expandDaemonIdForms, daemonIdsEquivalent, machineCoreFromDaemonId } from '@adhdev/mesh-shared';
+export { expandDaemonIdForms, daemonIdsEquivalent, machineCoreFromDaemonId, canonicalDaemonId } from '@adhdev/mesh-shared';
 export { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
 
 // ── Mesh Coordinator ──

@@ -8,6 +8,7 @@ import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshLedgerKind } from './mesh-ledger.js';
 import { createSessionDelivery } from './mesh-delivery-policy.js';
+import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -1001,6 +1002,9 @@ export function updateTaskStatus(
         if (!entry) return null;
         entry.status = status;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        // Any transition OFF `assigned` ends the single-flight dispatch window (terminal
+        // completion/failure, or the dispatch-failure requeue to `pending`).
+        if (status !== 'assigned') endTaskDispatchInFlight(meshId, taskId);
         if (DEPENDENCY_FAILURE_TERMINALS.has(status)) propagateDependencyFailure(meshId, taskId);
         return entry;
     });
@@ -1038,6 +1042,7 @@ export function cancelTask(
         entry.cancelledAt = now;
         if (opts?.reason) entry.cancelReason = opts.reason;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        endTaskDispatchInFlight(meshId, taskId);
         propagateDependencyFailure(meshId, taskId);
         return entry;
     });
@@ -1074,6 +1079,20 @@ export function requeueTask(
     return withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
+        // CANON-IDENTITY single-flight: refuse (no-op) to reopen a task whose dispatch
+        // is still in-flight — the worker is actively generating on it. Requeueing it
+        // here would flip the row back to `pending` and let a SECOND session claim the
+        // SAME task (the live `ade8586d` requeue-while-generating double-dispatch). A
+        // STALE assigned row (dead session, dispatch never confirmed) is NOT in-flight
+        // — its mark was cleared on the dispatch failure — so it still requeues as
+        // before. An explicit operator override (`force`) bypasses this guard.
+        if (!opts?.force && isTaskDispatchInFlight(meshId, taskId)) {
+            LOG.warn('MeshQueue', `Refusing to requeue task ${taskId} on mesh ${meshId}: it is actively dispatched/generating (single-flight in-flight). Requeueing now would open a duplicate second dispatch into another session. Pass force to override.`);
+            return entry;
+        }
+        // Proceeding to requeue (or force-override): the prior dispatch is being abandoned,
+        // so end the single-flight window for this task id.
+        endTaskDispatchInFlight(meshId, taskId);
         const currentCount = entry.requeueCount || 0;
         const maxRetries = opts?.maxRetries ?? entry.maxRetries ?? 1;
         if (!opts?.force && currentCount >= maxRetries) {
@@ -1154,6 +1173,9 @@ export function reclaimStrandedAssignedTask(
         delete entry.dispatchTimestamp;
         entry.strandedReclaimCount = reclaims;
         entry.updatedAt = now;
+        // The stranded assignment is being torn down (→ pending or failed); end its
+        // single-flight window so a re-claim/requeue is not blocked.
+        endTaskDispatchInFlight(meshId, taskId);
         if (reclaims > MAX_STRANDED_RECLAIMS) {
             // Repeatedly undeliverable — stop cycling and fail it so dependents unblock.
             entry.status = 'failed';
@@ -1212,6 +1234,9 @@ export function updateSessionTaskStatus(
         }
         entry.status = status;
         store.updateQueueEntry(entry);
+        // The worker reported a terminal/non-assigned outcome — the dispatch is over;
+        // release the single-flight mark so the task id can be re-dispatched later.
+        if (status !== 'assigned') endTaskDispatchInFlight(meshId, entry.id);
         if (DEPENDENCY_FAILURE_TERMINALS.has(status)) propagateDependencyFailure(meshId, entry.id);
         return entry;
     });

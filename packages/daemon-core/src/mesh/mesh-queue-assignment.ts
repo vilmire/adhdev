@@ -15,11 +15,27 @@ import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
 import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
-import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
+import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
+
+/**
+ * CANON: the single canonical coordinator-daemon id this daemon stamps onto every
+ * worker dispatch (meshContext.coordinatorDaemonId / sourceCoordinatorDaemonId / the
+ * co-located meshCoordinatorDaemonId anchor). loadConfig().machineId is the bare
+ * `mach_X` form; canonicalizing to `daemon_mach_X` unifies it with the MCP-side
+ * resolveCoordinatorDaemonId producer so the two dispatch paths can never stamp a
+ * worker's coordinator anchor in two different forms — the CANON-IDENTITY
+ * double-dispatch root cause. Consumers of the anchor already compare under
+ * daemonIdsEquivalent / expandDaemonIdForms, so the exact form is form-agnostic on
+ * the read side; this only removes the producer-side skew.
+ */
+function localCoordinatorDaemonId(): string | undefined {
+    return canonicalDaemonId(readNonEmptyString(loadConfig().machineId));
+}
 
 // ---------------------------------------------------------------------------
 // Idle auto fast-forward throttle state
@@ -244,6 +260,10 @@ function deliverTaskToSession(
         // ledger entry so the reconcile loop re-dispatches it. Identical for both transports.
         LOG.error('MeshQueue', `Failed to dispatch task via ${ctx.transport} to node ${ctx.nodeId}: ${e?.message}`);
         updateSessionDeliveryStatus(delivery.id, 'failed', { lastError: e?.message, incrementAttempt: true });
+        // The dispatch failed — the task is no longer in-flight (it returns to pending
+        // for a clean re-dispatch). Clear the single-flight mark so a legitimate
+        // requeue/re-claim is not blocked as if a worker were still generating.
+        endTaskDispatchInFlight(ctx.meshId, ctx.task.id);
         updateTaskStatus(ctx.meshId, ctx.task.id, 'pending');
         try {
             appendLedgerEntry(ctx.meshId, {
@@ -414,10 +434,18 @@ export function tryAssignQueueTask(
 
     LOG.info('MeshQueue', `Node ${nodeId} (${sessionId}) pulled task ${task.id}`);
 
+    // CANON-IDENTITY single-flight: mark the just-claimed task in-flight the moment it
+    // is handed to a transport. The atomic claim already prevents a concurrent claim,
+    // but this lets requeueTask distinguish a genuinely-generating task (refuse the
+    // operator requeue — it would open a second session) from a stale assigned row
+    // (still requeueable). Cleared when the task leaves `assigned` (terminal / dispatch
+    // failure / cancel / reclaim).
+    beginTaskDispatchInFlight(meshId, task.id);
+
     if (node?.daemonId && components.dispatchMeshCommand) {
         const isLocalNode = components.cliManager.adapters.has(sessionId);
         if (!isLocalNode) {
-            const localDaemonIdForDispatch = readNonEmptyString(loadConfig().machineId) || undefined;
+            const localDaemonIdForDispatch = localCoordinatorDaemonId();
             // (3) Originating coordinator session that enqueued this task — route its
             // completion back to that exact session (multi-coordinator). Carried over P2P
             // to the remote worker, which echoes it on its completion event.
@@ -477,7 +505,7 @@ export function tryAssignQueueTask(
             // session, so the coordinator daemon id IS this daemon's id. Stamp it alongside
             // the node identity so the session is fully relay-safe (meshCoordinatorDaemonId is
             // the anchor the forwarder keys on), matching what mesh_launch_session stamps.
-            const localDaemonId = readNonEmptyString(loadConfig().machineId);
+            const localDaemonId = localCoordinatorDaemonId();
             const localSourceCoordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId);
             inst.updateSettings({
                 meshNodeFor: meshId,
@@ -509,7 +537,7 @@ export function tryAssignQueueTask(
                 meshId,
                 nodeId,
                 taskId: task.id,
-                ...(readNonEmptyString(loadConfig().machineId) ? { coordinatorDaemonId: readNonEmptyString(loadConfig().machineId) } : {}),
+                ...(localCoordinatorDaemonId() ? { coordinatorDaemonId: localCoordinatorDaemonId() } : {}),
                 ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { coordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
             },
         }),
@@ -521,7 +549,7 @@ export function tryAssignQueueTask(
             task,
             transport: 'local',
             ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { sourceCoordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
-            ...(readNonEmptyString(loadConfig().machineId) ? { sourceCoordinatorDaemonId: readNonEmptyString(loadConfig().machineId) } : {}),
+            ...(localCoordinatorDaemonId() ? { sourceCoordinatorDaemonId: localCoordinatorDaemonId() } : {}),
         },
     );
 
@@ -727,7 +755,12 @@ function nodeHasActiveMeshWork(components: DaemonComponents, meshId: string, nod
         const settings = state.settings as Record<string, unknown> || {};
         if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
         const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
-        if (instNodeId !== nodeId) return false;
+        // Match under canonical machine-core form, NOT a raw `!==`: a session's stamped
+        // meshNodeId and the candidate nodeId can carry interchangeable daemon-id forms
+        // (bare `mach_X` vs `daemon_mach_X`). A raw mismatch makes a BUSY node look idle,
+        // so the active-work gate passes and a SECOND session is launched/claimed for a
+        // task already running here — the CANON-IDENTITY duplicate dispatch.
+        if (!daemonIdsEquivalent(instNodeId, nodeId)) return false;
         const sessionId = readNonEmptyString(state.instanceId);
         if (currentSessionId && sessionId === currentSessionId && isIdleSessionState(state)) return false;
         return sessionStateLooksActive(state);
@@ -791,7 +824,10 @@ function resolveAutoLaunchTarget(components: DaemonComponents, node: any): {
     const daemonId = readNonEmptyString(node?.daemonId);
     if (!daemonId) return { mode: 'skip', reason: 'remote_auto_launch_unsupported' };
     if (!components.dispatchMeshCommand) return { mode: 'skip', reason: 'remote_auto_launch_unsupported' };
-    const coordinatorDaemonId = readNonEmptyString(loadConfig().machineId);
+    // CANON: stamp the canonical `daemon_mach_` coordinator anchor onto the remote
+    // worker (meshCoordinatorDaemonId) so its completion forwards back under the same
+    // form every other dispatch path uses — no producer-side coordinator-id skew.
+    const coordinatorDaemonId = localCoordinatorDaemonId();
     if (!coordinatorDaemonId) return { mode: 'skip', reason: 'remote_auto_launch_no_coordinator_daemon_id' };
     return { mode: 'remote', daemonId, coordinatorDaemonId };
 }
@@ -814,7 +850,12 @@ export function activeReadonlyAssignedCount(meshId: string): number {
 }
 
 function nodeHasActiveAssignment(meshId: string, nodeId: string): boolean {
-    return getQueue(meshId, { status: ['assigned'] as any }).some(task => task.assignedNodeId === nodeId);
+    // Canonical-form match, NOT a raw `===`: an assigned row stamped in one daemon-id
+    // form (e.g. `daemon_mach_X`) must still register as this node's active work when
+    // the candidate nodeId arrives bare (`mach_X`). A raw mismatch makes the node look
+    // free, letting a second write task auto-launch onto an already-busy node and
+    // breaking the one-write-per-node (worktree isolation) invariant.
+    return getQueue(meshId, { status: ['assigned'] as any }).some(task => daemonIdsEquivalent(task.assignedNodeId, nodeId));
 }
 
 /** Active (status='assigned') task count for a node — the load metric for
@@ -925,7 +966,7 @@ function orderEligibleNodes(
  *  transaction; this only avoids spawning a session that would fail the claim. */
 function activeProviderAssignedCount(meshId: string, nodeId: string, providerType: string): number {
     return getQueue(meshId, { status: ['assigned'] as any })
-        .filter(task => task.assignedNodeId === nodeId && task.assignedProviderType === providerType).length;
+        .filter(task => daemonIdsEquivalent(task.assignedNodeId, nodeId) && task.assignedProviderType === providerType).length;
 }
 
 export function sessionHasActiveAssignment(meshId: string, sessionId: string): boolean {
@@ -952,7 +993,10 @@ function liveSessionCountForNode(components: DaemonComponents, meshId: string, n
         const settings = state.settings as Record<string, unknown> || {};
         if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
         const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
-        if (instNodeId !== nodeId) return false;
+        // Canonical-form match (see nodeHasActiveMeshWork): a daemon-id form skew between
+        // the session's stamped nodeId and the candidate nodeId must not undercount this
+        // node's live sessions, which would defeat the maxConcurrentSessions cap.
+        if (!daemonIdsEquivalent(instNodeId, nodeId)) return false;
         const status = readNonEmptyString(state.status).toLowerCase();
         return !isTerminalSessionStatus(status);
     }).length;

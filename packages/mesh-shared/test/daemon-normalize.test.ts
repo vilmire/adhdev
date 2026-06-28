@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { machineCoreFromDaemonId, daemonIdsEquivalent, expandDaemonIdForms } from '../src/daemon-normalize'
+import { machineCoreFromDaemonId, daemonIdsEquivalent, expandDaemonIdForms, canonicalDaemonId } from '../src/daemon-normalize'
 
 const MACH = 'mach_1b46842a15d3409d96ad33e767a916dd'
 
@@ -43,6 +43,42 @@ describe('daemonIdsEquivalent', () => {
     it('never matches when either side is empty', () => {
         expect(daemonIdsEquivalent('', MACH)).toBe(false)
         expect(daemonIdsEquivalent(MACH, undefined)).toBe(false)
+    })
+})
+
+describe('canonicalDaemonId — single CANON producer form', () => {
+    it('canonicalizes all three forms of one machine to the cloud `daemon_` form', () => {
+        expect(canonicalDaemonId(MACH)).toBe(`daemon_${MACH}`)
+        expect(canonicalDaemonId(`daemon_${MACH}`)).toBe(`daemon_${MACH}`)
+        expect(canonicalDaemonId(`standalone_${MACH}`)).toBe(`daemon_${MACH}`)
+    })
+
+    it('is idempotent', () => {
+        expect(canonicalDaemonId(canonicalDaemonId(MACH))).toBe(`daemon_${MACH}`)
+    })
+
+    it('collapses two producer forms to the SAME string so even a raw === dedup agrees', () => {
+        // The exact double-dispatch root cause: the queue path stamps bare `mach_X`
+        // while the MCP path stamps `daemon_mach_X`. Canonicalizing both makes the two
+        // producers emit one identical coordinator-id string.
+        expect(canonicalDaemonId(MACH)).toBe(canonicalDaemonId(`daemon_${MACH}`))
+    })
+
+    it('leaves a non-machine id unchanged (never balloons into a daemon_ form)', () => {
+        expect(canonicalDaemonId('node-daemon-id')).toBe('node-daemon-id')
+    })
+
+    it('returns undefined for empty/absent input', () => {
+        expect(canonicalDaemonId('')).toBeUndefined()
+        expect(canonicalDaemonId('   ')).toBeUndefined()
+        expect(canonicalDaemonId(null)).toBeUndefined()
+        expect(canonicalDaemonId(undefined)).toBeUndefined()
+    })
+
+    it('the canon form stays equivalent to every other form under daemonIdsEquivalent', () => {
+        const canon = canonicalDaemonId(`standalone_${MACH}`)!
+        expect(daemonIdsEquivalent(canon, MACH)).toBe(true)
+        expect(daemonIdsEquivalent(canon, `daemon_${MACH}`)).toBe(true)
     })
 })
 

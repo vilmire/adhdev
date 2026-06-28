@@ -7,7 +7,7 @@
  * deps (mesh-tool-shared, daemon-core) plus the MeshContext type (type-only, so no
  * runtime import cycle); mesh-tools.ts imports the exported helpers back.
  */
-import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/daemon-core';
+import { daemonIdsEquivalent, meshNodeIdMatches, canonicalDaemonId } from '@adhdev/daemon-core';
 import type { LocalMeshNodeEntry } from '@adhdev/daemon-core';
 import { readString } from './mesh-tool-shared.js';
 import type { MeshContext } from './mesh-tools.js';
@@ -25,7 +25,13 @@ export function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | u
         if (byMachine) return byMachine;
     }
     if (ctx.localDaemonId) {
-        return ctx.mesh.nodes.find(n => readNodeDaemonId(n) === ctx.localDaemonId);
+        // Compare under canonical machine-core form (daemonIdsEquivalent), NOT a raw
+        // `===`: the node's daemonId and ctx.localDaemonId may carry interchangeable
+        // forms (bare `mach_X` / `daemon_mach_X` / `standalone_mach_X`). A raw `===`
+        // misses the coordinator's own node on a form skew and forces the resolver to
+        // fall through to a different anchor form than the queue path stamps — the
+        // CANON-IDENTITY double-dispatch (two coordinator-id forms for one task).
+        return ctx.mesh.nodes.find(n => daemonIdsEquivalent(readNodeDaemonId(n), ctx.localDaemonId));
     }
     return undefined;
 }
@@ -45,9 +51,18 @@ export function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | u
  * direct-dispatch path now resolves an anchor whenever the queue path would.
  */
 export function resolveCoordinatorDaemonId(ctx: MeshContext): string | undefined {
-    return readString(resolveCoordinatorNode(ctx)?.daemonId)
+    const resolved = readString(resolveCoordinatorNode(ctx)?.daemonId)
         || readString(ctx.localDaemonId)
         || readString(ctx.localMachineId);
+    // CANON: emit the single canonical `daemon_mach_<core>` producer form for ALL
+    // three tiers. Tier 1 (the coordinator node's config-form daemonId) is already
+    // `daemon_mach_` and is the proven P2P-routable form; the localDaemonId /
+    // localMachineId fallbacks resolve to bare `mach_` or `standalone_mach_` forms.
+    // Without this, the fallback tiers stamp a DIFFERENT coordinator-id form than the
+    // primary path and the queue dispatch — the form skew that lets one task be
+    // dedup-missed and dispatched into a second session. canonicalDaemonId leaves a
+    // non-machine id unchanged and returns undefined for an empty resolve.
+    return canonicalDaemonId(resolved) ?? readString(resolved);
 }
 
 export function readNodeMachineId(node: LocalMeshNodeEntry): string | undefined {

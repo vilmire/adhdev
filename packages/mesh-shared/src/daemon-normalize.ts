@@ -50,6 +50,37 @@ export function machineCoreFromDaemonId(id: string | null | undefined): string |
     return trimmed
 }
 
+/**
+ * Canonicalize any daemon-id form to the single CANON producer form
+ * `daemon_mach_<core>` (the cloud `daemon_` form).
+ *
+ * CANON-IDENTITY double-dispatch root cause: the coordinator daemon id is stamped
+ * onto a worker dispatch by TWO independent producers — the MCP-side
+ * resolveCoordinatorDaemonId (which prefers the coordinator mesh node's config-form
+ * `daemon_mach_X` daemonId) and the daemon-core queue dispatch (which stamps the
+ * bare `loadConfig().machineId` = `mach_X`). When the SAME coordinator dispatches
+ * the same task down both paths, the two worker sessions are stamped with two
+ * DIFFERENT coordinator-id forms; a raw-string dedup that should recognise "this
+ * task is already dispatched by me" fails, and the task runs twice.
+ *
+ * The durable fix is comparator-side (daemonIdsEquivalent / expandDaemonIdForms),
+ * but unifying every PRODUCER on one canonical form shrinks the surface so even a
+ * raw `===` agrees. The canon is the cloud `daemon_` form because that is what the
+ * coordinator mesh node's config-form daemonId already carries and what the cloud
+ * P2P signaling layer registers a daemon under — so canonicalizing the bare/standalone
+ * fallback forms makes them consistent with the already-working primary path.
+ *
+ * Only a `mach_<…>` core is rewritten; an arbitrary/non-machine id (e.g. a custom
+ * node id) is returned unchanged so it is never ballooned into a spurious `daemon_`
+ * form. Idempotent. Returns undefined for an empty/absent id.
+ */
+export function canonicalDaemonId(id: string | null | undefined): string | undefined {
+    const core = machineCoreFromDaemonId(id)
+    if (!core) return undefined
+    if (!core.startsWith('mach_')) return core
+    return `daemon_${core}`
+}
+
 /** True when both ids resolve to the same machine core — i.e. they are the same
  *  daemon under different id forms. False when either side is empty. */
 export function daemonIdsEquivalent(a: string | null | undefined, b: string | null | undefined): boolean {

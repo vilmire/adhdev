@@ -74,8 +74,22 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
                 targetSessionId: typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : undefined,
                 clearTargetNode: args?.clearTargetNode === true,
                 clearTargetSession: args?.clearTargetSession !== false,
+                // CANON-IDENTITY: an in-flight (actively-generating) task is refused by
+                // default to avoid a duplicate second dispatch; an explicit operator
+                // force overrides that guard (and the retry cap).
+                force: args?.force === true,
             });
             if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
+            // The single-flight guard returns the row UNCHANGED (still 'assigned') when it
+            // refuses an in-flight requeue — surface that as a clear, non-success signal so
+            // the coordinator does not believe a second dispatch was opened.
+            if (task.status === 'assigned' && args?.force !== true) {
+                return {
+                    success: false,
+                    error: `Task '${taskId}' is actively dispatched/generating; requeue refused to avoid a duplicate second dispatch. Pass force:true to override, or cancel and re-enqueue.`,
+                    task,
+                };
+            }
             return { success: true, task };
         } catch (e: any) {
             return { success: false, error: e.message };
