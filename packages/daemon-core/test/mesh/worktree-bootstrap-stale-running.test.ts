@@ -1,12 +1,14 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveWin32Executable } from '../../src/cli-adapters/resolve-executable.js'
 import {
   isWorktreeBootstrapStaleRunning,
+  evaluateWorktreeBootstrapState,
   WORKTREE_BOOTSTRAP_STALE_RUNNING_MS,
+  type WorktreeBootstrapState,
 } from '../../src/mesh/worktree-bootstrap-config.js'
 
 const GIT = process.platform === 'win32' ? resolveWin32Executable('git') : 'git'
@@ -81,5 +83,154 @@ describe('Fix (3) — isWorktreeBootstrapStaleRunning backstop', () => {
     // updatedAt is recent even though startedAt is ancient → not stale.
     const node = { worktreeBootstrap: { status: 'running', startedAt: STARTED, updatedAt: new Date(fresh).toISOString() }, workspace: cleanRepo }
     expect(isWorktreeBootstrapStaleRunning(node, stale)).toBe(false)
+  })
+})
+
+// FIX (b): the git-clean predicate in the stale backstop must treat a superproject whose ONLY
+// uncommitted change is a submodule-gitlink pointer move (" M oss") as CLEAN — that outOfSync is
+// the normal product of a worktree task committing inside a submodule, and disqualifying the
+// backstop on it leaves the dispatch gate permanently closed once the worker commits inside oss/.
+// Real file edits and untracked files must still count as DIRTY.
+describe('FIX (b) — git-clean predicate exempts submodule-gitlink-only outOfSync', () => {
+  let superRepo: string
+  let subOriginOss: string
+  let subOriginProv: string
+  const STARTED = '2026-01-01T00:00:00.000Z'
+  const startedMs = Date.parse(STARTED)
+  const stale = startedMs + WORKTREE_BOOTSTRAP_STALE_RUNNING_MS + 60_000
+
+  const git = (cwd: string, args: string[]) =>
+    execFileSync(GIT, args, { cwd, encoding: 'utf8', windowsHide: true, stdio: 'pipe' })
+
+  const initRepo = (dir: string) => {
+    git(dir, ['init', '-q'])
+    git(dir, ['config', 'user.email', 'test@example.com'])
+    git(dir, ['config', 'user.name', 'Test'])
+    git(dir, ['config', 'commit.gpgsign', 'false'])
+  }
+
+  // Make a standalone origin repo with two commits so a submodule pointer can be moved.
+  const makeSubmoduleOrigin = (label: string): string => {
+    const dir = mkdtempSync(join(tmpdir(), `adhdev-wt-suborigin-${label}-`))
+    initRepo(dir)
+    writeFileSync(join(dir, 'README.md'), 'v1\n')
+    git(dir, ['add', '-A'])
+    git(dir, ['commit', '-q', '-m', 'v1'])
+    writeFileSync(join(dir, 'README.md'), 'v2\n')
+    git(dir, ['add', '-A'])
+    git(dir, ['commit', '-q', '-m', 'v2'])
+    return dir
+  }
+
+  // Move a submodule's checked-out HEAD back one commit so the superproject sees a gitlink
+  // pointer move (" M <path>") — without touching any file in the superproject worktree.
+  const movePointerBack = (submodulePath: string) => {
+    git(join(superRepo, submodulePath), ['checkout', '-q', 'HEAD~1'])
+  }
+
+  beforeAll(() => {
+    subOriginOss = makeSubmoduleOrigin('oss')
+    subOriginProv = makeSubmoduleOrigin('prov')
+    superRepo = mkdtempSync(join(tmpdir(), 'adhdev-wt-super-'))
+    initRepo(superRepo)
+    writeFileSync(join(superRepo, 'root.txt'), 'root\n')
+    git(superRepo, ['add', '-A'])
+    git(superRepo, ['commit', '-q', '-m', 'init'])
+    // Register two submodules at distinct paths ('oss', 'adhdev-providers') so the
+    // enumeration-from-.gitmodules path is exercised generically.
+    git(superRepo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', subOriginOss, 'oss'])
+    git(superRepo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', subOriginProv, 'adhdev-providers'])
+    git(superRepo, ['commit', '-q', '-m', 'add submodules'])
+  })
+
+  afterAll(() => {
+    for (const dir of [superRepo, subOriginOss, subOriginProv]) {
+      try { rmSync(dir, { recursive: true, force: true }) } catch { /* best-effort */ }
+    }
+  })
+
+  const node = () => ({ worktreeBootstrap: { status: 'running', startedAt: STARTED }, workspace: superRepo })
+
+  it('" M oss" gitlink-only outOfSync → CLEAN (backstop releases)', () => {
+    // Start from a clean superproject (sanity), then move only the oss pointer.
+    expect(git(superRepo, ['status', '--porcelain']).trim()).toBe('')
+    movePointerBack('oss')
+    const porcelain = git(superRepo, ['status', '--porcelain'])
+    expect(porcelain).toMatch(/^ M oss$/m)
+    expect(isWorktreeBootstrapStaleRunning(node(), stale)).toBe(true)
+  })
+
+  it('multiple submodules all gitlink-only → CLEAN', () => {
+    movePointerBack('adhdev-providers')
+    const porcelain = git(superRepo, ['status', '--porcelain'])
+    expect(porcelain).toMatch(/^ M oss$/m)
+    expect(porcelain).toMatch(/^ M adhdev-providers$/m)
+    expect(isWorktreeBootstrapStaleRunning(node(), stale)).toBe(true)
+  })
+
+  it('" M oss" + a real tracked-file edit → DIRTY (must keep deferring)', () => {
+    writeFileSync(join(superRepo, 'root.txt'), 'edited\n')
+    const porcelain = git(superRepo, ['status', '--porcelain'])
+    expect(porcelain).toMatch(/^ M oss$/m)
+    expect(porcelain).toMatch(/root\.txt/m)
+    expect(isWorktreeBootstrapStaleRunning(node(), stale)).toBe(false)
+    // restore the file so later assertions in this block start from gitlink-only.
+    git(superRepo, ['checkout', '--', 'root.txt'])
+  })
+
+  it('" M oss" + an untracked file → DIRTY (must keep deferring)', () => {
+    const untracked = join(superRepo, 'wip-untracked.txt')
+    writeFileSync(untracked, 'wip\n')
+    const porcelain = git(superRepo, ['status', '--porcelain'])
+    expect(porcelain).toMatch(/^ M oss$/m)
+    expect(porcelain).toMatch(/\?\? wip-untracked\.txt/m)
+    expect(isWorktreeBootstrapStaleRunning(node(), stale)).toBe(false)
+    rmSync(untracked, { force: true })
+  })
+
+  it('a non-submodule new directory (not registered in .gitmodules) → DIRTY', () => {
+    // A path that LOOKS like a nested checkout but is NOT a registered submodule must not
+    // be exempted — the enumeration is sourced strictly from .gitmodules.
+    mkdirSync(join(superRepo, 'not-a-submodule'), { recursive: true })
+    writeFileSync(join(superRepo, 'not-a-submodule', 'f.txt'), 'x\n')
+    const porcelain = git(superRepo, ['status', '--porcelain'])
+    expect(porcelain).toMatch(/not-a-submodule/m)
+    expect(isWorktreeBootstrapStaleRunning(node(), stale)).toBe(false)
+    rmSync(join(superRepo, 'not-a-submodule'), { recursive: true, force: true })
+  })
+})
+
+// FIX (a-residual): the terminal 'complete' stamp (markWorktreeBootstrapTerminalState) must be
+// recognized as terminal by evaluateWorktreeBootstrapState and never round-tripped back to a
+// non-terminal state ('stale'/'never_ran') on a later re-hydration — doing so would reopen the
+// dispatch/claim gate against a node whose bootstrap is already done.
+describe("FIX (a-residual) — evaluateWorktreeBootstrapState keeps persisted 'complete' terminal", () => {
+  // Inline mesh config carrying a usable worktree_bootstrap policy so loadMeshWorktreeBootstrapConfig
+  // resolves a config (otherwise we'd short-circuit to 'not_configured' before reading persisted).
+  const mesh = {
+    policy: {
+      worktreeBootstrap: {
+        version: 1,
+        commands: [{ command: 'echo', args: ['ok'] }],
+      },
+    },
+  }
+  const workspace = tmpdir() // no staleInputs configured → no fs reads needed
+
+  it("passes a persisted 'complete' through unchanged (not re-derived to stale/never_ran)", () => {
+    const persisted: WorktreeBootstrapState = {
+      status: 'complete',
+      required: true,
+      completedAt: '2026-01-01T00:00:00.000Z',
+    }
+    const evaluated = evaluateWorktreeBootstrapState(mesh, workspace, persisted)
+    expect(evaluated.status).toBe('complete')
+    expect(evaluated.staleReason).toBeUndefined()
+  })
+
+  it("with NO persisted state, still resolves to 'stale'/never_ran (unchanged baseline behavior)", () => {
+    const evaluated = evaluateWorktreeBootstrapState(mesh, workspace, null)
+    expect(evaluated.status).toBe('stale')
+    expect(evaluated.staleReason).toBe('never_ran')
   })
 })

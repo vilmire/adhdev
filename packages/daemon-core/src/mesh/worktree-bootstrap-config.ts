@@ -13,7 +13,12 @@ import {
 } from './refine-config.js';
 import type { MeshAsyncJobLifecycle } from '../repo-mesh-types.js';
 
-export type WorktreeBootstrapStatus = 'ready' | 'running' | 'failed' | 'not_configured' | 'disabled' | 'stale';
+// 'complete' is the terminal status the coordinator's markWorktreeBootstrapTerminalState
+// (router.ts) stamps when the worktree_bootstrap_complete event fires — distinct from
+// 'ready' (which carries a staleInputs digest from an in-process run). It is terminal and
+// must be recognized as such by evaluateWorktreeBootstrapState so a later re-hydration never
+// round-trips it back to 'stale'/'never_ran'.
+export type WorktreeBootstrapStatus = 'ready' | 'complete' | 'running' | 'failed' | 'not_configured' | 'disabled' | 'stale';
 
 export interface RepoMeshWorktreeBootstrapConfig {
     version: 1;
@@ -56,6 +61,65 @@ export interface WorktreeBootstrapState extends MeshAsyncJobLifecycle {
 // local workspace on disk, or git errors) it returns false and the gate stays closed.
 export const WORKTREE_BOOTSTRAP_STALE_RUNNING_MS = 10 * 60 * 1000;
 
+/**
+ * Enumerate registered submodule paths for a worktree, generically (no hardcoded
+ * 'oss'/'adhdev-providers'). Reads `.gitmodules` via `git config --file .gitmodules
+ * --get-regexp path`, whose lines are `submodule.<name>.path <relativePath>`. Paths
+ * are returned normalized to forward slashes (git porcelain always emits '/'),
+ * trailing slash stripped. Returns an empty set when there are no submodules or the
+ * lookup fails — callers must then treat any change as dirty (conservative).
+ */
+function getRegisteredSubmodulePaths(workspace: string): Set<string> {
+    const paths = new Set<string>();
+    try {
+        const out = execFileSync(
+            resolveWin32Executable('git'),
+            ['config', '--file', '.gitmodules', '--get-regexp', 'path'],
+            { cwd: workspace, encoding: 'utf8', timeout: 10_000, windowsHide: true },
+        );
+        for (const line of String(out).split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            // `submodule.<name>.path <relativePath>` — value is everything after the first space.
+            const spaceIdx = trimmed.indexOf(' ');
+            if (spaceIdx < 0) continue;
+            const value = trimmed.slice(spaceIdx + 1).trim().replace(/\\/g, '/').replace(/\/+$/, '');
+            if (value) paths.add(value);
+        }
+    } catch {
+        // No .gitmodules / not a submodule superproject / git error → no exemptions.
+    }
+    return paths;
+}
+
+/**
+ * True when `git status --porcelain` output represents a worktree that is clean
+ * EXCEPT for submodule-gitlink-pointer moves. A worktree task that commits inside a
+ * registered submodule (e.g. oss/) leaves the superproject's gitlink outOfSync — a
+ * porcelain line of exactly " M <submodulePath>" (or "M  <submodulePath>") — which is
+ * a NORMAL product of that task and must NOT disqualify the stale backstop. Any other
+ * line (a real file edit, an untracked file, a staged add, an unmerged path) means the
+ * tree is genuinely dirty → not clean. We filter gitlink lines explicitly rather than
+ * using `git status --ignore-submodules=all`, which would also mask a submodule with
+ * genuinely-uncommitted *content* (=dirty still surfaces pointer moves we want to ignore;
+ * =all would over-suppress).
+ */
+function isCleanIgnoringSubmoduleGitlinks(porcelain: string, submodulePaths: Set<string>): boolean {
+    const lines = porcelain.split(/\r?\n/).filter(line => line.length > 0);
+    for (const line of lines) {
+        // Porcelain v1 line: two status chars (XY) + space + path. A submodule gitlink
+        // pointer move shows X or Y as 'M' with the other position a space, e.g.
+        // " M oss" (worktree-modified) or "M  oss" (index-modified). Quoted paths
+        // (core.quotePath) wrap in double-quotes — those never match a bare submodule path,
+        // so they correctly fall through as dirty.
+        const status = line.slice(0, 2);
+        const path = line.slice(3).trim().replace(/\\/g, '/').replace(/\/+$/, '');
+        const isGitlinkPointerMove = (status === ' M' || status === 'M ') && submodulePaths.has(path);
+        if (!isGitlinkPointerMove) return false; // any non-gitlink change → dirty
+    }
+    return true;
+}
+
 export function isWorktreeBootstrapStaleRunning(
     node: { worktreeBootstrap?: { status?: string; startedAt?: string; updatedAt?: string; completedAt?: string }; workspace?: string } | undefined,
     nowMs: number = Date.now(),
@@ -76,7 +140,15 @@ export function isWorktreeBootstrapStaleRunning(
             timeout: 10_000,
             windowsHide: true,
         });
-        return String(out).trim() === '';
+        const porcelain = String(out).replace(/\r?\n$/, '');
+        if (porcelain.trim() === '') return true; // truly clean
+        // A worktree task that committed inside a submodule leaves the superproject's
+        // submodule-gitlink pointer outOfSync (" M oss"); that is the normal aftermath of the
+        // task this backstop exists to unstick, not an in-progress bootstrap, so a tree dirty
+        // ONLY by gitlink pointer moves still counts as clean here.
+        const submodulePaths = getRegisteredSubmodulePaths(workspace);
+        if (submodulePaths.size === 0) return false; // no submodules → no exemption, dirty
+        return isCleanIgnoringSubmoduleGitlinks(porcelain, submodulePaths);
     } catch {
         return false; // cannot verify clean → stay conservative (gate remains closed)
     }
@@ -238,6 +310,11 @@ export function evaluateWorktreeBootstrapState(mesh: any, workspace: string, per
     }
     if (persisted?.status === 'running') return { ...persisted, required };
     if (persisted?.status === 'failed') return { ...persisted, required };
+    // 'complete' is the terminal stamp written by markWorktreeBootstrapTerminalState
+    // (router.ts) on the worktree_bootstrap_complete event. Pass it through unchanged so a
+    // later getMeshWithCache re-hydration never re-derives it back to 'stale'/'never_ran' —
+    // doing so would reopen the dispatch/claim gate against a node whose bootstrap is done.
+    if (persisted?.status === 'complete') return { ...persisted, required };
     if (persisted?.status === 'ready') {
         const staleInputs = loaded.config.staleInputs ?? persisted.staleInputs ?? [];
         if (staleInputs.length > 0 && persisted.staleInputsDigest) {

@@ -769,7 +769,9 @@ export interface LocalMeshNodeEntry {
     clonedFromNodeId?: string;
     /** Repo-local preparation result for ADHDev-created worktree nodes. */
     worktreeBootstrap?: {
-        status: 'ready' | 'running' | 'failed' | 'not_configured' | 'disabled' | 'stale';
+        // 'complete' is the terminal stamp written by markWorktreeBootstrapTerminalState
+        // (router.ts) on worktree_bootstrap_complete — kept in sync with WorktreeBootstrapStatus.
+        status: 'ready' | 'complete' | 'running' | 'failed' | 'not_configured' | 'disabled' | 'stale';
         required?: boolean;
         configSource?: string;
         configSourceType?: string;
