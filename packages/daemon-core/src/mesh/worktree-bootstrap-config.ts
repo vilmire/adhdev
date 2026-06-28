@@ -4,7 +4,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import * as yaml from 'js-yaml';
-import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
+import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
 import {
     isMeshConfigRecord,
     normalizeMeshCommandConfig,
@@ -311,14 +311,18 @@ export async function runMeshWorktreeBootstrap(mesh: any, workspace: string): Pr
         // (which appends only .com/.exe) cannot resolve → spawn ENOENT. Resolve
         // to an absolute path first (no-op on non-win32 / already-absolute).
         const resolvedCommand = resolveWin32Executable(command.command);
+        // A win32 .cmd/.bat shim (npm/npx/tsc) cannot be exec'd directly — wrap
+        // it in cmd.exe /c (no-op off win32 / for a real .exe).
+        const spawn = buildWin32ExecFileSpawn(resolvedCommand, command.args);
         try {
-            const result = await execFileAsync(resolvedCommand, command.args, {
+            const result = await execFileAsync(spawn.file, spawn.args, {
                 cwd,
                 encoding: 'utf8',
                 timeout: command.timeoutMs || DEFAULT_TIMEOUT_MS,
                 maxBuffer: command.outputLimitBytes || DEFAULT_OUTPUT_LIMIT_BYTES,
                 env: { ...process.env, CI: process.env.CI || '1', ...(command.env || {}) },
                 windowsHide: true,
+                ...(spawn.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
             });
             state.commandsRun?.push({
                 command: command.command,

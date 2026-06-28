@@ -21,7 +21,7 @@ import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.j
 import { basename as pathBasename, join as pathJoin, resolve as pathResolve } from 'path';
 import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
-import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
+import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
 import type { CommandRouterResult } from '../commands/router.js';
 
 // Fix (4): resolve the git executable to an absolute path once on win32. A bare `git` handed to
@@ -1573,13 +1573,18 @@ export async function runMeshRefineValidationGate(
             // Resolve to an absolute path via the same helper the PTY path uses
             // (no-op on non-win32 and when the command is already absolute).
             const resolvedCommand = resolveWin32Executable(candidate.command);
+            // A win32 .cmd/.bat shim cannot be exec'd directly — wrap it in
+            // cmd.exe /c (no-op off win32 / for a real .exe). Keep
+            // resolvedCommand for diagnostics.
+            const spawn = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
             try {
-                const result = await execFileAsync(resolvedCommand, candidate.args, {
+                const result = await execFileAsync(spawn.file, spawn.args, {
                     cwd,
                     encoding: 'utf8',
                     timeout,
                     maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
                     env: { ...process.env, CI: process.env.CI || '1', ...(candidate.env || {}) },
+                    ...(spawn.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
                 });
                 summary.bootstrapCommandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
             } catch (error: any) {
@@ -1592,7 +1597,7 @@ export async function runMeshRefineValidationGate(
                         ? { failureKind: 'spawn_resolution_failed', resolvedCommand }
                         : { failureKind: 'dependency_bootstrap_failed' }),
                 }));
-                summary.bootstrap = { stage: 'failed', error: describeSpawnError(error, candidate.command, spawnResolutionFailed) };
+                summary.bootstrap = { stage: 'failed', error: describeSpawnError(error, resolvedCommand, spawnResolutionFailed) };
                 summary.status = 'failed';
                 summary.failureKind = spawnResolutionFailed ? 'spawn_resolution_failed' : 'dependency_bootstrap_failed';
                 summary.failureCode = spawnResolutionFailed ? 'spawn_resolution_failed' : 'dependency_bootstrap_failed';
@@ -1622,13 +1627,15 @@ export async function runMeshRefineValidationGate(
         // See the bootstrap loop above: resolve the win32 .cmd shim to an
         // absolute path before handing it to the spawn boundary.
         const resolvedCommand = resolveWin32Executable(candidate.command);
+        const spawn = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
         try {
-            const result = await execFileAsync(resolvedCommand, candidate.args, {
+            const result = await execFileAsync(spawn.file, spawn.args, {
                 cwd,
                 encoding: 'utf8',
                 timeout,
                 maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
                 env: { ...process.env, CI: process.env.CI || '1', ...(candidate.env || {}) },
+                ...(spawn.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
             });
             summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
         } catch (error: any) {
@@ -1652,7 +1659,7 @@ export async function runMeshRefineValidationGate(
             if (spawnResolutionFailed) {
                 summary.failureKind = 'spawn_resolution_failed';
                 summary.failureCode = 'spawn_resolution_failed';
-                summary.spawnResolutionError = describeSpawnError(error, candidate.command, true);
+                summary.spawnResolutionError = describeSpawnError(error, resolvedCommand, true);
             } else if (missingDependencyFailure) {
                 summary.failureKind = 'missing_dependencies';
                 summary.failureCode = 'missing_dependencies';

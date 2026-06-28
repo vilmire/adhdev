@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, isAbsolute } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { isSpawnResolutionError, describeSpawnError } from '../../src/commands/router'
@@ -37,10 +37,12 @@ describe('refine spawn resolution (B1)', () => {
     expect(resolveWin32Executable('vitest')).toBe('vitest')
   })
 
-  it('on win32 resolves a bare .cmd shim (npm) to an absolute path, NOT bare "npm"', () => {
+  it('on win32 resolves a bare .cmd shim (npm) to an absolute .cmd, NOT bare "npm" or an extensionless wrapper', () => {
     setPlatform('win32')
-    // Simulate npm's off-PATH global bin: only npm.cmd exists there (no .exe),
-    // which is exactly why libuv's spawn search (only .com/.exe) ENOENTs.
+    // Stage an off-PATH npm.cmd to cover hosts where `where npm` finds nothing
+    // (the global-bin fallback). On a real win32 host `where npm` resolves the
+    // installed npm.cmd directly — both paths must end in a launchable .cmd,
+    // never the extensionless Unix wrapper `where` lists first.
     const npmDir = join(tmp, 'npm')
     mkdirSync(npmDir, { recursive: true })
     writeFileSync(join(npmDir, 'npm.cmd'), '@echo off\n', 'utf-8')
@@ -48,23 +50,27 @@ describe('refine spawn resolution (B1)', () => {
 
     const resolved = resolveWin32Executable('npm')
     // The value handed to the spawn boundary must be a resolved absolute path,
-    // not the bare command the spawn search cannot find.
+    // not the bare command the spawn search cannot find...
     expect(resolved).not.toBe('npm')
-    expect(resolved).toBe(join(npmDir, 'npm.cmd'))
+    expect(isAbsolute(resolved)).toBe(true)
+    // ...and specifically a .cmd shim, never the extensionless wrapper.
+    expect(resolved.toLowerCase().endsWith('npm.cmd')).toBe(true)
   })
 
   it('documents the node-vs-npm asymmetry: a real .exe needs no global-bin fallback, an off-PATH .cmd does', () => {
     setPlatform('win32')
     // `node`/`git` are real .exe on PATH → libuv's spawn search (.com/.exe)
     // resolves them, which is why git/node refine commands work on win32 today
-    // and only the npm-family .cmd shims break. We stage an off-PATH npm.cmd to
-    // represent npm's %APPDATA%\npm prefix: the resolver must turn it absolute.
+    // and only the npm-family .cmd shims break. Use a name `where` finds on no
+    // host so we genuinely exercise the %APPDATA%\npm global-bin fallback (the
+    // codex case) regardless of the test host's real PATH.
+    const offPathName = 'adhdev-offpath-cli'
     const npmDir = join(tmp, 'npm')
     mkdirSync(npmDir, { recursive: true })
-    writeFileSync(join(npmDir, 'npm.cmd'), '@echo off\n', 'utf-8')
+    writeFileSync(join(npmDir, `${offPathName}.cmd`), '@echo off\n', 'utf-8')
     process.env.APPDATA = tmp
-    // The .cmd shim (npm) is resolved to the staged absolute path...
-    expect(resolveWin32Executable('npm')).toBe(join(npmDir, 'npm.cmd'))
+    // The off-PATH .cmd shim is resolved to the staged absolute path...
+    expect(resolveWin32Executable(offPathName)).toBe(join(npmDir, `${offPathName}.cmd`))
     // ...while a command that resolves nowhere stays the bare command (no
     // corruption / no false absolute path injected).
     const unresolvable = `definitely-not-a-real-binary-${Math.abs(npmDir.length)}`
