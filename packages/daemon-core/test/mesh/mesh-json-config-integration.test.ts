@@ -1,13 +1,17 @@
 /**
  * OPSRULES integration smoke — real load → merge → coordinator-prompt build.
  *
- * Exercises the actual `.adhdev/mesh.json` loader, the LOCAL-WINS merge, and the
- * real buildCoordinatorSystemPrompt path (not stubs), covering the four
- * acceptance cases:
- *   (i)   repo policy default only, no local override → effective = repo
- *   (ii)  machine-local override → local wins
+ * Exercises the actual `.adhdev/mesh.json` loader, the coordinator/operatingNotes
+ * merge, and the real buildCoordinatorSystemPrompt path (not stubs). Policy is
+ * machine-local: a `policy` block in the repo file is ignored, and the prompt's
+ * parallel-task line always reflects the machine-local mesh policy. The repo file
+ * shapes only the coordinator prompt + operating notes.
+ *
+ *   (i)   repo file carries a policy block → IGNORED; prompt reflects machine-local policy
+ *   (ii)  machine-local policy drives the prompt
+ *   (ii-append) repo append + local append both stack
  *   (iii) repo operatingNotes + ledger note → merged in ## Operating Notes (ledger wins on dup)
- *   (iv)  export scaffold → local settings emitted as a .adhdev/mesh.json draft
+ *   (iv)  export scaffold → local coordinator prompt emitted as a .adhdev/mesh.json draft
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'fs';
@@ -52,20 +56,23 @@ afterEach(() => {
 });
 
 describe('OPSRULES integration — load → merge → prompt', () => {
-    it('case (i): repo policy default only, no local override → effective policy is repo default', () => {
+    it('case (i): a repo policy block is IGNORED — the prompt reflects the machine-local policy', () => {
+        // Repo file says 5, machine-local says 3. Policy is machine-local → 3 wins, 5 never appears.
         const ws = workspaceWith({ version: 1, policy: { maxParallelTasks: 5 } });
         const loaded = loadRepoMeshJsonConfig(ws);
         expect(loaded.sourceType).toBe('repo_file');
+        expect((loaded.config as any)?.policy).toBeUndefined();
 
-        const effective = applyRepoMeshConfig(localMesh(), loaded.config);
-        expect(effective.policy.maxParallelTasks).toBe(5);
+        const effective = applyRepoMeshConfig(localMesh({ maxParallelTasks: 3 }), loaded.config);
+        expect(effective.policy.maxParallelTasks).toBe(3);
 
         const prompt = buildCoordinatorSystemPrompt({ mesh: effective, coordinatorCliType: 'claude-cli' });
-        expect(prompt).toContain('Maximum **5** tasks running in parallel');
+        expect(prompt).toContain('Maximum **3** tasks running in parallel');
+        expect(prompt).not.toContain('Maximum **5** tasks running in parallel');
     });
 
-    it('case (ii): machine-local override → local wins over repo', () => {
-        const ws = workspaceWith({ version: 1, policy: { maxParallelTasks: 5 } });
+    it('case (ii): machine-local policy drives the prompt', () => {
+        const ws = workspaceWith({ version: 1, coordinator: { systemPromptAppend: 'X' } });
         const loaded = loadRepoMeshJsonConfig(ws);
 
         const effective = applyRepoMeshConfig(localMesh({ maxParallelTasks: 8 }), loaded.config);
@@ -118,7 +125,7 @@ describe('OPSRULES integration — load → merge → prompt', () => {
         expect(prompt).not.toContain('[pattern to avoid] shared lesson');
     });
 
-    it('case (iv): export scaffold emits the local settings as a .adhdev/mesh.json draft', () => {
+    it('case (iv): export scaffold emits the local coordinator prompt as a .adhdev/mesh.json draft (no policy)', () => {
         const mesh = localMesh({ maxParallelTasks: 6 }, { systemPromptAppend: 'TEAM-RULE' });
         const scaffold = buildMeshJsonConfigScaffold(mesh);
         const json = serializeMeshJsonConfigScaffold(scaffold);
@@ -131,7 +138,8 @@ describe('OPSRULES integration — load → merge → prompt', () => {
 
         const reloaded = loadRepoMeshJsonConfig(ws);
         expect(reloaded.sourceType).toBe('repo_file');
-        expect(reloaded.config?.policy?.maxParallelTasks).toBe(6);
+        // policy is NOT exported into the scaffold (machine-local only)
+        expect((reloaded.config as any)?.policy).toBeUndefined();
         expect(reloaded.config?.coordinator?.systemPromptAppend).toBe('TEAM-RULE');
 
         // Sanity: the serialized text is the canonical 2-space JSON.

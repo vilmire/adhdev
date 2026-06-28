@@ -19,23 +19,17 @@ import {
     __resolveSchedulingStrategyForTests,
     __orderEligibleNodesForTests,
 } from '../../src/mesh/mesh-events-coordinator.js';
-import { __resetMeshJsonConfigCacheForTests } from '../../src/config/mesh-json-config.js';
 import { __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
 
-// A repo checkout root carrying .adhdev/mesh.json, distinct from the config dir.
+// A repo checkout root that may carry a (legacy) .adhdev/mesh.json — used to prove
+// the scheduler IGNORES any repo-file scheduling block now that policy is machine-local.
 function makeRepoRoot(): string {
     const root = join(tmpdir(), `adhdev-meshjson-repo-${randomUUID().slice(0, 8)}`);
     mkdirSync(join(root, '.adhdev'), { recursive: true });
     return root;
 }
-function writeScheduling(root: string, scheduling: Record<string, unknown> | null): void {
-    const path = join(root, '.adhdev', 'mesh.json');
-    if (scheduling === null) {
-        try { rmSync(path, { force: true }); } catch { /* best-effort */ }
-    } else {
-        writeFileSync(path, JSON.stringify({ policy: { scheduling } }, null, 2), 'utf-8');
-    }
-    __resetMeshJsonConfigCacheForTests();
+function writeLegacyScheduling(root: string, scheduling: Record<string, unknown>): void {
+    writeFileSync(join(root, '.adhdev', 'mesh.json'), JSON.stringify({ policy: { scheduling } }, null, 2), 'utf-8');
 }
 
 const roots: string[] = [];
@@ -49,52 +43,45 @@ function meshWithRepoRoot(repoRoot: string, storedStrategy?: string): any {
     };
 }
 
-describe('.adhdev/mesh.json scheduling wiring (LOCAL-WINS) — direct-call integration smoke', () => {
+describe('scheduling strategy resolution (machine-local policy only)', () => {
     afterEach(() => {
-        __resetMeshJsonConfigCacheForTests();
         __resetMeshRuntimeStoreForTests();
         for (const r of roots.splice(0)) { try { rmSync(r, { recursive: true, force: true }); } catch { /* best-effort */ } }
         try { rmSync(testTmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     });
 
-    it('distribution=spread overlay resolves the effective strategy to least_loaded', () => {
+    it('the stored policy strategy is honored', () => {
         const root = trackRoot();
-        writeScheduling(root, { distribution: 'spread' });
-        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root))).toBe('least_loaded');
-    });
-
-    it('distribution=in_order overlay resolves to first_eligible', () => {
-        const root = trackRoot();
-        writeScheduling(root, { distribution: 'in_order' });
-        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root))).toBe('first_eligible');
-    });
-
-    it('overlay WINS over a conflicting stored policy strategy (LOCAL-WINS)', () => {
-        const root = trackRoot();
-        writeScheduling(root, { distribution: 'spread' });
-        // Stored policy says first_eligible, but the repo file says spread → least_loaded.
-        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root, 'first_eligible'))).toBe('least_loaded');
-    });
-
-    it('with no overlay file, the raw stored strategy is honored (escape hatch preserved)', () => {
-        const root = trackRoot();
-        writeScheduling(root, null);
+        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root, 'least_loaded'))).toBe('least_loaded');
         expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root, 'round_robin'))).toBe('round_robin');
-        // And the default when nothing is set stays first_eligible (strict no-change).
+    });
+
+    it('defaults to first_eligible when no strategy is stored', () => {
+        const root = trackRoot();
         expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root))).toBe('first_eligible');
+    });
+
+    it('a legacy .adhdev/mesh.json policy.scheduling block is IGNORED (policy is machine-local)', () => {
+        const root = trackRoot();
+        // Repo file asks for spread; the stored policy says first_eligible (default). The
+        // repo overlay no longer exists, so the stored policy wins — spread is ignored.
+        writeLegacyScheduling(root, { distribution: 'spread', maxParallel: 4 });
+        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root))).toBe('first_eligible');
+        // And a stored strategy still wins regardless of what the repo file says.
+        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root, 'round_robin'))).toBe('round_robin');
     });
 
     it('the resolved strategy drives orderEligibleNodes correctly end-to-end', () => {
         const root = trackRoot();
-        writeScheduling(root, { distribution: 'spread' });
-        const mesh = meshWithRepoRoot(root);
+        const mesh = meshWithRepoRoot(root, 'least_loaded');
         const strategy = __resolveSchedulingStrategyForTests(mesh);
+        expect(strategy).toBe('least_loaded');
         const nodes = [
             { nodeId: 'a', node: { id: 'a', policy: {} }, index: 0 },
             { nodeId: 'b', node: { id: 'b', policy: {} }, index: 1 },
             { nodeId: 'c', node: { id: 'c', policy: {} }, index: 2 },
         ];
-        // spread → least_loaded; all equal load → rotation absorbed, advances per pass.
+        // least_loaded; all equal load → rotation absorbed, advances per pass.
         const p1 = __orderEligibleNodesForTests(mesh.id, strategy, nodes, { bumpCursor: true }).map(n => n.nodeId);
         const p2 = __orderEligibleNodesForTests(mesh.id, strategy, nodes, { bumpCursor: true }).map(n => n.nodeId);
         expect(p1).toEqual(['a', 'b', 'c']);

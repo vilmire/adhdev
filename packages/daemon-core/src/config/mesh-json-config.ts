@@ -1,77 +1,42 @@
 /**
  * Repo-shared declarative mesh config — `.adhdev/mesh.json`
  *
- * A repo-committed, machine-independent BASE for mesh declarative settings
- * (policy + coordinator prompt override/append + operating notes). It is the
- * lowest layer of a LOCAL-WINS merge chain:
+ * A repo-committed, machine-independent file carrying ONLY the repo-shared
+ * coordinator-prompt config and operating notes:
  *
- *   DEFAULT_MESH_POLICY  →  .adhdev/mesh.json (repo base)  →  machine-local
- *   meshes.json / coordinator-prompt files (always win)
- *
- * The merge is **in-memory only**. The on-disk machine-local `meshes.json` is
- * NEVER mutated by this module — local config keeps winning and the merge is
- * applied transiently on the coordinator launch + display paths. This keeps the
- * repo file a shared default that a machine can always override without the
- * override being silently rewritten back to the repo shape.
- *
- * Three zones (scope = mesh-global in v1; per-node scope is not introduced):
- *   - policy            — RepoMeshPolicy fields; local fields that differ from
- *                         DEFAULT_MESH_POLICY win, otherwise the repo base shows
- *                         through (true per-field LOCAL-WINS).
  *   - coordinator       — systemPromptOverride (local wins, else repo) and
  *                         systemPromptAppend (repo append + local append BOTH
  *                         stack, repo first).
  *   - operatingNotes    — repo-declared baseline notes merged with the runtime
  *                         ledger notes; on duplicate text the ledger note wins.
+ *   - limits            — advisory-only (`maxNoteChars`, `maxNotes`,
+ *                         `coordinator.maxPromptChars`); recorded, never enforced in v1.
  *
- * Advisory-only fields (`coordinator.maxPromptChars`, `limits.maxNoteChars`,
- * `limits.maxNotes`) are accepted and preserved in the schema but NOT enforced
- * in v1 — they document operator intent only.
+ * POLICY IS NOT HERE. RepoMeshPolicy (the 15 scheduling/approval fields) is
+ * MACHINE-LOCAL only — it lives in meshes.json and is never sourced from, merged
+ * with, or overlaid by a repo file. There is no `policy` zone and no
+ * `policy.scheduling` overlay in mesh.json; the scheduler reads the stored
+ * machine-local policy directly. The repo file shapes the coordinator prompt and
+ * operating notes, nothing else.
  *
- * SCHEDULING OVERLAY — this same `.adhdev/mesh.json` also carries the in-tree
- * scheduling product surface (`policy.scheduling`). Instead of the scattered
- * `schedulingStrategy` / `maxParallelTasks` knobs (each with its own default +
- * clamp), an operator declares one `policy.scheduling` block checked into the
- * repo. It layers ON TOP of the stored meshes.json policy with LOCAL-WINS — a
- * value present in the repo file overrides the persisted mesh policy, so the
- * repo is the source of truth for how its own work distributes. Absent keys
- * leave the stored policy untouched (a partial overlay, not a replacement).
+ * The coordinator/operatingNotes merge is **in-memory only**: the on-disk
+ * machine-local `meshes.json` is never mutated by this module.
  *
- *   .adhdev/mesh.json
- *   { "policy": { "scheduling": {
- *       "distribution": "spread" | "in_order",   // → schedulingStrategy
- *       "maxParallel": 1..8,                       // → maxParallelTasks (clamped)
- *       "readonlyMultiplier": 2                    // read-only cap multiplier (default 2)
- *   } } }
- *
- * The raw 4-union schedulingStrategy escape hatch is preserved elsewhere: a
- * hand-edited meshes.json may still write any of the four raw strategies and the
- * scheduler honors it. The scheduling overlay exposes only the 2-mode
- * `distribution` façade, mapped through distributionToStrategy.
- *
- * The declarative-config loader (`loadRepoMeshJsonConfig`) and the scheduling
- * overlay loader (`loadMeshJsonConfig`) read the SAME file but resolve different
- * zones; they coexist intentionally — coordinator launch/display consume the
- * declarative zones, the scheduler consumes the scheduling overlay.
+ * FILE SEPARATION: refine / worktree-bootstrap / change-impact configs live in
+ * their OWN `.adhdev/*` files with their own loaders — they are NOT inlined into
+ * mesh.json. `loadRepoSettings` (config/repo-settings.ts) assembles all of them
+ * into one object for consumers.
  *
  * SECURITY: declarative only. JSON/YAML is parsed; arbitrary JS (.js) is NOT
  * supported, so loading a config can never execute code.
  */
 
-import { existsSync, readFileSync, statSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import * as yaml from 'js-yaml';
-import {
-    mergeAndNormalizePolicy,
-    type RepoMeshPolicy,
-    type RepoMeshCoordinatorConfig,
-    type LocalMeshEntry,
-    type RepoMeshDistribution,
-    distributionToStrategy,
-    normalizeMeshDistribution,
-    resolveMaxParallelTasks,
-    MESH_MAX_PARALLEL_TASKS_MIN,
-    MESH_MAX_PARALLEL_TASKS_MAX,
+import type {
+    RepoMeshCoordinatorConfig,
+    LocalMeshEntry,
 } from '../repo-mesh-types.js';
 import type { CoordinatorOperatingNote } from '../mesh/coordinator-prompt.js';
 
@@ -97,11 +62,11 @@ export interface RepoMeshDeclarativeLimits {
 
 /**
  * Parsed + normalized `.adhdev/mesh.json` shape. Every field is optional except
- * version so a repo can declare only the zone(s) it cares about.
+ * version so a repo can declare only the zone(s) it cares about. Policy is NOT a
+ * zone here — it is machine-local (meshes.json) only.
  */
 export interface RepoMeshDeclarativeConfig {
     version: 1;
-    policy?: Partial<RepoMeshPolicy>;
     coordinator?: RepoMeshDeclarativeCoordinatorConfig;
     operatingNotes?: CoordinatorOperatingNote[];
     limits?: RepoMeshDeclarativeLimits;
@@ -117,31 +82,10 @@ export interface RepoMeshJsonConfigLoadResult {
     error?: string;
 }
 
-// ─── Types (scheduling overlay) ─────────────────
-
-export interface MeshJsonSchedulingConfig {
-    /** User-facing distribution mode; mapped to schedulingStrategy on apply. */
-    distribution?: RepoMeshDistribution;
-    /** Global write-task parallel cap (clamped to [1, 8] on apply). */
-    maxParallel?: number;
-    /** Read-only diagnosis cap multiplier. Missing → 2. */
-    readonlyMultiplier?: number;
-}
-
-export interface MeshJsonConfig {
-    scheduling?: MeshJsonSchedulingConfig;
-}
-
-export interface MeshJsonConfigLoadResult {
-    config?: MeshJsonConfig;
-    source: string;
-    sourceType: 'repo_file' | 'unavailable' | 'invalid';
-    path?: string;
-    error?: string;
-    /** Cache key: path + mtime, or a sentinel for the missing/invalid case. */
-    sourceKey: string;
-}
-
+// MESH_JSON_CONFIG_LOCATIONS is retained for backward compatibility: it is the
+// shared list of `.adhdev/mesh.*` filenames the loader probes (and other modules
+// reference for diagnostics). The file now carries only coordinator + operating
+// notes; there is no scheduling overlay.
 export const MESH_JSON_CONFIG_LOCATIONS = [
     '.adhdev/mesh.json',
     '.adhdev/mesh.yaml',
@@ -156,9 +100,6 @@ export const MESH_JSON_CONFIG_SCHEMA = {
     required: ['version'],
     properties: {
         version: { const: 1 },
-        // policy is validated/normalized through mergeAndNormalizePolicy at merge
-        // time; the schema here only asserts it is an object.
-        policy: { type: 'object' },
         coordinator: {
             type: 'object',
             additionalProperties: false,
@@ -241,14 +182,6 @@ export function normalizeRepoMeshDeclarativeConfig(parsed: unknown): {
     }
 
     const config: RepoMeshDeclarativeConfig = { version: 1 };
-
-    if (parsed.policy !== undefined) {
-        if (isRecord(parsed.policy)) {
-            config.policy = parsed.policy as Partial<RepoMeshPolicy>;
-        } else {
-            errors.push('policy must be an object when provided');
-        }
-    }
 
     if (parsed.coordinator !== undefined) {
         if (isRecord(parsed.coordinator)) {
@@ -334,51 +267,7 @@ export function loadRepoMeshJsonConfig(workspace?: string): RepoMeshJsonConfigLo
     };
 }
 
-// ─── Declarative config: Merge (LOCAL-WINS) ─────
-
-function deepEqual(a: unknown, b: unknown): boolean {
-    if (a === b) return true;
-    try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
-}
-
-/**
- * Reduce a (fully-normalized) machine-local policy to ONLY the fields that
- * genuinely differ from DEFAULT_MESH_POLICY. A meshes.json policy is always
- * stored fully-defaulted, so a naive merge would let it shadow every repo-base
- * field — defeating the repo default. By keeping only the truly-overridden
- * fields, an untouched local field falls through to the repo base while a local
- * field the operator actually changed still wins. Optional fields absent from
- * DEFAULT_MESH_POLICY (e.g. allowedProviders, schedulingStrategy) count as an
- * override whenever present.
- */
-export function diffPolicyFromDefault(local: Partial<RepoMeshPolicy> | undefined): Partial<RepoMeshPolicy> {
-    if (!local || typeof local !== 'object') return {};
-    const out: Record<string, unknown> = {};
-    // Compare against the NORMALIZED default (not the raw DEFAULT_MESH_POLICY) so a
-    // fully-normalized local policy — whose nested autoFastForward is filled out by
-    // normalizeAutoFastForwardPolicy — does not spuriously read as an override.
-    const def = mergeAndNormalizePolicy(undefined, undefined) as unknown as Record<string, unknown>;
-    for (const [key, value] of Object.entries(local)) {
-        if (value === undefined) continue;
-        if (!deepEqual(value, def[key])) out[key] = value;
-    }
-    return out as Partial<RepoMeshPolicy>;
-}
-
-/**
- * Effective mesh policy = DEFAULT → repo base → local overrides (per-field
- * LOCAL-WINS). When `local` is all-default the repo base shows through entirely
- * (case i); when `local` overrides a field that field wins (case ii). Nested
- * objects (autoFastForward) are still merged per-field by mergeAndNormalizePolicy.
- */
-export function mergeEffectiveMeshPolicy(
-    repoPolicy: Partial<RepoMeshPolicy> | undefined,
-    localPolicy: RepoMeshPolicy | Partial<RepoMeshPolicy> | undefined,
-): RepoMeshPolicy {
-    const repoMerged = mergeAndNormalizePolicy(undefined, repoPolicy);
-    const localOverrides = diffPolicyFromDefault(localPolicy);
-    return mergeAndNormalizePolicy(repoMerged, localOverrides);
-}
+// ─── Declarative config: Merge (coordinator + operating notes) ─────
 
 /**
  * Effective coordinator config. systemPromptOverride: local wins, else repo.
@@ -440,18 +329,19 @@ export function mergeEffectiveOperatingNotes(
 
 /**
  * Produce an in-memory effective mesh by layering the repo declarative config
- * UNDER the machine-local mesh entry (policy + coordinator zones). Returns a new
- * object; the input mesh and on-disk meshes.json are never mutated. operatingNotes
- * are merged separately at launch (they ride the prompt context, not the mesh).
+ * UNDER the machine-local mesh entry — coordinator zone ONLY. Policy is
+ * machine-local and is left exactly as the stored mesh carries it (never sourced
+ * from the repo file). Returns a new object; the input mesh and on-disk
+ * meshes.json are never mutated. operatingNotes are merged separately at launch
+ * (they ride the prompt context, not the mesh).
  */
-export function applyRepoMeshConfig<T extends Pick<LocalMeshEntry, 'policy' | 'coordinator'>>(
+export function applyRepoMeshConfig<T extends Pick<LocalMeshEntry, 'coordinator'>>(
     mesh: T,
     repoConfig: RepoMeshDeclarativeConfig | null | undefined,
 ): T {
     if (!repoConfig) return mesh;
     return {
         ...mesh,
-        policy: mergeEffectiveMeshPolicy(repoConfig.policy, mesh.policy),
         coordinator: mergeEffectiveCoordinatorConfig(repoConfig.coordinator, mesh.coordinator),
     };
 }
@@ -461,18 +351,16 @@ export function applyRepoMeshConfig<T extends Pick<LocalMeshEntry, 'policy' | 'c
 /**
  * Build a `.adhdev/mesh.json` DRAFT from a machine-local mesh entry. This is a
  * scaffold for the operator to review and commit — NOT an automatic migration.
- * It captures the local policy (fully normalized) plus any coordinator prompt
- * override/append so a repo can adopt the current machine's settings as the
- * shared base. Operating notes are intentionally NOT exported: those are runtime
- * ledger lessons, and a repo should declare baseline notes deliberately.
+ * It captures the coordinator prompt override/append so a repo can adopt the
+ * current machine's prompt customization as the shared base. Policy is NOT
+ * exported — it is machine-local only and has no place in mesh.json. Operating
+ * notes are intentionally NOT exported either: those are runtime ledger lessons,
+ * and a repo should declare baseline notes deliberately.
  */
 export function buildMeshJsonConfigScaffold(
-    mesh: Pick<LocalMeshEntry, 'policy' | 'coordinator'>,
+    mesh: Pick<LocalMeshEntry, 'coordinator'>,
 ): RepoMeshDeclarativeConfig {
-    const scaffold: RepoMeshDeclarativeConfig = {
-        version: 1,
-        policy: mergeAndNormalizePolicy(undefined, mesh.policy),
-    };
+    const scaffold: RepoMeshDeclarativeConfig = { version: 1 };
     const coord: RepoMeshDeclarativeCoordinatorConfig = {};
     const override = mesh.coordinator?.systemPromptOverride;
     if (typeof override === 'string' && override.trim()) coord.systemPromptOverride = override;
@@ -485,133 +373,4 @@ export function buildMeshJsonConfigScaffold(
 /** Serialize a scaffold to the canonical 2-space JSON draft text. */
 export function serializeMeshJsonConfigScaffold(config: RepoMeshDeclarativeConfig): string {
     return JSON.stringify(config, null, 2);
-}
-
-// ─── Scheduling overlay: validate / load ────────
-
-/**
- * Validate a parsed `.adhdev/mesh.*` document into a MeshJsonConfig (scheduling
- * overlay). Tolerant of an empty/partial file (an empty object is valid and
- * yields no overlay); strict about malformed values so a typo surfaces as
- * `invalid` rather than silently no-op'ing.
- */
-export function validateMeshJsonConfig(raw: unknown, source = 'inline'): { valid: boolean; errors: string[]; config?: MeshJsonConfig } {
-    const errors: string[] = [];
-    if (!isRecord(raw)) {
-        return { valid: false, errors: [`${source}: config must be an object`] };
-    }
-    const config: MeshJsonConfig = {};
-
-    const policy = raw.policy;
-    const schedulingRaw = isRecord(policy) ? policy.scheduling : undefined;
-    if (schedulingRaw !== undefined) {
-        if (!isRecord(schedulingRaw)) {
-            errors.push('policy.scheduling must be an object');
-        } else {
-            const scheduling: MeshJsonSchedulingConfig = {};
-            if (schedulingRaw.distribution !== undefined) {
-                if (typeof schedulingRaw.distribution !== 'string'
-                    || !['spread', 'in_order'].includes(schedulingRaw.distribution.trim())) {
-                    errors.push("policy.scheduling.distribution must be 'spread' or 'in_order'");
-                } else {
-                    scheduling.distribution = normalizeMeshDistribution(schedulingRaw.distribution);
-                }
-            }
-            if (schedulingRaw.maxParallel !== undefined) {
-                const n = Number(schedulingRaw.maxParallel);
-                if (!Number.isFinite(n) || n < MESH_MAX_PARALLEL_TASKS_MIN || n > MESH_MAX_PARALLEL_TASKS_MAX) {
-                    errors.push(`policy.scheduling.maxParallel must be a number in [${MESH_MAX_PARALLEL_TASKS_MIN}, ${MESH_MAX_PARALLEL_TASKS_MAX}]`);
-                } else {
-                    scheduling.maxParallel = Math.floor(n);
-                }
-            }
-            if (schedulingRaw.readonlyMultiplier !== undefined) {
-                const n = Number(schedulingRaw.readonlyMultiplier);
-                if (!Number.isFinite(n) || n < 1) {
-                    errors.push('policy.scheduling.readonlyMultiplier must be a number >= 1');
-                } else {
-                    scheduling.readonlyMultiplier = Math.floor(n);
-                }
-            }
-            // Reject unknown keys inside the scheduling block to catch typos early.
-            for (const key of Object.keys(schedulingRaw)) {
-                if (!['distribution', 'maxParallel', 'readonlyMultiplier'].includes(key)) {
-                    errors.push(`policy.scheduling.${key} is not a recognized field`);
-                }
-            }
-            if (Object.keys(scheduling).length) config.scheduling = scheduling;
-        }
-    }
-
-    return { valid: errors.length === 0, errors, config: errors.length === 0 ? config : undefined };
-}
-
-// mtime-keyed cache: the scheduler re-reads on every reconcile tick (~4s), so cache
-// the parse result and only re-read when the file's mtime (or its presence) changes.
-const cache = new Map<string, { sourceKey: string; result: MeshJsonConfigLoadResult }>();
-
-/**
- * Locate and load the `.adhdev/mesh.json` scheduling overlay for a repo root.
- * Declarative only — never executes config. Cached by path + mtime so repeated
- * scheduler reads are cheap.
- */
-export function loadMeshJsonConfig(repoRoot: string): MeshJsonConfigLoadResult {
-    if (!repoRoot) {
-        return { source: 'unavailable', sourceType: 'unavailable', error: 'no repo root', sourceKey: 'unavailable' };
-    }
-    for (const relative of MESH_JSON_CONFIG_LOCATIONS) {
-        const configPath = join(repoRoot, relative);
-        if (!existsSync(configPath)) continue;
-        let mtimeMs = 0;
-        try {
-            mtimeMs = statSync(configPath).mtimeMs;
-        } catch {
-            mtimeMs = 0;
-        }
-        const cacheKey = configPath;
-        const sourceKey = `file:${configPath}:${mtimeMs}`;
-        const cached = cache.get(cacheKey);
-        if (cached && cached.sourceKey === sourceKey) return cached.result;
-        let result: MeshJsonConfigLoadResult;
-        try {
-            const text = readFileSync(configPath, 'utf-8');
-            const parsed = parseConfigText(configPath, text);
-            const validation = validateMeshJsonConfig(parsed, relative);
-            result = validation.valid
-                ? { config: validation.config, source: relative, sourceType: 'repo_file', path: configPath, sourceKey }
-                : { source: relative, sourceType: 'invalid', path: configPath, error: validation.errors.join('; '), sourceKey: `invalid:${configPath}:${mtimeMs}` };
-        } catch (error: any) {
-            result = { source: relative, sourceType: 'invalid', path: configPath, error: error?.message || String(error), sourceKey: `error:${configPath}` };
-        }
-        cache.set(cacheKey, { sourceKey: result.sourceKey, result });
-        return result;
-    }
-    return {
-        source: 'unavailable',
-        sourceType: 'unavailable',
-        error: `No .adhdev/mesh config found. Checked: ${MESH_JSON_CONFIG_LOCATIONS.join(', ')}`,
-        sourceKey: 'unavailable',
-    };
-}
-
-/** Test-only: drop the mtime cache so a per-run temp file is re-read. */
-export function __resetMeshJsonConfigCacheForTests(): void {
-    cache.clear();
-}
-
-/**
- * The effective scheduling knobs after layering the repo-local `.adhdev/mesh.json`
- * overlay on top of a stored mesh policy (LOCAL-WINS). This is the single resolution
- * point the scheduler reads, so the strategy/caps it acts on always reflect the
- * in-tree override when present and fall back to the persisted policy otherwise.
- */
-export interface EffectiveMeshScheduling {
-    /** Resolved raw strategy (override distribution → strategy, else stored policy). */
-    strategy: ReturnType<typeof distributionToStrategy> | RepoMeshPolicy['schedulingStrategy'];
-    /** Effective, clamped global write cap. */
-    maxParallelTasks: number;
-    /** Read-only cap multiplier (override, else default 2). */
-    readonlyMultiplier?: number;
-    /** True when an `.adhdev/mesh.json` overlay actually contributed a value. */
-    overrideApplied: boolean;
 }

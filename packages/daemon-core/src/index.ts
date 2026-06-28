@@ -237,6 +237,11 @@ export type {
   RepoMeshRefineConfig,
   RepoMeshRefineValidationCommandConfig,
 } from './mesh/refine-config.js';
+// Unified repo-settings loader: assembles the separate `.adhdev/*` config files
+// (mesh.json coordinator/operatingNotes, refine, worktree-bootstrap, change-impact)
+// into one object. Policy is machine-local and not part of repo settings.
+export { loadRepoSettings } from './config/repo-settings.js';
+export type { RepoSettings, LoadRepoSettingsOptions } from './config/repo-settings.js';
 
 // ── Mesh Task Ledger ──
 export { appendLedgerEntry, appendRemoteLedgerEntries, buildTaskCompletionEvidence, normalizeMeshWorkerResult, readLedgerEntries, readLedgerSlice, readLedgerSliceFromStore, getLedgerSummary, getLedgerDir, getSessionRecoveryContext, MAX_LEDGER_SLICE_LIMIT } from './mesh/mesh-ledger.js';

@@ -177,10 +177,15 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
 
                     // OPSRULES — layer the repo-shared declarative mesh config
                     // (.adhdev/mesh.json in the coordinator node workspace, else
-                    // the calling cwd) UNDER the machine-local mesh entry. The
-                    // merge is LOCAL-WINS and in-memory only: meshes.json on disk
-                    // is never mutated. The effective mesh feeds prompt building;
-                    // operating notes are merged with the runtime ledger below.
+                    // the calling cwd) UNDER the machine-local mesh entry. Only the
+                    // COORDINATOR zone (prompt override/append) is merged — policy is
+                    // machine-local and is never sourced from the repo file. The merge
+                    // is in-memory only: meshes.json on disk is never mutated. Coordinator
+                    // launch needs only the mesh.json zone (coordinator + operatingNotes),
+                    // so it reads that dedicated loader directly rather than the unified
+                    // loadRepoSettings (which would also touch refine/bootstrap via the
+                    // machine-local inline seam). The effective mesh feeds prompt
+                    // building; operating notes are merged with the runtime ledger below.
                     const { loadRepoMeshJsonConfig, applyRepoMeshConfig, mergeEffectiveOperatingNotes } =
                         await import('../../config/mesh-json-config.js');
                     const repoMeshConfigLoad = loadRepoMeshJsonConfig(workspace);

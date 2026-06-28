@@ -16,6 +16,7 @@ import {
     runMeshWorktreeBootstrap,
     type WorktreeBootstrapState,
 } from '../../mesh/worktree-bootstrap-config.js';
+import { loadRepoSettings } from '../../config/repo-settings.js';
 import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../../mesh/mesh-events.js';
 import { loadConfig } from '../../config/config.js';
 import {
@@ -182,7 +183,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
     // entry. This is an export scaffold for the operator to review and commit to
     // the repo, NOT an automatic data migration: nothing is written to disk and
     // meshes.json is untouched. The returned `scaffold` (object) + `scaffoldJson`
-    // (2-space text) capture the local policy + coordinator prompt override/append.
+    // (2-space text) capture the coordinator prompt override/append (policy is
+    // machine-local and is intentionally NOT exported into mesh.json).
     export_mesh_json_config: async (_ctx: MedFamilyContext, args: any) => {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };
@@ -690,7 +692,10 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             };
 
             const initSubmodules = (sourceNode.policy as any)?.initSubmodulesOnClone !== false;
-            const loadedBootstrap = loadMeshWorktreeBootstrapConfig(mesh, result.worktreePath);
+            // Read the worktree bootstrap config through the unified RepoSettings
+            // loader (file-separated `.adhdev/worktree_bootstrap.json`; machine-local
+            // inline seam honored). runMeshWorktreeBootstrap below re-loads it to run.
+            const loadedBootstrap = loadRepoSettings({ workspace: result.worktreePath, mesh }).worktreeBootstrap;
             const runningBootstrapState: WorktreeBootstrapState = {
                 status: 'running',
                 required: loadedBootstrap.config?.required !== false,

@@ -13,9 +13,8 @@ import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-deliv
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
-import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, distributionToStrategy } from '../repo-mesh-types.js';
+import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
-import { loadMeshJsonConfig, type MeshJsonSchedulingConfig } from '../config/mesh-json-config.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
@@ -825,46 +824,15 @@ function nodeActiveLoad(meshId: string, nodeId: string): number {
 }
 
 /**
- * Resolve the canonical repo root for reading a mesh's in-tree `.adhdev/mesh.json`
- * overlay. Prefers a base (non-worktree) node's repoRoot/workspace — the canonical
- * checkout that carries the repo file — and falls back to any node so a worktree-only
- * mesh still resolves a root. Returns '' when no node declares a path.
- */
-function resolveMeshRepoRootForScheduling(mesh: any): string {
-    const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
-    const pickRoot = (n: any) => readNonEmptyString(n?.repoRoot) || readNonEmptyString(n?.workspace);
-    const base = nodes.find((n: any) => n?.isLocalWorktree !== true && pickRoot(n));
-    if (base) return pickRoot(base);
-    const anyNode = nodes.find((n: any) => pickRoot(n));
-    return anyNode ? pickRoot(anyNode) : '';
-}
-
-/**
- * The repo-local `.adhdev/mesh.json` `policy.scheduling` overlay for this mesh, when
- * present and valid. LOCAL-WINS: a value here overrides the stored mesh policy. Cached
- * by mtime in the loader, so calling this on every reconcile tick is cheap.
- */
-function resolveMeshSchedulingOverride(mesh: any): MeshJsonSchedulingConfig | undefined {
-    const repoRoot = resolveMeshRepoRootForScheduling(mesh);
-    if (!repoRoot) return undefined;
-    try {
-        return loadMeshJsonConfig(repoRoot).config?.scheduling;
-    } catch {
-        return undefined;
-    }
-}
-
-/**
- * The mesh-wide scheduling strategy. Resolution order (LOCAL-WINS):
- *   1. `.adhdev/mesh.json` policy.scheduling.distribution (2-mode → strategy), then
- *   2. the stored mesh policy schedulingStrategy raw 4-union (escape hatch), then
- *   3. 'first_eligible' (strict no-change default).
- * Only governs the final tie-break; eligibility, capacity, and priority gates apply
- * identically to every strategy.
+ * The mesh-wide scheduling strategy, read from the MACHINE-LOCAL stored mesh
+ * policy. Resolution order:
+ *   1. the stored mesh policy schedulingStrategy raw 4-union, then
+ *   2. 'first_eligible' (strict no-change default).
+ * Policy is machine-local only — there is no repo-file (`.adhdev/mesh.json`)
+ * overlay. Only governs the final tie-break; eligibility, capacity, and priority
+ * gates apply identically to every strategy.
  */
 function resolveSchedulingStrategy(mesh: any): RepoMeshSchedulingStrategy {
-    const override = resolveMeshSchedulingOverride(mesh);
-    if (override?.distribution) return distributionToStrategy(override.distribution);
     return normalizeMeshSchedulingStrategy(mesh?.policy?.schedulingStrategy);
 }
 
@@ -1131,19 +1099,15 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
     const pending = queue.filter(task => task.status === 'pending');
     if (!pending.length) return false;
 
-    // Write cap + read-only cap resolved through the shared helpers, with the
-    // repo-local `.adhdev/mesh.json` overlay winning over the stored policy
-    // (LOCAL-WINS). Both the cap value and the read-only multiplier route through
-    // the same resolvers the observability projection uses, so the enforced and
-    // exposed caps can never drift.
-    const schedulingOverride = resolveMeshSchedulingOverride(mesh);
-    const maxParallelTasks = resolveMaxParallelTasks(
-        schedulingOverride?.maxParallel ?? mesh?.policy?.maxParallelTasks,
-    );
+    // Write cap + read-only cap resolved through the shared helpers from the
+    // MACHINE-LOCAL stored mesh policy (no repo-file overlay). These are the same
+    // resolvers the observability projection uses, so the enforced and exposed
+    // caps can never drift.
+    const maxParallelTasks = resolveMaxParallelTasks(mesh?.policy?.maxParallelTasks);
     // Read-only diagnoses carry no isolation/merge cost, so they are exempt from the
     // write-task parallel cap. To prevent runaway auto-launch they get their own,
-    // higher safety cap (readonlyMultiplier × the write cap, default 2×).
-    const maxReadonlyParallelTasks = resolveMaxReadonlyParallelTasks(maxParallelTasks, schedulingOverride?.readonlyMultiplier);
+    // higher safety cap (default 2× the write cap).
+    const maxReadonlyParallelTasks = resolveMaxReadonlyParallelTasks(maxParallelTasks);
     for (const task of pending) {
         const isReadonly = isTaskReadonly(task);
         if (isReadonly) {
