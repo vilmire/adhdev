@@ -977,12 +977,12 @@ var MESH_CLEANUP_SESSIONS_TOOL = {
 };
 var MESH_TASK_HISTORY_TOOL = {
   name: "mesh_task_history",
-  description: "Read the task ledger for this mesh \u2014 dispatched tasks, completions, failures, checkpoints, and node lifecycle events. Use to understand what has been done before deciding next steps, to detect repeated failures, and to inform recovery decisions.",
+  description: "Read the task ledger for this mesh \u2014 dispatched tasks, completions, failures, checkpoints, node lifecycle events, and mission lifecycle (mission_created / mission_status_changed / mission_goal_updated). Use to understand what has been done before deciding next steps, to detect repeated failures, to audit mission goal/status changes, and to inform recovery decisions.",
   inputSchema: {
     type: "object",
     properties: {
       tail: { type: "number", description: "Number of recent entries to return (default: 20; clamped to 40 in compact mode, 200 in verbose)." },
-      kind: { type: "string", description: "Filter by entry kind: task_dispatched, task_completed, task_failed, task_stalled, session_launched, checkpoint_created, node_cloned, node_removed, direct_fast_forward." },
+      kind: { type: "string", description: "Filter by entry kind: task_dispatched, task_completed, task_failed, task_stalled, session_launched, checkpoint_created, node_cloned, node_removed, direct_fast_forward, mission_created, mission_status_changed, mission_goal_updated." },
       compact: { type: "boolean", description: "Slim payload for LLM callers. Default true. Truncates long payload strings (message/taskSummary \u2264200, finalSummary \u2264300) and elides any large nested evidence blob (>2KB serialized \u2014 e.g. validationSummary/result/patchEquivalence/submoduleReachability) to a {_elided,_kind,_bytes,_hint} placeholder; full evidence stays accessible via mesh_reconcile_ledger. Set false (or verbose=true) for full untruncated payloads." },
       verbose: { type: "boolean", description: "Force the full untruncated payload; overrides compact." }
     }
