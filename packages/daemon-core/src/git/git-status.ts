@@ -12,12 +12,45 @@ import {
 type ResolvedGitRepo = { workspace: string; repoRoot: string | null; isGitRepo: boolean };
 
 /**
- * Last successfully-collected status per workspace, used to survive a transient git
- * failure (timeout, slow Windows spawn under load, a momentary lock) WITHOUT dropping
- * the node out of the mesh graph. A genuine "not a git repository" answer is NOT a
- * transient failure — it never populates this cache and always reports isGitRepo:false.
+ * TTL for the happy-path result cache (C1). reconcile fires every 4s and mesh_status
+ * is polled; a single getGitRepoStatus on a 1-submodule repo spawns ~13-15 git
+ * processes (+ optional network fetch) which on Windows is ~10-15s. Within this short
+ * window, repeat callers that share the same option shape are served the already
+ * collected status instead of re-shelling. Kept well under the 4s reconcile cadence so
+ * a genuinely fresh probe still happens at least roughly once per reconcile tick.
  */
-const lastKnownGoodStatus = new Map<string, GitRepoStatus>();
+export const GIT_STATUS_CACHE_TTL_MS = 1500;
+
+/**
+ * Last successfully-collected status per (workspace, option-shape), used for two things:
+ *   1. C1 TTL result cache — on the happy path, a cached entry younger than
+ *      GIT_STATUS_CACHE_TTL_MS is returned directly (gated by `cachedAt`).
+ *   2. Transient-failure fallback — survive a transient git failure (timeout, slow
+ *      Windows spawn under load, a momentary lock) WITHOUT dropping the node out of the
+ *      mesh graph by re-serving the last good status, re-stamped as stale.
+ * A genuine "not a git repository" answer is NOT a transient failure — it never
+ * populates this cache and always reports isGitRepo:false. Only a successful, fully
+ * populated status is ever cached; error/empty results never are.
+ *
+ * The key folds in the option fields that change the SHAPE of the collected result
+ * (includeSubmodules, refreshUpstream) so different callers don't read each other's
+ * partial results. Fields that only affect timing/policy (timeoutMs, daemonBuildInfo,
+ * changeImpactConfig, submoduleIgnorePaths) are NOT part of the key — they don't change
+ * what a fresh same-shape collection would currently return for the happy path, and the
+ * sub-caches (changeImpactEvalCache) already key on their own invalidators.
+ */
+interface CachedStatusEntry {
+  status: GitRepoStatus;
+  cachedAt: number;
+}
+const lastKnownGoodStatus = new Map<string, CachedStatusEntry>();
+
+/** Cache key folding in only the option fields that change the result shape. */
+function statusCacheKey(workspace: string, options: GitStatusOptions): string {
+  const includeSubmodules = options.includeSubmodules !== false;
+  const refreshUpstream = options.refreshUpstream === true;
+  return `${workspace}\0sub=${includeSubmodules ? 1 : 0}\0up=${refreshUpstream ? 1 : 0}`;
+}
 
 /**
  * Memoized Change Impact evaluation, keyed by the inputs that can change the
@@ -45,12 +78,30 @@ interface ChangeImpactConfigCacheEntry {
 }
 const changeImpactConfigCache = new Map<string, ChangeImpactConfigCacheEntry>();
 
+/**
+ * C3: memoized ancestry verdict for the daemon-build-behind probe, keyed by
+ * `${repoPath}::${buildCommit}::${headOid}`. For a fixed (build commit, HEAD oid) pair
+ * the ancestry relationship (is build an ancestor of HEAD? equal? unrelated?) is
+ * immutable, so the verdict can be cached indefinitely — it auto-invalidates the moment
+ * HEAD moves (new oid → new key). This removes the steady-state `cat-file` +
+ * `rev-parse` + `merge-base` spawns (2-3 per scope) when HEAD has not moved between
+ * probes. A value of `false` means "build is NOT a strict ancestor of HEAD" (current,
+ * ahead, or unrelated — no warning); `true` means a strict-ancestor relationship was
+ * proven for that pair.
+ */
+const buildBehindAncestryCache = new Map<string, boolean>();
+
 /** Test seam: clear the last-known-good status cache between cases. */
 export function __resetGitStatusCacheForTests(): void {
   lastKnownGoodStatus.clear();
   changeImpactEvalCache.clear();
   changeImpactConfigCache.clear();
+  upstreamFetchedAt.clear();
+  buildBehindAncestryCache.clear();
 }
+
+/** Alias matching the task's requested name. */
+export const __resetGitStatusCache = __resetGitStatusCacheForTests;
 
 /** Test-only introspection: number of memoized Change Impact evaluations. */
 export function __changeImpactEvalCacheSizeForTests(): number {
@@ -78,6 +129,18 @@ export interface GitStatusOptions {
    */
   refreshUpstream?: boolean;
   /**
+   * When true, bypass the C1 TTL result cache: always re-collect a fresh status
+   * (ignoring any cached entry younger than GIT_STATUS_CACHE_TTL_MS). The freshly
+   * collected result still UPDATES the cache so subsequent normal callers benefit.
+   *
+   * Mutating / decision callers (mesh_fast_forward preflight + post-merge re-read,
+   * refine submodule alignment pre/post status) MUST set this — acting on a stale
+   * ahead/behind or submodule sync verdict is the primary correctness hazard of the
+   * cache. Read-only/observe callers (mesh_status, git-monitor, reconcile) leave it
+   * unset and enjoy the dedup.
+   */
+  forceFresh?: boolean;
+  /**
    * Test/override seam for the daemon build stamp used by the stale-build
    * detector. Production callers omit this so the real baked-in build commit
    * (getDaemonBuildInfo) is used.
@@ -96,10 +159,25 @@ export interface GitStatusOptions {
   changeImpactConfig?: ChangeImpactConfig | null;
 }
 
+/**
+ * C2: minimum interval between actual `git fetch` network calls per workspace. A
+ * refreshUpstream caller within this window does NOT re-fetch; it serves ahead/behind
+ * from the locally-re-read porcelain (which is always fresh every call). So
+ * refreshUpstream becomes "fetch if the local remote-tracking ref is stale" rather than
+ * "always pay a network round trip". Only the upstream ahead/behind can age up to this
+ * throttle; local working-tree status never does.
+ */
+export const GIT_FETCH_THROTTLE_MS = 30_000;
+
+/** Wall-clock of the last successful `git fetch` per workspace (C2 throttle gate). */
+const upstreamFetchedAt = new Map<string, number>();
+
 interface GitUpstreamProbe {
   upstreamStatus: GitUpstreamFreshness;
   upstreamFetchedAt?: number;
   upstreamFetchError?: string;
+  /** True only when this probe performed an actual network fetch (porcelain re-read needed). */
+  didFetch?: boolean;
 }
 
 export async function getGitRepoStatus(
@@ -116,10 +194,26 @@ export async function getGitRepoStatus(
   const effectiveOptions: GitStatusOptions =
     options.timeoutMs === undefined ? { ...options, timeoutMs: GIT_STATUS_TIMEOUT_MS } : options;
 
+  const cacheKey = statusCacheKey(workspace, options);
+
+  // C1: happy-path TTL result cache. A non-forceFresh caller within the TTL window is
+  // served the last successfully-collected status for this exact option shape instead
+  // of re-shelling ~14 git processes. Only successful, fully-populated results are ever
+  // stored (see the .set below + the never-cache-error rule in the catch), so a cache
+  // hit can never serve an error/empty status.
+  if (!options.forceFresh) {
+    const cached = lastKnownGoodStatus.get(cacheKey);
+    if (cached && lastCheckedAt - cached.cachedAt < GIT_STATUS_CACHE_TTL_MS) {
+      return cached.status;
+    }
+  }
+
   try {
     const repo = await resolveGitRepository(workspace, effectiveOptions);
     const status = await collectGitRepoStatus(repo, includeSubmodules, lastCheckedAt, effectiveOptions);
-    lastKnownGoodStatus.set(workspace, status);
+    // Cache the fresh, fully-populated success. forceFresh callers still refresh the
+    // cache so the next normal caller benefits from their freshly-collected status.
+    lastKnownGoodStatus.set(cacheKey, { status, cachedAt: lastCheckedAt });
     return status;
   } catch (error) {
     const gitError = error instanceof GitCommandError
@@ -130,7 +224,7 @@ export async function getGitRepoStatus(
     // a healthy node lose its repo identity and drop out of the mesh graph. Prefer the
     // last status we successfully collected for this workspace, re-stamped as stale.
     if (isTransientGitFailure(gitError)) {
-      const cached = lastKnownGoodStatus.get(workspace);
+      const cached = lastKnownGoodStatus.get(cacheKey)?.status;
       if (cached) {
         return {
           ...cached,
@@ -157,7 +251,11 @@ async function collectGitRepoStatus(
 
     if (options.refreshUpstream) {
       upstreamProbe = await refreshTrackedUpstream(repo, parsed, options);
-      if (upstreamProbe.upstreamStatus === 'fresh') {
+      // Re-read the porcelain (to pick up the updated ahead/behind) ONLY when this probe
+      // actually fetched. When the fetch was throttled (C2), the remote-tracking ref is
+      // unchanged, so the ahead/behind already parsed is still correct — re-reading would
+      // be a wasted spawn.
+      if (upstreamProbe.upstreamStatus === 'fresh' && upstreamProbe.didFetch) {
         parsed = await readPorcelainStatus(repo, options);
       }
     }
@@ -166,8 +264,11 @@ async function collectGitRepoStatus(
     const stashCount = await readStashCount(repo, options);
 
     let submodules: GitSubmoduleStatus[] | undefined;
+    let submoduleHeadOids = new Map<string, string>();
     if (includeSubmodules) {
-      submodules = await getSubmoduleStatuses(repo, options);
+      const subResult = await getSubmoduleStatuses(repo, options);
+      submodules = subResult.submodules;
+      submoduleHeadOids = subResult.headOidByPath;
     }
     const submoduleDirty = (submodules || []).some(submodule => submodule.dirty || submodule.outOfSync || !!submodule.error);
     const dirty = parsed.staged + parsed.modified + parsed.untracked + parsed.deleted + parsed.renamed > 0
@@ -175,7 +276,10 @@ async function collectGitRepoStatus(
       || stashCount > 0
       || submoduleDirty;
 
-    const daemonBuildBehind = await detectDaemonBuildBehind(repo, submodules, options);
+    const daemonBuildBehind = await detectDaemonBuildBehind(repo, submodules, options, {
+      rootHeadOid: parsed.headOid,
+      submoduleHeadOids,
+    });
 
     return {
       workspace: repo.workspace,
@@ -426,10 +530,18 @@ function resolveChangeImpactConfigForRepo(
   return { config, sourceKey: loaded.sourceKey };
 }
 
+interface DaemonBuildBehindHeadOids {
+  /** Root repo HEAD oid from porcelain `# branch.oid` (avoids a rev-parse spawn). */
+  rootHeadOid: string | null;
+  /** Per-submodule-path actual HEAD oid (already read during submodule collection). */
+  submoduleHeadOids: Map<string, string>;
+}
+
 async function detectDaemonBuildBehind(
   repo: ResolvedGitRepo,
   submodules: GitSubmoduleStatus[] | undefined,
   options: GitStatusOptions,
+  headOids: DaemonBuildBehindHeadOids = { rootHeadOid: null, submoduleHeadOids: new Map() },
 ): Promise<DaemonBuildBehind | undefined> {
   const build = options.daemonBuildInfo ?? getDaemonBuildInfo();
   if (!build.commit || build.commit === 'unknown') return undefined;
@@ -440,23 +552,60 @@ async function detectDaemonBuildBehind(
   // Check the root repo first, then each submodule. The daemon build commit is
   // baked from the daemon-core (oss submodule) HEAD, so on an adhdev
   // superproject worktree the match is expected on the `oss` submodule, not the
-  // root — checking both keeps the helper repo-agnostic.
-  const scopes: Array<{ scope: string; repoPath: string }> = [
-    { scope: 'root', repoPath: repo.repoRoot || repo.workspace },
+  // root — checking both keeps the helper repo-agnostic. The known HEAD oid (from
+  // porcelain for root, from the submodule rev-parse already paid during collection)
+  // is threaded in so the C3 ancestry cache can short-circuit before any spawn.
+  const scopes: Array<{ scope: string; repoPath: string; knownHeadOid: string | null }> = [
+    { scope: 'root', repoPath: repo.repoRoot || repo.workspace, knownHeadOid: headOids.rootHeadOid },
   ];
   for (const sub of submodules || []) {
-    if (sub.repoPath && !sub.error) scopes.push({ scope: sub.path, repoPath: sub.repoPath });
+    if (sub.repoPath && !sub.error) {
+      scopes.push({ scope: sub.path, repoPath: sub.repoPath, knownHeadOid: headOids.submoduleHeadOids.get(sub.path) ?? null });
+    }
   }
 
-  for (const { scope, repoPath } of scopes) {
+  for (const { scope, repoPath, knownHeadOid } of scopes) {
     try {
-      // Build commit must be a real object in THIS repo, else it's a different repo.
-      await runGit(repoPath, ['cat-file', '-e', `${build.commit}^{commit}`], options);
-      const headResult = await runGit(repoPath, ['rev-parse', 'HEAD'], options);
-      const head = headResult.stdout.trim();
-      if (!head || head === build.commit) continue;
-      // Strict ancestor: build commit is reachable from HEAD but is not HEAD.
-      await runGit(repoPath, ['merge-base', '--is-ancestor', build.commit, 'HEAD'], options);
+      // C3 fast path: if we already know this scope's HEAD oid and have a cached
+      // ancestry verdict for (repoPath, buildCommit, headOid), reuse it. A `false`
+      // verdict (not a strict ancestor — current/ahead/unrelated) lets us skip the
+      // cat-file + merge-base spawns entirely; the verdict auto-invalidates when HEAD
+      // moves (new oid → new key). A `true` verdict still needs the diff
+      // classification below, which is itself memoized on the same head oid.
+      let head = knownHeadOid;
+      const ancestryKey = head ? `${repoPath}::${build.commit}::${head}` : null;
+      if (ancestryKey) {
+        const cachedVerdict = buildBehindAncestryCache.get(ancestryKey);
+        if (cachedVerdict === false) continue;
+        if (cachedVerdict === undefined) {
+          if (head === build.commit) {
+            buildBehindAncestryCache.set(ancestryKey, false);
+            continue;
+          }
+          // Build commit must be a real object in THIS repo, else it's a different repo.
+          await runGit(repoPath, ['cat-file', '-e', `${build.commit}^{commit}`], options);
+          try {
+            await runGit(repoPath, ['merge-base', '--is-ancestor', build.commit, 'HEAD'], options);
+          } catch {
+            // Not a strict ancestor — cache the negative verdict so the next probe at
+            // this same HEAD short-circuits, then move on to the next scope.
+            buildBehindAncestryCache.set(ancestryKey, false);
+            continue;
+          }
+          buildBehindAncestryCache.set(ancestryKey, true);
+        }
+        // cachedVerdict === true (or just proven true) → fall through to classification.
+      } else {
+        // No known HEAD oid for this scope — fall back to the original probe (resolve
+        // HEAD via rev-parse). This keeps correctness when porcelain/submodule oid is
+        // unavailable; the verdict is still cached once HEAD is known.
+        await runGit(repoPath, ['cat-file', '-e', `${build.commit}^{commit}`], options);
+        const headResult = await runGit(repoPath, ['rev-parse', 'HEAD'], options);
+        head = headResult.stdout.trim();
+        if (!head || head === build.commit) continue;
+        await runGit(repoPath, ['merge-base', '--is-ancestor', build.commit, 'HEAD'], options);
+        buildBehindAncestryCache.set(`${repoPath}::${build.commit}::${head}`, true);
+      }
       // No throw → build commit IS an ancestor of HEAD → daemon is behind.
       // Inspect WHICH packages changed in buildCommit..HEAD. A daemon rebuild/restart
       // is only actually required when a daemon-runtime package changed; if only web /
@@ -465,6 +614,7 @@ async function detectDaemonBuildBehind(
       // verdict is memoized on (repoPath, buildCommit, head, config) to suppress
       // re-evaluation on the hot status path.
       const evalKey = `${repoPath} ${build.commit} ${head} ${configKey}`;
+      if (!head) continue; // proven non-empty oid here; every other branch above continued
       let evaluated = changeImpactEvalCache.get(evalKey);
       if (!evaluated) {
         evaluated = await classifyDaemonBuildChange(repoPath, build.commit, options, policy);
@@ -509,6 +659,8 @@ async function detectDaemonBuildBehind(
 
 interface ParsedPorcelainStatus {
   branch: string | null;
+  /** Full HEAD object id from `# branch.oid`, or null when detached/unborn. */
+  headOid: string | null;
   upstream: string | null;
   ahead: number;
   behind: number;
@@ -540,6 +692,20 @@ async function refreshTrackedUpstream(
     return { upstreamStatus: 'no_upstream' };
   }
 
+  // C2: throttle the actual network fetch. If we fetched this workspace within
+  // GIT_FETCH_THROTTLE_MS, skip the fetch and serve ahead/behind from the local
+  // porcelain (re-read fresh every call by the caller). forceFresh callers
+  // (convergence-critical: ff / refine) always re-fetch — they need true upstream.
+  const now = Date.now();
+  const lastFetch = upstreamFetchedAt.get(repo.workspace);
+  if (!options.forceFresh && lastFetch !== undefined && now - lastFetch < GIT_FETCH_THROTTLE_MS) {
+    return {
+      upstreamStatus: 'fresh',
+      upstreamFetchedAt: lastFetch,
+      didFetch: false,
+    };
+  }
+
   const remoteName = (await readBranchRemote(repo, parsed.branch, options)) ?? inferRemoteName(parsed.upstream);
   if (!remoteName) {
     return {
@@ -550,9 +716,12 @@ async function refreshTrackedUpstream(
 
   try {
     await runGit(repo, ['fetch', '--quiet', '--prune', '--no-tags', remoteName], options);
+    const fetchedAt = Date.now();
+    upstreamFetchedAt.set(repo.workspace, fetchedAt);
     return {
       upstreamStatus: 'fresh',
-      upstreamFetchedAt: Date.now(),
+      upstreamFetchedAt: fetchedAt,
+      didFetch: true,
     };
   } catch (error) {
     return {
@@ -589,6 +758,7 @@ function formatGitError(error: unknown): string {
 export function parsePorcelainV2Status(output: string): ParsedPorcelainStatus {
   const parsed: ParsedPorcelainStatus = {
     branch: null,
+    headOid: null,
     upstream: null,
     ahead: 0,
     behind: 0,
@@ -602,6 +772,13 @@ export function parsePorcelainV2Status(output: string): ParsedPorcelainStatus {
 
   for (const line of output.split('\n')) {
     if (!line) continue;
+
+    if (line.startsWith('# branch.oid ')) {
+      const oid = line.slice('# branch.oid '.length).trim();
+      // `(initial)` is git's sentinel for an unborn HEAD — not a real object id.
+      parsed.headOid = oid && oid !== '(initial)' && /^[0-9a-f]{7,64}$/.test(oid) ? oid : null;
+      continue;
+    }
 
     if (line.startsWith('# branch.head ')) {
       const branch = line.slice('# branch.head '.length).trim();
@@ -719,11 +896,17 @@ function emptyStatus(workspace: string, lastCheckedAt: number, error: GitCommand
 
 // ─── Submodule Status ───────────────────────────
 
+interface SubmoduleStatusResult {
+  submodules: GitSubmoduleStatus[];
+  /** Actual checked-out HEAD oid per submodule path (for the C3 ancestry cache key). */
+  headOidByPath: Map<string, string>;
+}
+
 async function getSubmoduleStatuses(
   repo: ResolvedGitRepo,
   options: GitStatusOptions,
-): Promise<GitSubmoduleStatus[]> {
-  if (!repo.repoRoot) return [];
+): Promise<SubmoduleStatusResult> {
+  if (!repo.repoRoot) return { submodules: [], headOidByPath: new Map() };
 
   try {
     // Do NOT shell out to `git submodule status`. That porcelain wrapper is a
@@ -743,11 +926,11 @@ async function getSubmoduleStatuses(
     // (conflict) prefix is surfaced separately via the superproject porcelain
     // status that the caller already parses, and a conflicted submodule's own
     // status read here also flags it dirty — so no row is lost.
-    const submodules = await deriveSubmoduleGitlinkStatuses(repo, options);
+    const { submodules, headOidByPath } = await deriveSubmoduleGitlinkStatuses(repo, options);
     await Promise.all(submodules.map(submodule => enrichSubmoduleWorktreeStatus(repo, submodule, options)));
-    return submodules;
+    return { submodules, headOidByPath };
   } catch {
-    return [];
+    return { submodules: [], headOidByPath: new Map() };
   }
 }
 
@@ -760,11 +943,12 @@ async function getSubmoduleStatuses(
 async function deriveSubmoduleGitlinkStatuses(
   repo: ResolvedGitRepo,
   options: GitStatusOptions,
-): Promise<GitSubmoduleStatus[]> {
-  if (!repo.repoRoot) return [];
+): Promise<SubmoduleStatusResult> {
+  if (!repo.repoRoot) return { submodules: [], headOidByPath: new Map() };
   const paths = await readSubmodulePaths(repo, options);
   const ignoreSet = new Set(options.submoduleIgnorePaths || []);
   const lastCheckedAt = Date.now();
+  const headOidByPath = new Map<string, string>();
 
   const entries = await Promise.all(
     paths
@@ -773,6 +957,10 @@ async function deriveSubmoduleGitlinkStatuses(
         const repoPath = repo.repoRoot + '/' + path;
         const expected = await readGitlinkExpectedSha(repo, path, options);
         const actual = await readSubmoduleHeadSha(repo, repoPath, options);
+        // Reuse the actual checked-out HEAD oid for the C3 build-behind ancestry cache
+        // key — it's the submodule HEAD the daemon build commit is tested against, and
+        // we already paid this rev-parse for the outOfSync check, so no extra spawn.
+        if (actual) headOidByPath.set(path, actual);
         // Uninitialized / no checked-out HEAD reproduces `git submodule status`'s
         // `-` prefix; a present-but-divergent HEAD reproduces the `+` prefix.
         const outOfSync = actual === null
@@ -790,7 +978,7 @@ async function deriveSubmoduleGitlinkStatuses(
         };
       }),
   );
-  return entries;
+  return { submodules: entries, headOidByPath };
 }
 
 /** Read submodule paths from `.gitmodules` via plumbing (no shell wrapper). */

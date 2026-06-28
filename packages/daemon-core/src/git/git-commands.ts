@@ -462,7 +462,10 @@ async function gitCheckpoint(
   const repo = await resolveGitRepository(workspace);
   const repoRoot = repo.repoRoot!;
 
-  const statusResult = await getGitRepoStatus(workspace);
+  // Decision-then-mutate path: this conflict / dirty-submodule precheck gates a real
+  // `git add` + `git commit`. Bypass the C1 TTL cache so the checkpoint never proceeds
+  // on a stale "clean" verdict.
+  const statusResult = await getGitRepoStatus(workspace, { forceFresh: true });
   if (statusResult.hasConflicts) {
     throw new GitCommandError('conflict', 'Repository has conflicts — resolve before checkpointing');
   }

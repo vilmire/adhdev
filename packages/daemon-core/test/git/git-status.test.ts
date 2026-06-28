@@ -2,12 +2,15 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __changeImpactEvalCacheSizeForTests,
   __resetGitStatusCacheForTests,
+  GIT_FETCH_THROTTLE_MS,
+  GIT_STATUS_CACHE_TTL_MS,
   getGitRepoStatus,
 } from '../../src/git/git-status.js';
+import * as gitExecutor from '../../src/git/git-executor.js';
 
 function git(cwd: string, args: string[], allowFailure = false): string {
   try {
@@ -131,7 +134,10 @@ describe('git repo status parser', () => {
       expect(healthy.headCommit).toBe(head);
 
       // Force a timeout by giving the collection path an impossibly short budget.
-      const timedOut = await getGitRepoStatus(repo, { timeoutMs: 1 });
+      // forceFresh bypasses the C1 TTL result cache (timeoutMs is not part of the cache
+      // key, so without this the just-seeded healthy status would be returned instead of
+      // re-collecting and tripping the 1ms budget).
+      const timedOut = await getGitRepoStatus(repo, { timeoutMs: 1, forceFresh: true });
 
       // Membership MUST survive: a single git timeout cannot make the node read as
       // "not a git repo" / repoRoot:null — that is exactly what dropped it from the graph.
@@ -649,9 +655,12 @@ describe('git repo status parser', () => {
 
     it('memoizes the impact evaluation for an identical diff + config (cache suppresses re-eval)', async () => {
       const { repo, oldCommit } = repoWithPackageChange('ci-cache', 'feature-ui');
+      // forceFresh so the C1 TTL result cache doesn't mask the C3 change-impact eval
+      // memo under test — we want each call to re-run detectDaemonBuildBehind.
       const opts = {
         daemonBuildInfo: buildInfoFor(oldCommit),
         changeImpactConfig: { webOnlyPackages: ['feature-ui'] },
+        forceFresh: true,
       };
 
       expect(__changeImpactEvalCacheSizeForTests()).toBe(0);
@@ -665,9 +674,12 @@ describe('git repo status parser', () => {
 
     it('re-evaluates (new cache entry) when HEAD advances', async () => {
       const { repo, oldCommit } = repoWithPackageChange('ci-cache-head', 'feature-ui');
+      // forceFresh so the C1 TTL result cache doesn't return the stale pre-HEAD-advance
+      // status — this test verifies the C3 eval memo re-keys on HEAD movement.
       const opts = {
         daemonBuildInfo: buildInfoFor(oldCommit),
         changeImpactConfig: { webOnlyPackages: ['feature-ui'] },
+        forceFresh: true,
       };
       await getGitRepoStatus(repo, opts);
       expect(__changeImpactEvalCacheSizeForTests()).toBe(1);
@@ -702,6 +714,286 @@ describe('git repo status parser', () => {
       });
       expect(status.daemonBuildBehind?.isDaemonAffecting).toBe(true);
       expect(status.daemonBuildBehind?.recommendedAction).toBe('daemon');
+    });
+  });
+
+  // ─── C1: TTL result cache ───────────────────────────
+  describe('C1 TTL result cache', () => {
+    beforeEach(() => {
+      __resetGitStatusCacheForTests();
+    });
+    afterEach(() => {
+      __resetGitStatusCacheForTests();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it('serves a cached result for a repeat caller within the TTL (no re-collection)', async () => {
+      const repo = tempRepo('c1-hit');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      const first = await getGitRepoStatus(repo);
+      expect(first.isGitRepo).toBe(true);
+
+      // Mutate the working tree AFTER the first (cached) read. A re-collection would see
+      // the new untracked file; a cache hit returns the prior status unchanged.
+      writeFileSync(join(repo, 'untracked.txt'), 'new\n');
+
+      const second = await getGitRepoStatus(repo);
+      // Same object reference proves it came straight from the cache (no re-collect).
+      expect(second).toBe(first);
+      expect(second.untracked).toBe(first.untracked);
+    });
+
+    it('re-collects after the TTL elapses', async () => {
+      const repo = tempRepo('c1-expire');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      const first = await getGitRepoStatus(repo);
+      expect(first.untracked).toBe(0);
+
+      // Mutate, then jump the clock past the TTL so the next call is forced to re-collect.
+      writeFileSync(join(repo, 'untracked.txt'), 'new\n');
+      const realNow = Date.now();
+      const spy = vi.spyOn(Date, 'now').mockReturnValue(realNow + GIT_STATUS_CACHE_TTL_MS + 50);
+
+      const second = await getGitRepoStatus(repo);
+      spy.mockRestore();
+      expect(second).not.toBe(first);
+      expect(second.untracked).toBe(1);
+    });
+
+    it('forceFresh bypasses the cache and always re-collects', async () => {
+      const repo = tempRepo('c1-forcefresh');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      const first = await getGitRepoStatus(repo);
+      expect(first.untracked).toBe(0);
+
+      writeFileSync(join(repo, 'untracked.txt'), 'new\n');
+      // Within the TTL a normal caller would get the stale cached status; forceFresh
+      // must re-collect and observe the new untracked file immediately.
+      const fresh = await getGitRepoStatus(repo, { forceFresh: true });
+      expect(fresh).not.toBe(first);
+      expect(fresh.untracked).toBe(1);
+    });
+
+    it('keys the cache on option shape so includeSubmodules/refreshUpstream do not collide', async () => {
+      const repo = tempRepo('c1-keyshape');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      const withSub = await getGitRepoStatus(repo, { includeSubmodules: true });
+      const withoutSub = await getGitRepoStatus(repo, { includeSubmodules: false });
+      // Different option shape → different cache key → not the same cached object.
+      expect(withoutSub).not.toBe(withSub);
+      // And a same-shape repeat is a cache hit again.
+      const withSubAgain = await getGitRepoStatus(repo, { includeSubmodules: true });
+      expect(withSubAgain).toBe(withSub);
+    });
+
+    it('never caches an error/empty result (timeout falls through, then a real read succeeds)', async () => {
+      const repo = tempRepo('c1-no-cache-error');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      // Cold timeout with no prior good status → empty/error status, which must NOT be
+      // cached. forceFresh on the timeout to ensure we exercise the collection path.
+      const timedOut = await getGitRepoStatus(repo, { timeoutMs: 1, forceFresh: true });
+      expect(['timeout', 'not_git_repo']).toContain(timedOut.reason);
+
+      // A subsequent normal read must succeed (it cannot have been served a cached error).
+      const ok = await getGitRepoStatus(repo);
+      expect(ok.isGitRepo).toBe(true);
+      expect(ok.reason).toBeUndefined();
+    });
+  });
+
+  // ─── C2: fetch throttle ───────────────────────────
+  describe('C2 upstream fetch throttle', () => {
+    beforeEach(() => {
+      __resetGitStatusCacheForTests();
+    });
+    afterEach(() => {
+      __resetGitStatusCacheForTests();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    function fetchCount(spy: ReturnType<typeof vi.spyOn>): number {
+      return spy.mock.calls.filter(call => Array.isArray(call[1]) && (call[1] as string[])[0] === 'fetch').length;
+    }
+
+    it('throttles the network fetch but keeps local working-tree status fresh', async () => {
+      const submoduleRepo = tempRepo('c2-throttle-source');
+      writeFileSync(join(submoduleRepo, 'a.txt'), 'one\n');
+      commit(submoduleRepo, 'c1');
+
+      const bare = mkdtempSync(join(tmpdir(), 'adhdev-c2-remote-'));
+      roots.push(bare);
+      git(bare, ['init', '--bare']);
+      git(submoduleRepo, ['remote', 'add', 'origin', bare]);
+      git(submoduleRepo, ['push', '-u', 'origin', 'HEAD']);
+
+      const spy = vi.spyOn(gitExecutor, 'runGit');
+
+      // First refreshUpstream call performs the real fetch.
+      const r1 = await getGitRepoStatus(submoduleRepo, { refreshUpstream: true });
+      expect(r1.upstreamStatus).toBe('fresh');
+      const afterFirst = fetchCount(spy);
+      expect(afterFirst).toBe(1);
+
+      // Make a local change, then advance the clock past the C1 result-cache TTL (so the
+      // next call MUST re-collect and see the new file) but stay within the C2 fetch
+      // throttle window (so no second network fetch). This is the real steady-state: local
+      // working-tree status is always re-read fresh, only the upstream fetch is throttled.
+      writeFileSync(join(submoduleRepo, 'untracked.txt'), 'new\n');
+      const realNow = Date.now();
+      vi.spyOn(Date, 'now').mockReturnValue(realNow + GIT_STATUS_CACHE_TTL_MS + 50);
+
+      const r2 = await getGitRepoStatus(submoduleRepo, { refreshUpstream: true });
+      // C1 expired → re-collected local status (untracked visible); C2 still within 30s →
+      // no second fetch.
+      expect(fetchCount(spy)).toBe(afterFirst);
+      expect(r2.upstreamStatus).toBe('fresh');
+      expect(r2.untracked).toBe(1);
+    });
+
+    it('fetches again once the throttle window elapses', async () => {
+      const repo = tempRepo('c2-window');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+      const bare = mkdtempSync(join(tmpdir(), 'adhdev-c2-window-remote-'));
+      roots.push(bare);
+      git(bare, ['init', '--bare']);
+      git(repo, ['remote', 'add', 'origin', bare]);
+      git(repo, ['push', '-u', 'origin', 'HEAD']);
+
+      const spy = vi.spyOn(gitExecutor, 'runGit');
+
+      await getGitRepoStatus(repo, { refreshUpstream: true });
+      expect(fetchCount(spy)).toBe(1);
+
+      // Advance past the throttle window → next refreshUpstream fetches again.
+      const realNow = Date.now();
+      vi.spyOn(Date, 'now').mockReturnValue(realNow + GIT_FETCH_THROTTLE_MS + 50);
+      await getGitRepoStatus(repo, { refreshUpstream: true, forceFresh: true });
+      expect(fetchCount(spy)).toBe(2);
+    });
+
+    it('forceFresh always re-fetches regardless of throttle window', async () => {
+      const repo = tempRepo('c2-forcefresh-fetch');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+      const bare = mkdtempSync(join(tmpdir(), 'adhdev-c2-ff-remote-'));
+      roots.push(bare);
+      git(bare, ['init', '--bare']);
+      git(repo, ['remote', 'add', 'origin', bare]);
+      git(repo, ['push', '-u', 'origin', 'HEAD']);
+
+      const spy = vi.spyOn(gitExecutor, 'runGit');
+      // Convergence-critical callers (ff/refine) pass forceFresh and must always see a
+      // true upstream — the throttle never suppresses their fetch.
+      await getGitRepoStatus(repo, { refreshUpstream: true, forceFresh: true });
+      await getGitRepoStatus(repo, { refreshUpstream: true, forceFresh: true });
+      expect(fetchCount(spy)).toBe(2);
+    });
+  });
+
+  // ─── C3: build-behind ancestry cache by HEAD oid ───────────────────────────
+  describe('C3 build-behind ancestry cache', () => {
+    function buildInfoFor(commit: string) {
+      return { commit, commitShort: commit.slice(0, 7), version: 'test' };
+    }
+
+    beforeEach(() => {
+      __resetGitStatusCacheForTests();
+    });
+    afterEach(() => {
+      __resetGitStatusCacheForTests();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    function ancestryProbeCount(spy: ReturnType<typeof vi.spyOn>): number {
+      // cat-file / merge-base / rev-parse are the ancestry-resolution spawns C3 elides
+      // on a memo hit.
+      return spy.mock.calls.filter(call => {
+        const argv = call[1] as string[] | undefined;
+        if (!Array.isArray(argv)) return false;
+        return argv[0] === 'cat-file' || argv[0] === 'merge-base' || argv[0] === 'rev-parse';
+      }).length;
+    }
+
+    it('memo-hits on an unchanged HEAD: a repeat probe skips cat-file/merge-base/rev-parse', async () => {
+      const repo = tempRepo('c3-memo-hit');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      writeFileSync(join(repo, 'b.txt'), 'two\n');
+      commit(repo, 'c2 (merged fix)');
+
+      const opts = { daemonBuildInfo: buildInfoFor(oldCommit), forceFresh: true };
+
+      const spy = vi.spyOn(gitExecutor, 'runGit');
+      const first = await getGitRepoStatus(repo, opts);
+      expect(first.daemonBuildBehind).toBeDefined();
+      const firstProbes = ancestryProbeCount(spy);
+      expect(firstProbes).toBeGreaterThan(0);
+
+      // Second probe at the SAME HEAD (forceFresh re-runs detectDaemonBuildBehind, but the
+      // C3 ancestry memo + change-impact memo are keyed on HEAD oid → no ancestry spawns).
+      spy.mockClear();
+      const second = await getGitRepoStatus(repo, opts);
+      expect(second.daemonBuildBehind?.head).toBe(first.daemonBuildBehind?.head);
+      expect(ancestryProbeCount(spy)).toBe(0);
+    });
+
+    it('reuses the porcelain HEAD oid instead of a separate rev-parse on the root scope', async () => {
+      const repo = tempRepo('c3-no-revparse');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      writeFileSync(join(repo, 'b.txt'), 'two\n');
+      commit(repo, 'c2 (merged fix)');
+
+      const spy = vi.spyOn(gitExecutor, 'runGit');
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor(oldCommit), forceFresh: true });
+      expect(status.daemonBuildBehind?.scope).toBe('root');
+      // The root-scope ancestry resolution must NOT spend a `rev-parse HEAD` — the HEAD oid
+      // comes from porcelain v2 `# branch.oid`. (readHead uses `log`, not rev-parse, so any
+      // rev-parse here would be the eliminated build-behind one.)
+      const revParseCalls = spy.mock.calls.filter(call => {
+        const argv = call[1] as string[] | undefined;
+        return Array.isArray(argv) && argv[0] === 'rev-parse';
+      });
+      expect(revParseCalls.length).toBe(0);
+    });
+
+    it('invalidates the verdict when HEAD moves (re-resolves ancestry)', async () => {
+      const repo = tempRepo('c3-head-move');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      writeFileSync(join(repo, 'b.txt'), 'two\n');
+      commit(repo, 'c2 (merged fix)');
+
+      const opts = { daemonBuildInfo: buildInfoFor(oldCommit), forceFresh: true };
+      const first = await getGitRepoStatus(repo, opts);
+      const firstHead = first.daemonBuildBehind?.head;
+
+      // Advance HEAD → new oid → new ancestry key → must re-resolve (spawns again).
+      writeFileSync(join(repo, 'c.txt'), 'three\n');
+      commit(repo, 'c3 (another change)');
+
+      const spy = vi.spyOn(gitExecutor, 'runGit');
+      const second = await getGitRepoStatus(repo, opts);
+      expect(second.daemonBuildBehind?.head).not.toBe(firstHead);
+      // HEAD moved → memo miss → ancestry probes ran again for the new oid.
+      expect(ancestryProbeCount(spy)).toBeGreaterThan(0);
     });
   });
 });

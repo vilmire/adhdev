@@ -87,7 +87,11 @@ type MeshFastForwardBase = Pick<
   'workspace' | 'mode' | 'dryRun' | 'updateSubmodules' | 'plannedSteps' | 'trigger'
 > & Pick<Partial<MeshFastForwardResult>, 'nodeId' | 'meshId'>;
 
-const STATUS_OPTIONS = { refreshUpstream: true, includeSubmodules: true, timeoutMs: 15_000 } as const;
+// forceFresh: fast-forward is a mutating/decision path — its preflight blockers and its
+// post-merge re-reads MUST see live git state, never a TTL-cached status from a
+// concurrent reconcile/mesh_status probe. It also bypasses the fetch throttle so
+// ahead/behind reflects a true upstream at decision time.
+const STATUS_OPTIONS = { refreshUpstream: true, includeSubmodules: true, timeoutMs: 15_000, forceFresh: true } as const;
 
 export async function fastForwardMeshNode(args: MeshFastForwardNodeArgs): Promise<MeshFastForwardResult> {
   const workspace = typeof args.workspace === 'string' ? args.workspace.trim() : '';

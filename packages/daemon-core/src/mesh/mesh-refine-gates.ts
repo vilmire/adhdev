@@ -1160,6 +1160,9 @@ export async function alignRefinerySubmodulesAfterMerge(
         includeSubmodules: true,
         submoduleIgnorePaths: options.submoduleIgnorePaths,
         timeoutMs: 15_000,
+        // Decision path — the out-of-sync submodule set drives a mutating `submodule
+        // update`. Must not act on a TTL-cached status; bypass the C1 cache.
+        forceFresh: true,
     });
     const outOfSyncPaths = (preStatus.submodules || [])
         .filter(submodule => submodule.dirty || submodule.outOfSync || !!submodule.error)
@@ -1193,6 +1196,9 @@ export async function alignRefinerySubmodulesAfterMerge(
             includeSubmodules: true,
             submoduleIgnorePaths: options.submoduleIgnorePaths,
             timeoutMs: 15_000,
+            // Re-read AFTER `submodule update` mutated the tree — MUST be fresh, never the
+            // cached preStatus from moments ago (which would falsely report still-dirty).
+            forceFresh: true,
         });
         const remaining = (postStatus.submodules || [])
             .filter(submodule => updatePaths.includes(submodule.path) && (submodule.dirty || submodule.outOfSync || !!submodule.error));
