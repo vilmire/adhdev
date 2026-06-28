@@ -16,6 +16,19 @@ import { randomUUID } from 'crypto';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getQueue } from './mesh-work-queue.js';
 import { computeMeshMissionStats, type MeshMissionStats } from './mesh-task-stats.js';
+import { appendLedgerEntry } from './mesh-ledger.js';
+
+/**
+ * Max chars of mission goal text written into a ledger entry payload. Mission
+ * goals can be hundreds–thousands of chars; the ledger is an append-only audit
+ * stream, so we store a bounded summary (+ a length/truncated flag) rather than
+ * the full text to keep the ledger from bloating on repeated goal rewrites.
+ */
+const LEDGER_GOAL_SUMMARY_MAX = 200;
+
+function summarizeGoalForLedger(goal: string): string {
+    return goal.length > LEDGER_GOAL_SUMMARY_MAX ? goal.slice(0, LEDGER_GOAL_SUMMARY_MAX) : goal;
+}
 
 export type MeshMissionStatus = 'active' | 'paused' | 'completed' | 'abandoned';
 
@@ -102,6 +115,8 @@ export function upsertMeshMission(meshId: string, input: {
     const id = typeof input.id === 'string' && input.id.trim() ? input.id.trim() : randomUUID();
     const store = MeshRuntimeStore.getInstance();
     const existing = store.getMission(meshId, id);
+    const prevStatus = existing ? normalizeMissionStatus(existing.status) : null;
+    const prevGoal = existing?.goal ?? '';
     const record = {
         id,
         meshId,
@@ -111,7 +126,77 @@ export function upsertMeshMission(meshId: string, input: {
     };
     store.upsertMission(record);
     const saved = store.getMission(meshId, id)!;
-    return { ...saved, status: normalizeMissionStatus(saved.status) };
+    const result: MeshMissionRecord = { ...saved, status: normalizeMissionStatus(saved.status) };
+
+    // Mission audit trail: record this mutation in the mesh ledger so mission
+    // lifecycle (create, goal rewrite, status transition) is auditable alongside
+    // task events and survives a coordinator restart. Best-effort: a ledger
+    // failure must never break the primary mission write.
+    appendMissionLedgerEntries(meshId, {
+        isCreate: !existing,
+        record: result,
+        prevStatus,
+        prevGoal,
+    });
+
+    return result;
+}
+
+/**
+ * Append the relevant ledger entries for a mission upsert. Emits at most one
+ * entry per distinct change:
+ *  - new mission                       → mission_created
+ *  - status differs from prior         → mission_status_changed
+ *  - goal text differs from prior      → mission_goal_updated (no-op rewrites skipped)
+ */
+function appendMissionLedgerEntries(
+    meshId: string,
+    args: { isCreate: boolean; record: MeshMissionRecord; prevStatus: MeshMissionStatus | null; prevGoal: string },
+): void {
+    const { isCreate, record, prevStatus, prevGoal } = args;
+    try {
+        if (isCreate) {
+            const goal = record.goal ?? '';
+            appendLedgerEntry(meshId, {
+                kind: 'mission_created',
+                payload: {
+                    missionId: record.id,
+                    title: record.title,
+                    goalSummary: summarizeGoalForLedger(goal),
+                    goalLength: goal.length,
+                    goalTruncated: goal.length > LEDGER_GOAL_SUMMARY_MAX,
+                    status: record.status,
+                },
+            });
+            return;
+        }
+        if (prevStatus !== null && prevStatus !== record.status) {
+            appendLedgerEntry(meshId, {
+                kind: 'mission_status_changed',
+                payload: {
+                    missionId: record.id,
+                    title: record.title,
+                    fromStatus: prevStatus,
+                    toStatus: record.status,
+                },
+            });
+        }
+        const nextGoal = record.goal ?? '';
+        if (nextGoal !== prevGoal) {
+            appendLedgerEntry(meshId, {
+                kind: 'mission_goal_updated',
+                payload: {
+                    missionId: record.id,
+                    title: record.title,
+                    prevGoalSummary: summarizeGoalForLedger(prevGoal),
+                    nextGoalSummary: summarizeGoalForLedger(nextGoal),
+                    prevGoalLength: prevGoal.length,
+                    nextGoalLength: nextGoal.length,
+                    goalTruncated: prevGoal.length > LEDGER_GOAL_SUMMARY_MAX || nextGoal.length > LEDGER_GOAL_SUMMARY_MAX,
+                },
+            });
+        }
+    } catch { /* audit trail is best-effort; never break the mission write */ }
 }
 
 export function getMeshMissions(meshId: string, statuses?: MeshMissionStatus[]): MeshMissionRecord[] {

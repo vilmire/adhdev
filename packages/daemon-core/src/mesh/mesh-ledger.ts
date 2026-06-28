@@ -49,6 +49,16 @@ export type MeshLedgerKind =
     // the ledger so it survives coordinator restarts and is provider-neutral.
     // payload: { text, category?, createdAt?, sourceCoordinator? }
     | 'coordinator_operating_note'
+    // Mission audit trail: mission record mutations (mesh_mission_upsert) so the
+    // ledger captures mission lifecycle, not just task events. Without these a
+    // mission create / goal rewrite / status transition left no ledger trace,
+    // breaking audit continuity and post-restart recovery.
+    // mission_created       payload: { missionId, title, goalSummary, goalLength, goalTruncated, status }
+    // mission_status_changed payload: { missionId, title, fromStatus, toStatus }
+    // mission_goal_updated  payload: { missionId, title, prevGoalSummary, nextGoalSummary, prevGoalLength, nextGoalLength, goalTruncated }
+    | 'mission_created'
+    | 'mission_status_changed'
+    | 'mission_goal_updated'
     ;
 
 export interface MeshLedgerEntry {
