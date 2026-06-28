@@ -11,7 +11,8 @@ describe('CliProviderInstance.completionFinalSummary', () => {
   function makeInstance() {
     return Object.create(CliProviderInstance.prototype) as CliProviderInstance & {
       adapter: any
-      completionFinalSummary(messages: unknown): string | undefined
+      readExternalCompletionMessages(): unknown[] | null
+      completionFinalSummary(messages: unknown, turnStartedAt?: number): string | undefined
     }
   }
 
@@ -33,5 +34,55 @@ describe('CliProviderInstance.completionFinalSummary', () => {
       { role: 'user', content: 'just a dispatched task with no reply yet' },
     ])
     expect(summary).toBeUndefined()
+  })
+
+  // NOTIF Defect-B: native-source providers (claude-cli: chatMessagesOwnedExternally)
+  // read the WHOLE session transcript filtered only by session start. A completion debounce
+  // that flushes before THIS turn's final assistant bubble lands must turn-scope the read so
+  // it never echoes the PRIOR task's last bubble.
+  // Realistic epoch-ms instants (Date.now()-scale); small synthetic numbers would trip the
+  // reader's seconds-vs-ms heuristic and not compare against the turnStartedAt boundary.
+  const TURN_A = 1_700_000_000_000
+  const TURN_B = 1_700_000_100_000 // +100s
+
+  it('turn-scopes the native transcript so a completion never echoes the prior task bubble', () => {
+    const instance = makeInstance()
+    instance.adapter = { chatMessagesOwnedExternally: true }
+    ;(instance as any).readExternalCompletionMessages = () => ([
+      { role: 'user', content: 'task A', timestamp: TURN_A },
+      { role: 'assistant', content: 'A is done.', timestamp: TURN_A + 500 },
+      { role: 'user', content: 'task B', timestamp: TURN_B },
+      { role: 'assistant', content: 'B is done.', timestamp: TURN_B + 500 },
+    ])
+    // Pass turnStartedAt = B's start; only B's bubble is in scope.
+    expect(instance.completionFinalSummary([], TURN_B)).toBe('B is done.')
+  })
+
+  it('does NOT return the prior task bubble when this turn has no bubble in the transcript yet', () => {
+    const instance = makeInstance()
+    instance.adapter = { chatMessagesOwnedExternally: true }
+    // The transcript still holds only A's bubble (B's has not been written yet).
+    ;(instance as any).readExternalCompletionMessages = () => ([
+      { role: 'user', content: 'task A', timestamp: TURN_A },
+      { role: 'assistant', content: 'A is done.', timestamp: TURN_A + 500 },
+      { role: 'user', content: 'task B', timestamp: TURN_B },
+    ])
+    // External read yields '' for turn B → fall back to the LIVE screen parse (empty here),
+    // never the stale A tail.
+    expect(instance.completionFinalSummary([], TURN_B)).toBeUndefined()
+  })
+
+  it('falls back to the live screen parse (this turn) when the transcript has no in-turn bubble', () => {
+    const instance = makeInstance()
+    instance.adapter = { chatMessagesOwnedExternally: true }
+    ;(instance as any).readExternalCompletionMessages = () => ([
+      { role: 'assistant', content: 'A is done.', timestamp: TURN_A + 500 },
+    ])
+    // Screen parse reflects the live (B) turn — that, not the stale A transcript tail, is used.
+    const summary = instance.completionFinalSummary(
+      [{ role: 'assistant', content: 'B reply from live screen' }],
+      TURN_B,
+    )
+    expect(summary).toBe('B reply from live screen')
   })
 })

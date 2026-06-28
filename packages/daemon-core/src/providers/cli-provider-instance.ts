@@ -29,7 +29,7 @@ import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOptio
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { normalizeProviderSessionId } from './provider-session-id.js';
-import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
+import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages, extractFinalSummaryFromMessagesAfter } from './chat-message-normalization.js';
 import { workingDirBasename } from './working-dir.js';
 import { ManualAttendanceTracker } from './manual-attendance.js';
 
@@ -68,6 +68,13 @@ type CompletedDebouncePending = {
     // already have started its own turn and overwritten engine.currentTurnTaskId — so the
     // id must be snapshotted here, not re-read at flush time.
     taskId?: string;
+    // NOTIF Defect-B: the wall-clock start of the turn that produced this (debounced)
+    // completion, snapshotted SYNCHRONOUSLY at the generating→idle transition (same
+    // reason as taskId — a follow-up turn moves engine.currentTurnStartedAt). The
+    // completion's finalSummary is turn-scoped to bubbles at/after this instant so a
+    // debounce that flushes before the producing turn's final assistant bubble lands
+    // in the native transcript never echoes the PRIOR task's last bubble.
+    turnStartedAt?: number;
 };
 
 function isIdleStatus(value: unknown): boolean {
@@ -1404,7 +1411,7 @@ export class CliProviderInstance implements ProviderInstance {
         };
     }
 
-    private completionFinalSummary(parsedMessages: unknown): string | undefined {
+    private completionFinalSummary(parsedMessages: unknown, turnStartedAt?: number): string | undefined {
         // For native-source providers (claude-cli: chatMessagesOwnedExternally), the PTY
         // screen parse is NOT the source of truth for the final summary — the terminal
         // wraps/scrolls/clips text, so a screen-parsed assistant message is often a partial
@@ -1413,6 +1420,14 @@ export class CliProviderInstance implements ProviderInstance {
         // to the parsed screen only when the transcript is unavailable. This is the real cause
         // of the truncated finalSummary — independent of cloud vs standalone (it surfaces on
         // any short, fast-completing task where screen parse wins the race).
+        //
+        // NOTIF Defect-B: `turnStartedAt` (the producing turn's start, snapshotted on the
+        // completedDebouncePending record) turn-scopes the NATIVE transcript read. The native
+        // transcript holds the WHOLE session filtered only by session start, so a debounce that
+        // flushes before the producing turn's final assistant bubble has landed would otherwise
+        // return the PRIOR task's last bubble (event taskId=B but summary=A). Filtering to bubbles
+        // at/after turnStartedAt yields '' in that race instead of the stale tail; the weak/empty
+        // summary is later upgraded by the mesh reconcile loop once the real bubble is written.
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
         const parsedSummary = extractFinalSummaryFromMessages(
             (this.completionHasFinalAssistantMessage(parsedMessages)
@@ -1421,11 +1436,14 @@ export class CliProviderInstance implements ProviderInstance {
         );
         if (adapterOwnsMessagesElsewhere) {
             const externalMessages = this.readExternalCompletionMessages();
+            // Turn-scope the external transcript: never return a bubble produced before this
+            // turn started. With no boundary known (turnStartedAt falsy) behaviour is unchanged.
             const externalSummary = externalMessages
-                ? extractFinalSummaryFromMessages(externalMessages as any)
+                ? extractFinalSummaryFromMessagesAfter(externalMessages as any, turnStartedAt)
                 : '';
             // The transcript is authoritative for native-source providers. Use it unless it is
-            // empty (not yet written) — only then fall back to whatever the screen parsed.
+            // empty (not yet written, or no in-turn bubble) — only then fall back to the screen
+            // parse, which reflects the LIVE screen (this turn's output), not the stale tail.
             if (externalSummary) return externalSummary;
             return parsedSummary || undefined;
         }
@@ -1804,8 +1822,8 @@ export class CliProviderInstance implements ProviderInstance {
                 // stuck on the dispatched user task. If the parser DID surface assistant text,
                 // prefer it; only fall back to '' when no assistant summary can be derived.
                 finalSummary: blockReason.startsWith('parsed_status:')
-                    ? (this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages) ?? '')
-                    : this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages),
+                    ? (this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt) ?? '')
+                    : this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt),
                 completionDiagnostic,
             });
             this.completedDebouncePending = null;
@@ -1827,7 +1845,7 @@ export class CliProviderInstance implements ProviderInstance {
             timestamp: pending.timestamp,
             // ARCH-REFACTOR R1: attribute to the turn captured at idle-transition.
             ...(pending.taskId ? { taskId: pending.taskId } : {}),
-            finalSummary: this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages),
+            finalSummary: this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt),
         });
         this.completedDebouncePending = null;
         this.completedDebounceTimer = null;
@@ -2037,7 +2055,18 @@ export class CliProviderInstance implements ProviderInstance {
      */
     private recheckAutoApproveSettled(): void {
         try {
-            const adapterStatus = this.adapter.getStatus({ allowParse: false });
+            // APPROVAL Defect-C (auto-approve gap): re-probe with a LIVE parse, not the cached
+            // engine snapshot. This timer is the ONLY re-drive when the PTY goes silent after the
+            // approval prompt finishes painting (its whole reason to exist) — but with
+            // allowParse:false it read only engine.activeModal, which the engine's per-frame settle
+            // pass can leave null/stale when the modal arrived between writes. The re-check then saw
+            // no modal and never fired, so the delegated worker's transient/quiet approval was missed
+            // and the coordinator had to step in with a manual mesh_approve. allowParse:true makes
+            // getStatus re-run runDetectStatus/runParseApproval on the current screen buffer (the same
+            // live re-probe the coordinator's resolveAction path uses), recovering the modal so
+            // auto-approve fires on its own. The half-rendered-frame guard (buttons.length===0) and
+            // the settle gate in maybeAutoApproveStatus still protect against firing on a partial modal.
+            const adapterStatus = this.adapter.getStatus({ allowParse: true });
             this.maybeAutoApproveStatus(adapterStatus, Date.now());
         } catch { /* adapter gone / transient — next frame retries */ }
     }
@@ -2380,6 +2409,18 @@ export class CliProviderInstance implements ProviderInstance {
                         // before any follow-up task's flush can start a new turn and move
                         // engine.currentTurnTaskId.
                         ...(this.completingTurnTaskId() ? { taskId: this.completingTurnTaskId() } : {}),
+                        // NOTIF Defect-B: snapshot the producing turn's START instant NOW, for the
+                        // same reason as taskId — a follow-up turn moves engine.currentTurnStartedAt.
+                        // Prefer the engine's per-turn start (set at onTurnStarted, earliest reliable
+                        // anchor) and fall back to generatingStartedAt (when generating was observed).
+                        ...((() => {
+                            const engineTurnStart = typeof (this.adapter as any)?.currentTurnStartedAt === 'number'
+                                && Number.isFinite((this.adapter as any).currentTurnStartedAt)
+                                ? (this.adapter as any).currentTurnStartedAt as number
+                                : 0;
+                            const turnStartedAt = engineTurnStart || this.generatingStartedAt || 0;
+                            return turnStartedAt ? { turnStartedAt } : {};
+                        })()),
                     };
                     const ownsExternalHistory = !!(this.adapter as any)?.chatMessagesOwnedExternally;
                     // (FALSEIDLE-BGCHILD-a) Native-history providers flush immediately (the

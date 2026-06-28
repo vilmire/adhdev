@@ -27,21 +27,69 @@ export function extractFinalSummaryFromMessages(
   return '';
 }
 
-function readChatMessageTimestampIso(message: ChatMessage | null | undefined): string | undefined {
+function readChatMessageTimestampMs(message: ChatMessage | null | undefined): number | undefined {
   if (!message) return undefined;
   const record = message as ChatMessage & Record<string, unknown>;
-  for (const value of [record.timestamp, record.createdAt, record.created_at, record.updatedAt, record.time]) {
+  for (const value of [record.timestamp, record.createdAt, record.created_at, record.updatedAt, record.time, record.receivedAt]) {
     if (typeof value === 'number' && Number.isFinite(value)) {
       // Heuristic seconds-vs-ms detection mirrors the mesh transcript reader.
-      const ms = value > 10_000_000_000 ? value : value * 1000;
-      return new Date(ms).toISOString();
+      return value > 10_000_000_000 ? value : value * 1000;
     }
     if (typeof value === 'string' && value.trim()) {
       const ms = new Date(value.trim()).getTime();
-      if (Number.isFinite(ms)) return new Date(ms).toISOString();
+      if (Number.isFinite(ms)) return ms;
     }
   }
   return undefined;
+}
+
+function readChatMessageTimestampIso(message: ChatMessage | null | undefined): string | undefined {
+  const ms = readChatMessageTimestampMs(message);
+  return typeof ms === 'number' ? new Date(ms).toISOString() : undefined;
+}
+
+/**
+ * Turn-scoped variant of extractFinalSummaryFromMessages. Selects the last
+ * user-facing assistant/model bubble whose own timestamp is at/after the
+ * producing turn's start (`minTimestampMs`). This is the NOTIF Defect-B fix:
+ * a completion event's finalSummary must describe the turn THAT completed, not
+ * the prior task's last bubble. For native-source providers (claude-cli) the
+ * external transcript holds the ENTIRE session history filtered only by session
+ * start, so a completion debounce that fires before the producing turn's final
+ * assistant bubble has landed would otherwise echo the previous task's tail.
+ * A message whose timestamp predates the turn start is skipped; if no in-turn
+ * assistant bubble exists yet, returns '' (weak/empty) — never the stale tail.
+ *
+ * Mirrors the reconcile path's transcriptAfterDispatch guard (mesh-events-stale):
+ * a bubble only counts if its timestamp proves it was produced after the turn began.
+ * When `minTimestampMs` is undefined the behaviour is identical to the unscoped
+ * extractor (no turn boundary known → no filtering).
+ */
+export function extractFinalSummaryFromMessagesAfter(
+  messages: ChatMessage[] | null | undefined,
+  minTimestampMs: number | undefined,
+  maxChars: number = DEFAULT_FINAL_SUMMARY_MAX_CHARS,
+): string {
+  if (!Array.isArray(messages) || messages.length === 0) return '';
+  const hasBoundary = typeof minTimestampMs === 'number' && Number.isFinite(minTimestampMs);
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg) continue;
+    if (hasBoundary) {
+      // A bubble carrying a timestamp BEFORE the producing turn's start belongs to
+      // a prior task — skip it. A bubble with no parseable timestamp cannot be
+      // proven stale, so it is kept (the unscoped fallback) rather than dropped.
+      const ts = readChatMessageTimestampMs(msg);
+      if (typeof ts === 'number' && ts < (minTimestampMs as number)) continue;
+    }
+    const classification = classifyChatMessageVisibility(msg);
+    if (classification.isUserFacing && (msg.role === 'assistant' || msg.role === 'model')) {
+      const text = flattenContent(msg.content).trim();
+      if (text) return text.slice(0, maxChars);
+    }
+  }
+  return '';
 }
 
 /**

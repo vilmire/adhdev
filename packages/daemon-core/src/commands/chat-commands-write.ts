@@ -752,6 +752,17 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
             : status?.status;
         LOG.info('Command', `[resolveAction] CLI PTY gate target=${String(args?.targetSessionId || '')} rawStatus=${String(status?.status || '')} effectiveStatus=${String(effectiveStatus || '')} statusModal=${statusModal ? 'yes' : 'no'} surfacedModal=${surfacedModal ? 'yes' : 'no'} parsedModal=${parsedModal ? 'yes' : 'no'} instance=${targetInstance ? 'yes' : 'no'}`);
         if (!effectiveModal) {
+            // APPROVAL Defect-B (live re-probe race): the modal is gone because the worker
+            // already resolved this very approval moments ago (delegated auto-approve fired,
+            // or a prior resolveAction landed) and the coordinator's approve raced in just
+            // after. That is NOT a caller error — return a SOFT already_resolved result so the
+            // coordinator does not hard-fail the task on a benign race. Mirrors the in-modal
+            // idempotency guard below (isApprovalRecentlyResolved → stalePrompt). Only a session
+            // that never had a recently-resolved approval reports the hard 'Not in approval state'.
+            if (typeof adapter.isApprovalRecentlyResolved === 'function' && adapter.isApprovalRecentlyResolved()) {
+                LOG.info('Command', `[resolveAction] CLI PTY → already_resolved (modal gone, resolved within cooldown)`);
+                return { success: true, alreadyResolved: true, status: 'already_resolved' };
+            }
             return { success: false, error: 'Not in approval state' };
         }
         const buttons: string[] = Array.isArray(effectiveModal.buttons) ? effectiveModal.buttons : [];

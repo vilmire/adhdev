@@ -407,6 +407,69 @@ describe('handleResolveAction for CLI approval state', () => {
     expect(adapter.resolveModal).toHaveBeenCalledTimes(1)
   })
 
+  // APPROVAL Defect-B (live re-probe race): the modal is gone because the worker already
+  // resolved this approval (delegated auto-approve fired) just before the coordinator's
+  // approve landed. That benign race must return a SOFT already_resolved, not a hard fail.
+  it('returns soft already_resolved when the modal is gone but the adapter recently resolved it', async () => {
+    const resolveModal = vi.fn()
+    const adapter = {
+      getStatus: () => ({ status: 'idle', messages: [], activeModal: null }),
+      resolveModal,
+      isApprovalRecentlyResolved: () => true,
+      writeRaw: vi.fn(),
+    }
+
+    const result = await handleResolveAction({
+      getProvider: () => ({ type: 'claude-cli', category: 'cli' }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'claude-cli', sessionId: 'sess-1' },
+      currentProviderType: 'claude-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: { instanceManager: { getInstance: () => null } },
+    } as any, {
+      targetSessionId: 'sess-1',
+      agentType: 'claude-cli',
+      action: 'approve',
+    })
+
+    expect(result).toEqual({ success: true, alreadyResolved: true, status: 'already_resolved' })
+    expect(resolveModal).not.toHaveBeenCalled()
+  })
+
+  it('still hard-fails Not in approval state when no modal and nothing was recently resolved', async () => {
+    const resolveModal = vi.fn()
+    const adapter = {
+      getStatus: () => ({ status: 'idle', messages: [], activeModal: null }),
+      resolveModal,
+      isApprovalRecentlyResolved: () => false,
+      writeRaw: vi.fn(),
+    }
+
+    const result = await handleResolveAction({
+      getProvider: () => ({ type: 'claude-cli', category: 'cli' }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'claude-cli', sessionId: 'sess-1' },
+      currentProviderType: 'claude-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: { instanceManager: { getInstance: () => null } },
+    } as any, {
+      targetSessionId: 'sess-1',
+      agentType: 'claude-cli',
+      action: 'approve',
+    })
+
+    expect(result).toEqual({ success: false, error: 'Not in approval state' })
+    expect(resolveModal).not.toHaveBeenCalled()
+  })
+
   it('fails closed when action mapping cannot identify a matching button', async () => {
     const resolveModal = vi.fn()
     const adapter = {
