@@ -29,6 +29,15 @@ function isModuleNotFoundError(error: unknown, ref: string): boolean {
     return code === 'MODULE_NOT_FOUND' && message.includes(ref);
 }
 
+// Identifies the host runtime so a binding-load failure names the exact ABI it
+// looked for. The underlying binding is N-API (ABI-stable), so a failure here is
+// almost always "no prebuilt directory addressed this triplet" rather than a
+// true ABI incompatibility — making the triplet the single most useful
+// diagnostic to surface in an env-blocker report.
+function runtimeTriplet(): string {
+    return `${process.platform}-${process.arch}-node${process.versions.modules}`;
+}
+
 function normalizeBinding(mod: any, ref: string): GhosttyVtBinding {
     const binding = mod?.default?.createTerminal
         ? mod.default
@@ -75,7 +84,8 @@ function loadGhosttyVtBinding(): GhosttyVtBinding {
 
     cachedBinding = null;
     cachedBindingError = new Error(
-        `ghostty-vt binding unavailable (${errors.join('; ') || 'no candidates tried'})`,
+        `ghostty-vt binding unavailable for runtime ${runtimeTriplet()} ` +
+            `(${errors.join('; ') || 'no candidates tried'})`,
     );
     throw cachedBindingError;
 }
