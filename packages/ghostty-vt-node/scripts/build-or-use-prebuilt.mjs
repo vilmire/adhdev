@@ -83,4 +83,27 @@ if (result.error) {
   console.error(`[ghostty-vt-node] failed to launch native build for ${triplet}:`, result.error);
 }
 
+// Mirror a successful local build into prebuilt/<triplet>/ so CI (or a developer)
+// can produce a shippable prebuilt reproducibly: build once on the target
+// platform, then commit prebuilt/<triplet>/. Set ADHDEV_GHOSTTY_VT_EMIT_PREBUILT=1
+// to enable (off by default so ordinary `npm run build` does not churn the dir).
+// The binding is Node-API (ABI-stable), so a single emitted triplet is enough for
+// the running platform-arch; the runtime loader (index.js) falls back across ABIs.
+if ((result.status ?? 1) === 0 && process.env.ADHDEV_GHOSTTY_VT_EMIT_PREBUILT === '1') {
+  try {
+    const prebuiltDir = path.join(packageDir, 'prebuilt', triplet);
+    fs.mkdirSync(prebuiltDir, { recursive: true });
+    for (const entry of fs.readdirSync(outputDir)) {
+      // Ship the addon plus its co-located runtime libs (.dylib/.so/.dll),
+      // skip intermediate build artifacts.
+      if (/\.(node|dylib|so|so\.\d.*|dll)$/.test(entry)) {
+        fs.copyFileSync(path.join(outputDir, entry), path.join(prebuiltDir, entry));
+      }
+    }
+    console.log(`[ghostty-vt-node] emitted prebuilt for ${triplet} → ${prebuiltDir}`);
+  } catch (emitError) {
+    console.error(`[ghostty-vt-node] failed to emit prebuilt for ${triplet}:`, emitError);
+  }
+}
+
 process.exit(result.status ?? 1);

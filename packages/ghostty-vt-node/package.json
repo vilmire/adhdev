@@ -10,7 +10,8 @@
     "prebuilt",
     "scripts",
     "CMakeLists.txt",
-    "src"
+    "src",
+    "README.md"
   ],
   "scripts": {
     "build": "node ./scripts/build-or-use-prebuilt.mjs",

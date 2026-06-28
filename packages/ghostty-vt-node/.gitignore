@@ -1,2 +1,13 @@
+# Local cmake-js build output (per-machine, never committed).
 build/
-prebuilt/
+
+# Native prebuilts are committed so worktree/CI clones load the binding without a
+# toolchain. The binding is Node-API (ABI-stable), so ONE prebuilt per
+# platform-arch serves every Node version — we ship the node137 triplet and the
+# loader's same-platform-arch fallback (index.js) resolves all other ABIs.
+# Ignore every prebuilt dir by default, then un-ignore the shipped node137 ones,
+# so a stray locally-built node115/node127 dir is never accidentally committed.
+prebuilt/*
+!prebuilt/darwin-arm64-node137/
+!prebuilt/linux-x64-node137/
+!prebuilt/win32-x64-node137/
