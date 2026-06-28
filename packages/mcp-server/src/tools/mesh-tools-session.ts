@@ -181,16 +181,18 @@ export async function meshSendTask(
     args: {
         node_id: string; session_id?: string; message: string;
         task_mode?: string; taskMode?: string;
+        readonly?: boolean; read_only?: boolean;
         mission_id?: string; missionId?: string;
     },
 ): Promise<string> {
     const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
+    const readonly = args.readonly === true || args.read_only === true;
     // Optional mission attribution. When set, the direct-dispatched task is also
     // materialised as an assigned queue entry so it counts toward the mission's
     // task aggregates — see recordDirectDispatchTask. Absent → unattributed
     // direct dispatch as before (backward compatible).
     const missionId = readString(args.missionId) || readString(args.mission_id) || undefined;
-    const modeValidation = validateMeshTaskModeRequest(requestedTaskMode, args.message);
+    const modeValidation = validateMeshTaskModeRequest(requestedTaskMode, args.message, readonly);
     if (!modeValidation.valid) {
         return JSON.stringify({
             success: false,
@@ -230,7 +232,7 @@ export async function meshSendTask(
     }
 
     let explicitTargetSession: any | undefined;
-    if (args.session_id && isWorkerTaskMode(taskMode)) {
+    if (args.session_id && isWorkerTaskMode(taskMode, readonly)) {
         try {
             const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {});
             const sessions = extractStatusMetadataSessions(statusResult);
@@ -375,6 +377,7 @@ export async function meshSendTask(
                             assignedNodeId: args.node_id,
                             assignedSessionId: dispatchedSessionId,
                             taskMode,
+                            ...(readonly ? { readonly: true } : {}),
                             dispatchedAt,
                         });
                     }
@@ -622,6 +625,7 @@ export async function meshSendTask(
                         assignedNodeId: args.node_id,
                         assignedSessionId: args.session_id,
                         taskMode,
+                        ...(readonly ? { readonly: true } : {}),
                         dispatchedAt,
                     });
                 } catch { /* best-effort */ }
@@ -665,6 +669,7 @@ export async function meshSendTask(
             targetNodeId: args.node_id,
             targetSessionId: args.session_id,
             taskMode,
+            ...(readonly ? { readonly: true } : {}),
             ...(missionId ? { missionId } : {}),
         });
 

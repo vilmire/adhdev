@@ -57,6 +57,7 @@ export async function meshEnqueueTask(
     ctx: MeshContext,
     args: {
         message: string; task_mode?: string; taskMode?: string;
+        readonly?: boolean; read_only?: boolean;
         requiredTags?: string[]; required_tags?: string[];
         targetNodeId?: string; target_node_id?: string;
         targetNode?: string; target_node?: string;
@@ -66,6 +67,7 @@ export async function meshEnqueueTask(
     },
 ): Promise<string> {
     const taskMode = readString(args.task_mode) || readString(args.taskMode);
+    const readonly = args.readonly === true || args.read_only === true;
     const requiredTags = normalizeMeshCapabilityTags(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
     const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : undefined;
     const missionId = readString(args.missionId) || readString(args.mission_id) || undefined;
@@ -105,7 +107,7 @@ export async function meshEnqueueTask(
         targetNodeId = resolvePreferredWorktreeNodeId(ctx) || undefined;
     }
     try {
-        const task = enqueueTask(ctx.mesh.id, args.message, { taskMode, requiredTags, dependsOn, missionId, targetNodeId, ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}) });
+        const task = enqueueTask(ctx.mesh.id, args.message, { taskMode, ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, missionId, targetNodeId, ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}) });
 
         // ── LocalTransport: queue-based pull (standalone daemon, all local) ─────
         if (!(ctx.transport instanceof IpcTransport)) {

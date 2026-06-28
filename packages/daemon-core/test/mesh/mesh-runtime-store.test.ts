@@ -643,6 +643,57 @@ describe('mesh-runtime-store', () => {
         });
     });
 
+    // QUEUE-NODE-SERIALIZATION: the node-conflict gate is now driven by the unified
+    // isTaskReadonly predicate, whose explicit boolean axis (readonly: true) is
+    // orthogonal to taskMode. These assert that a task flagged read-only via the
+    // BOOLEAN (not the legacy live_debug_readonly enum) gets identical scheduling:
+    // parallel claim on one node, while a non-readonly task keeps write isolation.
+    describe('claimNextQueueTask — readonly boolean axis (predicate unification)', () => {
+        afterEach(() => {
+            __resetMeshRuntimeStoreForTests();
+        });
+
+        // Note: NOT live_debug_readonly — a plain task_mode (or none) plus readonly:true.
+        const insertBoolReadonly = (db: any, meshId: string, id: string, ageMs: number) => {
+            const iso = new Date(Date.now() - ageMs).toISOString();
+            db.insertQueueEntry({ id, meshId, message: 'diagnose', status: 'pending', taskMode: 'validation', readonly: true, createdAt: iso, updatedAt: iso });
+        };
+        const insertWrite = (db: any, meshId: string, id: string, ageMs: number) => {
+            const iso = new Date(Date.now() - ageMs).toISOString();
+            db.insertQueueEntry({ id, meshId, message: 'edit code', status: 'pending', taskMode: 'validation', createdAt: iso, updatedAt: iso });
+        };
+
+        it('readonly:true tasks claim in parallel on one node (not serialized), even with a non-readonly taskMode', () => {
+            const meshId = `mesh-boolro-parallel-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            insertBoolReadonly(db, meshId, 'bro-1', 2000);
+            insertBoolReadonly(db, meshId, 'bro-2', 1000);
+
+            const c1 = db.claimNextQueueTask(meshId, 'node1', 'sess1');
+            const c2 = db.claimNextQueueTask(meshId, 'node1', 'sess2');
+            expect(c1?.id).toBe('bro-1');
+            expect(c2?.id).toBe('bro-2');
+            const assigned = db.getQueueStatsByStatus(meshId).find((s: any) => s.status === 'assigned');
+            expect(assigned?.count).toBe(2);
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('the same taskMode WITHOUT readonly:true keeps one-active-per-node write isolation', () => {
+            const meshId = `mesh-boolro-iso-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            // Identical taskMode='validation' as the readonly case, but no readonly flag →
+            // must be treated as a write task and serialized to one-per-node.
+            insertWrite(db, meshId, 'wv-1', 2000);
+            insertWrite(db, meshId, 'wv-2', 1000);
+
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess1')?.id).toBe('wv-1');
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess2')).toBeNull();
+
+            __clearMeshQueueForTests(meshId);
+        });
+    });
+
     // ── Per-(node, provider) maxParallel cap (providerRoles) ─────────────────
     // The claim transaction bounds the number of active assignments for a given
     // (node, provider) combination by the providerMaxParallel passed in. The cap

@@ -1,7 +1,8 @@
 /**
  * Session / command-payload record helpers for the mesh_* tools.
  *
- * Leaf module: depends only on mesh-tool-shared (readString). Holds the shared
+ * Leaf module: depends on mesh-tool-shared (readString) and daemon-core's pure
+ * isTaskReadonly predicate (for isWorkerTaskMode classification). Holds the shared
  * session-record readers/classifiers (id/provider/coordinator/unmanaged/terminal/
  * idle), the node session-id collector, and the command-payload unwrapper.
  * Physically split out of mesh-tools.ts (RF-SURVEY candidate C1) with no behavior
@@ -9,6 +10,7 @@
  * import these back, so there is no runtime import cycle.
  */
 import { readString } from './mesh-tool-shared.js';
+import { isTaskReadonly } from '@adhdev/daemon-core';
 
 export function readSessionRecordId(session: any): string | undefined {
     return readString(session?.id)
@@ -73,8 +75,16 @@ export function isUnmanagedSessionRecord(session: any): boolean {
     return !launchedByCoordinator;
 }
 
-export function isWorkerTaskMode(taskMode: string | undefined): boolean {
-    return taskMode !== 'live_debug_readonly';
+/**
+ * QUEUE-NODE-SERIALIZATION: a "worker task mode" is any task that is NOT read-only —
+ * i.e. one that needs a visible worker session and the one-active-per-node isolation.
+ * Delegates to daemon-core's single {@link isTaskReadonly} predicate so this boundary
+ * stays in lock-step with the scheduler's classification (no duplicate inline copy).
+ * `readonly` is the explicit boolean axis; live_debug_readonly remains an OR-fallback
+ * inside the predicate.
+ */
+export function isWorkerTaskMode(taskMode: string | undefined, readonly?: boolean): boolean {
+    return !isTaskReadonly({ readonly, taskMode });
 }
 
 function addSessionRecord(target: Set<string>, session: any): void {

@@ -3,7 +3,7 @@ import { dirname, join } from 'path';
 import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { getLedgerDir } from './mesh-ledger.js';
-import { nodeSatisfiesRequiredTags } from './mesh-work-queue.js';
+import { nodeSatisfiesRequiredTags, isTaskReadonly } from './mesh-work-queue.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms } from '@adhdev/mesh-shared';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -752,11 +752,12 @@ export class MeshRuntimeStore {
                 return deps.every(depId => depStatus.get(depId) === 'completed');
             };
 
-            // Per-candidate node-conflict gate: write tasks (anything other than
-            // live_debug_readonly) require an idle node; read-only tasks bypass the
-            // node-busy check so N read-only diagnoses can run on one node at once.
+            // Per-candidate node-conflict gate: write tasks require an idle node; read-only
+            // tasks bypass the node-busy check so N read-only diagnoses can run on one node
+            // at once. Read-only classification is decided solely by isTaskReadonly (the
+            // single predicate shared with the cap counters / auto-launch / guardrail).
             const nodeConflictAllows = (candidate: MeshWorkQueueEntry): boolean => {
-                if (candidate.taskMode === 'live_debug_readonly') return true;
+                if (isTaskReadonly(candidate)) return true;
                 return !nodeBusy;
             };
 

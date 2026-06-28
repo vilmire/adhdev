@@ -18,6 +18,7 @@ import {
     hasPendingDependents,
     describeTaskDependencyState,
     validateMeshTaskModeRequest,
+    isTaskReadonly,
     __clearMeshQueueForTests,
     __replaceMeshQueueForTests,
     __resetMeshRuntimeStoreForTests
@@ -910,6 +911,53 @@ describe('validateMeshTaskModeRequest — live_debug_readonly git guardrail', ()
         // bare "push" word is no longer a git_mutation trigger
         const result = validateMeshTaskModeRequest('live_debug_readonly', 'inspect the push notification queue');
         expect(result.violations).not.toContain('git_mutation');
+    });
+});
+
+// QUEUE-NODE-SERIALIZATION: the single classifier + its boolean axis.
+describe('isTaskReadonly — single read-only classifier', () => {
+    it('is true for the legacy live_debug_readonly enum', () => {
+        expect(isTaskReadonly({ taskMode: 'live_debug_readonly' })).toBe(true);
+    });
+    it('is true for the explicit readonly boolean regardless of taskMode', () => {
+        expect(isTaskReadonly({ readonly: true })).toBe(true);
+        expect(isTaskReadonly({ readonly: true, taskMode: 'code_change' })).toBe(true);
+        expect(isTaskReadonly({ readonly: true, taskMode: 'validation' })).toBe(true);
+    });
+    it('is false for write task modes without the readonly flag', () => {
+        expect(isTaskReadonly({ taskMode: 'code_change' })).toBe(false);
+        expect(isTaskReadonly({ taskMode: 'validation' })).toBe(false);
+        expect(isTaskReadonly({ taskMode: 'convergence' })).toBe(false);
+        expect(isTaskReadonly({})).toBe(false);
+        expect(isTaskReadonly(null)).toBe(false);
+        expect(isTaskReadonly(undefined)).toBe(false);
+        // Only an explicit `true` flips the axis (not any truthy/coerced value).
+        expect(isTaskReadonly({ readonly: false, taskMode: 'code_change' })).toBe(false);
+    });
+});
+
+// QUEUE-NODE-SERIALIZATION: the write guardrail is generalized to the readonly axis —
+// a task flagged read-only via the BOOLEAN (no live_debug_readonly enum) must reject
+// the same write/deploy/push commands.
+describe('validateMeshTaskModeRequest — readonly:true boolean axis guardrail', () => {
+    it('rejects a write/deploy command on a readonly:true task even with a non-readonly taskMode', () => {
+        const result = validateMeshTaskModeRequest('validation', 'now run wrangler deploy to ship it', true);
+        expect(result.valid).toBe(false);
+        expect(result.violations).toContain('deploy_or_version_bump');
+    });
+    it('rejects a git push on a readonly:true task with no taskMode at all', () => {
+        const result = validateMeshTaskModeRequest(undefined, 'git push origin main', true);
+        expect(result.valid).toBe(false);
+        expect(result.violations).toContain('git_mutation');
+    });
+    it('allows inspection-only work on a readonly:true task', () => {
+        const result = validateMeshTaskModeRequest('validation', 'git status -sb and read the logs', true);
+        expect(result.valid).toBe(true);
+        expect(result.violations).toHaveLength(0);
+    });
+    it('does NOT guard a write command when readonly is not set (write task is unrestricted here)', () => {
+        const result = validateMeshTaskModeRequest('code_change', 'run wrangler deploy to ship it');
+        expect(result.valid).toBe(true);
     });
 });
 

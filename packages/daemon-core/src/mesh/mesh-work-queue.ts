@@ -18,6 +18,29 @@ export const ACTIVE_MESH_QUEUE_STATUSES: MeshActiveTaskStatus[] = ['pending', 'a
 export const HISTORICAL_MESH_QUEUE_STATUSES: MeshHistoricalTaskStatus[] = ['completed', 'failed', 'cancelled'];
 export const MESH_TASK_MODES: MeshTaskMode[] = ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'];
 
+/**
+ * QUEUE-NODE-SERIALIZATION: single source of truth for "is this task read-only?".
+ *
+ * Read-only classification used to be inlined as `task.taskMode === 'live_debug_readonly'`
+ * at every enforcement site (node-conflict claim gate, auto-launch isolation, the
+ * write/readonly cap counters, the write guardrail). That spread-out comparison is the
+ * exact recurring-defect class — one site drifting from the others silently makes the same
+ * task read-only at some gates and write at others, i.e. partial serialization. All sites
+ * MUST call this predicate so the classification is decided in exactly one place.
+ *
+ * Two orthogonal inputs feed the same boolean axis (kept backward-compatible):
+ *   • `readonly === true` — the explicit boolean axis (new API surface).
+ *   • `taskMode === 'live_debug_readonly'` — the original enum value, preserved as an
+ *     OR-fallback so existing live_debug_readonly tasks keep behaving identically.
+ *
+ * Accepts any task-like shape (full {@link MeshWorkQueueEntry} or a bare
+ * `{ readonly?, taskMode? }`) so the daemon-core and mcp-server boundaries can share it.
+ */
+export function isTaskReadonly(task: { readonly?: boolean; taskMode?: MeshTaskMode | string } | null | undefined): boolean {
+    if (!task) return false;
+    return task.readonly === true || task.taskMode === 'live_debug_readonly';
+}
+
 export interface MeshTaskModeValidationResult {
     valid: boolean;
     taskMode?: MeshTaskMode;
@@ -410,13 +433,15 @@ export function normalizeMeshTaskMode(value: unknown): MeshTaskMode | undefined 
     return (MESH_TASK_MODES as string[]).includes(normalized) ? normalized : undefined;
 }
 
-export function validateMeshTaskModeRequest(mode: unknown, message: string): MeshTaskModeValidationResult {
+export function validateMeshTaskModeRequest(mode: unknown, message: string, readonly?: boolean): MeshTaskModeValidationResult {
     const taskMode = normalizeMeshTaskMode(mode);
-    if (!taskMode) {
-        return { valid: true, violations: [] };
-    }
-    if (taskMode !== 'live_debug_readonly') {
-        return { valid: true, taskMode, violations: [] };
+    // QUEUE-NODE-SERIALIZATION: the write guardrail (reject deploy/push/edit commands on a
+    // read-only task) is driven by the unified read-only axis, not by the enum alone — so a
+    // task flagged read-only via the explicit `readonly:true` boolean is guarded identically
+    // to a legacy live_debug_readonly task. isTaskReadonly is the single classifier.
+    const isReadonly = isTaskReadonly({ readonly, taskMode });
+    if (!isReadonly) {
+        return taskMode ? { valid: true, taskMode, violations: [] } : { valid: true, violations: [] };
     }
     const text = message || '';
     // Only flag keywords that look like real commands (code/command context) and
@@ -447,6 +472,14 @@ export interface MeshWorkQueueEntry {
     message: string;
     status: MeshTaskStatus;
     taskMode?: MeshTaskMode;
+    /**
+     * QUEUE-NODE-SERIALIZATION: explicit read-only axis, orthogonal to taskMode. When
+     * true the task is treated as read-only by every scheduling gate (no node-busy
+     * isolation, counted under the read-only cap, write commands rejected) regardless of
+     * its taskMode. Decided exclusively through {@link isTaskReadonly}; `taskMode ===
+     * 'live_debug_readonly'` remains an OR-fallback so legacy rows behave unchanged.
+     */
+    readonly?: boolean;
     /** If specified, only this node can claim the task (used by legacy mesh_send_task) */
     targetNodeId?: string;
     /** If specified, only this runtime session can claim the task */
@@ -722,6 +755,8 @@ export function enqueueTask(
         targetNodeId?: string;
         targetSessionId?: string;
         taskMode?: MeshTaskMode | string;
+        /** QUEUE-NODE-SERIALIZATION: explicit read-only axis (orthogonal to taskMode). */
+        readonly?: boolean;
         requiredTags?: string[];
         /** M1: tasks that must complete before this one is claimable. */
         dependsOn?: string[];
@@ -734,7 +769,8 @@ export function enqueueTask(
     } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry {
     requireMeshHostQueueOwner(opts);
-    const modeValidation = validateMeshTaskModeRequest(opts?.taskMode, message);
+    const readonly = opts?.readonly === true;
+    const modeValidation = validateMeshTaskModeRequest(opts?.taskMode, message, readonly);
     if (!modeValidation.valid) {
         throw new Error(`live_debug_readonly_guardrail_violation: forbidden operations (${modeValidation.violations.join(', ')})`);
     }
@@ -763,6 +799,7 @@ export function enqueueTask(
             message,
             status: 'pending',
             taskMode: modeValidation.taskMode,
+            ...(readonly ? { readonly: true } : {}),
             targetNodeId: opts?.targetNodeId,
             targetSessionId: opts?.targetSessionId,
             requiredTags: resolvedRequiredTags,
@@ -806,6 +843,8 @@ export function recordDirectDispatchTask(
         assignedNodeId?: string;
         assignedSessionId?: string;
         taskMode?: MeshTaskMode | string;
+        /** QUEUE-NODE-SERIALIZATION: explicit read-only axis (orthogonal to taskMode). */
+        readonly?: boolean;
         dispatchedAt?: string;
     },
 ): MeshWorkQueueEntry | null {
@@ -813,7 +852,8 @@ export function recordDirectDispatchTask(
     if (!missionId) return null;
     const taskId = typeof opts.id === 'string' ? opts.id.trim() : '';
     if (!taskId) return null;
-    const modeValidation = validateMeshTaskModeRequest(opts.taskMode, message);
+    const readonly = opts.readonly === true;
+    const modeValidation = validateMeshTaskModeRequest(opts.taskMode, message, readonly);
     if (!modeValidation.valid) {
         throw new Error(`live_debug_readonly_guardrail_violation: forbidden operations (${modeValidation.violations.join(', ')})`);
     }
@@ -829,6 +869,7 @@ export function recordDirectDispatchTask(
             message,
             status: 'assigned',
             ...(modeValidation.taskMode ? { taskMode: modeValidation.taskMode } : {}),
+            ...(readonly ? { readonly: true } : {}),
             missionId,
             ...(opts.assignedNodeId ? { targetNodeId: opts.assignedNodeId, assignedNodeId: opts.assignedNodeId } : {}),
             ...(opts.assignedSessionId ? { targetSessionId: opts.assignedSessionId, assignedSessionId: opts.assignedSessionId } : {}),

@@ -6,7 +6,7 @@ import { getMesh } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
-import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-delivery-policy.js';
@@ -805,13 +805,13 @@ function activeAssignedCount(meshId: string): number {
  *  (everything except read-only diagnoses, which run unbounded by the write cap). */
 export function activeWriteAssignedCount(meshId: string): number {
     return getQueue(meshId, { status: ['assigned'] as any })
-        .filter(task => task.taskMode !== 'live_debug_readonly').length;
+        .filter(task => !isTaskReadonly(task)).length;
 }
 
-/** Active read-only (live_debug_readonly) assignments, for the read-only safety cap. */
+/** Active read-only assignments, for the read-only safety cap. */
 export function activeReadonlyAssignedCount(meshId: string): number {
     return getQueue(meshId, { status: ['assigned'] as any })
-        .filter(task => task.taskMode === 'live_debug_readonly').length;
+        .filter(isTaskReadonly).length;
 }
 
 function nodeHasActiveAssignment(meshId: string, nodeId: string): boolean {
@@ -1145,7 +1145,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
     // higher safety cap (readonlyMultiplier × the write cap, default 2×).
     const maxReadonlyParallelTasks = resolveMaxReadonlyParallelTasks(maxParallelTasks, schedulingOverride?.readonlyMultiplier);
     for (const task of pending) {
-        const isReadonly = task.taskMode === 'live_debug_readonly';
+        const isReadonly = isTaskReadonly(task);
         if (isReadonly) {
             if (activeReadonlyAssignedCount(meshId) >= maxReadonlyParallelTasks) {
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'max_readonly_parallel_tasks_reached' });
@@ -1293,9 +1293,9 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 continue;
             }
             // Write tasks keep the one-active-per-node invariant (worktree isolation);
-            // read-only (live_debug_readonly) diagnoses may auto-launch onto a node
-            // that already has an active assignment.
-            if (task.taskMode !== 'live_debug_readonly' && nodeHasActiveAssignment(meshId, nodeId)) {
+            // read-only diagnoses may auto-launch onto a node that already has an active
+            // assignment. Classified by the shared isTaskReadonly predicate.
+            if (!isTaskReadonly(task) && nodeHasActiveAssignment(meshId, nodeId)) {
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'node_has_active_assignment', nodeId });
                 continue;
             }

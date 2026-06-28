@@ -22,6 +22,7 @@ import {
 } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId } from '@adhdev/mesh-shared';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
+import { isTaskReadonly } from './mesh-work-queue.js';
 
 /** Per-(node, provider) cap and its current consumption. */
 export interface MeshNodeProviderSchedulingRuntime {
@@ -80,10 +81,6 @@ interface MeshLike {
     nodes?: Array<{ id?: string; nodeId?: string; node_id?: string; policy?: RepoMeshNodePolicy | null; isLocalWorktree?: boolean }> | null;
 }
 
-function isReadonly(task: MeshWorkQueueEntry): boolean {
-    return task.taskMode === 'live_debug_readonly';
-}
-
 function isAssigned(task: MeshWorkQueueEntry): boolean {
     return task.status === 'assigned';
 }
@@ -112,8 +109,8 @@ export function buildMeshSchedulingRuntime(
     const maxReadonlyParallelTasks = resolveMaxReadonlyParallelTasks(maxParallelTasks);
 
     const assignedTasks = (Array.isArray(queue) ? queue : []).filter(isAssigned);
-    const activeWriteAssigned = assignedTasks.filter(t => !isReadonly(t)).length;
-    const activeReadonlyAssigned = assignedTasks.filter(isReadonly).length;
+    const activeWriteAssigned = assignedTasks.filter(t => !isTaskReadonly(t)).length;
+    const activeReadonlyAssigned = assignedTasks.filter(isTaskReadonly).length;
     const globalWriteCapReached = activeWriteAssigned >= maxParallelTasks;
     const globalReadonlyCapReached = activeReadonlyAssigned >= maxReadonlyParallelTasks;
 
@@ -126,7 +123,7 @@ export function buildMeshSchedulingRuntime(
         const nodeId = typeof task.assignedNodeId === 'string' ? task.assignedNodeId.trim() : '';
         if (!nodeId) continue;
         assignedByNode.set(nodeId, (assignedByNode.get(nodeId) ?? 0) + 1);
-        if (!isReadonly(task)) {
+        if (!isTaskReadonly(task)) {
             writeAssignedByNode.set(nodeId, (writeAssignedByNode.get(nodeId) ?? 0) + 1);
         }
         const provider = typeof task.assignedProviderType === 'string' ? task.assignedProviderType : '';
