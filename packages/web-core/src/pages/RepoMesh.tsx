@@ -6,7 +6,7 @@
  * Cloud:      wrap with a cloud provider that supplies multi-daemon loading,
  *             retry logic, coordinator targeting, and cloud-only UI sections.
  */
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 
 import AppPage from '../components/ui/AppPage'
 import { IconMesh } from '../components/Icons'
@@ -34,6 +34,14 @@ import { readMeshPolicy } from './repo-mesh/types'
 export type { MeshNode, MeshQueueEntry, AvailableCliAgent }
 export { RepoMeshHermesMcpConfig } from './repo-mesh/MeshHermesMcpConfig'
 export { getNodeActiveAssignments, describeNodeActiveAssignmentLabel } from './repo-mesh/MeshNodeList'
+
+// Interval for the visibility-gated automatic graph revalidation. Node
+// git/topology/health is pull-only (no server push), so without this the graph
+// stays stale until a manual Refresh. Kept conservative: revalidation triggers
+// a git probe that is heavy on win32, and we never want to pile reloads onto a
+// coordinator's own in-flight refresh. Polling only runs while the tab is
+// visible and the detail view is open.
+const GRAPH_AUTO_REVALIDATE_INTERVAL_MS = 7000
 
 // ─── Main page ───────────────────────────────────────────────────
 
@@ -285,6 +293,54 @@ export default function RepoMesh() {
             setMeshGraphStatus(null)
             setGraphError(null)
             void loadGraph(resolvedActiveDaemonId, selectedMeshId)
+        }
+    }, [selectedMeshId, resolvedActiveDaemonId])
+
+    // Visibility-gated automatic graph revalidation (SWR-style).
+    // `loadGraph` is recreated each render, so we read it through a ref to keep
+    // the interval stable (re-creating it every render would reset the timer and
+    // it would never fire). A guard ref drops a tick while a prior auto-reload is
+    // still in flight, so a slow git probe cannot pile up overlapping refreshes.
+    // The manual Refresh button (onRefreshGraph) remains the explicit path.
+    const loadGraphRef = useRef(loadGraph)
+    loadGraphRef.current = loadGraph
+    const autoRevalidateInFlight = useRef(false)
+    useEffect(() => {
+        if (!selectedMeshId || !resolvedActiveDaemonId) return
+        if (typeof document === 'undefined') return
+
+        let timer: ReturnType<typeof setInterval> | null = null
+
+        const tick = () => {
+            if (document.visibilityState !== 'visible') return
+            if (autoRevalidateInFlight.current) return
+            autoRevalidateInFlight.current = true
+            // refresh=true → SWR semantics: keep the current graph on screen (no
+            // loading spinner) and commit the fresh snapshot when it arrives.
+            void Promise.resolve(loadGraphRef.current(resolvedActiveDaemonId, selectedMeshId, true))
+                .finally(() => { autoRevalidateInFlight.current = false })
+        }
+
+        const start = () => {
+            if (timer === null) timer = setInterval(tick, GRAPH_AUTO_REVALIDATE_INTERVAL_MS)
+        }
+        const stop = () => {
+            if (timer !== null) { clearInterval(timer); timer = null }
+        }
+
+        // Poll only while the tab is visible; pause immediately when hidden and
+        // resume when the user returns. No leading tick — the selection effect
+        // above already does the first paint.
+        const onVisibilityChange = () => {
+            if (document.visibilityState === 'visible') start()
+            else stop()
+        }
+        if (document.visibilityState === 'visible') start()
+        document.addEventListener('visibilitychange', onVisibilityChange)
+
+        return () => {
+            stop()
+            document.removeEventListener('visibilitychange', onVisibilityChange)
         }
     }, [selectedMeshId, resolvedActiveDaemonId])
 
