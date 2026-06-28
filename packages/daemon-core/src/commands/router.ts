@@ -647,6 +647,7 @@ export class DaemonCommandRouter {
             normalizeMeshSessionCleanupMode: this.normalizeMeshSessionCleanupMode.bind(this),
             cleanupMeshSessions: this.cleanupMeshSessions.bind(this),
             cleanupLocalWorktreeNode: this.cleanupLocalWorktreeNode.bind(this),
+            precheckLocalWorktreeRemovable: this.precheckLocalWorktreeRemovable.bind(this),
             startMeshRefineJob: this.startMeshRefineJob.bind(this),
             batchRefineMeshNodes: this.batchRefineMeshNodes.bind(this),
             startMeshRefineBatchJob: this.startMeshRefineBatchJob.bind(this),
@@ -914,6 +915,133 @@ export class DaemonCommandRouter {
         return fs.existsSync(dir)
             ? { removed: false, residue: true, error: String(lastErr?.message || lastErr || 'unknown rm error') }
             : { removed: true, residue: false };
+    }
+
+    /**
+     * Non-destructive precheck mirroring every REFUSAL condition in
+     * {@link cleanupLocalWorktreeNode} — missing workspace / source-repo / branch
+     * metadata, unexpected (non-managed) path, branch mismatch — PLUS the
+     * dirty-worktree guard that `removeWorktree(requireClean)` enforces
+     * (`git status --porcelain`). It performs ZERO destructive actions: no
+     * `git worktree remove`, no `git worktree prune`, no directory deletion.
+     *
+     * remove_mesh_node calls this BEFORE any session cleanup so that a refusal
+     * (the common one being a dirty worktree) does not first stop/delete the
+     * delegated session and orphan it — the original ordering bug. Success/skip
+     * cases that the real cleanup handles idempotently (worktree path already
+     * gone, git-de-registered residue) are NOT refusals and return `{ ok: true }`.
+     *
+     * `force:true` skips the dirty guard, preserving `removeWorktree`'s
+     * `requireClean: !force` semantics. This is a read-only superset check; the
+     * authoritative `requireClean` guard inside `removeWorktree` is intentionally
+     * kept as a second line of defense against a precheck→execute race.
+     */
+    private async precheckLocalWorktreeRemovable(args: {
+        mesh: any;
+        node: any;
+        nodeId: string;
+        force?: boolean;
+    }): Promise<{ ok: true } | { ok: false; code: string; error: string; recoveryHint: string }> {
+        const sessionPreservedNote = ' The delegated session was left running (not stopped) — resolve the issue and retry mesh_remove_node.';
+        const workspace = typeof args.node?.workspace === 'string' ? args.node.workspace.trim() : '';
+        if (!workspace) {
+            return {
+                ok: false,
+                code: 'mesh_worktree_cleanup_missing_workspace',
+                error: `Worktree node '${args.nodeId}' is missing workspace metadata`,
+                recoveryHint: 'Inspect the mesh node record before removing it, or remove stale metadata manually only after confirming no managed worktree remains.' + sessionPreservedNote,
+            };
+        }
+
+        // Worktree path already gone → not a refusal; the real cleanup returns a
+        // skipped:true success and the node is dropped from the registry.
+        if (!fs.existsSync(workspace)) return { ok: true };
+
+        const sourceNode = args.node?.clonedFromNodeId
+            ? args.mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, args.node.clonedFromNodeId))
+            : args.mesh?.nodes?.find((n: any) => !n.isLocalWorktree);
+        const repoRoot = typeof sourceNode?.repoRoot === 'string' && sourceNode.repoRoot.trim()
+            ? sourceNode.repoRoot.trim()
+            : typeof sourceNode?.workspace === 'string' && sourceNode.workspace.trim()
+                ? sourceNode.workspace.trim()
+                : '';
+        if (!repoRoot || !fs.existsSync(repoRoot)) {
+            return {
+                ok: false,
+                code: 'mesh_worktree_cleanup_missing_source_repo',
+                error: `Refusing to remove worktree '${workspace}' because the source repo root is unavailable`,
+                recoveryHint: 'Run mesh_remove_node from the machine that owns the source repo, or verify the source node metadata before retrying.' + sessionPreservedNote,
+            };
+        }
+        if (typeof args.node?.worktreeBranch !== 'string' || !args.node.worktreeBranch.trim()) {
+            return {
+                ok: false,
+                code: 'mesh_worktree_cleanup_missing_branch',
+                error: `Refusing to remove worktree '${workspace}' because worktreeBranch metadata is missing`,
+                recoveryHint: 'Confirm this is an ADHDev-managed worktree before removing it manually; managed worktree nodes include worktreeBranch metadata.' + sessionPreservedNote,
+            };
+        }
+
+        const { resolveWorktreePath, listWorktrees } = await import('../git/git-worktree.js');
+        const normalizePath = (value: string) => {
+            const resolved = pathResolve(value);
+            try { return fs.realpathSync(resolved); } catch { return resolved; }
+        };
+        const expectedPath = normalizePath(resolveWorktreePath(repoRoot, String(args.mesh?.name || args.mesh?.id || 'mesh'), args.node.worktreeBranch));
+        const actualPath = normalizePath(workspace);
+        if (actualPath !== expectedPath) {
+            return {
+                ok: false,
+                code: 'mesh_worktree_cleanup_unexpected_path',
+                error: `Refusing to remove worktree '${workspace}' because it is not at the expected managed path '${expectedPath}'`,
+                recoveryHint: 'Use git worktree list/status to inspect the path. Retry only after confirming the mesh node metadata points to an ADHDev-managed worktree.' + sessionPreservedNote,
+            };
+        }
+
+        const entries = await listWorktrees(repoRoot);
+        const managedEntry = entries.find(entry => normalizePath(entry.path) === actualPath);
+        // De-registered residue (git no longer lists it as a worktree) is an
+        // idempotent recovery path in the real cleanup, NOT a refusal — neither the
+        // branch-mismatch nor the dirty check applies, so let the removal proceed.
+        if (!managedEntry) return { ok: true };
+
+        if (managedEntry.branch && managedEntry.branch !== args.node.worktreeBranch) {
+            return {
+                ok: false,
+                code: 'mesh_worktree_cleanup_branch_mismatch',
+                error: `Refusing to remove '${workspace}' because git reports branch '${managedEntry.branch}', expected '${args.node.worktreeBranch}'`,
+                recoveryHint: 'Inspect the worktree branch and mesh metadata before retrying cleanup.' + sessionPreservedNote,
+            };
+        }
+
+        // Dirty-worktree guard — a read-only mirror of removeWorktree(requireClean)
+        // (`git status --porcelain` run inside the worktree). `force:true` skips it,
+        // preserving the requireClean:!force semantics.
+        if (args.force !== true) {
+            const { execFile } = await import('node:child_process');
+            const { promisify } = await import('node:util');
+            const execFileAsync = promisify(execFile);
+            try {
+                const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
+                    cwd: workspace, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true,
+                });
+                if (stdout.trim()) {
+                    return {
+                        ok: false,
+                        code: 'mesh_worktree_cleanup_dirty',
+                        error: `Refusing to remove dirty worktree: ${workspace}`,
+                        recoveryHint: 'Commit, stash, or intentionally discard the worktree changes before retrying mesh_remove_node. The mesh registry entry is preserved until cleanup is safe.' + sessionPreservedNote,
+                    };
+                }
+            } catch {
+                // A status probe failure is not itself proof of dirtiness; defer to
+                // the authoritative removeWorktree(requireClean) guard rather than
+                // refusing here (which would block an otherwise-clean removal).
+                return { ok: true };
+            }
+        }
+
+        return { ok: true };
     }
 
     private async cleanupLocalWorktreeNode(args: {

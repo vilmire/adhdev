@@ -32,6 +32,16 @@ export type CleanupLocalWorktreeNodeResult =
     | { success: false; code: string; error: string; recoveryHint: string; convergence?: Record<string, unknown> };
 
 /**
+ * Result of the non-destructive local-worktree removability precheck. `ok:false`
+ * carries the same refusal `code`/`error`/`recoveryHint` that the destructive
+ * cleanup would have returned, so callers can refuse a removal BEFORE performing
+ * any irreversible step (e.g. stopping/deleting delegated sessions).
+ */
+export type WorktreeRemovalPrecheckResult =
+    | { ok: true }
+    | { ok: false; code: string; error: string; recoveryHint: string };
+
+/**
  * Router-private collaborators injected at dispatch. Each is a bound method or
  * field of DaemonCommandRouter; handlers that don't need a given collaborator
  * simply ignore it. The router owns this instance state (inline-mesh cache,
@@ -84,6 +94,18 @@ export interface MedFamilyContext {
         nodeId: string;
         force?: boolean;
     }) => Promise<CleanupLocalWorktreeNodeResult>;
+
+    /**
+     * Bound `DaemonCommandRouter.precheckLocalWorktreeRemovable` — purely
+     * non-destructive validation of whether a local worktree node can be removed.
+     * Called BEFORE session cleanup so a refusal does not orphan the session.
+     */
+    precheckLocalWorktreeRemovable: (args: {
+        mesh: any;
+        node: any;
+        nodeId: string;
+        force?: boolean;
+    }) => Promise<WorktreeRemovalPrecheckResult>;
 
     /** Bound `DaemonCommandRouter.startMeshRefineJob` (async execute path). */
     startMeshRefineJob: (meshId: string, nodeId: string, args: any) => Promise<CommandRouterResult>;

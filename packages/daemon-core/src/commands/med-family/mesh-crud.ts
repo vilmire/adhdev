@@ -417,6 +417,39 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             const explicitSessionIds = Array.isArray(args?.sessionIds)
                 ? (args.sessionIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim())
                 : undefined;
+            // Precheck-first: for a LOCAL worktree removal, validate removability
+            // with a purely non-destructive precheck BEFORE touching the session.
+            // The session cleanup below is destructive and irreversible
+            // (stop_and_delete), so a refusal that fires only AFTER it — as the old
+            // ordering did when removeWorktree rejected a dirty worktree — orphaned
+            // the delegated session. Running the precheck here means a refusal
+            // (dirty worktree, missing/mismatched metadata, etc.) returns with the
+            // session left fully intact. Remote-forwarded worktrees are prechecked
+            // on the owning daemon (it runs this same handler), so we only gate the
+            // local case here. Success/skip cases return ok:true and fall through to
+            // the unchanged normal flow.
+            if (node?.isLocalWorktree) {
+                const nodeDaemonId = typeof node.daemonId === 'string' ? node.daemonId.trim() : undefined;
+                const isRemoteWorktree = nodeDaemonId && !daemonIdsEquivalent(nodeDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand
+                    && !args?._meshDirectDispatch;
+                if (!isRemoteWorktree) {
+                    const precheck = await ctx.precheckLocalWorktreeRemovable({ mesh, node, nodeId, force: args?.force === true });
+                    if (precheck.ok === false) {
+                        return {
+                            success: false,
+                            removed: false,
+                            code: precheck.code,
+                            error: precheck.error,
+                            recoveryHint: precheck.recoveryHint,
+                            // No sessionCleanup key: the session was deliberately NOT
+                            // touched. worktreeCleanup mirrors the destructive path's
+                            // refusal shape so existing callers see the same code.
+                            worktreeCleanup: { success: false, code: precheck.code, error: precheck.error, recoveryHint: precheck.recoveryHint },
+                        };
+                    }
+                }
+            }
+
             let sessionCleanup: Record<string, unknown> | undefined;
             if (node && sessionCleanupMode !== 'preserve') {
                 sessionCleanup = await ctx.cleanupMeshSessions({

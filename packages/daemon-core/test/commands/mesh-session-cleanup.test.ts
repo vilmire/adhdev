@@ -677,7 +677,7 @@ describe('mesh session cleanup', () => {
     }
   }, 60000)
 
-  it('blocks local worktree removal when the managed worktree has local changes', async () => {
+  it('blocks local worktree removal when the managed worktree has local changes AND leaves the delegated session untouched (precheck-first)', async () => {
     const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-dirty-worktree-')
     try {
       const branch = 'feat/dirty-worktree'
@@ -694,7 +694,14 @@ describe('mesh session cleanup', () => {
         ],
       }
       expect(created.worktreePath).toBe(resolveWorktreePath(repoRoot, meshName, branch))
-      const { router } = createRouter()
+      // A live delegated session bound to the worktree workspace. The dirty-worktree
+      // refusal must NOT stop/delete it — pre-fix, session cleanup ran first and
+      // orphaned the session before the dirty check rejected the removal.
+      const { router, sessionHostControl } = createRouter({
+        listSessions: vi.fn(async () => [
+          { sessionId: 'live-1', workspace: created.worktreePath, lifecycle: 'running' },
+        ]),
+      })
 
       const result = await router.execute('remove_mesh_node', {
         meshId: inlineMesh.id,
@@ -705,14 +712,62 @@ describe('mesh session cleanup', () => {
       expect(result).toMatchObject({
         success: false,
         removed: false,
+        code: 'mesh_worktree_cleanup_dirty',
       })
       expect(String((result as any).error)).toContain('Refusing to remove dirty worktree')
+      // The session was deliberately preserved: no stop/delete, and no sessionCleanup
+      // key in the refusal response.
+      expect(sessionHostControl.stopSession).not.toHaveBeenCalled()
+      expect(sessionHostControl.deleteSession).not.toHaveBeenCalled()
+      expect((result as any).sessionCleanup).toBeUndefined()
+      expect(String((result as any).recoveryHint)).toContain('session was left running')
       expect(existsSync(created.worktreePath)).toBe(true)
       expect(inlineMesh.nodes.some(node => node.id === 'node-worktree')).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  it('still removes a clean local worktree and cleans up its delegated session (precheck pass preserves the happy path)', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-clean-worktree-')
+    try {
+      const branch = 'feat/clean-worktree'
+      const meshName = 'clean-worktree-mesh'
+      const created = await createWorktree({ repoRoot, branch, meshName })
+      expect(created.worktreePath).toBe(resolveWorktreePath(repoRoot, meshName, branch))
+      const inlineMesh = {
+        id: 'mesh-clean-worktree',
+        name: meshName,
+        policy: {},
+        nodes: [
+          { id: 'source', workspace: repoRoot, repoRoot },
+          { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
+        ],
+      }
+      // A running session bound to the worktree → default worktree cleanup mode
+      // (stop_and_delete) must stop AND delete it once the precheck passes.
+      const { router, sessionHostControl } = createRouter({
+        listSessions: vi.fn(async () => [
+          { sessionId: 'live-1', workspace: created.worktreePath, lifecycle: 'running' },
+        ]),
+      })
+
+      const result: any = await router.execute('remove_mesh_node', {
+        meshId: inlineMesh.id,
+        nodeId: 'node-worktree',
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({ success: true, removed: true, worktreeCleanup: { success: true } })
+      // Default worktree cleanup mode is stop_and_delete: a live workspace-bound
+      // session is force-deleted (it does not route through stopSession).
+      expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('live-1', { force: true })
+      expect(existsSync(created.worktreePath)).toBe(false)
+      expect(inlineMesh.nodes.some(node => node.id === 'node-worktree')).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60000)
 
   it('refuses to remove the coordinator base node (same daemon, not a worktree) without force', async () => {
     const meshId = `mesh-base-guard-${Date.now()}`
