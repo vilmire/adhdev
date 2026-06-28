@@ -201,7 +201,7 @@ export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './con
 export type {
   MagiPanel, MagiPanelMember, MagiPanelMap, MagiMode,
   MagiClaim, MagiClaimStance, MagiAgentResponse,
-  MagiResponseSource, MagiSynthesizedResponse,
+  MagiResponseSource, MagiReplicaGitRef, MagiGitSkew, MagiSynthesizedResponse,
   MagiClusterCategory, MagiClusterMember, MagiClaimCluster, MagiSynthesis,
 } from '@adhdev/mesh-shared';
 
@@ -269,6 +269,8 @@ export type { StaleDirectPruneClassification, StaleDirectPruneResult, PruneStale
 export type { MeshActiveWorkRecord, MeshActiveWorkStatus, MeshActiveWorkSummary, MeshActiveWorkSource, MeshStaleDirectWorkSummary } from './mesh/mesh-active-work.js';
 export { buildMeshAsyncRefineJobs, summarizeMeshAsyncRefineJobs, STALE_TERMINAL_REFINE_WINDOW_MS, RECENT_TERMINAL_REFINE_CAP } from './mesh/mesh-refine-status.js';
 export type { MeshAsyncRefineJobStatus, MeshAsyncRefineJobSummary, MeshAsyncRefineJobsSummary } from './mesh/mesh-refine-status.js';
+export { buildMeshMagiActivity, summarizeMeshMagiActivity, getMeshMagiActivityByGroup, STALE_MAGI_WINDOW_MS, RECENT_MAGI_CAP, MAGI_NEEDS_VERIFICATION_PREVIEW_CAP } from './mesh/mesh-magi-status.js';
+export type { MeshMagiActivityStatus, MeshMagiActivitySummary, MeshMagiActivitySummaryFold, MeshMagiNeedsVerificationItem } from './mesh/mesh-magi-status.js';
 
 // ── Mesh Scheduling Runtime (observability projection) ──
 export { buildMeshSchedulingRuntime } from './mesh/mesh-scheduling-runtime.js';

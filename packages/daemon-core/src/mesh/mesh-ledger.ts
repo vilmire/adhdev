@@ -59,6 +59,13 @@ export type MeshLedgerKind =
     | 'mission_created'
     | 'mission_status_changed'
     | 'mission_goal_updated'
+    // MAGI (Multi-Agent Ground-truth Insight) cross-verification activity. Persisted
+    // so a wait=false fan-out and its later synthesis survive coordinator restarts and
+    // are foldable into mesh_status (keyed by consensusGroupId).
+    // magi_dispatched payload: { source:'magi', consensusGroupId, missionId?, panel?, question?, replicaCount }
+    // magi_synthesis  payload: { source:'magi', consensusGroupId, missionId?, panel?, question?, synthesis }
+    | 'magi_dispatched'
+    | 'magi_synthesis'
     ;
 
 export interface MeshLedgerEntry {

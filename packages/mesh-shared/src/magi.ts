@@ -105,6 +105,41 @@ export interface MagiResponseSource {
      * merely still generating. Always implies ok=false.
      */
     stale?: boolean
+    /**
+     * Git ref of the node this replica ran on, captured at collection time from the
+     * live mesh node's compact git summary. Lets synthesis (and a dashboard) detect
+     * GIT SKEW across the panel — if the answering replicas span different branches
+     * or diverge (ahead/behind), their file:line evidence is comparing different code
+     * and "agreement" is less meaningful. Best-effort; absent when the node carried
+     * no git summary.
+     */
+    git?: MagiReplicaGitRef
+}
+
+/** Compact git ref of the node a replica ran on (subset of GitCompactSummary). */
+export interface MagiReplicaGitRef {
+    branch?: string | null
+    ahead?: number
+    behind?: number
+    dirty?: boolean
+}
+
+/**
+ * Cross-replica git divergence assessment. `skewed` is true when the answering
+ * replicas span more than one branch OR any replica diverges from its upstream
+ * (ahead/behind > 0) — both mean the panel is not all looking at the same code, so
+ * file:line evidence and agreement are git-skewed. Always present on a synthesis
+ * (skewed=false / distinctBranches≤1 when there is nothing to flag).
+ */
+export interface MagiGitSkew {
+    skewed: boolean
+    /** Number of distinct branches across the answering replicas with a known branch. */
+    distinctBranches: number
+    /** The distinct branch names (sorted), for display. */
+    branches: string[]
+    /** Replicas whose branch/divergence differs from the panel baseline. */
+    divergentReplicas: number
+    note?: string
 }
 
 /** A parsed replica response paired with its source identity. */
@@ -180,4 +215,17 @@ export interface MagiSynthesis {
     agreed: MagiClaimCluster[]
     /** Union of every response's open_questions (deduped). */
     openQuestions: string[]
+    /**
+     * Per-replica source identity (taskId / nodeId / provider / ok / stale / git) for
+     * every replica in the fan-out. Lets a consumer (the dashboard's extractMagiActivity)
+     * read which node × provider answered and the git ref each ran at — the inputs behind
+     * the gitSkew assessment.
+     */
+    replicas: MagiResponseSource[]
+    /**
+     * Cross-replica git divergence. When skewed, the answering replicas were not all
+     * on the same code (different branches / ahead-behind), so evidence and agreement
+     * should be read with that caveat. Always present.
+     */
+    gitSkew: MagiGitSkew
 }
