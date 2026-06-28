@@ -97,40 +97,56 @@ function resolveReconcileIntervalMs(): number {
     return DEFAULT_RECONCILE_INTERVAL_MS;
 }
 
-// RECONCILE-SYNTH-PREEMPTS-COMPLETION in-flight debounce. PHASE 4 only synthesizes a missing
-// completion when the worker session reads `idle`. But a worker that is GENUINELY generating
-// (it emitted agent:generating_started — the dispatch row is 'acked' — and has not yet
-// completed) can momentarily read `idle` mid-turn: a CLI PTY parser sees an inter-turn blip
-// between tool calls, or the read_chat probe races a brief settle. A single such idle read
-// must NOT fabricate a completion for an in-flight task — doing so writes a synthesized
-// terminal that then masks the REAL completion when it lands seconds later
+// R4f (GENERATING-BOUNDARY, acked-hold redesign). PHASE 4 only synthesizes a missing completion
+// when the worker session reads `idle`. But a worker that is GENUINELY generating (it emitted
+// agent:generating_started — the dispatch row is 'acked' — and has not yet completed) can
+// momentarily read `idle` mid-turn (a CLI PTY inter-tool-call settle, or the final assistant text
+// already rendered while the turn's generating_completed lifecycle close still lags). A premature
+// synth writes a terminal that then masks the worker's REAL completion when it lands seconds later
 // (drop:duplicate_completion_terminal_ledger; the observed 71s task a250fb44 lost its [System]
-// notification this way). We require the session to read `idle` on CONSECUTIVE reconcile ticks
-// before synthesizing for an `acked` (started-generating) dispatch — a transient mid-turn idle
-// flicker clears on the next ~4s tick, whereas a genuinely-settled (completed-but-lost) or dead
-// session reads idle every tick. A dispatch that was never acked (worker never started) is NOT
-// debounced here: there is no in-flight generation to protect, and the downstream grace gate +
-// stale-summary guard remain the backstops for that lost-dispatch case.
+// notification this way; the R4e 53s task synth fired 16s BEFORE the worker's real emit).
 //
-// Keyed by `${meshId}::${taskId}`. The map is pruned each PHASE-4 pass to the set of currently
-// active dispatches, so a completed/pruned task's counter is dropped (no unbounded growth).
-const REQUIRED_CONSECUTIVE_IDLE_TICKS_FOR_INFLIGHT_SYNTH = 2;
+// R4 → R4e used FINITE timers (consecutive ticks / MIN_IDLE_SETTLE / ACKED_TURN_SETTLE) to delay the
+// synth. That class of fix is fundamentally a RACE: the worker's real emit latency is variable and
+// unbounded (win32 idle reads can flip before the emit arrives), so ANY finite timer eventually
+// loses to a slow-enough turn — and the synth pre-empts the real completion. R4e live-FAILED for
+// exactly this reason.
+//
+// R4f redesign (direction B). An `acked` task means the worker ECHOED generating_started (the
+// taskId flip) — it is alive and mid-turn, so it WILL eventually emit a real terminal. We therefore
+// HOLD the synth INDEFINITELY for an acked task. This is safe against the emit actually arriving:
+// when the worker's real generating_completed lands, it writes a terminal ledger, and
+// reconcileDirectDispatchCompletionFromTranscript's hasTerminalLedgerAfterDispatch check makes any
+// later synth an idempotent no-op (alreadyTerminal). So the hold never costs a missed notification —
+// the real emit always wins, no matter how late.
+//
+// The indefinite hold is released ONLY by a genuine-DEATH / emit-loss BACKSTOP — never a finite
+// timer that races normal lag:
+//   (a) liveness failure — read_chat reports the session is gone, OR N consecutive read failures
+//       accumulate (a transport/session-gone signal, counted as death rather than swallowed via
+//       `continue`). A worker that died mid-turn will never emit, so the synth must eventually fire.
+//   (b) an absolute LONG death-deadline — time since the generating_started ack exceeds
+//       ACKED_DEATH_DEADLINE_MS, a backstop set FAR above any observed emit latency (default 8 min)
+//       so it does not race a normal slow turn; it only catches a worker that is genuinely wedged or
+//       whose emit was permanently lost. This is a notification-loss net, not a completion timer.
+//
+// A dispatch that was never acked (worker never started) is NOT held here: there is no in-flight
+// generation to protect, so it keeps the existing first-idle-tick synth behavior (its lost-dispatch
+// case is covered by the downstream grace + stale-summary guards). The map is pruned each PHASE-4
+// pass to the set of currently active dispatches, so a completed/pruned task's state is dropped (no
+// unbounded growth). Keyed by `${meshId}::${taskId}`.
 
-// R4e (RECONCILE-SYNTH-PREEMPTS-COMPLETION, time hardening). The consecutive-tick guard above is a
-// tick COUNT; at the 4s cadence it spans only ~8s, which a long worker turn can straddle with a
-// mid-turn idle window (a CLI PTY inter-tool-call settle, or the final assistant text already
-// rendered while the turn's generating_completed lifecycle close still lags). The worker's 5s
-// generating heartbeat means an ~8s idle window is barely over one heartbeat gap, so the tick count
-// alone let a 53s-turn synth fire ~11s BEFORE the worker's real completion emit (R4e live case). We
-// add two TIME hurdles the tick-count cannot express, BOTH finite so a truly-dead worker that never
-// emits is still eventually synthesized (notification-miss stays 0 — only DEFERRED, never dropped):
-//   - MIN_IDLE_SETTLE_MS: the worker must have read idle for at least this long since its FIRST idle
-//     observation. Comfortably exceeds the 5s heartbeat gap so a transient mid-turn idle window
-//     cannot satisfy it; a genuinely-settled or dead session keeps reading idle and crosses it.
-//   - ACKED_TURN_SETTLE_MS: an `acked` (generating_started) dispatch is never synthesized within
-//     this window of its ack (dispatch.updatedAt = the generating_started status flip), so a turn
-//     that only just started is never completed off an early idle blip.
-// Both are read at call time (not module-const) so tests can tune them via env per case.
+// R4f backstop (a): how many CONSECUTIVE read_chat failures (transport error / success:false /
+// no payload) for an acked task are treated as a death signal that releases the indefinite hold.
+// A single failed read is a transient probe blip; a session that genuinely died reads-fail every
+// tick, so a small streak distinguishes the two without racing a live-but-slow worker.
+const ACKED_DEATH_CONSECUTIVE_READ_FAILURES = 3;
+
+// R4f backstop (b): the absolute death-deadline. An acked task is held indefinitely until this much
+// time has elapsed since its generating_started ack (dispatch.updatedAt); past it, a persistently
+// idle session is synthesized as a notification-loss net. This is set FAR above any observed emit
+// latency (R4e's worst case was ~16s) so it does NOT race a normal slow turn — it only catches a
+// genuinely wedged worker or a permanently-lost emit. Read at call time so tests can tune it.
 function resolveTunedReconcileMs(envName: string, def: number, min: number, max: number): number {
     const raw = readNonEmptyString(process.env[envName]);
     if (raw) {
@@ -139,24 +155,28 @@ function resolveTunedReconcileMs(envName: string, def: number, min: number, max:
     }
     return def;
 }
-function resolveMinIdleSettleMs(): number {
-    return resolveTunedReconcileMs('MESH_INFLIGHT_MIN_IDLE_SETTLE_MS', 16_000, 0, 120_000);
-}
-function resolveAckedTurnSettleMs(): number {
-    return resolveTunedReconcileMs('MESH_INFLIGHT_ACKED_TURN_SETTLE_MS', 20_000, 0, 180_000);
+function resolveAckedDeathDeadlineMs(): number {
+    // Default 8 min — FAR above the variable emit latency the finite R4..R4e timers raced (R4e's
+    // worst case was ~16s); by the time this fires a live worker would long since have emitted its
+    // real terminal. The env-override floor is 0 so tests can force the deadline (production never
+    // sets it that low); the ceiling is 60min so a mis-set env cannot disable the loss-net forever.
+    return resolveTunedReconcileMs('MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS', 8 * 60_000, 0, 60 * 60_000);
 }
 
-// Per-task in-flight idle debounce: the consecutive idle-read `count` AND the timestamp of the
-// FIRST idle observation `firstIdleAtMs` (for the MIN_IDLE_SETTLE_MS hurdle).
-const inFlightIdleObservationCounts = new Map<string, { count: number; firstIdleAtMs: number }>();
+// Per-task in-flight hold state for an acked dispatch:
+//   - liveConfirmedSinceAck: we have seen at least one conclusive read (idle OR generating) since
+//     the ack — proves the session is reachable, so a later read FAILURE is a genuine liveness loss
+//     rather than a node that was never reachable.
+//   - consecutiveReadFailures: streak of inconclusive read_chat results (death backstop (a)).
+const inFlightAckedHoldState = new Map<string, { liveConfirmedSinceAck: boolean; consecutiveReadFailures: number }>();
 
 function inFlightSynthKey(meshId: string, taskId: string): string {
     return `${meshId}::${taskId}`;
 }
 
-// Test hook: clear the in-flight idle debounce state between cases.
+// Test hook: clear the in-flight acked-hold state between cases.
 export function __resetReconcileInFlightSynthDebounceForTests(): void {
-    inFlightIdleObservationCounts.clear();
+    inFlightAckedHoldState.clear();
 }
 
 interface LiveCoordinator {
@@ -1328,17 +1348,17 @@ async function reconcileUnterminatedDirectDispatches(
     const dispatches = getActiveDirectDispatches(mesh.id);
     if (dispatches.length === 0) return; // cheap exit — nothing dispatched, nothing to reconcile
 
-    // Prune the in-flight idle debounce map to the tasks still active in THIS mesh, so a
-    // completed/pruned task's counter is dropped (the map never grows without bound).
+    // Prune the in-flight acked-hold map to the tasks still active in THIS mesh, so a
+    // completed/pruned task's state is dropped (the map never grows without bound).
     const activeTaskKeys = new Set(
         dispatches
             .map(d => readNonEmptyString(d.taskId))
             .filter(Boolean)
             .map(taskId => inFlightSynthKey(mesh.id, taskId)),
     );
-    for (const key of inFlightIdleObservationCounts.keys()) {
+    for (const key of inFlightAckedHoldState.keys()) {
         if (key.startsWith(`${mesh.id}::`) && !activeTaskKeys.has(key)) {
-            inFlightIdleObservationCounts.delete(key);
+            inFlightAckedHoldState.delete(key);
         }
     }
 
@@ -1369,74 +1389,109 @@ async function reconcileUnterminatedDirectDispatches(
             ...(providerType ? { agentType: providerType, providerType } : {}),
         };
 
+        const synthKey = inFlightSynthKey(mesh.id, taskId);
+        const isAcked = dispatch.status === 'acked';
+
+        // R4f: read the worker session. A FAILED read (transport error / success:false / no payload)
+        // is no longer silently swallowed for an acked task — it is the liveness side of the
+        // death backstop (a). We classify the read result and route an acked failure into the
+        // failure counter; a never-acked (or non-acked) failure keeps the old best-effort `continue`.
         let payload: Record<string, unknown> | null = null;
+        let readFailed = false;
         try {
             if (isLocalNode) {
                 const result = await components.commandHandler.handle('read_chat', readArgs);
-                if (result && (result as { success?: boolean }).success === false) continue;
-                payload = unwrapReadChatPayload(result);
+                if (result && (result as { success?: boolean }).success === false) {
+                    readFailed = true;
+                } else {
+                    payload = unwrapReadChatPayload(result);
+                }
             } else if (dispatchMeshCommand) {
                 const result = await dispatchMeshCommand(nodeDaemonId, 'read_chat', readArgs);
                 payload = unwrapReadChatPayload(result);
-                if (payload && (payload as { success?: boolean }).success === false) continue;
+                if (payload && (payload as { success?: boolean }).success === false) { payload = null; readFailed = true; }
             } else {
-                continue; // remote node but no P2P transport — can't read; retry next tick
+                continue; // remote node but no P2P transport — can't read; retry next tick (not a death signal)
             }
         } catch {
-            continue; // best-effort; session may be gone or node offline — retry next tick
+            readFailed = true; // session may be gone or node offline
         }
-        if (!payload) continue;
+        if (!payload && !readFailed) continue; // null payload that wasn't a hard failure — retry next tick
+
+        if (readFailed || !payload) {
+            // R4f backstop (a) — liveness failure. For a never-acked dispatch there is no in-flight
+            // turn to protect, so a read failure is a transient probe blip → retry next tick (old
+            // behavior). For an ACKED dispatch that we had previously confirmed live, a streak of
+            // consecutive read failures means the worker session genuinely went away mid-turn and
+            // will never emit its real completion — count it. The actual terminal cleanup of a
+            // gone session is owned by PHASE 2.5 (stranded reclaim) / PHASE 5 (orphan prune); here
+            // we only record the death observation and STOP holding so those nets can take over,
+            // rather than pinning the row on an indefinite hold for a session that is already gone.
+            if (isAcked) {
+                const prior = inFlightAckedHoldState.get(synthKey);
+                const failures = (prior?.consecutiveReadFailures ?? 0) + 1;
+                const liveConfirmedSinceAck = prior?.liveConfirmedSinceAck ?? false;
+                inFlightAckedHoldState.set(synthKey, { liveConfirmedSinceAck, consecutiveReadFailures: failures });
+                if (liveConfirmedSinceAck && failures >= ACKED_DEATH_CONSECUTIVE_READ_FAILURES) {
+                    LOG.warn('MeshReconcile', `Acked-hold death signal: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) read_chat failed ${failures}x consecutively after a live-confirmed ack — worker session presumed gone mid-turn; releasing the indefinite synth hold to the stranded-reclaim / orphan-prune nets`);
+                }
+            }
+            continue; // no readable transcript this tick → cannot synth here; retry / let backstops act
+        }
+
+        // Read succeeded (a conclusive idle/generating status) → the session is reachable: reset the
+        // failure streak and mark it live-confirmed-since-ack, so a LATER read failure is recognized
+        // as a genuine liveness loss (backstop a) rather than a node that was never reachable.
+        inFlightAckedHoldState.set(synthKey, { liveConfirmedSinceAck: true, consecutiveReadFailures: 0 });
 
         // Only act on a session that has actually settled to idle. A generating /
         // waiting_approval session is mid-turn — synthesizing a completion now would
         // be wrong. (idle is the only status the MCP poll path reconciles too.)
-        const synthKey = inFlightSynthKey(mesh.id, taskId);
         const nowMs = Date.now();
         if (readChatPayloadStatus(payload) !== 'idle') {
-            // Not idle → the worker is mid-turn. Reset any partial idle streak so a single
-            // idle blip during a long generation never accumulates toward the synth threshold.
-            inFlightIdleObservationCounts.delete(synthKey);
+            // Not idle → the worker is genuinely mid-turn (a clear live signal). Keep the
+            // live-confirmed flag set (above) but otherwise just wait for the real emit.
             continue;
         }
 
-        // RECONCILE-SYNTH-PREEMPTS-COMPLETION (R4e hardened): a dispatch whose worker was OBSERVED
-        // to start generating (the agent:generating_started ack flipped the row to 'acked') and has
-        // no terminal yet is potentially still in-flight — its `idle` read here may be a transient
-        // mid-turn window, not a settled completion. Before synthesizing for such a task we require
-        // ALL of: (1) CONSECUTIVE idle observations (a flicker clears next tick, counter reset
-        // above); (2) at least MIN_IDLE_SETTLE_MS elapsed since the FIRST idle observation (the time
-        // hurdle the ~8s tick count cannot express — it would otherwise be straddled by a long
-        // turn's mid-turn idle); and (3) at least ACKED_TURN_SETTLE_MS since the generating_started
-        // ack, so a turn that only just started is never completed off an early idle blip. A
-        // genuinely-settled (completed-but-lost) or dead session keeps reading idle and clears all
-        // three within a few extra ticks, so notification-miss stays 0. A never-acked dispatch
-        // (worker never started) is exempt — no in-flight generation to pre-empt; its lost-dispatch
-        // case is covered by the downstream grace + stale-summary guards.
-        if (dispatch.status === 'acked') {
-            const prior = inFlightIdleObservationCounts.get(synthKey);
-            const firstIdleAtMs = prior?.firstIdleAtMs ?? nowMs;
-            const idleStreak = (prior?.count ?? 0) + 1;
-            inFlightIdleObservationCounts.set(synthKey, { count: idleStreak, firstIdleAtMs });
-            const idleSettleMs = nowMs - firstIdleAtMs;
-            const minIdleSettleMs = resolveMinIdleSettleMs();
-            const ackedTurnSettleMs = resolveAckedTurnSettleMs();
+        // R4f GENERATING-BOUNDARY (acked-hold): a dispatch whose worker was OBSERVED to start
+        // generating (the agent:generating_started ack flipped the row to 'acked') is ALIVE and
+        // mid-turn — it WILL eventually emit a real terminal. An `idle` read here is therefore
+        // presumed a TRANSIENT mid-turn window (a PTY inter-tool-call settle, or final text already
+        // rendered while the lifecycle close lags), NOT a settled completion. We HOLD the synth
+        // INDEFINITELY rather than racing the worker's (variable, unbounded) emit latency with a
+        // finite timer — the failure mode of R4..R4e. This is safe: when the worker's real emit
+        // lands it writes a terminal ledger, and reconcileDirectDispatchCompletionFromTranscript's
+        // hasTerminalLedgerAfterDispatch makes any later synth an idempotent no-op, so the real emit
+        // always wins no matter how late. The hold is released ONLY by the death backstops:
+        //   (a) consecutive read failures after a live-confirmed ack (handled above), or
+        //   (b) the absolute ACKED_DEATH_DEADLINE_MS since the ack — a notification-loss net set FAR
+        //       above any observed emit latency, so it catches a genuinely-wedged worker / lost emit
+        //       without racing a normal slow turn.
+        // A never-acked dispatch (worker never started) is exempt — no in-flight generation to
+        // pre-empt; it keeps the first-idle-tick synth, with the downstream grace + stale-summary
+        // guards as its backstops.
+        if (isAcked) {
             const ackedAtMs = Date.parse(readNonEmptyString(dispatch.updatedAt));
             const sinceAckMs = Number.isFinite(ackedAtMs) ? nowMs - ackedAtMs : Number.POSITIVE_INFINITY;
-            const tickGuardMet = idleStreak >= REQUIRED_CONSECUTIVE_IDLE_TICKS_FOR_INFLIGHT_SYNTH;
-            const settleGuardMet = idleSettleMs >= minIdleSettleMs;
-            const ackGuardMet = sinceAckMs >= ackedTurnSettleMs;
-            if (!tickGuardMet || !settleGuardMet || !ackGuardMet) {
-                LOG.info('MeshReconcile', `In-flight synth hold: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) idle ${idleStreak}/${REQUIRED_CONSECUTIVE_IDLE_TICKS_FOR_INFLIGHT_SYNTH} tick(s), settle ${Math.round(idleSettleMs / 1000)}s/${Math.round(minIdleSettleMs / 1000)}s, since-ack ${Number.isFinite(sinceAckMs) ? Math.round(sinceAckMs / 1000) + 's' : '∞'}/${Math.round(ackedTurnSettleMs / 1000)}s — deferring completion synth until the worker's turn genuinely settles (guards against a mid-turn idle window pre-empting the real completion)`);
+            const deathDeadlineMs = resolveAckedDeathDeadlineMs();
+            if (sinceAckMs < deathDeadlineMs) {
+                LOG.info('MeshReconcile', `Acked-hold: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) read idle ${Number.isFinite(sinceAckMs) ? Math.round(sinceAckMs / 1000) + 's' : '∞'} since the generating_started ack — HOLDING synth indefinitely (worker is alive and will emit; a later real emit is idempotent). Death backstop fires at ${Math.round(deathDeadlineMs / 1000)}s or on consecutive read failures.`);
                 continue;
             }
+            LOG.warn('MeshReconcile', `Acked-hold death deadline reached: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) still idle ${Math.round(sinceAckMs / 1000)}s after the ack (deadline ${Math.round(deathDeadlineMs / 1000)}s) — synthesizing the missing completion as a notification-loss net (a real emit, if it ever lands, no-ops idempotently).`);
         }
 
-        // R4e fix (3) — worker-emit priority. If the worker's REAL terminal emit for this task has
-        // already arrived in the pending-events queue (queued for delivery to the coordinator) but
-        // not yet written a terminal ledger, YIELD: let the genuine emit surface rather than racing
-        // it with a synth that would win the taskId-anchored fingerprint dedup and mask it.
+        // R4f (auxiliary, was R4e fix 3) — worker-emit priority. Secondary check: if the worker's
+        // REAL terminal emit for this task has already arrived in the pending-events queue (queued
+        // for delivery to the coordinator) but not yet written a terminal ledger, YIELD — let the
+        // genuine emit surface rather than racing it with a synth that would win the taskId-anchored
+        // fingerprint dedup and mask it. Under the R4f acked-hold this is now an auxiliary belt-and-
+        // suspenders check (the indefinite hold already defers an acked synth); it still guards the
+        // never-acked path and the post-death-deadline acked synth from racing an emit caught in
+        // flight at synth-commit time.
         if (realTerminalEmitPendingForTask(mesh.id, taskId)) {
-            inFlightIdleObservationCounts.delete(synthKey);
+            inFlightAckedHoldState.delete(synthKey);
             LOG.info('MeshReconcile', `Worker-emit priority: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) has a real terminal completion already queued — yielding synth to the worker's own emit`);
             continue;
         }
@@ -1471,15 +1526,17 @@ async function reconcileUnterminatedDirectDispatches(
             continue;
         }
 
-        // R4e fix (2) — live re-probe immediately before committing the synth. The idle
-        // observations that satisfied the settle guards above accumulated over PRIOR ticks; do one
-        // fresh read right now so a worker that resumed generating since this tick's first read is
-        // never falsely completed off a stale snapshot. Best-effort: an inconclusive re-probe
-        // (transport error/null) falls through to the synth — we already hold a valid idle read from
-        // the top of THIS tick, so a re-probe failure must not re-introduce a notification-miss.
+        // R4f (auxiliary, was R4e fix 2) — live re-probe immediately before committing the synth. A
+        // fresh read right now catches a worker that resumed generating since this tick's first read
+        // so it is never falsely completed off a stale snapshot. Best-effort: an inconclusive
+        // re-probe (transport error/null) falls through to the synth — we already hold a valid idle
+        // read from the top of THIS tick, so a re-probe failure must not re-introduce a
+        // notification-miss. Under the R4f acked-hold this matters mainly for the never-acked path
+        // and the post-death-deadline acked synth (the indefinite hold already deferred a live acked
+        // turn); it stays as a final live-state guard at synth-commit time.
         const reprobeStatus = await reprobeWorkerStatus(components, { isLocalNode, nodeDaemonId, readArgs });
         if (reprobeStatus && reprobeStatus !== 'idle') {
-            inFlightIdleObservationCounts.delete(synthKey);
+            inFlightAckedHoldState.delete(synthKey);
             LOG.info('MeshReconcile', `Live re-probe defer: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) read '${reprobeStatus}' at synth-commit time — worker resumed generating; deferring synth to a later tick`);
             continue;
         }
