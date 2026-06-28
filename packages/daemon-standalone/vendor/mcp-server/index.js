@@ -496,12 +496,13 @@ function resolveCoordinatorNode(ctx) {
     if (byMachine) return byMachine;
   }
   if (ctx.localDaemonId) {
-    return ctx.mesh.nodes.find((n) => readNodeDaemonId(n) === ctx.localDaemonId);
+    return ctx.mesh.nodes.find((n) => (0, import_daemon_core2.daemonIdsEquivalent)(readNodeDaemonId(n), ctx.localDaemonId));
   }
   return void 0;
 }
 function resolveCoordinatorDaemonId(ctx) {
-  return readString(resolveCoordinatorNode(ctx)?.daemonId) || readString(ctx.localDaemonId) || readString(ctx.localMachineId);
+  const resolved = readString(resolveCoordinatorNode(ctx)?.daemonId) || readString(ctx.localDaemonId) || readString(ctx.localMachineId);
+  return (0, import_daemon_core2.canonicalDaemonId)(resolved) ?? readString(resolved);
 }
 function readNodeMachineId(node) {
   return readString(node.machineId) || readString(node.machine_id) || readString(node.machine?.id) || readString(node.machine?.machineId) || readString(node.lastProbe?.machineId) || readString(node.last_probe?.machine_id) || readString(node.lastProbe?.machine?.id) || readString(node.lastProbe?.machine?.machineId) || readString(node.last_probe?.machine?.id) || readString(node.last_probe?.machine?.machine_id);
