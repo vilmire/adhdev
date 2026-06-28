@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import { randomUUID } from 'crypto'
@@ -142,6 +142,13 @@ function queueProgress(meshId: string, jobSuffix: string) {
 }
 
 describe('runMeshReconcileTick', () => {
+  // R4e in-flight-synth time knobs are env-tunable and read at call time; always clear them
+  // after each case so a test that sets them never leaks into the next.
+  afterEach(() => {
+    delete process.env.MESH_INFLIGHT_MIN_IDLE_SETTLE_MS
+    delete process.env.MESH_INFLIGHT_ACKED_TURN_SETTLE_MS
+  })
+
   it('drains the queue and injects into an idle coordinator', async () => {
     const meshId = `mesh_reconcile_idle_${Date.now()}`
     try {
@@ -1436,6 +1443,10 @@ describe('runMeshReconcileTick', () => {
 
     it('genuinely-lost completion (acked, persistently idle): synthesizes AND queues a coordinator completion once the idle settle is confirmed', async () => {
       const meshId = `mesh_reconcile_phase4_lost_settled_${Date.now()}`
+      // Disable the R4e TIME hurdles (settle / acked-turn) so this case exercises the original
+      // consecutive-TICK confirmation path in isolation. The time hurdles get their own tests below.
+      process.env.MESH_INFLIGHT_MIN_IDLE_SETTLE_MS = '0'
+      process.env.MESH_INFLIGHT_ACKED_TURN_SETTLE_MS = '0'
       try {
         const sessionId = 'sess-settled'
         const nodeId = 'node_local'
@@ -1522,6 +1533,191 @@ describe('runMeshReconcileTick', () => {
         const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed' && e.sessionId === sessionId)
         expect(completed).toBeTruthy()
         expect((completed?.payload as any)?.finalSummary).toContain('All done on the dispatched task')
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    // ── R4e: RECONCILE-SYNTH-PREEMPTS-COMPLETION race hardening ───────────────
+    // The consecutive-tick guard alone is a ~8s window a long worker turn can straddle with a
+    // mid-turn idle read, synthesizing a completion ~11s BEFORE the worker's real emit (the synth
+    // then wins the taskId fingerprint dedup and masks the genuine one). R4e adds: (1) a time-based
+    // idle-settle hurdle, (2) a live re-probe at commit, (3) worker-emit priority (yield to a real
+    // emit already queued), and (4) an acked-turn settle window. All four are FINITE so a truly
+    // dead worker that never emits is still eventually synthesized (notification-miss stays 0).
+
+    it('R4e worker-emit priority (live race): when the worker\'s REAL completion is already queued, the in-flight synth YIELDS — no premature pre-empting synth', async () => {
+      const meshId = `mesh_reconcile_r4e_emit_priority_${Date.now()}`
+      // Disable the time hurdles so this isolates the worker-emit-priority yield (fix 3).
+      process.env.MESH_INFLIGHT_MIN_IDLE_SETTLE_MS = '0'
+      process.env.MESH_INFLIGHT_ACKED_TURN_SETTLE_MS = '0'
+      try {
+        const sessionId = 'sess-emit-priority'
+        const nodeId = 'node_local'
+        const taskId = 'task_emit_priority'
+        seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+
+        // read_chat reads idle with a post-dispatch tail summary — the synth WOULD fire on tick 2.
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd === 'get_status_metadata') return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true, status: 'idle', providerSessionId: 'claude-history-emit',
+            messages: [{ role: 'assistant', content: 'mid-turn rendered text', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+
+        // Tick 1: first idle (streak=1) → held.
+        await runMeshReconcileTick(components)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
+
+        // The worker's REAL generating_completed lands in the pending queue (forwarded by the
+        // worker) BEFORE the synth-eligible tick — the exact R4e race.
+        queuePendingMeshCoordinatorEvent({
+          event: 'agent:generating_completed',
+          meshId,
+          nodeLabel: `Node '${nodeId}'`,
+          nodeId,
+          metadataEvent: { taskId, sessionId, providerSessionId: 'claude-history-emit', finalSummary: 'REAL worker completion — full 53s turn result.', timestamp: Date.now() },
+          coordinatorMessage: `Node '${nodeId}' has completed its task.`,
+          queuedAt: Date.now(),
+        })
+
+        // Tick 2: streak=2 + time hurdles disabled → would synth, but the real emit is queued →
+        // worker-emit priority YIELDS. No synthesized terminal is written.
+        await runMeshReconcileTick(components)
+        const synth = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed' && (e.payload as any)?.source === 'daemon_reconcile_transcript_completion')
+        expect(synth).toHaveLength(0)
+        // The worker's own completion is intact in the queue (it surfaces to the coordinator).
+        const pending = getPendingMeshCoordinatorEvents(meshId).filter(p => p.event === 'agent:generating_completed')
+        expect(pending).toHaveLength(1)
+        expect((pending[0].metadataEvent as any)?.finalSummary).toContain('REAL worker completion')
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('R4e time settle: a long-turn mid-turn idle (2 consecutive ticks) is DEFERRED until MIN_IDLE_SETTLE elapses — then still synthesizes (finite, no notif-miss)', async () => {
+      const meshId = `mesh_reconcile_r4e_settle_${Date.now()}`
+      // Acked-turn hurdle off; only the idle-settle hurdle under test. Set settle huge so two
+      // back-to-back ticks cannot clear it.
+      process.env.MESH_INFLIGHT_ACKED_TURN_SETTLE_MS = '0'
+      process.env.MESH_INFLIGHT_MIN_IDLE_SETTLE_MS = '3600000'
+      try {
+        const sessionId = 'sess-settle'
+        const nodeId = 'node_local'
+        const taskId = 'task_settle'
+        seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd === 'get_status_metadata') return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true, status: 'idle', providerSessionId: 'claude-history-settle',
+            messages: [{ role: 'assistant', content: 'mid-turn idle window text', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+
+        // Two idle ticks satisfy the tick-count guard, but the time hurdle holds the synth.
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+
+        // A genuinely-stalled worker stays idle forever; once the settle window is satisfied the
+        // synth MUST eventually fire so the notification is never lost (finite, not an infinite hold).
+        process.env.MESH_INFLIGHT_MIN_IDLE_SETTLE_MS = '0'
+        await runMeshReconcileTick(components)
+        const settled = readLedgerEntries(meshId).find(e => e.kind === 'task_completed' && e.sessionId === sessionId)
+        expect(settled).toBeTruthy()
+        expect((settled?.payload as any)?.source).toBe('daemon_reconcile_transcript_completion')
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('R4e acked-turn settle: a synth is DEFERRED within ACKED_TURN_SETTLE of the generating_started ack, even with idle reads (a just-started turn is never completed off an early blip)', async () => {
+      const meshId = `mesh_reconcile_r4e_ackgrace_${Date.now()}`
+      // Idle-settle hurdle off; only the acked-turn hurdle under test. seedAckedDispatch flips the
+      // dispatch to 'acked' "just now", so dispatch.updatedAt ≈ now → a huge window holds the synth.
+      process.env.MESH_INFLIGHT_MIN_IDLE_SETTLE_MS = '0'
+      process.env.MESH_INFLIGHT_ACKED_TURN_SETTLE_MS = '3600000'
+      try {
+        const sessionId = 'sess-ackgrace'
+        const nodeId = 'node_local'
+        const taskId = 'task_ackgrace'
+        seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd === 'get_status_metadata') return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true, status: 'idle', providerSessionId: 'claude-history-ackgrace',
+            messages: [{ role: 'assistant', content: 'idle blip right after ack', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        // The ack happened "just now" → within the acked-turn settle window → no synth.
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('R4e live re-probe: a worker that resumed generating between ticks is NOT synthesized off a stale idle snapshot (re-probe at commit time defers)', async () => {
+      const meshId = `mesh_reconcile_r4e_reprobe_${Date.now()}`
+      process.env.MESH_INFLIGHT_MIN_IDLE_SETTLE_MS = '0'
+      process.env.MESH_INFLIGHT_ACKED_TURN_SETTLE_MS = '0'
+      try {
+        const sessionId = 'sess-reprobe'
+        const nodeId = 'node_local'
+        const taskId = 'task_reprobe'
+        seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+        // read_chat reads idle for the per-tick top reads, but the synth-commit RE-PROBE (the 3rd
+        // read_chat call, on tick 2) catches the worker having resumed generating.
+        let readChatCalls = 0
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd === 'get_status_metadata') return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+          if (cmd !== 'read_chat') return { success: true }
+          readChatCalls++
+          const status = readChatCalls >= 3 ? 'generating' : 'idle'
+          return {
+            success: true, status, providerSessionId: 'claude-history-reprobe',
+            messages: [{ role: 'assistant', content: 'intermediate text', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+        await runMeshReconcileTick(components) // tick 1: top read idle (#1) → streak=1, held
+        await runMeshReconcileTick(components) // tick 2: top read idle (#2) → streak=2 → re-probe (#3)=generating → defer
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
       } finally {
         cleanup(meshId)
       }
