@@ -96,8 +96,15 @@ export interface MagiResponseSource {
     provider?: string
     /** False when the replica failed or its output could not be parsed. */
     ok: boolean
-    /** Reason when ok=false (timeout / failed / unparseable). */
+    /** Reason when ok=false (timeout / failed / unparseable / stale). */
     error?: string
+    /**
+     * True when the replica was detected STALE during collection — assigned to a
+     * node/session no longer present in the live mesh (so it will never reach a
+     * terminal state). Distinguishes a dead-assignment replica from one that is
+     * merely still generating. Always implies ok=false.
+     */
+    stale?: boolean
 }
 
 /** A parsed replica response paired with its source identity. */

@@ -604,7 +604,7 @@ function normalizeReplicaCount(value: unknown): number | undefined {
  * structurally invalid input so the calling tool returns a clear error rather than
  * writing a malformed panel.
  */
-function normalizeMagiPanel(config: unknown): MagiPanel {
+export function normalizeMagiPanel(config: unknown): MagiPanel {
     if (!config || typeof config !== 'object' || Array.isArray(config)) {
         throw new Error('invalid_magi_panel: config must be an object');
     }

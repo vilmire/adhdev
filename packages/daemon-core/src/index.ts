@@ -192,7 +192,7 @@ export type { SavedProviderSessionEntry } from './config/saved-sessions.js';
 export {
   listMeshes, getMesh, getMeshByRepo, createMesh, updateMesh, deleteMesh,
   addNode, removeNode, updateNode, normalizeRepoIdentity,
-  listMagiPanels, getMagiPanel, upsertMagiPanel, removeMagiPanel,
+  listMagiPanels, getMagiPanel, upsertMagiPanel, removeMagiPanel, normalizeMagiPanel,
 } from './config/mesh-config.js';
 export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './config/mesh-config.js';
 // MAGI panel / common-output / synthesis types (re-exported from the mesh-shared
