@@ -103,6 +103,7 @@ export {
     meshMagiPanelSet,
     meshMagiReview,
     parseFirstMagiCandidate,
+    parseFirstMagiCandidateWithCompactFallback,
     parseMagiResponse,
     synthesizeMagiResponses,
 } from './mesh-tools-magi.js';

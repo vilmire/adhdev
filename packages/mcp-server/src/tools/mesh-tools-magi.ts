@@ -17,6 +17,7 @@ import {
     appendLedgerEntry,
     buildMeshNodeCapabilityTags,
     commandForNode,
+    compactChatPayload,
     enqueueTask,
     getMagiPanel,
     getQueue,
@@ -737,6 +738,49 @@ export function parseFirstMagiCandidate(payload: unknown): MagiAgentResponse | n
 }
 
 /**
+ * Fix-A-v2: make the summary-fallback actually fire on the collect read path.
+ *
+ * The collect path reads RAW daemon read_chat (no `compact: true`), and the v1 read-chat
+ * contract (read-chat-contract.ts validateReadChatResultPayload / validateMessage) drops the
+ * top-level and per-message `summary` carriers that {@link collectMagiCandidateTexts} harvests.
+ * So for antigravity — whose final answer lives ONLY in `summary` while the transcript bubble
+ * body is empty (_sameAsSummary) — every candidate is empty on the raw payload and the answer
+ * is lost as `unparseable_output`. Fix A's harvesting was structurally inert there.
+ *
+ * Re-derive the summary locally by running the SAME {@link compactChatPayload} lift the daemon's
+ * compact path uses (messageContent(finalAssistant) → `summary`), then parse candidates from
+ * BOTH payloads:
+ *   - the raw payload FIRST — preserves the newest-bubble-first preference and the
+ *     premature-collect guard for providers (claude-cli etc.) that keep the JSON in the bubble
+ *     body, and never regresses to an older bubble just because compact lifted a newer one;
+ *   - the compacted payload as the FALLBACK — surfaces the lifted `summary` so empty-bubble
+ *     providers (antigravity) are finally recovered.
+ * Candidates are deduped across both sources. Compact is best-effort: a throw leaves the raw
+ * candidates intact.
+ */
+export function parseFirstMagiCandidateWithCompactFallback(
+    payload: unknown,
+    opts: { sessionId?: string | null } = {},
+): MagiAgentResponse | null {
+    const rawCandidates = collectMagiCandidateTexts(payload);
+    let compactCandidates: string[] = [];
+    try {
+        compactCandidates = collectMagiCandidateTexts(
+            compactChatPayload(payload, { sessionId: opts.sessionId ?? null }),
+        );
+    } catch { /* compact lift is best-effort — raw candidates still apply */ }
+    const seen = new Set<string>();
+    for (const candidate of [...rawCandidates, ...compactCandidates]) {
+        const trimmed = candidate.trim();
+        if (!trimmed || seen.has(trimmed)) continue;
+        seen.add(trimmed);
+        const parsed = parseMagiResponse(candidate);
+        if (parsed) return parsed;
+    }
+    return null;
+}
+
+/**
  * Fix A re-wait gate: a `completed` replica is NOT yet trustworthy for collection when its
  * terminal completion evidence is WEAK (the same insufficient/reviewRecommended/missing-
  * final-assistant signal the daemon shares across the live + ledger paths) OR a short-
@@ -1371,9 +1415,14 @@ async function collectMagiResponses(
                 tailLimit: 6,
             });
             const payload = unwrapCommandPayload(result);
-            // Fix A summary-fallback: parse the first viable candidate (assistant bubbles +
-            // summary carriers, newest-first) so antigravity's summary-only answer is caught.
-            parsed = parseFirstMagiCandidate(payload);
+            // Fix-A-v2 summary-fallback: the RAW read_chat payload has had its summary carriers
+            // stripped by the v1 contract, so re-derive them with the same compact lift the
+            // daemon's compact path uses and parse candidates from BOTH the raw payload (newest
+            // bubble body first, premature-collect guard) AND the compacted payload (surfaces the
+            // lifted `summary` so antigravity's empty-bubble / summary-only answer is recovered).
+            parsed = parseFirstMagiCandidateWithCompactFallback(payload, {
+                sessionId: task.assignedSessionId,
+            });
         } catch (e: any) {
             // A transient read failure re-waits (the node/peer may be momentarily busy);
             // finalize the failure only once the deadline is hit.
