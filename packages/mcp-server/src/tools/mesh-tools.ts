@@ -96,11 +96,13 @@ export {
     buildMagiFanoutPlan,
     buildMagiTaskPrompt,
     classifyStaleReplicas,
+    collectMagiCandidateTexts,
     findMagiReplicaTasks,
     meshMagiCollect,
     meshMagiPanelList,
     meshMagiPanelSet,
     meshMagiReview,
+    parseFirstMagiCandidate,
     parseMagiResponse,
     synthesizeMagiResponses,
 } from './mesh-tools-magi.js';

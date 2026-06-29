@@ -94,6 +94,66 @@ test('a node with no known HEAD commit is never proven stale (not excluded)', ()
     assert.equal(plan.distinctTargets, 2);
 });
 
+// ─── Fix B: stale-gate fallback via node drift counters (no referenceCommit) ───
+
+// Same node shape, but carrying upstream drift counters (GitCompactSummary.behind/ahead).
+function driftNode(id: string, provider: string, behind: number, ahead = 0, platform = 'linux') {
+    return {
+        id,
+        workspace: `/ws/${id}`,
+        userOverrides: { platform, arch: 'x64' },
+        policy: { providerPriority: [provider] },
+        // No headCommit on purpose: the coordinator carries no reference commit, so staleness
+        // can only be judged from the node's own drift from its upstream.
+        git: { branch: 'main', headCommit: null, behind, ahead },
+    } as any;
+}
+
+test('no referenceCommit: a behind>0 node is git-stale via drift fallback (default-excluded)', () => {
+    const panel = { members: [{ nodeId: 'a', provider: 'claude-cli' }, { nodeId: 'b', provider: 'codex-cli' }] };
+    // a is clean (behind 0), b is behind 3 — and there is NO coordinator reference commit.
+    const nodes = [driftNode('a', 'claude-cli', 0, 0, 'win32'), driftNode('b', 'codex-cli', 3, 0, 'darwin')];
+    const plan = buildMagiFanoutPlan(panel as any, nodes, {});
+
+    assert.equal(plan.referenceCommit, undefined);
+    // b is provably on different code than its upstream → git-stale → excluded.
+    assert.equal(plan.staleMembers.length, 1);
+    assert.equal(plan.staleMembers[0].nodeId, 'b');
+    assert.equal(plan.staleMembers[0].gitStale, true);
+    assert.equal(plan.staleMembers[0].excluded, true);
+    assert.equal(plan.replicas.length, 1);
+    assert.equal(plan.enoughTargets, false);
+});
+
+test('no referenceCommit: an ahead>0 node is also git-stale via drift fallback', () => {
+    const panel = { members: [{ nodeId: 'a', provider: 'claude-cli' }, { nodeId: 'b', provider: 'codex-cli' }] };
+    const nodes = [driftNode('a', 'claude-cli', 0, 0, 'win32'), driftNode('b', 'codex-cli', 0, 2, 'darwin')];
+    const plan = buildMagiFanoutPlan(panel as any, nodes, {});
+    assert.equal(plan.staleMembers.length, 1);
+    assert.equal(plan.staleMembers[0].nodeId, 'b');
+});
+
+test('no referenceCommit: include_stale=true keeps the drifted member', () => {
+    const panel = { members: [{ nodeId: 'a', provider: 'claude-cli' }, { nodeId: 'b', provider: 'codex-cli' }] };
+    const nodes = [driftNode('a', 'claude-cli', 0, 0, 'win32'), driftNode('b', 'codex-cli', 3, 0, 'darwin')];
+    const plan = buildMagiFanoutPlan(panel as any, nodes, { includeStale: true });
+    assert.equal(plan.staleMembers.length, 0);
+    assert.equal(plan.includedStaleMembers.length, 1);
+    assert.equal(plan.enoughTargets, true);
+    assert.equal(plan.replicas.length, 2);
+});
+
+test('no referenceCommit + no drift telemetry: nothing is proven stale (regression guard)', () => {
+    // The original "no referenceCommit → nothing excluded" guarantee must hold when nodes
+    // carry NO drift counters — we never exclude on missing telemetry.
+    const panel = { members: [{ nodeId: 'a', provider: 'claude-cli' }, { nodeId: 'b', provider: 'codex-cli' }] };
+    const nodes = [node('a', 'claude-cli', REF, 'win32'), node('b', 'codex-cli', OLD, 'darwin')];
+    const plan = buildMagiFanoutPlan(panel as any, nodes, {});
+    assert.equal(plan.staleMembers.length, 0);
+    assert.equal(plan.enoughTargets, true);
+    assert.equal(plan.distinctTargets, 2);
+});
+
 test('tag-routed member prefers a fresh candidate over a stale one', () => {
     // Two darwin codex-cli nodes: one fresh, one stale. A tag-routed member should
     // resolve to the fresh candidate and not be flagged stale.

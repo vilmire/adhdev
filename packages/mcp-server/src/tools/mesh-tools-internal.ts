@@ -283,6 +283,7 @@ export {
     getSessionRecoveryContext,
     insertDirectDispatch,
     isP2pRelayTransportFailure,
+    isWeakCompletionEvidence,
     listMeshMissionSummaries,
     markStaleDirectDispatches,
     meshNodeIdMatches,

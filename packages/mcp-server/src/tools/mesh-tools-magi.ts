@@ -20,12 +20,14 @@ import {
     enqueueTask,
     getMagiPanel,
     getQueue,
+    isWeakCompletionEvidence,
     listMagiPanels,
     meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
     normalizeMagiPanel,
     normalizeMeshCapabilityTags,
     randomUUID,
+    readLedgerEntries,
     readString,
     refreshMeshFromDaemon,
     resolveCoordinatorNode,
@@ -444,6 +446,25 @@ function nodeHeadCommit(node: any): string | undefined {
 }
 
 /**
+ * Fix B fallback: a node's drift from its OWN upstream (GitCompactSummary.behind/ahead).
+ * Used only when no coordinator reference commit is known — a node that reports it is
+ * behind/ahead of its upstream is provably on different code than the panel baseline even
+ * though we cannot diff explicit HEADs. Returns {behind:0,ahead:0} when the node carries no
+ * drift telemetry, so a node with no counters is never proven stale (mirrors the
+ * missing-HEAD "can't prove → fresh" rule).
+ */
+function nodeGitDrift(node: any): { behind: number; ahead: number } {
+    const git = node?.git;
+    const behind = git && typeof git.behind === 'number' && Number.isFinite(git.behind) ? Math.max(0, git.behind) : 0;
+    const ahead = git && typeof git.ahead === 'number' && Number.isFinite(git.ahead) ? Math.max(0, git.ahead) : 0;
+    return { behind, ahead };
+}
+function nodeHasGitDrift(node: any): boolean {
+    const { behind, ahead } = nodeGitDrift(node);
+    return behind > 0 || ahead > 0;
+}
+
+/**
  * Resolve a panel against the live mesh nodes into a concrete fan-out plan:
  * expand each available member to its replica count, clamp the total to the guard
  * cap (drop logged, never silent), assess (node, provider) target diversity, and
@@ -523,7 +544,28 @@ export function buildMagiFanoutPlan(
                 gitStale = true;
             }
         } else {
-            headCommit = nodeHeadCommit(candidateNodes.find(n => nodeHeadCommit(n)) ?? candidateNodes[0]);
+            // Fix B (stale-gate fallback): the coordinator carries no git HEAD telemetry, so
+            // there is no reference commit to diff against. Previously this passed EVERY
+            // candidate as fresh (gitStale stays false), so a node sitting behind/ahead of its
+            // own upstream silently joined the panel on different code. When drift counters ARE
+            // present, use them: prefer a candidate with zero drift; if none is clean but some
+            // candidate reports drift, mark the member git-stale (default-excluded like the
+            // HEAD-diff path). A candidate with no drift telemetry at all is still treated as
+            // fresh — we never exclude on missing data.
+            const freshCandidate = candidateNodes.find(n => !nodeHasGitDrift(n));
+            if (freshCandidate && candidateNodes.some(nodeHasGitDrift)) {
+                // Mixed pool: route to the clean candidate, leave the member fresh.
+                headCommit = nodeHeadCommit(freshCandidate);
+                if (member.nodeId) targetNodeId = (freshCandidate as any).id;
+                gitStale = false;
+            } else if (!freshCandidate && candidateNodes.some(nodeHasGitDrift)) {
+                // Every candidate reports drift → provably stale relative to its upstream.
+                headCommit = nodeHeadCommit(candidateNodes[0]);
+                gitStale = true;
+            } else {
+                // No drift telemetry on any candidate → cannot prove staleness; treat as fresh.
+                headCommit = nodeHeadCommit(candidateNodes.find(n => nodeHeadCommit(n)) ?? candidateNodes[0]);
+            }
         }
 
         const resolution: MagiMemberResolution = {
@@ -541,7 +583,9 @@ export function buildMagiFanoutPlan(
         // the reference); include_stale=true overrides but the caller surfaces a warning.
         if (gitStale && !includeStale) {
             resolution.excluded = true;
-            resolution.reason = `git-stale: node HEAD ${headCommit ?? '(unknown)'} differs from reference ${referenceCommit}`;
+            resolution.reason = referenceCommit
+                ? `git-stale: node HEAD ${headCommit ?? '(unknown)'} differs from reference ${referenceCommit}`
+                : `git-stale: node reports drift from its upstream (behind/ahead) and no coordinator reference commit is known`;
             memberResolutions.push(resolution);
             return;
         }
@@ -627,30 +671,99 @@ export function buildMagiTaskPrompt(args: {
 
 // ─── Worker-output extraction (best-effort) ─────
 
-function extractAssistantText(payload: unknown): string {
-    if (!payload || typeof payload !== 'object') return '';
+/**
+ * Fix A (summary fallback): ordered list of candidate texts to attempt MAGI parsing on,
+ * newest-first. The naive "last assistant bubble content" path misses two real shapes:
+ *   1. A mid-turn EMPTY final bubble (the premature-collect symptom) — the parseable
+ *      answer lives in an EARLIER assistant bubble.
+ *   2. antigravity-cli, which carries the turn's answer in a `summary` field while the
+ *      transcript bubble body is empty (_sameAsSummary) — reading the last bubble returns ''
+ *      and the real JSON answer is never seen.
+ * We therefore gather every assistant bubble's content AND every summary-bearing field
+ * (per-message summary/summaryMetadata, and the payload-level summary/finalSummary/
+ * lastMessagePreview/text), newest-first, and let the caller parse the first that yields a
+ * valid MAGI response. Pure; deduped; empties dropped.
+ */
+export function collectMagiCandidateTexts(payload: unknown): string[] {
+    if (!payload || typeof payload !== 'object') return [];
     const p = payload as Record<string, any>;
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const push = (value: unknown): void => {
+        const text = typeof value === 'string' ? value : '';
+        const trimmed = text.trim();
+        if (!trimmed || seen.has(trimmed)) return;
+        seen.add(trimmed);
+        out.push(text);
+    };
     const messages = Array.isArray(p.messages) ? p.messages
         : Array.isArray(p.chat) ? p.chat
         : Array.isArray(p.transcript) ? p.transcript
         : [];
-    const texts: string[] = [];
-    for (const msg of messages) {
+    // Walk assistant bubbles newest-first so a finished earlier turn is preferred over an
+    // empty in-progress final bubble.
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const msg = messages[i];
         if (!msg || typeof msg !== 'object') continue;
         const role = String((msg as any).role || (msg as any).from || '').toLowerCase();
         if (role && role !== 'assistant' && role !== 'agent' && role !== 'model') continue;
         const content = (msg as any).content ?? (msg as any).text ?? (msg as any).message;
-        if (typeof content === 'string') texts.push(content);
+        if (typeof content === 'string') push(content);
         else if (Array.isArray(content)) {
-            for (const part of content) {
-                if (typeof part === 'string') texts.push(part);
-                else if (part && typeof part === 'object' && typeof (part as any).text === 'string') texts.push((part as any).text);
-            }
+            const joined = content
+                .map((part: any) => (typeof part === 'string' ? part : (part && typeof part === 'object' && typeof part.text === 'string' ? part.text : '')))
+                .join('');
+            push(joined);
         }
+        // Per-message summary carriers (antigravity _sameAsSummary case: body empty, answer here).
+        push((msg as any).summary);
+        push((msg as any).summaryMetadata?.summary);
     }
-    if (texts.length > 0) return texts[texts.length - 1];
-    // Fallbacks for flatter payload shapes.
-    return readString(p.finalSummary) || readString(p.lastMessagePreview) || readString(p.text) || '';
+    // Payload-level summary carriers (compact read_chat lifts the final answer into `summary`).
+    push(p.summary);
+    push(p.finalSummary);
+    push(p.lastMessagePreview);
+    push(p.text);
+    return out;
+}
+
+/** Parse the first MAGI candidate text that yields a valid response, newest-first. */
+export function parseFirstMagiCandidate(payload: unknown): MagiAgentResponse | null {
+    for (const candidate of collectMagiCandidateTexts(payload)) {
+        const parsed = parseMagiResponse(candidate);
+        if (parsed) return parsed;
+    }
+    return null;
+}
+
+/**
+ * Fix A re-wait gate: a `completed` replica is NOT yet trustworthy for collection when its
+ * terminal completion evidence is WEAK (the same insufficient/reviewRecommended/missing-
+ * final-assistant signal the daemon shares across the live + ledger paths) OR a short-
+ * generating suppressed completion (the early mid-turn bubble that the premature-collect bug
+ * mistakes for the final answer). We look up the latest terminal ledger entry for the task —
+ * the queue task row does not carry evidenceLevel/completionDiagnostic, but the ledger does
+ * (see mesh-event-forwarding terminal payload). Best-effort: a missing/unreadable ledger
+ * returns false so we never block collection on telemetry we cannot read.
+ */
+function replicaCompletionIsWeak(meshId: string, taskId: string): boolean {
+    try {
+        const entries = readLedgerEntries(meshId, { kind: ['task_completed'], tail: 200 });
+        for (let i = entries.length - 1; i >= 0; i -= 1) {
+            const entry = entries[i] as any;
+            const payload = entry?.payload && typeof entry.payload === 'object' ? entry.payload as Record<string, unknown> : undefined;
+            const entryTaskId = readString(payload?.taskId) || readString(entry?.taskId);
+            if (!entryTaskId || entryTaskId !== taskId) continue;
+            if (isWeakCompletionEvidence(payload)) return true;
+            const diag = payload?.completionDiagnostic;
+            if (diag && typeof diag === 'object' && !Array.isArray(diag)
+                && readString((diag as Record<string, unknown>).reason) === 'short_generating_suppressed') {
+                return true;
+            }
+            return false;
+        }
+    } catch { /* ledger unreadable — do not block collection */ }
+    return false;
 }
 
 // ─── Handlers ───────────────────────────────────
@@ -1186,52 +1299,68 @@ async function collectMagiResponses(
     const ids = new Set(args.replicaTaskIds);
     const deadline = Date.now() + args.timeoutMs;
     const TERMINAL = MAGI_TERMINAL_STATUSES;
-    let terminal = false;
-    // Poll the queue until every replica is terminal, every remaining replica is
-    // detected STALE (a dead assignment that will never complete — featureA), or the
-    // deadline elapses. Stale detection lets us stop early instead of blocking the
-    // full timeout on a replica whose node/session has gone away.
-    for (;;) {
-        const tasks = annotateQueueStaleness(getQueue(ctx.mesh.id).filter((t: any) => ids.has(t.id)), ctx.mesh);
-        const allPresent = tasks.length === ids.size;
-        if (allPresent && tasks.every((t: any) => TERMINAL.has(String(t.status)))) { terminal = true; break; }
-        const nonTerminal = tasks.filter((t: any) => !TERMINAL.has(String(t.status)));
-        const { staleTaskIds } = classifyStaleReplicas(tasks, TERMINAL);
-        if (allPresent && nonTerminal.length > 0 && staleTaskIds.size === nonTerminal.length) {
-            // Every replica still outstanding is stuck on a dead assignment — no point
-            // waiting out the clock. Stop now; the per-task pass below records them stale.
-            break;
-        }
-        if (Date.now() >= deadline) break;
-        await sleep(Math.min(MAGI_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
-    }
+    const emptyResponse = (): MagiAgentResponse => ({ claims: [], top_findings: [], open_questions: [] });
 
-    const tasks = annotateQueueStaleness(getQueue(ctx.mesh.id).filter((t: any) => ids.has(t.id)), ctx.mesh);
-    const { staleTaskIds, staleReasons } = classifyStaleReplicas(tasks, TERMINAL);
-    const responses: MagiSynthesizedResponse[] = [];
-    for (const task of tasks as any[]) {
+    // Per-replica FINAL verdict, locked once reached: a parseable answer, a stale dead
+    // assignment, a non-readable terminal, or (at deadline) an unparseable confirmation.
+    // `provisional` keeps a parseable-but-WEAK answer as the deadline fallback so a re-wait
+    // never loses a valid answer it already saw.
+    const finalized = new Map<string, MagiSynthesizedResponse>();
+    const provisional = new Map<string, MagiSynthesizedResponse>();
+
+    const buildSource = (task: any): MagiResponseSource => {
         const sourceNodeId = task.assignedNodeId || task.targetNodeId || undefined;
         // deltaA: capture the replica node's git ref so synthesis can flag cross-replica
-        // git skew. Best-effort, from the live node's compact git summary — no extra git
-        // command in the collection hot path.
+        // git skew. Best-effort, from the live node's compact git summary.
         const gitRef = extractNodeGitRef(sourceNodeId ? ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, sourceNodeId)) : undefined);
-        const source: MagiResponseSource = {
+        return {
             taskId: task.id,
             nodeId: sourceNodeId,
             provider: task.assignedProviderType || undefined,
             ok: false,
             ...(gitRef ? { git: gitRef } : {}),
         };
+    };
+
+    // Attempt to FINALIZE one replica from its current state. Returns true once a final
+    // verdict is locked. `force` (deadline reached / tasks gone) converts any remaining
+    // re-wait (weak/unparseable/still-running) into a terminal verdict.
+    const tryResolveReplica = async (
+        task: any,
+        staleTaskIds: Set<string>,
+        staleReasons: Record<string, string>,
+        force: boolean,
+    ): Promise<boolean> => {
+        const taskId = task.id;
+        const source = buildSource(task);
+
+        // Not a readable completion yet (failed/cancelled/running, or no session bound).
         if (task.status !== 'completed' || !task.assignedNodeId || !task.assignedSessionId) {
-            if (staleTaskIds.has(task.id)) {
+            if (staleTaskIds.has(taskId)) {
                 source.stale = true;
-                source.error = `stale: ${staleReasons[task.id]}`;
-            } else {
-                source.error = task.status === 'completed' ? 'no_session_to_read' : `replica_${task.status || 'incomplete'}`;
+                source.error = `stale: ${staleReasons[taskId]}`;
+                finalized.set(taskId, { source, response: emptyResponse() });
+                return true;
             }
-            responses.push({ source, response: { claims: [], top_findings: [], open_questions: [] } });
-            continue;
+            if (TERMINAL.has(String(task.status))) {
+                source.error = task.status === 'completed' ? 'no_session_to_read' : `replica_${task.status || 'incomplete'}`;
+                finalized.set(taskId, { source, response: emptyResponse() });
+                return true;
+            }
+            // Still running and not stale → only finalize at the deadline.
+            if (force) {
+                source.error = `replica_${task.status || 'incomplete'}`;
+                finalized.set(taskId, { source, response: emptyResponse() });
+                return true;
+            }
+            return false;
         }
+
+        // A `completed` replica WITH a session: read the transcript and try to parse a MAGI
+        // answer. Fix A: a completed-but-weak completion (early/mid-turn suppressed) or a
+        // not-yet-parseable transcript is treated as NOT terminal — re-poll until the deadline
+        // rather than collecting a premature mid-turn bubble as the final answer.
+        let parsed: MagiAgentResponse | null = null;
         try {
             const node = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, task.assignedNodeId));
             if (!node) throw new Error('assigned node not in mesh');
@@ -1242,18 +1371,88 @@ async function collectMagiResponses(
                 tailLimit: 6,
             });
             const payload = unwrapCommandPayload(result);
-            const text = extractAssistantText(payload);
-            const parsed = parseMagiResponse(text);
-            if (parsed) {
-                responses.push({ source: { ...source, ok: true }, response: parsed });
-            } else {
-                source.error = 'unparseable_output';
-                responses.push({ source, response: { claims: [], top_findings: [], open_questions: [] } });
-            }
+            // Fix A summary-fallback: parse the first viable candidate (assistant bubbles +
+            // summary carriers, newest-first) so antigravity's summary-only answer is caught.
+            parsed = parseFirstMagiCandidate(payload);
         } catch (e: any) {
-            source.error = `read_failed: ${e?.message || String(e)}`;
-            responses.push({ source, response: { claims: [], top_findings: [], open_questions: [] } });
+            // A transient read failure re-waits (the node/peer may be momentarily busy);
+            // finalize the failure only once the deadline is hit.
+            if (force) {
+                source.error = `read_failed: ${e?.message || String(e)}`;
+                finalized.set(taskId, { source, response: emptyResponse() });
+                return true;
+            }
+            return false;
+        }
+
+        if (parsed) {
+            const weak = replicaCompletionIsWeak(ctx.mesh.id, taskId);
+            if (weak && !force) {
+                // Parseable but the completion evidence is weak — keep it as the deadline
+                // fallback and re-wait for a stronger/fuller final answer.
+                provisional.set(taskId, { source: { ...source, ok: true }, response: parsed });
+                return false;
+            }
+            finalized.set(taskId, { source: { ...source, ok: true }, response: parsed });
+            return true;
+        }
+
+        // Not parseable yet → the premature-collect guard: re-wait until the deadline.
+        if (force) {
+            const prov = provisional.get(taskId);
+            if (prov) {
+                finalized.set(taskId, prov);
+                return true;
+            }
+            source.error = 'unparseable_output';
+            finalized.set(taskId, { source, response: emptyResponse() });
+            return true;
+        }
+        return false;
+    };
+
+    // Poll until every replica reaches a final verdict, every still-outstanding replica is
+    // detected STALE (dead assignment), or the deadline elapses.
+    for (;;) {
+        const tasks = annotateQueueStaleness(getQueue(ctx.mesh.id).filter((t: any) => ids.has(t.id)), ctx.mesh);
+        const allPresent = tasks.length === ids.size;
+        const { staleTaskIds, staleReasons } = classifyStaleReplicas(tasks, TERMINAL);
+        const pastDeadline = Date.now() >= deadline;
+
+        for (const task of tasks as any[]) {
+            if (finalized.has(task.id)) continue;
+            await tryResolveReplica(task, staleTaskIds, staleReasons, pastDeadline);
+        }
+
+        if (allPresent && finalized.size >= ids.size) break;
+        if (pastDeadline) break;
+        // Every still-outstanding replica is stale → stop early (they were just finalized above).
+        const outstanding = tasks.filter((t: any) => !finalized.has(t.id));
+        if (allPresent && outstanding.length > 0 && outstanding.every((t: any) => staleTaskIds.has(t.id))) break;
+
+        await sleep(Math.min(MAGI_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
+    }
+
+    // Final pass: force-finalize anything still outstanding now that the loop has ended.
+    const finalTasks = annotateQueueStaleness(getQueue(ctx.mesh.id).filter((t: any) => ids.has(t.id)), ctx.mesh);
+    const { staleTaskIds, staleReasons } = classifyStaleReplicas(finalTasks, TERMINAL);
+    const presentIds = new Set(finalTasks.map((t: any) => t.id));
+    for (const task of finalTasks as any[]) {
+        if (!finalized.has(task.id)) await tryResolveReplica(task, staleTaskIds, staleReasons, true);
+    }
+    // A replica whose queue row vanished entirely (never observed) is recorded as missing.
+    for (const id of ids) {
+        if (finalized.has(id)) continue;
+        if (!presentIds.has(id)) {
+            finalized.set(id, { source: { taskId: id, ok: false, error: 'replica_missing' }, response: emptyResponse() });
         }
     }
-    return { responses, terminal, timedOut: !terminal, staleCount: staleTaskIds.size };
+
+    // Preserve the caller's replica order.
+    const responses = args.replicaTaskIds
+        .map(id => finalized.get(id))
+        .filter((r): r is MagiSynthesizedResponse => !!r);
+    const terminal = presentIds.size === ids.size && finalTasks.every((t: any) => TERMINAL.has(String(t.status)));
+    const staleCount = responses.filter(r => r.source.stale === true).length;
+    return { responses, terminal, timedOut: !terminal, staleCount };
 }

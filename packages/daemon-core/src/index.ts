@@ -293,7 +293,7 @@ export type { PendingMeshCoordinatorEvent } from './mesh/mesh-events.js';
 // (finalSummary / workerResult.summary / lastMessagePreview). Same data the mobile
 // inbox is fed; reused by mesh_read_chat's cache fallback when the live P2P read path
 // is unavailable (saturated/unreachable peer).
-export { resolveMeshSurfacedSessionPreview, readMeshCompletionSummary } from './mesh/mesh-events-utils.js';
+export { resolveMeshSurfacedSessionPreview, readMeshCompletionSummary, isWeakCompletionEvidence } from './mesh/mesh-events-utils.js';
 
 // ── Mesh Delivery Policy ──
 export { resolveDeliveryDecision, createSessionDelivery, updateSessionDeliveryStatus, getActiveSessionDeliveries, markSessionDeliveriesTerminal, recordCompletionConflict, getRecentCompletionConflicts } from './mesh/mesh-delivery-policy.js';
