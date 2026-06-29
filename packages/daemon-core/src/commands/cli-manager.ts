@@ -1535,14 +1535,22 @@ export class DaemonCliManager {
                     const meshContext = (args as any)?.meshContext;
                     if (meshContext && typeof meshContext === 'object' && typeof meshContext.meshId === 'string' && meshContext.meshId) {
                         const targetInstanceId = key;
+                        let stampResult: { stamped: boolean; reason?: string } | undefined;
                         try {
-                            this.deps.getInstanceManager()?.attachMeshAssignmentToInstance(targetInstanceId, {
+                            stampResult = this.deps.getInstanceManager()?.attachMeshAssignmentToInstance(targetInstanceId, {
                                 meshId: meshContext.meshId,
                                 ...(typeof meshContext.nodeId === 'string' && meshContext.nodeId ? { nodeId: meshContext.nodeId } : {}),
                                 ...(typeof meshContext.taskId === 'string' && meshContext.taskId ? { taskId: meshContext.taskId } : {}),
                                 ...(typeof meshContext.coordinatorDaemonId === 'string' && meshContext.coordinatorDaemonId ? { coordinatorDaemonId: meshContext.coordinatorDaemonId } : {}),
                             });
-                        } catch { /* best-effort */ }
+                        } catch { /* best-effort — stamping is a routing aid, not a hard requirement */ }
+                        // DOUBLE-DISPATCH stamp guard: the instance manager refused this stamp because
+                        // the SAME task is already running on another live session on this daemon.
+                        // Sending the prompt anyway would double-execute the task — fail closed so the
+                        // coordinator does not duplicate the work onto a second session.
+                        if (stampResult && stampResult.stamped === false && stampResult.reason === 'task_already_stamped_on_live_instance') {
+                            throw new Error(`Refusing duplicate mesh dispatch: task ${meshContext.taskId} is already being worked by a live session on this daemon`);
+                        }
                     }
                     const input = normalizeInputEnvelope(args?.input ? { input: args.input } : args);
                     const provider = this.providerLoader.resolve(agentType) || this.providerLoader.getMeta(agentType);

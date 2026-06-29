@@ -308,23 +308,64 @@ export class ProviderInstanceManager {
 
     /** Stamp a mesh assignment on a single instance (used by mesh_send_task
      *  --direct so the worker's completion event has a coordinator routing
-     *  marker in state.settings). Returns true if the instance existed and
-     *  the stamp was applied. */
-    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): boolean {
+     *  marker in state.settings). Returns `{ stamped: true }` when the stamp was
+     *  applied, or `{ stamped: false, reason }` when it was refused — the instance
+     *  was missing / has no attach method, or the DOUBLE-DISPATCH idempotence guard
+     *  fired (the same task is already running on another live session here). */
+    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): { stamped: boolean; reason?: string } {
         const inst = this.instances.get(instanceId);
         if (!inst || typeof inst.attachMeshAssignment !== 'function') {
-            try {
-                const { LOG } = require('../logging/logger.js');
-                LOG.warn?.('MeshDispatch', `attachMeshAssignment skipped: instance ${instanceId} ${inst ? 'has no attach method' : 'not found'}`);
-            } catch { /* noop */ }
-            return false;
+            LOG.warn('MeshDispatch', `attachMeshAssignment skipped: instance ${instanceId} ${inst ? 'has no attach method' : 'not found'}`);
+            return { stamped: false, reason: inst ? 'instance_has_no_attach_method' : 'instance_not_found' };
+        }
+        // DOUBLE-DISPATCH stamp idempotence guard (defense in depth): refuse to stamp this
+        // (meshId, taskId) onto a SECOND instance when a DIFFERENT, still-live and actively
+        // working instance already holds the exact same task. Two sessions carrying one taskId
+        // double-execute the work (the auto-launch race RCA: a delayed claim by the original
+        // session plus the new session's post-boot claim sequentially stamp the same task —
+        // the atomic claim only blocks SIMULTANEOUS claims). A stale/dead/idle prior holder is
+        // NOT a conflict — a legitimate re-dispatch after a dispatch failure must still stamp.
+        if (assignment.taskId) {
+            const conflict = this.findLiveWorkingTaskHolder(assignment.meshId, assignment.taskId, instanceId);
+            if (conflict) {
+                LOG.warn('MeshDispatch', `attachMeshAssignment refused: task ${assignment.taskId} (mesh ${assignment.meshId}) is already being worked by live session ${conflict} — skipping duplicate stamp on ${instanceId}`);
+                return { stamped: false, reason: 'task_already_stamped_on_live_instance' };
+            }
         }
         inst.attachMeshAssignment(assignment);
-        try {
-            const { LOG } = require('../logging/logger.js');
-            LOG.info?.('MeshDispatch', `stamped mesh assignment on ${instanceId}: mesh=${assignment.meshId} node=${assignment.nodeId || ''} task=${assignment.taskId || ''} coordinator=${assignment.coordinatorDaemonId || ''}`);
-        } catch { /* noop */ }
-        return true;
+        LOG.info('MeshDispatch', `stamped mesh assignment on ${instanceId}: mesh=${assignment.meshId} node=${assignment.nodeId || ''} task=${assignment.taskId || ''} coordinator=${assignment.coordinatorDaemonId || ''}`);
+        return { stamped: true };
+    }
+
+    /**
+     * DOUBLE-DISPATCH support: the id of another LIVE, actively-working instance that already
+     * holds (meshId, taskId), or null. "Live working" = stamped with this exact mesh+task AND
+     * currently mid-turn / booting toward it (generating / waiting on approval-or-choice /
+     * starting) — NOT idle, stopped, or errored. A stale/dead/idle holder is deliberately
+     * ignored so a legitimate re-dispatch (e.g. after a dispatch failure) is never blocked.
+     * The instance being stamped (excludeInstanceId) is skipped so re-stamping the same
+     * session stays idempotent. O(n) over instances — the count is small.
+     */
+    private findLiveWorkingTaskHolder(meshId: string, taskId: string, excludeInstanceId: string): string | null {
+        // Mid-turn / booting statuses (top-level or activeChat). Anything else — idle, stopped,
+        // error — is not a live worker actively holding the task.
+        const working = new Set(['generating', 'waiting_approval', 'waiting_choice', 'starting', 'streaming', 'working', 'no_progress', 'long_generating']);
+        for (const [id, inst] of this.instances) {
+            if (id === excludeInstanceId) continue;
+            let state: ProviderState;
+            try {
+                state = inst.getState();
+            } catch {
+                continue;
+            }
+            const settings = (state.settings as Record<string, unknown>) || {};
+            if (settings.meshNodeFor !== meshId) continue;
+            if (settings.meshActiveTaskId !== taskId) continue;
+            const status = (typeof state.status === 'string' ? state.status : '').toLowerCase();
+            const chatStatus = (typeof state.activeChat?.status === 'string' ? state.activeChat.status : '').toLowerCase();
+            if (working.has(status) || working.has(chatStatus)) return id;
+        }
+        return null;
     }
 
     /** Clear a mesh assignment after the dispatched task reaches a terminal

@@ -1098,6 +1098,47 @@ function liveSessionCountForNode(components: DaemonComponents, meshId: string, n
     }).length;
 }
 
+/**
+ * DOUBLE-DISPATCH auto-launch gate: does this node already have a LIVE mesh session that
+ * is NOT holding an assigned queue task — i.e. one that is idle, booting toward its first
+ * claim, or in a momentary non-idle flip? Such a session WILL claim a still-pending task
+ * on its own via the idle→claim / agent:ready drain, so spawning a NEW session here only
+ * races it and yields a duplicate worker that double-stamps the same taskId (the
+ * enqueue → drain-miss → auto-launch RCA: the drain skipped a momentarily-non-idle idle
+ * session as a candidate, and the write-only nodeHasActiveAssignment gate — which only
+ * inspects status='assigned' rows — could not see the about-to-claim session either).
+ *
+ * A session that already HOLDS an assigned queue task is genuine concurrent work, not a
+ * free claimer, and is excluded — so a read-only auto-launch onto a busy-but-no-idle node
+ * is still allowed. A node with NO live mesh session at all (dead, or never launched) does
+ * not match, preserving the legitimate first-session spawn.
+ */
+function nodeHasLiveSessionPendingClaim(components: DaemonComponents, meshId: string, nodeId: string): boolean {
+    // Session ids currently holding an assigned queue task on this node — those are busy,
+    // not pending claimers, so they must NOT suppress a (read-only) launch.
+    const busySessionIds = new Set(
+        getQueue(meshId, { status: ['assigned'] as any })
+            .filter(task => daemonIdsEquivalent(task.assignedNodeId, nodeId))
+            .map(task => readNonEmptyString(task.assignedSessionId))
+            .filter(Boolean),
+    );
+    return components.instanceManager.getByCategory('cli').some((inst: any) => {
+        const state = inst.getState();
+        const settings = state.settings as Record<string, unknown> || {};
+        if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
+        const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
+        // Canonical-form match (see nodeHasActiveMeshWork / liveSessionCountForNode): a
+        // daemon-id form skew must not make a present session look absent and reopen the
+        // duplicate-launch hole.
+        if (!daemonIdsEquivalent(instNodeId, nodeId)) return false;
+        const status = readNonEmptyString(state.status).toLowerCase();
+        if (isTerminalSessionStatus(status)) return false; // dead → no claimer here, allow launch
+        const sessionId = readNonEmptyString(state.instanceId);
+        if (sessionId && busySessionIds.has(sessionId)) return false; // busy with its own assigned task
+        return true; // live + unassigned → will claim the pending task itself
+    });
+}
+
 function recordAutoLaunchEvent(meshId: string, args: {
     phase: 'skipped' | 'started' | 'failed' | 'completed';
     taskId: string;
@@ -1415,6 +1456,20 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 // every tick; the de-dup'd skip ledger keeps it diagnosable without flood.
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: launchTarget.reason || 'auto_launch_unavailable', nodeId });
                 autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
+                continue;
+            }
+            // DOUBLE-DISPATCH auto-launch gate (see nodeHasLiveSessionPendingClaim): when this
+            // node already has a live session on its way to claim (idle / booting / momentary
+            // non-idle flip), do NOT spawn a second one — that session pulls the pending task
+            // via the normal idle→claim / agent:ready drain. Launching here races it and yields
+            // a duplicate worker that double-stamps the same taskId. Applies to read-only tasks
+            // too: an idle session can claim either kind, while a genuinely BUSY session (holding
+            // its own assigned task) is excluded by the helper, so a read-only launch onto a
+            // busy-but-no-idle node is still allowed. Skip with a transient (non-actionable)
+            // reason so the coordinator is not paged; the 4s reconcile retries, and once the
+            // existing session goes terminal this gate clears and a legitimate launch proceeds.
+            if (nodeHasLiveSessionPendingClaim(components, meshId, nodeId)) {
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'node_has_live_session_pending_claim', nodeId });
                 continue;
             }
             // Write tasks keep the one-active-per-node invariant (worktree isolation);
