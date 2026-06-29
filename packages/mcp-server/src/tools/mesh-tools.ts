@@ -118,6 +118,7 @@ export {
     parseFirstMagiCandidateWithCompactFallback,
     parseMagiResponse,
     parseMagiResponseForKind,
+    sessionSharedWithAnotherReplica,
     synthesizeMagiResponses,
 } from './mesh-tools-magi.js';
 

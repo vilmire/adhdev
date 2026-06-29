@@ -276,6 +276,7 @@ export {
     getActiveMeshMissionSummaries,
     getLedgerSummary,
     getMagiPanel,
+    getMeshMission,
     getMeshStatusMissionSummaries,
     getMeshStatusMissionsCompact,
     getQueue,

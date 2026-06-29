@@ -20,6 +20,7 @@ import {
     compactChatPayload,
     enqueueTask,
     getMagiPanel,
+    getMeshMission,
     getQueue,
     isWeakCompletionEvidence,
     listMagiPanels,
@@ -61,8 +62,14 @@ import type {
 export const MAGI_MAX_REPLICAS = 12;
 /** Minimum distinct (node, provider) targets a panel must resolve to. */
 const MAGI_MIN_TARGETS = 2;
-/** Lexical-cluster merge threshold (Jaccard over claim token sets). */
-const MAGI_CLUSTER_JACCARD = 0.5;
+/**
+ * Lexical-cluster merge threshold (Jaccard over claim token sets).
+ * FIX#2c: relaxed 0.5 → 0.4 so cross-provider same-conclusion claims worded a little
+ * differently still merge (they were each becoming distinctProviders=1 singletons). Kept
+ * conservative — the existing synthesis unit tests (singleton non-merge etc.) still pass at
+ * 0.4 because their non-mergeable claims share zero content tokens (jaccard 0).
+ */
+const MAGI_CLUSTER_JACCARD = 0.4;
 /** Default wall-clock budget for wait=true replica collection. */
 const MAGI_DEFAULT_WAIT_MS = 180_000;
 const MAGI_MAX_WAIT_MS = 600_000;
@@ -423,13 +430,47 @@ function jaccard(a: Set<string>, b: Set<string>): number {
     return union === 0 ? 0 : intersection / union;
 }
 
-/** Looks like specific source evidence (file:line / path), a strong merge signal. */
+/** Looks like specific source evidence (file:line / path / URL), a strong merge signal. */
 function isSpecificEvidence(ev: string): boolean {
-    return /[\w/.\\-]+:\d+/.test(ev) || /[\w-]+\.[a-z]{1,5}\b/i.test(ev);
+    return /[\w/.\\-]+:\d+/.test(ev) || /[\w-]+\.[a-z]{1,5}\b/i.test(ev) || /https?:\/\//i.test(ev);
+}
+
+/**
+ * FIX#2c — canonicalize a single concrete evidence TOKEN (file:line or URL) so the SAME
+ * source merges across differently-FORMATTED citations. The greedy merge compares
+ * specificEvidence sets by exact string membership, so two replicas that cite the same file
+ * line as `resolver.ts:128` vs `src/resolver.ts:128` (or the same doc as a bare URL vs a
+ * prose "see https://… (the design doc)") never merged and each stayed a distinctProviders=1
+ * singleton. Canonicalize the recognizable concrete forms; everything else falls back to the
+ * old lowercase-collapse. Pure / order-independent.
+ *
+ *  - file:line  → `<basename>:<line>` (drop directory prefix + normalize \\ vs / so the same
+ *    file cited with/without a path prefix collides; the basename+line pair is the discriminator)
+ *  - URL        → scheme-less host+path, lowercased, no trailing slash / query / fragment
+ */
+function canonicalizeSpecificEvidence(ev: string): string {
+    const lower = ev.toLowerCase().replace(/\s+/g, ' ').trim();
+    // URL: strip scheme, query, fragment, trailing slash so a bare URL and a prose-embedded
+    // citation of the same URL canonicalize identically.
+    const urlMatch = lower.match(/https?:\/\/([^\s)\]>"']+)/i);
+    if (urlMatch) {
+        const stripped = urlMatch[1].replace(/[#?].*$/, '').replace(/\/+$/, '');
+        return `url:${stripped}`;
+    }
+    // file:line — take the LAST path segment (basename) + line number, separator-agnostic.
+    const fileLine = lower.match(/([\w./\\-]+):(\d+)/);
+    if (fileLine) {
+        const pathPart = fileLine[1].replace(/\\/g, '/');
+        const basename = pathPart.split('/').filter(Boolean).pop() || pathPart;
+        return `${basename}:${fileLine[2]}`;
+    }
+    return lower;
 }
 
 function normalizeEvidence(ev: string): string {
-    return ev.toLowerCase().replace(/\s+/g, ' ').trim();
+    // For specific (file:line / URL) evidence, use the canonical form so cross-format
+    // citations of the same source compare equal; otherwise plain lowercase-collapse.
+    return isSpecificEvidence(ev) ? canonicalizeSpecificEvidence(ev) : ev.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 interface ClusterAccumulator {
@@ -1461,6 +1502,8 @@ export async function meshMagiReview(
         staleReplicas: collected.staleCount,
         synthesis,
     });
+    // FIX#3: this inline review owns `mission` — auto-close it once all replicas are terminal.
+    closeMagiMissionIfTerminal(ctx, mission.id, collected.terminal);
 
     return JSON.stringify({
         ...baseResult,
@@ -1546,12 +1589,16 @@ export async function meshMagiCollect(
 
     // deltaE: persist the synthesis (panel/question are merged from the earlier
     // magi_dispatched entry by consensusGroupId, so they need not be re-derived here).
+    const replicaMissionId = readString(replicaTasks[0]?.missionId);
     persistMagiSynthesis(ctx, {
         consensusGroupId,
-        missionId: readString(replicaTasks[0]?.missionId),
+        missionId: replicaMissionId,
         staleReplicas: collected.staleCount,
         synthesis,
     });
+    // FIX#3: the inline mission id comes from the replica tasks' OWN missionId (MAGI-owned,
+    // guard a) — auto-close it once all replicas are terminal.
+    closeMagiMissionIfTerminal(ctx, replicaMissionId, collected.terminal);
 
     return JSON.stringify({
         success: true,
@@ -1591,6 +1638,32 @@ export function findMagiReplicaTasks(queue: any[], consensusGroupId: string): an
     const groupId = typeof consensusGroupId === 'string' ? consensusGroupId.trim() : '';
     if (!groupId) return [];
     return (Array.isArray(queue) ? queue : []).filter((t: any) => readString(t?.consensusGroupId) === groupId);
+}
+
+/**
+ * FIX#1 (MAGI tangle): is THIS replica's transcript session also bound to ANOTHER replica of
+ * the same fan-out? collect used to resolve a replica's transcript purely by
+ * task.assignedSessionId and parse the NEWEST kind-valid JSON across that whole session. But
+ * assignedSessionId is NOT unique per replica — it is never cleared on completion, and a
+ * provider can reuse one session for >1 replica (sequential idle→claim reuse). When two
+ * replicas share a session both resolve to the SAME newest turn → one is dropped as
+ * unparseable_output / mis-attributed. There is no per-bubble taskId in the transcript to
+ * disambiguate them (the dispatch stamps meshContext.taskId, but bubbles carry only a
+ * positional _turnKey, and every MAGI replica is sent the IDENTICAL prompt so the user-bubble
+ * text can't separate them either). So we FAIL CLOSED on a detected share: the colliding
+ * replica is not attributed the ambiguous turn — it re-waits, and at the deadline finalizes as
+ * a `cross_wired_shared_session` error instead of returning another replica's answer.
+ *
+ * Session ids are node-local, so a match only collides on the SAME node; a coincidental id
+ * match across two nodes is not a real share. Pure given a task snapshot.
+ */
+export function sessionSharedWithAnotherReplica(task: any, allTasks: any[]): boolean {
+    const sid = readString(task?.assignedSessionId);
+    if (!sid) return false;
+    const nodeId = readString(task?.assignedNodeId);
+    return (Array.isArray(allTasks) ? allTasks : []).some((other: any) => other?.id !== task?.id
+        && readString(other?.assignedSessionId) === sid
+        && (!nodeId || !readString(other?.assignedNodeId) || readString(other?.assignedNodeId) === nodeId));
 }
 
 /**
@@ -1691,6 +1764,42 @@ function persistMagiSynthesis(
             },
         });
     } catch { /* ledger write is best-effort */ }
+}
+
+/**
+ * FIX#3 — auto-close the inline MAGI mission once all replicas are terminal.
+ *
+ * Every mesh_magi_review auto-creates an inline mission (status defaults 'active') for the
+ * fan-out; nothing ever closed it, so 'MAGI: …' missions accumulated forever (mission status
+ * is, by design, never derived from task status). Call this at the collect-terminal point:
+ * when collection is terminal (all replicas reached a terminal verdict) and the synthesis has
+ * been persisted, transition the OWNING mission active→completed.
+ *
+ * Guards:
+ *  - (a) MAGI-owned only — the caller MUST pass the replica tasks' OWN missionId (never a
+ *    coordinator-supplied id), so we only ever close the inline MAGI mission.
+ *  - (b) Never clobber a manual terminal/paused status — upsertMeshMission has NO no-clobber
+ *    semantics (it overwrites status), so we read the current status first and ONLY transition
+ *    from 'active'. An 'abandoned'/'paused'/'completed' mission is left untouched.
+ * Idempotent: a re-collect that finds the mission already 'completed' is a no-op. Best-effort:
+ * a missing mission / read failure never breaks collection.
+ */
+function closeMagiMissionIfTerminal(ctx: MeshContext, missionId: string | undefined, terminal: boolean): void {
+    if (!terminal) return;
+    const id = readString(missionId);
+    if (!id) return;
+    try {
+        const mission = getMeshMission(ctx.mesh.id, id);
+        // Only close a mission we can see AND that is still active. Skip when missing
+        // (already pruned), or already completed/abandoned/paused (guard b).
+        if (!mission || mission.status !== 'active') return;
+        upsertMeshMission(ctx.mesh.id, {
+            id,
+            title: mission.title,
+            // Preserve goal: upsert defaults goal to the existing value when omitted.
+            status: 'completed',
+        });
+    } catch { /* mission close is best-effort — never break collection */ }
 }
 
 /**
@@ -1796,6 +1905,7 @@ async function collectMagiResponses(
         staleTaskIds: Set<string>,
         staleReasons: Record<string, string>,
         force: boolean,
+        liveTasks: any[],
     ): Promise<boolean> => {
         const taskId = task.id;
         const source = buildSource(task);
@@ -1822,6 +1932,20 @@ async function collectMagiResponses(
             return false;
         }
 
+        // FIX#1: cross-wire guard. This completed replica's session is also bound to another
+        // replica of THIS group → the newest turn cannot be safely attributed to either. Do NOT
+        // grab it (that is exactly the mis-attribution / dropped-as-unparseable bug). Re-wait so a
+        // later poll can find them on distinct sessions; at the deadline finalize as a cross-wire
+        // error (not another replica's answer).
+        if (sessionSharedWithAnotherReplica(task, liveTasks)) {
+            if (force) {
+                source.error = 'cross_wired_shared_session';
+                finalized.set(taskId, { source, response: emptyResponse() });
+                return true;
+            }
+            return false;
+        }
+
         // A `completed` replica WITH a session: read the transcript and try to parse a MAGI
         // answer for THIS kind. Fix A: a completed-but-weak completion (early/mid-turn
         // suppressed) or a not-yet-parseable transcript is treated as NOT terminal — re-poll
@@ -1835,6 +1959,10 @@ async function collectMagiResponses(
                 targetSessionId: task.assignedSessionId,
                 workspace: (node as any).workspace,
                 tailLimit: 6,
+                // FIX#1: scope the read to the CURRENT turn so a provider that supports it returns
+                // only this turn's bubbles (coverage:'current-turn' / _turnKey), instead of the
+                // whole-session tail whose newest kind-valid JSON could belong to an earlier turn.
+                coverage: 'current-turn',
             });
             const payload = unwrapCommandPayload(result);
             // Fix-A-v2 summary-fallback (kind-aware): parse candidates from BOTH the raw payload
@@ -1904,7 +2032,7 @@ async function collectMagiResponses(
 
         for (const task of tasks as any[]) {
             if (finalized.has(task.id)) continue;
-            await tryResolveReplica(task, staleTaskIds, staleReasons, pastDeadline);
+            await tryResolveReplica(task, staleTaskIds, staleReasons, pastDeadline, tasks);
         }
 
         if (allPresent && finalized.size >= ids.size) break;
@@ -1921,7 +2049,7 @@ async function collectMagiResponses(
     const { staleTaskIds, staleReasons } = classifyStaleReplicas(finalTasks, TERMINAL);
     const presentIds = new Set(finalTasks.map((t: any) => t.id));
     for (const task of finalTasks as any[]) {
-        if (!finalized.has(task.id)) await tryResolveReplica(task, staleTaskIds, staleReasons, true);
+        if (!finalized.has(task.id)) await tryResolveReplica(task, staleTaskIds, staleReasons, true, finalTasks);
     }
     // A replica whose queue row vanished entirely (never observed) is recorded as missing.
     for (const id of ids) {
