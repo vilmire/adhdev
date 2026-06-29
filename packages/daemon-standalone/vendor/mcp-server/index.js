@@ -4345,6 +4345,16 @@ function nodeHeadCommit(node) {
   const h = node?.git?.headCommit;
   return typeof h === "string" && h.trim() ? h.trim() : void 0;
 }
+function nodeGitDrift(node) {
+  const git = node?.git;
+  const behind = git && typeof git.behind === "number" && Number.isFinite(git.behind) ? Math.max(0, git.behind) : 0;
+  const ahead = git && typeof git.ahead === "number" && Number.isFinite(git.ahead) ? Math.max(0, git.ahead) : 0;
+  return { behind, ahead };
+}
+function nodeHasGitDrift(node) {
+  const { behind, ahead } = nodeGitDrift(node);
+  return behind > 0 || ahead > 0;
+}
 function buildMagiFanoutPlan(panel, nodes, opts = {}) {
   const cap = Math.max(1, Math.floor(opts.maxReplicas ?? MAGI_MAX_REPLICAS));
   const members = Array.isArray(panel.members) ? panel.members : [];
@@ -4401,7 +4411,17 @@ function buildMagiFanoutPlan(panel, nodes, opts = {}) {
         gitStale = true;
       }
     } else {
-      headCommit = nodeHeadCommit(candidateNodes.find((n) => nodeHeadCommit(n)) ?? candidateNodes[0]);
+      const freshCandidate = candidateNodes.find((n) => !nodeHasGitDrift(n));
+      if (freshCandidate && candidateNodes.some(nodeHasGitDrift)) {
+        headCommit = nodeHeadCommit(freshCandidate);
+        if (member.nodeId) targetNodeId = freshCandidate.id;
+        gitStale = false;
+      } else if (!freshCandidate && candidateNodes.some(nodeHasGitDrift)) {
+        headCommit = nodeHeadCommit(candidateNodes[0]);
+        gitStale = true;
+      } else {
+        headCommit = nodeHeadCommit(candidateNodes.find((n) => nodeHeadCommit(n)) ?? candidateNodes[0]);
+      }
     }
     const resolution = {
       memberIndex,
@@ -4415,7 +4435,7 @@ function buildMagiFanoutPlan(panel, nodes, opts = {}) {
     };
     if (gitStale && !includeStale) {
       resolution.excluded = true;
-      resolution.reason = `git-stale: node HEAD ${headCommit ?? "(unknown)"} differs from reference ${referenceCommit}`;
+      resolution.reason = referenceCommit ? `git-stale: node HEAD ${headCommit ?? "(unknown)"} differs from reference ${referenceCommit}` : `git-stale: node reports drift from its upstream (behind/ahead) and no coordinator reference commit is known`;
       memberResolutions.push(resolution);
       return;
     }
@@ -4483,26 +4503,64 @@ ${args.artifacts.map((a) => String(a)).join("\n\n---\n\n")}`);
 ${MAGI_OUTPUT_CONTRACT}`);
   return parts.join("\n");
 }
-function extractAssistantText(payload) {
-  if (!payload || typeof payload !== "object") return "";
+function collectMagiCandidateTexts(payload) {
+  if (!payload || typeof payload !== "object") return [];
   const p = payload;
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (value) => {
+    const text = typeof value === "string" ? value : "";
+    const trimmed = text.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    out.push(text);
+  };
   const messages = Array.isArray(p.messages) ? p.messages : Array.isArray(p.chat) ? p.chat : Array.isArray(p.transcript) ? p.transcript : [];
-  const texts = [];
-  for (const msg of messages) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
     if (!msg || typeof msg !== "object") continue;
     const role = String(msg.role || msg.from || "").toLowerCase();
     if (role && role !== "assistant" && role !== "agent" && role !== "model") continue;
     const content = msg.content ?? msg.text ?? msg.message;
-    if (typeof content === "string") texts.push(content);
+    if (typeof content === "string") push(content);
     else if (Array.isArray(content)) {
-      for (const part of content) {
-        if (typeof part === "string") texts.push(part);
-        else if (part && typeof part === "object" && typeof part.text === "string") texts.push(part.text);
-      }
+      const joined = content.map((part) => typeof part === "string" ? part : part && typeof part === "object" && typeof part.text === "string" ? part.text : "").join("");
+      push(joined);
     }
+    push(msg.summary);
+    push(msg.summaryMetadata?.summary);
   }
-  if (texts.length > 0) return texts[texts.length - 1];
-  return readString(p.finalSummary) || readString(p.lastMessagePreview) || readString(p.text) || "";
+  push(p.summary);
+  push(p.finalSummary);
+  push(p.lastMessagePreview);
+  push(p.text);
+  return out;
+}
+function parseFirstMagiCandidate(payload) {
+  for (const candidate of collectMagiCandidateTexts(payload)) {
+    const parsed = parseMagiResponse(candidate);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+function replicaCompletionIsWeak(meshId, taskId) {
+  try {
+    const entries = (0, import_daemon_core4.readLedgerEntries)(meshId, { kind: ["task_completed"], tail: 200 });
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const entry = entries[i];
+      const payload = entry?.payload && typeof entry.payload === "object" ? entry.payload : void 0;
+      const entryTaskId = readString(payload?.taskId) || readString(entry?.taskId);
+      if (!entryTaskId || entryTaskId !== taskId) continue;
+      if ((0, import_daemon_core4.isWeakCompletionEvidence)(payload)) return true;
+      const diag = payload?.completionDiagnostic;
+      if (diag && typeof diag === "object" && !Array.isArray(diag) && readString(diag.reason) === "short_generating_suppressed") {
+        return true;
+      }
+      return false;
+    }
+  } catch {
+  }
+  return false;
 }
 async function meshMagiPanelSet(ctx, args) {
   const panelName = readString(args.panel_name) || readString(args.panelName);
@@ -4865,45 +4923,43 @@ async function collectMagiResponses(ctx, args) {
   const ids = new Set(args.replicaTaskIds);
   const deadline = Date.now() + args.timeoutMs;
   const TERMINAL = MAGI_TERMINAL_STATUSES;
-  let terminal = false;
-  for (; ; ) {
-    const tasks2 = annotateQueueStaleness((0, import_daemon_core4.getQueue)(ctx.mesh.id).filter((t) => ids.has(t.id)), ctx.mesh);
-    const allPresent = tasks2.length === ids.size;
-    if (allPresent && tasks2.every((t) => TERMINAL.has(String(t.status)))) {
-      terminal = true;
-      break;
-    }
-    const nonTerminal = tasks2.filter((t) => !TERMINAL.has(String(t.status)));
-    const { staleTaskIds: staleTaskIds2 } = classifyStaleReplicas(tasks2, TERMINAL);
-    if (allPresent && nonTerminal.length > 0 && staleTaskIds2.size === nonTerminal.length) {
-      break;
-    }
-    if (Date.now() >= deadline) break;
-    await sleep(Math.min(MAGI_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
-  }
-  const tasks = annotateQueueStaleness((0, import_daemon_core4.getQueue)(ctx.mesh.id).filter((t) => ids.has(t.id)), ctx.mesh);
-  const { staleTaskIds, staleReasons } = classifyStaleReplicas(tasks, TERMINAL);
-  const responses = [];
-  for (const task of tasks) {
+  const emptyResponse = () => ({ claims: [], top_findings: [], open_questions: [] });
+  const finalized = /* @__PURE__ */ new Map();
+  const provisional = /* @__PURE__ */ new Map();
+  const buildSource = (task) => {
     const sourceNodeId = task.assignedNodeId || task.targetNodeId || void 0;
     const gitRef = extractNodeGitRef(sourceNodeId ? ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, sourceNodeId)) : void 0);
-    const source = {
+    return {
       taskId: task.id,
       nodeId: sourceNodeId,
       provider: task.assignedProviderType || void 0,
       ok: false,
       ...gitRef ? { git: gitRef } : {}
     };
+  };
+  const tryResolveReplica = async (task, staleTaskIds2, staleReasons2, force) => {
+    const taskId = task.id;
+    const source = buildSource(task);
     if (task.status !== "completed" || !task.assignedNodeId || !task.assignedSessionId) {
-      if (staleTaskIds.has(task.id)) {
+      if (staleTaskIds2.has(taskId)) {
         source.stale = true;
-        source.error = `stale: ${staleReasons[task.id]}`;
-      } else {
-        source.error = task.status === "completed" ? "no_session_to_read" : `replica_${task.status || "incomplete"}`;
+        source.error = `stale: ${staleReasons2[taskId]}`;
+        finalized.set(taskId, { source, response: emptyResponse() });
+        return true;
       }
-      responses.push({ source, response: { claims: [], top_findings: [], open_questions: [] } });
-      continue;
+      if (TERMINAL.has(String(task.status))) {
+        source.error = task.status === "completed" ? "no_session_to_read" : `replica_${task.status || "incomplete"}`;
+        finalized.set(taskId, { source, response: emptyResponse() });
+        return true;
+      }
+      if (force) {
+        source.error = `replica_${task.status || "incomplete"}`;
+        finalized.set(taskId, { source, response: emptyResponse() });
+        return true;
+      }
+      return false;
     }
+    let parsed = null;
     try {
       const node = ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, task.assignedNodeId));
       if (!node) throw new Error("assigned node not in mesh");
@@ -4914,20 +4970,67 @@ async function collectMagiResponses(ctx, args) {
         tailLimit: 6
       });
       const payload = unwrapCommandPayload(result);
-      const text = extractAssistantText(payload);
-      const parsed = parseMagiResponse(text);
-      if (parsed) {
-        responses.push({ source: { ...source, ok: true }, response: parsed });
-      } else {
-        source.error = "unparseable_output";
-        responses.push({ source, response: { claims: [], top_findings: [], open_questions: [] } });
-      }
+      parsed = parseFirstMagiCandidate(payload);
     } catch (e) {
-      source.error = `read_failed: ${e?.message || String(e)}`;
-      responses.push({ source, response: { claims: [], top_findings: [], open_questions: [] } });
+      if (force) {
+        source.error = `read_failed: ${e?.message || String(e)}`;
+        finalized.set(taskId, { source, response: emptyResponse() });
+        return true;
+      }
+      return false;
+    }
+    if (parsed) {
+      const weak = replicaCompletionIsWeak(ctx.mesh.id, taskId);
+      if (weak && !force) {
+        provisional.set(taskId, { source: { ...source, ok: true }, response: parsed });
+        return false;
+      }
+      finalized.set(taskId, { source: { ...source, ok: true }, response: parsed });
+      return true;
+    }
+    if (force) {
+      const prov = provisional.get(taskId);
+      if (prov) {
+        finalized.set(taskId, prov);
+        return true;
+      }
+      source.error = "unparseable_output";
+      finalized.set(taskId, { source, response: emptyResponse() });
+      return true;
+    }
+    return false;
+  };
+  for (; ; ) {
+    const tasks = annotateQueueStaleness((0, import_daemon_core4.getQueue)(ctx.mesh.id).filter((t) => ids.has(t.id)), ctx.mesh);
+    const allPresent = tasks.length === ids.size;
+    const { staleTaskIds: staleTaskIds2, staleReasons: staleReasons2 } = classifyStaleReplicas(tasks, TERMINAL);
+    const pastDeadline = Date.now() >= deadline;
+    for (const task of tasks) {
+      if (finalized.has(task.id)) continue;
+      await tryResolveReplica(task, staleTaskIds2, staleReasons2, pastDeadline);
+    }
+    if (allPresent && finalized.size >= ids.size) break;
+    if (pastDeadline) break;
+    const outstanding = tasks.filter((t) => !finalized.has(t.id));
+    if (allPresent && outstanding.length > 0 && outstanding.every((t) => staleTaskIds2.has(t.id))) break;
+    await sleep(Math.min(MAGI_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
+  }
+  const finalTasks = annotateQueueStaleness((0, import_daemon_core4.getQueue)(ctx.mesh.id).filter((t) => ids.has(t.id)), ctx.mesh);
+  const { staleTaskIds, staleReasons } = classifyStaleReplicas(finalTasks, TERMINAL);
+  const presentIds = new Set(finalTasks.map((t) => t.id));
+  for (const task of finalTasks) {
+    if (!finalized.has(task.id)) await tryResolveReplica(task, staleTaskIds, staleReasons, true);
+  }
+  for (const id of ids) {
+    if (finalized.has(id)) continue;
+    if (!presentIds.has(id)) {
+      finalized.set(id, { source: { taskId: id, ok: false, error: "replica_missing" }, response: emptyResponse() });
     }
   }
-  return { responses, terminal, timedOut: !terminal, staleCount: staleTaskIds.size };
+  const responses = args.replicaTaskIds.map((id) => finalized.get(id)).filter((r) => !!r);
+  const terminal = presentIds.size === ids.size && finalTasks.every((t) => TERMINAL.has(String(t.status)));
+  const staleCount = responses.filter((r) => r.source.stale === true).length;
+  return { responses, terminal, timedOut: !terminal, staleCount };
 }
 
 // src/tools/mesh-tools-session.ts
