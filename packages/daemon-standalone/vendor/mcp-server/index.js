@@ -1172,7 +1172,9 @@ var MESH_MAGI_REVIEW_TOOL = {
         }
       },
       n: { type: "number", description: "Global replica override per member (clamped by the total-replica guard cap, default 12)." },
-      mode: { type: "string", enum: ["rca", "investigation", "claim_audit", "design_review", "code_audit"], description: "Synthesis emphasis hint \u2014 affects labels only, never the agent count or schema." },
+      task_kind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "Selects the SINGLE output schema injected into each replica prompt and the strict parser used at collection (no schema-on-schema conflict). claim_audit (DEFAULT, backward-compatible): {claims[],top_findings[],open_questions[]}. rca: {rootCause,failsAt,mechanism,evidence[],fixDirection,confidence}. design: {recommendation,rationale,alternatives[],tradeoffs[],risks[],evidence[],confidence}. freeform: no schema \u2014 natural-language answer, parsing/evidence checks waived, cross-verification is weak. Every kind except freeform requires non-empty evidence[]; an empty-evidence or schema-invalid answer triggers ONE delta re-request before being dropped as unparseable. Do NOT also embed an output-format schema in the question \u2014 it collides with this contract (a warning is surfaced if detected)." },
+      mode: { type: "string", enum: ["rca", "investigation", "claim_audit", "design_review", "code_audit"], description: "Synthesis emphasis hint \u2014 affects labels only, never the agent count or schema. Distinct from task_kind (which selects the output schema)." },
+      use_judge: { type: "boolean", description: "Default false (clustering synthesis). STUB: judge synthesis is not yet implemented \u2014 passing true currently falls back to clustering with a warning. Reserved interface only." },
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
       include_stale: { type: "boolean", description: "Default false. By default, panel members whose node HEAD commit differs from the coordinator reference commit are EXCLUDED (they would investigate different code). Set true to fan out to them anyway \u2014 results will be git-skewed and a warning is surfaced. If exclusion drops the panel below 2 independent targets the call errors rather than degrading to N=1; include_stale=true is one way to recover." },
       wait: { type: "boolean", description: "Default true \u2014 collect replica outputs and return the synthesis. Set false to dispatch async and return a consensusGroupId handle; collect later with mesh_magi_collect." },
@@ -1188,6 +1190,7 @@ var MESH_MAGI_COLLECT_TOOL = {
     type: "object",
     properties: {
       consensus_group_id: { type: "string", description: "The consensusGroupId returned by a wait=false mesh_magi_review." },
+      task_kind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "Optional override of the task_kind used to parse replica answers. Normally recovered automatically from the original dispatch \u2014 only set this if the dispatched ledger entry was pruned and auto-recovery falls back to claim_audit incorrectly." },
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
       wait: { type: "boolean", description: "Default false (snapshot). Set true to block for outstanding replicas up to wait_timeout_ms before synthesizing." },
       wait_timeout_ms: { type: "number", description: "When wait=true, max time to wait for remaining replica completion. Default ~4 min." }
@@ -4071,6 +4074,12 @@ var MAGI_CLUSTER_JACCARD = 0.5;
 var MAGI_DEFAULT_WAIT_MS = 18e4;
 var MAGI_MAX_WAIT_MS = 6e5;
 var MAGI_POLL_INTERVAL_MS = 5e3;
+var VALID_TASK_KINDS = ["claim_audit", "rca", "design", "freeform"];
+var DEFAULT_TASK_KIND = "claim_audit";
+function normalizeMagiTaskKind(raw) {
+  const s = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  return VALID_TASK_KINDS.includes(s) ? s : DEFAULT_TASK_KIND;
+}
 var VALID_STANCES = /* @__PURE__ */ new Set(["support", "oppose", "uncertain"]);
 function coerceClaim(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -4144,6 +4153,130 @@ function parseMagiResponse(text) {
     }
   }
   return null;
+}
+function asStringArray(raw) {
+  return Array.isArray(raw) ? raw.map((e) => typeof e === "string" ? e.trim() : "").filter(Boolean) : [];
+}
+function asConfidence(raw) {
+  return typeof raw === "number" && Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 0.5;
+}
+function asTrimmedString(raw) {
+  return typeof raw === "string" ? raw.trim() : "";
+}
+function coerceRcaResponse(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw;
+  const rootCause = asTrimmedString(r.rootCause);
+  const mechanism = asTrimmedString(r.mechanism);
+  const failsAt = asTrimmedString(r.failsAt);
+  const fixDirection = asTrimmedString(r.fixDirection);
+  const evidence = asStringArray(r.evidence);
+  const confidence = asConfidence(r.confidence);
+  if (!rootCause && !mechanism && !failsAt && !fixDirection && evidence.length === 0) return null;
+  const payload = { rootCause, failsAt, mechanism, evidence, fixDirection, confidence };
+  if (!rootCause || !mechanism) return { payload, failReason: "missing_required_fields" };
+  if (evidence.length === 0) return { payload, failReason: "empty_evidence" };
+  return { payload };
+}
+function coerceDesignResponse(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw;
+  const recommendation = asTrimmedString(r.recommendation);
+  const rationale = asTrimmedString(r.rationale);
+  const alternatives = asStringArray(r.alternatives);
+  const tradeoffs = asStringArray(r.tradeoffs);
+  const risks = asStringArray(r.risks);
+  const evidence = asStringArray(r.evidence);
+  const confidence = asConfidence(r.confidence);
+  if (!recommendation && !rationale && alternatives.length === 0 && tradeoffs.length === 0 && risks.length === 0 && evidence.length === 0) return null;
+  const payload = { recommendation, rationale, alternatives, tradeoffs, risks, evidence, confidence };
+  if (!recommendation || !rationale) return { payload, failReason: "missing_required_fields" };
+  if (evidence.length === 0) return { payload, failReason: "empty_evidence" };
+  return { payload };
+}
+function rcaToCommonSchema(p) {
+  return {
+    claims: [{ claim: p.rootCause, stance: "support", evidence: p.evidence, confidence: p.confidence }],
+    top_findings: [
+      ...p.failsAt ? [`fails at: ${p.failsAt}`] : [],
+      ...p.mechanism ? [`mechanism: ${p.mechanism}`] : [],
+      ...p.fixDirection ? [`fix direction: ${p.fixDirection}`] : []
+    ],
+    open_questions: []
+  };
+}
+function designToCommonSchema(p) {
+  return {
+    claims: [{ claim: p.recommendation, stance: "support", evidence: p.evidence, confidence: p.confidence }],
+    top_findings: [
+      ...p.rationale ? [`rationale: ${p.rationale}`] : [],
+      ...p.alternatives.map((a) => `alternative: ${a}`),
+      ...p.tradeoffs.map((t) => `tradeoff: ${t}`)
+    ],
+    open_questions: p.risks.map((r) => `risk: ${r}`)
+  };
+}
+function firstJsonCandidate(text, coerce) {
+  if (typeof text !== "string" || !text.trim()) return null;
+  try {
+    const direct = coerce(JSON.parse(text));
+    if (direct) return direct;
+  } catch {
+  }
+  for (const candidate of extractJsonObjectCandidates(text)) {
+    try {
+      const parsed = coerce(JSON.parse(candidate));
+      if (parsed) return parsed;
+    } catch {
+    }
+  }
+  return null;
+}
+function parseMagiResponseForKind(text, kind) {
+  if (kind === "freeform") {
+    const trimmed = typeof text === "string" ? text.trim() : "";
+    if (!trimmed) return { ok: false, failReason: "no_parseable_output" };
+    const payload = { text: trimmed };
+    return { ok: true, response: { claims: [], top_findings: [trimmed], open_questions: [] }, payload };
+  }
+  if (kind === "claim_audit") {
+    const parsed = parseMagiResponse(text);
+    if (!parsed) return { ok: false, failReason: "no_parseable_output" };
+    const hasEvidence = parsed.claims.some((c) => c.evidence.length > 0) || parsed.top_findings.length > 0;
+    if (!hasEvidence && parsed.claims.length > 0) return { ok: false, payload: parsed, failReason: "empty_evidence" };
+    return { ok: true, response: parsed, payload: parsed };
+  }
+  if (kind === "rca") {
+    const result2 = firstJsonCandidate(text, coerceRcaResponse);
+    if (!result2) return { ok: false, failReason: "no_parseable_output" };
+    if (result2.failReason) return { ok: false, payload: result2.payload, failReason: result2.failReason };
+    return { ok: true, response: rcaToCommonSchema(result2.payload), payload: result2.payload };
+  }
+  const result = firstJsonCandidate(text, coerceDesignResponse);
+  if (!result) return { ok: false, failReason: "no_parseable_output" };
+  if (result.failReason) return { ok: false, payload: result.payload, failReason: result.failReason };
+  return { ok: true, response: designToCommonSchema(result.payload), payload: result.payload };
+}
+function parseFirstMagiCandidateForKind(payload, kind, opts = {}) {
+  const rawCandidates = collectMagiCandidateTexts(payload);
+  let compactCandidates = [];
+  try {
+    compactCandidates = collectMagiCandidateTexts(
+      compactChatPayload(payload, { sessionId: opts.sessionId ?? null })
+    );
+  } catch {
+  }
+  const seen = /* @__PURE__ */ new Set();
+  let lastFail = { ok: false, failReason: "no_parseable_output" };
+  for (const candidate of [...rawCandidates, ...compactCandidates]) {
+    const trimmed = candidate.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    const result = parseMagiResponseForKind(candidate, kind);
+    if (result.ok) return result;
+    if (result.failReason !== "no_parseable_output") lastFail = result;
+  }
+  return lastFail;
 }
 var CLAIM_STOPWORDS = /* @__PURE__ */ new Set([
   "the",
@@ -4476,16 +4609,72 @@ function resolveMagiReferenceCommit(ctx) {
   const node = resolveCoordinatorNode(ctx);
   return nodeHeadCommit(node);
 }
-var MAGI_OUTPUT_CONTRACT = `When done, respond with ONLY a single JSON object (no prose, no code fence) matching this exact schema:
+var MAGI_CLAIM_AUDIT_CONTRACT = `When done, respond with ONLY a single JSON object (no prose, no code fence) matching this exact schema:
 {
   "claims": [ { "claim": "string", "stance": "support | oppose | uncertain", "evidence": ["file:line or external source"], "confidence": 0.0 } ],
   "top_findings": ["string"],
   "open_questions": ["string"]
 }
-Each claim MUST carry concrete evidence (file:line or a cited source) where possible \u2014 unevidenced high-confidence claims are flagged for re-verification. "stance" is your stance toward the claim being true. Do not invent agreement; report uncertainty honestly.`;
+Each claim MUST carry concrete evidence (file:line or a cited source) \u2014 unevidenced claims are flagged for re-verification. "stance" is your stance toward the claim being true. Do not invent agreement; report uncertainty honestly.`;
+var MAGI_RCA_CONTRACT = `When done, respond with ONLY a single JSON object (no prose, no code fence) matching this exact schema:
+{
+  "rootCause": "string \u2014 the single underlying root cause",
+  "failsAt": "file:line \u2014 the precise location the failure manifests",
+  "mechanism": "string \u2014 how the root cause produces the observed symptom",
+  "evidence": ["file:line or external source"],
+  "fixDirection": "string \u2014 the direction a fix should take (do NOT write the fix)",
+  "confidence": 0.0
+}
+"rootCause" and "mechanism" are REQUIRED. "evidence" MUST be non-empty (concrete file:line or cited source) \u2014 an empty evidence array is rejected and re-requested. Report uncertainty honestly.`;
+var MAGI_DESIGN_CONTRACT = `When done, respond with ONLY a single JSON object (no prose, no code fence) matching this exact schema:
+{
+  "recommendation": "string \u2014 the recommended approach",
+  "rationale": "string \u2014 why this approach",
+  "alternatives": ["string \u2014 approaches considered and not chosen"],
+  "tradeoffs": ["string"],
+  "risks": ["string"],
+  "evidence": ["file:line or external source backing the recommendation"],
+  "confidence": 0.0
+}
+"recommendation" and "rationale" are REQUIRED. "evidence" MUST be non-empty \u2014 an empty evidence array is rejected and re-requested. Report uncertainty honestly.`;
+var MAGI_FREEFORM_CONTRACT = `Answer the question in natural language. No JSON schema is required for this task \u2014 write your analysis directly. (Note: a freeform answer is cross-verified only weakly, because it is unstructured.)`;
+function magiOutputContractFor(kind) {
+  switch (kind) {
+    case "rca":
+      return MAGI_RCA_CONTRACT;
+    case "design":
+      return MAGI_DESIGN_CONTRACT;
+    case "freeform":
+      return MAGI_FREEFORM_CONTRACT;
+    case "claim_audit":
+    default:
+      return MAGI_CLAIM_AUDIT_CONTRACT;
+  }
+}
+function detectQuestionOutputSchemaConflict(question) {
+  const q = typeof question === "string" ? question : "";
+  if (!q.trim()) return null;
+  const lower = q.toLowerCase();
+  const signals = [
+    "respond with only",
+    "respond with a single json",
+    "single json object",
+    "output format",
+    "output schema",
+    "reply with only",
+    '"claims"',
+    '"top_findings"',
+    "matching this exact schema"
+  ];
+  const hit = signals.find((s) => lower.includes(s));
+  if (!hit) return null;
+  return `The question text appears to embed an output-format schema (matched "${hit}"). MAGI already injects exactly one output contract for the selected task_kind, so a second schema in the question collides with it and replicas may fuse the two into unparseable output. Move any output-format instructions OUT of the question \u2014 describe only WHAT to investigate.`;
+}
 function buildMagiTaskPrompt(args) {
+  const kind = args.taskKind ?? DEFAULT_TASK_KIND;
   const parts = [];
   parts.push("You are one independent member of a multi-agent cross-verification quorum (MAGI). Several other agents on different machines/providers are answering the SAME question independently; your job is a rigorous, READ-ONLY investigation. Do NOT write, edit, commit, or push anything.");
+  parts.push(`Task kind: ${kind}.`);
   if (args.mode) parts.push(`Investigation mode: ${args.mode}.`);
   parts.push(`
 ## Question
@@ -4500,7 +4689,7 @@ ${args.artifacts.map((a) => String(a)).join("\n\n---\n\n")}`);
   }
   parts.push(`
 ## Output
-${MAGI_OUTPUT_CONTRACT}`);
+${magiOutputContractFor(kind)}`);
   return parts.join("\n");
 }
 function collectMagiCandidateTexts(payload) {
@@ -4535,25 +4724,6 @@ function collectMagiCandidateTexts(payload) {
   push(p.lastMessagePreview);
   push(p.text);
   return out;
-}
-function parseFirstMagiCandidateWithCompactFallback(payload, opts = {}) {
-  const rawCandidates = collectMagiCandidateTexts(payload);
-  let compactCandidates = [];
-  try {
-    compactCandidates = collectMagiCandidateTexts(
-      compactChatPayload(payload, { sessionId: opts.sessionId ?? null })
-    );
-  } catch {
-  }
-  const seen = /* @__PURE__ */ new Set();
-  for (const candidate of [...rawCandidates, ...compactCandidates]) {
-    const trimmed = candidate.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    const parsed = parseMagiResponse(candidate);
-    if (parsed) return parsed;
-  }
-  return null;
 }
 function replicaCompletionIsWeak(meshId, taskId) {
   try {
@@ -4659,6 +4829,10 @@ async function meshMagiPanelList(ctx, args = {}) {
 async function meshMagiReview(ctx, args) {
   const question = readString(args.question);
   if (!question) return JSON.stringify({ success: false, error: "question required" });
+  const taskKind = normalizeMagiTaskKind(args.task_kind ?? args.taskKind);
+  const questionSchemaWarning = detectQuestionOutputSchemaConflict(question);
+  const useJudge = (args.use_judge ?? args.useJudge) === true;
+  const judgeWarning = useJudge ? "use_judge=true requested, but judge synthesis is not yet implemented \u2014 falling back to clustering synthesis." : null;
   await refreshMeshFromDaemon(ctx);
   const hasInlineMembers = Array.isArray(args.members) && args.members.length > 0;
   let panel;
@@ -4713,7 +4887,7 @@ async function meshMagiReview(ctx, args) {
     goal: `Cross-verify (read-only) across panel '${panelName}': ${question}${args.target ? `
 Target: ${args.target}` : ""}`
   });
-  const prompt = buildMagiTaskPrompt({ question, target: args.target, artifacts: args.artifacts, mode: mode || void 0 });
+  const prompt = buildMagiTaskPrompt({ question, target: args.target, artifacts: args.artifacts, mode: mode || void 0, taskKind });
   const replicaRecords = [];
   for (const replica of plan.replicas) {
     try {
@@ -4745,7 +4919,8 @@ Target: ${args.target}` : ""}`
     missionId: mission.id,
     panel: panelName,
     question,
-    replicaCount: replicaRecords.length
+    replicaCount: replicaRecords.length,
+    taskKind
   });
   const queueTrigger = await triggerMeshQueueAndReport(ctx);
   const baseResult = {
@@ -4754,6 +4929,9 @@ Target: ${args.target}` : ""}`
     missionId: mission.id,
     panel: panelName,
     ...hasInlineMembers ? { inline: true } : {},
+    taskKind,
+    ...questionSchemaWarning ? { questionSchemaWarning } : {},
+    ...judgeWarning ? { judgeWarning } : {},
     question,
     replicaCount: replicaRecords.length,
     replicas: replicaRecords.map((r) => ({ taskId: r.taskId, provider: r.provider, targetNodeId: r.targetNodeId })),
@@ -4791,12 +4969,14 @@ Target: ${args.target}` : ""}`
   }
   const collected = await collectMagiResponses(ctx, {
     replicaTaskIds: replicaRecords.map((r) => r.taskId),
-    timeoutMs: waitTimeoutMs
+    timeoutMs: waitTimeoutMs,
+    taskKind
   });
   const synthesis = synthesizeMagiResponses(collected.responses, {
     replicasExpected: replicaRecords.length,
     requireIndependentEvidence
   });
+  const freeformBanner = taskKind === "freeform" ? "task_kind=freeform: answers are unstructured natural language; cross-verification is WEAK (no claim clustering / independence scoring). Treat the collected answers as parallel opinions, not a verified consensus." : null;
   persistMagiSynthesis(ctx, {
     consensusGroupId,
     missionId: mission.id,
@@ -4815,8 +4995,10 @@ Target: ${args.target}` : ""}`
       missing: synthesis.replicasMissing,
       staleReplicas: collected.staleCount,
       ...collected.staleCount > 0 ? { staleNote: `${collected.staleCount} replica(s) were detected STALE \u2014 assigned to a node/session no longer present in the live mesh; collection stopped early rather than waiting out the timeout.` } : {},
-      ...synthesis.replicasMissing > 0 ? { missingNote: `Partial synthesis \u2014 ${synthesis.replicasMissing} of ${replicaRecords.length} replicas did not return a parseable response (timed out / failed / unparseable / stale).` } : {}
+      ...collected.retriedCount > 0 ? { retriedReplicas: collected.retriedCount, retryNote: `${collected.retriedCount} replica(s) failed the ${taskKind} schema and were sent one delta re-request for a corrected single-JSON answer.` } : {},
+      ...synthesis.replicasMissing > 0 ? { missingNote: `Partial synthesis \u2014 ${synthesis.replicasMissing} of ${replicaRecords.length} replicas did not return a parseable response (timed out / failed / unparseable / schema-invalid / stale).` } : {}
     },
+    ...freeformBanner ? { freeformBanner } : {},
     synthesis
   }, null, 2);
 }
@@ -4824,6 +5006,8 @@ async function meshMagiCollect(ctx, args) {
   const consensusGroupId = readString(args.consensus_group_id) || readString(args.consensusGroupId);
   if (!consensusGroupId) return JSON.stringify({ success: false, error: "consensus_group_id required" });
   await refreshMeshFromDaemon(ctx);
+  const explicitKind = args.task_kind ?? args.taskKind;
+  const taskKind = explicitKind !== void 0 ? normalizeMagiTaskKind(explicitKind) : recoverMagiTaskKind(ctx, consensusGroupId);
   const replicaTasks = findMagiReplicaTasks((0, import_daemon_core4.getQueue)(ctx.mesh.id), consensusGroupId);
   if (replicaTasks.length === 0) {
     return JSON.stringify({
@@ -4837,11 +5021,12 @@ async function meshMagiCollect(ctx, args) {
   const wait = args.wait === true;
   const timeoutMs = wait ? Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(args.wait_timeout_ms ?? args.waitTimeoutMs) || MAGI_DEFAULT_WAIT_MS)) : 0;
   const replicaTaskIds = replicaTasks.map((t) => readString(t.id)).filter(Boolean);
-  const collected = await collectMagiResponses(ctx, { replicaTaskIds, timeoutMs });
+  const collected = await collectMagiResponses(ctx, { replicaTaskIds, timeoutMs, taskKind });
   const synthesis = synthesizeMagiResponses(collected.responses, {
     replicasExpected: replicaTaskIds.length,
     requireIndependentEvidence
   });
+  const freeformBanner = taskKind === "freeform" ? "task_kind=freeform: answers are unstructured natural language; cross-verification is WEAK (no claim clustering / independence scoring). Treat the collected answers as parallel opinions, not a verified consensus." : null;
   persistMagiSynthesis(ctx, {
     consensusGroupId,
     missionId: readString(replicaTasks[0]?.missionId),
@@ -4851,6 +5036,7 @@ async function meshMagiCollect(ctx, args) {
   return JSON.stringify({
     success: true,
     consensusGroupId,
+    taskKind,
     replicaCount: replicaTaskIds.length,
     waited: wait,
     collection: {
@@ -4860,8 +5046,10 @@ async function meshMagiCollect(ctx, args) {
       missing: synthesis.replicasMissing,
       staleReplicas: collected.staleCount,
       ...collected.staleCount > 0 ? { staleNote: `${collected.staleCount} replica(s) were detected STALE \u2014 assigned to a node/session no longer present in the live mesh.` } : {},
+      ...collected.retriedCount > 0 ? { retriedReplicas: collected.retriedCount, retryNote: `${collected.retriedCount} replica(s) failed the ${taskKind} schema and were sent one delta re-request for a corrected single-JSON answer.` } : {},
       ...!collected.terminal ? { pendingNote: "Not all replicas are terminal yet \u2014 this is a partial snapshot. Re-collect once mission/pendingCoordinatorEvents report more completions." } : {}
     },
+    ...freeformBanner ? { freeformBanner } : {},
     synthesis
   }, null, 2);
 }
@@ -4896,11 +5084,28 @@ function persistMagiDispatched(ctx, args) {
         ...args.missionId ? { missionId: args.missionId } : {},
         ...args.panel ? { panel: args.panel } : {},
         ...args.question ? { question: args.question.slice(0, 300) } : {},
-        replicaCount: args.replicaCount
+        replicaCount: args.replicaCount,
+        // MAGI-REDESIGN: persist the task_kind so a later mesh_magi_collect
+        // (which rediscovers replicas from the queue, not the original call)
+        // re-derives the right schema parser for this group.
+        ...args.taskKind ? { taskKind: args.taskKind } : {}
       }
     });
   } catch {
   }
+}
+function recoverMagiTaskKind(ctx, consensusGroupId) {
+  try {
+    const entries = (0, import_daemon_core4.readLedgerEntries)(ctx.mesh.id, { kind: ["magi_dispatched"], tail: 200 });
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const payload = entries[i]?.payload;
+      if (!payload || typeof payload !== "object") continue;
+      if (readString(payload.consensusGroupId) !== consensusGroupId) continue;
+      return normalizeMagiTaskKind(payload.taskKind);
+    }
+  } catch {
+  }
+  return DEFAULT_TASK_KIND;
 }
 function persistMagiSynthesis(ctx, args) {
   try {
@@ -4935,7 +5140,9 @@ async function collectMagiResponses(ctx, args) {
   const ids = new Set(args.replicaTaskIds);
   const deadline = Date.now() + args.timeoutMs;
   const TERMINAL = MAGI_TERMINAL_STATUSES;
+  const kind = args.taskKind ?? DEFAULT_TASK_KIND;
   const emptyResponse = () => ({ claims: [], top_findings: [], open_questions: [] });
+  const retried = /* @__PURE__ */ new Set();
   const finalized = /* @__PURE__ */ new Map();
   const provisional = /* @__PURE__ */ new Map();
   const buildSource = (task) => {
@@ -4948,6 +5155,42 @@ async function collectMagiResponses(ctx, args) {
       ok: false,
       ...gitRef ? { git: gitRef } : {}
     };
+  };
+  const sendKindRetry = async (task, failReason) => {
+    const node = ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, task.assignedNodeId));
+    if (!node || !task.assignedSessionId) return false;
+    const why = failReason === "empty_evidence" ? "your previous answer had an empty evidence array" : failReason === "missing_required_fields" ? "your previous answer was missing required fields" : "your previous answer did not parse as the required JSON";
+    const message = `Your previous MAGI answer could not be accepted (${why}). Respond NOW with ONLY a single JSON object (no prose, no code fence) matching EXACTLY this schema, with non-empty evidence:
+
+${magiOutputContractFor(kind)}`;
+    try {
+      const coordinatorDaemonId = ctx.localDaemonId;
+      await commandForNode(ctx, node, "agent_command", {
+        targetSessionId: task.assignedSessionId,
+        providerType: task.assignedProviderType,
+        cliType: task.assignedProviderType,
+        agentType: task.assignedProviderType,
+        action: "send_chat",
+        message,
+        meshContext: {
+          meshId: ctx.mesh.id,
+          nodeId: task.assignedNodeId,
+          taskId: task.id,
+          ...coordinatorDaemonId ? { coordinatorDaemonId } : {},
+          ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}
+        }
+      });
+      try {
+        (0, import_daemon_core4.appendLedgerEntry)(ctx.mesh.id, {
+          kind: "magi_replica_retry",
+          payload: { taskId: task.id, kind, failReason }
+        });
+      } catch {
+      }
+      return true;
+    } catch {
+      return false;
+    }
   };
   const tryResolveReplica = async (task, staleTaskIds2, staleReasons2, force) => {
     const taskId = task.id;
@@ -4971,7 +5214,7 @@ async function collectMagiResponses(ctx, args) {
       }
       return false;
     }
-    let parsed = null;
+    let kindResult;
     try {
       const node = ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, task.assignedNodeId));
       if (!node) throw new Error("assigned node not in mesh");
@@ -4982,7 +5225,7 @@ async function collectMagiResponses(ctx, args) {
         tailLimit: 6
       });
       const payload = unwrapCommandPayload(result);
-      parsed = parseFirstMagiCandidateWithCompactFallback(payload, {
+      kindResult = parseFirstMagiCandidateForKind(payload, kind, {
         sessionId: task.assignedSessionId
       });
     } catch (e) {
@@ -4993,14 +5236,20 @@ async function collectMagiResponses(ctx, args) {
       }
       return false;
     }
-    if (parsed) {
+    if (kindResult.ok && kindResult.response) {
       const weak = replicaCompletionIsWeak(ctx.mesh.id, taskId);
       if (weak && !force) {
-        provisional.set(taskId, { source: { ...source, ok: true }, response: parsed });
+        provisional.set(taskId, { source: { ...source, ok: true }, response: kindResult.response });
         return false;
       }
-      finalized.set(taskId, { source: { ...source, ok: true }, response: parsed });
+      finalized.set(taskId, { source: { ...source, ok: true }, response: kindResult.response });
       return true;
+    }
+    const isSchemaFailure = kindResult.failReason === "missing_required_fields" || kindResult.failReason === "empty_evidence";
+    if (isSchemaFailure && !retried.has(taskId) && !force) {
+      retried.add(taskId);
+      const sent = await sendKindRetry(task, kindResult.failReason);
+      if (sent) return false;
     }
     if (force) {
       const prov = provisional.get(taskId);
@@ -5008,7 +5257,7 @@ async function collectMagiResponses(ctx, args) {
         finalized.set(taskId, prov);
         return true;
       }
-      source.error = "unparseable_output";
+      source.error = isSchemaFailure ? `schema_invalid: ${kindResult.failReason}` : "unparseable_output";
       finalized.set(taskId, { source, response: emptyResponse() });
       return true;
     }
@@ -5044,7 +5293,7 @@ async function collectMagiResponses(ctx, args) {
   const responses = args.replicaTaskIds.map((id) => finalized.get(id)).filter((r) => !!r);
   const terminal = presentIds.size === ids.size && finalTasks.every((t) => TERMINAL.has(String(t.status)));
   const staleCount = responses.filter((r) => r.source.stale === true).length;
-  return { responses, terminal, timedOut: !terminal, staleCount };
+  return { responses, terminal, timedOut: !terminal, staleCount, retriedCount: retried.size };
 }
 
 // src/tools/mesh-tools-session.ts
