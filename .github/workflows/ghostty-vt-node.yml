@@ -74,7 +74,11 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: latest
+          # Pin to the version ghostty's build.zig.zon requires
+          # (minimum_zig_version = "0.15.2"). `latest` floated to 0.16.0, which
+          # breaks the build (std.process.EnvMap removed; requireZig() rejects it),
+          # leaving the committed prebuilts stale and missing getCursorPosition().
+          version: 0.15.2
 
       - name: Install dependencies
         run: npm ci
