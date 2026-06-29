@@ -4070,7 +4070,7 @@ async function meshReviewInbox(ctx, args = {}) {
 // src/tools/mesh-tools-magi.ts
 var MAGI_MAX_REPLICAS = 12;
 var MAGI_MIN_TARGETS = 2;
-var MAGI_CLUSTER_JACCARD = 0.5;
+var MAGI_CLUSTER_JACCARD = 0.4;
 var MAGI_DEFAULT_WAIT_MS = 18e4;
 var MAGI_MAX_WAIT_MS = 6e5;
 var MAGI_POLL_INTERVAL_MS = 5e3;
@@ -4316,10 +4316,25 @@ function jaccard(a, b) {
   return union === 0 ? 0 : intersection / union;
 }
 function isSpecificEvidence(ev) {
-  return /[\w/.\\-]+:\d+/.test(ev) || /[\w-]+\.[a-z]{1,5}\b/i.test(ev);
+  return /[\w/.\\-]+:\d+/.test(ev) || /[\w-]+\.[a-z]{1,5}\b/i.test(ev) || /https?:\/\//i.test(ev);
+}
+function canonicalizeSpecificEvidence(ev) {
+  const lower = ev.toLowerCase().replace(/\s+/g, " ").trim();
+  const urlMatch = lower.match(/https?:\/\/([^\s)\]>"']+)/i);
+  if (urlMatch) {
+    const stripped = urlMatch[1].replace(/[#?].*$/, "").replace(/\/+$/, "");
+    return `url:${stripped}`;
+  }
+  const fileLine = lower.match(/([\w./\\-]+):(\d+)/);
+  if (fileLine) {
+    const pathPart = fileLine[1].replace(/\\/g, "/");
+    const basename = pathPart.split("/").filter(Boolean).pop() || pathPart;
+    return `${basename}:${fileLine[2]}`;
+  }
+  return lower;
 }
 function normalizeEvidence(ev) {
-  return ev.toLowerCase().replace(/\s+/g, " ").trim();
+  return isSpecificEvidence(ev) ? canonicalizeSpecificEvidence(ev) : ev.toLowerCase().replace(/\s+/g, " ").trim();
 }
 function rankNeedsVerification(c) {
   switch (c.category) {
@@ -4985,6 +5000,7 @@ Target: ${args.target}` : ""}`
     staleReplicas: collected.staleCount,
     synthesis
   });
+  closeMagiMissionIfTerminal(ctx, mission.id, collected.terminal);
   return JSON.stringify({
     ...baseResult,
     waited: true,
@@ -5027,12 +5043,14 @@ async function meshMagiCollect(ctx, args) {
     requireIndependentEvidence
   });
   const freeformBanner = taskKind === "freeform" ? "task_kind=freeform: answers are unstructured natural language; cross-verification is WEAK (no claim clustering / independence scoring). Treat the collected answers as parallel opinions, not a verified consensus." : null;
+  const replicaMissionId = readString(replicaTasks[0]?.missionId);
   persistMagiSynthesis(ctx, {
     consensusGroupId,
-    missionId: readString(replicaTasks[0]?.missionId),
+    missionId: replicaMissionId,
     staleReplicas: collected.staleCount,
     synthesis
   });
+  closeMagiMissionIfTerminal(ctx, replicaMissionId, collected.terminal);
   return JSON.stringify({
     success: true,
     consensusGroupId,
@@ -5059,6 +5077,12 @@ function findMagiReplicaTasks(queue, consensusGroupId) {
   const groupId = typeof consensusGroupId === "string" ? consensusGroupId.trim() : "";
   if (!groupId) return [];
   return (Array.isArray(queue) ? queue : []).filter((t) => readString(t?.consensusGroupId) === groupId);
+}
+function sessionSharedWithAnotherReplica(task, allTasks) {
+  const sid = readString(task?.assignedSessionId);
+  if (!sid) return false;
+  const nodeId = readString(task?.assignedNodeId);
+  return (Array.isArray(allTasks) ? allTasks : []).some((other) => other?.id !== task?.id && readString(other?.assignedSessionId) === sid && (!nodeId || !readString(other?.assignedNodeId) || readString(other?.assignedNodeId) === nodeId));
 }
 function classifyStaleReplicas(annotatedTasks, terminal = MAGI_TERMINAL_STATUSES) {
   const staleTaskIds = /* @__PURE__ */ new Set();
@@ -5120,6 +5144,22 @@ function persistMagiSynthesis(ctx, args) {
         ...typeof args.staleReplicas === "number" ? { staleReplicas: args.staleReplicas } : {},
         synthesis: args.synthesis
       }
+    });
+  } catch {
+  }
+}
+function closeMagiMissionIfTerminal(ctx, missionId, terminal) {
+  if (!terminal) return;
+  const id = readString(missionId);
+  if (!id) return;
+  try {
+    const mission = (0, import_daemon_core4.getMeshMission)(ctx.mesh.id, id);
+    if (!mission || mission.status !== "active") return;
+    (0, import_daemon_core4.upsertMeshMission)(ctx.mesh.id, {
+      id,
+      title: mission.title,
+      // Preserve goal: upsert defaults goal to the existing value when omitted.
+      status: "completed"
     });
   } catch {
   }
@@ -5192,7 +5232,7 @@ ${magiOutputContractFor(kind)}`;
       return false;
     }
   };
-  const tryResolveReplica = async (task, staleTaskIds2, staleReasons2, force) => {
+  const tryResolveReplica = async (task, staleTaskIds2, staleReasons2, force, liveTasks) => {
     const taskId = task.id;
     const source = buildSource(task);
     if (task.status !== "completed" || !task.assignedNodeId || !task.assignedSessionId) {
@@ -5214,6 +5254,14 @@ ${magiOutputContractFor(kind)}`;
       }
       return false;
     }
+    if (sessionSharedWithAnotherReplica(task, liveTasks)) {
+      if (force) {
+        source.error = "cross_wired_shared_session";
+        finalized.set(taskId, { source, response: emptyResponse() });
+        return true;
+      }
+      return false;
+    }
     let kindResult;
     try {
       const node = ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, task.assignedNodeId));
@@ -5222,7 +5270,11 @@ ${magiOutputContractFor(kind)}`;
         sessionId: task.assignedSessionId,
         targetSessionId: task.assignedSessionId,
         workspace: node.workspace,
-        tailLimit: 6
+        tailLimit: 6,
+        // FIX#1: scope the read to the CURRENT turn so a provider that supports it returns
+        // only this turn's bubbles (coverage:'current-turn' / _turnKey), instead of the
+        // whole-session tail whose newest kind-valid JSON could belong to an earlier turn.
+        coverage: "current-turn"
       });
       const payload = unwrapCommandPayload(result);
       kindResult = parseFirstMagiCandidateForKind(payload, kind, {
@@ -5270,7 +5322,7 @@ ${magiOutputContractFor(kind)}`;
     const pastDeadline = Date.now() >= deadline;
     for (const task of tasks) {
       if (finalized.has(task.id)) continue;
-      await tryResolveReplica(task, staleTaskIds2, staleReasons2, pastDeadline);
+      await tryResolveReplica(task, staleTaskIds2, staleReasons2, pastDeadline, tasks);
     }
     if (allPresent && finalized.size >= ids.size) break;
     if (pastDeadline) break;
@@ -5282,7 +5334,7 @@ ${magiOutputContractFor(kind)}`;
   const { staleTaskIds, staleReasons } = classifyStaleReplicas(finalTasks, TERMINAL);
   const presentIds = new Set(finalTasks.map((t) => t.id));
   for (const task of finalTasks) {
-    if (!finalized.has(task.id)) await tryResolveReplica(task, staleTaskIds, staleReasons, true);
+    if (!finalized.has(task.id)) await tryResolveReplica(task, staleTaskIds, staleReasons, true, finalTasks);
   }
   for (const id of ids) {
     if (finalized.has(id)) continue;
