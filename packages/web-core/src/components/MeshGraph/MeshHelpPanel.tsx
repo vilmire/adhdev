@@ -90,6 +90,25 @@ const MESH_HELP_SECTIONS: HelpSection[] = [
         ],
     },
     {
+        term: 'MAGI',
+        summary: 'Cross-verification: several independent AI agents answer the same question in parallel.',
+        details: [
+            'Confidence comes from independence — different AIs on different machines fail in different ways.',
+            'When the agents disagree, the disagreement itself flags what to double-check.',
+            'Run via mesh_magi_review; the synthesis weighs agreement against source coupling.',
+        ],
+    },
+    {
+        term: 'MAGI panel',
+        summary: 'A saved, reusable team of (machine × AI) members you invoke by name across investigations.',
+        details: [
+            'Each member is one provider (AI) optionally pinned to a node (machine), with a replica count.',
+            'independent — spans ≥2 providers AND ≥2 machines, so agreement adds real confidence.',
+            'coupled — collapses to one AI or one machine; repeated members repeat the same mistakes.',
+            'Managed machine-locally from the Panels tab; defined in ~/.adhdev/meshes.json.',
+        ],
+    },
+    {
         term: 'Branch convergence states',
         summary: 'After worktree work, each branch is classified into exactly one final state.',
         details: [
