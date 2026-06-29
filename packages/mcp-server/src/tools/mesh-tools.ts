@@ -69,6 +69,14 @@ export type {
     MeshContext,
 } from './mesh-tools-internal.js';
 
+export type {
+    MagiTaskKind,
+    MagiRcaResponse,
+    MagiDesignResponse,
+    MagiFreeformResponse,
+    MagiKindParseResult,
+} from './mesh-tools-magi.js';
+
 export {
     meshListNodes,
     meshStatus,
@@ -97,14 +105,19 @@ export {
     buildMagiTaskPrompt,
     classifyStaleReplicas,
     collectMagiCandidateTexts,
+    detectQuestionOutputSchemaConflict,
     findMagiReplicaTasks,
+    magiOutputContractFor,
     meshMagiCollect,
     meshMagiPanelList,
     meshMagiPanelSet,
     meshMagiReview,
+    normalizeMagiTaskKind,
     parseFirstMagiCandidate,
+    parseFirstMagiCandidateForKind,
     parseFirstMagiCandidateWithCompactFallback,
     parseMagiResponse,
+    parseMagiResponseForKind,
     synthesizeMagiResponses,
 } from './mesh-tools-magi.js';
 
