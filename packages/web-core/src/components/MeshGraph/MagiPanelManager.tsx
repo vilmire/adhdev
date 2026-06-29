@@ -62,32 +62,60 @@ interface PanelDraft {
     members: MemberDraft[]
 }
 
-function emptyMember(): MemberDraft {
-    return { provider: '', nodeId: '', capabilityTags: '', n: '' }
+/**
+ * A blank member. `nodeId` pre-fills the machine (primary axis) when a live node
+ * is available — passing '' (or omitting) starts the member on the tag-route path.
+ */
+function emptyMember(nodeId = ''): MemberDraft {
+    return { provider: '', nodeId, capabilityTags: '', n: '' }
 }
 
-function newPanelDraft(): PanelDraft {
-    return { originalName: '', name: '', description: '', defaultN: '', members: [emptyMember()] }
+function newPanelDraft(prefillNodeId = ''): PanelDraft {
+    return { originalName: '', name: '', description: '', defaultN: '', members: [emptyMember(prefillNodeId)] }
+}
+
+function liveNodeProviders(n: MagiResolveNode): string[] {
+    return n.providers?.length ? n.providers.filter(Boolean) : (n.providerPriority ?? []).filter(Boolean)
 }
 
 /**
- * Seed an independent 2-member draft from the live mesh: pick two distinct
- * providers (preferring two distinct nodes that offer them) so the panel starts
- * independent. Falls back to static example providers when the live mesh has
- * fewer than two — the user can still edit, so the button is never a dead-end.
+ * Plan a 2-machines × 2-AIs seed against the live mesh, WITHOUT promising more
+ * independence than the mesh can deliver. `sharesMachine` tells the caller the
+ * seed had to put both members on one machine (only one usable node) so the UI
+ * can say so plainly instead of implying a false "independent" guarantee.
+ */
+function planSeed(nodes: MagiResolveNode[]): { sharesMachine: boolean } {
+    // Two members on two different nodes with two different providers → distinct machines.
+    for (let i = 0; i < nodes.length; i++) {
+        for (const pa of liveNodeProviders(nodes[i])) {
+            for (let j = 0; j < nodes.length; j++) {
+                if (j === i) continue
+                for (const pb of liveNodeProviders(nodes[j])) {
+                    if (pb !== pa) return { sharesMachine: false }
+                }
+            }
+        }
+    }
+    return { sharesMachine: true }
+}
+
+/**
+ * Seed a 2-machines × 2-AIs draft from the live mesh: prefer two distinct nodes
+ * each offering a distinct provider so the panel starts independent. Falls back
+ * to two distinct providers (tag-routed) and finally to static example providers
+ * when the live mesh has fewer than two — the user can still edit, so the button
+ * is never a dead-end. `planSeed` reports whether the members had to share a
+ * machine so the caller can label the button honestly.
  */
 function seedIndependentDraft(nodes: MagiResolveNode[]): PanelDraft {
-    const nodeProviders = (n: MagiResolveNode): string[] =>
-        n.providers?.length ? n.providers.filter(Boolean) : (n.providerPriority ?? []).filter(Boolean)
-
     // Try to pick two members on two different nodes with two different providers.
     let memberA: MemberDraft | null = null
     let memberB: MemberDraft | null = null
     outer: for (let i = 0; i < nodes.length; i++) {
-        for (const pa of nodeProviders(nodes[i])) {
+        for (const pa of liveNodeProviders(nodes[i])) {
             for (let j = 0; j < nodes.length; j++) {
                 if (j === i) continue
-                for (const pb of nodeProviders(nodes[j])) {
+                for (const pb of liveNodeProviders(nodes[j])) {
                     if (pb === pa) continue
                     memberA = { provider: pa, nodeId: nodes[i].nodeId, capabilityTags: '', n: '' }
                     memberB = { provider: pb, nodeId: nodes[j].nodeId, capabilityTags: '', n: '' }
@@ -100,7 +128,7 @@ function seedIndependentDraft(nodes: MagiResolveNode[]): PanelDraft {
     // No two distinct (node, provider) pairs — fall back to two distinct providers
     // (tag-routed, no pinned node) from the live set, then to static examples.
     if (!memberA || !memberB) {
-        const liveProviders = [...new Set(nodes.flatMap(nodeProviders))]
+        const liveProviders = [...new Set(nodes.flatMap(liveNodeProviders))]
         const [pa, pb] = liveProviders.length >= 2 ? liveProviders : FALLBACK_PROVIDERS
         memberA = { provider: pa, nodeId: '', capabilityTags: '', n: '' }
         memberB = { provider: pb, nodeId: '', capabilityTags: '', n: '' }
@@ -202,6 +230,21 @@ export default function MagiPanelManager({ status, daemonId, sendDaemonCommand }
     )
     const knownNodeIds = useMemo(() => status.nodes.map(n => n.nodeId), [status.nodes])
 
+    // Default machine to pre-fill new members with: the first online node that
+    // reports any provider, else the first node reporting any provider, else the
+    // first known node. Empty string when no live node exists (members then start
+    // on the tag-route option). Machine is the primary axis, so a new member
+    // points at a real machine by default rather than the advanced tag-route path.
+    const prefillNodeId = useMemo(() => {
+        const offersProvider = (n: RepoMeshStatus['nodes'][number]) =>
+            (n.providers?.length ?? 0) > 0 || (n.providerPriority?.length ?? 0) > 0
+        const online = status.nodes.find(n => n.health === 'online' && offersProvider(n))
+        if (online) return online.nodeId
+        const anyWithProvider = status.nodes.find(offersProvider)
+        if (anyWithProvider) return anyWithProvider.nodeId
+        return status.nodes[0]?.nodeId ?? ''
+    }, [status.nodes])
+
     // Provider candidates for the (creatable) dropdown: every provider any live
     // node reports. Falls back to a static enum when the mesh reports none, so the
     // dropdown always offers something. Free-text entry is preserved regardless.
@@ -219,6 +262,10 @@ export default function MagiPanelManager({ status, daemonId, sendDaemonCommand }
         if ('error' in built) return null
         return resolveMagiPanel(built.panel, liveNodes)
     }, [editing, liveNodes])
+
+    // Whether the 2-machines × 2-AIs seed can actually land on two distinct
+    // machines, or has to share one (only one usable node). Drives honest button copy.
+    const seedSharesMachine = useMemo(() => planSeed(liveNodes).sharesMachine, [liveNodes])
 
     const canCommand = !!daemonId && !!sendDaemonCommand
 
@@ -291,7 +338,7 @@ export default function MagiPanelManager({ status, daemonId, sendDaemonCommand }
     const updateMember = (idx: number, patch: Partial<MemberDraft>) => {
         setEditing(d => d ? { ...d, members: d.members.map((m, i) => i === idx ? { ...m, ...patch } : m) } : d)
     }
-    const addMember = () => setEditing(d => d ? { ...d, members: [...d.members, emptyMember()] } : d)
+    const addMember = () => setEditing(d => d ? { ...d, members: [...d.members, emptyMember(prefillNodeId)] } : d)
     const removeMember = (idx: number) => setEditing(d => d ? { ...d, members: d.members.filter((_, i) => i !== idx) } : d)
 
     const inputClass = `w-full rounded-lg border px-2.5 py-1.5 text-xs ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40 text-slate-100 placeholder:text-slate-500' : 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400'}`
@@ -311,11 +358,20 @@ export default function MagiPanelManager({ status, daemonId, sendDaemonCommand }
                     <button type="button" className={btnGhost} onClick={() => void loadPanels()} disabled={loading || !canCommand}>
                         {loading ? 'Loading…' : 'Refresh'}
                     </button>
-                    <button type="button" className={btnGhost} onClick={() => { setError(null); setEditing(seedIndependentDraft(liveNodes)) }} disabled={!canCommand}
-                        title="Pre-fill an independent 2-member panel (two different AIs, ideally on two machines) you can tweak.">
-                        Start with an independent 2-member panel
-                    </button>
-                    <button type="button" className={btnPrimary} onClick={() => { setError(null); setEditing(newPanelDraft()) }} disabled={!canCommand}>
+                    <div className="flex flex-col items-stretch gap-0.5">
+                        <button type="button" className={btnGhost} onClick={() => { setError(null); setEditing(seedIndependentDraft(liveNodes)) }} disabled={!canCommand}
+                            title={seedSharesMachine
+                                ? 'Pre-fill a 2-member panel (two different AIs) you can tweak. Only one machine is available, so both members will start on the same machine.'
+                                : 'Pre-fill a 2-machines × 2-AIs panel (each AI pinned to a different machine) you can tweak.'}>
+                            Start with 2 machines × 2 AIs
+                        </button>
+                        {seedSharesMachine && (
+                            <span className={`text-[10px] leading-3 ${meshTheme.textMuted}`}>
+                                only 1 machine available — members will share a machine
+                            </span>
+                        )}
+                    </div>
+                    <button type="button" className={btnPrimary} onClick={() => { setError(null); setEditing(newPanelDraft(prefillNodeId)) }} disabled={!canCommand}>
                         New panel
                     </button>
                 </div>
@@ -330,7 +386,7 @@ export default function MagiPanelManager({ status, daemonId, sendDaemonCommand }
                     <span className={`font-semibold ${meshTheme.textPrimary}`}>Independent</span> = the panel spans 2+ different AIs <em>and</em> 2+
                     different machines. <span className={`font-semibold ${meshTheme.textPrimary}`}>Coupled</span> = it collapses to one AI or one
                     machine (two copies of the same AI repeat the same mistakes, so agreement doesn&apos;t add confidence). To make it independent:
-                    give members different Providers, and ideally different Nodes.
+                    spread members across different machines AND different AIs.
                 </div>
             </div>
 
@@ -374,25 +430,25 @@ export default function MagiPanelManager({ status, daemonId, sendDaemonCommand }
                     </label>
 
                     <div className="flex flex-col gap-2">
-                        <span className={`text-[10px] uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>Members — (node × provider) targets</span>
-                        <span className={helperClass}>Each member is one machine × one AI. Mixing different AIs and machines makes cross-verification stronger.</span>
+                        <span className={`text-[10px] uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>Members — (machine × AI) targets</span>
+                        <span className={helperClass}>Each member runs the question on one machine with one AI. Different machines AND different AIs make cross-verification stronger.</span>
                         {editing.members.map((m, idx) => (
                             <div key={idx} className={`rounded-xl border p-2.5 grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_auto_auto] gap-2 items-end ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
+                                <label className="flex flex-col gap-1">
+                                    <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>Node *</span>
+                                    <select className={inputClass} value={m.nodeId} onChange={e => updateMember(idx, { nodeId: e.target.value })}>
+                                        {knownNodeIds.map(id => <option key={id} value={id}>{id}</option>)}
+                                        {m.nodeId && !knownNodeIds.includes(m.nodeId) && <option value={m.nodeId}>{m.nodeId} (not in live mesh)</option>}
+                                        <option value="">Advanced: route by tags (no fixed machine)</option>
+                                    </select>
+                                    <span className={helperClass}>The machine this member runs on. Defaults to a specific machine; leave on the tag-route option to let the coordinator pick by tags (advanced).</span>
+                                </label>
                                 <label className="flex flex-col gap-1">
                                     <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>Provider *</span>
                                     <input className={inputClass} value={m.provider} placeholder="claude-cli"
                                         list="magi-provider-options"
                                         onChange={e => updateMember(idx, { provider: e.target.value })} />
                                     <span className={helperClass}>The AI this member runs. e.g. claude-cli, codex-cli, gemini-cli. Pick from the list or type your own.</span>
-                                </label>
-                                <label className="flex flex-col gap-1">
-                                    <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>Node (optional)</span>
-                                    <select className={inputClass} value={m.nodeId} onChange={e => updateMember(idx, { nodeId: e.target.value })}>
-                                        <option value="">(any — route by tags)</option>
-                                        {knownNodeIds.map(id => <option key={id} value={id}>{id}</option>)}
-                                        {m.nodeId && !knownNodeIds.includes(m.nodeId) && <option value={m.nodeId}>{m.nodeId} (not in live mesh)</option>}
-                                    </select>
-                                    <span className={helperClass}>Pin to a specific machine (optional). Blank = auto-assign to any machine that has this AI.</span>
                                 </label>
                                 <label className="flex flex-col gap-1">
                                     <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>Capability tags</span>
@@ -420,19 +476,22 @@ export default function MagiPanelManager({ status, daemonId, sendDaemonCommand }
                         </div>
                     </div>
 
-                    {/* Live independence hint — same resolveMagiPanel verdict the saved panel gets. */}
+                    {/* Live independence status — demoted to a small diagnostic line;
+                        the member grid above is the subject. Same resolveMagiPanel
+                        verdict the saved panel gets. */}
                     {draftResolution && (
-                        <div
-                            className={`rounded-lg border px-2.5 py-1.5 text-[11px] leading-5 ${draftResolution.coupled
-                                ? 'border-amber-400/30 bg-amber-500/10 text-amber-300'
-                                : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300'}`}
-                        >
-                            {draftResolution.coupled
-                                ? `Current: coupled · ${draftResolution.distinctProviders}p × ${draftResolution.distinctNodes}m — ${draftResolution.distinctProviders < 2
-                                    ? 'add a different Provider to make it independent.'
-                                    : 'spread members across a different Node to make it independent.'}`
-                                : `Current: independent · ${draftResolution.distinctProviders}p × ${draftResolution.distinctNodes}m ✓`}
-                            {draftResolution.meshEmpty && ' (mesh offline — assessed from the declaration only.)'}
+                        <div className={`flex items-center gap-1.5 text-[10px] leading-4 ${meshTheme.textMuted}`}>
+                            <span className={`inline-block h-1.5 w-1.5 rounded-full ${draftResolution.coupled ? 'bg-amber-400' : 'bg-emerald-400'}`} aria-hidden />
+                            <span className={draftResolution.coupled ? 'text-amber-300/80' : 'text-emerald-300/80'}>
+                                {draftResolution.coupled ? 'coupled' : 'independent'}
+                            </span>
+                            <span>· {draftResolution.distinctProviders} AI × {draftResolution.distinctNodes} machine</span>
+                            {draftResolution.coupled && (
+                                <span>— {draftResolution.distinctNodes < 2
+                                    ? 'put members on a different machine to make it independent'
+                                    : 'add a different AI to make it independent'}</span>
+                            )}
+                            {draftResolution.meshEmpty && <span>· mesh offline, from declaration only</span>}
                         </div>
                     )}
 
@@ -491,16 +550,20 @@ function MagiPanelRow({
                 <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-white/10 text-slate-300' : 'border-slate-300 text-slate-600'}`}>
                     {resolution.members.length} member{resolution.members.length === 1 ? '' : 's'} · {resolution.totalReplicas} replica{resolution.totalReplicas === 1 ? '' : 's'}
                 </span>
-                {/* Coupling badge — same independence rule as the live MAGI activity surface. */}
+                {/* Coupling status — demoted to a small diagnostic dot+label so the
+                    member layout below is the subject. Same independence rule as the
+                    live MAGI activity surface; color retained, visual weight reduced. */}
                 <span
-                    className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${resolution.coupled ? 'border-amber-400/30 bg-amber-500/10 text-amber-300' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300'}`}
+                    className={`inline-flex items-center gap-1 text-[10px] ${meshTheme.textSecondary}`}
                     title={resolution.coupled
                         ? 'Panel collapses to a single provider or machine — eventual agreements would be flagged source-coupled by MAGI synthesis.'
                         : 'Panel spans ≥2 providers and ≥2 machines — agreements would be independent.'}
                 >
-                    {resolution.coupled
-                        ? `coupled · ${resolution.distinctProviders}p × ${resolution.distinctNodes}m`
-                        : `independent · ${resolution.distinctProviders}p × ${resolution.distinctNodes}m`}
+                    <span className={`inline-block h-1.5 w-1.5 rounded-full ${resolution.coupled ? 'bg-amber-400' : 'bg-emerald-400'}`} aria-hidden />
+                    <span className={resolution.coupled ? 'text-amber-300/80' : 'text-emerald-300/80'}>
+                        {resolution.coupled ? 'coupled' : 'independent'}
+                    </span>
+                    <span>· {resolution.distinctProviders}p × {resolution.distinctNodes}m</span>
                 </span>
                 {resolution.meshEmpty && (
                     <span className={`text-[10px] ${meshTheme.textSecondary}`} title="No live mesh nodes reported — resolvability assessed against the raw definition.">
