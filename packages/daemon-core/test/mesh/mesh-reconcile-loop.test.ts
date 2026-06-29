@@ -29,6 +29,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 }))
 
 import { runMeshReconcileTick, __resetReconcileInFlightSynthDebounceForTests } from '../../src/mesh/mesh-reconcile-loop.js'
+import { setLogLevel, getRecentLogs } from '../../src/logging/logger.js'
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
 import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, claimNextTask, reclaimStrandedAssignedTask } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, appendLedgerEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
@@ -191,6 +192,134 @@ describe('runMeshReconcileTick', () => {
     } finally {
       cleanup(meshId)
     }
+  })
+
+  // ── NOTIF (B) desync diagnostic instrumentation ───────────────────────────
+  // The confirmed (B) defect is a RUNTIME desync: a coordinator whose adapter/FSM is
+  // idle is nonetheless classified busy by the reconcile loop, so its worker's
+  // completion is held and never drains until the user's next turn edge. Static
+  // analysis found no code path where the three status sources (getState().status,
+  // lastStatus, adapter.getStatus({allowParse:false}).status) all return idle yet the
+  // loop holds — so the divergence is between those sources at runtime. These tests do
+  // NOT reproduce the live desync (a unit fake unifies the sources by construction);
+  // they verify that the read-only `coordDiag` instrumentation CAPTURES all three
+  // sources and that the same-tick hold log can be paired to it by sessionId — so when
+  // it ships and runs on a live daemon (--log-level debug), the diverging source is
+  // directly readable from the logs. A coordinator that diverges getState=generating
+  // (the modal/auto-approve overlay) while lastStatus=idle and adapterRaw=idle is the
+  // `getState_overlay` origin; this models it.
+  describe('coordDiag instrumentation (read-only, NOTIF (B) origin localization)', () => {
+    afterEach(() => { setLogLevel('info') })
+
+    it('captures getState/lastStatus/adapterRaw + autoApproveBusy/maskSince for a held coordinator and pairs to the hold log by sessionId', async () => {
+      const meshId = `mesh_coorddiag_${Date.now()}`
+      try {
+        setLogLevel('debug')
+        const sink: any[] = []
+        // A coordinator whose getState() overlay says generating (the loop's busy basis)
+        // while the underlying adapter raw and lastStatus are idle — the getState_overlay
+        // desync class. The instrumentation must surface all three distinct values.
+        const sessionId = 'coord-overlay-desync'
+        const coordinator: any = {
+          category: 'cli',
+          getState: () => ({ instanceId: sessionId, status: 'generating', settings: { meshCoordinatorFor: meshId } }),
+          onEvent: vi.fn((_event: string, payload: any) => sink.push(payload)),
+          // Runtime-only fields the diagnostic reads directly off the instance.
+          lastStatus: 'idle',
+          autoApproveBusy: true,
+          autoApproveMaskSince: 1717000000000,
+          adapter: { getStatus: (_opts: any) => ({ status: 'idle' }) },
+        }
+        const components = makeComponents([coordinator])
+        queueCompletion(meshId, 'overlay')
+
+        await runMeshReconcileTick(components)
+
+        // No idle target (getState overlay says generating) → held, not injected.
+        expect(coordinator.onEvent).not.toHaveBeenCalled()
+        expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+
+        const logs = getRecentLogs(200, 'debug')
+        const diag = logs.find(e => e.category === 'MeshReconcile' && e.message.startsWith('coordDiag') && e.message.includes(`sess=${sessionId}`))
+        expect(diag, 'coordDiag line should be emitted for the coordinator').toBeTruthy()
+        // All three sources captured, and they diverge — this is what localizes the origin.
+        expect(diag!.message).toContain('getState=generating')
+        expect(diag!.message).toContain('lastStatus=idle')
+        expect(diag!.message).toContain('adapterRaw=idle')
+        expect(diag!.message).toContain('autoApproveBusy=true')
+        expect(diag!.message).toContain('maskSince=1717000000000')
+
+        // The hold decision log names the same sessionId on the same tick, so an operator
+        // can cross-reference the diverging-source coordDiag to the actual strand.
+        const hold = logs.find(e => e.category === 'MeshReconcile' && e.message.startsWith('coordHoldGenerating'))
+        expect(hold, 'generating-hold diag should name the held sessionId').toBeTruthy()
+        expect(hold!.message).toContain(sessionId)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('reuses the already-read state (no second getState() call) and reads adapter with allowParse:false', async () => {
+      const meshId = `mesh_coorddiag_noside_${Date.now()}`
+      try {
+        setLogLevel('debug')
+        const sink: any[] = []
+        let getStateCalls = 0
+        const adapterParseFlags: Array<boolean | undefined> = []
+        const sessionId = 'coord-sideeffect-probe'
+        const coordinator: any = {
+          category: 'cli',
+          getState: () => { getStateCalls++; return { instanceId: sessionId, status: 'generating', settings: { meshCoordinatorFor: meshId } } },
+          onEvent: vi.fn((_event: string, payload: any) => sink.push(payload)),
+          lastStatus: 'generating',
+          autoApproveBusy: false,
+          autoApproveMaskSince: 0,
+          adapter: { getStatus: (opts: any) => { adapterParseFlags.push(opts?.allowParse); return { status: 'generating' } } },
+        }
+        const components = makeComponents([coordinator])
+        queueCompletion(meshId, 'noside')
+
+        await runMeshReconcileTick(components)
+
+        // findLiveCoordinators reads getState() exactly once per instance; the diagnostic
+        // must NOT add a second call (getState runs maybeAutoApproveStatus as a side effect).
+        expect(getStateCalls).toBe(1)
+        // The adapter raw read must be side-effect-free (allowParse:false only reads activeModal).
+        expect(adapterParseFlags.every(f => f === false)).toBe(true)
+        expect(adapterParseFlags.length).toBeGreaterThan(0)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('emits no coordDiag line when log level is info (zero overhead in normal mode)', async () => {
+      const meshId = `mesh_coorddiag_off_${Date.now()}`
+      try {
+        setLogLevel('info')
+        const sink: any[] = []
+        let adapterCalls = 0
+        const coordinator: any = {
+          category: 'cli',
+          getState: () => ({ instanceId: 'coord-off', status: 'generating', settings: { meshCoordinatorFor: meshId } }),
+          onEvent: vi.fn((_event: string, payload: any) => sink.push(payload)),
+          lastStatus: 'idle',
+          adapter: { getStatus: () => { adapterCalls++; return { status: 'idle' } } },
+        }
+        const components = makeComponents([coordinator])
+        queueCompletion(meshId, 'off')
+
+        await runMeshReconcileTick(components)
+
+        // Scope to THIS mesh — the ring buffer is process-global and retains coordDiag
+        // lines from earlier debug-level tests in this file.
+        const diag = getRecentLogs(200, 'debug').find(e => e.message.startsWith('coordDiag') && e.message.includes(meshId))
+        expect(diag).toBeUndefined()
+        // The adapter raw read is gated behind getLogLevel()==='debug' — not called in info mode.
+        expect(adapterCalls).toBe(0)
+      } finally {
+        cleanup(meshId)
+      }
+    })
   })
 
   it('NOTIF-SURFACE-LOCAL: a held completion lands EXACTLY ONCE when the coordinator returns to idle', async () => {

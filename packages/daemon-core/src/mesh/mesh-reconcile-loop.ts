@@ -44,7 +44,7 @@ import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { loadConfig } from '../config/config.js';
 import { listMeshes } from '../config/mesh-config.js';
-import { LOG } from '../logging/logger.js';
+import { LOG, getLogLevel } from '../logging/logger.js';
 import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, buildPendingEventFingerprint, queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
@@ -319,6 +319,38 @@ function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
             ? (inst as any).isModalParked() === true
             : (status === 'waiting_choice' || status === 'waiting_approval');
         const sessionId = readNonEmptyString(state.instanceId);
+        // ── NOTIF (B) desync diagnostic (read-only, no behavior change) ───────────
+        // The confirmed (B) defect: a coordinator whose FSM is idle (status above ===
+        // 'idle' for minutes) is nonetheless classified busy here, so the generating/
+        // modal-park hold never drains and a worker completion is stranded until the
+        // user's next turn edge. Static analysis found no code path where getState()
+        // returns generating while lastStatus and the adapter raw are both idle — so the
+        // divergence is a runtime desync between the three status sources. Capture all
+        // three (plus the auto-approve mask state that getState() overlays at :803) for
+        // EVERY mesh-coordinator candidate on this tick, so the source that diverges from
+        // the others can be read directly against the same-tick "skip → generating"/
+        // "skip → modal-parked" hold logs below (pair by sessionId + timestamp).
+        //
+        // CRITICAL: reuse the `state` already fetched above (line ~301) — do NOT call
+        // getState() again. getState() runs maybeAutoApproveStatus() as a side effect,
+        // which would mutate the very auto-approve mask we are trying to observe. The
+        // adapter raw read uses allowParse:false, which only reads engine.activeModal and
+        // is side-effect-free.
+        if (getLogLevel() === 'debug') {
+            let adapterRaw = '?';
+            try {
+                const a = (inst as any).adapter;
+                if (a && typeof a.getStatus === 'function') {
+                    adapterRaw = readNonEmptyString(a.getStatus({ allowParse: false })?.status) || '?';
+                }
+            } catch (e: any) {
+                adapterRaw = `err:${e?.message || e}`;
+            }
+            const lastStatus = readNonEmptyString((inst as any).lastStatus) || '?';
+            const autoApproveBusy = (inst as any).autoApproveBusy;
+            const maskSince = (inst as any).autoApproveMaskSince;
+            LOG.debug('MeshReconcile', `coordDiag sess=${sessionId || '?'} mesh=${meshId} getState=${status || '?'} lastStatus=${lastStatus} adapterRaw=${adapterRaw} autoApproveBusy=${autoApproveBusy === true} maskSince=${maskSince || 0}`);
+        }
         // Modal-park transition observability: a coordinator entering modal-park is what
         // begins holding completion events under `modal_parked`; one leaving it is what
         // drains them. Both transitions were previously SILENT (the operator had no log
@@ -902,6 +934,12 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                     }
                 }
                 LOG.info('MeshReconcile', `Reconcile skip → modal-parked: holding pending event(s) for mesh ${meshId} (${modalParkedCoordinators.length} coordinator(s) awaiting a modal answer; events left queued${orphanEscaped > 0 ? `; ${orphanEscaped} orphan-targeted event(s) routed to strict-route TTL` : ''})`);
+                // NOTIF (B) diagnostic: name the session(s) classified modal-parked so the
+                // same-tick coordDiag line (paired by sessionId) shows whether the modal-park
+                // overlay is a real human-await or an unreleased mask (the getState_overlay origin).
+                if (getLogLevel() === 'debug') {
+                    LOG.debug('MeshReconcile', `coordHoldModalParked mesh=${meshId} heldFor=[${modalParkedCoordinators.map(c => c.sessionId || '?').join(',')}] (these were classified modal-parked; cross-ref same-tick coordDiag by sessionId)`);
+                }
                 // C1: mirror held terminal events into the ledger so a held completion's
                 // worker summary is auditable/recoverable even if the modal is never
                 // resolved, the coordinator restarts, or the pending file is later trimmed.
@@ -937,6 +975,14 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                 }
                 if (hasPending) {
                     LOG.info('MeshReconcile', `Reconcile skip → generating: holding pending event(s) for mesh ${meshId} (${generatingCoordinators.length} coordinator(s) busy; events left queued for the next idle tick)`);
+                    // NOTIF (B) diagnostic: this is the hold that strands the completion. Name
+                    // the sessionId(s) the loop just classified non-idle/non-modal so the
+                    // same-tick coordDiag line above (paired by sessionId) reveals which status
+                    // source diverged. If a coordDiag for one of these sessions shows getState
+                    // (or lastStatus/adapterRaw) === idle, that is the runtime desync origin.
+                    if (getLogLevel() === 'debug') {
+                        LOG.debug('MeshReconcile', `coordHoldGenerating mesh=${meshId} heldFor=[${generatingCoordinators.map(c => c.sessionId || '?').join(',')}] (these were classified busy; cross-ref same-tick coordDiag by sessionId)`);
+                    }
                     recordHeldTerminalEventsToLedger(
                         meshId,
                         drainDaemonIds.length > 0 ? drainDaemonIds : (localDaemonId ? [localDaemonId] : []),
