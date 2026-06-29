@@ -4536,8 +4536,20 @@ function collectMagiCandidateTexts(payload) {
   push(p.text);
   return out;
 }
-function parseFirstMagiCandidate(payload) {
-  for (const candidate of collectMagiCandidateTexts(payload)) {
+function parseFirstMagiCandidateWithCompactFallback(payload, opts = {}) {
+  const rawCandidates = collectMagiCandidateTexts(payload);
+  let compactCandidates = [];
+  try {
+    compactCandidates = collectMagiCandidateTexts(
+      compactChatPayload(payload, { sessionId: opts.sessionId ?? null })
+    );
+  } catch {
+  }
+  const seen = /* @__PURE__ */ new Set();
+  for (const candidate of [...rawCandidates, ...compactCandidates]) {
+    const trimmed = candidate.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
     const parsed = parseMagiResponse(candidate);
     if (parsed) return parsed;
   }
@@ -4970,7 +4982,9 @@ async function collectMagiResponses(ctx, args) {
         tailLimit: 6
       });
       const payload = unwrapCommandPayload(result);
-      parsed = parseFirstMagiCandidate(payload);
+      parsed = parseFirstMagiCandidateWithCompactFallback(payload, {
+        sessionId: task.assignedSessionId
+      });
     } catch (e) {
       if (force) {
         source.error = `read_failed: ${e?.message || String(e)}`;
