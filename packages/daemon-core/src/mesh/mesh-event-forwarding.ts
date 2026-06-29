@@ -1174,6 +1174,11 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                         : undefined,
                     evidence: completionEvidence,
                     // B2: evidenceLevel lets coordinator know when completion evidence is insufficient.
+                    // NOTIF Defect-2b: ONLY source==='default' (no parseable answer at all) is
+                    // 'insufficient'. 'parseable_answer' (a real JSON answer that just isn't
+                    // worker-result-shaped, e.g. a MAGI envelope) is concrete evidence and must
+                    // resolve to 'sufficient' — resolveWorkerResult now upgrades that case so a
+                    // complete, valid answer is no longer mislabelled insufficient/reviewRecommended.
                     ...(completionEvidence
                         ? completionEvidence.workerResult.source === 'default'
                             ? { evidenceLevel: 'insufficient', reviewRecommended: true }

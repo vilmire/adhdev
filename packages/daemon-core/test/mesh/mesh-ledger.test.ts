@@ -101,6 +101,58 @@ describe('mesh-ledger', () => {
                 },
             });
         });
+
+        // FIX#2b — evidenceLevel was always 'insufficient' because resolveWorkerResult returned
+        // source='default' whenever the finalSummary was not worker-result-shaped JSON — even when
+        // a complete, valid (e.g. MAGI) JSON answer WAS present. resolveWorkerResult now upgrades
+        // that case to source='parseable_answer' so the evidenceLevel branch (which marks ONLY
+        // 'default' insufficient) resolves it to 'sufficient'.
+        it("keeps source='default' for a prose-only final summary (no parseable answer)", () => {
+            const evidence = buildTaskCompletionEvidence({
+                event: 'agent:generating_completed',
+                nodeId: 'n', sessionId: 's',
+                finalSummary: 'I finished the investigation, all good.',
+            });
+            expect(evidence.workerResult.source).toBe('default');
+        });
+
+        it("upgrades to source='parseable_answer' when the final summary holds a parseable JSON answer that is NOT worker-result-shaped", () => {
+            const magiAnswer = JSON.stringify({
+                claims: [{ claim: 'X is the cause', stance: 'support', evidence: ['a.ts:1'], confidence: 0.9 }],
+                top_findings: ['found X'],
+                open_questions: [],
+            });
+            const evidence = buildTaskCompletionEvidence({
+                event: 'agent:generating_completed',
+                nodeId: 'n', sessionId: 's',
+                finalSummary: magiAnswer,
+            });
+            // Not 'default' → the evidenceLevel branch will NOT mark it 'insufficient'.
+            expect(evidence.workerResult.source).toBe('parseable_answer');
+            expect(evidence.workerResult.source).not.toBe('default');
+        });
+
+        it("recognizes a fenced JSON answer in the final summary", () => {
+            const fenced = 'Here is my answer:\n```json\n' + JSON.stringify({ answer: 42, reasoning: 'because' }) + '\n```';
+            const evidence = buildTaskCompletionEvidence({
+                event: 'agent:generating_completed',
+                nodeId: 'n', sessionId: 's',
+                finalSummary: fenced,
+            });
+            expect(evidence.workerResult.source).toBe('parseable_answer');
+        });
+
+        it("still prefers source='final_summary_json' when the summary IS a worker-result envelope", () => {
+            const workerJson = JSON.stringify({ status: 'completed', changedFiles: ['a.ts'], nextAction: 'merge' });
+            const evidence = buildTaskCompletionEvidence({
+                event: 'agent:generating_completed',
+                nodeId: 'n', sessionId: 's',
+                finalSummary: workerJson,
+            });
+            // A real worker-result envelope is still 'final_summary_json' (self-attributing),
+            // distinct from the weaker 'parseable_answer' tier.
+            expect(evidence.workerResult.source).toBe('final_summary_json');
+        });
     });
 
     describe('appendLedgerEntry', () => {
@@ -558,12 +610,18 @@ describe('mesh-ledger', () => {
             expect(evidence.workerResult.source).toBe('final_summary_json');
         });
 
-        it('rejects generic JSON without worker result fields', () => {
+        it('does not populate worker fields from generic JSON, but marks it parseable_answer (FIX#2b)', () => {
             const evidence = buildTaskCompletionEvidence({
                 ...baseOpts,
                 finalSummary: 'Some summary.\n```json\n{"foo":"bar","baz":123}\n```',
             });
-            expect(evidence.workerResult.source).toBe('default');
+            // extractJsonObjectFromSummary still rejects non-worker JSON, so NO worker fields are
+            // fabricated (status stays 'unknown', changedFiles empty)…
+            expect(evidence.workerResult.status).toBe('unknown');
+            expect(evidence.workerResult.changedFiles).toEqual([]);
+            // …but a parseable JSON answer is concrete evidence, so source is upgraded off 'default'
+            // (FIX#2b: the evidenceLevel branch will not label this 'insufficient').
+            expect(evidence.workerResult.source).toBe('parseable_answer');
         });
 
         it('accepts JSON with status + errors only', () => {
@@ -586,13 +644,17 @@ describe('mesh-ledger', () => {
             expect(evidence.workerResult.source).toBe('final_summary_json');
         });
 
-        it('rejects JSON with only status field and no other worker fields', () => {
-            // "status" alone plus unrelated field is not enough — need changedFiles/errors/gitStatus/nextAction/validationResults
+        it('does not treat status-only JSON as a worker envelope, but marks it parseable_answer (FIX#2b)', () => {
+            // "status" alone plus an unrelated field is not a worker envelope — need
+            // changedFiles/errors/gitStatus/nextAction/validationResults — so worker fields are
+            // NOT populated from it. It is still parseable JSON, so source upgrades off 'default'.
             const evidence = buildTaskCompletionEvidence({
                 ...baseOpts,
                 finalSummary: '```json\n{"status":"completed","message":"hello"}\n```',
             });
-            expect(evidence.workerResult.source).toBe('default');
+            // status stays 'unknown' (not lifted from the non-worker JSON's "status" field).
+            expect(evidence.workerResult.status).toBe('unknown');
+            expect(evidence.workerResult.source).toBe('parseable_answer');
         });
     });
 

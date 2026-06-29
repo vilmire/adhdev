@@ -126,7 +126,14 @@ export interface MeshWorkerResultArtifact {
     errors: string[];
     nextAction?: string;
     requiresUserAction: boolean;
-    source: 'explicit_metadata' | 'final_summary_json' | 'default';
+    // NOTIF Defect-2b: `parseable_answer` = the final summary held a parseable JSON
+    // ANSWER (e.g. a MAGI claim_audit / rca envelope) that is NOT worker-result-shaped
+    // (no status + changedFiles/errors/…). It is still concrete evidence that the worker
+    // produced a real, parseable answer — so it must NOT be labelled evidenceLevel
+    // 'insufficient' — but it is NOT a self-attributing worker result, so it is deliberately
+    // distinct from 'final_summary_json' and stays subject to the direct-dispatch grace gate
+    // in mesh-events-stale.ts (which keys on `!== 'final_summary_json'`).
+    source: 'explicit_metadata' | 'final_summary_json' | 'parseable_answer' | 'default';
 }
 
 export interface MeshTaskCompletionEvidence {
@@ -508,6 +515,35 @@ export function normalizeMeshWorkerResult(input?: Record<string, unknown>, sourc
     };
 }
 
+/**
+ * NOTIF Defect-2b: does the summary contain ANY parseable JSON object answer (not just a
+ * worker-result-shaped one)? Some providers (and every MAGI replica) emit a complete, valid
+ * answer as a JSON envelope that has no `status`/`changedFiles` worker-result fields, so
+ * extractJsonObjectFromSummary returns undefined and the completion is mislabelled
+ * source='default' → evidenceLevel='insufficient' even though a real answer was produced.
+ * This is a conservative existence check: it only returns true when a JSON object actually
+ * parses out of the summary (raw or fenced), so an empty / prose-only / unparseable summary
+ * still resolves to 'default'.
+ */
+function summaryHasParseableJsonAnswer(summary?: string): boolean {
+    const text = readNonEmptyString(summary);
+    if (!text) return false;
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidates = [fenced?.[1], text].filter(Boolean) as string[];
+    for (const candidate of candidates) {
+        const trimmed = candidate.trim();
+        if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) continue;
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+                && Object.keys(parsed).length > 0) {
+                return true;
+            }
+        } catch { /* try next candidate */ }
+    }
+    return false;
+}
+
 function resolveWorkerResult(opts: BuildTaskCompletionEvidenceOptions): MeshWorkerResultArtifact {
     if (opts.workerResult && typeof opts.workerResult === 'object') {
         return normalizeMeshWorkerResult(opts.workerResult, 'explicit_metadata');
@@ -515,6 +551,13 @@ function resolveWorkerResult(opts: BuildTaskCompletionEvidenceOptions): MeshWork
     const parsed = extractJsonObjectFromSummary(opts.finalSummary);
     if (parsed) {
         return normalizeMeshWorkerResult(parsed, 'final_summary_json');
+    }
+    // NOTIF Defect-2b: no worker-result-shaped JSON, but a parseable JSON answer IS present
+    // (the common MAGI / answer-only case). Treat it as concrete evidence so the completion is
+    // not labelled 'insufficient', while keeping the worker-result fields empty (status stays
+    // 'unknown') — we only know an answer parsed, not its task outcome.
+    if (summaryHasParseableJsonAnswer(opts.finalSummary)) {
+        return normalizeMeshWorkerResult(undefined, 'parseable_answer');
     }
     return normalizeMeshWorkerResult(undefined, 'default');
 }

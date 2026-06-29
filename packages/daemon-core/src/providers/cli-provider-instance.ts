@@ -249,6 +249,28 @@ function isCliGeneratingLikeStatus(status: unknown): boolean {
     return status === 'generating' || status === 'streaming' || status === 'no_progress' || status === 'long_generating' || status === 'starting';
 }
 
+/**
+ * NOTIF Defect-2a: the REPORTED short-generating duration, anchored on the IMMUTABLE turn
+ * start. generatingStartedAt is reset to 0 on every mid-turn waiting_approval/idle blip and
+ * re-armed on the next →generating, so a long turn that blips would otherwise measure only the
+ * final 1.5-2.5s sliver. engine.currentTurnStartedAt (set once at onTurnStarted, surviving
+ * mid-turn blips until the next turn starts) is preferred; generatingStartedAt is the fallback
+ * for turns that never recorded an engine turn start. Returns 0 when neither anchor is set.
+ * Pure / unit-testable.
+ */
+export function computeTurnAnchoredDurationMs(
+    engineTurnStartedAt: number | undefined,
+    generatingStartedAt: number,
+    now: number,
+): { durationMs: number; anchor: 'turn-start' | 'generatingStartedAt' | 'none' } {
+    const engineStart = typeof engineTurnStartedAt === 'number' && Number.isFinite(engineTurnStartedAt)
+        ? engineTurnStartedAt
+        : 0;
+    if (engineStart > 0) return { durationMs: now - engineStart, anchor: 'turn-start' };
+    if (generatingStartedAt > 0) return { durationMs: now - generatingStartedAt, anchor: 'generatingStartedAt' };
+    return { durationMs: 0, anchor: 'none' };
+}
+
 export function buildCliStructuredInputPrompt(
     input: InputEnvelope,
     options: { materializeDir?: string } = {},
@@ -2375,8 +2397,21 @@ export class CliProviderInstance implements ProviderInstance {
                 // Still emit agent:generating_completed so mesh orchestration can record
                 // task_completed for direct dispatches that complete faster than the debounce.
                 if (this.generatingDebouncePending) {
-                    const shortDurationMs = this.generatingStartedAt ? now - this.generatingStartedAt : 0;
-                    LOG.info('CLI', `[${this.type}] suppressed short generating (${shortDurationMs}ms)`);
+                    // NOTIF Defect-2a: shortDurationMs is the REPORTED turn duration, so it must be
+                    // measured from the IMMUTABLE turn start — not generatingStartedAt, which is
+                    // reset to 0 on every mid-turn waiting_approval/idle blip (see :1864/1885/2397/
+                    // 2503/2521) and re-armed on the next →generating, so a long turn that blipped
+                    // would measure only the final 1.5-2.5s sliver. engine.currentTurnStartedAt is
+                    // stamped once at onTurnStarted and persists past mid-turn blips until the next
+                    // turn starts, so it captures the true turn length. generatingStartedAt remains
+                    // the fallback (and the debounce itself stays a pure UI-suppression signal,
+                    // decoupled from the reported duration).
+                    const { durationMs: shortDurationMs, anchor: durationAnchor } = computeTurnAnchoredDurationMs(
+                        (this.adapter as any)?.currentTurnStartedAt,
+                        this.generatingStartedAt,
+                        now,
+                    );
+                    LOG.info('CLI', `[${this.type}] suppressed short generating (${shortDurationMs}ms, anchor=${durationAnchor})`);
                     if (this.generatingDebounceTimer) { clearTimeout(this.generatingDebounceTimer); this.generatingDebounceTimer = null; }
                     // Emit completion for mesh task association even though the UI generating
                     // started/completed pair is suppressed (too short for visible UI update).
