@@ -7,7 +7,8 @@ import type { SessionRecoveryContext } from './mesh-ledger.js';
 import { updateSessionTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue } from './mesh-work-queue.js';
 import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
+import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import type { ProviderInstance } from '../providers/provider-instance.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { resolveMeshHostStatus } from './mesh-host-ownership.js';
 import { enqueueUnresolvedDelegateForward, peekUnresolvedDelegateForwards, ackUnresolvedDelegateForward } from './mesh-unresolved-forward-outbox.js';
@@ -1670,6 +1671,93 @@ function ackUnresolvedDelegateForwardByFingerprint(
     if (match) ackUnresolvedDelegateForward(match.id);
 }
 
+/**
+ * NOTIF-HELD-DRAIN (Fix 2): event-driven coordinator drain. The reconcile loop delivers a
+ * worker's queued completion to an IDLE local coordinator only on its periodic poll. When a
+ * coordinator is sitting idle awaiting exactly that completion, waiting up to a full poll
+ * interval is the avoidable delivery latency the RCA flags — and combined with the (now-fixed)
+ * modal-park false-positive it stretched into the multi-minute notification stall. So the
+ * MOMENT a worker delegate event is persisted for a mesh, attempt the same idle-coordinator
+ * drain immediately, mirroring the event-driven worker-claim path (agent:ready /
+ * agent:generating_completed → triggerMeshQueue).
+ *
+ * Safety:
+ *  - drainPendingMeshCoordinatorEvents marks rows drained=1 atomically, so this races the
+ *    reconcile poll and the coordinator's own idle auto-flush harmlessly — exactly one consumes
+ *    each row.
+ *  - Only IDLE, non-modal-parked coordinators are delivery targets (never a generating /
+ *    consent-modal PTY).
+ *  - Strict session routing is honoured: an event naming an originating coordinator session is
+ *    delivered only to that live idle session; anything not currently deliverable here
+ *    (wrong/absent session, or a message-less lifecycle event) is RE-QUEUED — never dropped —
+ *    so the reconcile loop's strict hold/expire path remains the single authority for it.
+ */
+export function flushPendingForMeshIdleCoordinators(components: DaemonComponents, meshId: string): void {
+    // O(1) gate: skip the (relatively expensive) per-instance getState scan when the queue is
+    // empty for this mesh.
+    try {
+        const store = MeshRuntimeStore.getInstance();
+        if (store.pendingEventCount(meshId) === 0) return;
+    } catch { /* store unavailable — fall through and let the drain decide */ }
+
+    const idleCoordinators: { instance: ProviderInstance; sessionId: string }[] = [];
+    try {
+        for (const inst of components.instanceManager.getByCategory('cli')) {
+            const state = inst.getState();
+            const settings = state.settings && typeof state.settings === 'object'
+                ? state.settings as Record<string, unknown>
+                : {};
+            if (readNonEmptyString(settings.meshCoordinatorFor) !== meshId) continue;
+            const status = readNonEmptyString(state.status).toLowerCase();
+            const modalParked = typeof (inst as any).isModalParked === 'function'
+                ? (inst as any).isModalParked() === true
+                : (status === 'waiting_choice' || status === 'waiting_approval');
+            if (status === 'idle' && !modalParked) {
+                idleCoordinators.push({ instance: inst, sessionId: readNonEmptyString(state.instanceId) });
+            }
+        }
+    } catch { return; }
+    if (idleCoordinators.length === 0) return; // no idle target now → leave for the reconcile poll
+
+    const drainDaemonIds = resolveCoordinatorDrainDaemonIds(components);
+    let pendingEvents: PendingMeshCoordinatorEvent[];
+    try {
+        pendingEvents = drainPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : undefined);
+    } catch (e: any) {
+        LOG.warn('MeshEvents', `Event-driven coordinator drain failed for mesh ${meshId}: ${e?.message || e}`);
+        return;
+    }
+    if (pendingEvents.length === 0) return;
+
+    let delivered = 0;
+    for (const pending of pendingEvents) {
+        const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
+        const targets = wantSession
+            ? idleCoordinators.filter(c => c.sessionId === wantSession)
+            : idleCoordinators;
+        // Not deliverable into an idle target here (wrong/absent session), or a message-less
+        // lifecycle event (agent:ready / generating_started carry no coordinatorMessage and
+        // must not be injected): re-queue so the reconcile loop owns it (lazy-synth / strict
+        // hold/expire). Re-queue preserves queuedAt so the strict TTL measures true age.
+        if (targets.length === 0 || !pending.coordinatorMessage) {
+            try { queuePendingMeshCoordinatorEvent(pending); } catch { /* best-effort re-queue */ }
+            continue;
+        }
+        const message = pending.coordinatorMessage;
+        const force = shouldForceInjectMeshEvent(pending.event);
+        for (const c of targets) {
+            c.instance.onEvent('send_message', {
+                input: { text: message, textFallback: message },
+                ...(force ? { force: true } : {}),
+            });
+            delivered++;
+        }
+    }
+    if (delivered > 0) {
+        LOG.info('MeshEvents', `Event-driven drain delivered ${delivered} pending event(s) to ${idleCoordinators.length} idle coordinator(s) for mesh ${meshId}`);
+    }
+}
+
 export function setupMeshEventForwarding(components: DaemonComponents) {
     components.instanceManager.onEvent((event) => {
         // --- Coordinator idle auto-flush (fast path) ---
@@ -1785,5 +1873,11 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
             event: event.event,
             metadataEvent: event,
         });
+
+        // NOTIF-HELD-DRAIN (Fix 2): the worker's event is now persisted in the pending queue.
+        // If a local coordinator for this mesh is sitting idle awaiting it, deliver immediately
+        // instead of waiting up to a full reconcile interval (event-driven, mirrors the
+        // worker-claim path). No-op when no idle coordinator is present (held for reconcile).
+        flushPendingForMeshIdleCoordinators(components, routing.meshId);
     });
 }

@@ -1134,9 +1134,42 @@ export class CliProviderInstance implements ProviderInstance {
         // as modal-parked so its events are held/surfaced rather than masked behind generating.
         if (adapterStatus.status === 'waiting_approval'
             && (!this.autoApproveEffectivelyActive(adapterStatus.status) || this.autoApproveMaskStalled())) {
+            // NOTIF-HELD-DRAIN (Fix 1): an autonomous mesh session (coordinator or worker)
+            // that is actively progressing a turn — a tool call is in flight
+            // (hasAdapterPendingResponse) and NO human is attending it by hand — surfaces a
+            // routine tool-consent `waiting_approval` on EVERY tool call when auto-approve is
+            // off. That transient consent is part of the turn the harness/operator drives to
+            // completion, NOT a session genuinely wedged awaiting a human's modal answer.
+            // Classifying it modal-parked makes findLiveCoordinators hold the mesh's pending
+            // completion events under `modal_parked` across a busy coordinator's whole work
+            // batch, which is the multi-minute notification stall. Treat such a transient
+            // consent as NOT modal-parked so it is held as ordinary "generating" (released on
+            // the next idle) instead. A manually-attended session, a stalled auto-approve, or a
+            // non-progressing session (no turn in flight) still parks — those are the genuine
+            // human-await cases the guard must keep holding.
+            if (this.isTransientToolConsent()) {
+                return null;
+            }
             return 'waiting_approval';
         }
         return null;
+    }
+
+    /**
+     * NOTIF-HELD-DRAIN: true when this `waiting_approval` is a routine, transient tool-consent
+     * of an autonomously-progressing mesh session rather than a genuine human-await modal —
+     * i.e. it is a mesh coordinator/worker session, a turn is actively in flight
+     * (hasAdapterPendingResponse), and no human is attending it by hand. Such a consent is
+     * driven to resolution by the harness/operator as part of the in-flight turn, so holding
+     * the mesh's completion events behind it (modal_parked) is the false-positive that stalls
+     * delivery. Narrow by design: manual attendance or a non-progressing session falls through
+     * to the genuine-modal classification.
+     */
+    private isTransientToolConsent(now = Date.now()): boolean {
+        const isAutonomousMeshSession = this.isMeshWorkerSession() || !!this.settings.meshCoordinatorFor;
+        return isAutonomousMeshSession
+            && this.hasAdapterPendingResponse()
+            && !this.manualAttendance.isAttended(now);
     }
 
     /** True when this session is parked on a modal awaiting a human answer. */

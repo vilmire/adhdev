@@ -307,9 +307,17 @@ function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
         const status = readNonEmptyString(state.status).toLowerCase();
         // getState() overlays the modal-park statuses: an active AskUserQuestion
         // prompt surfaces as waiting_choice, a tool-consent prompt as waiting_approval.
-        // Lowercase literal compare — the SessionStatus enum is forked across modules
-        // and waiting_choice is absent from some of them (see cli-provider-instance).
-        const modalParked = status === 'waiting_choice' || status === 'waiting_approval';
+        // NOTIF-HELD-DRAIN (Fix 1): consult the instance's own isModalParked() rather than the
+        // raw status literal so the corrected classification flows here — a busy mesh
+        // coordinator's routine, in-flight tool-consent (auto-approve off) is NOT a human-await
+        // modal and must NOT wedge the mesh's pending completion events under `modal_parked`.
+        // resolveModalParkStatus() (which isModalParked wraps) already encodes that distinction
+        // and the waiting_choice/stalled-auto-approve genuine-modal cases. Fall back to the
+        // status literal for any instance that does not expose the method. Lowercase compare —
+        // the SessionStatus enum is forked across modules and waiting_choice is absent from some.
+        const modalParked = typeof (inst as any).isModalParked === 'function'
+            ? (inst as any).isModalParked() === true
+            : (status === 'waiting_choice' || status === 'waiting_approval');
         const sessionId = readNonEmptyString(state.instanceId);
         // Modal-park transition observability: a coordinator entering modal-park is what
         // begins holding completion events under `modal_parked`; one leaving it is what
