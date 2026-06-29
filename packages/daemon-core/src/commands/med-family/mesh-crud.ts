@@ -222,6 +222,64 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         }
     },
 
+    // ─── MAGI panels (machine-local config, sibling to meshes) ───────────────
+    // Panels live in ~/.adhdev/meshes.json `magiPanels` and are pure local config
+    // (no mesh ownership). These three handlers mirror list_meshes/create_mesh/
+    // update_mesh: dynamic-import the already-exported mesh-config accessors and
+    // surface normalizeMagiPanel's structured error codes (invalid_magi_panel,
+    // magi_panel_exists) verbatim so the dashboard can render them.
+    //
+    // Permission: magi_panel_set / magi_panel_remove are WRITE commands. They are
+    // intentionally NOT listed in canPeerUsePrivilegedShareCommand (daemon-cloud
+    // data-channel-router), so a peer holding ANY share permission hits its
+    // `default → false` branch — identical owner-only gating to create_mesh /
+    // update_mesh / list_meshes (none of which are listed there either). A trusted
+    // peer (no permission = the owner) passes the top `!permission → true` guard.
+    // Mirror, don't invent: do not add a new policy tier here.
+    //
+    // Resolvability (coupling / stale / available) is deliberately NOT computed
+    // here: buildMagiFanoutPlan lives in mcp-server, unreachable from daemon-core.
+    // magi_panel_list returns the raw definitions only; the dashboard derives
+    // member resolvability client-side (web-core MagiPanelManager, reusing the
+    // MagiGroupRow coupling logic) against live mesh_status.
+    magi_panel_list: async (_ctx: MedFamilyContext, _args: any) => {
+        try {
+            const { listMagiPanels } = await import('../../config/mesh-config.js');
+            return { success: true, panels: listMagiPanels() };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
+    magi_panel_set: async (_ctx: MedFamilyContext, args: any) => {
+        const name = typeof args?.name === 'string' ? args.name.trim() : '';
+        if (!name) return { success: false, error: 'invalid_magi_panel: panel name is required' };
+        try {
+            const { upsertMagiPanel } = await import('../../config/mesh-config.js');
+            // normalizeMagiPanel (invoked inside upsertMagiPanel) validates members,
+            // enforces MAX_MAGI_PANEL_MEMBERS, and clamps replica counts. Its
+            // invalid_magi_panel / magi_panel_exists messages flow back as `error`.
+            const panel = upsertMagiPanel(name, args?.panel, { overwrite: args?.overwrite === true });
+            return { success: true, name, panel };
+        } catch (e: any) {
+            // Surface the structured code (invalid_magi_panel: … / magi_panel_exists: …)
+            // verbatim so the editor can map it to a field-level message.
+            return { success: false, error: e.message };
+        }
+    },
+
+    magi_panel_remove: async (_ctx: MedFamilyContext, args: any) => {
+        const name = typeof args?.name === 'string' ? args.name.trim() : '';
+        if (!name) return { success: false, error: 'invalid_magi_panel: panel name is required' };
+        try {
+            const { removeMagiPanel } = await import('../../config/mesh-config.js');
+            const removed = removeMagiPanel(name);
+            return { success: true, removed };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
     add_mesh_node: async (ctx: MedFamilyContext, args: any) => {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         const workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';
