@@ -110,6 +110,7 @@ export type {
   RepoMeshNode,
   RepoMeshNodeHealth,
   RepoMeshPolicy,
+  RepoMeshMagiSessionCleanupMode,
   RepoMeshNodePolicy,
   RepoMeshRelatedRepo,
   RepoMeshNodeCapabilities,
@@ -142,6 +143,8 @@ export type {
 export {
   DEFAULT_MESH_POLICY,
   resolveDelegatedWorkerAutoApprove,
+  resolveMagiSessionCleanupMode,
+  magiAutoLaunchedSessionCleanupDecision,
   MESH_SCHEDULING_STRATEGIES,
   DEFAULT_MESH_SCHEDULING_STRATEGY,
   normalizeMeshSchedulingStrategy,

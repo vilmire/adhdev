@@ -19,6 +19,7 @@ import {
     commandForNode,
     compactChatPayload,
     enqueueTask,
+    findOptionalNodeWithRefresh,
     getMagiPanel,
     getMeshMission,
     getQueue,
@@ -38,6 +39,7 @@ import {
     upsertMagiPanel,
     upsertMeshMission,
 } from './mesh-tools-internal.js';
+import { resolveMagiSessionCleanupMode, type RepoMeshMagiSessionCleanupMode } from '@adhdev/daemon-core';
 import type {
     LocalMeshEntry,
     LocalMeshNodeEntry,
@@ -1299,6 +1301,8 @@ export async function meshMagiReview(
         taskKind?: string;
         use_judge?: boolean;
         useJudge?: boolean;
+        auto_cleanup?: boolean;
+        autoCleanup?: boolean;
     },
 ): Promise<string> {
     const question = readString(args.question);
@@ -1524,9 +1528,21 @@ export async function meshMagiReview(
     // FIX#3: this inline review owns `mission` — auto-close it once all replicas are terminal.
     closeMagiMissionIfTerminal(ctx, mission.id, collected.terminal);
 
+    // Post-review auto-cleanup (default ON): stop+delete ONLY the worker sessions this
+    // fan-out auto-launched, gated terminal. Re-read the replica tasks from the live queue
+    // so we see their final assignedSessionId / autoLaunch.sessionId. Best-effort.
+    const cleanupMode = resolveMagiAutoCleanupMode(ctx, args.auto_cleanup ?? args.autoCleanup);
+    const cleanupReplicaTasks = findMagiReplicaTasks(getQueue(ctx.mesh.id), consensusGroupId);
+    const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
+        replicaTasks: cleanupReplicaTasks,
+        terminal: collected.terminal,
+        mode: cleanupMode,
+    });
+
     return JSON.stringify({
         ...baseResult,
         waited: true,
+        ...(cleanup ? { sessionCleanup: { mode: cleanupMode, cleanedSessionCount: cleanup.cleanedSessionCount, perNode: cleanup.perNode } } : {}),
         collection: {
             terminal: collected.terminal,
             timedOut: collected.timedOut,
@@ -1562,6 +1578,8 @@ export async function meshMagiCollect(
         waitTimeoutMs?: number;
         task_kind?: string;
         taskKind?: string;
+        auto_cleanup?: boolean;
+        autoCleanup?: boolean;
     },
 ): Promise<string> {
     const consensusGroupId = readString(args.consensus_group_id) || readString(args.consensusGroupId);
@@ -1619,12 +1637,22 @@ export async function meshMagiCollect(
     // guard a) — auto-close it once all replicas are terminal.
     closeMagiMissionIfTerminal(ctx, replicaMissionId, collected.terminal);
 
+    // Post-collect auto-cleanup (default ON), gated terminal so a partial snapshot never
+    // kills still-generating replicas. Reuse the rediscovered replicaTasks. Best-effort.
+    const cleanupMode = resolveMagiAutoCleanupMode(ctx, args.auto_cleanup ?? args.autoCleanup);
+    const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
+        replicaTasks,
+        terminal: collected.terminal,
+        mode: cleanupMode,
+    });
+
     return JSON.stringify({
         success: true,
         consensusGroupId,
         taskKind,
         replicaCount: replicaTaskIds.length,
         waited: wait,
+        ...(cleanup ? { sessionCleanup: { mode: cleanupMode, cleanedSessionCount: cleanup.cleanedSessionCount, perNode: cleanup.perNode } } : {}),
         collection: {
             terminal: collected.terminal,
             timedOut: collected.timedOut,
@@ -1657,6 +1685,162 @@ export function findMagiReplicaTasks(queue: any[], consensusGroupId: string): an
     const groupId = typeof consensusGroupId === 'string' ? consensusGroupId.trim() : '';
     if (!groupId) return [];
     return (Array.isArray(queue) ? queue : []).filter((t: any) => readString(t?.consensusGroupId) === groupId);
+}
+
+// ─── Post-review auto-cleanup of MAGI-launched worker sessions ──────────────
+//
+// MAGI fans a question out to N independent (node × provider) replicas. For a pinned
+// target with no idle session the QUEUE auto-launches a fresh worker session, stamping
+// settings.autoLaunchedForQueueTaskId = task.id onto it (mesh-queue-assignment.ts) which
+// the cli-manager mirrors onto the session-host record meta. Those auto-launched workers
+// stay idle-LIVE after their turn, so repeated reviews pile up idle sessions.
+//
+// SAFETY: we compute the cleanup target set ONLY from the replica queue tasks themselves —
+// each replica contributes ITS OWN session ids (autoLaunch.sessionId once the auto-launch
+// completed, and assignedSessionId once it claimed), paired with the replica's task id as the
+// expected autoLaunchedForQueueTaskId marker. We never enumerate arbitrary sessions. The
+// daemon then double-checks the per-session marker (requireAutoLaunchedForTaskIds) before
+// touching anything: a REUSED idle session carries no marker → preserved; the COORDINATOR
+// session carries no marker → preserved; a session whose marker points at a DIFFERENT task
+// (re-assignment skew) → preserved. So only the sessions THIS fan-out actually spawned are
+// stopped+deleted. assignedSessionId is intentionally included even though it can be a reused
+// session — the marker gate filters reused ones out; an auto-launched-then-claimed session
+// has assignedSessionId === autoLaunch.sessionId and IS the one we want gone.
+
+/** One candidate cleanup target: a session a replica may have auto-launched, with the
+ *  replica's task id that the session-host record marker must match for it to be cleaned. */
+export interface MagiCleanupCandidate {
+    nodeId: string;
+    sessionId: string;
+    /** The replica task id this session must have been auto-launched FOR (marker check). */
+    expectedTaskId: string;
+}
+
+/**
+ * Pure: derive the per-node cleanup target set from the replica queue tasks. Returns a map
+ * keyed by nodeId → { sessionIds, requireAutoLaunchedForTaskIds }. Session ids are pulled
+ * ONLY from each replica task's own autoLaunch.sessionId (when status 'completed') and
+ * assignedSessionId — never from an external session listing — and each id is paired with
+ * THAT replica's task id as the expected marker (so a re-assignment skew can't smuggle in a
+ * sibling's session). A replica with no resolvable node id or no candidate session is skipped.
+ */
+export function computeMagiCleanupTargets(replicaTasks: any[]): Map<string, {
+    sessionIds: string[];
+    requireAutoLaunchedForTaskIds: Record<string, string>;
+}> {
+    const byNode = new Map<string, { sessionIds: Set<string>; requireAutoLaunchedForTaskIds: Record<string, string> }>();
+    for (const task of Array.isArray(replicaTasks) ? replicaTasks : []) {
+        const replicaTaskId = readString(task?.id);
+        if (!replicaTaskId) continue;
+        const nodeId = readString(task?.assignedNodeId)
+            || readString(task?.autoLaunch?.nodeId)
+            || readString(task?.targetNodeId);
+        if (!nodeId) continue;
+        const candidateSessionIds: string[] = [];
+        // The session the queue auto-launched for this replica (authoritative auto-launch id).
+        if (readString(task?.autoLaunch?.status) === 'completed') {
+            const al = readString(task?.autoLaunch?.sessionId);
+            if (al) candidateSessionIds.push(al);
+        }
+        // The session that actually claimed/ran it. May equal the auto-launched id (then it's
+        // the same session) or be a reused idle session (filtered out by the marker gate).
+        const assigned = readString(task?.assignedSessionId);
+        if (assigned) candidateSessionIds.push(assigned);
+        if (candidateSessionIds.length === 0) continue;
+        let entry = byNode.get(nodeId);
+        if (!entry) {
+            entry = { sessionIds: new Set<string>(), requireAutoLaunchedForTaskIds: {} };
+            byNode.set(nodeId, entry);
+        }
+        for (const sid of candidateSessionIds) {
+            entry.sessionIds.add(sid);
+            // Pair each session id with THIS replica's task id. If two replicas somehow named
+            // the same session id (shared-session collision), the marker on the live record can
+            // only equal one task id, so at most one replica legitimately owns it; recording the
+            // first is fine because the daemon re-verifies the marker == expectedTaskId per id.
+            if (!(sid in entry.requireAutoLaunchedForTaskIds)) {
+                entry.requireAutoLaunchedForTaskIds[sid] = replicaTaskId;
+            }
+        }
+    }
+    const out = new Map<string, { sessionIds: string[]; requireAutoLaunchedForTaskIds: Record<string, string> }>();
+    for (const [nodeId, entry] of byNode) {
+        out.set(nodeId, {
+            sessionIds: Array.from(entry.sessionIds),
+            requireAutoLaunchedForTaskIds: entry.requireAutoLaunchedForTaskIds,
+        });
+    }
+    return out;
+}
+
+/**
+ * Resolve whether MAGI post-review auto-cleanup is enabled for this call. Per-call
+ * auto_cleanup override (boolean) beats the mesh policy (magiSessionCleanup), which
+ * defaults ON ('stop_and_delete'). Returns the effective mode.
+ */
+export function resolveMagiAutoCleanupMode(
+    ctx: MeshContext,
+    perCallOverride: boolean | undefined,
+): RepoMeshMagiSessionCleanupMode {
+    if (perCallOverride === true) return 'stop_and_delete';
+    if (perCallOverride === false) return 'preserve';
+    return resolveMagiSessionCleanupMode((ctx.mesh as any)?.policy?.magiSessionCleanup);
+}
+
+/**
+ * Best-effort post-review cleanup. Stops+deletes ONLY the worker sessions THIS MAGI fan-out
+ * auto-launched (marker-verified daemon-side). Only runs when `terminal` is true — a partial
+ * collect must NOT kill replicas that are still generating. Never throws: cleanup failure
+ * never blocks returning the synthesis. Returns a small summary (or null when skipped/disabled).
+ */
+export async function cleanupMagiAutoLaunchedSessions(
+    ctx: MeshContext,
+    args: { replicaTasks: any[]; terminal: boolean; mode: RepoMeshMagiSessionCleanupMode },
+): Promise<{ cleanedSessionCount: number; perNode: Array<Record<string, unknown>> } | null> {
+    if (args.mode === 'preserve') return null;
+    if (!args.terminal) return null; // never cleanup a partial collection — replicas may still be live
+    const targets = computeMagiCleanupTargets(args.replicaTasks);
+    if (targets.size === 0) return null;
+
+    let cleanedSessionCount = 0;
+    const perNode: Array<Record<string, unknown>> = [];
+    for (const [nodeId, group] of targets) {
+        if (group.sessionIds.length === 0) continue;
+        try {
+            const node = await findOptionalNodeWithRefresh(ctx, nodeId);
+            if (!node) {
+                // Node gone from the live mesh — its sessions are unreachable; report, don't fail.
+                perNode.push({ nodeId, skipped: 'node_not_in_live_mesh', sessionIds: group.sessionIds });
+                continue;
+            }
+            const result = await commandForNode(ctx, node, 'cleanup_mesh_sessions', {
+                meshId: ctx.mesh.id,
+                nodeId,
+                mode: 'stop_and_delete',
+                sessionIds: group.sessionIds,
+                source: 'magi_session_cleanup',
+                requireAutoLaunchedForTaskIds: group.requireAutoLaunchedForTaskIds,
+                inlineMesh: ctx.mesh,
+            });
+            const payload = unwrapCommandPayload(result) as any;
+            const deleted = Array.isArray(payload?.deletedSessionIds) ? payload.deletedSessionIds.length : 0;
+            const stopped = Array.isArray(payload?.stoppedSessionIds) ? payload.stoppedSessionIds.length : 0;
+            cleanedSessionCount += deleted + stopped;
+            perNode.push({
+                nodeId,
+                requested: group.sessionIds.length,
+                deleted,
+                ...(stopped ? { stopped } : {}),
+                ...(Array.isArray(payload?.skippedMarkerMismatchSessionIds) && payload.skippedMarkerMismatchSessionIds.length
+                    ? { skippedMarkerMismatch: payload.skippedMarkerMismatchSessionIds }
+                    : {}),
+                ...(payload?.deleteUnsupported ? { deleteUnsupported: true } : {}),
+            });
+        } catch (e: any) {
+            perNode.push({ nodeId, error: e?.message || String(e), sessionIds: group.sessionIds });
+        }
+    }
+    return { cleanedSessionCount, perNode };
 }
 
 /**

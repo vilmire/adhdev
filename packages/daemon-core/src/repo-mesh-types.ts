@@ -93,6 +93,27 @@ export type RepoMeshSessionCleanupMode = 'preserve' | 'stop' | 'delete_stopped' 
 export type RepoMeshSpawnedSessionVisibility = 'visible' | 'hidden';
 
 /**
+ * What to do with the worker sessions a MAGI fan-out auto-launched, once the
+ * review's responses have been collected (terminal). MAGI dispatches each replica
+ * to an independent (node × provider); for a pinned target with no idle session
+ * the queue AUTO-LAUNCHES a fresh worker session. Those auto-launched sessions
+ * stay idle-LIVE after their turn (the CLI process is still running — `completed`
+ * means the task finished, not that the runtime exited), so repeated reviews leave
+ * a trail of idle live worker sessions cluttering the session list.
+ *
+ * 'stop_and_delete' (the default) force-stops AND deletes ONLY the sessions this
+ * fan-out auto-launched (verified by the per-session autoLaunchedForQueueTaskId
+ * marker — see cleanupMeshSessions). It is the only mode that covers the idle-LIVE
+ * case: delete_stopped skips live runtimes by contract, so it would no-op on the
+ * exact sessions we want gone. Reused idle sessions (no marker), the coordinator
+ * session, and any other node's sessions are NEVER touched.
+ *
+ * 'preserve' disables auto-cleanup entirely (leave every auto-launched worker
+ * session as-is for later inspection).
+ */
+export type RepoMeshMagiSessionCleanupMode = 'preserve' | 'stop_and_delete';
+
+/**
  * Mesh-wide tie-break strategy for distributing untargeted queue work across
  * eligible nodes. This ONLY governs the final tie-break stage of the scheduler
  * pipeline (TAG hard-filter → MAX-ALLOC capacity gate → PRIORITY soft score →
@@ -310,6 +331,17 @@ export interface RepoMeshPolicy {
      */
     sessionCleanupOnNodeRemove?: RepoMeshSessionCleanupMode;
     /**
+     * What to do with the worker sessions a MAGI fan-out auto-launched, once the
+     * review responses are collected (terminal). Defaults to 'stop_and_delete' so
+     * repeated mesh_magi_review calls don't accumulate idle-LIVE worker sessions.
+     * Only sessions THIS fan-out auto-launched are affected (marker-verified);
+     * reused/coordinator/other-node sessions are never touched. Set 'preserve' to
+     * leave auto-launched worker sessions for later inspection. A per-call
+     * auto_cleanup override on mesh_magi_review / mesh_magi_collect beats this.
+     * Accepts a boolean for convenience (true → stop_and_delete, false → preserve).
+     */
+    magiSessionCleanup?: RepoMeshMagiSessionCleanupMode | boolean;
+    /**
      * Daemon-initiated fast-forward for idle clean nodes that are only behind
      * their tracked upstream. Defaults to enabled.
      */
@@ -414,6 +446,11 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     spawnedSessionVisibility: 'hidden',
     delegatedWorkerAutoApprove: true,
     sessionCleanupOnNodeRemove: 'preserve',
+    // MAGI auto-launches a worker session per pinned replica target with no idle
+    // session; those stay idle-LIVE after their turn. Default ON (stop_and_delete)
+    // so repeated reviews don't pile up idle worker sessions. Only marker-verified
+    // auto-launched sessions are cleaned — see RepoMeshMagiSessionCleanupMode.
+    magiSessionCleanup: 'stop_and_delete',
     autoFastForward: { enabled: true },
     maxTaskRetries: 1,
 };
@@ -430,6 +467,56 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
 const SESSION_CLEANUP_MODES = new Set<RepoMeshSessionCleanupMode>([
     'preserve', 'stop', 'delete_stopped', 'stop_and_delete',
 ]);
+
+/**
+ * Resolve a magiSessionCleanup policy value (string mode, boolean shorthand,
+ * or unset) to a canonical mode. Unset → the default ('stop_and_delete', ON).
+ * boolean true → 'stop_and_delete', false → 'preserve'. Any unrecognized string
+ * falls back to the default so a typo can't silently disable auto-cleanup.
+ */
+export function resolveMagiSessionCleanupMode(
+    value: RepoMeshMagiSessionCleanupMode | boolean | undefined | null,
+): RepoMeshMagiSessionCleanupMode {
+    if (value === undefined || value === null) return DEFAULT_MESH_POLICY.magiSessionCleanup as RepoMeshMagiSessionCleanupMode;
+    if (typeof value === 'boolean') return value ? 'stop_and_delete' : 'preserve';
+    return value === 'preserve' || value === 'stop_and_delete'
+        ? value
+        : (DEFAULT_MESH_POLICY.magiSessionCleanup as RepoMeshMagiSessionCleanupMode);
+}
+
+export type MagiCleanupGateReason =
+    | 'auto_launch_marker_match'
+    | 'auto_launch_marker_skip_coordinator_session'
+    | 'auto_launch_marker_absent_session_not_auto_launched'
+    | 'auto_launch_marker_mismatch';
+
+/**
+ * Pure decision for the MAGI auto-cleanup marker gate. A session is eligible for
+ * MAGI auto-cleanup ONLY when its session-host record was auto-launched FOR the
+ * exact replica task the caller expects. This is the safety core: MAGI passes
+ * explicit session_ids (which bypass the self-coordinator / shared-daemon guards),
+ * so this marker check is the sole thing preventing a reused-idle, coordinator, or
+ * re-assigned session from being stopped/deleted.
+ *
+ *  - coordinator session (meta.meshCoordinatorFor === meshId)          → skip
+ *  - no expected task id supplied for this session id                  → skip
+ *  - record carries no autoLaunchedForQueueTaskId marker (reused idle) → skip
+ *  - marker present but points at a DIFFERENT task (re-assignment)     → skip
+ *  - marker present and equals the expected task id                    → ALLOW
+ */
+export function magiAutoLaunchedSessionCleanupDecision(args: {
+    recordMarker: string | undefined | null;
+    expectedTaskId: string | undefined | null;
+    isCoordinatorSession: boolean;
+}): { allow: boolean; reason: MagiCleanupGateReason } {
+    const marker = typeof args.recordMarker === 'string' ? args.recordMarker.trim() : '';
+    const expected = typeof args.expectedTaskId === 'string' ? args.expectedTaskId.trim() : '';
+    if (args.isCoordinatorSession) return { allow: false, reason: 'auto_launch_marker_skip_coordinator_session' };
+    if (!expected) return { allow: false, reason: 'auto_launch_marker_mismatch' };
+    if (!marker) return { allow: false, reason: 'auto_launch_marker_absent_session_not_auto_launched' };
+    if (marker !== expected) return { allow: false, reason: 'auto_launch_marker_mismatch' };
+    return { allow: true, reason: 'auto_launch_marker_match' };
+}
 const SPAWNED_SESSION_VISIBILITY_MODES = new Set<RepoMeshSpawnedSessionVisibility>([
     'visible', 'hidden',
 ]);
@@ -526,6 +613,8 @@ export function mergeAndNormalizePolicy(
     if (!SESSION_CLEANUP_MODES.has(policy.sessionCleanupOnNodeRemove as RepoMeshSessionCleanupMode)) {
         policy.sessionCleanupOnNodeRemove = 'preserve';
     }
+    // Canonicalize magiSessionCleanup (accepts boolean shorthand / unset → default ON).
+    policy.magiSessionCleanup = resolveMagiSessionCleanupMode(policy.magiSessionCleanup);
     if (!SPAWNED_SESSION_VISIBILITY_MODES.has(policy.spawnedSessionVisibility as RepoMeshSpawnedSessionVisibility)) {
         policy.spawnedSessionVisibility = DEFAULT_MESH_POLICY.spawnedSessionVisibility;
     }

@@ -84,7 +84,8 @@ export interface MedFamilyContext {
         mode: RepoMeshSessionCleanupMode;
         sessionIds?: string[];
         dryRun?: boolean;
-        source?: 'mesh_cleanup_sessions' | 'mesh_remove_node';
+        source?: 'mesh_cleanup_sessions' | 'mesh_remove_node' | 'magi_session_cleanup';
+        requireAutoLaunchedForTaskIds?: Record<string, string>;
     }) => Promise<{ success: boolean; [key: string]: unknown }>;
 
     /** Bound `DaemonCommandRouter.cleanupLocalWorktreeNode`. */

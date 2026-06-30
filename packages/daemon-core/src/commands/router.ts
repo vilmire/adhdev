@@ -35,7 +35,7 @@ import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../m
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
-import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
+import { DEFAULT_MESH_POLICY, magiAutoLaunchedSessionCleanupDecision } from '../repo-mesh-types.js';
 import { resolve as pathResolve } from 'path';
 import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
@@ -1409,7 +1409,7 @@ export class DaemonCommandRouter {
         node: any;
         sessionId: string;
         mode: RepoMeshSessionCleanupMode;
-        source: 'mesh_cleanup_sessions' | 'mesh_remove_node';
+        source: 'mesh_cleanup_sessions' | 'mesh_remove_node' | 'magi_session_cleanup';
         action: 'stop_session' | 'delete_session_force';
     }): Promise<void> {
         try {
@@ -1440,7 +1440,17 @@ export class DaemonCommandRouter {
         mode: RepoMeshSessionCleanupMode;
         sessionIds?: string[];
         dryRun?: boolean;
-        source?: 'mesh_cleanup_sessions' | 'mesh_remove_node';
+        source?: 'mesh_cleanup_sessions' | 'mesh_remove_node' | 'magi_session_cleanup';
+        /**
+         * MAGI auto-cleanup safety gate: a map of sessionId → the queue task id that
+         * session must have been AUTO-LAUNCHED for (record meta autoLaunchedForQueueTaskId).
+         * When set, a matched explicit session is only acted on if its record carries that
+         * exact marker. A reused idle session (no marker), the coordinator session, a
+         * re-assigned session, or any session whose marker points at a DIFFERENT task is
+         * skipped (reason 'auto_launch_marker_mismatch') — so MAGI never kills a session it
+         * didn't itself spawn for this fan-out. Only consulted alongside explicit sessionIds.
+         */
+        requireAutoLaunchedForTaskIds?: Record<string, string>;
     }): Promise<{ success: boolean; [key: string]: unknown }> {
         if (args.mode === 'preserve') {
             return { success: true, mode: 'preserve', matchedCount: 0, stoppedSessionIds: [], deletedSessionIds: [], skippedSessionIds: [] };
@@ -1459,6 +1469,7 @@ export class DaemonCommandRouter {
         const skippedLiveSessionIds: string[] = [];
         const skippedCoordinatorSessionIds: string[] = [];
         const skippedLiveSessionReasons: Array<{ sessionId: string; reason: string }> = [];
+        const skippedMarkerMismatchSessionIds: string[] = [];
         const actedLiveDelegateSessionIds: string[] = [];
         const deleteUnsupportedSessionIds: string[] = [];
         const recordsRemainSessionIds: string[] = [];
@@ -1510,6 +1521,28 @@ export class DaemonCommandRouter {
                 skippedSessionIds.push(sessionId);
                 skippedCoordinatorSessionIds.push(sessionId);
                 continue;
+            }
+            // MAGI auto-cleanup marker gate. When the caller supplied a per-session
+            // expected autoLaunchedForQueueTaskId, the session must (a) carry the marker
+            // on its record meta AND (b) have it equal the expected replica task id.
+            // This is the safety core for MAGI: explicit session_ids bypass the
+            // self-coordinator / shared-daemon guards (hasExplicitSessionIds=true), so the
+            // ONLY thing protecting a reused-idle / coordinator / re-assigned session here
+            // is this marker check. Always-skip the coordinator session even when its id is
+            // passed explicitly (it never carries an autoLaunchedForQueueTaskId marker, so
+            // the mismatch branch already covers it, but be explicit for clarity).
+            if (args.requireAutoLaunchedForTaskIds) {
+                const decision = magiAutoLaunchedSessionCleanupDecision({
+                    recordMarker: readStringValue(record?.meta?.autoLaunchedForQueueTaskId),
+                    expectedTaskId: args.requireAutoLaunchedForTaskIds[sessionId],
+                    isCoordinatorSession: coordinatorSession,
+                });
+                if (!decision.allow) {
+                    skippedSessionIds.push(sessionId);
+                    skippedMarkerMismatchSessionIds.push(sessionId);
+                    skippedLiveSessionReasons.push({ sessionId, reason: decision.reason });
+                    continue;
+                }
             }
             // Only the conservative shared-daemon guard for live sessions that are NOT a delegate
             // explicitly bound to this node. Delegate-bound live sessions fall through and are
@@ -1622,6 +1655,7 @@ export class DaemonCommandRouter {
             skippedSessionIds,
             skippedLiveSessionIds,
             skippedCoordinatorSessionIds,
+            ...(skippedMarkerMismatchSessionIds.length ? { skippedMarkerMismatchSessionIds } : {}),
             ...(actedLiveDelegateSessionIds.length ? { actedLiveDelegateSessionIds } : {}),
             ...(skippedLiveSessionReasons.length ? { skippedLiveSessionReasons } : {}),
             ...(deleteUnsupported ? {

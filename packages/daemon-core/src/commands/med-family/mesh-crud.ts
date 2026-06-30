@@ -396,6 +396,15 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             const sessionIds = Array.isArray(args?.sessionIds)
                 ? args.sessionIds.map((id: any) => typeof id === 'string' ? id.trim() : '').filter(Boolean)
                 : undefined;
+            // MAGI post-review auto-cleanup routes through this same command with
+            // source:'magi_session_cleanup' and a per-session autoLaunchedForQueueTaskId
+            // map, which gates cleanup to sessions THIS fan-out actually auto-launched.
+            const source = args?.source === 'magi_session_cleanup' ? 'magi_session_cleanup' : 'mesh_cleanup_sessions';
+            const requireAutoLaunchedForTaskIds = (args?.requireAutoLaunchedForTaskIds
+                && typeof args.requireAutoLaunchedForTaskIds === 'object'
+                && !Array.isArray(args.requireAutoLaunchedForTaskIds))
+                ? args.requireAutoLaunchedForTaskIds as Record<string, string>
+                : undefined;
             const result = await ctx.cleanupMeshSessions({
                 meshId,
                 nodeId,
@@ -403,7 +412,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 mode,
                 sessionIds,
                 dryRun: args?.dryRun === true,
-                source: 'mesh_cleanup_sessions',
+                source,
+                requireAutoLaunchedForTaskIds,
             });
             return result;
         } catch (e: any) {

@@ -718,12 +718,21 @@ export class DaemonCliManager {
         // by now, so updateMeta reaches the session-host store). Best-effort; guarded.
         const launchMeshNodeId = typeof settings?.meshNodeId === 'string' ? settings.meshNodeId.trim() : '';
         const launchMeshNodeFor = typeof settings?.meshNodeFor === 'string' ? settings.meshNodeFor.trim() : '';
-        if (launchMeshNodeId || launchMeshNodeFor) {
+        // Auto-launch attribution: the queue stamps the task id it auto-launched this
+        // worker FOR (autoLaunchedForQueueTaskId). Mirror it onto the record meta so a
+        // later cleanup (e.g. MAGI post-review auto-cleanup) can verify a session was
+        // auto-launched for a SPECIFIC replica task before stopping/deleting it — a reused
+        // idle session never carries this marker, so it is preserved.
+        const launchAutoLaunchedForQueueTaskId = typeof settings?.autoLaunchedForQueueTaskId === 'string'
+            ? settings.autoLaunchedForQueueTaskId.trim()
+            : '';
+        if (launchMeshNodeId || launchMeshNodeFor || launchAutoLaunchedForQueueTaskId) {
             try {
                 cliInstance.getAdapter().updateRuntimeMeta?.({
                     ...(launchMeshNodeId ? { meshNodeId: launchMeshNodeId } : {}),
                     ...(launchMeshNodeFor ? { meshNodeFor: launchMeshNodeFor } : {}),
                     ...(settings?.launchedByCoordinator === true ? { launchedByCoordinator: true } : {}),
+                    ...(launchAutoLaunchedForQueueTaskId ? { autoLaunchedForQueueTaskId: launchAutoLaunchedForQueueTaskId } : {}),
                 });
             } catch { /* best-effort — record-meta stamp is cleanup hygiene, not on the dispatch path */ }
         }
