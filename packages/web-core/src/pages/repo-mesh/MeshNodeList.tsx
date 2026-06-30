@@ -189,9 +189,14 @@ export function MeshNodeList({
     // list reflects its own daemon rather than the mesh's first daemon (daemons[0]).
     const providersByDaemonId = useMemo(() => buildProvidersByDaemonId(daemons), [daemons])
 
+    // Worktree nodes are ephemeral runtime artifacts, not static mesh configuration —
+    // they are excluded from this settings list entirely. A read-only runtime view of
+    // worktrees, if needed, belongs on the Observability/Status surface, not here.
+    const machineNodes = useMemo(() => nodes.filter(n => !isWorktreeNode(n)), [nodes])
+
     return (
         <Section
-            title={features.addNodeDaemonPicker ? `Nodes & Providers (${nodes.length})` : 'Nodes & Providers'}
+            title={features.addNodeDaemonPicker ? `Nodes & Providers (${machineNodes.length})` : 'Nodes & Providers'}
             description={features.addNodeDaemonPicker
                 ? 'Workspaces in this mesh and their preferred AI tools. Setup inventory only — live graph/git/session truth is owned by the Mesh Host status above.'
                 : 'Workspaces participating in this mesh and their preferred AI tools.'}
@@ -344,16 +349,15 @@ export function MeshNodeList({
                 </div>
             )}
 
-            {nodes.length === 0 ? (
+            {machineNodes.length === 0 ? (
                 <EmptyState icon={<IconFolder />} title="No nodes" description="Add a workspace to this mesh." />
             ) : (
                 <div className="flex flex-col gap-2">
-                    {nodes.map(node => {
+                    {machineNodes.map(node => {
                         const priorityStatus = describeNodeProviderPriority(node)
                         const activeAssignments = getNodeActiveAssignments(node, meshQueue)
                         const activeSessions = getNodeActiveSessions(node, activeDaemon)
                         const isSelected = selectedNodeId === node.id
-                        const worktree = isWorktreeNode(node)
                         const health = (node as any).status || (node as any).machine_status || (activeAssignments.length > 0 || activeSessions.length > 0 ? 'active' : 'enabled')
 
                         return (
@@ -372,12 +376,10 @@ export function MeshNodeList({
                                                 : <span className="text-sm font-medium">{node.workspace.split('/').pop()}</span>
                                             }
                                             {features.addNodeDaemonPicker && <NodeHealthBadge status={health} />}
-                                            {/* Live per-node runtime (active task count, sessions, git drift) now
-                                                lives on the Mesh "Status" tab so this config list stays static.
-                                                See MeshObservabilitySurface → MeshStatusTab. */}
-                                            {worktree && (
-                                                <span className={`text-[10px] px-2 py-0.5 rounded-full ${features.addNodeDaemonPicker ? 'bg-cyan-400/10 text-cyan-300 border border-cyan-400/30' : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/25'}`}>worktree</span>
-                                            )}
+                                            {/* Worktree (ephemeral runtime) nodes are filtered out of this settings
+                                                list — only static machine nodes appear here. Live per-node runtime
+                                                (active task count, sessions, git drift) lives on the Mesh "Status"
+                                                tab. See MeshObservabilitySurface → MeshStatusTab. */}
                                             {features.addNodeDaemonPicker && <span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-[10px] font-medium text-text-muted">setup inventory</span>}
                                         </div>
 
@@ -389,12 +391,6 @@ export function MeshNodeList({
 
                                         <div className="text-[10px] text-text-muted font-mono">{node.workspace}</div>
 
-                                        {worktree && (
-                                            <div className={`mt-2 rounded-lg px-3 py-2 text-[11px] ${features.addNodeDaemonPicker ? 'border border-cyan-400/20 bg-cyan-400/10 text-cyan-200' : 'border border-cyan-500/20 bg-cyan-500/10 text-cyan-200'}`}>
-                                                Worktree node{node.worktreeBranch ? ` · ${node.worktreeBranch}` : ''}. Provider priority saved here is node-local and disappears when removed.
-                                            </div>
-                                        )}
-
                                         {features.addNodeDaemonPicker && (
                                             <div className="mt-2 text-[11px] text-amber-300">
                                                 Live branch/git/session detail is graph-owned; use the node popup in the live graph above.
@@ -403,11 +399,9 @@ export function MeshNodeList({
 
                                         <div className={`mt-3 max-w-2xl ${!features.addNodeDaemonPicker ? '' : ''}`} onClick={e => e.stopPropagation()}>
                                             <FormField label="Preferred AI tools (in order)"
-                                                hint={worktree
-                                                    ? 'Worktree-local launch defaults. Configure the source node for durable defaults.'
-                                                    : features.addNodeDaemonPicker
-                                                        ? 'Used for coordinator/session launches when no tool is selected explicitly.'
-                                                        : 'Used when launches omit an explicit tool.'}>
+                                                hint={features.addNodeDaemonPicker
+                                                    ? 'Used for coordinator/session launches when no tool is selected explicitly.'
+                                                    : 'Used when launches omit an explicit tool.'}>
                                                 <ProviderPriorityEditor
                                                     value={nodeProviderPriorityDrafts[node.id] ?? readNodeProviderPriority(node)}
                                                     availableProviders={resolveNodeAvailableProviders(node, providersByDaemonId)}

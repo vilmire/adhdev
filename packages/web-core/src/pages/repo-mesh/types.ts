@@ -173,9 +173,7 @@ export interface MeshNodeListFeatures {
 export interface MeshDetailViewFeatures {
     coordinatorPrompt: boolean
     meshHostDaemonSection: boolean
-    queueSection: boolean
     hermesMcpConfig: boolean
     addNodeDaemonPicker: boolean
     nodeInstruction: boolean
-    reviewInbox: boolean
 }

@@ -7,6 +7,7 @@
  *             retry logic, coordinator targeting, and cloud-only UI sections.
  */
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 
 import AppPage from '../components/ui/AppPage'
 import { IconMesh } from '../components/Icons'
@@ -26,7 +27,6 @@ import { useMeshList } from './repo-mesh/useMeshList'
 import { useMeshNodeActions } from './repo-mesh/useMeshNodeActions'
 import { useMeshQueue } from './repo-mesh/useMeshQueue'
 import { useMeshGraph } from './repo-mesh/useMeshGraph'
-import { useMeshReviewInbox } from './repo-mesh/useMeshReviewInbox'
 import type { MeshNode, MeshQueueEntry, AvailableCliAgent } from './repo-mesh/types'
 import { readMeshPolicy } from './repo-mesh/types'
 
@@ -113,10 +113,14 @@ export default function RepoMesh() {
         : primaryDaemonId
 
     // ─── Queue ───
+    // The dedicated Queue settings section was removed (runtime telemetry, not config).
+    // meshQueue is still loaded because per-node "active assignments" diagnostics in the
+    // node list and the scheduler in useMeshNodeActions consume it; the standalone path
+    // auto-loads it below.
 
     const {
-        meshQueue, queueSummary, queueLoading, queueError,
-        loadQueue, handleLoadQueue,
+        meshQueue,
+        loadQueue,
     } = useMeshQueue({
         primaryDaemonId,
         activeDaemonId: resolvedActiveDaemonId,
@@ -125,17 +129,6 @@ export default function RepoMesh() {
         loadLiveMesh,
         resolveCommandTarget,
     })
-
-    // ─── Review Inbox (M4.0) ───
-
-    const {
-        items: reviewInboxItems,
-        loading: reviewInboxLoading,
-        error: reviewInboxError,
-        remoteNodesExcluded: reviewInboxRemoteNodesExcluded,
-        loadInbox: loadReviewInbox,
-        dismissItem: dismissReviewInboxItem,
-    } = useMeshReviewInbox({ primaryDaemonId, sendCommand })
 
     // ─── Node actions ───
 
@@ -199,10 +192,36 @@ export default function RepoMesh() {
 
     const nodes: MeshNode[] = selectedMesh?.nodes || []
     const selectedHostNode = useMemo(
-        () => nodes.find(n => String(n.daemon_id || n.daemonId || '') === coordinatorDaemonId),
+        () => nodes.find(n => daemonIdsEquivalent(String(n.daemon_id || n.daemonId || ''), coordinatorDaemonId)),
         [nodes, coordinatorDaemonId],
     )
     const isHostNodeAttached = features.meshHostDaemonSection ? !!selectedHostNode : true
+
+    // The daemon this mesh is actually pinned to host the coordinator on. Read from
+    // the persisted meshHost metadata (hostDaemonId, else the daemon of hostNodeId),
+    // resolved through daemonIdsEquivalent because the persisted id is frequently a
+    // config-form id that does not byte-equal a connected runtime daemon id. This is
+    // the seed for coordinatorDaemonId so the host selector reflects real persisted
+    // truth instead of defaulting to daemons[0] in a multi-daemon environment.
+    const persistedHostDaemonId = useMemo(() => {
+        if (!features.meshHostDaemonSection || !selectedMesh) return ''
+        const meshHost = (selectedMesh as any).meshHost as { hostDaemonId?: string; hostNodeId?: string } | undefined
+        const pinned = String(meshHost?.hostDaemonId || '')
+        if (pinned) {
+            const match = daemons.find(d => daemonIdsEquivalent(d.id, pinned))
+            if (match) return match.id
+        }
+        const hostNodeId = String(meshHost?.hostNodeId || '')
+        if (hostNodeId) {
+            const hostNode = nodes.find(n => String(n.id) === hostNodeId)
+            const nodeDaemonId = String(hostNode?.daemon_id || hostNode?.daemonId || '')
+            if (nodeDaemonId) {
+                const match = daemons.find(d => daemonIdsEquivalent(d.id, nodeDaemonId))
+                if (match) return match.id
+            }
+        }
+        return ''
+    }, [selectedMesh, nodes, daemons, features.meshHostDaemonSection])
 
     const meshNodeDaemonIds = useMemo(() => {
         if (!meshGraphStatus) return []
@@ -259,14 +278,21 @@ export default function RepoMesh() {
         if (selectedNodeId && !nodeIds.has(selectedNodeId)) setSelectedNodeId(null)
     }, [selectedMesh, selectedNodeId])
 
-    // Cloud: init coordinator daemon id from daemons list
+    // Cloud: init coordinator daemon id. Seed order: persisted mesh host
+    // (meshHost.hostDaemonId / hostNodeId, resolved via persistedHostDaemonId) →
+    // current valid selection → daemons[0] fallback. The persisted host wins so a
+    // multi-daemon mesh shows its real host instead of an arbitrary first daemon.
     useEffect(() => {
         if (!features.meshHostDaemonSection) return
         if (!daemons.length) { setCoordinatorDaemonId(''); return }
-        if (!coordinatorDaemonId || !daemons.some(d => d.id === coordinatorDaemonId)) {
-            setCoordinatorDaemonId(daemons[0].id)
+        if (persistedHostDaemonId && !daemonIdsEquivalent(persistedHostDaemonId, coordinatorDaemonId)) {
+            setCoordinatorDaemonId(persistedHostDaemonId)
+            return
         }
-    }, [daemons, coordinatorDaemonId, features.meshHostDaemonSection])
+        if (!coordinatorDaemonId || !daemons.some(d => d.id === coordinatorDaemonId)) {
+            setCoordinatorDaemonId(persistedHostDaemonId || daemons[0].id)
+        }
+    }, [daemons, coordinatorDaemonId, persistedHostDaemonId, features.meshHostDaemonSection])
 
     // Cloud: init newMeshDaemonId
     useEffect(() => {
@@ -343,17 +369,13 @@ export default function RepoMesh() {
         }
     }, [selectedMeshId, resolvedActiveDaemonId])
 
-    // Standalone: auto-load queue on mesh selection
+    // Standalone: auto-load queue on mesh selection. The dedicated Queue settings
+    // section is gone, but meshQueue still feeds per-node assignment diagnostics and
+    // the scheduler, so the standalone path keeps loading it.
     useEffect(() => {
         if (features.queueSection) return
         void loadQueue(selectedMeshId)
     }, [selectedMeshId, features.queueSection])
-
-    // Auto-load review inbox on mesh selection (when feature is enabled)
-    useEffect(() => {
-        if (!features.reviewInbox || !selectedMeshId) return
-        void loadReviewInbox(selectedMeshId)
-    }, [selectedMeshId, features.reviewInbox])
 
     // Initial mesh load
     useEffect(() => { void loadMeshes() }, [loadMeshes])
@@ -408,10 +430,6 @@ export default function RepoMesh() {
             graphLoading={graphLoading}
             graphError={graphError}
             onRefreshGraph={() => loadGraph(resolvedActiveDaemonId, selectedMeshId, true)}
-            queueSummary={queueSummary}
-            queueLoading={queueLoading}
-            queueError={queueError}
-            onLoadQueue={() => handleLoadQueue(selectedMesh)}
             savingPolicy={savingPolicy}
             onUpdatePolicy={handleUpdatePolicy}
             coordinatorPromptDraft={coordinatorPromptDraft}
@@ -428,6 +446,7 @@ export default function RepoMesh() {
             attachedDaemonIds={attachedDaemonIds}
             isHostNodeAttached={isHostNodeAttached}
             selectedHostNode={selectedHostNode}
+            hostPinned={!!persistedHostDaemonId}
             onLaunchCoordinator={handleLaunchCoordinator}
             activeDaemon={activeDaemon}
             activeDaemonId={resolvedActiveDaemonId}
@@ -467,27 +486,9 @@ export default function RepoMesh() {
             features={{
                 coordinatorPrompt: features.coordinatorPrompt,
                 meshHostDaemonSection: features.meshHostDaemonSection,
-                queueSection: features.queueSection,
                 hermesMcpConfig: features.hermesMcpConfig,
                 addNodeDaemonPicker: features.addNodeDaemonPicker,
                 nodeInstruction: features.nodeInstruction,
-                reviewInbox: features.reviewInbox ?? false,
-            }}
-            reviewInboxItems={reviewInboxItems}
-            reviewInboxLoading={reviewInboxLoading}
-            reviewInboxError={reviewInboxError}
-            reviewInboxRemoteNodesExcluded={reviewInboxRemoteNodesExcluded}
-            onLoadReviewInbox={() => selectedMeshId && void loadReviewInbox(selectedMeshId)}
-            onDismissReviewInboxItem={dismissReviewInboxItem}
-            onRefineNode={async (nodeId) => {
-                if (!selectedMeshId) return
-                await sendCommand(resolvedActiveDaemonId, 'refine_mesh_node', { meshId: selectedMeshId, nodeId, inlineMesh: selectedMesh })
-                void loadReviewInbox(selectedMeshId)
-            }}
-            onRequeueLast={async (nodeId) => {
-                if (!selectedMeshId) return
-                await sendCommand(resolvedActiveDaemonId, 'requeue_mesh_queue_task', { meshId: selectedMeshId, nodeId })
-                void loadReviewInbox(selectedMeshId)
             }}
             sendCommand={sendCommand}
         />

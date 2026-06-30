@@ -102,7 +102,7 @@ describe('RepoMesh graph detail affordances', () => {
     expect(standaloneSource).toContain('extractStatus: extractRepoMeshStatus')
   })
 
-  it('preserves provider priority when provider inventory is unavailable and marks worktree-local policy', () => {
+  it('preserves provider priority when provider inventory is unavailable and excludes worktree nodes from the settings list', () => {
     // Handler lives in useMeshNodeActions.ts (extracted from RepoMesh.tsx by F2)
     const nodeActionsSource = readSource('pages/repo-mesh/useMeshNodeActions.ts')
     expect(nodeActionsSource).toContain('const requested = nodeProviderPriorityDrafts[node.id] || readNodeProviderPriority(node)')
@@ -110,9 +110,11 @@ describe('RepoMesh graph detail affordances', () => {
     expect(nodeActionsSource).toContain('normalizeProviderPriority(requested)')
     expect(nodeActionsSource).toContain('providerPriority')
 
-    // UI text and helper live in MeshNodeList.tsx
+    // IA cleanup: MeshNodeList still detects worktree nodes, but now FILTERS them out
+    // of the static settings list rather than rendering worktree-local policy warnings.
     const nodeListSource = readSource('pages/repo-mesh/MeshNodeList.tsx')
     expect(nodeListSource).toContain('function isWorktreeNode(node: MeshNode): boolean')
-    expect(nodeListSource).toContain('Provider priority saved here is node-local and disappears when removed.')
+    expect(nodeListSource).toContain('nodes.filter(n => !isWorktreeNode(n))')
+    expect(nodeListSource).not.toContain('Provider priority saved here is node-local and disappears when removed.')
   })
 })

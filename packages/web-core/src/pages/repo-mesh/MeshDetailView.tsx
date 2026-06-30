@@ -6,14 +6,11 @@ import { AlertBanner } from '../../components/ui/AlertBanner'
 import { FormField } from '../../components/ui/FormField'
 import { IconMesh } from '../../components/Icons'
 import MagiPanelManager from '../../components/MeshGraph/MagiPanelManager'
-import MagiSynthesisViewer from '../../components/MeshGraph/MagiSynthesisViewer'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { AvailableCliProviderOption } from '../../utils/provider-priority'
-import { MeshQueueSection } from './MeshQueueSection'
 import { MeshMissionsSection } from './MeshMissionsSection'
-import { ReviewInboxSection } from './ReviewInboxSection'
 import { MeshNodeList } from './MeshNodeList'
 import { MeshHostDaemonSection } from './MeshHostDaemonSection'
 import { RepoMeshHermesMcpConfig } from './MeshHermesMcpConfig'
@@ -30,7 +27,6 @@ import {
     type MeshProviderRole,
     type MeshSchedulingStrategy,
     type MeshQueueEntry,
-    type MeshQueueSummary,
     type MeshDetailViewFeatures,
     type ProviderPriorityDrafts,
     type AvailableCliAgent,
@@ -48,12 +44,6 @@ interface Props {
     graphLoading: boolean
     graphError: string | null
     onRefreshGraph: (refresh?: boolean) => void
-
-    // Queue
-    queueSummary: MeshQueueSummary | null
-    queueLoading: boolean
-    queueError: string | null
-    onLoadQueue: () => void
 
     // Policy
     savingPolicy: boolean
@@ -76,6 +66,7 @@ interface Props {
     attachedDaemonIds: Set<string>
     isHostNodeAttached: boolean
     selectedHostNode: MeshNode | undefined
+    hostPinned: boolean
     onLaunchCoordinator: () => void
 
     // Node list
@@ -121,16 +112,6 @@ interface Props {
 
     features: MeshDetailViewFeatures
 
-    // Review Inbox (M4.0) — required when features.reviewInbox is true
-    reviewInboxItems: import('@adhdev/daemon-core').MeshReviewInboxItem[]
-    reviewInboxLoading: boolean
-    reviewInboxError: string | null
-    reviewInboxRemoteNodesExcluded: boolean
-    onLoadReviewInbox: () => void
-    onDismissReviewInboxItem: (nodeId: string) => void
-    onRefineNode: (nodeId: string) => void
-    onRequeueLast: (nodeId: string) => void
-
     sendCommand: (daemonId: string, command: string, payload?: any) => Promise<any>
 }
 
@@ -170,10 +151,6 @@ export function MeshDetailView({
     graphLoading,
     graphError,
     onRefreshGraph,
-    queueSummary,
-    queueLoading,
-    queueError,
-    onLoadQueue,
     savingPolicy,
     onUpdatePolicy,
     coordinatorPromptDraft,
@@ -190,6 +167,7 @@ export function MeshDetailView({
     attachedDaemonIds,
     isHostNodeAttached,
     selectedHostNode,
+    hostPinned,
     onLaunchCoordinator,
     activeDaemon,
     activeDaemonId,
@@ -227,14 +205,6 @@ export function MeshDetailView({
     onRemoveNode,
     availableCliAgents,
     features,
-    reviewInboxItems,
-    reviewInboxLoading,
-    reviewInboxError,
-    reviewInboxRemoteNodesExcluded,
-    onLoadReviewInbox,
-    onDismissReviewInboxItem,
-    onRefineNode,
-    onRequeueLast,
     sendCommand,
 }: Props) {
     const policy = readMeshPolicy(selectedMesh)
@@ -283,6 +253,7 @@ export function MeshDetailView({
                     attachedDaemonIds={attachedDaemonIds}
                     isHostNodeAttached={isHostNodeAttached}
                     selectedHostNode={selectedHostNode}
+                    hostPinned={hostPinned}
                     onLaunchCoordinator={onLaunchCoordinator}
                     onAttachSelectedHost={() => { onNodeDaemonIdChange(coordinatorDaemonId); onShowAddNode() }}
                 />
@@ -325,21 +296,6 @@ export function MeshDetailView({
                 </Section>
             )}
 
-            {/* ── MAGI synthesis viewer (fix c) ──
-                 Reads the persisted synthesis folded into status.magiActivity[]. Raw replica
-                 answers are NOT persisted — fetched live (best-effort) via mesh_magi_collect
-                 verbose, with a 'raw not persisted' note when unavailable. */}
-            {displayedMeshStatus && (
-                <Section title="MAGI synthesis" description="Persisted cross-verification synthesis (needs-verification, agreements, independence, open questions). Raw replica text is live-only.">
-                    <MagiSynthesisViewer
-                        status={displayedMeshStatus}
-                        daemonId={activeDaemonId}
-                        meshId={selectedMesh.id}
-                        sendDaemonCommand={sendCommand}
-                    />
-                </Section>
-            )}
-
             {/* ── Missions (fix b: full-goal fetch-more) ── */}
             <MeshMissionsSection
                 status={displayedMeshStatus}
@@ -348,33 +304,10 @@ export function MeshDetailView({
                 sendCommand={sendCommand}
             />
 
-            {/* ── Cloud: Queue section ── */}
-            {features.queueSection && (
-                <MeshQueueSection
-                    queueSummary={queueSummary}
-                    queueLoading={queueLoading}
-                    queueError={queueError}
-                    activeDaemonId={activeDaemonId}
-                    onRefresh={onLoadQueue}
-                />
-            )}
-
-            {/* ── Review Inbox (M4.0) ── */}
-            {features.reviewInbox && (
-                <ReviewInboxSection
-                    items={reviewInboxItems}
-                    loading={reviewInboxLoading}
-                    error={reviewInboxError}
-                    remoteNodesExcluded={reviewInboxRemoteNodesExcluded}
-                    meshId={selectedMesh.id}
-                    activeDaemonId={activeDaemonId}
-                    onRefresh={onLoadReviewInbox}
-                    onDismiss={onDismissReviewInboxItem}
-                    onRefineNode={onRefineNode}
-                    onRequeueLast={onRequeueLast}
-                    sendCommand={sendCommand}
-                />
-            )}
+            {/* Queue, Review Inbox, and MAGI synthesis are runtime telemetry, not static
+                settings — they were removed from this page. Live queue/graph/node-runtime
+                truth is reached through the Observability dialog above; review-inbox runtime
+                has no settings-page home and is intentionally absent here. */}
 
             {/* ── Nodes & Providers ── */}
             <MeshNodeList
