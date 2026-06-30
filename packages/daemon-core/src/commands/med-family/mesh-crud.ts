@@ -82,10 +82,32 @@ export async function decideOssCloneSync(
 }
 
 export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
-    list_meshes: async (_ctx: MedFamilyContext, _args: any) => {
+    list_meshes: async (ctx: MedFamilyContext, _args: any) => {
         try {
             const { listMeshes } = await import('../../config/mesh-config.js');
-            return { success: true, meshes: listMeshes() };
+            const meshes = listMeshes();
+            // HOST-MISSEED-CLOUD-SURFACE: surface the SAME resolved host pin that
+            // mesh_status synthesizes (resolveMeshHostStatus) onto each list entry's
+            // meshHost. The cloud dashboard's host banner reads hostPinned from the
+            // list_meshes payload (selectedMesh.meshHost), NOT from mesh_status — so
+            // without this a host mesh whose hostDaemonId was never persisted shows
+            // 'no host yet' even though the daemon resolves this daemon as host.
+            // resolveMeshHostStatus only synthesizes localDaemonId for role:'host'
+            // (member meshes keep hostDaemonId undefined), so member meshes are not
+            // polluted. localDaemonId mirrors mesh-status.ts; when absent, the resolver
+            // falls back to the raw persisted meshHost.
+            const localDaemonId = ctx?.deps?.statusInstanceId;
+            const meshesWithHost = Array.isArray(meshes)
+                ? meshes.map((mesh: any) => {
+                    try {
+                        return { ...mesh, meshHost: resolveMeshHostStatus(mesh, { localDaemonId }) };
+                    } catch {
+                        // Resolver failure on a single mesh must not drop the whole list.
+                        return mesh;
+                    }
+                })
+                : meshes;
+            return { success: true, meshes: meshesWithHost };
         } catch (e: any) {
             return { success: false, error: e.message };
         }

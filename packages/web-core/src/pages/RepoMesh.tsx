@@ -221,7 +221,18 @@ export default function RepoMesh() {
         if (!features.meshHostDaemonSection || !selectedMesh) {
             return { pinned: false, daemonId: '', label: '', online: false }
         }
-        const meshHost = (selectedMesh as any).meshHost as { hostDaemonId?: string; hostNodeId?: string } | undefined
+        const listMeshHost = (selectedMesh as any).meshHost as { hostDaemonId?: string; hostNodeId?: string } | undefined
+        // HOST-MISSEED-CLOUD-SURFACE: the mesh_status payload (meshGraphStatus.meshHost)
+        // carries the daemon-side *resolved* host pin (resolveMeshHostStatus synthesizes
+        // hostDaemonId = the host daemon for a role:'host' mesh whose pin was never
+        // persisted). The list_meshes entry historically lacked that synthesis, so reading
+        // pinned solely from selectedMesh.meshHost produced 'no host yet' even when the
+        // daemon already resolved this daemon as host. Read the resolved pin from the
+        // loaded mesh_status FIRST, then fall back to the list entry's meshHost.
+        const statusMeshHost = (meshGraphStatus?.meshId && String(meshGraphStatus.meshId) === String(selectedMesh.id ?? ''))
+            ? (meshGraphStatus.meshHost as { hostDaemonId?: string; hostNodeId?: string } | undefined)
+            : undefined
+        const meshHost = statusMeshHost?.hostDaemonId ? statusMeshHost : (listMeshHost ?? statusMeshHost)
         const pinnedDaemonId = String(meshHost?.hostDaemonId || '')
         // HOST-MISSEED-FIRSTSETUP transition boost: the mesh-list `meshHost` may still
         // lack a persisted pin (the daemon-side read-side default only fills it in the
@@ -254,7 +265,7 @@ export default function RepoMesh() {
             String((hostNode as any)?.workspace || '') ||
             effectiveId
         return { pinned: true, daemonId: effectiveId, label: offlineLabel, online: false }
-    }, [selectedMesh, nodes, daemons, features.meshHostDaemonSection])
+    }, [selectedMesh, nodes, daemons, meshGraphStatus, features.meshHostDaemonSection])
 
     const persistedHostDaemonId = persistedHostInfo.daemonId
     const hostOnline = persistedHostInfo.online
@@ -347,9 +358,16 @@ export default function RepoMesh() {
     // operator is viewing from (self), only then fall back to daemons[0]. All matches
     // go through daemonIdsEquivalent (daemon_mach_/mach_/standalone_ forms describe one
     // machine). Standalone keeps daemons[0]===self, so its prior behavior is preserved.
+    // HOST-MISSEED-CLOUD-SURFACE: feed the daemon-resolved host pin (mesh_status
+    // meshHost.hostDaemonId for THIS mesh) into the seed so the transition-window seed
+    // prefers the daemon the daemon itself names as host over daemons[0].
+    const resolvedHostPinDaemonId = useMemo(() => {
+        if (!meshGraphStatus?.meshId || String(meshGraphStatus.meshId) !== String(selectedMesh?.id ?? '')) return undefined
+        return (meshGraphStatus.meshHost as { hostDaemonId?: string } | undefined)?.hostDaemonId
+    }, [meshGraphStatus, selectedMesh])
     const firstSetupSeedDaemonId = useMemo(
-        () => resolveFirstSetupSeedDaemonId(daemons, nodes, resolvedActiveDaemonId, primaryDaemonId),
-        [daemons, nodes, resolvedActiveDaemonId, primaryDaemonId],
+        () => resolveFirstSetupSeedDaemonId(daemons, nodes, resolvedActiveDaemonId, primaryDaemonId, resolvedHostPinDaemonId),
+        [daemons, nodes, resolvedActiveDaemonId, primaryDaemonId, resolvedHostPinDaemonId],
     )
 
     useEffect(() => {
