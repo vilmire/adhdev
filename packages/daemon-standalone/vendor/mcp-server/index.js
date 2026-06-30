@@ -1178,7 +1178,8 @@ var MESH_MAGI_REVIEW_TOOL = {
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
       include_stale: { type: "boolean", description: "Default false. By default, panel members whose node HEAD commit differs from the coordinator reference commit are EXCLUDED (they would investigate different code). Set true to fan out to them anyway \u2014 results will be git-skewed and a warning is surfaced. If exclusion drops the panel below 2 independent targets the call errors rather than degrading to N=1; include_stale=true is one way to recover." },
       wait: { type: "boolean", description: "Default true \u2014 collect replica outputs and return the synthesis. Set false to dispatch async and return a consensusGroupId handle; collect later with mesh_magi_collect." },
-      wait_timeout_ms: { type: "number", description: 'Max time to wait for replica completion before returning a partial "missing K of N" synthesis. Default ~4 min.' }
+      wait_timeout_ms: { type: "number", description: 'Max time to wait for replica completion before returning a partial "missing K of N" synthesis. Default ~4 min.' },
+      auto_cleanup: { type: "boolean", description: "Default = mesh policy magiSessionCleanup (ON / stop_and_delete unless overridden). Once all replicas are terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified) so repeated reviews don't accumulate idle worker sessions. Reused/coordinator/other sessions are never touched. Set false to preserve auto-launched worker sessions for inspection. No effect on a partial (non-terminal) collection." }
     },
     required: ["question"]
   }
@@ -1193,7 +1194,8 @@ var MESH_MAGI_COLLECT_TOOL = {
       task_kind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "Optional override of the task_kind used to parse replica answers. Normally recovered automatically from the original dispatch \u2014 only set this if the dispatched ledger entry was pruned and auto-recovery falls back to claim_audit incorrectly." },
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
       wait: { type: "boolean", description: "Default false (snapshot). Set true to block for outstanding replicas up to wait_timeout_ms before synthesizing." },
-      wait_timeout_ms: { type: "number", description: "When wait=true, max time to wait for remaining replica completion. Default ~4 min." }
+      wait_timeout_ms: { type: "number", description: "When wait=true, max time to wait for remaining replica completion. Default ~4 min." },
+      auto_cleanup: { type: "boolean", description: "Default = mesh policy magiSessionCleanup (ON / stop_and_delete). When the collection is terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified). Reused/coordinator/other sessions are never touched. Set false to preserve them. No effect on a partial (non-terminal) snapshot." }
     },
     required: ["consensus_group_id"]
   }
@@ -1207,9 +1209,14 @@ var MESH_MAGI_PANEL_SET_TOOL = {
       panel_name: { type: "string", description: 'Panel name key, e.g. "design-review".' },
       config: {
         type: "object",
-        description: "Panel config: { description?, members:[{ provider (REQUIRED), nodeId?, capabilityTags?, n? }], defaultN? }.",
+        description: "Panel config: { description?, members:[{ provider (REQUIRED), nodeId?, capabilityTags?, n? }], defaultN?, defaultKind? }.",
         properties: {
           description: { type: "string" },
+          defaultKind: {
+            type: "string",
+            enum: ["claim_audit", "rca", "design"],
+            description: 'Optional NON-binding default output kind applied when a mesh_magi_review on this panel omits task_kind. Priority is always task_kind > defaultKind > claim_audit, so it never overrides an explicit per-run kind. "freeform" is NOT allowed (it contributes no structured claims to cross-verification) and is dropped with a warning.'
+          },
           members: {
             type: "array",
             items: {
@@ -4068,6 +4075,7 @@ async function meshReviewInbox(ctx, args = {}) {
 }
 
 // src/tools/mesh-tools-magi.ts
+var import_daemon_core5 = require("@adhdev/daemon-core");
 var MAGI_MAX_REPLICAS = 12;
 var MAGI_MIN_TARGETS = 2;
 var MAGI_CLUSTER_JACCARD = 0.4;
@@ -4844,7 +4852,7 @@ async function meshMagiPanelList(ctx, args = {}) {
 async function meshMagiReview(ctx, args) {
   const question = readString(args.question);
   if (!question) return JSON.stringify({ success: false, error: "question required" });
-  const taskKind = normalizeMagiTaskKind(args.task_kind ?? args.taskKind);
+  const explicitTaskKind = args.task_kind ?? args.taskKind;
   const questionSchemaWarning = detectQuestionOutputSchemaConflict(question);
   const useJudge = (args.use_judge ?? args.useJudge) === true;
   const judgeWarning = useJudge ? "use_judge=true requested, but judge synthesis is not yet implemented \u2014 falling back to clustering synthesis." : null;
@@ -4876,6 +4884,7 @@ async function meshMagiReview(ctx, args) {
       configuredPanels: Object.keys((0, import_daemon_core4.listMagiPanels)())
     });
   }
+  const taskKind = normalizeMagiTaskKind(explicitTaskKind ?? panel.defaultKind);
   const includeStale = (args.include_stale ?? args.includeStale) === true;
   const referenceCommit = resolveMagiReferenceCommit(ctx);
   const plan = buildMagiFanoutPlan(panel, ctx.mesh.nodes, { n: args.n, referenceCommit, includeStale });
@@ -5001,9 +5010,17 @@ Target: ${args.target}` : ""}`
     synthesis
   });
   closeMagiMissionIfTerminal(ctx, mission.id, collected.terminal);
+  const cleanupMode = resolveMagiAutoCleanupMode(ctx, args.auto_cleanup ?? args.autoCleanup);
+  const cleanupReplicaTasks = findMagiReplicaTasks((0, import_daemon_core4.getQueue)(ctx.mesh.id), consensusGroupId);
+  const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
+    replicaTasks: cleanupReplicaTasks,
+    terminal: collected.terminal,
+    mode: cleanupMode
+  });
   return JSON.stringify({
     ...baseResult,
     waited: true,
+    ...cleanup ? { sessionCleanup: { mode: cleanupMode, cleanedSessionCount: cleanup.cleanedSessionCount, perNode: cleanup.perNode } } : {},
     collection: {
       terminal: collected.terminal,
       timedOut: collected.timedOut,
@@ -5051,12 +5068,19 @@ async function meshMagiCollect(ctx, args) {
     synthesis
   });
   closeMagiMissionIfTerminal(ctx, replicaMissionId, collected.terminal);
+  const cleanupMode = resolveMagiAutoCleanupMode(ctx, args.auto_cleanup ?? args.autoCleanup);
+  const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
+    replicaTasks,
+    terminal: collected.terminal,
+    mode: cleanupMode
+  });
   return JSON.stringify({
     success: true,
     consensusGroupId,
     taskKind,
     replicaCount: replicaTaskIds.length,
     waited: wait,
+    ...cleanup ? { sessionCleanup: { mode: cleanupMode, cleanedSessionCount: cleanup.cleanedSessionCount, perNode: cleanup.perNode } } : {},
     collection: {
       terminal: collected.terminal,
       timedOut: collected.timedOut,
@@ -5077,6 +5101,89 @@ function findMagiReplicaTasks(queue, consensusGroupId) {
   const groupId = typeof consensusGroupId === "string" ? consensusGroupId.trim() : "";
   if (!groupId) return [];
   return (Array.isArray(queue) ? queue : []).filter((t) => readString(t?.consensusGroupId) === groupId);
+}
+function computeMagiCleanupTargets(replicaTasks) {
+  const byNode = /* @__PURE__ */ new Map();
+  for (const task of Array.isArray(replicaTasks) ? replicaTasks : []) {
+    const replicaTaskId = readString(task?.id);
+    if (!replicaTaskId) continue;
+    const nodeId = readString(task?.assignedNodeId) || readString(task?.autoLaunch?.nodeId) || readString(task?.targetNodeId);
+    if (!nodeId) continue;
+    const candidateSessionIds = [];
+    if (readString(task?.autoLaunch?.status) === "completed") {
+      const al = readString(task?.autoLaunch?.sessionId);
+      if (al) candidateSessionIds.push(al);
+    }
+    const assigned = readString(task?.assignedSessionId);
+    if (assigned) candidateSessionIds.push(assigned);
+    if (candidateSessionIds.length === 0) continue;
+    let entry = byNode.get(nodeId);
+    if (!entry) {
+      entry = { sessionIds: /* @__PURE__ */ new Set(), requireAutoLaunchedForTaskIds: {} };
+      byNode.set(nodeId, entry);
+    }
+    for (const sid of candidateSessionIds) {
+      entry.sessionIds.add(sid);
+      if (!(sid in entry.requireAutoLaunchedForTaskIds)) {
+        entry.requireAutoLaunchedForTaskIds[sid] = replicaTaskId;
+      }
+    }
+  }
+  const out = /* @__PURE__ */ new Map();
+  for (const [nodeId, entry] of byNode) {
+    out.set(nodeId, {
+      sessionIds: Array.from(entry.sessionIds),
+      requireAutoLaunchedForTaskIds: entry.requireAutoLaunchedForTaskIds
+    });
+  }
+  return out;
+}
+function resolveMagiAutoCleanupMode(ctx, perCallOverride) {
+  if (perCallOverride === true) return "stop_and_delete";
+  if (perCallOverride === false) return "preserve";
+  return (0, import_daemon_core5.resolveMagiSessionCleanupMode)(ctx.mesh?.policy?.magiSessionCleanup);
+}
+async function cleanupMagiAutoLaunchedSessions(ctx, args) {
+  if (args.mode === "preserve") return null;
+  if (!args.terminal) return null;
+  const targets = computeMagiCleanupTargets(args.replicaTasks);
+  if (targets.size === 0) return null;
+  let cleanedSessionCount = 0;
+  const perNode = [];
+  for (const [nodeId, group] of targets) {
+    if (group.sessionIds.length === 0) continue;
+    try {
+      const node = await findOptionalNodeWithRefresh(ctx, nodeId);
+      if (!node) {
+        perNode.push({ nodeId, skipped: "node_not_in_live_mesh", sessionIds: group.sessionIds });
+        continue;
+      }
+      const result = await commandForNode(ctx, node, "cleanup_mesh_sessions", {
+        meshId: ctx.mesh.id,
+        nodeId,
+        mode: "stop_and_delete",
+        sessionIds: group.sessionIds,
+        source: "magi_session_cleanup",
+        requireAutoLaunchedForTaskIds: group.requireAutoLaunchedForTaskIds,
+        inlineMesh: ctx.mesh
+      });
+      const payload = unwrapCommandPayload(result);
+      const deleted = Array.isArray(payload?.deletedSessionIds) ? payload.deletedSessionIds.length : 0;
+      const stopped = Array.isArray(payload?.stoppedSessionIds) ? payload.stoppedSessionIds.length : 0;
+      cleanedSessionCount += deleted + stopped;
+      perNode.push({
+        nodeId,
+        requested: group.sessionIds.length,
+        deleted,
+        ...stopped ? { stopped } : {},
+        ...Array.isArray(payload?.skippedMarkerMismatchSessionIds) && payload.skippedMarkerMismatchSessionIds.length ? { skippedMarkerMismatch: payload.skippedMarkerMismatchSessionIds } : {},
+        ...payload?.deleteUnsupported ? { deleteUnsupported: true } : {}
+      });
+    } catch (e) {
+      perNode.push({ nodeId, error: e?.message || String(e), sessionIds: group.sessionIds });
+    }
+  }
+  return { cleanedSessionCount, perNode };
 }
 function sessionSharedWithAnotherReplica(task, allTasks) {
   const sid = readString(task?.assignedSessionId);
