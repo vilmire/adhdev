@@ -99,9 +99,11 @@ export {
 } from './mesh-tools-mission.js';
 
 export {
+    MAGI_KIND_PRESETS,
     MAGI_MAX_REPLICAS,
     buildInlineMagiPanel,
     buildMagiFanoutPlan,
+    buildPresetMagiPanelForKind,
     buildMagiTaskPrompt,
     classifyStaleReplicas,
     cleanupMagiAutoLaunchedSessions,
