@@ -27,6 +27,7 @@ import { useMeshList } from './repo-mesh/useMeshList'
 import { useMeshNodeActions } from './repo-mesh/useMeshNodeActions'
 import { useMeshQueue } from './repo-mesh/useMeshQueue'
 import { useMeshGraph } from './repo-mesh/useMeshGraph'
+import { resolveFirstSetupSeedDaemonId } from './repo-mesh/host-seed'
 import type { MeshNode, MeshQueueEntry, AvailableCliAgent } from './repo-mesh/types'
 import { readMeshPolicy } from './repo-mesh/types'
 
@@ -222,7 +223,13 @@ export default function RepoMesh() {
         }
         const meshHost = (selectedMesh as any).meshHost as { hostDaemonId?: string; hostNodeId?: string } | undefined
         const pinnedDaemonId = String(meshHost?.hostDaemonId || '')
-        const hostNodeId = String(meshHost?.hostNodeId || '')
+        // HOST-MISSEED-FIRSTSETUP transition boost: the mesh-list `meshHost` may still
+        // lack a persisted pin (the daemon-side read-side default only fills it in the
+        // mesh_status payload, not the list entry). When hostNodeId is absent, infer the
+        // host node from a node already flagged role:'host' so the host badge resolves to
+        // M4 instead of collapsing to a picker before the pin propagates.
+        const inferredHostNode = nodes.find(n => (n as any).role === 'host')
+        const hostNodeId = String(meshHost?.hostNodeId || (inferredHostNode as any)?.id || '')
         const hostNode = hostNodeId ? nodes.find(n => String(n.id) === hostNodeId) : undefined
         const nodeDaemonId = String(hostNode?.daemon_id || hostNode?.daemonId || '')
 
@@ -325,20 +332,36 @@ export default function RepoMesh() {
     //   • pinned host (online or offline) → the persisted host id, unless the host
     //     is offline AND the user picked a re-bind daemon, in which case route
     //     through that connected daemon (effectiveCommandDaemonId encodes both).
-    //   • no host pinned yet (first-time setup) → daemons[0] so graph/status loads
-    //     and a Launch Host Coordinator action can establish the host daemon-side.
+    //   • no host pinned yet (first-time setup) → see firstSetupSeedDaemonId below.
     // Keeping this as the single writer of coordinatorDaemonId is what lets
     // loadGraph/loadMeshStatus/metadata-subscription keep working without a select.
+    //
+    // HOST-MISSEED-FIRSTSETUP: the old first-setup fallback was a bare `daemons[0]`,
+    // which on cloud is just the P2P insertion order — so an unrelated member daemon
+    // (e.g. moltbot) could land at index 0 and get seeded as the host candidate,
+    // producing "Will host on <wrong daemon>". The daemon-side read-side pin now fills
+    // meshHost.hostDaemonId for host meshes, so persistedHostInfo.pinned should be true
+    // in steady state. This seed chain is the UI-side belt-and-suspenders for the
+    // transition window (before the pin propagates) and for any mesh that still lacks a
+    // persisted pin: prefer the node already marked role:'host', then the daemon the
+    // operator is viewing from (self), only then fall back to daemons[0]. All matches
+    // go through daemonIdsEquivalent (daemon_mach_/mach_/standalone_ forms describe one
+    // machine). Standalone keeps daemons[0]===self, so its prior behavior is preserved.
+    const firstSetupSeedDaemonId = useMemo(
+        () => resolveFirstSetupSeedDaemonId(daemons, nodes, resolvedActiveDaemonId, primaryDaemonId),
+        [daemons, nodes, resolvedActiveDaemonId, primaryDaemonId],
+    )
+
     useEffect(() => {
         if (!features.meshHostDaemonSection) return
         if (!daemons.length && !persistedHostInfo.pinned) { setCoordinatorDaemonId(''); return }
         const target = persistedHostInfo.pinned
             ? effectiveCommandDaemonId
-            : (daemons[0]?.id || '')
+            : firstSetupSeedDaemonId
         if (target && !daemonIdsEquivalent(target, coordinatorDaemonId)) {
             setCoordinatorDaemonId(target)
         }
-    }, [daemons, coordinatorDaemonId, persistedHostInfo.pinned, effectiveCommandDaemonId, features.meshHostDaemonSection])
+    }, [daemons, coordinatorDaemonId, persistedHostInfo.pinned, effectiveCommandDaemonId, firstSetupSeedDaemonId, features.meshHostDaemonSection])
 
     // Drop a stale re-bind override once the pinned host comes back online (or the
     // chosen re-bind daemon disconnects), so we snap back to commanding the host.

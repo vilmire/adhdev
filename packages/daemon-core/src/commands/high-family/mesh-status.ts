@@ -65,7 +65,11 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                     const mesh = meshRecord?.mesh;
                     if (!mesh) return { success: false, error: 'Mesh not found' };
-                    const meshHost = resolveMeshHostStatus(mesh);
+                    // Pass the evaluating daemon's id so a host mesh whose
+                    // hostDaemonId was never persisted (HOST-MISSEED-FIRSTSETUP) gets
+                    // pinned to THIS daemon — the dashboard then renders M4 as host
+                    // instead of falling back to 'no host yet'.
+                    const meshHost = resolveMeshHostStatus(mesh, { localDaemonId: ctx.deps.statusInstanceId });
 
                     const refreshRequested = args?.refresh === true || args?.forceRefresh === true;
                     // Compact (default) elides each mission's full goal text from the

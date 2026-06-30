@@ -1,3 +1,4 @@
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import type { RepoMeshDaemonRole, RepoMeshHostMetadata, RepoMeshHostStatus } from '../repo-mesh-types.js';
 
 function readObject(value: unknown): Record<string, unknown> | null {
@@ -12,7 +13,28 @@ export function normalizeMeshDaemonRole(value: unknown): RepoMeshDaemonRole | un
     return value === 'host' || value === 'member' ? value : undefined;
 }
 
-export function resolveMeshHostStatus(mesh: unknown): RepoMeshHostStatus {
+/**
+ * Options for resolveMeshHostStatus's read-side host-pin default.
+ *
+ * `localDaemonId` is the id of the daemon evaluating the mesh (typically
+ * `deps.statusInstanceId`). When the persisted `meshHost` declares `role:'host'`
+ * but carries NO `hostDaemonId` (the first-setup miss — a host mesh whose pin was
+ * never written to config), the host daemon IS this local daemon by definition, so
+ * we synthesize `hostDaemonId = localDaemonId` (and, when the mesh has a node
+ * representing this daemon, `hostNodeId`). This is the read-side default — the SSOT
+ * is computed from the role + the evaluating daemon's identity rather than requiring
+ * a config migration to backfill every already-created mesh.
+ *
+ * HARD guard: the synthesis fires ONLY for `role:'host'`. A `role:'member'` daemon
+ * must NEVER fill itself in as host — that would make a member falsely claim
+ * coordinator/queue ownership.
+ */
+export interface ResolveMeshHostOptions {
+    /** Id of the daemon evaluating this mesh (e.g. deps.statusInstanceId). */
+    localDaemonId?: string;
+}
+
+export function resolveMeshHostStatus(mesh: unknown, opts?: ResolveMeshHostOptions): RepoMeshHostStatus {
     const meshRecord = readObject(mesh);
     const raw = readObject(meshRecord?.meshHost);
     const role = normalizeMeshDaemonRole(raw?.role) ?? 'host';
@@ -23,9 +45,25 @@ export function resolveMeshHostStatus(mesh: unknown): RepoMeshHostStatus {
         canOwnQueue: role === 'host',
         defaulted: !raw,
     };
-    const hostDaemonId = readString(raw?.hostDaemonId);
-    const hostNodeId = readString(raw?.hostNodeId);
+    let hostDaemonId = readString(raw?.hostDaemonId);
+    let hostNodeId = readString(raw?.hostNodeId);
     const hostAddress = readString(raw?.hostAddress);
+    // HOST-MISSEED-FIRSTSETUP read-side default: a host mesh with no persisted
+    // hostDaemonId is hosted by THIS daemon (role:'host' is local-relative), so
+    // fill the pin from the evaluating daemon. Member daemons are never synthesized.
+    const localDaemonId = readString(opts?.localDaemonId);
+    if (role === 'host' && !hostDaemonId && localDaemonId) {
+        hostDaemonId = localDaemonId;
+        // Anchor hostNodeId to the node representing this local daemon, when present.
+        if (!hostNodeId && Array.isArray(meshRecord?.nodes)) {
+            const selfNode = (meshRecord!.nodes as unknown[]).find(n => {
+                const nodeDaemonId = readString(readObject(n)?.daemonId);
+                return nodeDaemonId ? daemonIdsEquivalent(nodeDaemonId, localDaemonId) : false;
+            });
+            const selfNodeId = readString(readObject(selfNode)?.id);
+            if (selfNodeId) hostNodeId = selfNodeId;
+        }
+    }
     if (hostDaemonId) normalized.hostDaemonId = hostDaemonId;
     if (hostNodeId) normalized.hostNodeId = hostNodeId;
     if (hostAddress) normalized.hostAddress = hostAddress;
