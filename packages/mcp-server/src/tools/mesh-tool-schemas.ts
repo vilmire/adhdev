@@ -283,6 +283,8 @@ export const MESH_MISSION_LIST_TOOL = {
     description: 'List missions with their goal, status, and live task progress (total/pending/assigned/completed/failed). '
         + 'Unlike mesh_status (which surfaces live + recent missions), this returns every mission regardless of status by default, '
         + 'so paused/abandoned/completed missions are never hidden. Filter with `status` to scope (e.g. ["paused"] to find paused missions). '
+        + 'Completed MAGI cross-verification missions (one auto-created per mesh_magi_review) are hidden by default to keep the list '
+        + 'coordinator-focused — in-progress MAGI missions still show; pass include_magi=true to list completed ones too. '
         + 'Compact (default) elides the full goal to a capped preview; pass verbose=true for full goal text. Read-only.',
     inputSchema: {
         type: 'object' as const,
@@ -293,6 +295,7 @@ export const MESH_MISSION_LIST_TOOL = {
                 description: 'Optional status filter. Omit to return missions of every status.',
             },
             verbose: { type: 'boolean', description: 'Return full goal text instead of a capped preview. Defaults to false (compact).' },
+            include_magi: { type: 'boolean', description: 'Include completed MAGI cross-verification missions (hidden by default). Defaults to false.' },
         },
     },
 };
@@ -614,6 +617,7 @@ export const MESH_MAGI_COLLECT_TOOL = {
             wait: { type: 'boolean', description: 'Default false (snapshot). Set true to block for outstanding replicas up to wait_timeout_ms before synthesizing.' },
             wait_timeout_ms: { type: 'number', description: 'When wait=true, max time to wait for remaining replica completion. Default ~4 min.' },
             auto_cleanup: { type: 'boolean', description: 'Default = mesh policy magiSessionCleanup (ON / stop_and_delete). When the collection is terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified). Reused/coordinator/other sessions are never touched. Set false to preserve them. No effect on a partial (non-terminal) snapshot.' },
+            verbose: { type: 'boolean', description: 'Default false. When true, each synthesis.replicas[] entry also carries rawAnswer — the replica\'s raw end-user answer text (capped). Omitted by default to keep the payload small; the structured clusters already carry the parsed claims.' },
         },
         required: ['consensus_group_id'],
     },

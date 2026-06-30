@@ -207,6 +207,9 @@ export type {
   MagiResponseSource, MagiReplicaGitRef, MagiGitSkew, MagiSynthesizedResponse,
   MagiClusterCategory, MagiClusterMember, MagiClaimCluster, MagiSynthesis,
 } from '@adhdev/mesh-shared';
+// Value re-export: per-replica raw-answer truncation cap (used by the mcp-server
+// collection path, which depends only on @adhdev/daemon-core).
+export { MAGI_RAW_ANSWER_CAP } from '@adhdev/mesh-shared';
 
 // ── Mesh shared daemon-id / node-id helpers (re-export so external tooling —
 //    e.g. the mcp-server, which depends only on @adhdev/daemon-core — can

@@ -13,6 +13,7 @@
 
 import type { GitRepoStatus, GitCompactSummary } from './git/git-types.js';
 import type { MeshMissionSummary, MeshMissionSlimSummary } from './mesh/mesh-missions.js';
+import type { MeshMagiActivitySummary } from './mesh/mesh-magi-status.js';
 import type { MagiPanelMap } from '@adhdev/mesh-shared';
 
 // ─── Core Mesh Types ────────────────────────────
@@ -944,6 +945,17 @@ export interface RepoMeshStatus {
      * an optional `stats` operational rollup (durations / retries).
      */
     missions?: (MeshMissionSummary | MeshMissionSlimSummary)[];
+    /**
+     * MAGI cross-verification activity, reconstructed from the mesh ledger
+     * (magi_dispatched / magi_synthesis entries) and folded in so the dashboard's
+     * MAGI surface can read synthesis output — needs_verification counts, the
+     * independence banner, git skew, and a bounded needs_verification preview —
+     * without re-running collection. Running groups are always included; synthesized
+     * groups are bounded to recent ones (see summarizeMeshMagiActivity). Omitted by
+     * daemons predating the exposure and when no MAGI run is present; treat as
+     * optional. Mirrors the MCP `mesh_status` tool's `magiActivity` field.
+     */
+    magiActivity?: MeshMagiActivitySummary[];
 }
 
 // RepoMeshSessionStatus shape now lives in @adhdev/mesh-shared (shared with

@@ -25,6 +25,7 @@ import {
     getQueue,
     isWeakCompletionEvidence,
     listMagiPanels,
+    MAGI_RAW_ANSWER_CAP,
     meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
     normalizeMagiPanel,
@@ -1401,6 +1402,9 @@ export async function meshMagiReview(
     const mission = upsertMeshMission(ctx.mesh.id, {
         title: `MAGI: ${titleQ}`,
         goal: `Cross-verify (read-only) across panel '${panelName}': ${question}${args.target ? `\nTarget: ${args.target}` : ''}`,
+        // Tag provenance so the completed inline mission is bounded out of the default
+        // mesh_mission_list (these accumulate one-per-run and auto-close on collection).
+        source: 'magi',
     });
 
     // 4. Enqueue one read-only task per replica, all sharing the consensus group id.
@@ -1511,6 +1515,10 @@ export async function meshMagiReview(
         replicasExpected: replicaRecords.length,
         requireIndependentEvidence,
     });
+    // mesh_magi_review has no rawAnswer contract — strip the per-replica raw text from
+    // both the persisted ledger entry and the returned synthesis. rawAnswer is surfaced
+    // only via mesh_magi_collect verbose.
+    const synthesisNoRaw = stripRawAnswers(synthesis);
     // freeform contributes no structured claims, so cross-verification is weak — banner it.
     const freeformBanner = taskKind === 'freeform'
         ? 'task_kind=freeform: answers are unstructured natural language; cross-verification is WEAK (no claim clustering / independence scoring). Treat the collected answers as parallel opinions, not a verified consensus.'
@@ -1523,7 +1531,7 @@ export async function meshMagiReview(
         panel: panelName,
         question,
         staleReplicas: collected.staleCount,
-        synthesis,
+        synthesis: synthesisNoRaw,
     });
     // FIX#3: this inline review owns `mission` — auto-close it once all replicas are terminal.
     closeMagiMissionIfTerminal(ctx, mission.id, collected.terminal);
@@ -1554,7 +1562,7 @@ export async function meshMagiReview(
             ...(synthesis.replicasMissing > 0 ? { missingNote: `Partial synthesis — ${synthesis.replicasMissing} of ${replicaRecords.length} replicas did not return a parseable response (timed out / failed / unparseable / schema-invalid / stale).` } : {}),
         },
         ...(freeformBanner ? { freeformBanner } : {}),
-        synthesis,
+        synthesis: synthesisNoRaw,
     }, null, 2);
 }
 
@@ -1580,6 +1588,7 @@ export async function meshMagiCollect(
         taskKind?: string;
         auto_cleanup?: boolean;
         autoCleanup?: boolean;
+        verbose?: boolean;
     },
 ): Promise<string> {
     const consensusGroupId = readString(args.consensus_group_id) || readString(args.consensusGroupId);
@@ -1620,6 +1629,11 @@ export async function meshMagiCollect(
         replicasExpected: replicaTaskIds.length,
         requireIndependentEvidence,
     });
+    // rawAnswer gate: always strip from the persisted ledger entry (bounds payload).
+    // The RETURNED synthesis carries rawAnswer only when verbose=true; default strips it.
+    const verbose = args.verbose === true;
+    const synthesisNoRaw = stripRawAnswers(synthesis);
+    const returnedSynthesis = verbose ? synthesis : synthesisNoRaw;
     const freeformBanner = taskKind === 'freeform'
         ? 'task_kind=freeform: answers are unstructured natural language; cross-verification is WEAK (no claim clustering / independence scoring). Treat the collected answers as parallel opinions, not a verified consensus.'
         : null;
@@ -1631,7 +1645,7 @@ export async function meshMagiCollect(
         consensusGroupId,
         missionId: replicaMissionId,
         staleReplicas: collected.staleCount,
-        synthesis,
+        synthesis: synthesisNoRaw,
     });
     // FIX#3: the inline mission id comes from the replica tasks' OWN missionId (MAGI-owned,
     // guard a) — auto-close it once all replicas are terminal.
@@ -1664,7 +1678,8 @@ export async function meshMagiCollect(
             ...(!collected.terminal ? { pendingNote: 'Not all replicas are terminal yet — this is a partial snapshot. Re-collect once mission/pendingCoordinatorEvents report more completions.' } : {}),
         },
         ...(freeformBanner ? { freeformBanner } : {}),
-        synthesis,
+        ...(verbose ? { rawAnswersIncluded: true } : {}),
+        synthesis: returnedSynthesis,
     }, null, 2);
 }
 
@@ -1945,9 +1960,29 @@ function recoverMagiTaskKind(ctx: MeshContext, consensusGroupId: string): MagiTa
 }
 
 /**
+ * Strip per-replica rawAnswer (the captured raw end-user text) from a synthesis's
+ * replicas[]. rawAnswer can be up to MAGI_RAW_ANSWER_CAP chars × N replicas, so it is
+ * gated: omitted from the persisted ledger entry (bounds ledger payload growth) and from
+ * the default mesh_magi_collect response. Returns a shallow copy with rawAnswer/
+ * rawAnswerTruncated removed from every replica; the original is never mutated.
+ */
+function stripRawAnswers(synthesis: MagiSynthesis): MagiSynthesis {
+    if (!Array.isArray(synthesis.replicas) || synthesis.replicas.length === 0) return synthesis;
+    return {
+        ...synthesis,
+        replicas: synthesis.replicas.map(r => {
+            if (r.rawAnswer === undefined && r.rawAnswerTruncated === undefined) return r;
+            const { rawAnswer: _omitRaw, rawAnswerTruncated: _omitTrunc, ...rest } = r;
+            return rest;
+        }),
+    };
+}
+
+/**
  * Persist the synthesis as a `magi_synthesis` ledger entry, retrievable by
  * consensusGroupId (getMeshMagiActivityByGroup) and foldable into mesh_status. The full
- * synthesis is stored; mesh_status bounds it on read. Best-effort.
+ * synthesis is stored MINUS per-replica rawAnswer (the caller strips it to bound ledger
+ * payload growth); mesh_status bounds it further on read. Best-effort.
  */
 function persistMagiSynthesis(
     ctx: MeshContext,
@@ -2044,6 +2079,26 @@ async function collectMagiResponses(
     // never loses a valid answer it already saw.
     const finalized = new Map<string, MagiSynthesizedResponse>();
     const provisional = new Map<string, MagiSynthesizedResponse>();
+
+    // FIX C-rawanswer: capture the replica's raw end-user answer (newest readable
+    // candidate text from its transcript), capped to MAGI_RAW_ANSWER_CAP so a long
+    // answer can't bloat the synthesis payload / ledger. Returns undefined when no
+    // readable text was produced. Gated downstream: stripped from the persisted
+    // magi_synthesis ledger entry and the default mesh_magi_collect response; surfaced
+    // only in mesh_magi_collect verbose.
+    const captureRawAnswer = (source: MagiResponseSource, payload: unknown): void => {
+        try {
+            const candidates = collectMagiCandidateTexts(payload);
+            const raw = candidates.find(c => c.trim().length > 0);
+            if (!raw) return;
+            if (raw.length > MAGI_RAW_ANSWER_CAP) {
+                source.rawAnswer = raw.slice(0, MAGI_RAW_ANSWER_CAP);
+                source.rawAnswerTruncated = true;
+            } else {
+                source.rawAnswer = raw;
+            }
+        } catch { /* raw-answer capture is best-effort */ }
+    };
 
     const buildSource = (task: any): MagiResponseSource => {
         const sourceNodeId = task.assignedNodeId || task.targetNodeId || undefined;
@@ -2168,6 +2223,10 @@ async function collectMagiResponses(
                 coverage: 'current-turn',
             });
             const payload = unwrapCommandPayload(result);
+            // Capture the raw answer onto `source` now, so it rides along whether this
+            // replica finalizes as a parseable answer or a weak/provisional one. (Stripped
+            // for non-verbose consumers downstream.)
+            captureRawAnswer(source, payload);
             // Fix-A-v2 summary-fallback (kind-aware): parse candidates from BOTH the raw payload
             // (newest bubble body first, premature-collect guard) AND the compacted payload
             // (surfaces the lifted `summary` so antigravity's empty-bubble / summary-only answer

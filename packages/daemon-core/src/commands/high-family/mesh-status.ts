@@ -494,6 +494,24 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // returned here (live + capped history), so the cost stays linear
                     // in visible missions rather than the whole mesh history.
                     const missions = getMeshStatusMissionSummaries(meshId, { verbose: verboseMissions, withStats: true });
+
+                    // FIX C-backend: fold persisted MAGI cross-verification activity into the
+                    // dashboard mesh_status payload so the web MAGI surface (extractMagiActivity)
+                    // can read synthesis output — needs_verification counts, the independence
+                    // banner, git skew, and a bounded needs_verification preview — without
+                    // re-running collection. Mirrors the MCP mesh_status tool
+                    // (mesh-tools-status.ts buildMeshMagiActivity / summarizeMeshMagiActivity).
+                    // Read magi_dispatched/magi_synthesis entries over a wider tail than the 20
+                    // rendered above (MAGI events are sparse — a 20-entry tail routinely misses
+                    // the dispatch/synthesis pair). Compact (the default) folds synthesized groups
+                    // to a bounded recent set + a count summary; verbose carries the full list.
+                    const { buildMeshMagiActivity, summarizeMeshMagiActivity } = await import('../../mesh/mesh-magi-status.js');
+                    const magiLedgerEntries = readLedgerEntries(meshId, { kind: ['magi_dispatched', 'magi_synthesis'], tail: 200 });
+                    const magiActivity = buildMeshMagiActivity({ meshId, ledgerEntries: magiLedgerEntries });
+                    let magiActivityFold: ReturnType<typeof summarizeMeshMagiActivity> | undefined;
+                    if (magiActivity.length > 0 && !verboseMissions) {
+                        magiActivityFold = summarizeMeshMagiActivity(magiActivity);
+                    }
                     const statusResult = {
                         success: true,
                         meshId: mesh.id,
@@ -550,6 +568,20 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },
                         ...(missions.length > 0 ? { missions } : {}),
+                        // Compact (default): bounded folded groups + a status-count summary.
+                        // Verbose: the full reconstructed activity list. Mirrors the MCP tool.
+                        ...(magiActivity.length > 0
+                            ? (magiActivityFold
+                                ? {
+                                    ...(magiActivityFold.groups.length > 0 ? { magiActivity: magiActivityFold.groups } : {}),
+                                    magiActivitySummary: {
+                                        total: magiActivityFold.total,
+                                        byStatus: magiActivityFold.byStatus,
+                                        ...(magiActivityFold.staleSynthesized > 0 ? { staleSynthesized: magiActivityFold.staleSynthesized } : {}),
+                                    },
+                                }
+                                : { magiActivity })
+                            : {}),
                         ...(asyncRefineJobs.length > 0 ? { asyncRefineJobs } : {}),
                         ...(historicalSessions ? { historicalSessions } : {}),
                         ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),

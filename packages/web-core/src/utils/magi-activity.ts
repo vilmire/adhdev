@@ -15,13 +15,20 @@
  * data — no new daemon-core / mcp-server / mesh-tool wiring. It is a pure function
  * over the raw `mesh_status` response (or an already-extracted RepoMeshStatus).
  *
- * WIRING GAP — the MAGI *synthesis* result (claim clusters, the needs-verification
- * list, agreed clusters, the independence banner, open questions) is computed
- * ephemerally inside the `mesh_magi_review` MCP tool and returned only to the
- * coordinator agent. It is never persisted to the ledger / mesh store, so
- * `mesh_status` cannot carry it and the dashboard cannot read it. MAGI panel
- * definitions (`~/.adhdev/meshes.json` `magiPanels`) are machine-local config and
- * are likewise absent from `mesh_status`. Both are flagged unreachable here.
+ * SYNTHESIS — the MAGI synthesis result (needs_verification counts, the independence
+ * banner, git skew, a bounded needs_verification preview, open questions) IS now
+ * persisted to the mesh ledger as a `magi_synthesis` entry and folded into
+ * `mesh_status` under `magiActivity[]` (one entry per consensusGroupId, status
+ * 'running' | 'synthesized') by both the MCP `mesh_status` tool and the daemon-core
+ * mesh_status command. So synthesis is reachable here whenever a fan-out has been
+ * collected — `synthesisReachable` is derived from whether any folded group carries
+ * synthesized output (see extractMagiActivity). The full per-cluster claim/evidence
+ * detail still lives only in the coordinator's mesh_magi_collect response; what
+ * `mesh_status` carries is the bounded synthesis SUMMARY.
+ *
+ * STILL UNREACHABLE — MAGI panel definitions (`~/.adhdev/meshes.json` `magiPanels`)
+ * are machine-local config and are absent from `mesh_status`; `panelsReachable` stays
+ * false.
  */
 import { readRecord, readString, type JsonRecord } from '@adhdev/mesh-shared'
 
@@ -31,15 +38,20 @@ const MAGI_MISSION_TITLE_PREFIX = 'magi:'
 /** Replica task statuses considered terminal (no further state transitions). */
 const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 
-/** Stable, user-facing description of what synthesis data the dashboard cannot reach. */
+/**
+ * Stable, user-facing note describing what MAGI data mesh_status carries vs. what
+ * remains coordinator-only. Synthesis SUMMARY (needs_verification counts, independence
+ * banner, git skew, a bounded preview) is now persisted as a `magi_synthesis` ledger
+ * entry and folded into mesh_status under `magiActivity[]`, so the dashboard reads it.
+ * Only the FULL per-cluster claim/evidence detail and machine-local panel definitions
+ * stay out of mesh_status.
+ */
 export const MAGI_SYNTHESIS_WIRING_GAP =
-    'MAGI synthesis (claim clusters, the needs-verification list, the independence banner, open questions) ' +
-    'is computed inside the mesh_magi_review MCP tool and returned only to the coordinator agent — it is not ' +
-    'persisted to the mesh ledger/store, so mesh_status (the dashboard P2P data layer) cannot read it. Panel ' +
-    'definitions are machine-local config and are likewise absent from mesh_status. Reachable today: MAGI ' +
-    'missions, per-replica task status grouped by consensus group, and MAGI dispatch/enqueue ledger events. To ' +
-    'surface synthesis, mesh_magi_review must persist its MagiSynthesis (e.g. a ledger artifact or mission ' +
-    'record) and mesh_status must fold it into its payload.'
+    'MAGI synthesis SUMMARY (needs_verification counts, the independence banner, git skew, a bounded ' +
+    'needs_verification preview, open questions) is persisted as a magi_synthesis ledger entry and folded ' +
+    'into mesh_status under magiActivity[], so the dashboard reads it. The FULL per-cluster claim/evidence ' +
+    'detail lives only in the coordinator\'s mesh_magi_collect response, and panel definitions are machine-local ' +
+    'config absent from mesh_status — both stay coordinator-only.'
 
 export interface MagiReplicaActivity {
     taskId: string
@@ -115,8 +127,12 @@ export interface MagiActivitySummary {
     activeGroups: number
     /** MAGI dispatch / enqueue-failure entries from the bounded mesh_status ledger tail. */
     ledgerEvents: MagiLedgerEvent[]
-    /** Always false — synthesis is not persisted (see MAGI_SYNTHESIS_WIRING_GAP). */
-    synthesisReachable: false
+    /**
+     * True when mesh_status carries a folded `magiActivity` group with synthesized
+     * output (a collected fan-out). The synthesis SUMMARY is reachable; the full
+     * per-cluster detail is not (see MAGI_SYNTHESIS_WIRING_GAP).
+     */
+    synthesisReachable: boolean
     /** Always false — MAGI panels are machine-local config, not in mesh_status. */
     panelsReachable: false
     /** One-line description of the wiring gap for the dashboard to render. */
@@ -293,6 +309,13 @@ export function extractMagiActivity(response: unknown): MagiActivitySummary {
     const ledger = readRecord(status.ledger)
     const ledgerEntries = Array.isArray(ledger.entries) ? ledger.entries : []
 
+    // Synthesis reachability: the daemon now folds reconstructed MAGI activity into
+    // mesh_status under `magiActivity[]` (one entry per consensusGroupId, with a
+    // `status` of 'running' | 'synthesized'). Synthesis is reachable when any folded
+    // group is 'synthesized' — i.e. a fan-out has been collected and its summary persisted.
+    const foldedMagiActivity = Array.isArray(status.magiActivity) ? status.magiActivity.map(readRecord) : []
+    const synthesisReachable = foldedMagiActivity.some(g => readString(g.status) === 'synthesized')
+
     const missionById = new Map<string, JsonRecord>()
     for (const mission of missions) {
         const id = readString(mission.id)
@@ -333,7 +356,7 @@ export function extractMagiActivity(response: unknown): MagiActivitySummary {
         totalGroups: groups.length,
         activeGroups: groups.filter(g => !g.terminal).length,
         ledgerEvents: extractMagiLedgerEvents(ledgerEntries),
-        synthesisReachable: false,
+        synthesisReachable,
         panelsReachable: false,
         wiringGap: MAGI_SYNTHESIS_WIRING_GAP,
     }

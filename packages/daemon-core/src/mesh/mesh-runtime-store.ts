@@ -298,6 +298,7 @@ export class MeshRuntimeStore {
                 title TEXT NOT NULL,
                 goal TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active',
+                source TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -372,6 +373,15 @@ export class MeshRuntimeStore {
                         PRIMARY KEY (mesh_id, node_id, session_id)
                     );
                 `);
+            }
+
+            // 3. mesh_missions.source: nullable provenance tag ('magi' | 'coordinator').
+            //    Pre-existing rows keep source NULL — listMeshMissionSummaries treats a
+            //    NULL/absent source as a coordinator mission (never auto-hidden), so the
+            //    completed-MAGI bounding only ever affects rows explicitly stamped 'magi'.
+            const missionCols = this.tableColumns('mesh_missions');
+            if (!missionCols.has('source')) {
+                this.db.exec(`ALTER TABLE mesh_missions ADD COLUMN source TEXT`);
             }
         } catch (err: any) {
             // Best-effort: a failed isolation migration must not brick the store. The
@@ -1742,15 +1752,21 @@ export class MeshRuntimeStore {
         title: string;
         goal?: string;
         status?: string;
+        source?: string;
     }): void {
         const now = new Date().toISOString();
+        // `source` is a write-once provenance tag: on conflict we only overwrite it
+        // with a non-null incoming value (COALESCE(excluded, existing)), so a later
+        // status/goal upsert that omits source never clears a previously-stamped
+        // 'magi'/'coordinator' tag.
         this.db.prepare(
-            `INSERT INTO mesh_missions (id, mesh_id, title, goal, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO mesh_missions (id, mesh_id, title, goal, status, source, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                  title = excluded.title,
                  goal = excluded.goal,
                  status = excluded.status,
+                 source = COALESCE(excluded.source, mesh_missions.source),
                  updated_at = excluded.updated_at`
         ).run(
             mission.id,
@@ -1758,21 +1774,22 @@ export class MeshRuntimeStore {
             mission.title,
             mission.goal ?? '',
             mission.status ?? 'active',
+            mission.source ?? null,
             now,
             now,
         );
         this.maybeCheckpointWal();
     }
 
-    getMission(meshId: string, missionId: string): { id: string; meshId: string; title: string; goal: string; status: string; createdAt: string; updatedAt: string } | null {
+    getMission(meshId: string, missionId: string): { id: string; meshId: string; title: string; goal: string; status: string; source?: string; createdAt: string; updatedAt: string } | null {
         const row = this.db.prepare(
             'SELECT * FROM mesh_missions WHERE mesh_id = ? AND id = ?'
         ).get(meshId, missionId) as Record<string, string> | undefined;
         if (!row) return null;
-        return { id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, createdAt: row.created_at, updatedAt: row.updated_at };
+        return { id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at };
     }
 
-    getMissions(meshId: string, statuses?: string[]): Array<{ id: string; meshId: string; title: string; goal: string; status: string; createdAt: string; updatedAt: string }> {
+    getMissions(meshId: string, statuses?: string[]): Array<{ id: string; meshId: string; title: string; goal: string; status: string; source?: string; createdAt: string; updatedAt: string }> {
         let rows: Array<Record<string, string>>;
         if (statuses?.length) {
             const placeholders = statuses.map(() => '?').join(', ');
@@ -1784,7 +1801,7 @@ export class MeshRuntimeStore {
                 'SELECT * FROM mesh_missions WHERE mesh_id = ? ORDER BY updated_at DESC'
             ).all(meshId) as Array<Record<string, string>>;
         }
-        return rows.map(row => ({ id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, createdAt: row.created_at, updatedAt: row.updated_at }));
+        return rows.map(row => ({ id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }));
     }
 
     /** Remove all missions for a mesh — mesh deletion / test cleanup. */

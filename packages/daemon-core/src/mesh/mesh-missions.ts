@@ -34,12 +34,28 @@ export type MeshMissionStatus = 'active' | 'paused' | 'completed' | 'abandoned';
 
 export const MESH_MISSION_STATUSES: MeshMissionStatus[] = ['active', 'paused', 'completed', 'abandoned'];
 
+/**
+ * Provenance of a mission. `magi` marks an inline mission auto-created by a
+ * mesh_magi_review fan-out (one per cross-verification run). `coordinator` (the
+ * default semantic for an unstamped/legacy mission) marks a coordinator- or
+ * user-authored mission. Used to bound the accumulation of completed MAGI missions
+ * out of the default mesh_mission_list surface — see listMeshMissionSummaries.
+ */
+export type MeshMissionSource = 'magi' | 'coordinator';
+
 export interface MeshMissionRecord {
     id: string;
     meshId: string;
     title: string;
     goal: string;
     status: MeshMissionStatus;
+    /**
+     * Optional provenance tag. Absent on missions created before this field existed
+     * and on coordinator/user missions that don't bother stamping it — both are
+     * treated as coordinator missions (never auto-hidden). Only explicit `magi`
+     * missions are bounded out of the default list once completed.
+     */
+    source?: MeshMissionSource;
     createdAt: string;
     updatedAt: string;
 }
@@ -101,11 +117,16 @@ function normalizeMissionStatus(value: unknown): MeshMissionStatus {
         : 'active';
 }
 
+function normalizeMissionSource(value: unknown): MeshMissionSource | undefined {
+    return value === 'magi' || value === 'coordinator' ? value : undefined;
+}
+
 export function upsertMeshMission(meshId: string, input: {
     id?: string;
     title: string;
     goal?: string;
     status?: string;
+    source?: MeshMissionSource;
 }): MeshMissionRecord {
     const title = typeof input.title === 'string' ? input.title.trim() : '';
     if (!title) throw new Error('mission_title_required: a mission needs a non-empty title');
@@ -123,10 +144,18 @@ export function upsertMeshMission(meshId: string, input: {
         title,
         goal: typeof input.goal === 'string' ? input.goal : existing?.goal ?? '',
         status: normalizeMissionStatus(input.status ?? existing?.status),
+        // source is write-once: only forwarded when the caller supplies one. The
+        // store COALESCEs it against the existing value, so a later status/goal
+        // upsert that omits source never clears a previously-stamped tag.
+        ...(input.source ? { source: input.source } : {}),
     };
     store.upsertMission(record);
     const saved = store.getMission(meshId, id)!;
-    const result: MeshMissionRecord = { ...saved, status: normalizeMissionStatus(saved.status) };
+    const result: MeshMissionRecord = {
+        ...saved,
+        status: normalizeMissionStatus(saved.status),
+        source: normalizeMissionSource(saved.source),
+    };
 
     // Mission audit trail: record this mutation in the mesh ledger so mission
     // lifecycle (create, goal rewrite, status transition) is auditable alongside
@@ -201,12 +230,12 @@ function appendMissionLedgerEntries(
 
 export function getMeshMissions(meshId: string, statuses?: MeshMissionStatus[]): MeshMissionRecord[] {
     return MeshRuntimeStore.getInstance().getMissions(meshId, statuses)
-        .map(m => ({ ...m, status: normalizeMissionStatus(m.status) }));
+        .map(m => ({ ...m, status: normalizeMissionStatus(m.status), source: normalizeMissionSource(m.source) }));
 }
 
 export function getMeshMission(meshId: string, missionId: string): MeshMissionRecord | null {
     const record = MeshRuntimeStore.getInstance().getMission(meshId, missionId);
-    return record ? { ...record, status: normalizeMissionStatus(record.status) } : null;
+    return record ? { ...record, status: normalizeMissionStatus(record.status), source: normalizeMissionSource(record.source) } : null;
 }
 
 /** Aggregate task statuses for a mission at query time (no stored progress). */
@@ -367,15 +396,28 @@ export function getMeshStatusMissionsCompact(
  * coordinator can deliberately surface paused/abandoned/completed missions that
  * the live status view would hide or truncate.
  *
+ * MAGI bounding: by default this EXCLUDES completed MAGI missions (source==='magi'
+ * && status==='completed') — a mesh_magi_review fan-out auto-creates one inline
+ * mission per run and auto-closes it on collection, so without this they accumulate
+ * unbounded and drown out coordinator missions in the list. In-progress MAGI missions
+ * (active/paused) are still shown so a running cross-verification stays visible. Pass
+ * `includeMagi: true` to return every mission including completed MAGI ones. A mission
+ * with no `source` (legacy / coordinator) is never affected.
+ *
  * Compact (the default) elides each goal to a capped preview + goalTruncated
  * flag; verbose returns the full goal text. The stored goal is never mutated.
  */
 export function listMeshMissionSummaries(
     meshId: string,
-    options?: { statuses?: MeshMissionStatus[]; verbose?: boolean },
+    options?: { statuses?: MeshMissionStatus[]; verbose?: boolean; includeMagi?: boolean },
 ): MeshMissionSummary[] | MeshMissionSlimSummary[] {
     const statuses = options?.statuses && options.statuses.length > 0 ? options.statuses : undefined;
+    const includeMagi = options?.includeMagi === true;
     const missions = getMeshMissions(meshId, statuses)
+        // Bound completed-MAGI accumulation by default. Only a mission EXPLICITLY
+        // tagged source==='magi' AND completed is hidden — coordinator/legacy
+        // (source undefined) missions and in-progress MAGI missions always pass.
+        .filter(m => includeMagi || !(m.source === 'magi' && m.status === 'completed'))
         .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
     const full = missions.map(mission => summarizeMeshMission(meshId, mission));
     return options?.verbose ? full : full.map(summary => slimMissionSummary(summary));

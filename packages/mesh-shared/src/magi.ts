@@ -145,7 +145,23 @@ export interface MagiResponseSource {
      * no git summary.
      */
     git?: MagiReplicaGitRef
+    /**
+     * The replica's raw end-user answer text as read from its session transcript at
+     * collection time, truncated to MAGI_RAW_ANSWER_CAP chars (with `rawAnswerTruncated`
+     * set when it was longer). This is the human-readable original a replica produced —
+     * useful when the structured claim parse dropped nuance, or for a cluster member that
+     * needs the source prose. GATED: stripped from the persisted `magi_synthesis` ledger
+     * entry (to bound ledger payload growth) and from the default mesh_magi_collect
+     * response; surfaced ONLY in mesh_magi_collect verbose. Best-effort; absent for a
+     * replica that produced no readable transcript (failed / stale / unparseable).
+     */
+    rawAnswer?: string
+    /** True when `rawAnswer` was truncated at MAGI_RAW_ANSWER_CAP. */
+    rawAnswerTruncated?: boolean
 }
+
+/** Max chars of a replica's raw answer retained on MagiResponseSource.rawAnswer. */
+export const MAGI_RAW_ANSWER_CAP = 4000
 
 /** Compact git ref of the node a replica ran on (subset of GitRepoStatus). */
 export interface MagiReplicaGitRef {

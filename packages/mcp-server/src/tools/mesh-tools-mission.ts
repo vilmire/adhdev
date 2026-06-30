@@ -233,7 +233,7 @@ export async function meshMissionUpsert(
 
 export async function meshMissionList(
     ctx: MeshContext,
-    args: { status?: string | string[]; verbose?: boolean } = {},
+    args: { status?: string | string[]; verbose?: boolean; include_magi?: boolean; includeMagi?: boolean } = {},
 ): Promise<string> {
     try {
         const rawStatuses = Array.isArray(args.status)
@@ -250,9 +250,11 @@ export async function meshMissionList(
             });
         }
         const statuses = rawStatuses.length > 0 ? (rawStatuses as any[]) : undefined;
+        const includeMagi = (args.include_magi ?? args.includeMagi) === true;
         const missions = listMeshMissionSummaries(ctx.mesh.id, {
             statuses,
             verbose: args.verbose === true,
+            includeMagi,
         }).map(mission => {
             try {
                 return { ...mission, stats: computeMeshMissionStats(ctx.mesh.id, mission.id) };
@@ -264,6 +266,7 @@ export async function meshMissionList(
             success: true,
             count: missions.length,
             ...(statuses ? { statusFilter: statuses } : {}),
+            ...(includeMagi ? { includeMagi: true } : { magiCompletedHidden: true }),
             missions,
         }, null, 2);
     } catch (e: any) {
