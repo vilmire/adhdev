@@ -55,18 +55,24 @@ interface Props {
     savingCoordinatorPrompt: boolean
     onSaveCoordinatorPrompt: () => void
 
-    // Host daemon (cloud)
+    // Host daemon (cloud). The host is a fixed 1:1 pin — there is no picker. These
+    // props feed the read-only host display + the offline command re-bind action.
     daemons: RepoMeshDaemonEntry[]
     coordinatorDaemonId: string
-    onCoordinatorDaemonIdChange: (id: string) => void
     coordinatorCliType: string
     onCoordinatorCliTypeChange: (type: string) => void
     launchingCoordinator: boolean
     launchResult: string | null
-    attachedDaemonIds: Set<string>
     isHostNodeAttached: boolean
     selectedHostNode: MeshNode | undefined
     hostPinned: boolean
+    /** Display label for the pinned host (kept stable even when the host is offline). */
+    hostLabel: string
+    /** Whether the pinned host daemon is currently connected. */
+    hostOnline: boolean
+    /** Temporary command-routing override daemon while the host is offline ('' = none). */
+    hostRebindDaemonId: string
+    onHostRebindDaemonIdChange: (id: string) => void
     onLaunchCoordinator: () => void
 
     // Node list
@@ -159,15 +165,17 @@ export function MeshDetailView({
     onSaveCoordinatorPrompt,
     daemons,
     coordinatorDaemonId,
-    onCoordinatorDaemonIdChange,
     coordinatorCliType,
     onCoordinatorCliTypeChange,
     launchingCoordinator,
     launchResult,
-    attachedDaemonIds,
     isHostNodeAttached,
     selectedHostNode,
     hostPinned,
+    hostLabel,
+    hostOnline,
+    hostRebindDaemonId,
+    onHostRebindDaemonIdChange,
     onLaunchCoordinator,
     activeDaemon,
     activeDaemonId,
@@ -240,22 +248,23 @@ export function MeshDetailView({
         >
             {error && <AlertBanner variant="error" onDismiss={onDismissError} className="mb-4">{error}</AlertBanner>}
 
-            {/* ── Cloud: Coordinator machine ── */}
+            {/* ── Cloud: Mesh host (read-only) ── */}
             {features.meshHostDaemonSection && (
                 <MeshHostDaemonSection
                     daemons={daemons}
                     coordinatorDaemonId={coordinatorDaemonId}
-                    onCoordinatorDaemonIdChange={id => { onCoordinatorDaemonIdChange(id); onRefreshGraph() }}
                     coordinatorCliType={coordinatorCliType}
                     onCoordinatorCliTypeChange={onCoordinatorCliTypeChange}
                     launchingCoordinator={launchingCoordinator}
                     launchResult={launchResult}
-                    attachedDaemonIds={attachedDaemonIds}
                     isHostNodeAttached={isHostNodeAttached}
                     selectedHostNode={selectedHostNode}
                     hostPinned={hostPinned}
+                    hostLabel={hostLabel}
+                    hostOnline={hostOnline}
+                    hostRebindDaemonId={hostRebindDaemonId}
+                    onHostRebindDaemonIdChange={id => { onHostRebindDaemonIdChange(id); onRefreshGraph() }}
                     onLaunchCoordinator={onLaunchCoordinator}
-                    onAttachSelectedHost={() => { onNodeDaemonIdChange(coordinatorDaemonId); onShowAddNode() }}
                 />
             )}
 

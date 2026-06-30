@@ -104,9 +104,18 @@ export default function RepoMesh() {
         loadGraph,
     } = useMeshGraph({ selectedMeshId, loadMeshStatus, extractStatus, normalizeNode, gateIncompleteGraph })
 
-    // ─── Coordinator daemon selection (cloud) ───
-    // Kept here so it can be passed into both useMeshNodeActions and useMeshQueue
+    // ─── Coordinator daemon (cloud) ───
+    // The host is a fixed 1:1 pin per mesh — there is no UI picker for it. This
+    // state is the resolved command/view-source target, derived (not user-chosen):
+    // the persisted host normally, or a temporary re-bind override when the host
+    // daemon is offline so commands still have a connected route. Kept here so it
+    // can flow into useMeshNodeActions and useMeshQueue.
     const [coordinatorDaemonId, setCoordinatorDaemonId] = useState('')
+
+    // Temporary command-routing override used ONLY while the pinned host daemon is
+    // offline. This is NOT a host re-assignment — it just picks a connected daemon
+    // to command over P2P until the host reconnects. Cleared once the host is back.
+    const [hostRebindDaemonId, setHostRebindDaemonId] = useState('')
 
     const resolvedActiveDaemonId = features.meshHostDaemonSection
         ? (coordinatorDaemonId || primaryDaemonId)
@@ -197,31 +206,64 @@ export default function RepoMesh() {
     )
     const isHostNodeAttached = features.meshHostDaemonSection ? !!selectedHostNode : true
 
-    // The daemon this mesh is actually pinned to host the coordinator on. Read from
-    // the persisted meshHost metadata (hostDaemonId, else the daemon of hostNodeId),
-    // resolved through daemonIdsEquivalent because the persisted id is frequently a
-    // config-form id that does not byte-equal a connected runtime daemon id. This is
-    // the seed for coordinatorDaemonId so the host selector reflects real persisted
-    // truth instead of defaulting to daemons[0] in a multi-daemon environment.
-    const persistedHostDaemonId = useMemo(() => {
-        if (!features.meshHostDaemonSection || !selectedMesh) return ''
+    // The daemon this mesh is pinned to as its host. The host is a fixed 1:1 pin
+    // decided daemon-side at mesh creation, so this is read from persisted meshHost
+    // metadata (hostDaemonId, else the daemon of hostNodeId), NOT chosen in the UI.
+    //
+    // Crucially this must survive the host being offline: when the host daemon is
+    // not in the connected `daemons` list we still report `pinned` with a stable id
+    // and a best-effort label (from the persisted host node), marked `online:false`,
+    // instead of collapsing to '' and re-exposing a picker. Resolution goes through
+    // daemonIdsEquivalent because the persisted id is frequently a config-form id
+    // that does not byte-equal a connected runtime daemon id.
+    const persistedHostInfo = useMemo<{ pinned: boolean; daemonId: string; label: string; online: boolean }>(() => {
+        if (!features.meshHostDaemonSection || !selectedMesh) {
+            return { pinned: false, daemonId: '', label: '', online: false }
+        }
         const meshHost = (selectedMesh as any).meshHost as { hostDaemonId?: string; hostNodeId?: string } | undefined
-        const pinned = String(meshHost?.hostDaemonId || '')
-        if (pinned) {
-            const match = daemons.find(d => daemonIdsEquivalent(d.id, pinned))
-            if (match) return match.id
-        }
+        const pinnedDaemonId = String(meshHost?.hostDaemonId || '')
         const hostNodeId = String(meshHost?.hostNodeId || '')
-        if (hostNodeId) {
-            const hostNode = nodes.find(n => String(n.id) === hostNodeId)
-            const nodeDaemonId = String(hostNode?.daemon_id || hostNode?.daemonId || '')
-            if (nodeDaemonId) {
-                const match = daemons.find(d => daemonIdsEquivalent(d.id, nodeDaemonId))
-                if (match) return match.id
-            }
+        const hostNode = hostNodeId ? nodes.find(n => String(n.id) === hostNodeId) : undefined
+        const nodeDaemonId = String(hostNode?.daemon_id || hostNode?.daemonId || '')
+
+        // Effective persisted host daemon id (config-form id is fine — kept as-is so
+        // the badge/command target stays stable even when the daemon is offline).
+        const effectiveId = pinnedDaemonId || nodeDaemonId
+        if (!effectiveId) return { pinned: false, daemonId: '', label: '', online: false }
+
+        // Resolve to a connected runtime daemon if one matches → host is online.
+        const connected =
+            daemons.find(d => pinnedDaemonId && daemonIdsEquivalent(d.id, pinnedDaemonId)) ||
+            (nodeDaemonId ? daemons.find(d => daemonIdsEquivalent(d.id, nodeDaemonId)) : undefined)
+        if (connected) {
+            return { pinned: true, daemonId: connected.id, label: daemonDisplayLabel(connected), online: true }
         }
-        return ''
+
+        // Host daemon is offline / not connected: preserve the pin and a label from
+        // the persisted host node (machineLabel/workspace) so the read-only badge
+        // never falls back to a daemon picker. Never blank the id.
+        const offlineLabel =
+            String((hostNode as any)?.machineLabel || '') ||
+            String((hostNode as any)?.workspace || '') ||
+            effectiveId
+        return { pinned: true, daemonId: effectiveId, label: offlineLabel, online: false }
     }, [selectedMesh, nodes, daemons, features.meshHostDaemonSection])
+
+    const persistedHostDaemonId = persistedHostInfo.daemonId
+    const hostOnline = persistedHostInfo.online
+
+    // While the pinned host is offline, route commands through the chosen re-bind
+    // daemon (a connected daemon) if one is set and still connected. Otherwise the
+    // resolved target is the persisted host id (which may be offline — loads will
+    // just fail until reconnect, which the UI surfaces).
+    const effectiveCommandDaemonId = useMemo(() => {
+        if (!features.meshHostDaemonSection) return ''
+        if (!persistedHostInfo.pinned) return ''
+        if (!hostOnline && hostRebindDaemonId && daemons.some(d => d.id === hostRebindDaemonId)) {
+            return hostRebindDaemonId
+        }
+        return persistedHostDaemonId
+    }, [features.meshHostDaemonSection, persistedHostInfo.pinned, hostOnline, hostRebindDaemonId, daemons, persistedHostDaemonId])
 
     const meshNodeDaemonIds = useMemo(() => {
         if (!meshGraphStatus) return []
@@ -278,21 +320,34 @@ export default function RepoMesh() {
         if (selectedNodeId && !nodeIds.has(selectedNodeId)) setSelectedNodeId(null)
     }, [selectedMesh, selectedNodeId])
 
-    // Cloud: init coordinator daemon id. Seed order: persisted mesh host
-    // (meshHost.hostDaemonId / hostNodeId, resolved via persistedHostDaemonId) →
-    // current valid selection → daemons[0] fallback. The persisted host wins so a
-    // multi-daemon mesh shows its real host instead of an arbitrary first daemon.
+    // Cloud: derive the command/view-source daemon id. There is no host picker —
+    // this is computed deterministically:
+    //   • pinned host (online or offline) → the persisted host id, unless the host
+    //     is offline AND the user picked a re-bind daemon, in which case route
+    //     through that connected daemon (effectiveCommandDaemonId encodes both).
+    //   • no host pinned yet (first-time setup) → daemons[0] so graph/status loads
+    //     and a Launch Host Coordinator action can establish the host daemon-side.
+    // Keeping this as the single writer of coordinatorDaemonId is what lets
+    // loadGraph/loadMeshStatus/metadata-subscription keep working without a select.
     useEffect(() => {
         if (!features.meshHostDaemonSection) return
-        if (!daemons.length) { setCoordinatorDaemonId(''); return }
-        if (persistedHostDaemonId && !daemonIdsEquivalent(persistedHostDaemonId, coordinatorDaemonId)) {
-            setCoordinatorDaemonId(persistedHostDaemonId)
-            return
+        if (!daemons.length && !persistedHostInfo.pinned) { setCoordinatorDaemonId(''); return }
+        const target = persistedHostInfo.pinned
+            ? effectiveCommandDaemonId
+            : (daemons[0]?.id || '')
+        if (target && !daemonIdsEquivalent(target, coordinatorDaemonId)) {
+            setCoordinatorDaemonId(target)
         }
-        if (!coordinatorDaemonId || !daemons.some(d => d.id === coordinatorDaemonId)) {
-            setCoordinatorDaemonId(persistedHostDaemonId || daemons[0].id)
+    }, [daemons, coordinatorDaemonId, persistedHostInfo.pinned, effectiveCommandDaemonId, features.meshHostDaemonSection])
+
+    // Drop a stale re-bind override once the pinned host comes back online (or the
+    // chosen re-bind daemon disconnects), so we snap back to commanding the host.
+    useEffect(() => {
+        if (!hostRebindDaemonId) return
+        if (hostOnline || !daemons.some(d => d.id === hostRebindDaemonId)) {
+            setHostRebindDaemonId('')
         }
-    }, [daemons, coordinatorDaemonId, persistedHostDaemonId, features.meshHostDaemonSection])
+    }, [hostOnline, hostRebindDaemonId, daemons])
 
     // Cloud: init newMeshDaemonId
     useEffect(() => {
@@ -438,15 +493,17 @@ export default function RepoMesh() {
             onSaveCoordinatorPrompt={handleSaveCoordinatorPrompt}
             daemons={daemons}
             coordinatorDaemonId={coordinatorDaemonId}
-            onCoordinatorDaemonIdChange={id => { setCoordinatorDaemonId(id); setMeshGraphStatus(null) }}
             coordinatorCliType={coordinatorCliType}
             onCoordinatorCliTypeChange={setCoordinatorCliType}
             launchingCoordinator={launchingCoordinator}
             launchResult={launchResult}
-            attachedDaemonIds={attachedDaemonIds}
             isHostNodeAttached={isHostNodeAttached}
             selectedHostNode={selectedHostNode}
-            hostPinned={!!persistedHostDaemonId}
+            hostPinned={persistedHostInfo.pinned}
+            hostLabel={persistedHostInfo.label}
+            hostOnline={hostOnline}
+            hostRebindDaemonId={hostRebindDaemonId}
+            onHostRebindDaemonIdChange={id => { setHostRebindDaemonId(id); setMeshGraphStatus(null) }}
             onLaunchCoordinator={handleLaunchCoordinator}
             activeDaemon={activeDaemon}
             activeDaemonId={resolvedActiveDaemonId}
@@ -496,6 +553,11 @@ export default function RepoMesh() {
 }
 
 // ─── Helper ──────────────────────────────────────────────────────
+
+function daemonDisplayLabel(daemon: RepoMeshDaemonEntry | undefined): string {
+    if (!daemon) return 'Unknown'
+    return daemon.machineNickname || daemon.nickname || daemon.hostname || daemon.id || 'Unknown'
+}
 
 function readNodeProviderPriority(node: MeshNode): string[] {
     const raw = Array.isArray(node.providerPriority)

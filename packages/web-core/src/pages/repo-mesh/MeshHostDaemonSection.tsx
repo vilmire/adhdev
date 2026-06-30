@@ -11,53 +11,80 @@ function daemonLabel(daemon: RepoMeshDaemonEntry | undefined): string {
 
 interface Props {
     daemons: RepoMeshDaemonEntry[]
+    /** Resolved command/view-source daemon id (derived, not user-chosen). */
     coordinatorDaemonId: string
-    onCoordinatorDaemonIdChange: (id: string) => void
     coordinatorCliType: string
     onCoordinatorCliTypeChange: (type: string) => void
     launchingCoordinator: boolean
     launchResult: string | null
-    attachedDaemonIds: Set<string>
     isHostNodeAttached: boolean
     selectedHostNode: MeshNode | undefined
-    /** True when this mesh already has a persisted host (meshHost.hostDaemonId/hostNodeId)
-     *  pinned, i.e. the host is fixed and the picker should degrade to a read-only badge. */
+    /** True when this mesh already has a persisted host pinned (meshHost metadata). */
     hostPinned: boolean
+    /** Stable display label for the pinned host (preserved even when offline). */
+    hostLabel: string
+    /** Whether the pinned host daemon is currently connected. */
+    hostOnline: boolean
+    /** Temporary command-routing override daemon while the host is offline ('' = none). */
+    hostRebindDaemonId: string
+    onHostRebindDaemonIdChange: (id: string) => void
     onLaunchCoordinator: () => void
-    onAttachSelectedHost: () => void
 }
 
+/**
+ * Mesh host display.
+ *
+ * The mesh host is a FIXED 1:1 pin decided daemon-side when the mesh is created —
+ * it is never re-selected from the dashboard. This section therefore renders a
+ * read-only host badge (never a daemon picker) once a host is pinned. The only
+ * interactive paths are:
+ *   • host offline → a temporary command-routing RE-BIND (route commands through a
+ *     connected daemon until the host reconnects; this does NOT change the host).
+ *   • no host pinned yet (first-time setup) → a single "Launch Host Coordinator"
+ *     action whose launch establishes the host daemon-side.
+ */
 export function MeshHostDaemonSection({
     daemons,
     coordinatorDaemonId,
-    onCoordinatorDaemonIdChange,
     coordinatorCliType,
     onCoordinatorCliTypeChange,
     launchingCoordinator,
     launchResult,
-    attachedDaemonIds,
     isHostNodeAttached,
     selectedHostNode,
     hostPinned,
+    hostLabel,
+    hostOnline,
+    hostRebindDaemonId,
+    onHostRebindDaemonIdChange,
     onLaunchCoordinator,
-    onAttachSelectedHost,
 }: Props) {
-    const hostDaemon = daemons.find(d => d.id === coordinatorDaemonId)
-    // The host is locked (read-only badge) when it is already pinned for this mesh AND
-    // its node is attached. Selection / launch only re-appear in the exception cases:
-    // no host pinned yet (first-time setup), or a pinned host that is not yet attached
-    // (re-binding). This keeps the settings page honest about a fixed host vs the
-    // connection path used to command it.
-    const hostLocked = hostPinned && isHostNodeAttached && !!coordinatorDaemonId
+    const cliProviderField = (
+        <FormField label="Coordinator CLI provider" hint="Tool launched for the host coordinator session.">
+            <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                value={coordinatorCliType} onChange={e => onCoordinatorCliTypeChange(e.target.value)}>
+                <option value="">Use node provider priority</option>
+                <option value="claude-cli">Claude Code</option>
+                <option value="codex-cli">Codex</option>
+                <option value="gemini-cli">Gemini</option>
+                <option value="hermes-cli">Hermes</option>
+            </select>
+        </FormField>
+    )
 
-    if (hostLocked) {
+    const launchResultBanner = launchResult && (
+        <div className="mt-3 text-[12px] text-green-400 bg-green-500/10 border border-green-500/20 rounded-lg px-3 py-2">{launchResult}</div>
+    )
+
+    // ── Host already pinned: read-only display (never a picker) ──
+    if (hostPinned) {
         return (
-            <Section title="Mesh Host daemon" description="The daemon that owns this mesh's coordinator and live truth (status, queue, graph, node detail). Fixed once a host is bound; re-bind from the node list if the host machine changes.">
+            <Section title="Mesh Host daemon" description="The daemon that owns this mesh's coordinator and live truth (status, queue, graph, node detail). Fixed when the mesh is created — it cannot be reassigned here.">
                 <div className="flex flex-wrap items-center gap-3">
-                    <span className="inline-flex items-center gap-2 rounded-full border border-accent-primary/40 bg-accent-primary/10 px-3 py-1.5 text-[13px] text-text-primary">
+                    <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[13px] text-text-primary ${hostOnline ? 'border-accent-primary/40 bg-accent-primary/10' : 'border-amber-500/40 bg-amber-500/10'}`}>
                         <span className="text-text-muted">Host:</span>
-                        <span className="font-medium">{daemonLabel(hostDaemon)}</span>
-                        <span className="text-text-muted">· attached</span>
+                        <span className="font-medium">{hostLabel || 'Unknown'}</span>
+                        <span className={hostOnline ? 'text-text-muted' : 'text-amber-400'}>· {hostOnline ? 'online' : 'offline'}</span>
                     </span>
                     {selectedHostNode?.workspace && (
                         <span className="text-[12px] text-text-muted">
@@ -65,77 +92,82 @@ export function MeshHostDaemonSection({
                         </span>
                     )}
                 </div>
+
+                {/* Host offline: temporary command-routing re-bind (NOT a host change). */}
+                {!hostOnline && (
+                    <div className="mt-4">
+                        <AlertBanner variant="warning" className="mb-3">
+                            <strong>Host offline.</strong>{' '}
+                            The pinned host daemon is not connected. Live status/queue/graph will not load until it reconnects.
+                            You can temporarily route commands through another connected daemon below — this is a routing fallback,
+                            not a host reassignment.
+                        </AlertBanner>
+                        {daemons.length > 0 ? (
+                            <FormField label="Reconnect to command" hint="Route commands through this connected daemon until the host is back. Does not change the mesh host.">
+                                <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                                    value={hostRebindDaemonId} onChange={e => onHostRebindDaemonIdChange(e.target.value)}>
+                                    <option value="">Wait for host to reconnect</option>
+                                    {daemons.map(d => (
+                                        <option key={d.id} value={d.id}>{daemonLabel(d)}</option>
+                                    ))}
+                                </select>
+                            </FormField>
+                        ) : (
+                            <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-muted">
+                                No connected daemons available to route commands through. Bring the host (or another daemon) online.
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 <div className="mt-3 grid gap-3 sm:grid-cols-[180px_auto] items-end">
-                    <FormField label="Coordinator CLI provider" hint="Tool launched for the host coordinator session.">
-                        <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                            value={coordinatorCliType} onChange={e => onCoordinatorCliTypeChange(e.target.value)}>
-                            <option value="">Use node provider priority</option>
-                            <option value="claude-cli">Claude Code</option>
-                            <option value="codex-cli">Codex</option>
-                            <option value="gemini-cli">Gemini</option>
-                            <option value="hermes-cli">Hermes</option>
-                        </select>
-                    </FormField>
-                    <button className="btn btn-primary btn-sm" onClick={onLaunchCoordinator} disabled={launchingCoordinator}>
+                    {cliProviderField}
+                    <button className="btn btn-primary btn-sm" onClick={onLaunchCoordinator}
+                        disabled={launchingCoordinator || !coordinatorDaemonId}
+                        title={!coordinatorDaemonId ? 'No command target available — bring the host or a daemon online.' : undefined}>
                         {launchingCoordinator ? 'Launching...' : 'Launch Host Coordinator'}
                     </button>
                 </div>
-                {launchResult && (
-                    <div className="mt-3 text-[12px] text-green-400 bg-green-500/10 border border-green-500/20 rounded-lg px-3 py-2">{launchResult}</div>
-                )}
+                {launchResultBanner}
             </Section>
         )
     }
 
+    // ── First-time setup: no host pinned yet ──
+    // The host is established by launching the coordinator on a connected daemon —
+    // that launch pins it daemon-side. No "pick a daemon" select; the command target
+    // is the resolved daemon (coordinatorDaemonId), and launch fixes it as the host.
+    const setupDaemon = daemons.find(d => d.id === coordinatorDaemonId)
     return (
-        <Section title="Mesh Host daemon" description="Choose the daemon that will own the coordinator. Host-owned live truth is required before cloud renders status, queue, graph, or node detail.">
+        <Section title="Mesh Host daemon" description="This mesh has no host yet. Launching the coordinator on a connected daemon fixes that daemon as the mesh host (a 1:1 pin); it owns live truth thereafter.">
             <AlertBanner variant="info" className="mb-4">
-                <strong>Start with one host workspace.</strong>{' '}
-                Create a mesh on a connected daemon, then attach additional machine workspaces below. Live status, queue, and graph data come from the selected host daemon.
+                <strong>Set the mesh host.</strong>{' '}
+                The host is the daemon that owns this mesh's coordinator and live truth. Launch the host coordinator below to set it — the host is fixed once established.
             </AlertBanner>
-            <div className="grid gap-3 sm:grid-cols-[1fr_180px_auto] items-end">
-                <FormField label="Mesh Host daemon" hint="Cloud selects the connected daemon to command over P2P; the host must be attached before it can own a coordinator.">
-                    <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                        value={coordinatorDaemonId} onChange={e => onCoordinatorDaemonIdChange(e.target.value)}>
-                        <option value="">Select a Mesh Host...</option>
-                        {daemons.map(d => (
-                            <option key={d.id} value={d.id}>
-                                {daemonLabel(d)} · {attachedDaemonIds.has(d.id) ? 'attached' : 'not attached'}
-                            </option>
-                        ))}
-                    </select>
-                </FormField>
-                <FormField label="CLI provider">
-                    <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                        value={coordinatorCliType} onChange={e => onCoordinatorCliTypeChange(e.target.value)}>
-                        <option value="">Use node provider priority</option>
-                        <option value="claude-cli">Claude Code</option>
-                        <option value="codex-cli">Codex</option>
-                        <option value="gemini-cli">Gemini</option>
-                        <option value="hermes-cli">Hermes</option>
-                    </select>
-                </FormField>
-                <button className="btn btn-primary btn-sm" onClick={onLaunchCoordinator}
-                    disabled={!coordinatorDaemonId || !isHostNodeAttached || launchingCoordinator}
-                    title={!isHostNodeAttached && coordinatorDaemonId ? 'Attach this Mesh Host daemon first.' : undefined}>
-                    {launchingCoordinator ? 'Launching...' : 'Launch Host Coordinator'}
-                </button>
-            </div>
-            <div className="mt-3 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-muted">
-                {coordinatorDaemonId
-                    ? isHostNodeAttached
-                        ? <>Host setup node: <span className="font-mono text-text-primary">{selectedHostNode?.workspace}</span>. Live graph/status/detail renders only from this daemon.</>
-                        : <>Selected host is not attached yet. Attach one of its workspaces below before launching.</>
-                    : 'Select a connected daemon to become the Mesh Host.'}
-            </div>
-            {!isHostNodeAttached && coordinatorDaemonId && (
-                <button type="button" className="btn btn-secondary btn-sm mt-3" onClick={onAttachSelectedHost}>
-                    Attach selected host daemon
-                </button>
+            {daemons.length > 0 ? (
+                <>
+                    <div className="mb-3 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-muted">
+                        {coordinatorDaemonId
+                            ? isHostNodeAttached
+                                ? <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>{selectedHostNode?.workspace ? <> · setup node <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span></> : null}. Launching sets this daemon as the mesh host.</>
+                                : <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>. Attach one of its workspaces as a node first, then launch to set the host.</>
+                            : 'Waiting for a connected daemon to host this mesh.'}
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-[180px_auto] items-end">
+                        {cliProviderField}
+                        <button className="btn btn-primary btn-sm" onClick={onLaunchCoordinator}
+                            disabled={!coordinatorDaemonId || !isHostNodeAttached || launchingCoordinator}
+                            title={!isHostNodeAttached && coordinatorDaemonId ? 'Attach a workspace from this daemon as a node first.' : undefined}>
+                            {launchingCoordinator ? 'Launching...' : 'Launch Host Coordinator (sets host)'}
+                        </button>
+                    </div>
+                </>
+            ) : (
+                <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-muted">
+                    No connected daemons. Bring a daemon online to host this mesh.
+                </div>
             )}
-            {launchResult && (
-                <div className="mt-3 text-[12px] text-green-400 bg-green-500/10 border border-green-500/20 rounded-lg px-3 py-2">{launchResult}</div>
-            )}
+            {launchResultBanner}
         </Section>
     )
 }
