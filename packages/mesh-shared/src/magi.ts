@@ -34,6 +34,27 @@ export interface MagiPanelMember {
 }
 
 /**
+ * The output-schema selector a MAGI fan-out injects into every replica prompt and
+ * the strict parser used at collection. Code-orthogonal to the panel's member set
+ * (the fan-out planner never reads it) — it ONLY shapes the per-replica prompt /
+ * parse contract. SSOT lives here (mesh-shared leaf) so both daemon-core (panel
+ * normalization) and mcp-server (resolution / prompt assembly) consume one union.
+ *
+ * - claim_audit (default, backward-compatible), rca, design → require evidence[].
+ * - freeform → no schema, no evidence; contributes NO structured claims to
+ *   synthesis, so it is NOT a valid panel `defaultKind` (a panel is a
+ *   cross-verification tool; a default that zeroes out cross-verification is
+ *   self-contradictory). Normalization drops/rejects defaultKind === 'freeform'.
+ */
+export type MagiTaskKind = 'claim_audit' | 'rca' | 'design' | 'freeform'
+
+/**
+ * The kinds valid as a panel `defaultKind` — every MagiTaskKind EXCEPT 'freeform'
+ * (which contributes no structured claims, so it must not be a panel-level default).
+ */
+export type MagiPanelDefaultKind = Exclude<MagiTaskKind, 'freeform'>
+
+/**
  * A named MAGI panel. Stored machine-local in `~/.adhdev/meshes.json` under the
  * top-level `magiPanels` map (sibling to `meshes`), because a member binds
  * concrete node identity + provider availability — both machine-dependent facts.
@@ -46,6 +67,16 @@ export interface MagiPanel {
     defaultN?: number
     /** Marks the panel's fan-out as intentional same-prompt duplication (always true in practice). */
     dedupExempt?: boolean
+    /**
+     * Optional, NON-binding default output kind for fan-outs invoked through this
+     * panel. NOT a first-class panel axis (task_kind is code-orthogonal to the
+     * member set) — just a fallback applied when a review omits an explicit
+     * task_kind. Resolution priority is strictly
+     * `args.task_kind > panel.defaultKind > 'claim_audit'`, so it never changes the
+     * schema of an automation that already passes task_kind. 'freeform' is rejected
+     * at normalization (see MagiPanelDefaultKind).
+     */
+    defaultKind?: MagiPanelDefaultKind
 }
 
 /** Top-level `magiPanels` map in meshes.json, keyed by panel name. */

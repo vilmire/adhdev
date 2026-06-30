@@ -315,6 +315,8 @@ export type {
     MagiClusterMember,
     MagiGitSkew,
     MagiMode,
+    MagiTaskKind,
+    MagiPanelDefaultKind,
     MagiPanel,
     MagiPanelMember,
     MagiReplicaGitRef,

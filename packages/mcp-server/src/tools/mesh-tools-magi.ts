@@ -47,6 +47,7 @@ import type {
     MagiClusterMember,
     MagiGitSkew,
     MagiMode,
+    MagiTaskKind,
     MagiPanel,
     MagiPanelMember,
     MagiReplicaGitRef,
@@ -88,7 +89,11 @@ const MAGI_POLL_INTERVAL_MS = 5_000;
 // ADAPTS its typed payload into a MagiAgentResponse so clustering/independence still
 // work, while the raw typed payload is preserved on the source for display.
 
-export type MagiTaskKind = 'claim_audit' | 'rca' | 'design' | 'freeform';
+// MagiTaskKind SSOT lives in the mesh-shared leaf, consumed here through daemon-core's
+// re-export (mesh-tools-internal) — same indirection as the other Magi* types, so this
+// module takes no direct @adhdev/mesh-shared dependency. Re-exported for existing
+// callers that import MagiTaskKind from this module.
+export type { MagiTaskKind, MagiPanelDefaultKind } from './mesh-tools-internal.js';
 
 const VALID_TASK_KINDS: readonly MagiTaskKind[] = ['claim_audit', 'rca', 'design', 'freeform'];
 const DEFAULT_TASK_KIND: MagiTaskKind = 'claim_audit';
@@ -1299,8 +1304,12 @@ export async function meshMagiReview(
     const question = readString(args.question);
     if (!question) return JSON.stringify({ success: false, error: 'question required' });
 
-    // MAGI-REDESIGN: select the output kind (default claim_audit for backward compat).
-    const taskKind = normalizeMagiTaskKind(args.task_kind ?? args.taskKind);
+    // MAGI-REDESIGN: capture the EXPLICIT output kind (if any) here; the final taskKind
+    // is resolved AFTER the panel is loaded so a named panel's optional defaultKind can
+    // fill in. Strict priority: args.task_kind > panel.defaultKind > claim_audit. We must
+    // not normalize-to-default yet — that would erase the "no explicit kind" signal and
+    // make panel.defaultKind unreachable.
+    const explicitTaskKind = args.task_kind ?? args.taskKind;
     // B: warn (do NOT block) if the coordinator embedded an output schema in the question —
     // it collides with the single kind contract MAGI injects and causes fusion/unparseable.
     const questionSchemaWarning = detectQuestionOutputSchemaConflict(question);
@@ -1342,6 +1351,16 @@ export async function meshMagiReview(
             configuredPanels: Object.keys(listMagiPanels()),
         });
     }
+
+    // Resolve the final output kind now that the panel is loaded. Strict priority:
+    // explicit args.task_kind > panel.defaultKind > claim_audit (the DEFAULT_TASK_KIND
+    // fallback inside normalizeMagiTaskKind). An explicit kind always wins, so an
+    // automation already passing task_kind keeps its exact schema (backward-compatible).
+    // INLINE-MEMBER ASYMMETRY (intentional): buildInlineMagiPanel never sets defaultKind,
+    // so the inline path naturally falls through to claim_audit — there is no panel
+    // identity to carry a default. normalizeMagiTaskKind also drops a panel-stored
+    // 'freeform' defensively (it should already be rejected at write time).
+    const taskKind = normalizeMagiTaskKind(explicitTaskKind ?? panel.defaultKind);
 
     // 2. Plan the fan-out. Git-stale members (node HEAD differs from the coordinator's
     // reference commit) are EXCLUDED by default — they would investigate different code;

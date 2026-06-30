@@ -22,7 +22,7 @@ import type {
     RepoMeshHostMetadata,
     RepoMeshDaemonRole,
 } from '../repo-mesh-types.js';
-import type { MagiPanel, MagiPanelMember } from '@adhdev/mesh-shared';
+import type { MagiPanel, MagiPanelMember, MagiPanelDefaultKind } from '@adhdev/mesh-shared';
 import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 
@@ -598,6 +598,30 @@ function normalizeReplicaCount(value: unknown): number | undefined {
 }
 
 /**
+ * Normalize a panel `defaultKind` (the non-binding default output kind). Returns
+ * undefined (drop, don't throw) for any absent / unknown value so a stray field
+ * never blocks a panel write. 'freeform' is explicitly DROPPED with a warning: a
+ * panel is a cross-verification tool and freeform contributes no structured claims
+ * (claims:[]), so defaulting to it would silently zero out the very thing the panel
+ * exists for. Only the evidence-bearing kinds (claim_audit / rca / design) survive.
+ */
+function normalizeMagiPanelDefaultKind(raw: unknown): MagiPanelDefaultKind | undefined {
+    if (raw == null) return undefined;
+    const s = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+    if (s === 'claim_audit' || s === 'rca' || s === 'design') return s;
+    if (s === 'freeform') {
+        // eslint-disable-next-line no-console
+        console.warn(
+            "[magi] panel defaultKind='freeform' rejected — freeform contributes no structured claims to cross-verification; dropping (use claim_audit / rca / design, or omit).",
+        );
+        return undefined;
+    }
+    // Any other value (typo / unsupported kind): drop silently — the panel still
+    // resolves to the claim_audit fallback at review time.
+    return undefined;
+}
+
+/**
  * Validate + normalize a panel config before persisting. Mirrors the node-config
  * normalization style (mesh-config addNode/updateNode): trims strings, drops
  * empties, requires a provider per member, clamps replica counts. Throws on
@@ -639,10 +663,12 @@ export function normalizeMagiPanel(config: unknown): MagiPanel {
         ? raw.description.trim().slice(0, 200)
         : undefined;
     const defaultN = normalizeReplicaCount(raw.defaultN);
+    const defaultKind = normalizeMagiPanelDefaultKind(raw.defaultKind);
     return {
         ...(description ? { description } : {}),
         members,
         ...(defaultN !== undefined ? { defaultN } : {}),
+        ...(defaultKind !== undefined ? { defaultKind } : {}),
         // dedupExempt is always meaningful for a MAGI panel (intentional same-prompt
         // fan-out). Persist it true unless the caller explicitly disables it.
         dedupExempt: raw.dedupExempt === false ? false : true,

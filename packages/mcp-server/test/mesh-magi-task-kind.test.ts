@@ -22,6 +22,29 @@ test('normalizeMagiTaskKind defaults to claim_audit for missing/invalid input', 
     assert.equal(normalizeMagiTaskKind('freeform'), 'freeform');
 });
 
+// ─── Panel defaultKind resolution priority ──────
+// mesh_magi_review resolves the kind as: normalizeMagiTaskKind(explicit ?? panel.defaultKind).
+// These assert the `??` precedence collapses to the documented
+// args.task_kind > panel.defaultKind > claim_audit order at the normalizer boundary.
+
+test('explicit task_kind wins over a panel defaultKind', () => {
+    const explicit = 'design';
+    const panelDefaultKind = 'rca';
+    assert.equal(normalizeMagiTaskKind(explicit ?? panelDefaultKind), 'design');
+});
+
+test('panel defaultKind fills in when no explicit kind is passed', () => {
+    const explicit = undefined;
+    const panelDefaultKind = 'rca';
+    assert.equal(normalizeMagiTaskKind(explicit ?? panelDefaultKind), 'rca');
+});
+
+test('claim_audit is the final fallback when neither explicit nor panel default is set', () => {
+    const explicit = undefined;
+    const panelDefaultKind = undefined;
+    assert.equal(normalizeMagiTaskKind(explicit ?? panelDefaultKind), 'claim_audit');
+});
+
 // ─── B: one schema per kind, no schema-on-schema ─
 
 test('buildMagiTaskPrompt injects ONLY the selected kind contract', () => {

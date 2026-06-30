@@ -15,11 +15,16 @@
  * against the live mesh node list, because the fan-out planner lives in mcp-server
  * and the daemon returns raw definitions only.
  *
- * NOTE: `task_kind` is a per-review argument to mesh_magi_review, NOT a panel
- * field — it is intentionally absent from this editor.
+ * NOTE: `task_kind` is primarily a per-review argument to mesh_magi_review. A panel
+ * MAY carry an optional, NON-binding `defaultKind` (claim_audit / rca / design) that
+ * fills in when a review omits task_kind — resolution is always
+ * task_kind > defaultKind > claim_audit, so it never overrides an explicit per-run
+ * kind. It is exposed below as a single "Default task type" dropdown. The synthesis
+ * `mode` axis is deliberately NOT surfaced (it overlaps task_kind semantically).
+ * 'freeform' is excluded — it contributes no structured claims to cross-verification.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { MagiPanel, MagiPanelMember, MagiPanelMap } from '@adhdev/mesh-shared'
+import type { MagiPanel, MagiPanelMember, MagiPanelMap, MagiPanelDefaultKind } from '@adhdev/mesh-shared'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
@@ -37,6 +42,18 @@ const MAX_MAGI_PANEL_MEMBERS = 24
  * the empty-mesh escape hatch so the dropdown / seed preset never dead-ends.
  */
 const FALLBACK_PROVIDERS = ['claude-cli', 'codex-cli', 'gemini-cli', 'hermes-cli', 'antigravity-cli']
+
+/**
+ * The output kinds offered as a panel `defaultKind`. Mirrors the daemon-core
+ * normalizer's accepted set (claim_audit / rca / design); 'freeform' is excluded
+ * because it contributes no structured claims to cross-verification. Empty selection
+ * ('' below) means "no default" → a review without task_kind resolves to claim_audit.
+ */
+const DEFAULT_KIND_OPTIONS: { value: MagiPanelDefaultKind; label: string }[] = [
+    { value: 'claim_audit', label: 'claim_audit — verify specific claims (default)' },
+    { value: 'rca', label: 'rca — root-cause analysis' },
+    { value: 'design', label: 'design — design / approach review' },
+]
 
 interface MagiPanelManagerProps {
     status: RepoMeshStatus
@@ -59,6 +76,8 @@ interface PanelDraft {
     name: string
     description: string
     defaultN: string
+    /** Empty string = no default (review falls back to claim_audit). */
+    defaultKind: '' | MagiPanelDefaultKind
     members: MemberDraft[]
 }
 
@@ -71,7 +90,7 @@ function emptyMember(nodeId = ''): MemberDraft {
 }
 
 function newPanelDraft(prefillNodeId = ''): PanelDraft {
-    return { originalName: '', name: '', description: '', defaultN: '', members: [emptyMember(prefillNodeId)] }
+    return { originalName: '', name: '', description: '', defaultN: '', defaultKind: '', members: [emptyMember(prefillNodeId)] }
 }
 
 function liveNodeProviders(n: MagiResolveNode): string[] {
@@ -134,7 +153,7 @@ function seedIndependentDraft(nodes: MagiResolveNode[]): PanelDraft {
         memberB = { provider: pb, nodeId: '', capabilityTags: '', n: '' }
     }
 
-    return { originalName: '', name: 'design-review', description: '', defaultN: '', members: [memberA, memberB] }
+    return { originalName: '', name: 'design-review', description: '', defaultN: '', defaultKind: '', members: [memberA, memberB] }
 }
 
 function panelToDraft(name: string, panel: MagiPanel): PanelDraft {
@@ -143,6 +162,7 @@ function panelToDraft(name: string, panel: MagiPanel): PanelDraft {
         name,
         description: panel.description ?? '',
         defaultN: panel.defaultN != null ? String(panel.defaultN) : '',
+        defaultKind: panel.defaultKind ?? '',
         members: (panel.members ?? []).map(m => ({
             provider: m.provider ?? '',
             nodeId: m.nodeId ?? '',
@@ -185,11 +205,16 @@ function draftToPanel(draft: PanelDraft): { panel: MagiPanel } | { error: string
         if (!Number.isFinite(parsed) || parsed < 1) return { error: 'Default replicas must be ≥ 1' }
         defaultN = Math.floor(parsed)
     }
+    // Empty defaultKind = omit the field (panel carries no default → claim_audit at
+    // review time). 'freeform' can't reach here (not an option); the daemon-core
+    // normalizer is the backstop guard regardless.
+    const defaultKind = draft.defaultKind || undefined
     return {
         panel: {
             ...(description ? { description } : {}),
             members,
             ...(defaultN !== undefined ? { defaultN } : {}),
+            ...(defaultKind ? { defaultKind } : {}),
         },
     }
 }
@@ -428,6 +453,15 @@ export default function MagiPanelManager({ status, daemonId, sendDaemonCommand }
                             onChange={e => setEditing(d => d ? { ...d, description: e.target.value } : d)} />
                         <span className={helperClass}>Optional note on when to use this team.</span>
                     </label>
+                    <label className="flex flex-col gap-1">
+                        <span className={`text-[10px] uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>Default task type (optional)</span>
+                        <select className={inputClass} value={editing.defaultKind}
+                            onChange={e => setEditing(d => d ? { ...d, defaultKind: e.target.value as PanelDraft['defaultKind'] } : d)}>
+                            <option value="">No default (uses claim_audit unless a run overrides)</option>
+                            {DEFAULT_KIND_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </select>
+                        <span className={helperClass}>Not the panel&apos;s identity — just a fallback output shape used when a review doesn&apos;t pass its own task_kind. Every run can override it. Leave blank to use claim_audit.</span>
+                    </label>
 
                     <div className="flex flex-col gap-2">
                         <span className={`text-[10px] uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>Members — (machine × AI) targets</span>
@@ -550,6 +584,13 @@ function MagiPanelRow({
                 <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-white/10 text-slate-300' : 'border-slate-300 text-slate-600'}`}>
                     {resolution.members.length} member{resolution.members.length === 1 ? '' : 's'} · {resolution.totalReplicas} replica{resolution.totalReplicas === 1 ? '' : 's'}
                 </span>
+                {panel.defaultKind && (
+                    <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] ${meshTheme.isDark ? 'border-white/10 text-slate-400' : 'border-slate-300 text-slate-500'}`}
+                        title="Default output type when a review omits task_kind (overridable per run).">
+                        default: {panel.defaultKind}
+                    </span>
+                )}
                 {/* Coupling status — demoted to a small diagnostic dot+label so the
                     member layout below is the subject. Same independence rule as the
                     live MAGI activity surface; color retained, visual weight reduced. */}

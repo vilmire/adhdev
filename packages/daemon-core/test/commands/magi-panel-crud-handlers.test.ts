@@ -82,6 +82,38 @@ describe('magi_panel_* handlers — CRUD over machine-local meshes.json', () => 
         expect(overwrite.panel.members[0].provider).toBe('gemini-cli')
     })
 
+    it('round-trips an optional defaultKind (claim_audit / rca / design)', async () => {
+        const setRes: any = await meshCrudHandlers.magi_panel_set(ctx, {
+            name: 'rca-panel',
+            panel: { defaultKind: 'rca', members: [{ provider: 'claude-cli' }] },
+        })
+        expect(setRes.success).toBe(true)
+        expect(setRes.panel.defaultKind).toBe('rca')
+
+        const listRes: any = await meshCrudHandlers.magi_panel_list(ctx, {})
+        expect(listRes.panels['rca-panel'].defaultKind).toBe('rca')
+    })
+
+    it("drops defaultKind='freeform' (no structured claims → must not be a panel default)", async () => {
+        // freeform contributes claims:[] to synthesis, so it is rejected as a panel
+        // default and normalized to undefined (a warning is logged, not an error).
+        const setRes: any = await meshCrudHandlers.magi_panel_set(ctx, {
+            name: 'ff-panel',
+            panel: { defaultKind: 'freeform', members: [{ provider: 'claude-cli' }] },
+        })
+        expect(setRes.success).toBe(true)
+        expect(setRes.panel.defaultKind).toBeUndefined()
+    })
+
+    it('drops an unknown/typo defaultKind without failing the write', async () => {
+        const setRes: any = await meshCrudHandlers.magi_panel_set(ctx, {
+            name: 'typo-panel',
+            panel: { defaultKind: 'claimaudit', members: [{ provider: 'claude-cli' }] },
+        })
+        expect(setRes.success).toBe(true)
+        expect(setRes.panel.defaultKind).toBeUndefined()
+    })
+
     it('surfaces invalid_magi_panel for a member missing a provider', async () => {
         const res: any = await meshCrudHandlers.magi_panel_set(ctx, {
             name: 'bad',

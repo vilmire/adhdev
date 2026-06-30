@@ -626,9 +626,14 @@ export const MESH_MAGI_PANEL_SET_TOOL = {
             panel_name: { type: 'string', description: 'Panel name key, e.g. "design-review".' },
             config: {
                 type: 'object',
-                description: 'Panel config: { description?, members:[{ provider (REQUIRED), nodeId?, capabilityTags?, n? }], defaultN? }.',
+                description: 'Panel config: { description?, members:[{ provider (REQUIRED), nodeId?, capabilityTags?, n? }], defaultN?, defaultKind? }.',
                 properties: {
                     description: { type: 'string' },
+                    defaultKind: {
+                        type: 'string',
+                        enum: ['claim_audit', 'rca', 'design'],
+                        description: 'Optional NON-binding default output kind applied when a mesh_magi_review on this panel omits task_kind. Priority is always task_kind > defaultKind > claim_audit, so it never overrides an explicit per-run kind. "freeform" is NOT allowed (it contributes no structured claims to cross-verification) and is dropped with a warning.',
+                    },
                     members: {
                         type: 'array',
                         items: {
