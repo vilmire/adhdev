@@ -147,6 +147,7 @@ describe('runMeshReconcileTick', () => {
   // after each case so a test that sets it never leaks into the next.
   afterEach(() => {
     delete process.env.MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS
+    delete process.env.MESH_INFLIGHT_ACKED_TRANSCRIPT_FASTTRACK_GRACE_MS
   })
 
   it('drains the queue and injects into an idle coordinator', async () => {
@@ -1750,6 +1751,167 @@ describe('runMeshReconcileTick', () => {
         const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed' && e.sessionId === sessionId)
         expect(completed).toBeTruthy()
         expect((completed?.payload as any)?.finalSummary).toContain('All done on the dispatched task')
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    // ── ACKED-HOLD-IDLE-OVERTRUST: transcript-completion fast-track ──────────────
+    // The R4f indefinite hold is safe but slow: when the worker's real emit is LOST (not just
+    // late), nothing promotes the synth until the 8-min death backstop — even though the answer
+    // has been fully rendered in the transcript (read_chat idle WITH a final assistant message)
+    // for the whole time. The fast-track promotes the synth EARLY once idle-with-final-assistant
+    // has held continuously for a short grace (above the provider's ~34s emit ceiling), while
+    // keeping the death backstop as the last-resort net and the real emit idempotent.
+
+    it('ACKED-FASTTRACK: a SINGLE idle-with-final-assistant read does NOT promote — grace not yet met (no premature synth)', async () => {
+      const meshId = `mesh_reconcile_fasttrack_single_${Date.now()}`
+      // Default grace (40s); the ack is "just now" so a single idle tick has elapsed ~0s of the
+      // continuous idle streak → below grace → held, not promoted.
+      try {
+        const sessionId = 'sess-fasttrack-single'
+        const nodeId = 'node_local'
+        const taskId = 'task_fasttrack_single'
+        seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd === 'get_status_metadata') return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true, status: 'idle', providerSessionId: 'claude-history-ftsingle',
+            messages: [{ role: 'assistant', content: 'All done — fast-track candidate.', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+
+        // One tick: the streak anchors but grace (40s) is not yet met → no synth.
+        await runMeshReconcileTick(components)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+        expect(getPendingMeshCoordinatorEvents(meshId).some(p => p.event === 'agent:generating_completed')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('ACKED-FASTTRACK: idle-with-final-assistant past the grace promotes the synth EARLY — well before the 8-min death backstop', async () => {
+      const meshId = `mesh_reconcile_fasttrack_promote_${Date.now()}`
+      // Force the fast-track grace to 0 so the FIRST idle-with-final-assistant read crosses it,
+      // while leaving the death deadline at its 8-min default — proving the EARLY path fired, not
+      // the backstop. (Same env-escape-hatch pattern as the death-deadline=0 tests.)
+      process.env.MESH_INFLIGHT_ACKED_TRANSCRIPT_FASTTRACK_GRACE_MS = '0'
+      try {
+        const sessionId = 'sess-fasttrack-promote'
+        const nodeId = 'node_local'
+        const taskId = 'task_fasttrack_promote'
+        // Ack ≈ now (seedAckedDispatch flips updated_at to now) → sinceAck ≪ 8min, so the death
+        // backstop would NOT fire; only the fast-track can promote here.
+        seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd === 'get_status_metadata') return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true, status: 'idle', providerSessionId: 'claude-history-ftpromote',
+            messages: [{ role: 'assistant', content: 'All done — built and tests pass.', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+
+        await runMeshReconcileTick(components)
+        const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed' && e.sessionId === sessionId)
+        expect(completed).toBeTruthy()
+        expect((completed?.payload as any)?.source).toBe('daemon_reconcile_transcript_completion')
+        expect((completed?.payload as any)?.finalSummary).toContain('All done')
+        expect(getPendingMeshCoordinatorEvents(meshId).some(p => p.event === 'agent:generating_completed')).toBe(true)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('ACKED-FASTTRACK: promotion is idempotent — a real emit landing AFTER the fast-track synth writes no duplicate terminal ledger', async () => {
+      const meshId = `mesh_reconcile_fasttrack_idempotent_${Date.now()}`
+      process.env.MESH_INFLIGHT_ACKED_TRANSCRIPT_FASTTRACK_GRACE_MS = '0'
+      try {
+        const sessionId = 'sess-fasttrack-idem'
+        const nodeId = 'node_local'
+        const taskId = 'task_fasttrack_idem'
+        seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd === 'get_status_metadata') return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true, status: 'idle', providerSessionId: 'claude-history-ftidem',
+            messages: [{ role: 'assistant', content: 'Done via fast-track.', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+
+        // Tick 1: fast-track promotes the synth (grace=0).
+        await runMeshReconcileTick(components)
+        const afterSynth = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed' && e.sessionId === sessionId)
+        expect(afterSynth).toHaveLength(1)
+
+        // The worker's REAL completion finally lands (the lost/late emit). A later reconcile must
+        // NOT write a second terminal — hasTerminalLedgerAfterDispatch makes it an idempotent no-op.
+        await runMeshReconcileTick(components)
+        const afterReal = readLedgerEntries(meshId).filter(e => e.kind === 'task_completed' && e.sessionId === sessionId)
+        expect(afterReal).toHaveLength(1)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('ACKED-FASTTRACK: an interrupting generating read RESETS the streak — a later idle must re-accumulate grace (no carry-over)', async () => {
+      const meshId = `mesh_reconcile_fasttrack_reset_${Date.now()}`
+      // Grace at its DEFAULT (40s). Tick 1 idle (anchors streak), tick 2 generating (resets it),
+      // tick 3 idle again (re-anchors at ~0s). With the default grace none of these single idle
+      // ticks can cross 40s → never promoted. This proves a streaming worker that flickers idle
+      // is never fast-tracked.
+      try {
+        const sessionId = 'sess-fasttrack-reset'
+        const nodeId = 'node_local'
+        const taskId = 'task_fasttrack_reset'
+        seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+        ])
+        const statuses = ['idle', 'generating', 'idle']
+        let call = 0
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd === 'get_status_metadata') return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+          if (cmd !== 'read_chat') return { success: true }
+          const status = statuses[Math.min(call++, statuses.length - 1)]
+          return {
+            success: true, status, providerSessionId: 'claude-history-ftreset',
+            messages: [{ role: 'assistant', content: 'flickering text', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+
+        for (let i = 0; i < 3; i++) await runMeshReconcileTick(components)
+        // No single idle window reached the 40s grace (and the generating tick reset it) → no synth.
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
       } finally {
         cleanup(meshId)
       }

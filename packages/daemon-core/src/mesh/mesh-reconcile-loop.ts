@@ -183,12 +183,58 @@ function resolveAckedDeathDeadlineMs(): number {
     return resolveTunedReconcileMs('MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS', 8 * 60_000, 0, 60 * 60_000);
 }
 
+// ACKED-HOLD-IDLE-OVERTRUST (transcript-completion fast-track). The indefinite acked-hold above is
+// safe but SLOW: when the worker's real generating_completed emit is dropped/lost, the only thing
+// that promotes the missing completion is the 8-min death backstop — even though the answer has been
+// FULLY rendered in the transcript for minutes (read_chat reports idle WITH a final visible assistant
+// message every ~4s). Observed live: completions surfaced 144s / 492s late, both incompatible with the
+// provider's own emit ceiling (COMPLETED_FINALIZATION_MAX_WAIT_MS 30s + NATIVE_HISTORY_MESH_IDLE_SETTLE
+// 4s ≈ 34s). That gap = a worker that finished, whose PTY generating→idle edge / real emit was lost,
+// held hostage to the 8-min net.
+//
+// Fast-track: when an acked task reads idle AND a final visible assistant message is present (the same
+// transcript-completion evidence PHASE 4 already requires to synth), and that idle-with-final-assistant
+// state has PERSISTED for a short continuous grace, promote the synth EARLY — ahead of the 8-min
+// backstop. The grace is the correctness gate: a SINGLE idle read could be a mid-turn blip (PTY
+// inter-tool-call settle, or final text rendered while the next tool call is about to start), so we
+// require the idle-with-final-assistant signal to hold continuously for the grace window before
+// trusting it as a genuine turn-end. Any non-idle read (generating / waiting_approval), a read
+// failure, or the disappearance of the final assistant message RESETS the streak — so an actively
+// streaming worker that momentarily reads idle never crosses the grace.
+//
+// Safety: this only changes WHEN an acked synth fires (earlier), never WHETHER it is correct —
+// reconcileDirectDispatchCompletionFromTranscript's hasTerminalLedgerAfterDispatch makes a real
+// emit that lands later an idempotent no-op, exactly as the death-backstop synth relies on. The
+// death backstop (8 min) is PRESERVED unchanged as the final net; the fast-track is a faster path in
+// front of it. The grace is set ABOVE the provider's own emit ceiling (~34s) so a worker still inside
+// its normal finalization window is never pre-empted — we only fast-track once enough continuous idle
+// has elapsed that a live emit would already have arrived.
+function resolveAckedTranscriptFastTrackGraceMs(): number {
+    // Default 40s — above the provider emit ceiling (30s COMPLETED_FINALIZATION_MAX_WAIT_MS + 4s
+    // NATIVE_HISTORY_MESH_IDLE_SETTLE ≈ 34s): a genuinely-live worker would have emitted its real
+    // terminal within that window, so 40s of CONTINUOUS idle-with-final-assistant means the emit was
+    // lost, not late. Far below the 8-min death backstop, so the fast-track is the dominant path for a
+    // lost emit while the backstop remains the last-resort net. Floor 0 lets tests force an immediate
+    // fast-track; ceiling 5min keeps a mis-set env from collapsing it into the death backstop.
+    return resolveTunedReconcileMs('MESH_INFLIGHT_ACKED_TRANSCRIPT_FASTTRACK_GRACE_MS', 40_000, 0, 5 * 60_000);
+}
+
 // Per-task in-flight hold state for an acked dispatch:
 //   - liveConfirmedSinceAck: we have seen at least one conclusive read (idle OR generating) since
 //     the ack — proves the session is reachable, so a later read FAILURE is a genuine liveness loss
 //     rather than a node that was never reachable.
 //   - consecutiveReadFailures: streak of inconclusive read_chat results (death backstop (a)).
-const inFlightAckedHoldState = new Map<string, { liveConfirmedSinceAck: boolean; consecutiveReadFailures: number }>();
+//   - transcriptIdleSinceMs: the timestamp of the FIRST tick in the current continuous run of
+//     idle-with-final-assistant reads (ACKED-HOLD-IDLE-OVERTRUST fast-track). Cleared to undefined
+//     whenever the signal breaks (non-idle read, read failure, or no final assistant message), so a
+//     mid-turn idle blip never accumulates grace. When `now - transcriptIdleSinceMs` exceeds the
+//     fast-track grace the synth is promoted ahead of the death backstop.
+interface AckedHoldState {
+    liveConfirmedSinceAck: boolean;
+    consecutiveReadFailures: number;
+    transcriptIdleSinceMs?: number;
+}
+const inFlightAckedHoldState = new Map<string, AckedHoldState>();
 
 function inFlightSynthKey(meshId: string, taskId: string): string {
     return `${meshId}::${taskId}`;
@@ -1612,6 +1658,8 @@ async function reconcileUnterminatedDirectDispatches(
                 const prior = inFlightAckedHoldState.get(synthKey);
                 const failures = (prior?.consecutiveReadFailures ?? 0) + 1;
                 const liveConfirmedSinceAck = prior?.liveConfirmedSinceAck ?? false;
+                // A read failure breaks the idle-with-final-assistant run → reset the fast-track streak
+                // (transcriptIdleSinceMs cleared by omission) so it must re-accumulate from scratch.
                 inFlightAckedHoldState.set(synthKey, { liveConfirmedSinceAck, consecutiveReadFailures: failures });
                 if (liveConfirmedSinceAck && failures >= ACKED_DEATH_CONSECUTIVE_READ_FAILURES) {
                     LOG.warn('MeshReconcile', `Acked-hold death signal: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) read_chat failed ${failures}x consecutively after a live-confirmed ack — worker session presumed gone mid-turn; releasing the indefinite synth hold to the stranded-reclaim / orphan-prune nets`);
@@ -1622,8 +1670,15 @@ async function reconcileUnterminatedDirectDispatches(
 
         // Read succeeded (a conclusive idle/generating status) → the session is reachable: reset the
         // failure streak and mark it live-confirmed-since-ack, so a LATER read failure is recognized
-        // as a genuine liveness loss (backstop a) rather than a node that was never reachable.
-        inFlightAckedHoldState.set(synthKey, { liveConfirmedSinceAck: true, consecutiveReadFailures: 0 });
+        // as a genuine liveness loss (backstop a) rather than a node that was never reachable. The
+        // fast-track idle streak (transcriptIdleSinceMs) is PRESERVED across this reset — it is
+        // managed below where the idle + final-assistant signal is actually evaluated.
+        const priorHoldState = inFlightAckedHoldState.get(synthKey);
+        inFlightAckedHoldState.set(synthKey, {
+            liveConfirmedSinceAck: true,
+            consecutiveReadFailures: 0,
+            ...(priorHoldState?.transcriptIdleSinceMs !== undefined ? { transcriptIdleSinceMs: priorHoldState.transcriptIdleSinceMs } : {}),
+        });
 
         // Only act on a session that has actually settled to idle. A generating /
         // waiting_approval session is mid-turn — synthesizing a completion now would
@@ -1631,7 +1686,9 @@ async function reconcileUnterminatedDirectDispatches(
         const nowMs = Date.now();
         if (readChatPayloadStatus(payload) !== 'idle') {
             // Not idle → the worker is genuinely mid-turn (a clear live signal). Keep the
-            // live-confirmed flag set (above) but otherwise just wait for the real emit.
+            // live-confirmed flag set (above) but RESET the fast-track idle streak: a turn that
+            // resumed generating proves the prior idle was a mid-turn blip, not a settled turn-end.
+            inFlightAckedHoldState.set(synthKey, { liveConfirmedSinceAck: true, consecutiveReadFailures: 0 });
             continue;
         }
 
@@ -1652,15 +1709,50 @@ async function reconcileUnterminatedDirectDispatches(
         // A never-acked dispatch (worker never started) is exempt — no in-flight generation to
         // pre-empt; it keeps the first-idle-tick synth, with the downstream grace + stale-summary
         // guards as its backstops.
+        //
+        // ACKED-HOLD-IDLE-OVERTRUST: the read is idle. Extract the final-assistant evidence NOW (the
+        // same signal the synth below requires) so the fast-track can gate on idle-WITH-final-assistant
+        // rather than bare idle. Only when a final visible assistant message is present do we treat
+        // this tick as a candidate turn-end and accumulate the fast-track grace streak; a bare idle
+        // with no assistant result is the worker still warming up and resets the streak.
+        const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
+        const evidence = extractFinalAssistantSummaryEvidence(messages);
+
         if (isAcked) {
             const ackedAtMs = Date.parse(readNonEmptyString(dispatch.updatedAt));
             const sinceAckMs = Number.isFinite(ackedAtMs) ? nowMs - ackedAtMs : Number.POSITIVE_INFINITY;
             const deathDeadlineMs = resolveAckedDeathDeadlineMs();
-            if (sinceAckMs < deathDeadlineMs) {
-                LOG.info('MeshReconcile', `Acked-hold: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) read idle ${Number.isFinite(sinceAckMs) ? Math.round(sinceAckMs / 1000) + 's' : '∞'} since the generating_started ack — HOLDING synth indefinitely (worker is alive and will emit; a later real emit is idempotent). Death backstop fires at ${Math.round(deathDeadlineMs / 1000)}s or on consecutive read failures.`);
+
+            // ACKED-HOLD-IDLE-OVERTRUST fast-track. Maintain the continuous idle-with-final-assistant
+            // streak. The streak starts (or continues) only while a final visible assistant message is
+            // present; a tick with idle-but-no-assistant breaks it (the answer is not yet rendered).
+            const holdState = inFlightAckedHoldState.get(synthKey);
+            let fastTrackReady = false;
+            if (evidence.finalSummary) {
+                const idleSinceMs = holdState?.transcriptIdleSinceMs ?? nowMs;
+                if (holdState && holdState.transcriptIdleSinceMs === undefined) {
+                    inFlightAckedHoldState.set(synthKey, { ...holdState, transcriptIdleSinceMs: idleSinceMs });
+                }
+                const fastTrackGraceMs = resolveAckedTranscriptFastTrackGraceMs();
+                const idleHeldMs = nowMs - idleSinceMs;
+                if (idleHeldMs >= fastTrackGraceMs) {
+                    fastTrackReady = true;
+                    LOG.info('MeshReconcile', `Acked-hold transcript fast-track: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) read idle WITH a final assistant message for ${Math.round(idleHeldMs / 1000)}s continuous (grace ${Math.round(fastTrackGraceMs / 1000)}s) — promoting the synth ahead of the ${Math.round(deathDeadlineMs / 1000)}s death backstop; the worker's real emit was lost/late and a later one no-ops idempotently.`);
+                }
+            } else if (holdState?.transcriptIdleSinceMs !== undefined) {
+                // Idle but no final assistant yet → not a turn-end; reset the streak.
+                inFlightAckedHoldState.set(synthKey, { ...holdState, transcriptIdleSinceMs: undefined });
+            }
+
+            // Hold indefinitely UNLESS the fast-track grace was met OR the absolute death deadline is
+            // reached. The fast-track is the new fast path in front of the (preserved) 8-min backstop.
+            if (!fastTrackReady && sinceAckMs < deathDeadlineMs) {
+                LOG.info('MeshReconcile', `Acked-hold: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) read idle ${Number.isFinite(sinceAckMs) ? Math.round(sinceAckMs / 1000) + 's' : '∞'} since the generating_started ack — HOLDING synth (worker presumed alive; a later real emit is idempotent). Transcript fast-track promotes at ${Math.round(resolveAckedTranscriptFastTrackGraceMs() / 1000)}s continuous idle-with-final-assistant; death backstop at ${Math.round(deathDeadlineMs / 1000)}s or on consecutive read failures.`);
                 continue;
             }
-            LOG.warn('MeshReconcile', `Acked-hold death deadline reached: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) still idle ${Math.round(sinceAckMs / 1000)}s after the ack (deadline ${Math.round(deathDeadlineMs / 1000)}s) — synthesizing the missing completion as a notification-loss net (a real emit, if it ever lands, no-ops idempotently).`);
+            if (!fastTrackReady) {
+                LOG.warn('MeshReconcile', `Acked-hold death deadline reached: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) still idle ${Math.round(sinceAckMs / 1000)}s after the ack (deadline ${Math.round(deathDeadlineMs / 1000)}s) — synthesizing the missing completion as a notification-loss net (a real emit, if it ever lands, no-ops idempotently).`);
+            }
         }
 
         // R4f (auxiliary, was R4e fix 3) — worker-emit priority. Secondary check: if the worker's
@@ -1677,8 +1769,6 @@ async function reconcileUnterminatedDirectDispatches(
             continue;
         }
 
-        const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
-        const evidence = extractFinalAssistantSummaryEvidence(messages);
         if (!evidence.finalSummary) continue; // no assistant result yet — nothing to attribute
 
         // STALE-SUMMARY guard (modal-parked / reused-session misattribution): a direct
