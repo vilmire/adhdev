@@ -1,6 +1,7 @@
 export { MeshListView } from './MeshListView'
 export { MeshDetailView } from './MeshDetailView'
 export { MeshQueueSection } from './MeshQueueSection'
+export { MeshMissionsSection } from './MeshMissionsSection'
 export { MeshNodeList, getNodeActiveAssignments, describeNodeActiveAssignmentLabel } from './MeshNodeList'
 export { MeshHostDaemonSection } from './MeshHostDaemonSection'
 export { RepoMeshHermesMcpConfig } from './MeshHermesMcpConfig'

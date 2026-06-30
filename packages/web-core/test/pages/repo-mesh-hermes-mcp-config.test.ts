@@ -84,12 +84,18 @@ describe('RepoMesh graph detail affordances', () => {
     expect(repoMeshSource).toContain('status: meshGraphStatus')
     expect(repoMeshSource).toContain('displayedMeshStatus={displayedMeshStatus}')
 
-    // MeshDetailView.tsx renders the observability surface
+    // IA redesign (WT-2): the mesh SETTINGS page no longer embeds the observability
+    // surface — that surface is reserved for the dialog. The page launches
+    // DashboardMeshGraphDialog and still wires the live-daemon seam into the MAGI surfaces.
     const detailSource = readSource('pages/repo-mesh/MeshDetailView.tsx')
-    expect(detailSource).toContain('<MeshObservabilitySurface')
+    expect(detailSource).toContain('<DashboardMeshGraphDialog')
+    expect(detailSource).not.toContain('<MeshObservabilitySurface')
     expect(detailSource).toContain('daemonId={activeDaemonId}')
     expect(detailSource).toContain('sendDaemonCommand={sendCommand}')
-    expect(detailSource).toContain('queue activity, sessions, node drift, and mesh topology')
+
+    // The shared observability surface is still consumed by the graph dialog (not deleted).
+    const dialogSource = readSource('components/dashboard/DashboardMeshGraphDialog.tsx')
+    expect(dialogSource).toContain('<MeshObservabilitySurface')
 
     // Standalone context supplies extractRepoMeshStatus to the context
     const standaloneSource = readSource('context/StandaloneRepoMeshProvider.tsx')

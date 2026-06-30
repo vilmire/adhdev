@@ -1,14 +1,18 @@
+import { useState } from 'react'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import AppPage from '../../components/ui/AppPage'
 import { Section } from '../../components/ui/Section'
 import { AlertBanner } from '../../components/ui/AlertBanner'
 import { FormField } from '../../components/ui/FormField'
 import { IconMesh } from '../../components/Icons'
-import { MeshObservabilitySurface } from '../../components/MeshGraph'
 import MagiPanelManager from '../../components/MeshGraph/MagiPanelManager'
+import MagiSynthesisViewer from '../../components/MeshGraph/MagiSynthesisViewer'
+import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
+import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { AvailableCliProviderOption } from '../../utils/provider-priority'
 import { MeshQueueSection } from './MeshQueueSection'
+import { MeshMissionsSection } from './MeshMissionsSection'
 import { ReviewInboxSection } from './ReviewInboxSection'
 import { MeshNodeList } from './MeshNodeList'
 import { MeshHostDaemonSection } from './MeshHostDaemonSection'
@@ -38,12 +42,10 @@ interface Props {
     onBack: () => void
     onDelete: (meshId: string) => void
 
-    // Graph
+    // Graph / live mesh status (drives the MAGI surfaces + the graph dialog launcher)
     displayedMeshStatus: RepoMeshStatus | null
     graphLoading: boolean
     graphError: string | null
-    graphProvenance: 'idle' | 'first_paint' | 'settling' | 'settled'
-    graphBootstrapFallback?: boolean
     onRefreshGraph: (refresh?: boolean) => void
 
     // Queue
@@ -131,6 +133,32 @@ interface Props {
     sendCommand: (daemonId: string, command: string, payload?: any) => Promise<any>
 }
 
+/**
+ * Build a minimal synthetic ActiveConversation so the /mesh settings page can launch
+ * DashboardMeshGraphDialog without a real coordinator conversation. The dialog only
+ * needs `daemonId` + a mesh id (read from `coordinator.meshId` / `settings.meshCoordinatorFor`)
+ * to load `mesh_status` and render the observability surface; the live-session overlay
+ * (built from `sessionId`) is simply absent here, which the dialog handles gracefully.
+ */
+function buildMeshGraphLaunchConversation(args: { meshId: string; daemonId: string; meshName: string }): ActiveConversation {
+    return {
+        routeId: `mesh-settings:${args.meshId}`,
+        daemonId: args.daemonId,
+        agentName: args.meshName,
+        agentType: 'mesh',
+        status: 'idle',
+        title: args.meshName,
+        messages: [],
+        workspaceName: args.meshName,
+        displayPrimary: args.meshName,
+        displaySecondary: 'Mesh observability',
+        streamSource: 'native',
+        tabKey: `mesh-settings:${args.meshId}`,
+        coordinator: { meshId: args.meshId, role: 'coordinator' },
+        settings: { meshCoordinatorFor: args.meshId },
+    }
+}
+
 export function MeshDetailView({
     selectedMesh,
     error,
@@ -140,8 +168,6 @@ export function MeshDetailView({
     displayedMeshStatus,
     graphLoading,
     graphError,
-    graphProvenance,
-    graphBootstrapFallback = false,
     onRefreshGraph,
     queueSummary,
     queueLoading,
@@ -220,6 +246,11 @@ export function MeshDetailView({
         return Number.isFinite(p) && p !== 0
     })
 
+    // Graph/detail observability is now a launched dialog (DashboardMeshGraphDialog),
+    // not an embedded surface on the page — the page is the mesh SETTINGS surface.
+    const [graphDialogOpen, setGraphDialogOpen] = useState(false)
+    const canLaunchGraphDialog = !!activeDaemonId && !!selectedMesh.id
+
     return (
         <AppPage
             icon={<IconMesh />}
@@ -256,6 +287,66 @@ export function MeshDetailView({
                 />
             )}
 
+            {/* ── Observability: graph / detail dialog launcher ──
+                 The page no longer embeds the observability surface (graph/overview/status);
+                 that surface is reserved for DashboardMeshGraphDialog, which this button
+                 launches. The dialog owns its own mesh_status loader + live-session overlay. */}
+            <Section title="Observability" description="Open the live mesh graph, overview, and runtime status in the observability dialog.">
+                {graphError && <div className="mb-3 text-[12px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">{graphError}</div>}
+                <div className="flex flex-wrap items-center gap-3">
+                    <button
+                        type="button"
+                        className="btn btn-primary btn-sm inline-flex items-center gap-1.5"
+                        onClick={() => setGraphDialogOpen(true)}
+                        disabled={!canLaunchGraphDialog}
+                        title={canLaunchGraphDialog ? 'Open the mesh graph / overview / status dialog' : 'A coordinator daemon must be selected first'}
+                    >
+                        <IconMesh size={14} />Open mesh graph & status
+                    </button>
+                    <span className="text-[12px] text-text-muted">
+                        Topology graph, overview cards (missions, ledger, queue, nodes, sessions), and per-node runtime drift.
+                    </span>
+                </div>
+            </Section>
+
+            {/* ── MAGI panels (CRUD) ──
+                 Panel create/edit/delete lives ONLY here on the /mesh detail page.
+                 The mesh dialog shows panels read-only (MagiPanelOverview); this Section is
+                 the single place to mutate them. Same {status, daemonId, sendDaemonCommand}
+                 seam the surface uses. */}
+            {displayedMeshStatus && (
+                <Section title="MAGI panels" description="Saved (machine × AI) cross-verification quorums — machine-local config. Create, edit, or delete them here.">
+                    <MagiPanelManager
+                        status={displayedMeshStatus}
+                        daemonId={activeDaemonId}
+                        sendDaemonCommand={sendCommand}
+                    />
+                </Section>
+            )}
+
+            {/* ── MAGI synthesis viewer (fix c) ──
+                 Reads the persisted synthesis folded into status.magiActivity[]. Raw replica
+                 answers are NOT persisted — fetched live (best-effort) via mesh_magi_collect
+                 verbose, with a 'raw not persisted' note when unavailable. */}
+            {displayedMeshStatus && (
+                <Section title="MAGI synthesis" description="Persisted cross-verification synthesis (needs-verification, agreements, independence, open questions). Raw replica text is live-only.">
+                    <MagiSynthesisViewer
+                        status={displayedMeshStatus}
+                        daemonId={activeDaemonId}
+                        meshId={selectedMesh.id}
+                        sendDaemonCommand={sendCommand}
+                    />
+                </Section>
+            )}
+
+            {/* ── Missions (fix b: full-goal fetch-more) ── */}
+            <MeshMissionsSection
+                status={displayedMeshStatus}
+                daemonId={activeDaemonId}
+                meshId={selectedMesh.id}
+                sendCommand={sendCommand}
+            />
+
             {/* ── Cloud: Queue section ── */}
             {features.queueSection && (
                 <MeshQueueSection
@@ -265,55 +356,6 @@ export function MeshDetailView({
                     activeDaemonId={activeDaemonId}
                     onRefresh={onLoadQueue}
                 />
-            )}
-
-            {/* ── Mesh overview + graph (tabbed inside the surface) ── */}
-            <Section title="Mesh" description="Overview cards (missions, ledger, queue, nodes, sessions) with the live topology graph behind the Graph tab.">
-                <div className="mb-4 text-[12px] text-text-muted max-w-2xl">
-                    {features.meshHostDaemonSection
-                        ? <>Direct aggregate mesh_status from the selected Mesh Host is preferred. Use Refresh above to ask the host for the latest peer git provenance.{graphProvenance === 'settling' && <span className="ml-1 text-amber-300">Refreshing peer data…</span>}</>
-                        : <>Overview shows live mesh state as cards; switch to the Graph tab for the topology view.</>
-                    }
-                </div>
-                {graphBootstrapFallback && (
-                    <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12px] text-amber-200">
-                        <span className="mt-0.5 shrink-0 text-amber-400" aria-hidden>⚠</span>
-                        <span>Connecting to coordinator — showing setup inventory. Live data will appear shortly.</span>
-                    </div>
-                )}
-                {graphError && <div className="mb-3 text-[12px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">{graphError}</div>}
-                {!displayedMeshStatus ? (
-                    <div className="text-[12px] text-text-muted rounded-lg border border-border-subtle bg-bg-secondary px-3 py-3">
-                        {graphLoading ? 'Loading graph...' : features.meshHostDaemonSection
-                            ? 'No mesh graph data is available yet. Refresh after the selected Mesh Host is reachable.'
-                            : 'Refresh the graph to inspect queue activity, sessions, node drift, and mesh topology.'}
-                    </div>
-                ) : (
-                    <MeshObservabilitySurface
-                        status={displayedMeshStatus}
-                        emptyMessage={features.meshHostDaemonSection
-                            ? 'No mesh graph data is available yet. Refresh after the selected Mesh Host is reachable.'
-                            : 'Refresh the graph to inspect queue activity, sessions, node drift, and mesh topology.'}
-                        daemonId={activeDaemonId}
-                        sendDaemonCommand={sendCommand}
-                        bootstrapFallback={graphBootstrapFallback}
-                    />
-                )}
-            </Section>
-
-            {/* ── MAGI panels (CRUD) ──
-                 Panel create/edit/delete lives ONLY here on the /mesh detail page.
-                 The mesh dialog and the Mesh overview above show panels read-only
-                 (MagiPanelOverview); this Section is the single place to mutate them.
-                 Same {status, daemonId, sendDaemonCommand} seam the surface uses. */}
-            {displayedMeshStatus && (
-                <Section title="MAGI panels" description="Saved (machine × AI) cross-verification quorums — machine-local config. Create, edit, or delete them here.">
-                    <MagiPanelManager
-                        status={displayedMeshStatus}
-                        daemonId={activeDaemonId}
-                        sendDaemonCommand={sendCommand}
-                    />
-                </Section>
             )}
 
             {/* ── Review Inbox (M4.0) ── */}
@@ -489,7 +531,15 @@ export function MeshDetailView({
                     {' · The mesh MCP server can be used directly from your CLI agent.'}
                 </AlertBanner>
             )}
+
+            {/* ── Observability dialog (launched from the Observability section) ── */}
+            {graphDialogOpen && canLaunchGraphDialog && (
+                <DashboardMeshGraphDialog
+                    activeConv={buildMeshGraphLaunchConversation({ meshId: selectedMesh.id, daemonId: activeDaemonId, meshName: selectedMesh.name })}
+                    sendDaemonCommand={sendCommand}
+                    onClose={() => setGraphDialogOpen(false)}
+                />
+            )}
         </AppPage>
     )
 }
-
