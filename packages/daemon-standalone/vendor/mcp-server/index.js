@@ -898,7 +898,7 @@ var MESH_MISSION_UPSERT_TOOL = {
 };
 var MESH_MISSION_LIST_TOOL = {
   name: "mesh_mission_list",
-  description: 'List missions with their goal, status, and live task progress (total/pending/assigned/completed/failed). Unlike mesh_status (which surfaces live + recent missions), this returns every mission regardless of status by default, so paused/abandoned/completed missions are never hidden. Filter with `status` to scope (e.g. ["paused"] to find paused missions). Compact (default) elides the full goal to a capped preview; pass verbose=true for full goal text. Read-only.',
+  description: 'List missions with their goal, status, and live task progress (total/pending/assigned/completed/failed). Unlike mesh_status (which surfaces live + recent missions), this returns every mission regardless of status by default, so paused/abandoned/completed missions are never hidden. Filter with `status` to scope (e.g. ["paused"] to find paused missions). Completed MAGI cross-verification missions (one auto-created per mesh_magi_review) are hidden by default to keep the list coordinator-focused \u2014 in-progress MAGI missions still show; pass include_magi=true to list completed ones too. Compact (default) elides the full goal to a capped preview; pass verbose=true for full goal text. Read-only.',
   inputSchema: {
     type: "object",
     properties: {
@@ -907,7 +907,8 @@ var MESH_MISSION_LIST_TOOL = {
         items: { type: "string", enum: ["active", "paused", "completed", "abandoned"] },
         description: "Optional status filter. Omit to return missions of every status."
       },
-      verbose: { type: "boolean", description: "Return full goal text instead of a capped preview. Defaults to false (compact)." }
+      verbose: { type: "boolean", description: "Return full goal text instead of a capped preview. Defaults to false (compact)." },
+      include_magi: { type: "boolean", description: "Include completed MAGI cross-verification missions (hidden by default). Defaults to false." }
     }
   }
 };
@@ -1195,7 +1196,8 @@ var MESH_MAGI_COLLECT_TOOL = {
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
       wait: { type: "boolean", description: "Default false (snapshot). Set true to block for outstanding replicas up to wait_timeout_ms before synthesizing." },
       wait_timeout_ms: { type: "number", description: "When wait=true, max time to wait for remaining replica completion. Default ~4 min." },
-      auto_cleanup: { type: "boolean", description: "Default = mesh policy magiSessionCleanup (ON / stop_and_delete). When the collection is terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified). Reused/coordinator/other sessions are never touched. Set false to preserve them. No effect on a partial (non-terminal) snapshot." }
+      auto_cleanup: { type: "boolean", description: "Default = mesh policy magiSessionCleanup (ON / stop_and_delete). When the collection is terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified). Reused/coordinator/other sessions are never touched. Set false to preserve them. No effect on a partial (non-terminal) snapshot." },
+      verbose: { type: "boolean", description: "Default false. When true, each synthesis.replicas[] entry also carries rawAnswer \u2014 the replica's raw end-user answer text (capped). Omitted by default to keep the payload small; the structured clusters already carry the parsed claims." }
     },
     required: ["consensus_group_id"]
   }
@@ -4044,9 +4046,11 @@ async function meshMissionList(ctx, args = {}) {
       });
     }
     const statuses = rawStatuses.length > 0 ? rawStatuses : void 0;
+    const includeMagi = (args.include_magi ?? args.includeMagi) === true;
     const missions = (0, import_daemon_core4.listMeshMissionSummaries)(ctx.mesh.id, {
       statuses,
-      verbose: args.verbose === true
+      verbose: args.verbose === true,
+      includeMagi
     }).map((mission) => {
       try {
         return { ...mission, stats: (0, import_daemon_core4.computeMeshMissionStats)(ctx.mesh.id, mission.id) };
@@ -4058,6 +4062,7 @@ async function meshMissionList(ctx, args = {}) {
       success: true,
       count: missions.length,
       ...statuses ? { statusFilter: statuses } : {},
+      ...includeMagi ? { includeMagi: true } : { magiCompletedHidden: true },
       missions
     }, null, 2);
   } catch (e) {
@@ -4909,7 +4914,10 @@ async function meshMagiReview(ctx, args) {
   const mission = (0, import_daemon_core4.upsertMeshMission)(ctx.mesh.id, {
     title: `MAGI: ${titleQ}`,
     goal: `Cross-verify (read-only) across panel '${panelName}': ${question}${args.target ? `
-Target: ${args.target}` : ""}`
+Target: ${args.target}` : ""}`,
+    // Tag provenance so the completed inline mission is bounded out of the default
+    // mesh_mission_list (these accumulate one-per-run and auto-close on collection).
+    source: "magi"
   });
   const prompt = buildMagiTaskPrompt({ question, target: args.target, artifacts: args.artifacts, mode: mode || void 0, taskKind });
   const replicaRecords = [];
@@ -5000,6 +5008,7 @@ Target: ${args.target}` : ""}`
     replicasExpected: replicaRecords.length,
     requireIndependentEvidence
   });
+  const synthesisNoRaw = stripRawAnswers(synthesis);
   const freeformBanner = taskKind === "freeform" ? "task_kind=freeform: answers are unstructured natural language; cross-verification is WEAK (no claim clustering / independence scoring). Treat the collected answers as parallel opinions, not a verified consensus." : null;
   persistMagiSynthesis(ctx, {
     consensusGroupId,
@@ -5007,7 +5016,7 @@ Target: ${args.target}` : ""}`
     panel: panelName,
     question,
     staleReplicas: collected.staleCount,
-    synthesis
+    synthesis: synthesisNoRaw
   });
   closeMagiMissionIfTerminal(ctx, mission.id, collected.terminal);
   const cleanupMode = resolveMagiAutoCleanupMode(ctx, args.auto_cleanup ?? args.autoCleanup);
@@ -5032,7 +5041,7 @@ Target: ${args.target}` : ""}`
       ...synthesis.replicasMissing > 0 ? { missingNote: `Partial synthesis \u2014 ${synthesis.replicasMissing} of ${replicaRecords.length} replicas did not return a parseable response (timed out / failed / unparseable / schema-invalid / stale).` } : {}
     },
     ...freeformBanner ? { freeformBanner } : {},
-    synthesis
+    synthesis: synthesisNoRaw
   }, null, 2);
 }
 async function meshMagiCollect(ctx, args) {
@@ -5059,13 +5068,16 @@ async function meshMagiCollect(ctx, args) {
     replicasExpected: replicaTaskIds.length,
     requireIndependentEvidence
   });
+  const verbose = args.verbose === true;
+  const synthesisNoRaw = stripRawAnswers(synthesis);
+  const returnedSynthesis = verbose ? synthesis : synthesisNoRaw;
   const freeformBanner = taskKind === "freeform" ? "task_kind=freeform: answers are unstructured natural language; cross-verification is WEAK (no claim clustering / independence scoring). Treat the collected answers as parallel opinions, not a verified consensus." : null;
   const replicaMissionId = readString(replicaTasks[0]?.missionId);
   persistMagiSynthesis(ctx, {
     consensusGroupId,
     missionId: replicaMissionId,
     staleReplicas: collected.staleCount,
-    synthesis
+    synthesis: synthesisNoRaw
   });
   closeMagiMissionIfTerminal(ctx, replicaMissionId, collected.terminal);
   const cleanupMode = resolveMagiAutoCleanupMode(ctx, args.auto_cleanup ?? args.autoCleanup);
@@ -5092,7 +5104,8 @@ async function meshMagiCollect(ctx, args) {
       ...!collected.terminal ? { pendingNote: "Not all replicas are terminal yet \u2014 this is a partial snapshot. Re-collect once mission/pendingCoordinatorEvents report more completions." } : {}
     },
     ...freeformBanner ? { freeformBanner } : {},
-    synthesis
+    ...verbose ? { rawAnswersIncluded: true } : {},
+    synthesis: returnedSynthesis
   }, null, 2);
 }
 var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -5238,6 +5251,17 @@ function recoverMagiTaskKind(ctx, consensusGroupId) {
   }
   return DEFAULT_TASK_KIND;
 }
+function stripRawAnswers(synthesis) {
+  if (!Array.isArray(synthesis.replicas) || synthesis.replicas.length === 0) return synthesis;
+  return {
+    ...synthesis,
+    replicas: synthesis.replicas.map((r) => {
+      if (r.rawAnswer === void 0 && r.rawAnswerTruncated === void 0) return r;
+      const { rawAnswer: _omitRaw, rawAnswerTruncated: _omitTrunc, ...rest } = r;
+      return rest;
+    })
+  };
+}
 function persistMagiSynthesis(ctx, args) {
   try {
     (0, import_daemon_core4.appendLedgerEntry)(ctx.mesh.id, {
@@ -5292,6 +5316,20 @@ async function collectMagiResponses(ctx, args) {
   const retried = /* @__PURE__ */ new Set();
   const finalized = /* @__PURE__ */ new Map();
   const provisional = /* @__PURE__ */ new Map();
+  const captureRawAnswer = (source, payload) => {
+    try {
+      const candidates = collectMagiCandidateTexts(payload);
+      const raw = candidates.find((c) => c.trim().length > 0);
+      if (!raw) return;
+      if (raw.length > import_daemon_core4.MAGI_RAW_ANSWER_CAP) {
+        source.rawAnswer = raw.slice(0, import_daemon_core4.MAGI_RAW_ANSWER_CAP);
+        source.rawAnswerTruncated = true;
+      } else {
+        source.rawAnswer = raw;
+      }
+    } catch {
+    }
+  };
   const buildSource = (task) => {
     const sourceNodeId = task.assignedNodeId || task.targetNodeId || void 0;
     const gitRef = extractNodeGitRef(sourceNodeId ? ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, sourceNodeId)) : void 0);
@@ -5384,6 +5422,7 @@ ${magiOutputContractFor(kind)}`;
         coverage: "current-turn"
       });
       const payload = unwrapCommandPayload(result);
+      captureRawAnswer(source, payload);
       kindResult = parseFirstMagiCandidateForKind(payload, kind, {
         sessionId: task.assignedSessionId
       });
