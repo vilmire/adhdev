@@ -88,6 +88,26 @@ function resolveAutoPruneMinAgeMs(): number {
     return DEFAULT_AUTO_PRUNE_MIN_AGE_MS;
 }
 
+// PTY-OVERTRUST-DRAIN (Defect B, fix B). Age-based escape for the
+// `generating_no_idle_coordinator` hold. Fix A makes the drain predicate read the RAW
+// adapter (mask-stripped), so the common mask-driven false-busy is gone. But a hold can
+// still arise from a genuine status-source desync that fix A does not reach (e.g. the
+// adapter raw itself momentarily reads generating while the coordinator is actually at a
+// turn end). This is a TIME-BASED BACKSTOP: when a mesh's pending terminal events have
+// been held this long, re-confirm the coordinator's RAW adapter idle on the tick and, if
+// it is genuinely idle, drain ONCE. It NEVER injects into a genuinely-generating PTY —
+// the re-confirmation gates on raw adapter idle, so the intentional removal of
+// force-inject-into-generating (data-loss) is preserved. Default 12s = 3 reconcile ticks
+// at the 4s cadence: long enough that a normal mid-turn settle is not pre-empted, short
+// enough that a desync-stranded completion is not held for minutes. Env-tunable.
+const DEFAULT_PENDING_HELD_DRAIN_ESCALATE_MS = 12_000;
+
+function resolvePendingHeldDrainEscalateMs(): number {
+    // Floor 4s (one tick) so a mis-set env cannot make the escape race a normal settle;
+    // ceiling 5min so it cannot be disabled into a permanent strand.
+    return resolveTunedReconcileMs('MESH_PENDING_HELD_DRAIN_ESCALATE_MS', DEFAULT_PENDING_HELD_DRAIN_ESCALATE_MS, 4_000, 5 * 60_000);
+}
+
 function resolveReconcileIntervalMs(): number {
     const raw = readNonEmptyString(process.env.MESH_RECONCILE_INTERVAL_MS);
     if (raw) {
@@ -187,6 +207,13 @@ interface LiveCoordinator {
     // routes back to the exact originating coordinator session, not a sibling on the same
     // daemon (the multi-coordinator misroute).
     sessionId: string;
+    // PTY-OVERTRUST-DRAIN (Defect B): drain-eligibility, decided on the RAW adapter
+    // turn-state (mask-stripped) — NOT on getState().status, which overlays the
+    // auto-approve "hold-idle" visual mask that paints a genuinely-idle coordinator
+    // `generating` and so used to strand its worker's completion. True only when the
+    // raw adapter is at a real turn end AND the session is not modal-parked. When the
+    // instance does not expose getDrainStatus() (non-CLI / older), this falls back to
+    // the masked `status === 'idle'` (the pre-fix behaviour) so nothing regresses.
     idle: boolean;
     // True when the coordinator session is parked on a harness modal awaiting a
     // human answer — claude-cli AskUserQuestion (waiting_choice) or a tool-consent
@@ -318,6 +345,18 @@ function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
         const modalParked = typeof (inst as any).isModalParked === 'function'
             ? (inst as any).isModalParked() === true
             : (status === 'waiting_choice' || status === 'waiting_approval');
+        // PTY-OVERTRUST-DRAIN (Defect B, fix A): drain-eligible idle is decided on the
+        // RAW adapter turn-state, not getState().status. getState() overlays the
+        // auto-approve hold-idle mask that paints a genuinely-idle coordinator
+        // `generating` (a UI-flicker suppressant), and the reconcile loop used to trust
+        // that mask and HOLD the worker's completion (generating_no_idle_coordinator)
+        // even though the PTY was at a real turn end. getDrainStatus() strips the mask
+        // (raw adapter idle, modal-park preserved). Fall back to the masked literal for
+        // any instance that does not expose it (non-CLI / older) — regression-0.
+        const drainStatus: string | null = typeof (inst as any).getDrainStatus === 'function'
+            ? (inst as any).getDrainStatus()
+            : null;
+        const idle = drainStatus !== null ? drainStatus === 'idle' : (status === 'idle');
         const sessionId = readNonEmptyString(state.instanceId);
         // ── NOTIF (B) desync diagnostic (read-only, no behavior change) ───────────
         // The confirmed (B) defect: a coordinator whose FSM is idle (status above ===
@@ -349,7 +388,10 @@ function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
             const lastStatus = readNonEmptyString((inst as any).lastStatus) || '?';
             const autoApproveBusy = (inst as any).autoApproveBusy;
             const maskSince = (inst as any).autoApproveMaskSince;
-            LOG.debug('MeshReconcile', `coordDiag sess=${sessionId || '?'} mesh=${meshId} getState=${status || '?'} lastStatus=${lastStatus} adapterRaw=${adapterRaw} autoApproveBusy=${autoApproveBusy === true} maskSince=${maskSince || 0}`);
+            // PTY-OVERTRUST-DRAIN: include the mask-stripped drainStatus next to the three
+            // legacy sources so the divergence (getState=generating while adapterRaw=idle =
+            // the mask) is directly readable, and confirm drain now follows adapterRaw.
+            LOG.debug('MeshReconcile', `coordDiag sess=${sessionId || '?'} mesh=${meshId} getState=${status || '?'} drainStatus=${drainStatus || 'n/a'} lastStatus=${lastStatus} adapterRaw=${adapterRaw} autoApproveBusy=${autoApproveBusy === true} maskSince=${maskSince || 0}`);
         }
         // Modal-park transition observability: a coordinator entering modal-park is what
         // begins holding completion events under `modal_parked`; one leaving it is what
@@ -365,7 +407,7 @@ function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
                 LOG.info('MeshReconcile', `Coordinator ${sessionId || '?'} (mesh ${meshId}) left modal-park (status=${status}) — held events will drain on this/next tick`);
             }
         }
-        out.push({ meshId, instance: inst, sessionId, idle: status === 'idle', modalParked });
+        out.push({ meshId, instance: inst, sessionId, idle, modalParked });
     }
     return out;
 }
@@ -564,6 +606,107 @@ function recordHeldTerminalEventsToLedger(
             LOG.warn('MeshReconcile', `Failed to ledger-record held ${event.event} for mesh ${meshId}: ${e?.message || e}`);
         }
     }
+}
+
+// PTY-OVERTRUST-DRAIN (Defect B, fix B). Age of the OLDEST queued terminal/force-inject
+// event for a mesh, in ms — the signal the generating-hold age-escape gates on. Returns 0
+// when there is no held terminal event (no escape needed). Best-effort: a peek failure
+// returns 0 (no escape this tick), never throws into the tick.
+function oldestHeldTerminalEventAgeMs(meshId: string, drainDaemonIds: string[]): number {
+    let pending: readonly PendingMeshCoordinatorEvent[];
+    try {
+        pending = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : undefined);
+    } catch {
+        return 0;
+    }
+    const now = Date.now();
+    let maxAge = 0;
+    for (const event of pending) {
+        if (!shouldForceInjectMeshEvent(event.event)) continue; // only terminal events matter
+        const queuedAt = typeof event.queuedAt === 'number' ? event.queuedAt : now;
+        const age = now - queuedAt;
+        if (age > maxAge) maxAge = age;
+    }
+    return maxAge;
+}
+
+// PTY-OVERTRUST-DRAIN (Defect B, fix B). Re-confirm, on the RAW adapter (mask-stripped),
+// which of the held-as-generating coordinators is GENUINELY idle right now. A coordinator
+// whose getDrainStatus() reads 'idle' is a real drain target the time-based escape may
+// deliver into. One that still reads 'generating'/'modal_parked'/'other' stays held — the
+// escape NEVER injects into a genuinely-busy PTY (that is the data-loss force-inject path
+// intentionally removed; re-confirmation is what keeps this safe). Falls back to the
+// coordinator's already-computed `idle` flag when the instance does not expose
+// getDrainStatus() (non-CLI / older) — that flag is itself raw-adapter-derived post-fix-A.
+function reconfirmGenuinelyIdleCoordinators(generating: LiveCoordinator[]): LiveCoordinator[] {
+    const out: LiveCoordinator[] = [];
+    for (const c of generating) {
+        const inst = c.instance as any;
+        const drainStatus: string | null = typeof inst?.getDrainStatus === 'function'
+            ? inst.getDrainStatus()
+            : null;
+        const genuinelyIdle = drainStatus !== null ? drainStatus === 'idle' : c.idle;
+        if (genuinelyIdle) out.push({ ...c, idle: true });
+    }
+    return out;
+}
+
+// Full-drain the local pending queue for a mesh and inject every event into the given
+// IDLE target coordinators, honouring strict session routing. Shared by the normal idle
+// delivery path and the Defect-B age-escape so both deliver identically (one drain, one
+// inject-per-event, strict-route hold for an unmatched session). Returns the number of
+// events drained (0 when the queue was empty / drain failed). Callers must have already
+// confirmed the targets are genuinely idle.
+function drainAndInjectIntoTargets(
+    meshId: string,
+    drainDaemonIds: string[],
+    localDaemonId: string | undefined,
+    targetCoordinators: LiveCoordinator[],
+    logLabel: string,
+): number {
+    let pendingEvents: PendingMeshCoordinatorEvent[] = [];
+    try {
+        pendingEvents = drainPendingMeshCoordinatorEvents(
+            meshId,
+            drainDaemonIds.length > 0 ? drainDaemonIds : localDaemonId,
+        );
+    } catch (e: any) {
+        LOG.warn('MeshReconcile', `Drain failed for mesh ${meshId}: ${e?.message || e}`);
+        return 0;
+    }
+    if (pendingEvents.length === 0) return 0;
+
+    LOG.info('MeshReconcile', `Reconcile inject → ${logLabel}: ${pendingEvents.length} pending event(s) → ${targetCoordinators.length} coordinator(s) for mesh ${meshId}`);
+    for (const pending of pendingEvents) {
+        // Strict session routing (multi-coordinator): when the event names an
+        // originating coordinator session, deliver ONLY to the live coordinator whose
+        // session id matches — a sibling coordinator on the same daemon must NOT receive
+        // another coordinator's completion. When the event carries no session id (legacy /
+        // version-skewed / single-coordinator), fall back to the daemon-level set
+        // (unchanged behaviour — regression-0 for the common case).
+        const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
+        if (wantSession) {
+            // SESSION-ID IS SINGLE-FORM: a coordinator session id is one canonical
+            // UUID (crypto.randomUUID), carried verbatim end-to-end — no node/daemon-id
+            // style serialization variants. Exact `===` is the correct match; unlike
+            // the daemon-level set below it needs no equivalence helper.
+            const matched = targetCoordinators.filter(c => c.sessionId === wantSession);
+            if (matched.length === 0) {
+                // The originating coordinator session is not deliverable on this daemon
+                // right now (gone, or modal-parked and excluded from targets). Strict mode
+                // does NOT broadcast to siblings — hold the event for a later tick, and
+                // ledger-expire it past a TTL so it can never wedge forever.
+                holdOrExpireStrictUnmatchedEvent(pending, wantSession, meshId);
+                continue;
+            }
+            for (const c of matched) injectPendingIntoCoordinator(c.instance, pending);
+            continue;
+        }
+        for (const c of targetCoordinators) {
+            injectPendingIntoCoordinator(c.instance, pending);
+        }
+    }
+    return pendingEvents.length;
 }
 
 // One reconcile tick. Two independent phases:
@@ -974,6 +1117,31 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                     try { hasPending = store.pendingEventCount(meshId) > 0; } catch { /* peek below */ }
                 }
                 if (hasPending) {
+                    // ── PTY-OVERTRUST-DRAIN (Defect B, fix B): age-based escape ───────────
+                    // Fix A already routes the common mask-driven false-busy to the idle path,
+                    // so reaching here means the coordinator's RAW adapter reads generating.
+                    // That is almost always genuine — but a status-source desync fix A does not
+                    // reach can momentarily make the raw adapter read generating while the PTY
+                    // is actually at a turn end, stranding the completion across many ticks. As a
+                    // TIME-BASED BACKSTOP, once the oldest held terminal event has aged past the
+                    // escalate threshold, RE-CONFIRM each held coordinator's raw adapter idle and,
+                    // if genuinely idle, drain ONCE into it. The re-confirmation gate is what makes
+                    // this safe: it NEVER injects into a genuinely-generating PTY (that is the
+                    // data-loss force-inject path intentionally removed). A coordinator still
+                    // genuinely generating stays held.
+                    const escalateMs = resolvePendingHeldDrainEscalateMs();
+                    const heldAgeMs = oldestHeldTerminalEventAgeMs(
+                        meshId,
+                        drainDaemonIds.length > 0 ? drainDaemonIds : (localDaemonId ? [localDaemonId] : []),
+                    );
+                    if (heldAgeMs >= escalateMs) {
+                        const escapeTargets = reconfirmGenuinelyIdleCoordinators(generatingCoordinators);
+                        if (escapeTargets.length > 0) {
+                            LOG.info('MeshReconcile', `Reconcile age-escape → generating-hold: held terminal event(s) for mesh ${meshId} aged ${Math.round(heldAgeMs / 1000)}s (≥ ${Math.round(escalateMs / 1000)}s) and ${escapeTargets.length} coordinator(s) re-confirmed genuinely idle on the raw adapter — draining once`);
+                            const drained = drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, escapeTargets, 'age-escape');
+                            if (drained > 0) continue; // delivered → no hold this tick
+                        }
+                    }
                     LOG.info('MeshReconcile', `Reconcile skip → generating: holding pending event(s) for mesh ${meshId} (${generatingCoordinators.length} coordinator(s) busy; events left queued for the next idle tick)`);
                     // NOTIF (B) diagnostic: this is the hold that strands the completion. Name
                     // the sessionId(s) the loop just classified non-idle/non-modal so the
@@ -1005,48 +1173,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         // queued event and deliver it to the idle input box as a real turn. The no-idle case
         // (generating/modal-only) was already held above and never reaches here, so there is
         // no force-drain-into-generating path left — the single delivery is the idle drain.
-        let pendingEvents: PendingMeshCoordinatorEvent[] = [];
-        try {
-            pendingEvents = drainPendingMeshCoordinatorEvents(
-                meshId,
-                drainDaemonIds.length > 0 ? drainDaemonIds : localDaemonId,
-            );
-        } catch (e: any) {
-            LOG.warn('MeshReconcile', `Drain failed for mesh ${meshId}: ${e?.message || e}`);
-            continue;
-        }
-        if (pendingEvents.length === 0) continue;
-
-        LOG.info('MeshReconcile', `Reconcile inject → idle: ${pendingEvents.length} pending event(s) → ${targetCoordinators.length} coordinator(s) for mesh ${meshId}`);
-        for (const pending of pendingEvents) {
-            // Strict session routing (multi-coordinator): when the event names an
-            // originating coordinator session, deliver ONLY to the live coordinator whose
-            // session id matches — a sibling coordinator on the same daemon must NOT receive
-            // another coordinator's completion. When the event carries no session id (legacy /
-            // version-skewed / single-coordinator), fall back to the daemon-level set
-            // (unchanged behaviour — regression-0 for the common case).
-            const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
-            if (wantSession) {
-                // SESSION-ID IS SINGLE-FORM: a coordinator session id is one canonical
-                // UUID (crypto.randomUUID), carried verbatim end-to-end — no node/daemon-id
-                // style serialization variants. Exact `===` is the correct match; unlike
-                // the daemon-level set below it needs no equivalence helper.
-                const matched = targetCoordinators.filter(c => c.sessionId === wantSession);
-                if (matched.length === 0) {
-                    // The originating coordinator session is not deliverable on this daemon
-                    // right now (gone, or modal-parked and excluded from targets). Strict mode
-                    // does NOT broadcast to siblings — hold the event for a later tick, and
-                    // ledger-expire it past a TTL so it can never wedge forever.
-                    holdOrExpireStrictUnmatchedEvent(pending, wantSession, meshId);
-                    continue;
-                }
-                for (const c of matched) injectPendingIntoCoordinator(c.instance, pending);
-                continue;
-            }
-            for (const c of targetCoordinators) {
-                injectPendingIntoCoordinator(c.instance, pending);
-            }
-        }
+        drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, targetCoordinators, 'idle');
     }
 }
 

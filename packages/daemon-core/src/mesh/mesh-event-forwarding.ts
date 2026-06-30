@@ -1717,7 +1717,16 @@ export function flushPendingForMeshIdleCoordinators(components: DaemonComponents
             const modalParked = typeof (inst as any).isModalParked === 'function'
                 ? (inst as any).isModalParked() === true
                 : (status === 'waiting_choice' || status === 'waiting_approval');
-            if (status === 'idle' && !modalParked) {
+            // PTY-OVERTRUST-DRAIN (Defect B): decide idle on the RAW adapter turn-state
+            // (getDrainStatus, mask-stripped) to match the reconcile loop — getState().status
+            // overlays the auto-approve hold-idle mask that paints a genuinely-idle coordinator
+            // `generating`, which would make this opportunistic flush skip a real drain target.
+            // Fall back to the masked literal for any instance without getDrainStatus().
+            const drainStatus: string | null = typeof (inst as any).getDrainStatus === 'function'
+                ? (inst as any).getDrainStatus()
+                : null;
+            const idle = drainStatus !== null ? drainStatus === 'idle' : (status === 'idle');
+            if (idle && !modalParked) {
                 idleCoordinators.push({ instance: inst, sessionId: readNonEmptyString(state.instanceId) });
             }
         }

@@ -1199,6 +1199,50 @@ export class CliProviderInstance implements ProviderInstance {
         return this.resolveModalParkStatus() !== null;
     }
 
+    /**
+     * PTY-OVERTRUST-DRAIN (Defect B). The deliverability/drain status the mesh
+     * reconcile loop must consult — the RAW adapter turn-state, with the
+     * auto-approve "hold-idle" visual mask STRIPPED.
+     *
+     * getState().status overlays `autoApproveHoldIdle`/`autoApproveActive` to paint a
+     * genuinely-idle adapter as `generating` (a UI-flicker suppression while an
+     * auto-approve key-press settles — see getState() ~:800). That mask is correct
+     * for the dashboard, but the reconcile loop trusts it as "the coordinator is
+     * busy" and therefore HOLDS a worker's completion under
+     * `generating_no_idle_coordinator` even though the coordinator's PTY is at a real
+     * turn end and would accept the inject as a turn — the completion is stranded.
+     *
+     * This accessor reports the drain truth instead:
+     *   - 'modal_parked' — a GENUINE human-await modal (AskUserQuestion / a non-
+     *     transient tool-consent). Still excluded from drain (a force-inject here
+     *     writes raw keystrokes the modal eats → data corruption). Mirrors
+     *     isModalParked(), evaluated first so a parked session never reads idle.
+     *   - 'idle' — the RAW adapter is at a turn end (adapter.getStatus(allowParse:false)
+     *     === 'idle') and the session is not modal-parked. Drain-eligible REGARDLESS
+     *     of the auto-approve mask. This is the case the mask used to hide.
+     *   - 'generating' — the raw adapter is genuinely mid-turn. Held (a raw PTY write
+     *     into a generating claude-cli is not consumed as a turn → data loss). The
+     *     intentional removal of force-inject-into-generating is preserved.
+     *   - 'other' — any other raw status (error / starting / waiting_choice handled by
+     *     modal-park above). Not a drain target.
+     *
+     * Uses allowParse:false (engine.activeModal only, side-effect-free) so it never
+     * mutates the very auto-approve mask state the diagnostics read.
+     */
+    getDrainStatus(): 'idle' | 'generating' | 'modal_parked' | 'other' {
+        if (this.isModalParked()) return 'modal_parked';
+        let rawStatus: string;
+        try {
+            const raw = this.adapter.getStatus({ allowParse: false })?.status;
+            rawStatus = typeof raw === 'string' ? raw.trim() : '';
+        } catch {
+            return 'other';
+        }
+        if (rawStatus === 'idle') return 'idle';
+        if (isCliGeneratingLikeStatus(rawStatus)) return 'generating';
+        return 'other';
+    }
+
     onEvent(event: string, data?: any): void {
         if (event === 'send_message') {
             const input = normalizeInputEnvelope(data);
