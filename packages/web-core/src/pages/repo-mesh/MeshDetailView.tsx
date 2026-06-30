@@ -5,6 +5,7 @@ import { AlertBanner } from '../../components/ui/AlertBanner'
 import { FormField } from '../../components/ui/FormField'
 import { IconMesh } from '../../components/Icons'
 import { MeshObservabilitySurface } from '../../components/MeshGraph'
+import MagiPanelManager from '../../components/MeshGraph/MagiPanelManager'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { AvailableCliProviderOption } from '../../utils/provider-priority'
 import { MeshQueueSection } from './MeshQueueSection'
@@ -299,6 +300,21 @@ export function MeshDetailView({
                     />
                 )}
             </Section>
+
+            {/* ── MAGI panels (CRUD) ──
+                 Panel create/edit/delete lives ONLY here on the /mesh detail page.
+                 The mesh dialog and the Mesh overview above show panels read-only
+                 (MagiPanelOverview); this Section is the single place to mutate them.
+                 Same {status, daemonId, sendDaemonCommand} seam the surface uses. */}
+            {displayedMeshStatus && (
+                <Section title="MAGI panels" description="Saved (machine × AI) cross-verification quorums — machine-local config. Create, edit, or delete them here.">
+                    <MagiPanelManager
+                        status={displayedMeshStatus}
+                        daemonId={activeDaemonId}
+                        sendDaemonCommand={sendCommand}
+                    />
+                </Section>
+            )}
 
             {/* ── Review Inbox (M4.0) ── */}
             {features.reviewInbox && (

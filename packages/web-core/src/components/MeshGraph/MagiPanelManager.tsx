@@ -563,21 +563,28 @@ export default function MagiPanelManager({ status, daemonId, sendDaemonCommand }
     )
 }
 
-function MagiPanelRow({
-    name, panel, liveNodes, meshTheme, onEdit, onRemove, disabled,
+/**
+ * Read-only display body for one MAGI panel — name + description + member/replica
+ * count + optional defaultKind badge + coupled/independent diagnostic + resolved
+ * member rows (provider @ node × replicas + availability). PROP-ONLY: it carries no
+ * daemonId / edit / delete affordance, so it is reused both inside the editor list
+ * (MagiPanelRow wraps it with Edit/Delete) and in the read-only MagiPanelOverview.
+ * Routing both through one component keeps the read and edit badges from drifting.
+ *
+ * `resolveMagiPanel` is a pure function over (panel, liveNodes), so this row needs
+ * no command seam — the live independence verdict is computed client-side here.
+ */
+export function MagiPanelSummaryRow({
+    name, panel, liveNodes, meshTheme,
 }: {
     name: string
     panel: MagiPanel
     liveNodes: MagiResolveNode[]
     meshTheme: MeshGraphTheme
-    onEdit: () => void
-    onRemove: () => void
-    disabled: boolean
 }) {
     const resolution = useMemo(() => resolveMagiPanel(panel, liveNodes), [panel, liveNodes])
-    const btnGhost = `rounded-lg px-2.5 py-1 text-[11px] font-medium ${meshTheme.textSecondary} border ${meshTheme.isDark ? 'border-white/10 hover:bg-white/[0.05]' : 'border-slate-300 hover:bg-slate-50'} disabled:opacity-50`
     return (
-        <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
+        <div className="flex flex-col gap-2">
             <div className="flex flex-wrap items-center gap-2">
                 <span className={`min-w-0 truncate text-[12px] font-semibold ${meshTheme.textPrimary}`} title={panel.description || name}>{name}</span>
                 {panel.description && <span className={`min-w-0 truncate text-[11px] ${meshTheme.textSecondary}`}>{panel.description}</span>}
@@ -611,12 +618,8 @@ function MagiPanelRow({
                         (mesh offline — declaration only)
                     </span>
                 )}
-                <div className="ml-auto flex items-center gap-1.5">
-                    <button type="button" className={btnGhost} onClick={onEdit} disabled={disabled}>Edit</button>
-                    <button type="button" className={btnGhost} onClick={onRemove} disabled={disabled}>Delete</button>
-                </div>
             </div>
-            <div className="mt-2 flex flex-col gap-1">
+            <div className="flex flex-col gap-1">
                 {resolution.members.map((mr, idx) => (
                     <div key={idx} className="flex flex-wrap items-center gap-1.5 text-[11px]">
                         <span className={`font-mono ${meshTheme.textPrimary}`}>{mr.member.provider}</span>
@@ -630,6 +633,36 @@ function MagiPanelRow({
                         </span>
                     </div>
                 ))}
+            </div>
+        </div>
+    )
+}
+
+/**
+ * Editor-list row: the read-only summary (MagiPanelSummaryRow) plus the Edit/Delete
+ * affordance wrapped AROUND it. The CRUD buttons live here, outside the summary, so
+ * the read-only Overview can reuse the same summary body without them.
+ */
+function MagiPanelRow({
+    name, panel, liveNodes, meshTheme, onEdit, onRemove, disabled,
+}: {
+    name: string
+    panel: MagiPanel
+    liveNodes: MagiResolveNode[]
+    meshTheme: MeshGraphTheme
+    onEdit: () => void
+    onRemove: () => void
+    disabled: boolean
+}) {
+    const btnGhost = `rounded-lg px-2.5 py-1 text-[11px] font-medium ${meshTheme.textSecondary} border ${meshTheme.isDark ? 'border-white/10 hover:bg-white/[0.05]' : 'border-slate-300 hover:bg-slate-50'} disabled:opacity-50`
+    return (
+        <div className={`relative rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
+            <div className="absolute right-3 top-3 flex items-center gap-1.5">
+                <button type="button" className={btnGhost} onClick={onEdit} disabled={disabled}>Edit</button>
+                <button type="button" className={btnGhost} onClick={onRemove} disabled={disabled}>Delete</button>
+            </div>
+            <div className="pr-28">
+                <MagiPanelSummaryRow name={name} panel={panel} liveNodes={liveNodes} meshTheme={meshTheme} />
             </div>
         </div>
     )

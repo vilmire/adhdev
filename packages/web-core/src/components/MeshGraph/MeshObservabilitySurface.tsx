@@ -18,7 +18,7 @@ import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
 import { buildMeshGraph, type MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 import { canonicalizeRepoMeshStatus, summarizeRepoMeshCanonicalNodeDebug } from '../../utils/repo-mesh-status'
 import { extractMagiActivity, type MagiGroupActivity } from '../../utils/magi-activity'
-import MagiPanelManager from './MagiPanelManager'
+import MagiPanelOverview from './MagiPanelOverview'
 
 type DetailSelection =
     | { kind: 'node'; nodeId: string }
@@ -26,7 +26,7 @@ type DetailSelection =
     | { kind: 'session'; nodeId: string; sessionId: string }
     | { kind: 'queue'; taskId: string }
 
-export type MeshSurfaceTab = 'overview' | 'status' | 'panels' | 'graph'
+export type MeshSurfaceTab = 'overview' | 'status' | 'graph'
 
 interface MeshObservabilitySurfaceProps {
     status: RepoMeshStatus
@@ -84,15 +84,6 @@ export function MeshSurfaceTabControls({
                     onClick={() => onActiveTabChange('status')}
                 >
                     Status
-                </button>
-                <button
-                    type="button"
-                    role="tab"
-                    aria-selected={activeTab === 'panels'}
-                    className={tabButtonClass(activeTab === 'panels')}
-                    onClick={() => onActiveTabChange('panels')}
-                >
-                    Panels
                 </button>
                 <button
                     type="button"
@@ -1216,20 +1207,19 @@ export default function MeshObservabilitySurface({
                  bounded scroll container (min-h-0 + flex-1 + overflow-y-auto). Without
                  it the cards get clipped by the dialog shell's overflow-hidden and the
                  dashboard "full view" cannot scroll down to the lower cards. */}
-            <div className={`${activeTab === 'overview' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto`}>
+            <div className={`${activeTab === 'overview' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col gap-3 overflow-y-auto`}>
                 {activeTab === 'overview' && <MeshOverviewCards status={status} />}
+                {/* Read-only MAGI panel summary — sibling of the overview cards, NOT
+                    inside MeshOverviewCards (general-overview is untouched). CRUD lives
+                    on the /mesh detail page; this is glance-only on both surfaces. */}
+                {activeTab === 'overview' && (
+                    <MagiPanelOverview status={canonicalStatus} daemonId={daemonId} sendDaemonCommand={sendDaemonCommand} />
+                )}
             </div>
 
             {/* ── Status / Runtime tab: scheduling + per-node runtime (own scroll region) ── */}
             <div className={`${activeTab === 'status' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto`}>
                 {activeTab === 'status' && <MeshStatusTab status={canonicalStatus} />}
-            </div>
-
-            {/* ── Panels tab: MAGI panel CRUD (machine-local config; same sendDaemonCommand seam) ── */}
-            <div className={`${activeTab === 'panels' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto`}>
-                {activeTab === 'panels' && (
-                    <MagiPanelManager status={canonicalStatus} daemonId={daemonId} sendDaemonCommand={sendDaemonCommand} />
-                )}
             </div>
 
             {/* ── Graph tab: existing topology card (lazily mounted) ── */}
