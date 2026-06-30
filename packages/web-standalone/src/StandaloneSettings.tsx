@@ -11,7 +11,6 @@ import {
     AlertBanner,
     BrowserNotificationSettings,
     ConnectedMachinesSection,
-    CoordinatorPromptsSection,
     GeneralThemeSection,
     ChatThemeSection,
     MobileDashboardModeSection,
@@ -414,14 +413,6 @@ export default function StandaloneSettings() {
                     ides={ides}
                     emptyMessage="Daemon not connected. Run 'adhdev-standalone' to start."
                 />
-            </Section>
-
-            {/* ═══ Coordinator prompts (~/.adhdev/coordinator-prompts/) ═══ */}
-            <Section
-                title="Coordinator prompts"
-                description="User-level overrides for the mesh coordinator system prompt. Per-mesh overrides live in the Repo Mesh page."
-            >
-                <CoordinatorPromptsSection daemonId={daemonEntry?.id} />
             </Section>
 
             {/* ═══ Theme ═══ */}

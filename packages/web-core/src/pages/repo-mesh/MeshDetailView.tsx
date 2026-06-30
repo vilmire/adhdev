@@ -17,6 +17,7 @@ import { ReviewInboxSection } from './ReviewInboxSection'
 import { MeshNodeList } from './MeshNodeList'
 import { MeshHostDaemonSection } from './MeshHostDaemonSection'
 import { RepoMeshHermesMcpConfig } from './MeshHermesMcpConfig'
+import CoordinatorPromptsSection from '../../components/settings/CoordinatorPromptsSection'
 import { IconRefresh } from './icons'
 import {
     readMeshPolicy,
@@ -451,34 +452,59 @@ export function MeshDetailView({
                 {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">Saving…</div>}
             </Section>
 
-            {/* ── Coordinator prompt (advanced) ── */}
+            {/* ── Coordinator prompt (advanced) ──
+                 Two axes live here:
+                  • Per-mesh: stored in this mesh's coordinator config (systemPromptOverride /
+                    systemPromptAppend) via `update_mesh`. Applies only to this mesh.
+                  • User-level: per-machine files at ~/.adhdev/coordinator-prompts/<cli>.{md,append.md}
+                    on the coordinator daemon, edited via list_/write_coordinator_prompt. Applies to
+                    every mesh this daemon coordinates. Relocated here from Settings so it always has
+                    a daemon target (activeDaemonId) — on Settings it had no daemon/mesh context and
+                    showed "No connected daemons". */}
             {features.coordinatorPrompt && (
                 <Section title="Coordinator prompt" collapsible defaultOpen={false}
                     badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-[10px] font-medium text-text-muted">advanced</span>}
-                    description="Customize the system prompt for coordinator sessions. Leave empty to use the daemon default.">
-                    <FormField label="Override (replaces default)" hint="When set, replaces the daemon's default base prompt. Leave empty to keep the default.">
-                        <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
-                            rows={6} value={coordinatorPromptDraft.override}
-                            onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, override: e.target.value })}
-                            disabled={savingCoordinatorPrompt} placeholder="(empty — daemon default applies)" />
-                    </FormField>
-                    <FormField label="Append (added after the base)" hint="Always added after whichever base prompt wins.">
-                        <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
-                            rows={4} value={coordinatorPromptDraft.append}
-                            onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, append: e.target.value })}
-                            disabled={savingCoordinatorPrompt} placeholder="(empty — nothing appended)" />
-                    </FormField>
-                    <details className="mt-2 text-[12px] text-text-muted">
-                        <summary className="cursor-pointer select-none">Available placeholders</summary>
-                        <p className="mt-1 font-mono break-words">
-                            {'{{meshName}}, {{repo}}, {{defaultBranch}}, {{cliType}}, {{nodes}}, {{policy}}, {{tools}}, {{workflow}}, {{rules}}, {{toolExposurePreflight}}'}
+                    description="Customize the system prompt for coordinator sessions. Per-mesh overrides apply to this mesh only; user-level overrides apply to every mesh this daemon coordinates.">
+
+                    {/* Per-mesh override (this mesh's coordinator config) */}
+                    <div className="rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
+                        <div className="text-[13px] font-semibold mb-1">This mesh</div>
+                        <p className="text-[12px] text-text-muted mb-3">Applies only to coordinator sessions for <span className="font-mono text-[11px]">{selectedMesh.name}</span>. Leave empty to fall through to the user-level / daemon default.</p>
+                        <FormField label="Override (replaces default)" hint="When set, replaces the daemon's default base prompt. Leave empty to keep the default.">
+                            <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
+                                rows={6} value={coordinatorPromptDraft.override}
+                                onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, override: e.target.value })}
+                                disabled={savingCoordinatorPrompt} placeholder="(empty — daemon default applies)" />
+                        </FormField>
+                        <FormField label="Append (added after the base)" hint="Always added after whichever base prompt wins.">
+                            <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
+                                rows={4} value={coordinatorPromptDraft.append}
+                                onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, append: e.target.value })}
+                                disabled={savingCoordinatorPrompt} placeholder="(empty — nothing appended)" />
+                        </FormField>
+                        <details className="mt-2 text-[12px] text-text-muted">
+                            <summary className="cursor-pointer select-none">Available placeholders</summary>
+                            <p className="mt-1 font-mono break-words">
+                                {'{{meshName}}, {{repo}}, {{defaultBranch}}, {{cliType}}, {{nodes}}, {{policy}}, {{tools}}, {{workflow}}, {{rules}}, {{toolExposurePreflight}}'}
+                            </p>
+                        </details>
+                        <div className="mt-3 flex items-center gap-2">
+                            <button type="button" className="btn btn-primary btn-sm" onClick={onSaveCoordinatorPrompt} disabled={savingCoordinatorPrompt}>
+                                {savingCoordinatorPrompt ? 'Saving…' : 'Save coordinator prompt'}
+                            </button>
+                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => onCoordinatorPromptDraftChange({ override: '', append: '' })} disabled={savingCoordinatorPrompt} title="Clear both fields. Click Save to commit.">Clear</button>
+                        </div>
+                    </div>
+
+                    {/* User-level (per-machine files on the coordinator daemon) */}
+                    <div className="mt-5 border-t border-border-subtle pt-4">
+                        <div className="text-[13px] font-semibold mb-1">User-level (this daemon)</div>
+                        <p className="text-[12px] text-text-muted mb-3">
+                            Per-machine prompt files on the coordinator daemon. They apply to every mesh this
+                            daemon coordinates and are not synced across daemons. Per-mesh overrides above win
+                            over these.
                         </p>
-                    </details>
-                    <div className="mt-3 flex items-center gap-2">
-                        <button type="button" className="btn btn-primary btn-sm" onClick={onSaveCoordinatorPrompt} disabled={savingCoordinatorPrompt}>
-                            {savingCoordinatorPrompt ? 'Saving…' : 'Save coordinator prompt'}
-                        </button>
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onCoordinatorPromptDraftChange({ override: '', append: '' })} disabled={savingCoordinatorPrompt} title="Clear both fields. Click Save to commit.">Clear</button>
+                        <CoordinatorPromptsSection daemonId={activeDaemonId || undefined} />
                     </div>
                 </Section>
             )}
