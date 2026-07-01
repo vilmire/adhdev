@@ -82,3 +82,5 @@ export {
   applyTerminalColorEnv,
   ensureNodePtySpawnHelperPermissions,
 } from './spawn-env.js';
+export { createSessionHostControlPlane } from './control-plane.js';
+export type { SessionHostControlPlane, SessionHostControlTransport } from './control-plane.js';

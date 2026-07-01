@@ -1,69 +1,78 @@
-import { SessionHostClient, type SessionHostEndpoint } from '@adhdev/session-host-core';
-
-interface SessionHostControlPlane {
-  getDiagnostics(payload?: { includeSessions?: boolean; limit?: number }): Promise<any>;
-  listSessions(): Promise<any[]>;
-  stopSession(sessionId: string): Promise<any>;
-  deleteSession(sessionId: string, opts?: { force?: boolean }): Promise<any>;
-  resumeSession(sessionId: string): Promise<any>;
-  restartSession(sessionId: string): Promise<any>;
-  sendSignal(sessionId: string, signal: string): Promise<any>;
-  forceDetachClient(sessionId: string, clientId: string): Promise<any>;
-  pruneDuplicateSessions(payload?: { providerType?: string; workspace?: string; dryRun?: boolean }): Promise<any>;
-  acquireWrite(payload: { sessionId: string; clientId: string; ownerType: 'agent' | 'user'; force?: boolean }): Promise<any>;
-  releaseWrite(payload: { sessionId: string; clientId: string }): Promise<any>;
-}
+import {
+  SessionHostClient,
+  createSessionHostControlPlane,
+  type AcquireWritePayload,
+  type GetHostDiagnosticsPayload,
+  type PruneDuplicateSessionsPayload,
+  type ReleaseWritePayload,
+  type SessionHostControlPlane,
+  type SessionHostDiagnostics,
+  type SessionHostEndpoint,
+  type SessionHostPruneDuplicatesResult,
+  type SessionHostRecord,
+  type SessionHostRequestType,
+} from '@adhdev/session-host-core';
 
 export class StandaloneSessionHostControlPlane implements SessionHostControlPlane {
+  private readonly plane: SessionHostControlPlane;
+
   constructor(
     private readonly getEndpoint: () => Promise<SessionHostEndpoint>,
-  ) {}
-
-  async getDiagnostics(payload: { includeSessions?: boolean; limit?: number } = {}): Promise<any> {
-    return this.request('get_host_diagnostics', payload);
+  ) {
+    // The 11-method dispatch table (type strings + throw text) is shared with the
+    // cloud daemon via @adhdev/session-host-core. Standalone injects a per-request
+    // transport that opens a fresh client and closes it in `finally`.
+    this.plane = createSessionHostControlPlane({
+      request: <T>(type: SessionHostRequestType, payload: Record<string, unknown>) =>
+        this.request<T>(type, payload),
+    });
   }
 
-  async listSessions(): Promise<any[]> {
-    return this.request('list_sessions', {});
+  getDiagnostics(payload: GetHostDiagnosticsPayload = {}): Promise<SessionHostDiagnostics> {
+    return this.plane.getDiagnostics(payload);
   }
 
-  async stopSession(sessionId: string): Promise<any> {
-    return this.request('stop_session', { sessionId });
+  listSessions(): Promise<SessionHostRecord[]> {
+    return this.plane.listSessions();
   }
 
-  async deleteSession(sessionId: string, opts: { force?: boolean } = {}): Promise<any> {
-    return this.request('delete_session', { sessionId, force: opts.force === true });
+  stopSession(sessionId: string): Promise<SessionHostRecord | null> {
+    return this.plane.stopSession(sessionId);
   }
 
-  async resumeSession(sessionId: string): Promise<any> {
-    return this.request('resume_session', { sessionId });
+  deleteSession(sessionId: string, opts: { force?: boolean } = {}): Promise<SessionHostRecord | null> {
+    return this.plane.deleteSession(sessionId, opts);
   }
 
-  async restartSession(sessionId: string): Promise<any> {
-    return this.request('restart_session', { sessionId });
+  resumeSession(sessionId: string): Promise<SessionHostRecord | null> {
+    return this.plane.resumeSession(sessionId);
   }
 
-  async sendSignal(sessionId: string, signal: string): Promise<any> {
-    return this.request('send_signal', { sessionId, signal });
+  restartSession(sessionId: string): Promise<SessionHostRecord | null> {
+    return this.plane.restartSession(sessionId);
   }
 
-  async forceDetachClient(sessionId: string, clientId: string): Promise<any> {
-    return this.request('force_detach_client', { sessionId, clientId });
+  sendSignal(sessionId: string, signal: string): Promise<SessionHostRecord | null> {
+    return this.plane.sendSignal(sessionId, signal);
   }
 
-  async pruneDuplicateSessions(payload: { providerType?: string; workspace?: string; dryRun?: boolean } = {}): Promise<any> {
-    return this.request('prune_duplicate_sessions', payload);
+  forceDetachClient(sessionId: string, clientId: string): Promise<SessionHostRecord | null> {
+    return this.plane.forceDetachClient(sessionId, clientId);
   }
 
-  async acquireWrite(payload: { sessionId: string; clientId: string; ownerType: 'agent' | 'user'; force?: boolean }): Promise<any> {
-    return this.request('acquire_write', payload);
+  pruneDuplicateSessions(payload: PruneDuplicateSessionsPayload = {}): Promise<SessionHostPruneDuplicatesResult> {
+    return this.plane.pruneDuplicateSessions(payload);
   }
 
-  async releaseWrite(payload: { sessionId: string; clientId: string }): Promise<any> {
-    return this.request('release_write', payload);
+  acquireWrite(payload: AcquireWritePayload): Promise<SessionHostRecord | null> {
+    return this.plane.acquireWrite(payload);
   }
 
-  private async request(type: string, payload: Record<string, unknown>): Promise<any> {
+  releaseWrite(payload: ReleaseWritePayload): Promise<SessionHostRecord | null> {
+    return this.plane.releaseWrite(payload);
+  }
+
+  private async request<T>(type: SessionHostRequestType, payload: Record<string, unknown>): Promise<T> {
     const endpoint = await this.getEndpoint();
     const client = new SessionHostClient({ endpoint });
     try {
@@ -75,7 +84,7 @@ export class StandaloneSessionHostControlPlane implements SessionHostControlPlan
       if (!response.success) {
         throw new Error(response.error || `Session host request failed: ${type}`);
       }
-      return response.result ?? null;
+      return (response.result ?? null) as T;
     } finally {
       await client.close().catch(() => {});
     }

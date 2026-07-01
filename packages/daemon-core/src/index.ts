@@ -534,6 +534,8 @@ export {
 } from './session-host/app-name.js';
 export type { SessionHostAppNameResolution } from './session-host/app-name.js';
 export { ensureSessionHostReady, listHostedCliRuntimes } from './session-host/runtime-support.js';
+export { createManagedSessionHost } from './session-host/managed-host.js';
+export type { ManagedSessionHost, ManagedSessionHostOptions } from './session-host/managed-host.js';
 export {
   getSessionHostRecoveryLabel,
   getSessionHostSurfaceKind,

@@ -1,18 +1,24 @@
 import * as childProcess from 'child_process';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
 import {
-  ensureSessionHostReady as ensureSharedSessionHostReady,
+  createManagedSessionHost,
   listHostedCliRuntimes as listSharedHostedCliRuntimes,
   resolveSessionHostAppNameResolution,
   type SessionHostEndpoint,
 } from '@adhdev/daemon-core';
-import { sanitizeSpawnEnv } from '@adhdev/session-host-core';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../../daemon-core/src/runtime-defaults.js';
 const SESSION_HOST_APP_NAME_RESOLUTION = resolveSessionHostAppNameResolution({ standalone: true });
 const SESSION_HOST_APP_NAME = SESSION_HOST_APP_NAME_RESOLUTION.appName;
 const SESSION_HOST_START_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
+
+// Shared managed-host helpers (env/pidfile/kill/spawn/ensureReady). Standalone keeps
+// stdio='ignore' spawns and kills pidfile-tracked processes unconditionally, matching
+// the prior local implementation exactly.
+const managedHost = createManagedSessionHost({
+  appName: SESSION_HOST_APP_NAME,
+  requiredRequestTypes: ['delete_session', 'get_terminal_snapshot'],
+  timeoutMs: SESSION_HOST_START_TIMEOUT_MS,
+  spawnStdio: 'ignore',
+});
 
 export function getStandaloneSessionHostAppName(): string {
   return SESSION_HOST_APP_NAME;
@@ -22,63 +28,16 @@ export function getStandaloneSessionHostAppNameWarning(): string | undefined {
   return SESSION_HOST_APP_NAME_RESOLUTION.warning;
 }
 
-function buildSessionHostEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env = sanitizeSpawnEnv(baseEnv);
-  env.ADHDEV_SESSION_HOST_NAME = SESSION_HOST_APP_NAME;
-  return env;
-}
-
 function resolveSessionHostEntry(): string {
-  const localCandidates = [
-    path.resolve(__dirname, '../vendor/session-host-daemon/index.js'),
-    path.resolve(__dirname, '../../vendor/session-host-daemon/index.js'),
-  ];
-  for (const candidate of localCandidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return require.resolve('@adhdev/session-host-daemon');
+  return managedHost.resolveEntry();
 }
 
-function getSessionHostPidFile(): string {
-  return path.join(os.homedir(), '.adhdev', `${SESSION_HOST_APP_NAME}-session-host.pid`);
-}
-
-function killPid(pid: number): boolean {
-  try {
-    if (process.platform === 'win32') {
-      childProcess.execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
-    } else {
-      process.kill(pid, 'SIGTERM');
-    }
-    return true;
-  } catch {
-    return false;
-  }
+function buildSessionHostEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return managedHost.buildEnv(baseEnv);
 }
 
 export function stopManagedSessionHostProcess(): boolean {
-  let stopped = false;
-  const pidFile = getSessionHostPidFile();
-  try {
-    if (fs.existsSync(pidFile)) {
-      const pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
-      if (Number.isFinite(pid) && pid !== process.pid) {
-        stopped = killPid(pid) || stopped;
-      }
-    }
-  } catch {
-    // noop
-  } finally {
-    try {
-      fs.unlinkSync(pidFile);
-    } catch {
-      // noop
-    }
-  }
-
-  return stopped;
+  return managedHost.stopManagedSessionHostProcess();
 }
 
 export function stopSessionHost(): boolean {
@@ -98,37 +57,7 @@ async function runSessionHostCli(args: string[]): Promise<number> {
 }
 
 export async function ensureSessionHostReady(): Promise<SessionHostEndpoint> {
-  const spawnHost = () => {
-    const entry = resolveSessionHostEntry();
-    const child = childProcess.spawn(process.execPath, [entry], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-      env: buildSessionHostEnv(process.env),
-    });
-    child.unref();
-  };
-
-  try {
-    return await ensureSharedSessionHostReady({
-      appName: SESSION_HOST_APP_NAME,
-      spawnHost,
-      timeoutMs: SESSION_HOST_START_TIMEOUT_MS,
-      requiredRequestTypes: ['delete_session', 'get_terminal_snapshot'],
-    });
-  } catch (error) {
-    stopSessionHost();
-    return ensureSharedSessionHostReady({
-      appName: SESSION_HOST_APP_NAME,
-      spawnHost,
-      timeoutMs: SESSION_HOST_START_TIMEOUT_MS,
-      requiredRequestTypes: ['delete_session', 'get_terminal_snapshot'],
-    }).catch((retryError) => {
-      const initialMessage = error instanceof Error ? error.message : String(error);
-      const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
-      throw new Error(`Session host failed to start after retry (${initialMessage}; retry: ${retryMessage})`);
-    });
-  }
+  return managedHost.ensureReady();
 }
 
 export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint) {
