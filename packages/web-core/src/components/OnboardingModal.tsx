@@ -25,6 +25,12 @@ const STEPS = [
     visual: '🖱️',
   },
   {
+    icon: '🕸️',
+    title: 'Orchestrate a fleet',
+    desc: 'With Repo Mesh (cloud), one coordinator hands work to agents across many machines — parallel git worktrees, automatic branch convergence, and cross-checking the same repo from several angles.',
+    visual: '🕸️',
+  },
+  {
     icon: '🚀',
     title: 'Get started',
     desc: 'Install the daemon and link it to your dashboard. It connects automatically.',
