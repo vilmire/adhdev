@@ -5,8 +5,9 @@ import { Section } from '../../components/ui/Section'
 import { AlertBanner } from '../../components/ui/AlertBanner'
 import { FormField } from '../../components/ui/FormField'
 import { IconMesh } from '../../components/Icons'
-// MAGI panels UI hidden per product decision 2026-07-01 — internal logic retained.
-// MagiPanelManager / MagiKindPanelEditor imports removed with their Mesh-page mounts below.
+// MAGI named-panel CRUD (MagiPanelManager) UI stays hidden per product decision 2026-07-01;
+// the task_kind → panel binding editor (MagiKindPanelEditor) is restored below.
+import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
@@ -291,18 +292,17 @@ export function MeshDetailView({
                 </div>
             </Section>
 
-            {/* ── MAGI panels UI hidden per product decision 2026-07-01 — internal logic retained ──
-                 The MAGI panels (CRUD) and MAGI kind → panel bindings Sections were removed
-                 from the /mesh detail page. The underlying capability is untouched: the
-                 magi_panel_* / magi_kind_panel_* daemon commands, the mesh_magi_* orchestration,
-                 and the MagiPanelManager / MagiKindPanelEditor components (still in-tree under
-                 components/MeshGraph/) all remain. Only these Mesh-page UI mounts are hidden.
-                 To restore, re-add:
-                   <Section title="MAGI panels" ...><MagiPanelManager status={displayedMeshStatus}
-                       daemonId={activeDaemonId} sendDaemonCommand={sendCommand} /></Section>
-                   <Section title="MAGI kind → panel bindings" ...><MagiKindPanelEditor status={...}
-                       daemonId={activeDaemonId} sendDaemonCommand={sendCommand} /></Section>
-                 and their imports. */}
+            {/* ── MAGI task_kind → panel binding editor ──
+                 The named-panel CRUD (MagiPanelManager) Section stays hidden per the
+                 2026-07-01 product decision; only the task_kind binding editor below is
+                 mounted. Underlying magi_panel_* / magi_kind_panel_* commands are untouched. */}
+            <Section title="MAGI" description="task_kind → 패널 슬롯 바인딩">
+                <MagiKindPanelEditor
+                    status={displayedMeshStatus}
+                    daemonId={activeDaemonId}
+                    sendDaemonCommand={sendCommand}
+                />
+            </Section>
 
             {/* ── Missions (fix b: full-goal fetch-more) ── */}
             <MeshMissionsSection
