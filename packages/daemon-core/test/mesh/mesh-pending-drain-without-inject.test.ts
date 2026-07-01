@@ -78,12 +78,24 @@ function queueCompletion(meshId: string, suffix: string, targetCoordinatorDaemon
   })
 }
 
-async function callGetPending(components: any, meshId: string, coordinatorDaemonId?: string) {
+async function callGetPending(
+  components: any,
+  meshId: string,
+  coordinatorDaemonId?: string,
+  extraArgs?: Record<string, unknown>,
+) {
   const ctx = { deps: components } as any
   return (await meshEventsHandlers.get_pending_mesh_events(ctx, {
     meshId,
     ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
-  })) as { success: boolean; events: any[]; heldForBusyLocalCoordinator?: boolean; hasLiveCliCoordinator?: boolean }
+    ...(extraArgs || {}),
+  })) as {
+    success: boolean
+    events: any[]
+    heldForBusyLocalCoordinator?: boolean
+    hasLiveCliCoordinator?: boolean
+    surfacedForSelfCoordinator?: boolean
+  }
 }
 
 describe('DRAIN-WITHOUT-INJECT: get_pending_mesh_events must not consume events held for a busy local CLI coordinator', () => {
@@ -230,6 +242,78 @@ describe('NOTIF-DROP: get_pending_mesh_events reports hasLiveCliCoordinator for 
     expect(res.hasLiveCliCoordinator).toBe(true)
     expect(res.events).toHaveLength(0)
     cleanup(meshId)
+  })
+})
+
+// SELF-COORDINATOR INBOX LEVEL-DRAIN (Defect 2). When the busy local coordinator reads its
+// OWN inbox (drainCoordinatorPendingEvents passes selfCoordinatorInboxRead:true), the drained
+// events return in ITS tool result — a lossless data-queue surface, NOT a PTY inject. Holding
+// that read stranded the completion until the coordinator's next busy→idle edge (~59s measured).
+// The hold is relaxed for that caller ONLY; a broadcast poll / different-coordinator drain still
+// holds (no force-write into a busy PTY that would lose the input).
+describe('SELF-COORDINATOR INBOX LEVEL-DRAIN (Defect 2)', () => {
+  it('LEVEL-DRAINS a held completion into the self-coordinator inbox WITHOUT waiting for a busy→idle edge', async () => {
+    const meshId = `mesh_self_leveldrain_${Date.now()}`
+    cleanup(meshId)
+    queueCompletion(meshId, 'SC', 'test-machine')
+
+    // The local coordinator is GENERATING (busy). Its own inbox read must still surface the
+    // completion — no idle edge required.
+    const generating = makeCoordinator(meshId, 'generating')
+    const components = makeComponents([generating], 'test-machine')
+
+    const res = await callGetPending(components, meshId, 'test-machine', { selfCoordinatorInboxRead: true })
+
+    // Not held: the events are returned in the caller's (self-coordinator's) tool result.
+    expect(res.heldForBusyLocalCoordinator).toBeUndefined()
+    expect(res.events).toHaveLength(1)
+    expect(res.events[0].metadataEvent.taskId).toBe('task-SC')
+    // Flagged surfaced-for-self-coordinator so the MCP puller surfaces (does NOT re-forward to PTY).
+    expect(res.surfacedForSelfCoordinator).toBe(true)
+    // Drained (consumed) — no double-delivery from a later reconcile PTY inject.
+    expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+    cleanup(meshId)
+  })
+
+  it('GUARD: a DIFFERENT busy coordinator drain (no self-coordinator flag) is STILL HELD — no PTY-inject relaxation', async () => {
+    const meshId = `mesh_self_guard_${Date.now()}`
+    cleanup(meshId)
+    queueCompletion(meshId, 'GD', 'test-machine')
+
+    // Same busy local coordinator, but the drain is NOT the self-coordinator's own inbox read
+    // (e.g. a broadcast poll / reconcile-owned path). It must remain held so its live PTY prompt
+    // is never force-written mid-turn.
+    const generating = makeCoordinator(meshId, 'generating')
+    const components = makeComponents([generating], 'test-machine')
+
+    const res = await callGetPending(components, meshId, 'test-machine') // no selfCoordinatorInboxRead
+
+    expect(res.heldForBusyLocalCoordinator).toBe(true)
+    expect(res.events).toHaveLength(0)
+    expect(res.surfacedForSelfCoordinator).toBeUndefined()
+    // Still queued (drained=0) for the reconcile loop's idle-edge PTY delivery.
+    expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
+    cleanup(meshId)
+  })
+
+  it('unit: shouldHoldPendingDrainForBusyLocalCoordinator relaxes ONLY for the self-coordinator inbox read', () => {
+    const meshId = `mesh_self_unit_${Date.now()}`
+    const busyLocal = () => makeComponents([makeCoordinator(meshId, 'generating')], 'test-machine')
+
+    // Busy local coordinator + local scope, NOT a self-inbox read → held (unchanged).
+    expect(
+      shouldHoldPendingDrainForBusyLocalCoordinator(busyLocal(), meshId, 'test-machine'),
+    ).toBe(true)
+
+    // Busy local coordinator + local scope + self-coordinator inbox read → NOT held (level-drain).
+    expect(
+      shouldHoldPendingDrainForBusyLocalCoordinator(busyLocal(), meshId, 'test-machine', true),
+    ).toBe(false)
+
+    // A REMOTE-scoped drain is never held regardless of the self flag (remote owns its own drain).
+    expect(
+      shouldHoldPendingDrainForBusyLocalCoordinator(busyLocal(), meshId, 'remote-daemon', true),
+    ).toBe(false)
   })
 })
 

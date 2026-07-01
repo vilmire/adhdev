@@ -2037,6 +2037,12 @@ export async function drainCoordinatorPendingEvents(
             meshId: ctx.mesh.id,
             ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
         };
+        // SELF-COORDINATOR INBOX LEVEL-DRAIN (Defect 2): this LOCAL drain is the coordinator
+        // reading its OWN inbox — the drained events return in this tool call's RESULT and are
+        // surfaced to the LLM directly (a lossless data-queue surface), so the daemon must NOT
+        // hold it while the local CLI coordinator is busy. Scoped to the local drain only; the
+        // remote-node pulls below keep the default (reconcile-owned) delivery.
+        const localPendingEventArgs = { ...pendingEventArgs, selfCoordinatorInboxRead: true };
 
         // Drain THIS daemon's local pending queue and route each event to its delivery surface.
         //
@@ -2056,16 +2062,25 @@ export async function drainCoordinatorPendingEvents(
         // this decision. The remote-node pull below is unchanged — its forward re-homes a remote
         // worker's event into the local queue, which the second local drain then surfaces.
         const drainLocalToSurface = async (): Promise<void> => {
-            const raw = await transport.command('get_pending_mesh_events', pendingEventArgs) as any;
-            const hasLiveCliCoordinator = unwrapCommandPayload(raw)?.hasLiveCliCoordinator === true
+            const raw = await transport.command('get_pending_mesh_events', localPendingEventArgs) as any;
+            const payloadRaw = unwrapCommandPayload(raw);
+            const hasLiveCliCoordinator = payloadRaw?.hasLiveCliCoordinator === true
                 || raw?.hasLiveCliCoordinator === true;
+            // SELF-COORDINATOR INBOX LEVEL-DRAIN (Defect 2): the daemon relaxed the busy-coordinator
+            // hold because this is the self-coordinator's own inbox read, and it flagged the events
+            // as surfaced through THIS tool result. Surface them directly to the LLM — do NOT
+            // re-forward into the (busy) live PTY (the lossy drain-without-inject path). Without the
+            // flag, delivery is unchanged: forward when a live CLI coordinator owns PTY delivery.
+            const surfacedForSelfCoordinator = payloadRaw?.surfacedForSelfCoordinator === true
+                || raw?.surfacedForSelfCoordinator === true;
             const localEvents = normalizePendingMeshCoordinatorEvents(raw).filter(matchesCurrentMesh);
             for (const event of localEvents) {
                 const payload = buildMeshForwardPayloadFromPendingEvent(event);
                 if (!payload.event || !payload.meshId) continue;
-                if (!hasLiveCliCoordinator) {
-                    // Pure-MCP coordinator: the LLM tool result is the only surface. Do NOT
-                    // re-forward (that re-queues with no PTY → the drain-without-inject loop).
+                if (!hasLiveCliCoordinator || surfacedForSelfCoordinator) {
+                    // Pure-MCP coordinator, OR the self-coordinator's own busy inbox read: the LLM
+                    // tool result is the surface. Do NOT re-forward (that re-queues with no free PTY
+                    // → the drain-without-inject loop / the ~59s self-coordinator strand).
                     rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
                     surfacedEvents.push(event);
                     continue;

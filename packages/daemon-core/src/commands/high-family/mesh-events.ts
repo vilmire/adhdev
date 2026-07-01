@@ -29,6 +29,11 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
         const coordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
             ? args.coordinatorDaemonId.trim()
             : undefined;
+        // SELF-COORDINATOR INBOX LEVEL-DRAIN (Defect 2): the MCP self-coordinator inbox read
+        // (drainCoordinatorPendingEvents) sets this so its own drain is not held while its CLI
+        // is busy — the events return in ITS tool result (a lossless data-queue surface), never
+        // a PTY inject. Every other drain leaves it unset and keeps the busy-coordinator hold.
+        const selfCoordinatorInboxRead = args?.selfCoordinatorInboxRead === true;
         // DRAIN-WITHOUT-INJECT guard: when a LOCAL live CLI coordinator for this mesh is
         // busy (generating / modal-parked), the reconcile loop is HOLDING its terminal
         // events (drained=0) for the coordinator's next idle tick. Draining here would
@@ -57,11 +62,15 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
         // loop: return nothing, leaving the rows undrained for its idle-tick delivery. A
         // remote pull (foreign coordinatorDaemonId) or a pure stdio MCP coordinator (no live
         // CLI session) is NOT held — see shouldHoldPendingDrainForBusyLocalCoordinator.
-        if (meshId && shouldHoldPendingDrainForBusyLocalCoordinator(ctx.deps, meshId, coordinatorDaemonId)) {
+        if (meshId && shouldHoldPendingDrainForBusyLocalCoordinator(ctx.deps, meshId, coordinatorDaemonId, selfCoordinatorInboxRead)) {
             return { success: true, events: [], heldForBusyLocalCoordinator: true, hasLiveCliCoordinator };
         }
         const events = drainPendingMeshCoordinatorEvents(meshId || undefined, coordinatorDaemonId);
-        return { success: true, events, hasLiveCliCoordinator };
+        // SELF-COORDINATOR INBOX LEVEL-DRAIN: when the busy local coordinator drained its OWN
+        // inbox (selfCoordinatorInboxRead), tell the puller these events were surfaced through
+        // the caller's tool result — it must NOT re-forward them into the (busy) PTY (that is the
+        // lossy path). Absent the flag, delivery is unchanged (reconcile-owned PTY / remote pull).
+        return { success: true, events, hasLiveCliCoordinator, ...(selfCoordinatorInboxRead ? { surfacedForSelfCoordinator: true } : {}) };
     },
 
     interactive_prompt_response: async (ctx: HighFamilyContext, args: any) => {

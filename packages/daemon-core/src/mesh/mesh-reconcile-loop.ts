@@ -523,11 +523,26 @@ export function resolveCoordinatorDrainDeliverability(
  * remote pull is never blocked by our local coordinator's busy state. A pure
  * stdio MCP coordinator (no live CLI session) never satisfies (1), so its tool
  * result remains the surface and the drain proceeds. No regression to either.
+ *
+ * SELF-COORDINATOR INBOX LEVEL-DRAIN (Defect 2): the hold above assumes the ONLY
+ * surface for a busy local coordinator's events is a future PTY inject on its idle
+ * edge, so it defers to the reconcile loop. But when the drain caller IS the local
+ * coordinator reading its OWN inbox (the `get_pending_mesh_events` call whose events
+ * are returned in the caller's tool RESULT — a data queue the self-coordinating LLM
+ * consumes directly), the events ARE surfaced losslessly the moment the tool returns,
+ * with NO PTY write. A busy self-coordinating LLM that calls a mesh tool mid-turn would
+ * otherwise get an empty inbox (held) and only see the completion on its NEXT busy→idle
+ * edge — the measured ~59s strand. `callerIsSelfCoordinatorInboxRead` marks that safe
+ * caller: the hold is relaxed for it (return the events), while every OTHER drain (a
+ * backfill relay, a broadcast poll, a DIFFERENT coordinator that genuinely needs its PTY)
+ * still defers to the reconcile loop. This relaxes delivery INTO the coordinator's own
+ * inbox only — it never changes how events are injected into a live PTY prompt.
  */
 export function shouldHoldPendingDrainForBusyLocalCoordinator(
     components: Pick<DaemonComponents, 'instanceManager'> & { statusInstanceId?: string },
     meshId: string,
     requestedCoordinatorDaemonId?: string | null,
+    callerIsSelfCoordinatorInboxRead?: boolean,
 ): boolean {
     if (!meshId) return false;
     const deliverability = resolveCoordinatorDrainDeliverability(components, meshId);
@@ -539,7 +554,13 @@ export function shouldHoldPendingDrainForBusyLocalCoordinator(
         readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId),
         readNonEmptyString(loadConfig().machineId),
     ]);
-    return localIds.some(id => daemonIdsEquivalent(id, requested));
+    const targetsLocalCoordinator = localIds.some(id => daemonIdsEquivalent(id, requested));
+    if (!targetsLocalCoordinator) return false;
+    // SELF-COORDINATOR INBOX LEVEL-DRAIN: the busy local coordinator is itself the caller,
+    // reading its own inbox — the drained events return in ITS tool result (lossless data-queue
+    // surface, no PTY inject). Do NOT hold; let the self-coordinator see its completions now.
+    if (callerIsSelfCoordinatorInboxRead) return false;
+    return true;
 }
 
 // Inject a drained pending event into a live coordinator session. Force-inject
