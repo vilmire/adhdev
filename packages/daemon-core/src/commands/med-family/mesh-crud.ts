@@ -732,6 +732,29 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 // keeps showing up in the dashboard graph until the cache
                 // ages out on its own.
                 if (removed) ctx.invalidateAggregateMeshStatus(meshId);
+                // MESH-INLINE-NODE-RESURRECTION: removeInlineMeshNode only mutates
+                // the in-memory inlineMeshCache + tombstones — it does NOT touch
+                // the file-backed config (meshes.json). When the SAME node also
+                // lives in meshes.json (a worktree node that was persisted to the
+                // file config, then resolved through the inline cache on removal),
+                // the file record survives. On daemon restart the in-memory
+                // tombstone is lost, getMesh falls back to the file config, and
+                // mesh-status renders the dead node again. So a node present in
+                // BOTH the inline cache AND meshes.json must be spliced+saved from
+                // the file config here too. Pure-inline meshes (no matching file
+                // mesh/node) are untouched — getMesh returns undefined and we skip.
+                try {
+                    const { getMesh, removeNode } = await import('../../config/mesh-config.js');
+                    const fileMesh = getMesh(meshId);
+                    const fileNode = fileMesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
+                    if (fileNode?.id) {
+                        const fileRemoved = removeNode(meshId, fileNode.id);
+                        if (fileRemoved) {
+                            removed = true;
+                            ctx.invalidateAggregateMeshStatus(meshId);
+                        }
+                    }
+                } catch { /* file config absent / unreadable — inline-only mesh, nothing to durably delete */ }
                 // Node was already absent from the inline mesh (e.g. removed by a
                 // prior refine cleanup). Treat as removed so caller gets removed:true.
                 if (!removed && !node) removed = true;
