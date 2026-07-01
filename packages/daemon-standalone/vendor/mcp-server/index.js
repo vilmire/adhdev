@@ -2959,14 +2959,17 @@ async function drainCoordinatorPendingEvents(ctx, opts) {
       meshId: ctx.mesh.id,
       ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
     };
+    const localPendingEventArgs = { ...pendingEventArgs, selfCoordinatorInboxRead: true };
     const drainLocalToSurface = async () => {
-      const raw = await transport.command("get_pending_mesh_events", pendingEventArgs);
-      const hasLiveCliCoordinator = unwrapCommandPayload(raw)?.hasLiveCliCoordinator === true || raw?.hasLiveCliCoordinator === true;
+      const raw = await transport.command("get_pending_mesh_events", localPendingEventArgs);
+      const payloadRaw = unwrapCommandPayload(raw);
+      const hasLiveCliCoordinator = payloadRaw?.hasLiveCliCoordinator === true || raw?.hasLiveCliCoordinator === true;
+      const surfacedForSelfCoordinator = payloadRaw?.surfacedForSelfCoordinator === true || raw?.surfacedForSelfCoordinator === true;
       const localEvents = normalizePendingMeshCoordinatorEvents(raw).filter(matchesCurrentMesh);
       for (const event of localEvents) {
         const payload = buildMeshForwardPayloadFromPendingEvent(event);
         if (!payload.event || !payload.meshId) continue;
-        if (!hasLiveCliCoordinator) {
+        if (!hasLiveCliCoordinator || surfacedForSelfCoordinator) {
           rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
           surfacedEvents.push(event);
           continue;
