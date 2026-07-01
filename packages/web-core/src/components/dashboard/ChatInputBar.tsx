@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState, useCallback } from 'react';
 import { useControlsBarVisibility } from '../../hooks/useControlsBarVisibility';
+import { sanitizePastedText } from '../../utils/text';
 import type { MessageInputSupport } from '@adhdev/daemon-core';
 
 const MAX_ATTACHMENTS = 5;
@@ -312,17 +313,35 @@ const ChatInputBar = memo(function ChatInputBar({
                         value={draftInput}
                         onChange={e => setDraftInput(e.target.value)}
                         onPaste={e => {
-                            // Intercept image pastes when supported. Text pastes
-                            // (including those with newlines) fall through to the
-                            // textarea's default handler so the cursor position
-                            // and selection are honored.
+                            // Intercept image pastes when supported.
                             if (canAttachImages && e.clipboardData.files.length > 0) {
                                 const hasImageFile = Array.from(e.clipboardData.files).some((f) => f.type.startsWith('image/'));
                                 if (hasImageFile) {
                                     e.preventDefault();
                                     void addFiles(e.clipboardData.files);
+                                    return;
                                 }
                             }
+
+                            // Sanitize pasted text: copying a rendered transcript
+                            // bubble can carry control chars / zero-width marks /
+                            // mojibake ('�') that shouldn't land in the composer.
+                            const raw = e.clipboardData.getData('text/plain');
+                            const clean = sanitizePastedText(raw);
+                            // Unchanged → let the browser handle it (preserves
+                            // native undo and default cursor/selection behavior).
+                            if (clean === raw) return;
+
+                            e.preventDefault();
+                            const el = chatInputRef.current;
+                            const start = el?.selectionStart ?? draftInput.length;
+                            const end = el?.selectionEnd ?? draftInput.length;
+                            const next = draftInput.slice(0, start) + clean + draftInput.slice(end);
+                            setDraftInput(next);
+                            const caret = start + clean.length;
+                            requestAnimationFrame(() => {
+                                el?.setSelectionRange(caret, caret);
+                            });
                         }}
                         onKeyDown={e => {
                             if (e.key !== 'Enter') return;
