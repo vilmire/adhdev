@@ -205,7 +205,19 @@ type DetailSelection =
     | { kind: 'queue'; task: RepoMeshQueueTask }
     | { kind: 'session'; node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }
 
-export default function MeshOverviewCards({ status }: { status: RepoMeshStatus }) {
+/** Command seam used to fetch the verbose (full-goal) mission payload on demand. */
+type MeshCommandSeam = {
+    daemonId?: string | null
+    meshId?: string | null
+    sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
+}
+
+export default function MeshOverviewCards({
+    status,
+    daemonId = null,
+    meshId = null,
+    sendDaemonCommand = null,
+}: { status: RepoMeshStatus } & MeshCommandSeam) {
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const canonicalStatus = useMemo(() => canonicalizeRepoMeshStatus(status), [status])
@@ -273,7 +285,16 @@ export default function MeshOverviewCards({ status }: { status: RepoMeshStatus }
                 <RefineJobsCard meshTheme={meshTheme} jobs={asyncRefineJobs} />
             </div>
 
-            {detail && <DetailModal meshTheme={meshTheme} detail={detail} onClose={closeDetail} />}
+            {detail && (
+                <DetailModal
+                    meshTheme={meshTheme}
+                    detail={detail}
+                    onClose={closeDetail}
+                    daemonId={daemonId}
+                    meshId={meshId ?? canonicalStatus.meshId ?? null}
+                    sendDaemonCommand={sendDaemonCommand}
+                />
+            )}
         </div>
     )
 }
@@ -409,11 +430,11 @@ function detailTitle(detail: DetailSelection): { kicker: string; title: string }
     }
 }
 
-function DetailModal({ meshTheme, detail, onClose }: {
+function DetailModal({ meshTheme, detail, onClose, daemonId, meshId, sendDaemonCommand }: {
     meshTheme: MeshGraphTheme
     detail: DetailSelection
     onClose: () => void
-}) {
+} & MeshCommandSeam) {
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') onClose()
@@ -455,7 +476,15 @@ function DetailModal({ meshTheme, detail, onClose }: {
                     </button>
                 </div>
                 <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
-                    {detail.kind === 'mission' && <MissionDetail meshTheme={meshTheme} mission={detail.mission} />}
+                    {detail.kind === 'mission' && (
+                        <MissionDetail
+                            meshTheme={meshTheme}
+                            mission={detail.mission}
+                            daemonId={daemonId}
+                            meshId={meshId}
+                            sendDaemonCommand={sendDaemonCommand}
+                        />
+                    )}
                     {detail.kind === 'ledger' && <LedgerDetail meshTheme={meshTheme} entry={detail.entry} />}
                     {detail.kind === 'queue' && <QueueDetail meshTheme={meshTheme} task={detail.task} />}
                     {detail.kind === 'session' && <SessionDetail meshTheme={meshTheme} node={detail.node} session={detail.session} />}
@@ -465,14 +494,56 @@ function DetailModal({ meshTheme, detail, onClose }: {
     )
 }
 
-function MissionDetail({ meshTheme, mission }: { meshTheme: MeshGraphTheme; mission: MeshMissionDisplay }) {
+const unwrapResult = (raw: any): any => (raw && typeof raw === 'object' && 'result' in raw ? raw.result : raw)
+
+/** Pull RepoMeshStatus out of a mesh_status response (cloud/P2P wraps under result / result.status). */
+function extractMeshStatus(raw: any): any {
+    const body = unwrapResult(raw)
+    if (body && typeof body === 'object' && body.status && typeof body.status === 'object' && Array.isArray(body.status.missions)) return body.status
+    return body
+}
+
+function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand }: {
+    meshTheme: MeshGraphTheme
+    mission: MeshMissionDisplay
+} & MeshCommandSeam) {
     const t = mission.tasks
     // Compact (slim) status payloads send `goalPreview`/`goalTruncated` instead of
     // the full `goal`, so the previous `mission.goal`-only read rendered blank.
-    const goalText = ('goal' in mission && typeof mission.goal === 'string' && mission.goal)
+    const slimGoal = ('goal' in mission && typeof mission.goal === 'string' && mission.goal)
         ? mission.goal
         : ('goalPreview' in mission ? mission.goalPreview : '')
     const goalTruncated = 'goalTruncated' in mission ? mission.goalTruncated === true : false
+
+    // Full goal fetched on demand via the verbose mesh_status seam — mirrors the
+    // /mesh page's MeshMissionsSection so the dialog detail can also reveal the
+    // complete goal instead of stopping at the truncated preview.
+    const [fullGoal, setFullGoal] = useState<string | null>(null)
+    const [fetching, setFetching] = useState(false)
+    const [fetchError, setFetchError] = useState<string | null>(null)
+    const canFetchGoal = goalTruncated && !fullGoal && !!daemonId && !!sendDaemonCommand
+
+    const fetchFullGoal = useCallback(async () => {
+        if (!daemonId || !sendDaemonCommand) return
+        setFetching(true)
+        setFetchError(null)
+        try {
+            const raw = await sendDaemonCommand(daemonId, 'mesh_status', { meshId: meshId ?? undefined, verbose: true })
+            const verbose = extractMeshStatus(raw)
+            const verboseMissions: any[] = Array.isArray(verbose?.missions) ? verbose.missions : []
+            const match = verboseMissions.find(m => m?.id === mission.id)
+            const goal = typeof match?.goal === 'string' && match.goal ? match.goal : null
+            if (goal) setFullGoal(goal)
+            else setFetchError('Full goal unavailable')
+        } catch (err) {
+            setFetchError(err instanceof Error ? err.message : 'Failed to fetch full mission goal')
+        } finally {
+            setFetching(false)
+        }
+    }, [daemonId, meshId, sendDaemonCommand, mission.id])
+
+    const goalText = fullGoal ?? slimGoal
+    const showTruncatedLabel = goalTruncated && !fullGoal
     const stats = mission.stats ?? null
     const incompleteCount = stats?.incompleteTaskIds?.length ?? 0
     return (
@@ -484,8 +555,19 @@ function MissionDetail({ meshTheme, mission }: { meshTheme: MeshGraphTheme; miss
             {goalText && (
                 <div className={`max-h-64 overflow-y-auto whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>
                     {goalText}
-                    {goalTruncated && <span className={meshTheme.textMuted}> … (truncated)</span>}
+                    {showTruncatedLabel && !canFetchGoal && <span className={meshTheme.textMuted}> … (truncated)</span>}
                 </div>
+            )}
+            {fetchError && <div className="text-[11px] text-amber-400">{fetchError}</div>}
+            {canFetchGoal && (
+                <button
+                    type="button"
+                    className="self-start text-[12px] text-accent-primary hover:underline disabled:opacity-50"
+                    onClick={fetchFullGoal}
+                    disabled={fetching}
+                >
+                    {fetching ? 'Loading…' : 'Show full goal'}
+                </button>
             )}
             <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
                 <StatTile meshTheme={meshTheme} label="Completed" value={t.completed} tone="emerald" />

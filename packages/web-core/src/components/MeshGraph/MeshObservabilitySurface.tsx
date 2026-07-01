@@ -1208,7 +1208,14 @@ export default function MeshObservabilitySurface({
                  it the cards get clipped by the dialog shell's overflow-hidden and the
                  dashboard "full view" cannot scroll down to the lower cards. */}
             <div className={`${activeTab === 'overview' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col gap-3 overflow-y-auto`}>
-                {activeTab === 'overview' && <MeshOverviewCards status={status} />}
+                {activeTab === 'overview' && (
+                    <MeshOverviewCards
+                        status={status}
+                        daemonId={daemonId}
+                        meshId={canonicalStatus.meshId}
+                        sendDaemonCommand={sendDaemonCommand}
+                    />
+                )}
                 {/* Read-only MAGI panel summary — sibling of the overview cards, NOT
                     inside MeshOverviewCards (general-overview is untouched). CRUD lives
                     on the /mesh detail page; this is glance-only on both surfaces. */}
