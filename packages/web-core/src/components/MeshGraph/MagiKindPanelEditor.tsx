@@ -51,6 +51,7 @@ interface MagiKindPanelEditorProps {
 /** Slim live-node view, matching the (nodeId, providers, providerPriority) axis. */
 interface LiveNode {
     nodeId: string
+    machineLabel?: string
     providers?: string[]
     providerPriority?: string[]
 }
@@ -123,10 +124,17 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
     const [savingKind, setSavingKind] = useState<MagiTaskKind | null>(null)
 
     const liveNodes: LiveNode[] = useMemo(
-        () => (status?.nodes ?? []).map(n => ({ nodeId: n.nodeId, providers: n.providers, providerPriority: n.providerPriority })),
+        () => (status?.nodes ?? []).map(n => ({ nodeId: n.nodeId, machineLabel: n.machineLabel, providers: n.providers, providerPriority: n.providerPriority })),
         [status?.nodes],
     )
     const knownNodeIds = useMemo(() => (status?.nodes ?? []).map(n => n.nodeId), [status?.nodes])
+
+    // Friendly display label per nodeId (raw id stays the option value). Falls back
+    // to the raw nodeId when the normalized machineLabel is unavailable.
+    const nodeLabelById = useMemo(
+        () => Object.fromEntries((status?.nodes ?? []).map(n => [n.nodeId, n.machineLabel || n.nodeId])),
+        [status?.nodes],
+    )
 
     // Providers offered per node, keyed by nodeId — used to filter the provider
     // dropdown to the selected node's providers.
@@ -234,25 +242,10 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
         <div className="flex flex-col gap-3 p-1">
             <div className="flex flex-wrap items-center gap-2">
                 <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>MAGI kind → panel bindings</span>
-                <span className={`text-[11px] ${meshTheme.textSecondary}`}>
-                    Bind each task_kind to (machine × provider [× model]) slots — machine-local config.
-                </span>
                 <div className="ml-auto flex items-center gap-2">
                     <button type="button" className={btnGhost} onClick={() => void loadKindPanels()} disabled={loading || !canCommand}>
                         {loading ? 'Loading…' : 'Refresh'}
                     </button>
-                </div>
-            </div>
-
-            {/* ── Explainer banner ── */}
-            <div className={`rounded-xl border p-3 text-[11px] leading-5 ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
-                A bare <span className={`font-mono ${meshTheme.textPrimary}`}>mesh_magi_review(&#123;task_kind&#125;)</span> resolves the panel from these
-                bindings. An <span className={`font-semibold ${meshTheme.textPrimary}`}>unconfigured kind is a hard error</span>
-                {' '}(<span className="font-mono">magi_kind_not_configured</span>) — there is no preset auto-synthesis, so every kind you want to reach via
-                task_kind must have at least one slot here.
-                <div className="mt-2">
-                    The <span className={`font-semibold ${meshTheme.textPrimary}`}>model</span> axis is best-effort: claude-cli maps model → <span className="font-mono">--model</span> at
-                    launch (manifest <span className="font-mono">modelLaunchArgs</span>); ACP maps it via <span className="font-mono">setConfigOption</span>. Providers that can&apos;t honor it ignore it.
                 </div>
             </div>
 
@@ -303,8 +296,8 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                                                 <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>Machine</span>
                                                 <select className={inputClass} value={s.nodeId} onChange={e => updateSlot(kind, idx, { nodeId: e.target.value })}>
                                                     <option value="">(any node by tags)</option>
-                                                    {knownNodeIds.map(id => <option key={id} value={id}>{id}</option>)}
-                                                    {s.nodeId && !knownNodeIds.includes(s.nodeId) && <option value={s.nodeId}>{s.nodeId} (not in live mesh)</option>}
+                                                    {knownNodeIds.map(id => <option key={id} value={id}>{nodeLabelById[id] ?? id}</option>)}
+                                                    {s.nodeId && !knownNodeIds.includes(s.nodeId) && <option value={s.nodeId}>{(nodeLabelById[s.nodeId] ?? s.nodeId)} (not in live mesh)</option>}
                                                 </select>
                                                 <span className={helperClass}>The machine this slot runs on. Leave on &quot;(any node by tags)&quot; to let the coordinator route by tags.</span>
                                             </label>

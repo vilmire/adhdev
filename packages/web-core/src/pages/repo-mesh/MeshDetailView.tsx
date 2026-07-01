@@ -297,7 +297,7 @@ export function MeshDetailView({
                  2026-07-01 product decision; only the task_kind binding editor below is
                  mounted. Underlying magi_panel_* / magi_kind_panel_* commands are untouched. */}
             {displayedMeshStatus && (
-                <Section title="MAGI" description="task_kind → 패널 슬롯 바인딩">
+                <Section title="MAGI" description="task_kind → panel slot bindings">
                     <MagiKindPanelEditor
                         status={displayedMeshStatus}
                         daemonId={activeDaemonId}
