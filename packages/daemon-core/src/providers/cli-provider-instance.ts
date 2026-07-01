@@ -1207,8 +1207,7 @@ export class CliProviderInstance implements ProviderInstance {
      * to the genuine-modal classification.
      */
     private isTransientToolConsent(now = Date.now()): boolean {
-        const isAutonomousMeshSession = this.isMeshWorkerSession() || !!this.settings.meshCoordinatorFor;
-        return isAutonomousMeshSession
+        return this.isAutonomousMeshSession()
             && this.hasAdapterPendingResponse()
             && !this.manualAttendance.isAttended(now);
     }
@@ -1839,6 +1838,20 @@ export class CliProviderInstance implements ProviderInstance {
     private isMeshWorkerSession(): boolean {
         return !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId
             || this.settings.meshNodeId || this.settings.launchedByCoordinator);
+    }
+
+    // FALSE-IDLE (self-coordinator settle): an autonomously-progressing mesh session
+    // is either a delegated worker (isMeshWorkerSession) OR the coordinator's OWN
+    // claude-cli session (meshCoordinatorFor). Both run auto-approved tool turns whose
+    // inter-approval valley (busy→idle blip→generating re-entry ~0.5s later) must be
+    // absorbed by the completedDebounce settle window, not flushed on the first idle
+    // sample. The worker branch already gets NATIVE_HISTORY_MESH_IDLE_SETTLE_MS; the
+    // self-coordinator session (worker markers absent, meshCoordinatorFor present) was
+    // taking flushDelay=0 — no settle window — so its busyEpoch/lastOutputAt continuity
+    // guard had no window to observe the valley and fired mid-turn "next-step" previews
+    // as a finalSummary. Mirrors the isAutonomousMeshSession notion in isTransientToolConsent.
+    private isAutonomousMeshSession(): boolean {
+        return this.isMeshWorkerSession() || !!this.settings.meshCoordinatorFor;
     }
 
     /**
@@ -2623,16 +2636,29 @@ export class CliProviderInstance implements ProviderInstance {
                     };
                     const ownsExternalHistory = !!(this.adapter as any)?.chatMessagesOwnedExternally;
                     // (FALSEIDLE-BGCHILD-a) Native-history providers flush immediately (the
-                    // transcript is authoritative). For mesh worker sessions, give the
-                    // generating→idle transition a short settle window so a background-child
+                    // transcript is authoritative). For autonomously-progressing mesh sessions,
+                    // give the generating→idle transition a short settle window so a background-child
                     // false idle (quiet after a backgrounded test/command while the parent turn
-                    // continues) gets caught by the resume guard in flushCompletedDebounceIfFinalized
-                    // instead of firing an early completion the coordinator can never correct.
-                    const meshWorkerSession = this.isMeshWorkerSession();
+                    // continues) or an inter-approval auto-approve valley gets caught by the resume
+                    // guard in flushCompletedDebounceIfFinalized instead of firing an early completion
+                    // the coordinator can never correct.
+                    //
+                    // (FALSE-IDLE self-coordinator settle) The settle window now covers BOTH mesh
+                    // worker sessions AND the coordinator's own claude-cli session (meshCoordinatorFor):
+                    // isAutonomousMeshSession(). Previously only isMeshWorkerSession() qualified, so a
+                    // self-coordinating daemon (worker + coordinator on the same daemon) ran the
+                    // coordinator's own turn at flushDelay=0 — no settle window at all — and the
+                    // busyEpoch/lastOutputAt continuity guard, being a flush-time point-check, had no
+                    // window in which to observe the ~0.5s auto-approve valley. Its mid-turn
+                    // "next-step" sentence was flushed as finalSummary. A genuinely non-mesh session
+                    // (neither worker nor self-coordinator) still flushes immediately (delay=0), so
+                    // no non-mesh behaviour changes; this only ADDS a settle window (strictly
+                    // stricter — the guard can only ever CANCEL a pending flush, never emit more).
+                    const meshSettleSession = this.isAutonomousMeshSession();
                     const flushDelay = ownsExternalHistory
-                        ? (meshWorkerSession ? NATIVE_HISTORY_MESH_IDLE_SETTLE_MS : 0)
+                        ? (meshSettleSession ? NATIVE_HISTORY_MESH_IDLE_SETTLE_MS : 0)
                         : 3000;
-                    LOG.debug('CLI', `[${this.type}] set completedDebouncePending duration=${duration}s ownsExternalHistory=${ownsExternalHistory} meshWorker=${meshWorkerSession} flushDelay=${flushDelay}ms generatingStartedAt=${this.generatingStartedAt}`);
+                    LOG.debug('CLI', `[${this.type}] set completedDebouncePending duration=${duration}s ownsExternalHistory=${ownsExternalHistory} meshSettle=${meshSettleSession} flushDelay=${flushDelay}ms generatingStartedAt=${this.generatingStartedAt}`);
                     this.scheduleCompletedDebounceFlush(flushDelay);
                 }
             } else if (newStatus === 'idle' && this.lastStatus === 'starting') {
