@@ -2564,28 +2564,91 @@ export class CliProviderInstance implements ProviderInstance {
                     if (shortFinalSummary) {
                         this.pushEvent({ event: 'agent:generating_started', chatTitle, timestamp: now - shortDurationMs });
                     }
+                    // FALSE-IDLE short-gen settle: snapshot the producing turn's start + taskId NOW,
+                    // before `generatingStartedAt` is reset below — the settle-arm path (mesh sessions,
+                    // see the mesh branch further down) needs the same turn anchor the normal
+                    // completedDebounce branch captures, and generatingStartedAt is the fallback for it.
+                    const shortEngineTurnStart = typeof (this.adapter as any)?.currentTurnStartedAt === 'number'
+                        && Number.isFinite((this.adapter as any).currentTurnStartedAt)
+                        ? (this.adapter as any).currentTurnStartedAt as number
+                        : 0;
+                    const shortTurnStartedAt = shortEngineTurnStart || this.generatingStartedAt || 0;
+                    const shortTaskId = this.completingTurnTaskId();
                     this.generatingDebouncePending = null;
                     this.generatingStartedAt = 0;
-                    const missingEvidence = ((this.provider as any).requiresFinalAssistantBeforeIdle === true || shortEvidenceSource === 'external-native') && !shortFinalSummary;
+                    // FALSE-IDLE short-gen: a short-generating completion with NO transcript
+                    // backing at all (shortEvidenceSource === 'unavailable': both the screen parse
+                    // AND the external-native transcript failed to yield a final assistant) is just
+                    // as unproven as an 'external-native' source that returned no final assistant.
+                    // Fold 'unavailable' into the missing-evidence predicate so a zero-evidence dip
+                    // (the mid-turn point-sample that triggered this whole false-idle bug) is treated
+                    // as weak/held, not fired as a genuine completion. A real shortFinalSummary being
+                    // present still clears the gate (the !shortFinalSummary guard is unchanged).
+                    const missingEvidence = ((this.provider as any).requiresFinalAssistantBeforeIdle === true
+                        || shortEvidenceSource === 'external-native'
+                        || shortEvidenceSource === 'unavailable') && !shortFinalSummary;
                     if (missingEvidence) {
                         LOG.warn('CLI', `[${this.type}] short completion missing final assistant evidence (source=${shortEvidenceSource})`);
                     }
-                    // When evidence is missing and there is no active mesh task context, suppress
-                    // the completion event. Providers with requiresFinalAssistantBeforeIdle or
-                    // external-native history must confirm a final assistant message before the
-                    // coordinator records task_completed. Only emit here if a mesh task is active
-                    // so the coordinator can apply its own timeout/retry logic.
-                    const hasMeshContext = !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator);
-                    if (missingEvidence && !hasMeshContext) {
-                        LOG.info('CLI', `[${this.type}] short completion suppressed: missing final assistant evidence, no mesh context (source=${shortEvidenceSource})`);
-                        // completedDebouncePending intentionally left null — the session is now idle
-                        // with no confirmed turn, matching the startup-blip suppression semantics.
-                        // (No EvtTrace: not a mesh session, so nothing routes to a coordinator.)
-                    } else {
-                        // EVTTRACE: completion fired (short-generating idle path).
+                    if (this.isAutonomousMeshSession()) {
+                        // FALSE-IDLE short-gen settle (the core fix): for an autonomously-progressing
+                        // mesh session (delegated worker OR self-coordinator), the short-generating
+                        // branch was a POINT-SAMPLE — a single idle read from getStatus({allowParse:false})
+                        // that fires the completion INLINE with zero continuity backing. When the worker
+                        // is merely mid-turn (a sub-3s dip between two tool calls), this synchronously
+                        // emitted a false agent:generating_completed the coordinator can never correct.
+                        //
+                        // Route it through the SAME settle + continuity machinery as the normal
+                        // completedDebounce branch: arm completedDebouncePending capturing busyEpochAtArm
+                        // and lastOutputAtArm, then scheduleCompletedDebounceFlush(NATIVE_HISTORY_MESH_IDLE_SETTLE_MS)
+                        // so flushCompletedDebounceIfFinalized() re-verifies CONTINUOUS idle before emitting.
+                        // A busy re-entry (busyEpoch bump) or new PTY output within the settle window —
+                        // exactly what happens when the worker resumes its next tool call — CANCELS the
+                        // false completion. Genuine completions (real final assistant) still emit at the
+                        // end of the (short, 4s) settle window; missingEvidence flows through the
+                        // finalization block (missing_final_assistant → CANON-C weak/held) rather than
+                        // being frozen as a genuine inline fire.
+                        this.completedDebouncePending = {
+                            chatTitle,
+                            duration: Math.round(shortDurationMs / 1000),
+                            timestamp: now,
+                            firstObservedAt: now,
+                            // Short-gen enters from generating→idle (or waiting_approval→idle); the
+                            // completedDebounce finalization gate treats previousStatus for its
+                            // approval-resolution / inter-approval-valley handling. lastStatus is the
+                            // status we transitioned FROM here.
+                            previousStatus: this.lastStatus,
+                            ...(shortTaskId ? { taskId: shortTaskId } : {}),
+                            ...(shortTurnStartedAt ? { turnStartedAt: shortTurnStartedAt } : {}),
+                            // FALSE-IDLE continuity: same arm-time snapshots as the normal branch so the
+                            // flush guard can prove continuous idle across the settle window.
+                            busyEpochAtArm: this.busyEpoch,
+                            ...(typeof adapterStatus?.lastOutputAt === 'number' && Number.isFinite(adapterStatus.lastOutputAt)
+                                ? { lastOutputAtArm: adapterStatus.lastOutputAt as number }
+                                : {}),
+                        };
+                        LOG.info('CLI', `[${this.type}] short-generating routed through settle window (${shortDurationMs}ms, source=${shortEvidenceSource}, missingEvidence=${missingEvidence}) — arming completedDebouncePending instead of inline fire`);
+                        // EVTTRACE: now traces the settle ARM (not an inline fire) for mesh sessions,
+                        // so logs show the short-gen path deferring to continuity re-check.
                         if (this.isMeshWorkerSession()) {
-                            traceMeshEventStage('fired', this.meshTraceCtx(), `short-generating idle (source=${shortEvidenceSource})`);
+                            traceMeshEventStage('arm', this.meshTraceCtx(), `short-generating settle-arm (source=${shortEvidenceSource}, missingEvidence=${missingEvidence})`);
                         }
+                        this.scheduleCompletedDebounceFlush(NATIVE_HISTORY_MESH_IDLE_SETTLE_MS);
+                    } else if (missingEvidence) {
+                        // NON-MESH, missing evidence: suppress the completion event entirely (the
+                        // original !hasMeshContext suppression). A genuinely non-mesh session has no
+                        // coordinator to notify, and firing a completion with no confirmed final
+                        // assistant would just surface an empty/unconfirmed turn. Leave
+                        // completedDebouncePending null — the session is now idle with no confirmed
+                        // turn, matching the startup-blip suppression semantics. (No EvtTrace: not a
+                        // mesh session, so nothing routes to a coordinator.)
+                        LOG.info('CLI', `[${this.type}] short completion suppressed: missing final assistant evidence, non-mesh session (source=${shortEvidenceSource})`);
+                    } else {
+                        // NON-MESH interactive fast-path with a CONFIRMED summary: keep the existing
+                        // inline fire. The dashboard UX reason for the short path (a fast turn should
+                        // surface its completion promptly without a 4s settle) still holds, and a
+                        // non-mesh session has no coordinator to be falsely notified — the false-idle
+                        // bug being fixed is specifically the mesh worker/coordinator misfire above.
                         this.pushEvent({
                             event: 'agent:generating_completed',
                             chatTitle,
@@ -2596,7 +2659,6 @@ export class CliProviderInstance implements ProviderInstance {
                                 reason: 'short_generating_suppressed',
                                 shortDurationMs,
                                 finalAssistantEvidenceSource: shortEvidenceSource,
-                                ...(missingEvidence ? { blockReason: 'missing_final_assistant' } : {}),
                             },
                         });
                     }
