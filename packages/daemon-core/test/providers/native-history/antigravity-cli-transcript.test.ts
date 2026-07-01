@@ -538,6 +538,81 @@ describe('antigravity-cli-transcript — readSession (.db SQLite)', () => {
     expect(result).toBeNull();
   });
 
+  it('retries a transient SQLITE_BUSY open and still returns the assistant rows', async () => {
+    // Regression: on win32 antigravity holds a mandatory WAL write/checkpoint
+    // lock while persisting a step; a readonly open racing that lock throws
+    // SQLITE_BUSY. Collapsing that to null on the first failure erased the
+    // just-written assistant answer on chat_history re-query. The reader must
+    // retry and surface the already-persisted rows instead.
+    const dbPath = await makeConversationDb(SESSION_D, [
+      { step_type: 14, payload: encodeUserStep('Answer me') },
+      { step_type: 15, payload: encodeModelStep({ answer: 'Here is the persisted answer.' }) },
+    ]);
+
+    // Wrap the real binding so the FIRST two open attempts throw SQLITE_BUSY,
+    // then the third opens for real. parseConversationDb re-opens per attempt,
+    // so this exercises the bounded retry loop end to end.
+    const { loadBetterSqlite3: realLoad } = await import(
+      '../../../src/system/load-better-sqlite3.js'
+    );
+    const RealDatabase = realLoad();
+    let openAttempts = 0;
+    const FlakyDatabase = function (this: any, ...ctorArgs: any[]) {
+      openAttempts++;
+      if (openAttempts <= 2) {
+        const err: any = new Error('SQLITE_BUSY: database is locked');
+        err.code = 'SQLITE_BUSY';
+        throw err;
+      }
+      return new (RealDatabase as any)(...ctorArgs);
+    } as unknown as typeof RealDatabase;
+
+    vi.doMock('../../../src/system/load-better-sqlite3.js', () => ({
+      loadBetterSqlite3: () => FlakyDatabase,
+    }));
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_D);
+
+    expect(openAttempts).toBeGreaterThanOrEqual(3); // two busy failures + one success
+    expect(result).not.toBeNull();
+    const messages = result!.messages;
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(messages[1].content).toBe('Here is the persisted answer.');
+
+    vi.doUnmock('../../../src/system/load-better-sqlite3.js');
+    vi.resetModules();
+  });
+
+  it('returns null only after a SQLITE_BUSY lock persists past all retries', async () => {
+    const dbPath = await makeConversationDb(SESSION_D, [
+      { step_type: 14, payload: encodeUserStep('hi') },
+      { step_type: 15, payload: encodeModelStep({ answer: 'never surfaces this read' }) },
+    ]);
+
+    let openAttempts = 0;
+    const AlwaysBusyDatabase = function (this: any) {
+      openAttempts++;
+      const err: any = new Error('SQLITE_BUSY: database is locked');
+      err.code = 'SQLITE_BUSY';
+      throw err;
+    } as unknown as any;
+
+    vi.doMock('../../../src/system/load-better-sqlite3.js', () => ({
+      loadBetterSqlite3: () => AlwaysBusyDatabase,
+    }));
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_D);
+
+    // Exhausts the bounded retry loop (4 attempts) before giving up.
+    expect(openAttempts).toBe(4);
+    expect(result).toBeNull();
+
+    vi.doUnmock('../../../src/system/load-better-sqlite3.js');
+    vi.resetModules();
+  });
+
   it('returns null for a .db without a steps table', async () => {
     const dir = path.join(antigravityRoot(), 'conversations');
     fs.mkdirSync(dir, { recursive: true });

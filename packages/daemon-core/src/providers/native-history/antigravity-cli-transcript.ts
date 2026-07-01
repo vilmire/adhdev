@@ -556,53 +556,111 @@ interface AgyDbStepRow {
  * Parse a per-session conversations/<uuid>.db (SQLite) into NativeHistoryMessages.
  * Returns null when the db is unreadable, empty, or yields no chat messages.
  */
+/**
+ * True when an error thrown by better-sqlite3 open/read is a transient
+ * SQLITE_BUSY / "database is locked" condition rather than a permanent one.
+ *
+ * On win32 antigravity holds a mandatory WAL write/checkpoint lock while it
+ * persists a step; a readonly open racing that lock throws SQLITE_BUSY. That
+ * is transient — the answer IS already on disk — so it must be retried, NOT
+ * collapsed to "no session" (which erases the just-written assistant answer on
+ * a chat_history re-query). macOS advisory locking + WAL reader-doesn't-block-
+ * writer masks this, which is why it is win32-specific.
+ */
+function isSqliteBusyError(err: unknown): boolean {
+  if (!err) return false;
+  const code = (err as any).code;
+  if (typeof code === 'string' && code.includes('SQLITE_BUSY')) return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /SQLITE_BUSY|database is locked|database table is locked/i.test(msg);
+}
+
+const AGY_DB_BUSY_TIMEOUT_MS = 3000;
+const AGY_DB_MAX_ATTEMPTS = 4;
+const AGY_DB_RETRY_BACKOFF_MS = [50, 100, 150];
+
+function sleepBusy(ms: number): void {
+  // Synchronous busy-wait: parseConversationDb is a sync function called from a
+  // sync read path, and better-sqlite3 itself is synchronous. The waits are
+  // tiny (≤150ms) and only occur under genuine lock contention, so a short
+  // spin-sleep is acceptable and keeps the call site synchronous.
+  const end = Date.now() + ms;
+  while (Date.now() < end) { /* spin */ }
+}
+
 function parseConversationDb(
   filePath: string,
   sessionId: string,
   workspace?: string,
 ): NativeHistoryMessage[] | null {
-  let db: any;
+  let Database: any;
   try {
-    const Database = loadBetterSqlite3();
-    db = new Database(filePath, { readonly: true, fileMustExist: true });
+    Database = loadBetterSqlite3();
   } catch (err) {
-    // better-sqlite3 unavailable (ABI mismatch / not installed in this bundle)
-    // or the db handle failed to open. This is the silent-degrade that made a
-    // live read_chat return 0 assistant messages with no trace — the answers
-    // are on disk but unreadable. Log it (once-ish, at WARN) so the failure is
-    // greppable in daemon logs and distinguishable from "no db file". The
-    // reader still degrades gracefully (returns null → dispatcher falls back to
-    // brain/.pb), but the operator now knows WHY the .db path produced nothing.
+    // better-sqlite3 binding genuinely unavailable (ABI mismatch / not built
+    // into this bundle). This is the only true "cannot read at all" case — a
+    // real load failure, distinct from transient lock contention below. Warn
+    // once at WARN so it is greppable; the reader degrades gracefully (returns
+    // null → dispatcher falls back to brain/.pb).
     LOG.warn(
       'NativeHistory',
-      `antigravity .db reader could not open ${path.basename(filePath)}: ${err instanceof Error ? err.message : String(err)} (better-sqlite3 load/open failed — assistant answers in this .db will not surface)`,
+      `antigravity .db reader could not load better-sqlite3 for ${path.basename(filePath)}: ${err instanceof Error ? err.message : String(err)} (native binding unavailable — assistant answers in this .db will not surface)`,
     );
     return null;
   }
 
-  let rows: AgyDbStepRow[];
-  try {
-    rows = db
-      .prepare(
-        `SELECT idx, step_type, step_payload
-           FROM steps
-          WHERE step_type IN (${AGY_STEP_TYPE_USER}, ${AGY_STEP_TYPE_MODEL})
-          ORDER BY idx ASC`,
-      )
-      .all() as AgyDbStepRow[];
-  } catch (err) {
-    // `steps` table absent / unexpected schema — a real (but recoverable)
-    // shape mismatch, not the binding-missing case above. Log at debug so a
-    // schema drift in a future antigravity release is diagnosable without
-    // spamming logs for every legacy db.
-    LOG.debug(
-      'NativeHistory',
-      `antigravity .db ${path.basename(filePath)} has no readable steps table: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return null;
-  } finally {
-    try { db.close(); } catch { /* ignore */ }
+  let rows: AgyDbStepRow[] | null = null;
+  let lastBusyErr: unknown;
+
+  for (let attempt = 1; attempt <= AGY_DB_MAX_ATTEMPTS; attempt++) {
+    let db: any;
+    try {
+      db = new Database(filePath, { readonly: true, fileMustExist: true });
+      // Ask SQLite itself to wait (rather than failing fast) if the WAL
+      // lock is momentarily held by antigravity. Set as early as possible
+      // after open so the prepare/all below inherits the wait.
+      try { db.pragma(`busy_timeout = ${AGY_DB_BUSY_TIMEOUT_MS}`); } catch { /* ignore */ }
+      rows = db
+        .prepare(
+          `SELECT idx, step_type, step_payload
+             FROM steps
+            WHERE step_type IN (${AGY_STEP_TYPE_USER}, ${AGY_STEP_TYPE_MODEL})
+            ORDER BY idx ASC`,
+        )
+        .all() as AgyDbStepRow[];
+      break; // success
+    } catch (err) {
+      if (isSqliteBusyError(err)) {
+        // Transient WAL lock contention. Do NOT collapse to null on the first
+        // failure — the assistant answer is already persisted; treating a busy
+        // lock as "no session" is exactly what erased answers on re-query.
+        // Retry with a small backoff; only give up after attempts exhausted.
+        lastBusyErr = err;
+        if (attempt < AGY_DB_MAX_ATTEMPTS) {
+          sleepBusy(AGY_DB_RETRY_BACKOFF_MS[attempt - 1] ?? 150);
+          continue;
+        }
+        LOG.warn(
+          'NativeHistory',
+          `antigravity .db ${path.basename(filePath)} stayed locked (SQLITE_BUSY) after ${AGY_DB_MAX_ATTEMPTS} attempts: ${err instanceof Error ? err.message : String(err)} (WAL write/checkpoint lock contention — assistant answers may transiently not surface this read)`,
+        );
+        return null;
+      }
+      // `steps` table absent / unexpected schema, or a genuine open/parse
+      // failure that is not lock contention — a real (but recoverable) shape
+      // mismatch. Log at debug so a schema drift in a future antigravity
+      // release is diagnosable without spamming logs for every legacy db.
+      LOG.debug(
+        'NativeHistory',
+        `antigravity .db ${path.basename(filePath)} not readable: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    } finally {
+      try { db?.close(); } catch { /* ignore */ }
+    }
   }
+
+  void lastBusyErr; // referenced only for retry bookkeeping above
 
   if (!Array.isArray(rows) || rows.length === 0) return null;
 
