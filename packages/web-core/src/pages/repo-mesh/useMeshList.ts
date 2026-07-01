@@ -4,7 +4,7 @@
  * Manages: meshes, selectedMeshId, loading/error, create/delete forms,
  * and daemon-picker state used during mesh creation.
  */
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import {
     defaultProviderPriorityFromInventory,
     normalizeAvailableCliProviders,
@@ -23,6 +23,13 @@ interface UseMeshListOptions {
         createDaemonPicker: boolean
         addNodeDaemonPicker?: boolean
     }
+    /**
+     * Optional held-first background freshen for a daemon's metadata (workspaces,
+     * availableProviders). When the create picker selects a daemon whose entry
+     * lacks workspaces/providers, we render whatever is held and call this to
+     * freshen in the background — no empty-state stall on the first paint.
+     */
+    loadDaemonMetadata?: (daemonId: string, opts?: { force?: boolean; minFreshMs?: number }) => void | Promise<unknown>
 }
 
 export function useMeshList({
@@ -32,6 +39,7 @@ export function useMeshList({
     unwrapResult,
     normalizeMesh,
     features,
+    loadDaemonMetadata,
 }: UseMeshListOptions) {
     const [meshes, setMeshes] = useState<MeshEntry[]>([])
     const [selectedMeshId, setSelectedMeshId] = useState<string | null>(null)
@@ -57,6 +65,20 @@ export function useMeshList({
         () => normalizeAvailableCliProviders((selectedCreateDaemon as any)?.availableProviders || []),
         [selectedCreateDaemon],
     )
+
+    // Held-first SWR: as soon as a daemon is picked in the create form, render its
+    // held workspaces/providers (which may be empty on first sight) and freshen in
+    // the background. This freshen is what populates the picker without blocking —
+    // the previous code left the picker empty until an unrelated status snapshot
+    // happened to arrive.
+    useEffect(() => {
+        if (!features.createDaemonPicker || !loadDaemonMetadata) return
+        if (!newMeshDaemonId || !selectedCreateDaemon) return
+        const missingMetadata = !selectedCreateDaemon.workspaces
+            || !(selectedCreateDaemon as any).availableProviders
+        if (!missingMetadata) return
+        void Promise.resolve(loadDaemonMetadata(newMeshDaemonId, { minFreshMs: 30_000 })).catch(() => {})
+    }, [features.createDaemonPicker, loadDaemonMetadata, newMeshDaemonId, selectedCreateDaemon])
 
     const loadMeshes = useCallback(async () => {
         setLoading(true)

@@ -17,6 +17,7 @@ import {
     type AvailableCliProviderOption,
 } from '../utils/provider-priority'
 import { useMeshGraphMetadataSubscription } from '../hooks/useMeshGraphMetadataSubscription'
+import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import {
     useRepoMeshContext,
     type RepoMeshDaemonEntry,
@@ -56,6 +57,10 @@ export default function RepoMesh() {
         gateIncompleteGraph,
     } = ctx
 
+    // Held-first background freshen for daemon metadata (workspaces/providers),
+    // used by the create-mesh daemon picker so it never stalls on empty state.
+    const loadDaemonMetadata = useDaemonMetadataLoader()
+
     // Standalone: first daemon; cloud: selected coordinator daemon
     const primaryDaemon = daemons[0] as RepoMeshDaemonEntry | undefined
     const primaryDaemonId = primaryDaemon?.id || ''
@@ -93,6 +98,7 @@ export default function RepoMesh() {
         unwrapResult,
         normalizeMesh,
         features,
+        loadDaemonMetadata,
     })
 
     const selectedMesh = meshes.find(m => m.id === selectedMeshId) || null

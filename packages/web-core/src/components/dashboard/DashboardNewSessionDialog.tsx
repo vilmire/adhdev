@@ -202,6 +202,15 @@ export default function DashboardNewSessionDialog({
         void loadDaemonMetadata(selectedMachine.id, { minFreshMs: 30_000 }).catch(() => {})
     }, [loadDaemonMetadata, selectedMachine])
 
+    // Held-first prefetch: warm a machine's metadata as soon as the user hovers or
+    // focuses its picker entry, so switching to it shows the held snapshot with no
+    // empty-state flash. The loader is a background SWR freshen — cheap to call and
+    // deduped/throttled internally.
+    const prefetchMachineMetadata = useCallback((machineId: string) => {
+        if (!machineId) return
+        void loadDaemonMetadata(machineId, { minFreshMs: 30_000 }).catch(() => {})
+    }, [loadDaemonMetadata])
+
     const cliProviders = useMemo(
         () => ((selectedMachine?.availableProviders || []).filter(provider => isLaunchableMachineProvider(provider, 'cli'))),
         [selectedMachine],
@@ -648,6 +657,7 @@ export default function DashboardNewSessionDialog({
                                         aria-label="Machine"
                                         value={selectedMachine.id}
                                         onChange={(event) => setSelectedMachineId(event.target.value)}
+                                        onFocus={() => sortedMachines.forEach(machine => prefetchMachineMetadata(machine.id))}
                                         className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
                                         disabled={busy}
                                     >
@@ -670,6 +680,8 @@ export default function DashboardNewSessionDialog({
                                                     aria-pressed={selected}
                                                     className={`inline-flex min-w-0 items-center gap-2 rounded-full border px-3 py-2 text-sm transition-colors ${selected ? 'border-accent bg-accent/10 text-text-primary' : 'border-border-subtle bg-bg-secondary/60 text-text-secondary hover:bg-bg-secondary hover:text-text-primary'}`}
                                                     onClick={() => setSelectedMachineId(machine.id)}
+                                                    onMouseEnter={() => prefetchMachineMetadata(machine.id)}
+                                                    onFocus={() => prefetchMachineMetadata(machine.id)}
                                                     disabled={busy}
                                                     title={label}
                                                 >

@@ -5,12 +5,12 @@ import { useBaseDaemonActions } from '../context/BaseDaemonContext'
 import { useTransport } from '../context/TransportContext'
 import { subscriptionManager } from '../managers/SubscriptionManager'
 import { statusPayloadToEntries } from '../utils/status-transform'
-import { DAEMON_METADATA_SUBSCRIPTION_WAIT_MS, DEFAULT_DAEMON_METADATA_FRESH_MS } from '../utils/daemon-timing'
+import { DEFAULT_DAEMON_METADATA_FRESH_MS } from '../utils/daemon-timing'
+import { shouldLoadDaemonMetadata } from '../utils/daemon-metadata-swr'
 
 const metadataInFlight = new Map<string, Promise<void>>()
 const metadataLoadedAt = new Map<string, number>()
 const metadataSubscriptions = new Set<string>()
-const metadataWaiters = new Map<string, Set<(updated: boolean) => void>>()
 
 function unwrapStatusPayload(raw: unknown): StatusReportPayload | null {
     if (!raw || typeof raw !== 'object') return null
@@ -25,30 +25,6 @@ function unwrapStatusPayload(raw: unknown): StatusReportPayload | null {
     return body as unknown as StatusReportPayload
 }
 
-function resolveMetadataWaiters(daemonId: string, updated: boolean) {
-    const waiters = metadataWaiters.get(daemonId)
-    if (!waiters || waiters.size === 0) return
-    metadataWaiters.delete(daemonId)
-    waiters.forEach((resolve) => resolve(updated))
-}
-
-function waitForMetadataUpdate(daemonId: string, timeoutMs: number): Promise<boolean> {
-    return new Promise((resolve) => {
-        const waiters = metadataWaiters.get(daemonId) || new Set<(updated: boolean) => void>()
-        metadataWaiters.set(daemonId, waiters)
-
-        const finish = (updated: boolean) => {
-            clearTimeout(timer)
-            waiters.delete(finish)
-            if (waiters.size === 0) metadataWaiters.delete(daemonId)
-            resolve(updated)
-        }
-
-        const timer = setTimeout(() => finish(false), timeoutMs)
-        waiters.add(finish)
-    })
-}
-
 export function useDaemonMetadataLoader() {
     const { sendCommand, sendData } = useTransport()
     const { injectEntries, getIdes } = useBaseDaemonActions()
@@ -57,11 +33,16 @@ export function useDaemonMetadataLoader() {
         if (!daemonId) return
 
         const minFreshMs = opts?.minFreshMs ?? DEFAULT_DAEMON_METADATA_FRESH_MS
-        const loadedAt = metadataLoadedAt.get(daemonId) || 0
-        if (!opts?.force && metadataSubscriptions.has(daemonId) && loadedAt > 0) {
-            return
-        }
-        if (!opts?.force && loadedAt > 0 && (Date.now() - loadedAt) < minFreshMs) {
+        // Held-first SWR: the daemon store already holds the last snapshot and is
+        // rendered immediately by callers. Only decide whether a background
+        // freshen is needed here.
+        if (!shouldLoadDaemonMetadata({
+            force: opts?.force,
+            hasSubscription: metadataSubscriptions.has(daemonId),
+            loadedAt: metadataLoadedAt.get(daemonId) || 0,
+            now: Date.now(),
+            minFreshMs,
+        })) {
             return
         }
 
@@ -69,6 +50,11 @@ export function useDaemonMetadataLoader() {
         if (existing) return existing
 
         const request = (async () => {
+            // Establish the metadata subscription so future pushes keep the held
+            // snapshot fresh. This runs in the background — we do NOT block first
+            // paint waiting for its initial push. The get_status_metadata fetch
+            // below is fired in parallel and is the fast path that populates the
+            // held snapshot on the very first load.
             if (sendData && !metadataSubscriptions.has(daemonId)) {
                 const unsubscribe = subscriptionManager.subscribe(
                     { sendData },
@@ -94,7 +80,6 @@ export function useDaemonMetadataLoader() {
                             injectEntries(entries)
                         }
                         metadataLoadedAt.set(daemonId, Date.now())
-                        resolveMetadataWaiters(daemonId, true)
                     },
                 )
 
@@ -102,11 +87,6 @@ export function useDaemonMetadataLoader() {
                     metadataSubscriptions.add(daemonId)
                 } else {
                     metadataSubscriptions.delete(daemonId)
-                }
-
-                if (!opts?.force && unsubscribe.initialSendAccepted) {
-                    const updated = await waitForMetadataUpdate(daemonId, DAEMON_METADATA_SUBSCRIPTION_WAIT_MS)
-                    if (updated) return
                 }
             }
 
@@ -126,7 +106,6 @@ export function useDaemonMetadataLoader() {
                 injectEntries(entries, { authoritativeDaemonIds: [daemonId] })
             }
             metadataLoadedAt.set(daemonId, Date.now())
-            resolveMetadataWaiters(daemonId, true)
         })().finally(() => {
             metadataInFlight.delete(daemonId)
         })

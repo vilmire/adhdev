@@ -2,6 +2,12 @@ export const DEFAULT_MACHINE_RUNTIME_REFRESH_MS = 15_000
 export const DEFAULT_MACHINE_RUNTIME_FRESH_MS = 15_000
 
 export const DEFAULT_DAEMON_METADATA_FRESH_MS = 60_000
+/**
+ * @deprecated No longer gates first paint. Metadata loading is now held-first
+ * SWR: the daemon subscription is established in the background and the
+ * get_status_metadata fetch runs in parallel, so nothing blocks on the initial
+ * subscription push. Retained for reference/back-compat only.
+ */
 export const DAEMON_METADATA_SUBSCRIPTION_WAIT_MS = 1_200
 
 export const DEFAULT_SESSION_HOST_DIAGNOSTICS_LIMIT = 12
