@@ -5,8 +5,8 @@ import { Section } from '../../components/ui/Section'
 import { AlertBanner } from '../../components/ui/AlertBanner'
 import { FormField } from '../../components/ui/FormField'
 import { IconMesh } from '../../components/Icons'
-import MagiPanelManager from '../../components/MeshGraph/MagiPanelManager'
-import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
+// MAGI panels UI hidden per product decision 2026-07-01 — internal logic retained.
+// MagiPanelManager / MagiKindPanelEditor imports removed with their Mesh-page mounts below.
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
@@ -291,35 +291,18 @@ export function MeshDetailView({
                 </div>
             </Section>
 
-            {/* ── MAGI panels (CRUD) ──
-                 Panel create/edit/delete lives ONLY here on the /mesh detail page.
-                 The mesh dialog shows panels read-only (MagiPanelOverview); this Section is
-                 the single place to mutate them. Same {status, daemonId, sendDaemonCommand}
-                 seam the surface uses. */}
-            {displayedMeshStatus && (
-                <Section title="MAGI panels" description="Saved (machine × AI) cross-verification quorums — machine-local config. Create, edit, or delete them here.">
-                    <MagiPanelManager
-                        status={displayedMeshStatus}
-                        daemonId={activeDaemonId}
-                        sendDaemonCommand={sendCommand}
-                    />
-                </Section>
-            )}
-
-            {/* ── MAGI kind → panel bindings ──
-                 Bind each task_kind (rca / design / claim_audit / freeform) to slots.
-                 A bare mesh_magi_review({task_kind}) resolves the panel from these; an
-                 unconfigured kind errors (magi_kind_not_configured) instead of
-                 auto-synthesizing. Same seam as the MAGI panels Section above. */}
-            {displayedMeshStatus && (
-                <Section title="MAGI kind → panel bindings" description="Bind each task_kind (rca / design / claim_audit / freeform) to (machine + provider + model) slots. A bare mesh_magi_review({task_kind}) uses these — an unconfigured kind errors instead of auto-synthesizing a panel.">
-                    <MagiKindPanelEditor
-                        status={displayedMeshStatus}
-                        daemonId={activeDaemonId}
-                        sendDaemonCommand={sendCommand}
-                    />
-                </Section>
-            )}
+            {/* ── MAGI panels UI hidden per product decision 2026-07-01 — internal logic retained ──
+                 The MAGI panels (CRUD) and MAGI kind → panel bindings Sections were removed
+                 from the /mesh detail page. The underlying capability is untouched: the
+                 magi_panel_* / magi_kind_panel_* daemon commands, the mesh_magi_* orchestration,
+                 and the MagiPanelManager / MagiKindPanelEditor components (still in-tree under
+                 components/MeshGraph/) all remain. Only these Mesh-page UI mounts are hidden.
+                 To restore, re-add:
+                   <Section title="MAGI panels" ...><MagiPanelManager status={displayedMeshStatus}
+                       daemonId={activeDaemonId} sendDaemonCommand={sendCommand} /></Section>
+                   <Section title="MAGI kind → panel bindings" ...><MagiKindPanelEditor status={...}
+                       daemonId={activeDaemonId} sendDaemonCommand={sendCommand} /></Section>
+                 and their imports. */}
 
             {/* ── Missions (fix b: full-goal fetch-more) ── */}
             <MeshMissionsSection
