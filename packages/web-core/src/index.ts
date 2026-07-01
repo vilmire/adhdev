@@ -72,6 +72,8 @@ export { default as ConnectionBadge } from './components/ConnectionBadge'
 export { default as StatCard } from './components/StatCard'
 export { default as ProgressBar } from './components/ProgressBar'
 export { default as RemoteView } from './components/RemoteView'
+export { default as ScreenshotViewer } from './components/remote/ScreenshotViewer'
+export type { ScreenshotViewerProps } from './components/remote/ScreenshotViewer'
 export { default as InteractivePromptModal } from './components/interactive-prompt/InteractivePromptModal'
 
 export { default as ScreenshotToolbar } from './components/ScreenshotToolbar'
@@ -102,6 +104,14 @@ export {
 export type { IdeSessionSummary, CliSessionSummary, AcpSessionSummary } from './utils/daemon-utils'
 export { statusPayloadToEntries } from './utils/status-transform'
 export type { StatusTransformOptions } from './utils/status-transform'
+// Re-export daemon-core's managed-status normalizer (browser-safe /status/normalize subpath,
+// type-only deps) so UI consumers use web-core as the facade instead of reaching into daemon-core.
+export {
+    normalizeManagedStatus,
+    isManagedStatusWorking,
+    isManagedStatusWaiting,
+} from '@adhdev/daemon-core/status/normalize'
+export type { ManagedStatus } from '@adhdev/daemon-core/status/normalize'
 export {
     addProviderPriorityItem,
     defaultProviderPriorityFromInventory,
@@ -161,6 +171,7 @@ export { AlertBanner } from './components/ui/AlertBanner'
 export { FormField, Input, Textarea } from './components/ui/FormField'
 export { StatusBadge } from './components/ui/StatusBadge'
 export { DataTable } from './components/ui/DataTable'
+export { ErrorBoundary } from './components/ui/ErrorBoundary'
 export { default as ThemeToggle } from './components/ThemeToggle'
 
 // ── Settings (shared) ──
