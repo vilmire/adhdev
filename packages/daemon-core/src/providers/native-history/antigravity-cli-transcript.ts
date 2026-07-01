@@ -12,11 +12,35 @@
  *        { source: 'USER_EXPLICIT'|'MODEL', type: string, content: string, status: 'DONE'|..., created_at: number }
  *
  *   3. ~/.gemini/antigravity-cli/conversations/<uuid>.pb
- *      Protobuf binary — schema not publicly documented. Adapter extracts
+ *      Legacy protobuf binary — schema not publicly documented. Adapter extracts
  *      printable UTF-8 text runs as best-effort content (no proto library needed).
  *
+ *   4. ~/.gemini/antigravity-cli/conversations/<uuid>.db  ← current format
+ *      Per-session SQLite database. Recent antigravity migrated conversation
+ *      storage from .pb (+ brain/*.jsonl) to a per-session SQLite db. The
+ *      schema is a trajectory of `steps`, NOT a simple messages(role,content)
+ *      table:
+ *        steps(idx INTEGER PK, step_type INTEGER, status INTEGER,
+ *              step_payload BLOB [protobuf], ...)
+ *      Each `step_payload` is a protobuf message. Empirically (introspected
+ *      from real stores):
+ *        - step_type 14 → a USER turn. The prompt text is the largest
+ *          contiguous UTF-8 run inside the payload (field 19 subtree).
+ *        - step_type 15 → a MODEL/assistant turn. The assistant's final
+ *          natural-language answer lives at payload field 20 → field 1
+ *          (identical to field 8). Field 20 → field 3 is the internal
+ *          reasoning summary and is intentionally NOT surfaced.
+ *        - other step types are tool calls / ephemeral system context.
+ *      We read the blobs with a tiny dependency-free protobuf field walker
+ *      (no proto schema / codegen needed) and map the two message step types.
+ *      Because the daemon does NOT read this db, native history previously
+ *      returned 0 rows for these sessions and read_chat fell back to the
+ *      pty parser (which only echoes the user's own input) — assistant
+ *      answers appeared lost even though they were on disk.
+ *
  * This adapter provides:
- *   - Full coverage when a brain transcript exists (authoritative source).
+ *   - Full coverage from a per-session .db (current format) — preferred.
+ *   - Full coverage when a brain transcript exists (legacy authoritative source).
  *   - Partial coverage (user prompts only) from history.jsonl as fallback.
  *   - Best-effort raw-string extraction from .pb files when no other source exists.
  *
@@ -24,6 +48,7 @@
  *   ~/.gemini/antigravity-cli/history.jsonl
  *   ~/.gemini/antigravity-cli/brain/{uuid}/.system_generated/logs/transcript*.jsonl
  *   ~/.gemini/antigravity-cli/conversations/{uuid}.pb
+ *   ~/.gemini/antigravity-cli/conversations/{uuid}.db
  *
  * OSS code (AGPL-3.0). Must not import from packages/ (proprietary).
  */
@@ -31,6 +56,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { loadBetterSqlite3 } from '../../system/load-better-sqlite3.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -382,6 +408,232 @@ function parsePbFile(
   ];
 }
 
+// ─── SQLite (.db) conversation reader ────────────────────────────────────────
+//
+// Recent antigravity stores each conversation in a per-session SQLite db at
+// conversations/<uuid>.db. See the file header for the schema. We decode the
+// protobuf `step_payload` blobs with a minimal, dependency-free field walker —
+// we only need two leaf strings (user prompt / assistant answer), so a full
+// proto schema is unnecessary.
+
+/** Antigravity step_type values that map to a chat message. */
+const AGY_STEP_TYPE_USER = 14;
+const AGY_STEP_TYPE_MODEL = 15;
+
+interface ProtoField {
+  field: number;
+  wireType: number;
+  /** For wireType 2 (length-delimited): the raw bytes. */
+  bytes?: Buffer;
+  /** For wireType 0 (varint): the value. */
+  varint?: number;
+}
+
+/**
+ * Read a base-128 varint starting at `offset`. Returns [value, nextOffset].
+ * Values are read as JS numbers (safe: the fields we consume are small).
+ */
+function readVarint(buf: Buffer, offset: number): [number, number] {
+  let result = 0;
+  let shift = 0;
+  let i = offset;
+  while (i < buf.length) {
+    const byte = buf[i];
+    i += 1;
+    result += (byte & 0x7f) * Math.pow(2, shift);
+    if ((byte & 0x80) === 0) return [result, i];
+    shift += 7;
+    if (shift > 63) break; // malformed / oversized
+  }
+  return [result, i];
+}
+
+/**
+ * Decode the top-level fields of a protobuf message. Best-effort: stops on the
+ * first malformed byte rather than throwing, so a partially-corrupt blob still
+ * yields the fields decoded so far.
+ */
+function decodeProtoFields(buf: Buffer): ProtoField[] {
+  const fields: ProtoField[] = [];
+  let i = 0;
+  while (i < buf.length) {
+    const [key, afterKey] = readVarint(buf, i);
+    if (afterKey === i) break;
+    i = afterKey;
+    const field = Math.floor(key / 8);
+    const wireType = key & 7;
+    if (field <= 0) break;
+    if (wireType === 0) {
+      const [value, next] = readVarint(buf, i);
+      if (next === i) break;
+      i = next;
+      fields.push({ field, wireType, varint: value });
+    } else if (wireType === 2) {
+      const [len, afterLen] = readVarint(buf, i);
+      i = afterLen;
+      if (len < 0 || i + len > buf.length) break;
+      fields.push({ field, wireType, bytes: buf.subarray(i, i + len) });
+      i += len;
+    } else if (wireType === 5) {
+      i += 4;
+    } else if (wireType === 1) {
+      i += 8;
+    } else {
+      break; // wireType 3/4 (groups) — unused by antigravity payloads
+    }
+  }
+  return fields;
+}
+
+/** Return the bytes of the first length-delimited field with number `field`. */
+function firstLenField(buf: Buffer, field: number): Buffer | null {
+  for (const f of decodeProtoFields(buf)) {
+    if (f.field === field && f.wireType === 2 && f.bytes) return f.bytes;
+  }
+  return null;
+}
+
+/** Heuristic: is this buffer (mostly) printable UTF-8 text? */
+function looksLikeText(buf: Buffer): boolean {
+  if (buf.length === 0) return false;
+  let printable = 0;
+  for (let i = 0; i < buf.length; i++) {
+    const b = buf[i];
+    // ASCII printable + common whitespace, or any high byte (UTF-8 lead/cont).
+    if ((b >= 32 && b <= 126) || b === 9 || b === 10 || b === 13 || b >= 0x80) printable += 1;
+  }
+  return printable / buf.length >= 0.9;
+}
+
+/**
+ * Antigravity prefixes some assistant answers with a literal `MARKER_V1`
+ * sentinel followed by a blank line. Strip it so the user-visible bubble starts
+ * at the real text.
+ */
+function stripAnswerMarker(text: string): string {
+  return text.replace(/^\s*MARKER_V1\s*/, '');
+}
+
+/**
+ * Extract the assistant's final natural-language answer from a step_type 15
+ * payload: field 20 → field 1 (identical to field 8). Field 20 → field 3 is the
+ * private reasoning summary and is deliberately skipped. Returns '' if absent
+ * (e.g. a pure reasoning / tool-only model step, which carries no user-visible
+ * answer text).
+ */
+function extractModelAnswer(payload: Buffer): string {
+  const inner = firstLenField(payload, 20);
+  if (!inner) return '';
+  const answer = firstLenField(inner, 1) ?? firstLenField(inner, 8);
+  if (!answer || !looksLikeText(answer)) return '';
+  return stripAnswerMarker(answer.toString('utf-8')).trim();
+}
+
+/**
+ * Extract the user prompt from a step_type 14 payload: field 19 → field 2 (the
+ * clean prompt text; field 19 → field 3 wraps the same string with a leading
+ * newline and is used only as a fallback). The USER_REQUEST XML wrapper, when
+ * present, is unwrapped to match the brain-transcript reader's output.
+ */
+function extractUserPrompt(payload: Buffer): string {
+  const inner = firstLenField(payload, 19);
+  if (!inner) return '';
+  const raw = firstLenField(inner, 2) ?? firstLenField(inner, 3);
+  if (!raw || !looksLikeText(raw)) return '';
+  const text = raw.toString('utf-8').trim();
+  if (!text) return '';
+  return extractUserRequestContent(text);
+}
+
+interface AgyDbStepRow {
+  idx: number;
+  step_type: number;
+  step_payload: Buffer | null;
+}
+
+/**
+ * Parse a per-session conversations/<uuid>.db (SQLite) into NativeHistoryMessages.
+ * Returns null when the db is unreadable, empty, or yields no chat messages.
+ */
+function parseConversationDb(
+  filePath: string,
+  sessionId: string,
+  workspace?: string,
+): NativeHistoryMessage[] | null {
+  let db: any;
+  try {
+    const Database = loadBetterSqlite3();
+    db = new Database(filePath, { readonly: true, fileMustExist: true });
+  } catch {
+    return null;
+  }
+
+  let rows: AgyDbStepRow[];
+  try {
+    rows = db
+      .prepare(
+        `SELECT idx, step_type, step_payload
+           FROM steps
+          WHERE step_type IN (${AGY_STEP_TYPE_USER}, ${AGY_STEP_TYPE_MODEL})
+          ORDER BY idx ASC`,
+      )
+      .all() as AgyDbStepRow[];
+  } catch {
+    // `steps` table absent / unexpected schema.
+    return null;
+  } finally {
+    try { db.close(); } catch { /* ignore */ }
+  }
+
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+
+  const normalizedWorkspace = typeof workspace === 'string' ? workspace.trim() : '';
+  const baseTs = statMtimeMs(filePath) || Date.now();
+  const messages: NativeHistoryMessage[] = [];
+
+  for (const row of rows) {
+    const payload = row.step_payload;
+    if (!payload || !Buffer.isBuffer(payload) || payload.length === 0) continue;
+
+    // Steps are ordered by idx; the db carries no per-step timestamp we can
+    // trust as ms, so synthesize a monotonically increasing receivedAt that
+    // preserves order (idx-derived) around the file mtime.
+    const receivedAt = baseTs + messages.length;
+
+    if (row.step_type === AGY_STEP_TYPE_USER) {
+      const content = extractUserPrompt(payload);
+      if (!content) continue;
+      const msg: NativeHistoryMessage = {
+        ts: new Date(receivedAt).toISOString(),
+        receivedAt,
+        role: 'user',
+        content,
+        kind: 'standard',
+        agent: 'antigravity-cli',
+        historySessionId: sessionId,
+      };
+      if (normalizedWorkspace) msg.workspace = normalizedWorkspace;
+      messages.push(msg);
+    } else if (row.step_type === AGY_STEP_TYPE_MODEL) {
+      const content = extractModelAnswer(payload);
+      if (!content) continue; // reasoning-only / tool-only model step — no answer text
+      const msg: NativeHistoryMessage = {
+        ts: new Date(receivedAt).toISOString(),
+        receivedAt,
+        role: 'assistant',
+        content,
+        kind: 'standard',
+        agent: 'antigravity-cli',
+        historySessionId: sessionId,
+      };
+      if (normalizedWorkspace) msg.workspace = normalizedWorkspace;
+      messages.push(msg);
+    }
+  }
+
+  return messages.length > 0 ? messages : null;
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /**
@@ -390,6 +642,7 @@ function parsePbFile(
  * `sessionPath` is the absolute path to one of:
  *   - A brain transcript JSONL: ~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript*.jsonl
  *   - The shared history.jsonl: ~/.gemini/antigravity-cli/history.jsonl
+ *   - A conversation SQLite db: ~/.gemini/antigravity-cli/conversations/<uuid>.db
  *   - A conversation protobuf: ~/.gemini/antigravity-cli/conversations/<uuid>.pb
  *
  * The session UUID is inferred from the directory name (brain), filename (pb), or
@@ -430,7 +683,26 @@ export function readSession(
     };
   }
 
-  // ── Case 2: .pb conversation file ───────────────────────────────────────
+  // ── Case 2a: .db conversation file (current per-session SQLite format) ───
+  if (sessionPath.endsWith('.db')) {
+    const dbSessionId = sessionId || path.basename(sessionPath, '.db');
+    if (!isUuidLike(dbSessionId)) return null;
+
+    const messages = parseConversationDb(sessionPath, dbSessionId, workspace);
+    if (!messages || messages.length === 0) return null;
+
+    return {
+      messages,
+      providerSessionId: dbSessionId,
+      source: 'provider-native',
+      sourcePath: sessionPath,
+      sourceMtimeMs,
+      nativeHistoryCoverage: 'full',
+      workspace,
+    };
+  }
+
+  // ── Case 2b: .pb conversation file (legacy protobuf) ─────────────────────
   if (sessionPath.endsWith('.pb')) {
     const pbSessionId = sessionId || path.basename(sessionPath, '.pb');
     if (!isUuidLike(pbSessionId)) return null;
@@ -607,34 +879,85 @@ export async function listSessions(_watchPath: string): Promise<NativeHistorySes
     seen.add(sessionId);
   }
 
-  // ── Step 3: .pb files without any other source ─────────────────────────
+  // ── Step 3: conversations/<uuid>.db and .pb without any other source ────
+  //
+  // Current antigravity writes per-session SQLite dbs; older sessions kept a
+  // .pb protobuf. Both can coexist in conversations/. Discover both, but when
+  // the same uuid has a .db, prefer it (full coverage) over the .pb (best
+  // effort). brain/history sources already in `seen` still win over either.
   const convRoot = conversationsRoot();
   if (fs.existsSync(convRoot)) {
     let entries: fs.Dirent[] = [];
     try { entries = fs.readdirSync(convRoot, { withFileTypes: true }); } catch { /* ignore */ }
 
+    // Group by uuid so a .db supersedes a sibling .pb of the same session.
+    const byUuid = new Map<string, { db?: string; pb?: string }>();
     for (const entry of entries) {
-      if (!entry.isFile() || !/^[0-9a-f-]+\.pb$/i.test(entry.name)) continue;
-      const pbSessionId = entry.name.replace(/\.pb$/, '');
-      if (!isUuidLike(pbSessionId) || seen.has(pbSessionId)) continue;
+      if (!entry.isFile()) continue;
+      const dbMatch = /^([0-9a-f-]+)\.db$/i.exec(entry.name);
+      const pbMatch = /^([0-9a-f-]+)\.pb$/i.exec(entry.name);
+      if (dbMatch && isUuidLike(dbMatch[1])) {
+        const g = byUuid.get(dbMatch[1]) ?? {};
+        g.db = path.join(convRoot, entry.name);
+        byUuid.set(dbMatch[1], g);
+      } else if (pbMatch && isUuidLike(pbMatch[1])) {
+        const g = byUuid.get(pbMatch[1]) ?? {};
+        g.pb = path.join(convRoot, entry.name);
+        byUuid.set(pbMatch[1], g);
+      }
+    }
 
-      const pbPath = path.join(convRoot, entry.name);
-      const pbMtime = statMtimeMs(pbPath);
+    for (const [uuid, files] of byUuid.entries()) {
+      if (seen.has(uuid)) continue;
 
-      results.push({
-        historySessionId: pbSessionId,
-        sessionId: pbSessionId,
-        sourcePath: pbPath,
-        sourceMtimeMs: pbMtime,
-        messageCount: 0,
-        firstMessageAt: pbMtime,
-        lastMessageAt: pbMtime,
-        agent: 'antigravity-cli',
-        source: 'provider-native',
-        nativeHistoryCoverage: 'best-effort',
-        partialReason: 'antigravity_cli_pb_raw_text_extraction',
-      });
-      seen.add(pbSessionId);
+      if (files.db) {
+        // Parse the db so listSessions reports accurate counts/preview and the
+        // session surfaces with full coverage (assistant answers included).
+        const workspace = workspaceBySession.get(uuid);
+        const messages = parseConversationDb(files.db, uuid, workspace);
+        const dbMtime = statMtimeMs(files.db);
+        if (messages && messages.length > 0) {
+          const lastMsg = messages[messages.length - 1];
+          const firstMsg = messages[0];
+          results.push({
+            historySessionId: uuid,
+            sessionId: uuid,
+            sourcePath: files.db,
+            sourceMtimeMs: dbMtime,
+            messageCount: messages.length,
+            firstMessageAt: firstMsg.receivedAt || dbMtime,
+            lastMessageAt: lastMsg.receivedAt || dbMtime,
+            sessionTitle: lastMsg.content,
+            preview: lastMsg.content,
+            workspace,
+            agent: 'antigravity-cli',
+            source: 'provider-native',
+            nativeHistoryCoverage: 'full',
+          });
+          seen.add(uuid);
+          continue;
+        }
+        // db unreadable/empty (e.g. sqlite binding unavailable) → fall through
+        // to the .pb best-effort entry below if one exists.
+      }
+
+      if (files.pb) {
+        const pbMtime = statMtimeMs(files.pb);
+        results.push({
+          historySessionId: uuid,
+          sessionId: uuid,
+          sourcePath: files.pb,
+          sourceMtimeMs: pbMtime,
+          messageCount: 0,
+          firstMessageAt: pbMtime,
+          lastMessageAt: pbMtime,
+          agent: 'antigravity-cli',
+          source: 'provider-native',
+          nativeHistoryCoverage: 'best-effort',
+          partialReason: 'antigravity_cli_pb_raw_text_extraction',
+        });
+        seen.add(uuid);
+      }
     }
   }
 

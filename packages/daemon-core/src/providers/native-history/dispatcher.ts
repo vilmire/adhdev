@@ -97,7 +97,7 @@ function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: strin
     switch (reader) {
         case 'claude-cli':   return resolveClaudePath(workspace, sessionId);
         case 'codex-cli':    return resolveCodexPath(workspace, sessionId, sessionStartedAtMs);
-        case 'antigravity-cli': return resolveAntigravityPath(workspace);
+        case 'antigravity-cli': return resolveAntigravityPath(workspace, sessionId);
         case 'hermes-cli':   return resolveHermesPath(workspace, sessionId);
     }
 }
@@ -225,21 +225,40 @@ function resolveRealPath(value: string): string {
     try { return fs.realpathSync(value); } catch { return value; }
 }
 
-function resolveAntigravityPath(workspace: string): string | null {
+function resolveAntigravityPath(workspace: string, sessionId: string): string | null {
     void workspace;
-    // agy brain/<uuid>/.system_generated/logs/transcript.jsonl
-    const brainRoot = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
-    if (!fs.existsSync(brainRoot)) return null;
-    const cutoff = Date.now() - RECENT_WINDOW_MS;
-    const entries = fs.readdirSync(brainRoot, { withFileTypes: true })
-        .filter(e => e.isDirectory())
-        .map(e => ({ p: path.join(brainRoot, e.name), mtime: safeMtime(path.join(brainRoot, e.name)) }))
-        .filter(e => e.mtime >= cutoff)
-        .sort((a, b) => b.mtime - a.mtime);
-    for (const e of entries) {
-        const t = path.join(e.p, '.system_generated', 'logs', 'transcript.jsonl');
-        if (fs.existsSync(t)) return t;
+    const agyRoot = path.join(os.homedir(), '.gemini', 'antigravity-cli');
+
+    // (1) Exact session bind: current antigravity writes a per-session SQLite db
+    //     at conversations/<uuid>.db. If the caller knows the session id and the
+    //     db exists, bind straight to it — this is the authoritative source and
+    //     carries the assistant answers the brain/pty path was losing.
+    if (sessionId && isUuidLikeSessionId(sessionId)) {
+        const dbPath = path.join(agyRoot, 'conversations', `${sessionId}.db`);
+        if (fs.existsSync(dbPath)) return dbPath;
     }
+
+    // (2) brain/<uuid>/.system_generated/logs/transcript.jsonl (legacy full source).
+    const brainRoot = path.join(agyRoot, 'brain');
+    if (fs.existsSync(brainRoot)) {
+        const cutoff = Date.now() - RECENT_WINDOW_MS;
+        const entries = fs.readdirSync(brainRoot, { withFileTypes: true })
+            .filter(e => e.isDirectory())
+            .map(e => ({ p: path.join(brainRoot, e.name), mtime: safeMtime(path.join(brainRoot, e.name)) }))
+            .filter(e => e.mtime >= cutoff)
+            .sort((a, b) => b.mtime - a.mtime);
+        for (const e of entries) {
+            const t = path.join(e.p, '.system_generated', 'logs', 'transcript.jsonl');
+            if (fs.existsSync(t)) return t;
+        }
+    }
+
+    // (3) No brain transcript and no bound session id: fall back to the most
+    //     recently touched conversations/<uuid>.db (within the recency window).
+    const convRoot = path.join(agyRoot, 'conversations');
+    const newestDb = newestRecentFile(convRoot, /^[0-9a-f-]+\.db$/i);
+    if (newestDb) return newestDb;
+
     return null;
 }
 
