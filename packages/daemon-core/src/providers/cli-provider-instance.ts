@@ -2813,7 +2813,13 @@ export class CliProviderInstance implements ProviderInstance {
             typeof data.providerSessionId === 'string' ? data.providerSessionId : '',
         );
         if (patchedProviderSessionId) {
-            this.promoteProviderSessionId(patchedProviderSessionId);
+            // A provider-response id is authoritative when it carries an
+            // explicit `new_session` marker (the CLI genuinely started a new
+            // conversation). Without that marker it's just an observed id and
+            // must not hijack an existing binding (see promoteProviderSessionId).
+            this.promoteProviderSessionId(patchedProviderSessionId, {
+                authoritative: data.sessionEvent === 'new_session',
+            });
         }
 
         if (data.sessionEvent === 'new_session') {
@@ -3167,9 +3173,25 @@ export class CliProviderInstance implements ProviderInstance {
         return lines.join('\n');
     }
 
-    private promoteProviderSessionId(sessionId: string): void {
+    private promoteProviderSessionId(sessionId: string, opts: { authoritative?: boolean } = {}): void {
         const nextSessionId = String(sessionId || '').trim();
         if (!nextSessionId || nextSessionId === this.providerSessionId) return;
+
+        // Sticky binding: once this instance is bound to a provider session,
+        // an *observed* id (one discovered from a status parse or the native
+        // history reader) must NOT hijack the live binding. hermes ≥0.14
+        // spawns a fresh `sessions` row per internal sub-session, so a
+        // newest-wins native read surfaces a different id mid-turn on every
+        // poll; accepting it would re-bind the instance, re-hydrate unbounded
+        // history (daemon saturation) and reset completion detection so the
+        // turn never finalizes. Only an *authoritative* change — the first
+        // bind (no id yet) or an explicit provider `new_session`/resume — may
+        // replace an existing binding. Legitimate resume/new-session paths
+        // pass authoritative:true and are unaffected.
+        if (this.providerSessionId && !opts.authoritative) {
+            LOG.debug('CLI', `[${this.type}] ignoring non-authoritative session id ${nextSessionId} (bound to ${this.providerSessionId})`);
+            return;
+        }
 
         const previousHistorySessionId = this.providerSessionId || this.instanceId;
         const previousProviderSessionId = this.providerSessionId;

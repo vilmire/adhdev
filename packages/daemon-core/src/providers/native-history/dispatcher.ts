@@ -66,7 +66,7 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
             try { fs.statSync(sourcePath); } catch { /* best-effort metadata refresh */ }
         }
 
-        const session = readByReader(reader, sourcePath, sessionId, workspace);
+        const session = readByReader(reader, sourcePath, sessionId, workspace, requestedProviderSid);
         if (!session) return null;
 
         if (requestedProviderSid && session.providerSessionId && session.providerSessionId !== requestedProviderSid) {
@@ -265,12 +265,18 @@ function readByReader(
     sourcePath: string,
     sessionId: string,
     workspace: string,
+    requestedProviderSid: string,
 ): any | null {
     switch (reader) {
         case 'claude-cli':      return readClaudeCliSession(sourcePath);
         case 'codex-cli':       return readCodexCliSession(sourcePath);
         case 'antigravity-cli': return readAntigravityCliSession(sourcePath, sessionId || undefined, workspace || undefined);
-        case 'hermes-cli':      return readHermesCliSession(sourcePath);
+        // hermes reads a *shared* state.db and would otherwise pick the newest
+        // source='cli' session, which drifts every read (hermes ≥0.14 writes a
+        // fresh row per internal sub-session). Pass the bound id so it reads
+        // THAT session directly instead of newest-wins. claude/codex resolve a
+        // per-session file upstream, so they need no equivalent pin here.
+        case 'hermes-cli':      return readHermesCliSession(sourcePath, requestedProviderSid || undefined);
     }
 }
 

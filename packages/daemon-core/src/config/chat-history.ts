@@ -1820,6 +1820,16 @@ function callProviderNativeHistoryRead(
     const result = fn({
         agentType,
         sessionId: normalizedSessionId,
+        // Arm the native-history executor's session pin guard. When the
+        // instance is already bound to a provider session, pass that id as
+        // `providerSessionId` so the executor rejects any *other* newest
+        // session it would otherwise pick (hermes ≥0.14 creates a fresh
+        // `sessions` row per internal sub-session, so an unpinned
+        // newest-wins query drifts to a different id on every read →
+        // re-bind churn + unbounded history re-hydration). When there is no
+        // bound id yet (first-bind / workspace-only discovery) this is '',
+        // which leaves the guard disarmed so discovery still works.
+        providerSessionId: normalizedSessionId,
         historySessionId: normalizedSessionId,
         workspace,
         format: canonicalHistory?.format,

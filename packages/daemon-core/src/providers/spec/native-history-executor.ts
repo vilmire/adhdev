@@ -263,34 +263,49 @@ function executeSqlite(src: NativeHistorySqliteSource, input: NativeHistoryInput
     catch { return null; }
 
     try {
-        let sessionRow: any;
-        try {
-            // session_query may reference `?` to receive the session's
-            // start-time floor in seconds (e.g. WHERE started_at >= ?).
-            // That gives spec authors a robust way to keep prior-session
-            // rows out of a fresh dashboard view without inventing their
-            // own time arithmetic in SQL. When the caller didn't pass a
-            // session floor (i.e. no live session is associated with the
-            // call), we use 0 so spec queries that bind `?` still produce
-            // a sane result rather than choking the whole executor.
-            const sessionFloorSeconds = typeof input.sessionStartedAtMs === 'number'
-                ? Math.floor(input.sessionStartedAtMs / 1000)
-                : 0;
-            const stmt = db.prepare(src.session_query);
-            try {
-                sessionRow = stmt.get(sessionFloorSeconds);
-            } catch {
-                sessionRow = stmt.get();
-            }
-        } catch { return null; }
-        if (!sessionRow) return null;
-        // First column of the first row is the session id.
-        const sessionIdRaw = Object.values(sessionRow)[0];
-        const sessionId = sessionIdRaw == null ? '' : String(sessionIdRaw);
-        if (!sessionId) return null;
-
         const requested = input.providerSessionId || '';
-        if (requested && sessionId !== requested) return null;
+        let sessionId: string;
+        if (requested) {
+            // Session pin: the caller already bound this instance to a
+            // specific provider session, so read THAT session directly and
+            // skip the newest-wins `session_query` entirely. hermes ≥0.14
+            // spawns a fresh `sessions` row per internal sub-session, so the
+            // `ORDER BY started_at DESC LIMIT 1` pick drifts to a different
+            // id on every read. Left unpinned that churns the bound session
+            // (each re-bind re-hydrates unbounded history → daemon
+            // saturation) and reads completion evidence from the wrong
+            // session (turn never finalizes). Binding straight to the
+            // requested id fixes both. Existence is validated below by the
+            // spec's own `message_query` returning rows for this id, so we
+            // don't hardcode any schema here.
+            sessionId = requested;
+        } else {
+            let sessionRow: any;
+            try {
+                // session_query may reference `?` to receive the session's
+                // start-time floor in seconds (e.g. WHERE started_at >= ?).
+                // That gives spec authors a robust way to keep prior-session
+                // rows out of a fresh dashboard view without inventing their
+                // own time arithmetic in SQL. When the caller didn't pass a
+                // session floor (i.e. no live session is associated with the
+                // call), we use 0 so spec queries that bind `?` still produce
+                // a sane result rather than choking the whole executor.
+                const sessionFloorSeconds = typeof input.sessionStartedAtMs === 'number'
+                    ? Math.floor(input.sessionStartedAtMs / 1000)
+                    : 0;
+                const stmt = db.prepare(src.session_query);
+                try {
+                    sessionRow = stmt.get(sessionFloorSeconds);
+                } catch {
+                    sessionRow = stmt.get();
+                }
+            } catch { return null; }
+            if (!sessionRow) return null;
+            // First column of the first row is the session id.
+            const sessionIdRaw = Object.values(sessionRow)[0];
+            sessionId = sessionIdRaw == null ? '' : String(sessionIdRaw);
+        }
+        if (!sessionId) return null;
 
         const messageRows: any[] = db.prepare(src.message_query).all(sessionId);
         if (!messageRows || messageRows.length === 0) return null;

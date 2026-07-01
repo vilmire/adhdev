@@ -93,26 +93,42 @@ function loadMessagesForSession(db: any, sessionId: string): NativeHistoryMessag
     return out;
 }
 
-export function readSession(sessionPath: string): NativeHistorySession | null {
+export function readSession(sessionPath: string, requestedSessionId?: string): NativeHistorySession | null {
     if (!sessionPath) return null;
 
-    // Path mode A: SQLite — sourcePath is the state.db path. Pick the
-    // newest source='cli' session that has at least one persisted message.
+    // Path mode A: SQLite — sourcePath is the state.db path.
     if (sessionPath === HERMES_STATE_DB) {
         const db = openDb();
         if (!db) return null;
         try {
-            const row: any = db.prepare(
-                `SELECT id, started_at FROM sessions
-                 WHERE source = 'cli' AND message_count > 0
-                 ORDER BY started_at DESC LIMIT 1`,
-            ).get();
-            if (!row) return null;
-            const messages = loadMessagesForSession(db, row.id);
+            const pinned = String(requestedSessionId || '').trim();
+            let sessionId: string;
+            if (pinned) {
+                // Session pin: the caller is already bound to a specific
+                // provider session, so read THAT session directly instead of
+                // the newest-wins pick below. hermes ≥0.14 writes a fresh
+                // `sessions` row per internal sub-session, so an unpinned
+                // `ORDER BY started_at DESC LIMIT 1` drifts to a different id
+                // on every read → re-bind churn + reading completion evidence
+                // from the wrong session. loadMessagesForSession returning
+                // rows validates the id exists.
+                sessionId = pinned;
+            } else {
+                // No bound id yet (discovery): pick the newest source='cli'
+                // session that has at least one persisted message.
+                const row: any = db.prepare(
+                    `SELECT id, started_at FROM sessions
+                     WHERE source = 'cli' AND message_count > 0
+                     ORDER BY started_at DESC LIMIT 1`,
+                ).get();
+                if (!row) return null;
+                sessionId = String(row.id);
+            }
+            const messages = loadMessagesForSession(db, sessionId);
             if (messages.length === 0) return null;
             return {
                 messages,
-                providerSessionId: String(row.id),
+                providerSessionId: sessionId,
                 source: 'provider-native',
                 sourcePath: sessionPath,
                 sourceMtimeMs: statMtimeMs(sessionPath),
