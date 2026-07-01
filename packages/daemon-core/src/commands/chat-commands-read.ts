@@ -50,6 +50,34 @@ const HOT_TAIL_MIN_LIMIT = 60;
 // and routes solely through canonicalHistory.contractVersion +
 // isNativeSourceCanonicalHistory().
 const CLI_NATIVE_TRANSCRIPT_PROVIDERS = new Set(['codex-cli', 'claude-cli', 'hermes-cli', 'antigravity-cli']);
+
+// Last successfully-bound provider-native session id, keyed by the mesh session
+// id (targetSessionId) the read was scoped to. The live pin lives on the
+// CliProviderInstance and is torn down when the turn ends; a *post-turn* read
+// then finds historySessionId empty AND canBindFromLiveSession=false (no live
+// spawnedAtMs), so readCliProviderNativeHistory would fail closed with
+// native_history_workspace_only_lookup_unsafe and surface providerSessionId=null
+// + zero rows even though the transcript is physically present in state.db.
+// Persisting the last resolved id here lets that later read reuse the known pin
+// and run the native query normally instead of fail-closing. Refreshed on every
+// successful bind; never lets an empty id clear a known pin. Keyed by mesh
+// session id so pins never alias across distinct sessions sharing a workspace.
+const lastBoundProviderSessionIdByMeshSession = new Map<string, string>();
+
+function recordBoundProviderSessionId(meshSessionId: string | undefined, providerSessionId: string | undefined): void {
+    const key = typeof meshSessionId === 'string' ? meshSessionId.trim() : '';
+    const value = typeof providerSessionId === 'string' ? providerSessionId.trim() : '';
+    if (!key || !value) return;
+    lastBoundProviderSessionIdByMeshSession.set(key, value);
+}
+
+function getBoundProviderSessionIdPin(meshSessionId: string | undefined): string | undefined {
+    const key = typeof meshSessionId === 'string' ? meshSessionId.trim() : '';
+    if (!key) return undefined;
+    const pinned = lastBoundProviderSessionIdByMeshSession.get(key);
+    return pinned && pinned.trim() ? pinned.trim() : undefined;
+}
+
 const warnedLegacyNativeAllowlistHits = new Set<string>();
 function warnLegacyNativeAllowlistHit(providerType: string): void {
     if (warnedLegacyNativeAllowlistHits.has(providerType)) return;
@@ -1055,13 +1083,49 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     excludeInProgressTurn?: boolean;
     sessionStartedAtMs?: number;
     envOverrides?: Record<string, string>;
+    // Last provider-native session id previously bound for this mesh session
+    // (see lastBoundProviderSessionIdByMeshSession). When historySessionId is
+    // empty and no live session can be bound (post-turn read), reuse this pin so
+    // the native query runs against the known session instead of fail-closing.
+    pinnedProviderSessionId?: string;
+    // Opt-in last-resort: when there is no caller session id, no live binding,
+    // and NO pin was ever recorded, allow a workspace-scoped read (newest
+    // session in state.db with rows for this workspace). Strictly behind the pin
+    // — it never fires when pinnedProviderSessionId is set — and still subject to
+    // the downstream hasSafeNativeHistoryMapping workspace-overlap gate. Only the
+    // read_chat path opts in, and only with a concrete workspace.
+    allowWorkspaceLatestFallback?: boolean;
 }): ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' } {
     const canBindFromLiveSession = !args.historySessionId
         && typeof args.sessionStartedAtMs === 'number'
         && args.sessionStartedAtMs > 0
         && typeof args.workspace === 'string'
         && args.workspace.trim().length > 0;
-    if (!args.historySessionId && !canBindFromLiveSession) {
+    const pinnedProviderSessionId = typeof args.pinnedProviderSessionId === 'string'
+        ? args.pinnedProviderSessionId.trim()
+        : '';
+    // Pin reuse (PRIMARY): a later read whose live binding is gone
+    // (historySessionId empty, no live spawnedAtMs) can still resolve to the
+    // session it was last bound to. Read THAT session directly by threading the
+    // pin through as historySessionId — same code path an explicit session read
+    // takes — instead of fail-closing. Never overrides a caller-supplied
+    // historySessionId; only kicks in when there is none.
+    const effectiveHistorySessionId = args.historySessionId || (!canBindFromLiveSession ? pinnedProviderSessionId : '');
+    // Last-resort workspace-latest (b): only when nothing above resolved a
+    // session id AND no pin exists AND the caller opted in with a workspace.
+    // Strictly behind pin reuse — pinnedProviderSessionId being set disables it.
+    const workspaceLatestFallback = !effectiveHistorySessionId
+        && !canBindFromLiveSession
+        && !pinnedProviderSessionId
+        && args.allowWorkspaceLatestFallback === true
+        && typeof args.workspace === 'string'
+        && args.workspace.trim().length > 0;
+    if (!effectiveHistorySessionId && !canBindFromLiveSession && !workspaceLatestFallback) {
+        // No caller session id, no live binding, no known pin, no opted-in
+        // workspace-latest. This is the genuinely-unresolvable case — a
+        // workspace-only lookup here could alias a concurrent session sharing the
+        // cwd, so fail closed as before. The pin/live/workspace-latest paths are
+        // all checked AHEAD of this so a resolvable session is never dropped here.
         return {
             messages: [],
             hasMore: false,
@@ -1072,7 +1136,7 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     }
     const sessionHistory = readProviderChatHistory(agentStr, {
         canonicalHistory: args.canonicalHistory,
-        historySessionId: args.historySessionId,
+        historySessionId: effectiveHistorySessionId || undefined,
         workspace: args.workspace,
         offset: args.offset,
         limit: args.limit,
@@ -1087,10 +1151,11 @@ function readCliProviderNativeHistory(agentStr: string, args: {
         ? (sessionHistory as any).providerSessionId.trim()
         : '';
     // A fresh live session can be bound without a provider id when the native
-    // reader matched both cwd and session_meta.timestamp to spawnedAtMs.
+    // reader matched both cwd and session_meta.timestamp to spawnedAtMs. A
+    // pin-bound read is always session-scoped (we passed an explicit id).
     return {
         ...(sessionHistory as any),
-        lookup: args.historySessionId || (canBindFromLiveSession && boundProviderSessionId)
+        lookup: effectiveHistorySessionId || (canBindFromLiveSession && boundProviderSessionId)
             ? 'session'
             : 'workspace',
     };
@@ -1476,6 +1541,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 scripts: provider?.scripts as any,
                 sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
                 envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
+                pinnedProviderSessionId: getBoundProviderSessionIdPin(args?.targetSessionId),
             })
             : readProviderChatHistory(agentStr, {
                 canonicalHistory: provider?.nativeHistory,
@@ -1495,6 +1561,9 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
             const historyProviderSessionId = typeof (result as any)?.providerSessionId === 'string'
                 ? (result as any).providerSessionId
                 : readHistorySessionIdFromMessages(messages) || historySessionId;
+            if (typeof (result as any)?.providerSessionId === 'string' && (result as any).providerSessionId.trim()) {
+                recordBoundProviderSessionId(args?.targetSessionId, (result as any).providerSessionId.trim());
+            }
             const safeMapping = hasSafeNativeHistoryMapping({
                 historySessionId: lookup === 'workspace' ? undefined : historySessionId,
                 providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId,
@@ -1702,8 +1771,24 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         scripts: provider?.scripts as any,
                         excludeInProgressTurn: returnedStatus === 'waiting_approval',
                         sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
-                envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
+                        envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
+                        pinnedProviderSessionId: getBoundProviderSessionIdPin(targetSessionId),
+                        // Last-resort only when no pin was ever recorded for this
+                        // session; the downstream workspace-overlap safety gate
+                        // still filters an aliased session out.
+                        allowWorkspaceLatestFallback: !getBoundProviderSessionIdPin(targetSessionId),
                     });
+                    // Refresh the per-mesh-session pin whenever a native read
+                    // resolves a concrete provider-native session id. A later
+                    // post-turn read (live binding gone) can then reuse it
+                    // instead of fail-closing. Only a non-empty resolved id
+                    // updates the pin; an empty result never clears a known one.
+                    const resolvedProviderSessionId = typeof nativeHistory?.providerSessionId === 'string'
+                        ? nativeHistory.providerSessionId.trim()
+                        : '';
+                    if (resolvedProviderSessionId) {
+                        recordBoundProviderSessionId(targetSessionId, resolvedProviderSessionId);
+                    }
                 } catch (error: any) {
                     nativeHistoryError = error;
                     nativeHistory = null;
@@ -2026,10 +2111,32 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const intendedWorkspace = argsWorkspace;
             const supportsNative = supportsCliNativeTranscript(agentStr, provider)
                 && isNativeSourceCanonicalHistory(provider?.nativeHistory);
+            // Post-turn read (no live adapter): getHistorySessionId falls back to
+            // the daemon runtime session id when no provider-native id was ever
+            // registered. That runtime id is NOT a real provider session, so a
+            // native read keyed on it resolves nothing (providerSessionId=null,
+            // zero rows) even though the transcript is present in state.db. When
+            // this is that runtime fallback (historySessionId === targetSid and no
+            // explicit id was passed) and we hold a pin from an earlier bound
+            // read, prefer the pin so the query hits the real session.
+            const pinnedProviderSessionIdForHistory = getBoundProviderSessionIdPin(targetSid);
+            const historySessionIdIsRuntimeFallback = Boolean(
+                targetSid
+                && historySessionId === targetSid
+                && !getExplicitHistorySessionId(args),
+            );
+            // When this is the runtime fallback (not a real provider id): prefer
+            // the pin if we have one, else drop the runtime id entirely so the
+            // pin-reuse / workspace-latest logic inside readCliProviderNativeHistory
+            // can engage (passing the runtime id as historySessionId would pin the
+            // query to a non-existent session and never reach those paths).
+            const effectiveHistorySessionIdForRead = historySessionIdIsRuntimeFallback
+                ? (pinnedProviderSessionIdForHistory || undefined)
+                : historySessionId;
             const history = supportsNative
                 ? readCliProviderNativeHistory(agentStr, {
                     canonicalHistory: provider?.nativeHistory,
-                    historySessionId,
+                    historySessionId: effectiveHistorySessionIdForRead,
                     workspace,
                     offset: 0,
                     limit: historyLimit,
@@ -2037,7 +2144,11 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     historyBehavior: provider?.historyBehavior,
                     scripts: provider?.scripts as any,
                     sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
-                envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
+                    envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
+                    pinnedProviderSessionId: pinnedProviderSessionIdForHistory,
+                    // Last-resort only when no pin was ever recorded AND the
+                    // runtime fallback did not resolve a real provider session.
+                    allowWorkspaceLatestFallback: !pinnedProviderSessionIdForHistory && historySessionIdIsRuntimeFallback,
                 })
                 : readProviderChatHistory(agentStr, {
                     canonicalHistory: provider?.nativeHistory,
@@ -2055,19 +2166,28 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 : [];
             const historyProviderSessionId = typeof (history as any)?.providerSessionId === 'string'
                 ? (history as any).providerSessionId
-                : readHistorySessionIdFromMessages(historyMessages) || historySessionId;
+                : readHistorySessionIdFromMessages(historyMessages) || effectiveHistorySessionIdForRead;
+            // Refresh the pin whenever this path resolves a real provider id.
+            if (typeof (history as any)?.providerSessionId === 'string' && (history as any).providerSessionId.trim()) {
+                recordBoundProviderSessionId(targetSid, (history as any).providerSessionId.trim());
+            }
+            // Use the id we actually read with (pin / real provider id), NOT the
+            // raw runtime-fallback historySessionId — otherwise the mapping guard
+            // compares the stamped messages' real id against the runtime id and
+            // fails closed, undoing the pin reuse.
+            const mappingSessionId = effectiveHistorySessionIdForRead;
             const safeMapping = supportsNative
                 ? hasSafeNativeHistoryMapping({
-                    historySessionId: lookup === 'workspace' ? undefined : historySessionId,
+                    historySessionId: lookup === 'workspace' ? undefined : mappingSessionId,
                     providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId,
                     workspace,
                     nativeMessages: historyMessages,
                 })
                 : false;
             const trustedExactNativeIdentity = lookup !== 'workspace'
-                && Boolean(historySessionId)
+                && Boolean(mappingSessionId)
                 && Boolean(historyProviderSessionId)
-                && historySessionId === historyProviderSessionId;
+                && mappingSessionId === historyProviderSessionId;
 
             const machineSessionKey = String(
                 args?.targetSessionId
