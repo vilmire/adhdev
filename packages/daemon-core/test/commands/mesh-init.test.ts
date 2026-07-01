@@ -10,9 +10,11 @@ import {
   suggestNodeProviderPriority,
   MESH_INIT_REFINE_CONFIG_PATH,
   MESH_INIT_WORKTREE_BOOTSTRAP_CONFIG_PATH,
+  MESH_INIT_CHANGE_IMPACT_CONFIG_PATH,
 } from '../../src/mesh/mesh-init'
 import { loadMeshRefineConfig } from '../../src/mesh/refine-config'
 import { loadMeshWorktreeBootstrapConfig } from '../../src/mesh/worktree-bootstrap-config'
+import { loadChangeImpactConfig } from '../../src/git/change-impact-config'
 import type { CLIInfo } from '../../src/detection/cli-detector'
 
 async function createWorkspace(prefix: string, opts: { lock?: boolean; scripts?: Record<string, string> } = {}) {
@@ -78,11 +80,41 @@ describe('runMeshInit', () => {
     expect(result.dryRun).toBe(true)
     expect(result.refine.written).toBe(false)
     expect(result.worktreeBootstrap.written).toBe(false)
+    expect(result.changeImpact.written).toBe(false)
     expect(result.refine.config).toBeDefined()
     expect(result.worktreeBootstrap.config).toBeDefined()
+    expect(result.changeImpact.config).toBeDefined()
     expect(result.providers.providerPriority).toEqual(['claude-cli', 'codex-cli'])
     expect(existsSync(join(ws, MESH_INIT_REFINE_CONFIG_PATH))).toBe(false)
     expect(existsSync(join(ws, MESH_INIT_WORKTREE_BOOTSTRAP_CONFIG_PATH))).toBe(false)
+    expect(existsSync(join(ws, MESH_INIT_CHANGE_IMPACT_CONFIG_PATH))).toBe(false)
+  })
+
+  it('dry-run echoes the currently-saved config per domain (current-vs-suggested diff source)', async () => {
+    // Isolate machine-local config so the magiKindPanels echo is deterministic (not the real user's).
+    const prevConfigDir = process.env.ADHDEV_CONFIG_DIR
+    process.env.ADHDEV_CONFIG_DIR = await mkdtemp(join(tmpdir(), 'mesh-init-echo-cfg-'))
+    try {
+      const ws = await createWorkspace('mesh-init-echo-')
+      // No repo config saved yet → currentConfig reports absent (unavailable) for every domain.
+      const fresh = runMeshInit({}, ws, detected)
+      expect(fresh.currentConfig).toBeDefined()
+      expect(fresh.currentConfig.refine).toBeUndefined()
+      expect(fresh.currentConfig.changeImpact).toBeUndefined()
+      expect(fresh.currentConfig.sourceTypes.refine).toBe('unavailable')
+      expect(fresh.currentConfig.sourceTypes.changeImpact).toBe('unavailable')
+      expect(fresh.currentConfig.magiKindPanels).toEqual({})
+
+      // Once a refine config is on disk, the echo reflects the saved value.
+      const existing = { version: 1, validation: { required: true, commands: [{ command: 'npm', args: ['run', 'lint'] }] } }
+      await writeFile(join(ws, MESH_INIT_REFINE_CONFIG_PATH), JSON.stringify(existing, null, 2))
+      const after = runMeshInit({}, ws, detected)
+      expect(after.currentConfig.sourceTypes.refine).toBe('repo_file')
+      expect(after.currentConfig.refine?.validation?.commands?.[0]?.args).toEqual(['run', 'lint'])
+    } finally {
+      if (prevConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = prevConfigDir
+    }
   })
 
   it('write=true persists valid, loadable configs', async () => {
@@ -101,10 +133,34 @@ describe('runMeshInit', () => {
     expect(loadedBoot.sourceType).toBe('repo_file')
     expect(loadedBoot.config?.commands?.length).toBeGreaterThan(0)
 
+    // change-impact is written and round-trips through its real loader too.
+    expect(result.changeImpact.written).toBe(true)
+    const loadedImpact = loadChangeImpactConfig(ws)
+    expect(loadedImpact.sourceType).toBe('repo_file')
+    expect(loadedImpact.config?.impactTargets?.daemon?.recommendedCommand).toBeTruthy()
+
     // Written JSON is pretty-printed and trailing-newline terminated.
     const raw = await readFile(join(ws, MESH_INIT_REFINE_CONFIG_PATH), 'utf-8')
     expect(raw.endsWith('\n')).toBe(true)
     expect(JSON.parse(raw).version).toBe(1)
+  })
+
+  it('never clobbers an existing change-impact config unless overwrite=true', async () => {
+    const ws = await createWorkspace('mesh-init-impact-keep-')
+    const existing = { daemonRuntimePackages: ['server'], impactTargets: { daemon: { recommendedCommand: 'hand-authored' } } }
+    await writeFile(join(ws, MESH_INIT_CHANGE_IMPACT_CONFIG_PATH), JSON.stringify(existing, null, 2))
+
+    const kept = runMeshInit({}, ws, detected, { write: true })
+    expect(kept.changeImpact.written).toBe(false)
+    expect(kept.changeImpact.skippedReason).toBe('already_exists')
+    const afterKeep = JSON.parse(await readFile(join(ws, MESH_INIT_CHANGE_IMPACT_CONFIG_PATH), 'utf-8'))
+    expect(afterKeep.impactTargets.daemon.recommendedCommand).toBe('hand-authored')
+
+    const overwritten = runMeshInit({}, ws, detected, { write: true, overwrite: true })
+    expect(overwritten.changeImpact.written).toBe(true)
+    const afterOver = JSON.parse(await readFile(join(ws, MESH_INIT_CHANGE_IMPACT_CONFIG_PATH), 'utf-8'))
+    // The heuristic draft replaced the hand-authored recommendedCommand wholesale.
+    expect(afterOver.impactTargets.daemon.recommendedCommand).not.toBe('hand-authored')
   })
 
   it('never clobbers an existing config unless overwrite=true', async () => {

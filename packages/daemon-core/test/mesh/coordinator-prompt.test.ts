@@ -345,5 +345,35 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('## Operating Notes')
     expect(prompt).toContain('[recovery lesson] a durable lesson')
   })
+
+  it('includes the guided Onboarding / Reinit section with save-scope labels and init-vs-reinit guidance', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: baseMesh() as any,
+      coordinatorCliType: 'claude-cli',
+    })
+
+    expect(prompt).toContain('## Onboarding / Reinit')
+    expect(prompt).toContain('mesh_init')
+    expect(prompt).toContain('mesh_reinit')
+    // Save-scope labels — repo-file (commit) vs machine-local.
+    expect(prompt).toContain('repo-file (commit target)')
+    expect(prompt).toContain('machine-local')
+    // Machine-local + repo write tools called out.
+    expect(prompt).toContain('mesh_magi_kind_panel_set')
+    expect(prompt).toContain('mesh_write_mesh_json_config')
+    // reinit must diff-then-approve before overwriting hand-edits.
+    expect(prompt).toContain('current-vs-suggested diff')
+  })
+
+  it('expands the {{onboarding}} placeholder in a mesh-level override', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        ...baseMesh(),
+        coordinator: { systemPromptOverride: 'HEAD\n{{onboarding}}' },
+      } as any,
+    })
+    expect(prompt).toContain('HEAD')
+    expect(prompt).toContain('## Onboarding / Reinit')
+  })
 })
 

@@ -26,6 +26,8 @@ import {
     isWeakCompletionEvidence,
     getMagiKindPanel,
     listMagiKindPanels,
+    setMagiKindPanel,
+    normalizeMagiSlots,
     listMagiPanels,
     MAGI_RAW_ANSWER_CAP,
     meshNodeIdMatches,
@@ -56,6 +58,7 @@ import type {
     MagiTaskKind,
     MagiPanel,
     MagiPanelMember,
+    MagiSlot,
     MagiReplicaGitRef,
     MagiResponseSource,
     MagiSynthesis,
@@ -1232,6 +1235,90 @@ export async function meshMagiPanelSet(
 function previewMagiPanel(config: unknown): MagiPanel {
     return normalizeMagiPanel(config);
 }
+
+/**
+ * Set the MAGI kind→panel slot binding for one task_kind (machine-local
+ * ~/.adhdev/meshes.json `magiKindPanels`). This is the MCP surface for the daemon
+ * `magi_kind_panel_set` command, which was not exposed to the coordinator before.
+ *
+ * IMPORTANT — kind-slot write is a WHOLESALE REPLACEMENT of the slot list for that
+ * kind (a task_kind has exactly one binding; setMagiKindPanel always overwrites). So
+ * this is NOT an additive upsert — the passed `slots` become the complete new set and
+ * any prior slots for the kind are dropped. It therefore requires explicit user
+ * approval before a write (present the current-vs-new slot lists first). Mirrors the
+ * mesh_magi_panel_set write/dry-run precedent: defaults to dry-run (write=false).
+ * Machine-local config — labeled distinct from the repo-committed .adhdev/* files.
+ */
+export async function meshMagiKindPanelSet(
+    ctx: MeshContext,
+    args: { task_kind?: string; kind?: string; slots?: unknown; write?: boolean },
+): Promise<string> {
+    const kind = readString(args.task_kind) || readString(args.kind);
+    if (!kind) return JSON.stringify({ success: false, error: 'task_kind required' });
+    const write = args.write === true;
+    try {
+        // The current binding for this kind, so the coordinator can diff current-vs-new
+        // before an overwrite (the write drops any slot not in the new list).
+        const current: MagiSlot[] = getMagiKindPanel(kind) ?? [];
+        if (!write) {
+            // Dry-run: normalize + validate WITHOUT persisting (same normalizer as the
+            // persisted write path, so preview and write agree on validation).
+            const preview = normalizeMagiSlots(args.slots);
+            return JSON.stringify({
+                success: true,
+                dryRun: true,
+                taskKind: kind,
+                scope: 'machine_local',
+                replacement: true,
+                currentSlots: current,
+                slots: preview,
+                note: 'Dry-run only — no file written. This is a WHOLESALE replacement of the kind\'s slot list (machine-local ~/.adhdev/meshes.json); the currentSlots would be fully replaced. Re-run with write=true after explicit user approval.',
+            }, null, 2);
+        }
+        const slots = setMagiKindPanel(kind, args.slots);
+        return JSON.stringify({
+            success: true,
+            written: true,
+            taskKind: kind,
+            scope: 'machine_local',
+            replacement: true,
+            previousSlots: current,
+            slots,
+            nextAction: 'Verify with mesh_magi_kind_panel_list, then mesh_magi_review({ task_kind }) resolves this binding.',
+        }, null, 2);
+    } catch (e: any) {
+        const message = e?.message || String(e);
+        const code = message.includes('invalid_magi_kind_panel') ? 'invalid_magi_kind_panel' : undefined;
+        return JSON.stringify({ success: false, ...(code ? { code } : {}), error: message });
+    }
+}
+
+/**
+ * List the configured MAGI kind→panel slot bindings (machine-local). Read-only —
+ * the sibling of mesh_magi_panel_list for kind-slot bindings. Use to confirm what a
+ * `task_kind` resolves to before mesh_magi_review, and to diff before an overwrite.
+ */
+export async function meshMagiKindPanelList(
+    ctx: MeshContext,
+    args: { task_kind?: string; kind?: string } = {},
+): Promise<string> {
+    const only = readString(args.task_kind) || readString(args.kind);
+    const all = listMagiKindPanels();
+    if (only) {
+        const slots = getMagiKindPanel(only);
+        if (slots === undefined) {
+            return JSON.stringify({
+                success: false,
+                code: 'magi_kind_not_configured',
+                error: `task_kind '${only}' has no configured kind-panel binding`,
+                configuredKinds: Object.keys(all),
+            }, null, 2);
+        }
+        return JSON.stringify({ success: true, scope: 'machine_local', taskKind: only, slots }, null, 2);
+    }
+    return JSON.stringify({ success: true, scope: 'machine_local', kindPanels: all, configuredKinds: Object.keys(all) }, null, 2);
+}
+
 
 /**
  * Build a one-off ad-hoc MAGI panel from inline `members` (mesh_magi_review members

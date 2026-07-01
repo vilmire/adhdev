@@ -87,6 +87,71 @@ export async function meshInit(
     return JSON.stringify(result, null, 2);
 }
 
+/**
+ * Re-onboarding of an already-initialized repo. This is NOT a separate write engine
+ * — it reuses mesh_init's suggest→validate→gated-write engine with OVERWRITE
+ * semantics, plus the current-vs-suggested config echo (result.currentConfig) so the
+ * coordinator can present a per-section diff before replacing anything.
+ *
+ * CONTRACT — reinit must NOT silently drop operator hand-edits: overwrite=true is a
+ * wholesale replacement of the existing config, so the coordinator MUST load the
+ * current config (returned here in `currentConfig`), present a per-section
+ * current-vs-suggested diff, and get EXPLICIT per-section user approval before the
+ * write. The default is DRY-RUN (write=false): the first reinit call is a preview
+ * that surfaces the diff; only after approval does the coordinator re-invoke with
+ * write=true. `overwrite` defaults to true here (that is the whole point of reinit —
+ * unlike init, an existing config is the expected case), but with write=false it
+ * still writes nothing.
+ */
+export async function meshReinit(
+    ctx: MeshContext,
+    args: { node_id?: string; write?: boolean; overwrite?: boolean },
+): Promise<string> {
+    const node = resolveRefineConfigNode(ctx, args.node_id);
+    // overwrite defaults to true for reinit (an existing config is expected); callers
+    // can still pass overwrite=false to fall back to existing-wins. write defaults to
+    // false (dry-run preview surfacing the diff) exactly like mesh_init.
+    const overwrite = args.overwrite !== false;
+    const result = await commandForNode(ctx, node, 'mesh_init', {
+        workspace: node.workspace,
+        inlineMesh: ctx.mesh,
+        ...(args.write !== undefined ? { write: args.write } : {}),
+        overwrite,
+    });
+    // Annotate the mode so the coordinator reads this as a reinit (diff-then-approve)
+    // rather than a fresh init, without inventing a second write engine.
+    const annotated = (result && typeof result === 'object')
+        ? {
+            ...result,
+            mode: 'reinit',
+            reinitContract: 'Overwrite replaces existing config wholesale. Present the per-section current-vs-suggested diff (see currentConfig) and get EXPLICIT per-section user approval before re-invoking with write=true. Never silently drop operator hand-edits.',
+        }
+        : result;
+    return JSON.stringify(annotated, null, 2);
+}
+
+/**
+ * Write `.adhdev/mesh.json` (the repo-committed coordinator prompt + declarative
+ * config) from the machine-local mesh entry. Gated WRITE sibling of the draft-only
+ * export_mesh_json_config — forwards to the daemon `write_mesh_json_config` command
+ * which enforces the same write/overwrite/dry-run contract as mesh_init (dry-run
+ * default, existing-wins unless overwrite=true, validate before write). REPO-COMMITTED
+ * scope. Resolves the workspace via the same node resolver as mesh_init (non-optional).
+ */
+export async function meshWriteMeshJsonConfig(
+    ctx: MeshContext,
+    args: { node_id?: string; write?: boolean; overwrite?: boolean; workspace?: string } = {},
+): Promise<string> {
+    const node = resolveRefineConfigNode(ctx, args.node_id);
+    const result = await commandForNode(ctx, node, 'write_mesh_json_config', {
+        meshId: ctx.mesh.id,
+        workspace: (typeof args.workspace === 'string' && args.workspace.trim()) ? args.workspace.trim() : node.workspace,
+        ...(args.write !== undefined ? { write: args.write } : {}),
+        ...(args.overwrite !== undefined ? { overwrite: args.overwrite } : {}),
+    });
+    return JSON.stringify(result, null, 2);
+}
+
 export async function meshRefinePlan(
     ctx: MeshContext,
     args: { node_id: string },

@@ -41,11 +41,12 @@ import {
   meshReadDebug,
   meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon, meshCheckpoint, meshApprove,
   meshCloneNode, meshRemoveNode, meshRefineNode,
-  meshRefineConfigSchema, meshValidateRefineConfig, meshSuggestRefineConfig, meshInit, meshRefinePlan, meshRefineBatch,
+  meshRefineConfigSchema, meshValidateRefineConfig, meshSuggestRefineConfig, meshInit, meshReinit, meshRefinePlan, meshRefineBatch,
   meshChangeImpactConfigSchema, meshValidateChangeImpactConfig, meshSuggestChangeImpactConfig,
   meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshRecordNote, meshReconcileLedger, meshMissionUpsert,
   meshMissionList, meshReviewInbox,
-  meshMagiReview, meshMagiCollect, meshMagiPanelSet, meshMagiPanelList
+  meshMagiReview, meshMagiCollect, meshMagiPanelSet, meshMagiPanelList,
+  meshMagiKindPanelSet, meshMagiKindPanelList, meshWriteMeshJsonConfig
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 
@@ -225,6 +226,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_validate_change_impact_config': text = await meshValidateChangeImpactConfig(meshCtx, a as any); break;
           case 'mesh_suggest_change_impact_config': text = await meshSuggestChangeImpactConfig(meshCtx, a as any); break;
           case 'mesh_init': text = await meshInit(meshCtx, a as any); break;
+          case 'mesh_reinit': text = await meshReinit(meshCtx, a as any); break;
+          case 'mesh_write_mesh_json_config': text = await meshWriteMeshJsonConfig(meshCtx, a as any); break;
           case 'mesh_refine_plan': text = await meshRefinePlan(meshCtx, a as any); break;
           case 'mesh_cleanup_sessions': text = await meshCleanupSessions(meshCtx, a as any); break;
           case 'mesh_prune_stale_direct': text = await meshPruneStaleDirect(meshCtx, a as any); break;
@@ -238,6 +241,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_magi_collect': text = await meshMagiCollect(meshCtx, a as any); break;
           case 'mesh_magi_panel_set': text = await meshMagiPanelSet(meshCtx, a as any); break;
           case 'mesh_magi_panel_list': text = await meshMagiPanelList(meshCtx, a as any); break;
+          case 'mesh_magi_kind_panel_set': text = await meshMagiKindPanelSet(meshCtx, a as any); break;
+          case 'mesh_magi_kind_panel_list': text = await meshMagiKindPanelList(meshCtx, a as any); break;
           default: return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
         }
         return { content: [{ type: 'text', text }] };

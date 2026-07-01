@@ -232,6 +232,95 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         }
     },
 
+    // Gated WRITE path for `.adhdev/mesh.json` — the sibling of export_mesh_json_config
+    // (which only DRAFTS). Same write/overwrite/dry-run contract as mesh_init's config
+    // writer: defaults to dry-run (no write), never clobbers an existing repo mesh.json
+    // unless overwrite=true, and validates the scaffold before persisting. The scaffold
+    // is built from the machine-local mesh entry (coordinator prompt override/append);
+    // policy/operating-notes are intentionally NOT exported (see buildMeshJsonConfigScaffold).
+    write_mesh_json_config: async (_ctx: MedFamilyContext, args: any) => {
+        const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+        if (!meshId) return { success: false, error: 'meshId required' };
+        const workspace = typeof args?.workspace === 'string' && args.workspace.trim() ? args.workspace.trim() : process.cwd();
+        const write = args?.write === true;
+        const overwrite = args?.overwrite === true;
+        try {
+            const { getMesh } = await import('../../config/mesh-config.js');
+            const mesh = getMesh(meshId);
+            if (!mesh) return { success: false, error: 'Mesh not found' };
+            const {
+                buildMeshJsonConfigScaffold,
+                serializeMeshJsonConfigScaffold,
+                loadRepoMeshJsonConfig,
+                normalizeRepoMeshDeclarativeConfig,
+                MESH_JSON_CONFIG_LOCATIONS,
+            } = await import('../../config/mesh-json-config.js');
+            const { mkdirSync, writeFileSync } = await import('fs');
+            const { dirname, join } = await import('path');
+
+            const scaffold = buildMeshJsonConfigScaffold(mesh);
+            const scaffoldJson = serializeMeshJsonConfigScaffold(scaffold);
+            const relativePath = MESH_JSON_CONFIG_LOCATIONS[0];
+            const absolutePath = join(workspace, relativePath);
+
+            // Validate before we ever touch disk — never write an unusable mesh.json.
+            const validation = normalizeRepoMeshDeclarativeConfig(scaffold);
+            if (!validation.valid) {
+                return { success: false, meshId, error: `invalid mesh.json scaffold: ${validation.errors.join('; ')}` };
+            }
+
+            // existing-wins: a repo mesh.json already present is kept unless overwrite=true.
+            const existing = loadRepoMeshJsonConfig(workspace);
+            const existingPresent = existing.sourceType === 'repo_file' || existing.sourceType === 'invalid';
+            if (existingPresent && !overwrite) {
+                return {
+                    success: true,
+                    meshId,
+                    written: false,
+                    dryRun: !write,
+                    skippedReason: 'already_exists',
+                    path: absolutePath,
+                    relativePath,
+                    existing: existing.config,
+                    existingSourceType: existing.sourceType,
+                    scaffold,
+                    scaffoldJson,
+                    note: 'A repo mesh.json already exists — kept as-is. Re-run with overwrite=true to replace it (this silently drops operator hand-edits, so present a current-vs-suggested diff first).',
+                };
+            }
+
+            if (!write) {
+                return {
+                    success: true,
+                    meshId,
+                    written: false,
+                    dryRun: true,
+                    path: absolutePath,
+                    relativePath,
+                    scaffold,
+                    scaffoldJson,
+                    note: 'Dry-run: nothing written. Re-run with write=true to persist to the repo (commit target). meshes.json is untouched.',
+                };
+            }
+
+            mkdirSync(dirname(absolutePath), { recursive: true });
+            writeFileSync(absolutePath, `${scaffoldJson}\n`, 'utf-8');
+            return {
+                success: true,
+                meshId,
+                written: true,
+                dryRun: false,
+                path: absolutePath,
+                relativePath,
+                scaffold,
+                scaffoldJson,
+                note: 'Wrote .adhdev/mesh.json (repo commit target). Commit it to the repo; meshes.json (machine-local) is unchanged.',
+            };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
     delete_mesh: async (_ctx: MedFamilyContext, args: any) => {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };

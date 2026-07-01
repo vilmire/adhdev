@@ -4,7 +4,13 @@
  * One-shot helper that onboards an existing git project into Repo Mesh:
  *   1. suggest + write `.adhdev/refine.json`           (Refinery validation config)
  *   2. suggest + write `.adhdev/worktree_bootstrap.json` (worktree bootstrap config)
- *   3. recommend a node providerPriority from the installed CLI providers
+ *   3. suggest + write `.adhdev/change-impact.json`     (change-impact classification)
+ *   4. recommend a node providerPriority from the installed CLI providers
+ *
+ * mesh_init now covers all THREE repo-committed `.adhdev/*` config families that
+ * carry a suggest→validate→write engine (refine + worktree_bootstrap +
+ * change-impact). `.adhdev/mesh.json` (coordinator prompt + operating notes) has
+ * its own dedicated export/write path (export_mesh_json_config / write_mesh_json_config).
  *
  * Design contract (matches the rest of the mesh tooling):
  *   - Heuristics are suggestion/scaffold only. The written files are the
@@ -34,11 +40,21 @@ import {
     validateMeshWorktreeBootstrapConfig,
     type RepoMeshWorktreeBootstrapConfig,
 } from './worktree-bootstrap-config.js';
+import {
+    CHANGE_IMPACT_CONFIG_LOCATIONS,
+    loadChangeImpactConfig,
+    suggestChangeImpactConfig,
+    validateChangeImpactConfig,
+    type ChangeImpactConfig,
+} from '../git/change-impact-config.js';
+import { listMagiKindPanels } from '../config/mesh-config.js';
+import type { MagiKindPanelMap } from '@adhdev/mesh-shared';
 import type { CLIInfo } from '../detection/cli-detector.js';
 
 /** Canonical write targets — the first/preferred location for each config family. */
 export const MESH_INIT_REFINE_CONFIG_PATH = MESH_REFINE_CONFIG_LOCATIONS[0];
 export const MESH_INIT_WORKTREE_BOOTSTRAP_CONFIG_PATH = MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS[0];
+export const MESH_INIT_CHANGE_IMPACT_CONFIG_PATH = CHANGE_IMPACT_CONFIG_LOCATIONS[0];
 
 /**
  * Default lockfiles whose change should invalidate a 'ready' bootstrap.
@@ -61,7 +77,7 @@ export interface MeshInitConfigFileResult {
     written: boolean;
     /** Why it was not written (already_exists / not_suggested / no change). */
     skippedReason?: 'already_exists' | 'no_suggestion';
-    config?: RepoMeshRefineConfig | RepoMeshWorktreeBootstrapConfig;
+    config?: RepoMeshRefineConfig | RepoMeshWorktreeBootstrapConfig | ChangeImpactConfig;
 }
 
 /**
@@ -158,16 +174,50 @@ export interface RunMeshInitOptions {
     overwrite?: boolean;
 }
 
+/**
+ * A snapshot of the currently-saved config for each domain, so the coordinator can
+ * render a current-vs-suggested diff to the user before an init/reinit overwrite.
+ * This is READ-ONLY echo — every field is what is on disk / machine-local right now,
+ * never a suggestion. Absent domains are reported as `undefined` config.
+ */
+export interface MeshInitCurrentConfigEcho {
+    /** Currently-saved `.adhdev/refine.json` (repo-committed) — undefined when absent/invalid. */
+    refine?: RepoMeshRefineConfig;
+    /** Currently-saved `.adhdev/worktree_bootstrap.json` (repo-committed). */
+    worktreeBootstrap?: RepoMeshWorktreeBootstrapConfig;
+    /** Currently-saved `.adhdev/change-impact.json` (repo-committed). */
+    changeImpact?: ChangeImpactConfig;
+    /** Per-domain source type so the coordinator can tell "absent" from "invalid". */
+    sourceTypes: {
+        refine: string;
+        worktreeBootstrap: string;
+        changeImpact: string;
+    };
+    /**
+     * Currently-configured MAGI kind→panel slot bindings (machine-local
+     * ~/.adhdev/meshes.json). Empty object when none configured. This is a
+     * machine-local echo — the coordinator labels it as such vs. the repo files.
+     */
+    magiKindPanels: MagiKindPanelMap;
+}
+
 export interface RunMeshInitResult {
     success: true;
     workspace: string;
     dryRun: boolean;
     refine: MeshInitConfigFileResult;
     worktreeBootstrap: MeshInitConfigFileResult;
+    changeImpact: MeshInitConfigFileResult;
     providers: {
         providerPriority: string[];
         installedProviders: Array<{ id: string; displayName: string; version?: string }>;
     };
+    /**
+     * Read-only snapshot of the currently-saved config per domain (repo files +
+     * machine-local kind panels). Lets the coordinator present a current-vs-suggested
+     * diff to the user before any overwrite. Always populated (dry-run and write).
+     */
+    currentConfig: MeshInitCurrentConfigEcho;
     note: string;
 }
 
@@ -210,7 +260,45 @@ export function runMeshInit(
         overwrite,
     });
 
+    // change-impact classification (.adhdev/change-impact.json). suggest/validate/save
+    // mirror refine's engine exactly, so it drops into the same applyConfigSuggestion
+    // gate: existing-wins unless overwrite, dry-run by default, validated before write.
+    const changeImpactLoaded = loadChangeImpactConfig(workspace);
+    const changeImpact = applyConfigSuggestion({
+        workspace,
+        relativePath: MESH_INIT_CHANGE_IMPACT_CONFIG_PATH,
+        existing: changeImpactLoaded.sourceType === 'repo_file' ? changeImpactLoaded.config : undefined,
+        suggestedConfig: suggestChangeImpactConfig(workspace).suggestedConfig,
+        validate: (config) => validateChangeImpactConfig(config, MESH_INIT_CHANGE_IMPACT_CONFIG_PATH).valid,
+        write,
+        overwrite,
+    });
+
     const providers = suggestNodeProviderPriority(detected);
+
+    // Read-only echo of the currently-saved config per domain so the coordinator can
+    // present a current-vs-suggested diff before any overwrite (init vs reinit). This
+    // never suggests — it reports what is on disk / machine-local right now.
+    const refineLoaded = loadMeshRefineConfig(mesh, workspace);
+    const bootstrapLoaded = loadMeshWorktreeBootstrapConfig(mesh, workspace);
+    let magiKindPanels: MagiKindPanelMap = {};
+    try {
+        magiKindPanels = listMagiKindPanels();
+    } catch {
+        // Machine-local config unreadable — echo an empty binding rather than failing init.
+        magiKindPanels = {};
+    }
+    const currentConfig: MeshInitCurrentConfigEcho = {
+        refine: refineLoaded.config,
+        worktreeBootstrap: bootstrapLoaded.config,
+        changeImpact: changeImpactLoaded.sourceType === 'repo_file' ? changeImpactLoaded.config : undefined,
+        sourceTypes: {
+            refine: refineLoaded.sourceType,
+            worktreeBootstrap: bootstrapLoaded.sourceType,
+            changeImpact: changeImpactLoaded.sourceType,
+        },
+        magiKindPanels,
+    };
 
     return {
         success: true,
@@ -218,10 +306,12 @@ export function runMeshInit(
         dryRun: !write,
         refine,
         worktreeBootstrap,
+        changeImpact,
         providers,
+        currentConfig,
         note: write
-            ? 'Configs written to disk are the execution source of truth; suggestions are scaffold and only take effect once saved. providerPriority is a recommendation — apply it to node policy via clone/policy update.'
-            : 'Dry-run: no files written. Re-run with write=true to persist the suggested configs. Heuristic suggestions never execute until saved as repo config.',
+            ? 'Configs written to disk are the execution source of truth; suggestions are scaffold and only take effect once saved. providerPriority is a recommendation — apply it to node policy via clone/policy update. currentConfig echoes what was on disk before this run.'
+            : 'Dry-run: no files written. Re-run with write=true to persist the suggested configs. Heuristic suggestions never execute until saved as repo config. Use currentConfig to diff current-vs-suggested before overwriting.',
     };
 }
 
@@ -234,7 +324,7 @@ function applyConfigSuggestion(input: {
     workspace: string;
     relativePath: string;
     existing?: unknown;
-    suggestedConfig?: RepoMeshRefineConfig | RepoMeshWorktreeBootstrapConfig;
+    suggestedConfig?: RepoMeshRefineConfig | RepoMeshWorktreeBootstrapConfig | ChangeImpactConfig;
     validate: (config: unknown) => boolean;
     write: boolean;
     overwrite: boolean;

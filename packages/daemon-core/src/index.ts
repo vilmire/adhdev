@@ -204,6 +204,7 @@ export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './con
 // them without taking a direct @adhdev/mesh-shared dependency).
 export type {
   MagiPanel, MagiPanelMember, MagiPanelMap, MagiMode, MagiTaskKind, MagiPanelDefaultKind,
+  MagiSlot, MagiKindPanelMap,
   MagiClaim, MagiClaimStance, MagiAgentResponse,
   MagiResponseSource, MagiReplicaGitRef, MagiGitSkew, MagiSynthesizedResponse,
   MagiClusterCategory, MagiClusterMember, MagiClaimCluster, MagiSynthesis,

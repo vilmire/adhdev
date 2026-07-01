@@ -207,6 +207,9 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
     // ── Workflow ──
     sections.push(WORKFLOW_SECTION);
 
+    // ── Onboarding / Reinit ──
+    sections.push(ONBOARDING_SECTION);
+
     // ── Rules ──
     sections.push(buildRulesSection(coordinatorCliType));
 
@@ -255,6 +258,7 @@ function readUserPromptFile(cliType: string | undefined, suffix: string): string
  *   {{policy}}          — full policy section
  *   {{tools}}           — the canonical tools table
  *   {{workflow}}        — the canonical orchestration workflow
+ *   {{onboarding}}      — the guided init/reinit onboarding section
  *   {{rules}}           — the canonical rules section (with coordinatorNote)
  *   {{toolExposurePreflight}} — the MCP-missing preflight reminder
  *
@@ -281,6 +285,7 @@ function expandPromptPlaceholders(template: string, ctx: CoordinatorPromptContex
         policy: buildPolicySection(mergeAndNormalizePolicy(undefined, mesh.policy)),
         tools: TOOLS_SECTION,
         workflow: WORKFLOW_SECTION,
+        onboarding: ONBOARDING_SECTION,
         rules: buildRulesSection(coordinatorCliType),
         toolExposurePreflight: TOOL_EXPOSURE_PREFLIGHT_SECTION,
     };
@@ -493,7 +498,12 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_clone_node\` | Create a worktree node for isolated parallel branch work |
 | \`mesh_refine_node\` | Validate and merge a completed worktree node back into its base branch |
 | \`mesh_remove_node\` | Remove a node (cleans up worktree if applicable) |
-| \`mesh_cleanup_sessions\` | Manually clean up delegated session records for a node |`;
+| \`mesh_cleanup_sessions\` | Manually clean up delegated session records for a node |
+| \`mesh_init\` | Guided onboarding for a fresh repo: dry-run scan → suggest \`.adhdev/*\` configs (refine/bootstrap/change-impact) + providerPriority + current-config echo; gated write on approval |
+| \`mesh_reinit\` | Re-onboard an already-configured repo: re-suggest with overwrite semantics + current-vs-suggested diff; dry-run preview first, per-section approval before write |
+| \`mesh_write_mesh_json_config\` | Gated write of \`.adhdev/mesh.json\` (repo coordinator-prompt config) from the mesh entry — dry-run/overwrite like mesh_init |
+| \`mesh_magi_kind_panel_set\` | Bind a task_kind → MAGI kind-panel slots (machine-local, wholesale replacement — approve current-vs-new first) |
+| \`mesh_magi_kind_panel_list\` | List configured task_kind → MAGI kind-panel slot bindings (machine-local, read-only) |`;
 
 const TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
 
@@ -528,6 +538,29 @@ Follow these recovery rules:
 2. **If "Max retries exceeded"**: Do NOT retry on the same node. Either reassign the task to a different node, or inform the user that the task requires manual intervention.
 3. **If no recovery context**: The stop may be intentional (normal completion). Use \`mesh_read_chat\` once to verify, then move on.
 4. **Always record what happened**: After handling a failure, briefly note the outcome in your report to the user.`;
+
+const ONBOARDING_SECTION = `## Onboarding / Reinit
+
+When the user asks to **set up / configure / onboard** this repo for Repo Mesh (or to **re-init / reconfigure** an already-onboarded repo), run ONE guided, approval-gated conversation. You draft, the user approves, the daemon writes. Never auto-write a heuristic suggestion without an explicit user approval turn.
+
+**Save scopes — label every draft with its scope before asking for approval:**
+- **repo-file (commit target)** — \`.adhdev/refine.json\`, \`.adhdev/worktree_bootstrap.json\`, \`.adhdev/change-impact.json\`, \`.adhdev/mesh.json\`. These are committed to the repository and shared with every machine/contributor.
+- **machine-local** — MAGI kind→panel bindings and named MAGI panels, node providerPriority (\`~/.adhdev/meshes.json\`). These stay on this machine and are NOT committed.
+
+**Guided sequence:**
+1. **Scan (dry-run)** — Call \`mesh_init\` (write=false, the default). It returns per-domain suggested configs for refine / worktree_bootstrap / change-impact, a recommended providerPriority, AND \`currentConfig\` — the currently-saved config per domain (repo files + machine-local \`magiKindPanels\`). Nothing is written.
+2. **Present drafts** — For each domain, show the user the suggested config with its **save scope label** (repo-file vs machine-local). When \`currentConfig\` already has a saved value for a domain (init on a partially-onboarded repo, or any reinit), present a **current-vs-suggested diff**, not just the suggestion.
+3. **Approve → gated write** — Only after the user approves, call the matching gated-write tool:
+   - repo \`.adhdev/*\` config files → \`mesh_init\` with \`write=true\` (and \`overwrite=true\` ONLY for domains the user approved replacing).
+   - \`.adhdev/mesh.json\` (coordinator prompt / operating notes) → \`mesh_write_mesh_json_config\` (write=true, overwrite only if approved).
+   - machine-local MAGI kind→panel slots → \`mesh_magi_kind_panel_set\` (write=true). NOTE: a kind binding is a **wholesale replacement** of that kind's slot list — present the current-vs-new slots first.
+   - machine-local named MAGI panels → \`mesh_magi_panel_set\`. providerPriority → apply via node policy update.
+
+**init vs reinit:**
+- **\`mesh_init\`** — for a fresh, never-onboarded repo. Existing config files are kept (existing-wins) unless the user explicitly approves overwrite. Use for first-time setup.
+- **\`mesh_reinit\`** — for a repo that is already onboarded and needs its config refreshed. It re-suggests with OVERWRITE semantics and returns the current-vs-suggested \`currentConfig\` echo. Its first call is a DRY-RUN preview: you MUST present the per-section current-vs-suggested diff and get EXPLICIT per-section approval before re-invoking with write=true. Overwrite is a wholesale replacement, so it silently drops operator hand-edits if you skip the diff — never do that.
+
+`;
 
 function buildRulesSection(coordinatorCliType?: string): string {
     const coordinatorNote = coordinatorCliType
