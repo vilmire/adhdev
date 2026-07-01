@@ -99,9 +99,31 @@ describe('executeSqlite — hermes session pin', () => {
         expect(result?.messages.map(m => m.content)).toEqual(['NEWER-ask', 'NEWER-reply']);
     });
 
-    it('returns null for a pinned id that has no messages (no silent alias)', () => {
+    it('falls back to newest-session self-resolve when the pinned id has no rows', () => {
+        // Regression for the hermes read_chat gap: hermes never surfaces its own
+        // provider session id, so the read pipeline threads the mesh RUNTIME
+        // session id through as `providerSessionId`. That runtime id does not
+        // exist in state.db. The OLD executor read `message_query WHERE
+        // session_id = '<runtime id>'` → 0 rows → null, dropping the answer that
+        // was physically present under the real cli session. The executor now
+        // treats a pinned id with no rows as "not a real session" and lets the
+        // spec's own `session_query` resolve the newest cli session instead.
         const result = executeNativeHistory(hermesCfg(dbPath), {
-            providerSessionId: 'nonexistent_session_id',
+            providerSessionId: 'mesh_runtime_id_not_in_db',
+            // A floor old enough that session_query returns the newest session.
+            sessionStartedAtMs: 1_699_999_000_000,
+        });
+        expect(result?.providerSessionId).toBe('20260412_202020_f2a65b');
+        expect(result?.messages.map(m => m.content)).toEqual(['NEWER-ask', 'NEWER-reply']);
+    });
+
+    it('returns null when the pinned id has no rows AND no session resolves', () => {
+        // The recovery must not invent a session: with a floor in the future,
+        // session_query matches nothing, so a bogus pin still yields null rather
+        // than aliasing an out-of-range session.
+        const result = executeNativeHistory(hermesCfg(dbPath), {
+            providerSessionId: 'mesh_runtime_id_not_in_db',
+            sessionStartedAtMs: 2_000_000_000_000, // far future → session_query empty
         });
         expect(result).toBeNull();
     });

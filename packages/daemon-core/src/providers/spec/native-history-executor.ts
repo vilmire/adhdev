@@ -264,22 +264,30 @@ function executeSqlite(src: NativeHistorySqliteSource, input: NativeHistoryInput
 
     try {
         const requested = input.providerSessionId || '';
-        let sessionId: string;
-        if (requested) {
-            // Session pin: the caller already bound this instance to a
-            // specific provider session, so read THAT session directly and
-            // skip the newest-wins `session_query` entirely. hermes ≥0.14
-            // spawns a fresh `sessions` row per internal sub-session, so the
-            // `ORDER BY started_at DESC LIMIT 1` pick drifts to a different
-            // id on every read. Left unpinned that churns the bound session
-            // (each re-bind re-hydrates unbounded history → daemon
-            // saturation) and reads completion evidence from the wrong
-            // session (turn never finalizes). Binding straight to the
-            // requested id fixes both. Existence is validated below by the
-            // spec's own `message_query` returning rows for this id, so we
-            // don't hardcode any schema here.
-            sessionId = requested;
-        } else {
+        // Resolve the session id the message query runs against. The `requested`
+        // pin path is tried first, but a pinned id that has NO rows in the store
+        // is not a real session — fall back to the newest-session `session_query`
+        // instead of returning empty. This is the hermes read_chat gap: hermes
+        // never surfaces its own provider session id to the daemon (the spec
+        // declares no session-id extraction and the adapter's screen-scrape is
+        // codex-only), so the read pipeline falls back to threading the mesh
+        // RUNTIME session id through as `providerSessionId`. That runtime id does
+        // not exist in ~/.hermes/state.db, so the old unconditional pin path ran
+        // `message_query WHERE session_id = '<runtime id>'` → 0 rows → null, and
+        // the answer (physically present under the real cli session) was never
+        // returned. Validating the pin by the spec's own `message_query` keeps
+        // this schema-agnostic and only rescues the mis-bound-id case: a genuine
+        // discovered pin (codex/claude use jsonl sources and never reach here;
+        // any real sqlite pin has rows) still short-circuits on its own rows.
+        const resolveMessagesFor = (sessionId: string): any[] | null => {
+            if (!sessionId) return null;
+            let rows: any[];
+            try { rows = db.prepare(src.message_query).all(sessionId); }
+            catch { return null; }
+            return rows && rows.length > 0 ? rows : null;
+        };
+
+        const resolveNewestSessionId = (): string => {
             let sessionRow: any;
             try {
                 // session_query may reference `?` to receive the session's
@@ -299,15 +307,38 @@ function executeSqlite(src: NativeHistorySqliteSource, input: NativeHistoryInput
                 } catch {
                     sessionRow = stmt.get();
                 }
-            } catch { return null; }
-            if (!sessionRow) return null;
+            } catch { return ''; }
+            if (!sessionRow) return '';
             // First column of the first row is the session id.
             const sessionIdRaw = Object.values(sessionRow)[0];
-            sessionId = sessionIdRaw == null ? '' : String(sessionIdRaw);
+            return sessionIdRaw == null ? '' : String(sessionIdRaw);
+        };
+
+        let sessionId: string;
+        let messageRows: any[] | null;
+        if (requested) {
+            // Pin path: read the requested session directly and skip the
+            // newest-wins `session_query`. hermes ≥0.14 spawns a fresh
+            // `sessions` row per internal sub-session, so an unpinned
+            // `ORDER BY started_at DESC LIMIT 1` pick drifts to a different id
+            // on every read (re-bind churn + reading completion evidence from
+            // the wrong session). A pin that resolves rows is authoritative.
+            messageRows = resolveMessagesFor(requested);
+            if (messageRows) {
+                sessionId = requested;
+            } else {
+                // The pinned id has no rows — it is not a real session in this
+                // store (the mis-bound mesh runtime-id case). Recover by letting
+                // the spec's own newest-session query self-resolve instead of
+                // returning empty.
+                sessionId = resolveNewestSessionId();
+                messageRows = resolveMessagesFor(sessionId);
+            }
+        } else {
+            sessionId = resolveNewestSessionId();
+            messageRows = resolveMessagesFor(sessionId);
         }
         if (!sessionId) return null;
-
-        const messageRows: any[] = db.prepare(src.message_query).all(sessionId);
         if (!messageRows || messageRows.length === 0) return null;
 
         const mtime = safeMtimeMs(resolved);
