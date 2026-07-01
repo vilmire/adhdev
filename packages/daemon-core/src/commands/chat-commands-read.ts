@@ -2210,6 +2210,47 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             });
 
             if (supportsNative && !decision.nativeSelected) {
+                // Native-only content preservation (hermes chat_tail gap).
+                // The history-only path has NO PTY transcript (native-only
+                // providers suppress PTY bodies), so args.ptyMessages is empty
+                // and the machine's pty-parser selection returns NOTHING. But a
+                // post-turn / cold read routinely lands here with a REAL,
+                // safely-mapped native slice that the source FSM declined only
+                // because coverage came back 'partial' (missing sessionStartedAtMs
+                // → Booting→Recovering→pty-parser) or a transient shrink looked
+                // like a regression. Dropping those rows deletes the assistant
+                // answer from chat_tail / read_chat entirely. When the native
+                // read actually resolved rows for THIS session identity
+                // (safeMapping proves ownership: matching historySessionId /
+                // providerSessionId + workspace), return them instead of an empty
+                // array. This never loosens identity safety — it is gated on the
+                // same hasSafeNativeHistoryMapping used everywhere else — and it
+                // is scoped to the native-only history path (no PTY to prefer).
+                // Truly-empty native reads (historyMessages.length === 0) and
+                // unsafe/workspace-aliasing reads (safeMapping === false) still
+                // fall through to the soft-pending dead-end below.
+                if (safeMapping && historyMessages.length > 0) {
+                    LOG.debug('Command', `[read_chat] native-only content preserved despite pty-parser selection target=${String(args?.targetSessionId || '')} provider=${agentStr} rows=${historyMessages.length} cause=${decision.decision.transition.cause}`);
+                    return buildReadChatCommandResult({
+                        messages: historyMessages,
+                        status: 'idle',
+                        messageSource: {
+                            ...decision.messageSource,
+                            nativeOnlyContentPreserved: true,
+                            returnedMessageCount: historyMessages.length,
+                        },
+                        transcriptProvenance: {
+                            ...decision.messageSource,
+                            nativeOnlyContentPreserved: true,
+                        },
+                        ...(typeof (history as any)?.title === 'string' ? { title: (history as any).title } : {}),
+                        ...(historyProviderSessionId ? { providerSessionId: historyProviderSessionId } : {}),
+                        ...(((provider?.historyBehavior as any)?.transcriptAuthority === 'provider' || (provider?.historyBehavior as any)?.transcriptAuthority === 'daemon')
+                            ? { transcriptAuthority: (provider?.historyBehavior as any).transcriptAuthority }
+                            : {}),
+                        coverage: 'tail',
+                    }, args, h);
+                }
                 // Dead-end: we are in the history-only path (no live PTY/ACP
                 // adapter was found for this target session) AND provider-native
                 // history is not safely mappable to the requested session
