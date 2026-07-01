@@ -111,6 +111,12 @@ export {
     normalizeProviderPriority,
     normalizeProviderPriorityForInventory,
     removeProviderPriorityItem,
+    DEFAULT_REPO_MESH_PROVIDER_PRIORITY,
+    parseProviderPriorityInput,
+    readRepoMeshNodePolicy,
+    readRepoMeshNodeProviderPriority,
+    formatRepoMeshNodeProviderPriority,
+    describeRepoMeshNodeProviderPriority,
 } from './utils/provider-priority'
 export type { AvailableCliProviderOption, ProviderPrioritySnapshot } from './utils/provider-priority'
 export { default as ProviderPriorityEditor } from './components/provider-priority/ProviderPriorityEditor'

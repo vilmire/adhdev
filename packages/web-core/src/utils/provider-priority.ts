@@ -1,3 +1,5 @@
+import { parseJsonRecord } from '@adhdev/mesh-shared'
+
 export interface ProviderPrioritySnapshot {
   type?: string
   id?: string
@@ -102,4 +104,73 @@ export function moveProviderPriorityItem(priority: string[], type: string, direc
   const targetIndex = direction === 'up' ? Math.max(0, index - 1) : Math.min(next.length, index + 1)
   next.splice(targetIndex, 0, type)
   return next
+}
+
+const CANONICAL_REPO_MESH_PROVIDER_TYPES = new Set([
+  'hermes-cli',
+  'claude-cli',
+  'codex-cli',
+  'gemini-cli',
+  'antigravity-cli',
+])
+
+export const DEFAULT_REPO_MESH_PROVIDER_PRIORITY = 'hermes-cli, claude-cli, codex-cli, gemini-cli, antigravity-cli'
+
+function normalizeProviderPriorityToken(type: string): string | undefined {
+  const trimmed = type.trim()
+  if (!trimmed) return undefined
+  const lower = trimmed.toLowerCase()
+  return CANONICAL_REPO_MESH_PROVIDER_TYPES.has(lower) ? lower : trimmed
+}
+
+export function parseProviderPriorityInput(input: string): string[] {
+  const seen = new Set<string>()
+  return input
+    .split(/[\s,]+/)
+    .map(normalizeProviderPriorityToken)
+    .filter((type): type is string => !!type)
+    .filter(type => {
+      if (seen.has(type)) return false
+      seen.add(type)
+      return true
+    })
+}
+
+export function readRepoMeshNodePolicy(node: unknown): Record<string, unknown> {
+  const record = node && typeof node === 'object' ? node as Record<string, unknown> : {}
+  return parseJsonRecord(record.node_policy ?? record.policy_json ?? record.policy)
+}
+
+export function readRepoMeshNodeProviderPriority(node: unknown): string[] {
+  const record = node && typeof node === 'object' ? node as Record<string, unknown> : {}
+  const policy = readRepoMeshNodePolicy(node)
+  const raw = record.providerPriority ?? record.provider_priority ?? policy.providerPriority
+  if (!Array.isArray(raw)) return []
+  return normalizeProviderPriority(raw)
+}
+
+export function formatRepoMeshNodeProviderPriority(node: unknown): string {
+  return readRepoMeshNodeProviderPriority(node).join(' → ')
+}
+
+export function describeRepoMeshNodeProviderPriority(node: unknown): {
+  configured: boolean
+  label: string
+  launchReady: boolean
+  launchBlockedMessage?: string
+} {
+  const providerPriority = readRepoMeshNodeProviderPriority(node)
+  if (!providerPriority.length) {
+    return {
+      configured: false,
+      label: 'not configured',
+      launchReady: false,
+      launchBlockedMessage: 'launch not ready unless an explicit provider is selected',
+    }
+  }
+  return {
+    configured: true,
+    label: providerPriority.join(' → '),
+    launchReady: true,
+  }
 }
