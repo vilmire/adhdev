@@ -18,7 +18,7 @@ import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
 import { buildMeshGraph, type MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 import { canonicalizeRepoMeshStatus, summarizeRepoMeshCanonicalNodeDebug } from '../../utils/repo-mesh-status'
 import { extractMagiActivity, type MagiGroupActivity } from '../../utils/magi-activity'
-import MagiPanelOverview from './MagiPanelOverview'
+// MagiPanelOverview mount removed 2026-07-01 — deprecated named-panels surface hidden (component retained in-tree).
 
 type DetailSelection =
     | { kind: 'node'; nodeId: string }
@@ -1216,12 +1216,15 @@ export default function MeshObservabilitySurface({
                         sendDaemonCommand={sendDaemonCommand}
                     />
                 )}
-                {/* Read-only MAGI panel summary — sibling of the overview cards, NOT
-                    inside MeshOverviewCards (general-overview is untouched). CRUD lives
-                    on the /mesh detail page; this is glance-only on both surfaces. */}
-                {activeTab === 'overview' && (
-                    <MagiPanelOverview status={canonicalStatus} daemonId={daemonId} sendDaemonCommand={sendDaemonCommand} />
-                )}
+                {/* MAGI panels overview hidden per product decision 2026-07-01 — the named-panels
+                    surface (magi_panel_list) is deprecated and was removed from the /mesh settings
+                    page; this read-only glance mount is retired to match. MagiPanelOverview.tsx is
+                    kept in-tree (unmounted) and the task_kind / magi_kind_panel_* surface is
+                    untouched. To restore, re-add:
+                      {activeTab === 'overview' && (
+                        <MagiPanelOverview status={canonicalStatus} daemonId={daemonId} sendDaemonCommand={sendDaemonCommand} />
+                      )}
+                    and its import. */}
             </div>
 
             {/* ── Status / Runtime tab: scheduling + per-node runtime (own scroll region) ── */}
