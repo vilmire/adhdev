@@ -1116,13 +1116,25 @@ var MESH_SUGGEST_CHANGE_IMPACT_CONFIG_TOOL = {
 };
 var MESH_INIT_TOOL = {
   name: "mesh_init",
-  description: "One-click mesh onboarding for an existing git project. Detects installed CLI providers, suggests Refinery (.adhdev/refine.json) and worktree bootstrap (.adhdev/worktree_bootstrap.json) configs, optionally writes them to disk, and recommends a node providerPriority from the detected providers. Suggestions are scaffold only and never execute until saved; providerPriority is a recommendation to apply to node policy, not auto-applied. Defaults to dry-run (no files written) and never overwrites an existing config unless overwrite=true.",
+  description: "One-click mesh onboarding for an existing git project. Detects installed CLI providers, suggests all three repo `.adhdev/*` config families \u2014 Refinery (.adhdev/refine.json), worktree bootstrap (.adhdev/worktree_bootstrap.json) AND change-impact (.adhdev/change-impact.json) \u2014 optionally writes them to disk, and recommends a node providerPriority from the detected providers. Also returns `currentConfig`: the currently-saved config per domain (repo files + machine-local magiKindPanels) so you can present a current-vs-suggested diff before overwriting. Suggestions are scaffold only and never execute until saved; providerPriority is a recommendation to apply to node policy, not auto-applied. Defaults to dry-run (no files written) and never overwrites an existing config unless overwrite=true. For an already-onboarded repo that needs refreshing, use mesh_reinit (overwrite semantics + enforced diff).",
   inputSchema: {
     type: "object",
     properties: {
       node_id: { type: "string", description: "Optional node/workspace to onboard. Defaults to the first mesh node with a workspace." },
       write: { type: "boolean", description: "When true, persist the suggested configs to disk. Defaults false (dry-run preview only)." },
       overwrite: { type: "boolean", description: "When true, overwrite an existing config file. Defaults false (never clobber an existing refine/bootstrap config)." }
+    }
+  }
+};
+var MESH_REINIT_TOOL = {
+  name: "mesh_reinit",
+  description: "Re-onboard an ALREADY-initialized repo: re-suggest the repo `.adhdev/*` configs (refine / worktree_bootstrap / change-impact) with OVERWRITE semantics and return a current-vs-suggested diff so you can replace stale config. This is NOT a new write engine \u2014 it reuses mesh_init's suggest\u2192validate\u2192gated-write with overwrite=true (default) plus the current-config echo (`currentConfig`). CONTRACT: overwrite is a WHOLESALE replacement, so it must NOT silently drop operator hand-edits \u2014 the first call (write=false, the default) is a DRY-RUN preview that surfaces the per-section diff; you MUST present that current-vs-suggested diff and get EXPLICIT per-section user approval, then re-invoke with write=true. Use mesh_init (not reinit) for a fresh, never-onboarded repo.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Optional node/workspace to re-onboard. Defaults to the first mesh node with a workspace." },
+      write: { type: "boolean", description: "When true, persist the overwritten configs. Defaults false (dry-run preview surfacing the current-vs-suggested diff \u2014 approve per-section first)." },
+      overwrite: { type: "boolean", description: "Defaults true (reinit replaces existing config). Pass false to fall back to existing-wins (equivalent to mesh_init)." }
     }
   }
 };
@@ -1253,6 +1265,55 @@ var MESH_MAGI_PANEL_LIST_TOOL = {
     }
   }
 };
+var MESH_MAGI_KIND_PANEL_SET_TOOL = {
+  name: "mesh_magi_kind_panel_set",
+  description: "Bind a task_kind to its MAGI kind-panel slot list (machine-local ~/.adhdev/meshes.json `magiKindPanels`). This binding is what a bare `mesh_magi_review({ task_kind })` (no panel/members) resolves to. IMPORTANT \u2014 WHOLESALE REPLACEMENT: a task_kind has exactly one binding, so the `slots` you pass become the COMPLETE new slot set and any prior slots for that kind are dropped (not merged). Because it silently replaces the current binding, get EXPLICIT user approval before writing and present the current-vs-new slot lists (the dry-run returns `currentSlots`). Follows the mesh_magi_panel_set write/dry-run precedent: defaults to dry-run (write=false). Machine-local scope (NOT a repo-committed file).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      task_kind: { type: "string", description: "The task_kind key to bind, e.g. claim_audit / rca / design / freeform." },
+      slots: {
+        type: "array",
+        description: "The COMPLETE desired slot list for this kind (wholesale replacement). Each slot: { provider (REQUIRED), nodeId?, model?, capabilityTags?, n? }.",
+        items: {
+          type: "object",
+          properties: {
+            provider: { type: "string", description: "REQUIRED \u2014 provider type, e.g. claude-cli / codex-cli / gemini-cli / hermes-cli." },
+            nodeId: { type: "string", description: "Optional \u2014 pin to a specific mesh node id." },
+            model: { type: "string", description: "Optional \u2014 pin a specific model for this slot." },
+            capabilityTags: { type: "array", items: { type: "string" }, description: "Optional routing tags (ANDed with the provider tag) when nodeId is absent." },
+            n: { type: "number", description: "Optional per-slot replica count (default 1)." }
+          },
+          required: ["provider"]
+        }
+      },
+      write: { type: "boolean", description: "When true, persist the slot list (wholesale replacement) to meshes.json. Defaults false (dry-run preview of the normalized slots + currentSlots)." }
+    },
+    required: ["task_kind", "slots"]
+  }
+};
+var MESH_MAGI_KIND_PANEL_LIST_TOOL = {
+  name: "mesh_magi_kind_panel_list",
+  description: "List the configured MAGI kind\u2192panel slot bindings (machine-local). Read-only sibling of mesh_magi_panel_list for kind-slot bindings. Use to confirm what a `task_kind` resolves to before mesh_magi_review, and to diff current-vs-new before an overwrite via mesh_magi_kind_panel_set.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      task_kind: { type: "string", description: "Optional \u2014 show only this task_kind's binding. Omit to list all configured kind bindings." }
+    }
+  }
+};
+var MESH_WRITE_MESH_JSON_CONFIG_TOOL = {
+  name: "mesh_write_mesh_json_config",
+  description: "Write `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Gated WRITE sibling of the draft-only export_mesh_json_config. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false), never clobbers an existing repo mesh.json unless overwrite=true, and validates before writing. Overwrite silently replaces the file, so present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope (commit target) \u2014 distinct from the machine-local MAGI/panel writes.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      write: { type: "boolean", description: "When true, persist .adhdev/mesh.json to the repo (commit target). Defaults false (dry-run preview)." },
+      overwrite: { type: "boolean", description: "When true, replace an existing .adhdev/mesh.json. Defaults false (never clobber an existing repo mesh.json)." },
+      workspace: { type: "string", description: "Optional workspace path whose .adhdev/mesh.json is written. Defaults to the coordinator node workspace." }
+    }
+  }
+};
 var ALL_MESH_TOOLS = [
   MESH_STATUS_TOOL,
   MESH_LIST_NODES_TOOL,
@@ -1281,6 +1342,8 @@ var ALL_MESH_TOOLS = [
   MESH_VALIDATE_CHANGE_IMPACT_CONFIG_TOOL,
   MESH_SUGGEST_CHANGE_IMPACT_CONFIG_TOOL,
   MESH_INIT_TOOL,
+  MESH_REINIT_TOOL,
+  MESH_WRITE_MESH_JSON_CONFIG_TOOL,
   MESH_REFINE_PLAN_TOOL,
   MESH_CLEANUP_SESSIONS_TOOL,
   MESH_PRUNE_STALE_DIRECT_TOOL,
@@ -1293,7 +1356,9 @@ var ALL_MESH_TOOLS = [
   MESH_MAGI_REVIEW_TOOL,
   MESH_MAGI_COLLECT_TOOL,
   MESH_MAGI_PANEL_SET_TOOL,
-  MESH_MAGI_PANEL_LIST_TOOL
+  MESH_MAGI_PANEL_LIST_TOOL,
+  MESH_MAGI_KIND_PANEL_SET_TOOL,
+  MESH_MAGI_KIND_PANEL_LIST_TOOL
 ];
 
 // src/tools/mesh-compact.ts
@@ -4806,6 +4871,59 @@ async function meshMagiPanelSet(ctx, args) {
 function previewMagiPanel(config) {
   return (0, import_daemon_core4.normalizeMagiPanel)(config);
 }
+async function meshMagiKindPanelSet(ctx, args) {
+  const kind = readString(args.task_kind) || readString(args.kind);
+  if (!kind) return JSON.stringify({ success: false, error: "task_kind required" });
+  const write = args.write === true;
+  try {
+    const current = (0, import_daemon_core4.getMagiKindPanel)(kind) ?? [];
+    if (!write) {
+      const preview = (0, import_daemon_core4.normalizeMagiSlots)(args.slots);
+      return JSON.stringify({
+        success: true,
+        dryRun: true,
+        taskKind: kind,
+        scope: "machine_local",
+        replacement: true,
+        currentSlots: current,
+        slots: preview,
+        note: "Dry-run only \u2014 no file written. This is a WHOLESALE replacement of the kind's slot list (machine-local ~/.adhdev/meshes.json); the currentSlots would be fully replaced. Re-run with write=true after explicit user approval."
+      }, null, 2);
+    }
+    const slots = (0, import_daemon_core4.setMagiKindPanel)(kind, args.slots);
+    return JSON.stringify({
+      success: true,
+      written: true,
+      taskKind: kind,
+      scope: "machine_local",
+      replacement: true,
+      previousSlots: current,
+      slots,
+      nextAction: "Verify with mesh_magi_kind_panel_list, then mesh_magi_review({ task_kind }) resolves this binding."
+    }, null, 2);
+  } catch (e) {
+    const message = e?.message || String(e);
+    const code = message.includes("invalid_magi_kind_panel") ? "invalid_magi_kind_panel" : void 0;
+    return JSON.stringify({ success: false, ...code ? { code } : {}, error: message });
+  }
+}
+async function meshMagiKindPanelList(ctx, args = {}) {
+  const only = readString(args.task_kind) || readString(args.kind);
+  const all = (0, import_daemon_core4.listMagiKindPanels)();
+  if (only) {
+    const slots = (0, import_daemon_core4.getMagiKindPanel)(only);
+    if (slots === void 0) {
+      return JSON.stringify({
+        success: false,
+        code: "magi_kind_not_configured",
+        error: `task_kind '${only}' has no configured kind-panel binding`,
+        configuredKinds: Object.keys(all)
+      }, null, 2);
+    }
+    return JSON.stringify({ success: true, scope: "machine_local", taskKind: only, slots }, null, 2);
+  }
+  return JSON.stringify({ success: true, scope: "machine_local", kindPanels: all, configuredKinds: Object.keys(all) }, null, 2);
+}
 function buildInlineMagiPanel(members, opts = {}) {
   return (0, import_daemon_core4.normalizeMagiPanel)({
     members,
@@ -6465,6 +6583,32 @@ async function meshInit(ctx, args) {
   });
   return JSON.stringify(result, null, 2);
 }
+async function meshReinit(ctx, args) {
+  const node = resolveRefineConfigNode(ctx, args.node_id);
+  const overwrite = args.overwrite !== false;
+  const result = await commandForNode(ctx, node, "mesh_init", {
+    workspace: node.workspace,
+    inlineMesh: ctx.mesh,
+    ...args.write !== void 0 ? { write: args.write } : {},
+    overwrite
+  });
+  const annotated = result && typeof result === "object" ? {
+    ...result,
+    mode: "reinit",
+    reinitContract: "Overwrite replaces existing config wholesale. Present the per-section current-vs-suggested diff (see currentConfig) and get EXPLICIT per-section user approval before re-invoking with write=true. Never silently drop operator hand-edits."
+  } : result;
+  return JSON.stringify(annotated, null, 2);
+}
+async function meshWriteMeshJsonConfig(ctx, args = {}) {
+  const node = resolveRefineConfigNode(ctx, args.node_id);
+  const result = await commandForNode(ctx, node, "write_mesh_json_config", {
+    meshId: ctx.mesh.id,
+    workspace: typeof args.workspace === "string" && args.workspace.trim() ? args.workspace.trim() : node.workspace,
+    ...args.write !== void 0 ? { write: args.write } : {},
+    ...args.overwrite !== void 0 ? { overwrite: args.overwrite } : {}
+  });
+  return JSON.stringify(result, null, 2);
+}
 async function meshRefinePlan(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
   const result = await commandForNode(ctx, node, "plan_mesh_refine_node", {
@@ -7758,6 +7902,12 @@ async function startMcpServer(opts) {
           case "mesh_init":
             text = await meshInit(meshCtx, a);
             break;
+          case "mesh_reinit":
+            text = await meshReinit(meshCtx, a);
+            break;
+          case "mesh_write_mesh_json_config":
+            text = await meshWriteMeshJsonConfig(meshCtx, a);
+            break;
           case "mesh_refine_plan":
             text = await meshRefinePlan(meshCtx, a);
             break;
@@ -7796,6 +7946,12 @@ async function startMcpServer(opts) {
             break;
           case "mesh_magi_panel_list":
             text = await meshMagiPanelList(meshCtx, a);
+            break;
+          case "mesh_magi_kind_panel_set":
+            text = await meshMagiKindPanelSet(meshCtx, a);
+            break;
+          case "mesh_magi_kind_panel_list":
+            text = await meshMagiKindPanelList(meshCtx, a);
             break;
           default:
             return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
