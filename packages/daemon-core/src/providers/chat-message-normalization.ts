@@ -27,7 +27,7 @@ export function extractFinalSummaryFromMessages(
   return '';
 }
 
-function readChatMessageTimestampMs(message: ChatMessage | null | undefined): number | undefined {
+export function readChatMessageTimestampMs(message: ChatMessage | null | undefined): number | undefined {
   if (!message) return undefined;
   const record = message as ChatMessage & Record<string, unknown>;
   for (const value of [record.timestamp, record.createdAt, record.created_at, record.updatedAt, record.time, record.receivedAt]) {

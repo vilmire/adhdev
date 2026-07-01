@@ -29,7 +29,7 @@ import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOptio
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { normalizeProviderSessionId } from './provider-session-id.js';
-import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages, extractFinalSummaryFromMessagesAfter } from './chat-message-normalization.js';
+import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages, extractFinalSummaryFromMessagesAfter, readChatMessageTimestampMs } from './chat-message-normalization.js';
 import { workingDirBasename } from './working-dir.js';
 import { ManualAttendanceTracker } from './manual-attendance.js';
 
@@ -75,6 +75,16 @@ type CompletedDebouncePending = {
     // debounce that flushes before the producing turn's final assistant bubble lands
     // in the native transcript never echoes the PRIOR task's last bubble.
     turnStartedAt?: number;
+    // FALSE-IDLE continuity: the busyEpoch value at the instant this pending was armed.
+    // The flush guard requires this.busyEpoch to still equal this — proving no busy
+    // phase (generating/waiting_approval) opened since arming. A momentary busy→idle
+    // blip in an inter-approval valley bumps busyEpoch, so a completion armed before
+    // the blip is cancelled at flush instead of emitting a stale mid-turn summary.
+    busyEpochAtArm?: number;
+    // FALSE-IDLE continuity: the adapter's raw PTY lastOutputAt at arm time. New PTY
+    // output after arming means the session was not continuously idle through the
+    // settle window (the agent kept printing), so the completion is cancelled.
+    lastOutputAtArm?: number;
 };
 
 function isIdleStatus(value: unknown): boolean {
@@ -508,6 +518,15 @@ export class CliProviderInstance implements ProviderInstance {
     // first sets it; the other becomes a no-op.
     private agentReadyEmitted = false;
     private generatingStartedAt: number = 0;
+    // FALSE-IDLE continuity epoch: monotonically bumped on EVERY entry into a busy
+    // phase (→generating or →waiting_approval). The completedDebouncePending snapshots
+    // this value at arm time (busyEpochAtArm); the flush guard requires it UNCHANGED
+    // — proving the session did not re-enter a busy phase (a momentary busy→idle blip
+    // in an inter-approval valley) between arming the debounce and flushing it. A
+    // single point-sample of status at flush time cannot see a generating phase that
+    // opened AND closed within the settle window; the epoch can. See
+    // flushCompletedDebounceIfFinalized.
+    private busyEpoch: number = 0;
     // GENERATING-BOUNDARY (R4b): the per-turn taskId for which a startup-grace
     // started+completed pair was already synthesized. Both fast-collapse callers
     // (starting→idle transition AND the idle-stayed no-status-change poll) route
@@ -1411,7 +1430,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.applyProviderResponse(parsed.payload, { phase: 'immediate' });
     }
 
-    private completionHasFinalAssistantMessage(messages: unknown): boolean {
+    private completionHasFinalAssistantMessage(messages: unknown, turnStartedAt?: number): boolean {
         const visibleMessages = (Array.isArray(messages) ? messages : [])
             .filter((message: any) => isUserFacingChatMessage(message as ChatMessage));
         const lastVisible = visibleMessages[visibleMessages.length - 1] as ChatMessage | undefined;
@@ -1421,6 +1440,21 @@ export class CliProviderInstance implements ProviderInstance {
         // Guard: if the last assistant message looks like an active approval/input prompt,
         // it is not a real completion — the session is still awaiting user input.
         if (looksLikeActiveApprovalPromptText(content)) return false;
+        // FALSE-IDLE turn-boundary evidence (Defect 1b): when a producing-turn start is
+        // known, the final assistant bubble must POST-DATE it. A STALE mid-turn assistant
+        // (predating this turn's start — e.g. the last bubble of a prior sub-turn observed
+        // during an inter-approval valley) must NOT satisfy the finalization gate, or a
+        // false-idle blip emits a completion carrying that stale summary. A bubble with no
+        // parseable timestamp cannot be proven stale, so it is kept (fails open — behaviour
+        // identical to before for providers/paths that carry no timestamps).
+        if (typeof turnStartedAt === 'number' && Number.isFinite(turnStartedAt) && turnStartedAt > 0) {
+            // readChatMessageTimestampMs mirrors the summary turn-scoping reader
+            // (extractFinalSummaryFromMessagesAfter) — same seconds-vs-ms heuristic and
+            // field precedence — so the present-check and the summary-scope agree on which
+            // bubbles predate the turn.
+            const ts = readChatMessageTimestampMs(lastVisible);
+            if (typeof ts === 'number' && ts < turnStartedAt) return false;
+        }
         return true;
     }
 
@@ -1485,8 +1519,8 @@ export class CliProviderInstance implements ProviderInstance {
         return restoredHistory.messages;
     }
 
-    private completionFinalAssistantEvidence(parsedMessages: unknown): CompletionFinalAssistantEvidence {
-        if (this.completionHasFinalAssistantMessage(parsedMessages)) {
+    private completionFinalAssistantEvidence(parsedMessages: unknown, turnStartedAt?: number): CompletionFinalAssistantEvidence {
+        if (this.completionHasFinalAssistantMessage(parsedMessages, turnStartedAt)) {
             return {
                 present: true,
                 messages: Array.isArray(parsedMessages) ? parsedMessages : [],
@@ -1497,7 +1531,7 @@ export class CliProviderInstance implements ProviderInstance {
         const externalMessages = this.readExternalCompletionMessages();
         if (externalMessages) {
             return {
-                present: this.completionHasFinalAssistantMessage(externalMessages),
+                present: this.completionHasFinalAssistantMessage(externalMessages, turnStartedAt),
                 messages: externalMessages,
                 source: 'external-native',
             };
@@ -1528,10 +1562,17 @@ export class CliProviderInstance implements ProviderInstance {
         // at/after turnStartedAt yields '' in that race instead of the stale tail; the weak/empty
         // summary is later upgraded by the mesh reconcile loop once the real bubble is written.
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
-        const parsedSummary = extractFinalSummaryFromMessages(
-            (this.completionHasFinalAssistantMessage(parsedMessages)
+        // FALSE-IDLE Defect 1b: turn-scope the PARSED screen fallback too. Without this a stale
+        // mid-turn assistant (predating turnStartedAt) that the turn-boundary gate already
+        // rejected as evidence could still leak into the finalSummary via this parsed fallback
+        // when the external transcript's turn-scoped read is empty — freezing the very stale text
+        // the gate rejected. extractFinalSummaryFromMessagesAfter drops bubbles before the turn
+        // start; with no boundary known (turnStartedAt falsy) it is identical to the unscoped read.
+        const parsedSummary = extractFinalSummaryFromMessagesAfter(
+            (this.completionHasFinalAssistantMessage(parsedMessages, turnStartedAt)
                 ? (Array.isArray(parsedMessages) ? parsedMessages : [])
                 : []) as any,
+            turnStartedAt,
         );
         if (adapterOwnsMessagesElsewhere) {
             const externalMessages = this.readExternalCompletionMessages();
@@ -1669,7 +1710,11 @@ export class CliProviderInstance implements ProviderInstance {
         }
         if (parsed?.activeModal || parsed?.modal) return { reason: 'parsed_modal_active', terminal: true };
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
-        const finalAssistantEvidence = this.completionFinalAssistantEvidence(parsed?.messages);
+        // FALSE-IDLE turn-boundary evidence (Defect 1b): turn-scope the present-check so a
+        // STALE mid-turn assistant (predating pending.turnStartedAt) cannot satisfy the
+        // finalization gate. Only the confirming final-assistant bubble that POST-DATES this
+        // turn's start counts as evidence the turn genuinely ended.
+        const finalAssistantEvidence = this.completionFinalAssistantEvidence(parsed?.messages, pending.turnStartedAt);
         const allowMissingAssistantTimeout = !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator);
         LOG.debug('CLI', `[${this.type}] finalAssistantEvidence: present=${finalAssistantEvidence.present} source=${finalAssistantEvidence.source} adapterOwnsMessagesElsewhere=${adapterOwnsMessagesElsewhere} parsedStatus=${parsedStatus}`);
         if (!finalAssistantEvidence.present) {
@@ -1839,6 +1884,32 @@ export class CliProviderInstance implements ProviderInstance {
         LOG.debug('CLI', `[${this.type}] flush attempt: adapterStatus=${latestStatus.status} latestVisible=${latestVisibleStatus} generatingStartedAt=${this.generatingStartedAt} isWaitingForResponse=${!!(this.adapter as any)?.isWaitingForResponse} hasPartial=${!!this.adapter.getPartialResponse?.()}`);
         if (latestVisibleStatus !== 'idle') {
             LOG.info('CLI', `[${this.type}] cancelled pending completed (resumed ${latestVisibleStatus})`);
+            this.completedDebouncePending = null;
+            this.completedDebounceTimer = null;
+            return;
+        }
+
+        // FALSE-IDLE continuity guard (Defect 1a): the point-sample above only proves the
+        // session is idle at THIS instant. A momentary busy→idle blip inside an inter-approval
+        // valley (auto-approved tool turns) opens AND closes a generating phase entirely within
+        // the settle window — so the single sample reads 'idle' even though the turn is still in
+        // flight (it re-enters generating ~0.5s later). Require instead that the session stayed
+        // CONTINUOUSLY idle since the debounce was armed: (1) no entry into a busy phase
+        // (busyEpoch unchanged), and (2) no new raw PTY output (lastOutputAt did not advance).
+        // Either signal ⇒ the idle was not continuous ⇒ cancel; the still-live turn re-arms its
+        // own completion when it genuinely finishes. This only ever cancels (never emits more),
+        // so shared behaviour for claude/codex/antigravity is strictly stricter, never looser.
+        if (typeof pending.busyEpochAtArm === 'number' && this.busyEpoch !== pending.busyEpochAtArm) {
+            LOG.info('CLI', `[${this.type}] cancelled pending completed (busy re-entry during settle: epoch ${pending.busyEpochAtArm}→${this.busyEpoch})`);
+            this.completedDebouncePending = null;
+            this.completedDebounceTimer = null;
+            return;
+        }
+        const latestOutputAt = typeof (latestStatus as any)?.lastOutputAt === 'number' ? (latestStatus as any).lastOutputAt as number : undefined;
+        if (typeof pending.lastOutputAtArm === 'number'
+            && typeof latestOutputAt === 'number'
+            && latestOutputAt > pending.lastOutputAtArm) {
+            LOG.info('CLI', `[${this.type}] cancelled pending completed (new PTY output during settle: ${pending.lastOutputAtArm}→${latestOutputAt})`);
             this.completedDebouncePending = null;
             this.completedDebounceTimer = null;
             return;
@@ -2357,6 +2428,9 @@ export class CliProviderInstance implements ProviderInstance {
                 }
 
                 if (!this.generatingStartedAt) this.generatingStartedAt = now;
+                // FALSE-IDLE continuity: entering a busy phase invalidates any
+                // completedDebouncePending armed earlier in this settle window.
+                this.busyEpoch++;
                 // Defer the generating_started event — if idle comes back within 3s,
                 // the whole started→completed pair was a false positive from PTY noise
                 if (this.generatingDebounceTimer) clearTimeout(this.generatingDebounceTimer);
@@ -2381,6 +2455,11 @@ export class CliProviderInstance implements ProviderInstance {
                 this.completedDebouncePending = null;
 
                 if (!this.generatingStartedAt) this.generatingStartedAt = now;
+                // FALSE-IDLE continuity: waiting_approval is a busy phase (the agent
+                // resumes into it), so bump the epoch too — the completedDebouncePending
+                // cancel above covers the currently-armed pending, and the epoch covers
+                // a pending that re-arms and flushes across this same valley.
+                this.busyEpoch++;
                 const modal = adapterStatus.activeModal;
                 LOG.info('CLI', `[${this.type}] approval modal: "${modal?.message?.slice(0, 80) ?? 'none'}"`);
                 // Include the FSM's approval entry seq, mirroring the auto-approve
@@ -2533,6 +2612,14 @@ export class CliProviderInstance implements ProviderInstance {
                             const turnStartedAt = engineTurnStart || this.generatingStartedAt || 0;
                             return turnStartedAt ? { turnStartedAt } : {};
                         })()),
+                        // FALSE-IDLE continuity: snapshot the busy epoch + raw PTY output
+                        // clock at arm time so the flush guard can prove the session stayed
+                        // continuously idle (no busy re-entry, no new PTY output) through the
+                        // settle window rather than merely reading 'idle' once at flush.
+                        busyEpochAtArm: this.busyEpoch,
+                        ...(typeof adapterStatus?.lastOutputAt === 'number' && Number.isFinite(adapterStatus.lastOutputAt)
+                            ? { lastOutputAtArm: adapterStatus.lastOutputAt as number }
+                            : {}),
                     };
                     const ownsExternalHistory = !!(this.adapter as any)?.chatMessagesOwnedExternally;
                     // (FALSEIDLE-BGCHILD-a) Native-history providers flush immediately (the
