@@ -21,6 +21,7 @@ import {
     readString,
     refreshMeshFromDaemon,
     slimLedgerPayload,
+    tombstoneOperatingNote,
     unwrapCommandPayload,
     upsertMeshMission,
 } from './mesh-tools-internal.js';
@@ -113,6 +114,36 @@ export async function meshRecordNote(
         recorded: { text, category: category ?? null, createdAt },
         note: 'Recorded to the mesh ledger. Future coordinators on this mesh will see it under "## Operating Notes" at launch.',
     }, null, 2);
+}
+
+export async function meshForgetNote(
+    ctx: MeshContext,
+    args: { note_id?: string; noteId?: string; text?: string; reason?: string },
+): Promise<string> {
+    const { mesh } = ctx;
+    const noteId = readString(args.note_id) || readString(args.noteId) || undefined;
+    const text = typeof args.text === 'string' ? args.text.trim() : '';
+    if (!noteId && !text) {
+        return JSON.stringify({ success: false, error: 'note_id or text required' }, null, 2);
+    }
+    try {
+        const { tombstone, matched } = tombstoneOperatingNote(mesh.id, {
+            ...(noteId ? { noteId } : {}),
+            ...(text ? { text } : {}),
+            ...(typeof args.reason === 'string' && args.reason.trim() ? { reason: args.reason.trim() } : {}),
+        });
+        return JSON.stringify({
+            success: true,
+            meshId: mesh.id,
+            tombstoneId: tombstone.id,
+            forgot: { noteId: noteId ?? null, text: text || null, matched },
+            note: matched > 0
+                ? `Retracted ${matched} operating note(s). Future coordinators on this mesh will no longer see them at launch. History is preserved (append-only tombstone).`
+                : 'No live operating note matched — recorded a tombstone anyway so any matching note appended later is also suppressed.',
+        }, null, 2);
+    } catch (e: any) {
+        return JSON.stringify({ success: false, error: e?.message || String(e) }, null, 2);
+    }
 }
 
 export async function meshReconcileLedger(

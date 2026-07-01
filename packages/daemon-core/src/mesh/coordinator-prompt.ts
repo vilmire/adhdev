@@ -490,6 +490,7 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_read_debug\` | Collect a daemon-side chat/parser debug bundle for a session |
 | \`mesh_task_history\` | Read the task ledger — dispatches, completions, failures. Use to understand what has been done before deciding next steps |
 | \`mesh_record_note\` | Record a durable, provider-neutral operating note (provider quirk / pattern to avoid / recovery lesson). Future coordinators see it under "## Operating Notes" at launch |
+| \`mesh_forget_note\` | Retract a stale/wrong operating note by note_id or exact text so it stops riding into future coordinators' prompts (append-only tombstone; history preserved) |
 | \`mesh_git_status\` | Check git status on a specific node |
 | \`mesh_read_node_logs\` | Fetch a remote node's daemon log tail directly over P2P (grep/since/byte-bounded, secrets redacted) — no session/PowerShell needed to debug a node's daemon |
 | \`mesh_fast_forward_node\` | Safely dry-run or explicitly execute an obvious clean fast-forward without launching an agent session |

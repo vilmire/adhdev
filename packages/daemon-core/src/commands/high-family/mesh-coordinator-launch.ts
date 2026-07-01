@@ -101,8 +101,10 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // Best-effort: a read failure just omits the section.
                     const buildOperatingNotesBestEffort = async (id: string) => {
                         try {
-                            const { readLedgerEntries } = await import('../../mesh/mesh-ledger.js');
-                            const noteEntries = readLedgerEntries(id, { kind: ['coordinator_operating_note'], tail: 20 });
+                            const { readOperatingNotes } = await import('../../mesh/mesh-ledger.js');
+                            // readOperatingNotes filters out tombstoned (forgotten) notes so a
+                            // retracted lesson never rides into the prompt. Newest last; tail 20.
+                            const noteEntries = readOperatingNotes(id, { tail: 20 });
                             const notes = noteEntries
                                 .map((e) => {
                                     const p = (e.payload || {}) as Record<string, unknown>;

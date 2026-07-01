@@ -49,6 +49,11 @@ export type MeshLedgerKind =
     // the ledger so it survives coordinator restarts and is provider-neutral.
     // payload: { text, category?, createdAt?, sourceCoordinator? }
     | 'coordinator_operating_note'
+    // Retraction of a coordinator_operating_note. Append-only (history preserved);
+    // readers filter out the targeted note so it leaves the prompt/list. Targets by
+    // note id (exact) and/or by trimmed-text fingerprint (matches all notes with that
+    // text). payload: { targetNoteId?, targetFingerprint?, reason?, forgottenAt? }
+    | 'coordinator_operating_note_tombstone'
     // Mission audit trail: mission record mutations (mesh_mission_upsert) so the
     // ledger captures mission lifecycle, not just task events. Without these a
     // mission create / goal rewrite / status transition left no ledger trace,
@@ -252,6 +257,32 @@ const ARCHIVABLE_KINDS: ReadonlySet<MeshLedgerKind> = new Set([
 ] as MeshLedgerKind[]);
 const DEFAULT_LEDGER_SLICE_LIMIT = 100;
 export const MAX_LEDGER_SLICE_LIMIT = 500;
+
+// ─── Operating-note growth control ──────────────
+// coordinator_operating_note is append-only and, unlike task_* entries, is never
+// archived by compactLedger (it is not in ARCHIVABLE_KINDS — it must survive
+// restarts and there is no time-based cutoff for a "lesson"). Without dedicated
+// controls the note set grows without bound and duplicate/stale notes crowd the
+// bounded tail that rides into the coordinator prompt. These three constants back
+// the three growth controls: dedupe-on-record, tombstone/forget, keep-latest-N.
+
+// Kind marking an operating note as retracted. A tombstone is itself an
+// append-only ledger entry (history is never destroyed); readers filter out the
+// notes it targets. payload: { targetNoteId?, targetFingerprint?, reason? }
+export const OPERATING_NOTE_KIND: MeshLedgerKind = 'coordinator_operating_note';
+export const OPERATING_NOTE_TOMBSTONE_KIND: MeshLedgerKind = 'coordinator_operating_note_tombstone';
+
+// Dedupe window: when recording a note, if the same trimmed text already appears
+// among the most recent OPERATING_NOTE_DEDUPE_WINDOW notes, the record is a no-op
+// (the existing entry is returned). Keeps the prompt tail from filling with the
+// same lesson recorded 20 times.
+export const OPERATING_NOTE_DEDUPE_WINDOW = 40;
+
+// Keep-latest-N: pruneOperatingNotes retains at most this many live (non-tombstoned)
+// operating notes, removing the oldest surplus and any tombstoned notes from the
+// store. The prompt reads a much smaller tail (20), so this bound never trims what
+// a coordinator actually sees while still capping unbounded store growth.
+export const OPERATING_NOTE_KEEP_LATEST = 100;
 
 // ─── Path Helpers ───────────────────────────────
 
@@ -605,6 +636,23 @@ export function appendLedgerEntry(
     meshId: string,
     partial: Omit<MeshLedgerEntry, 'id' | 'meshId' | 'timestamp'>,
 ): MeshLedgerEntry {
+    // Fix (1) dedupe-on-record: for a coordinator_operating_note, if the same
+    // trimmed text already appears among the most recent OPERATING_NOTE_DEDUPE_WINDOW
+    // notes, do NOT append a duplicate — return the existing entry so the bounded
+    // prompt tail can't be crowded by the same lesson recorded repeatedly. Other
+    // kinds (task_completed, …) are untouched.
+    if (partial.kind === OPERATING_NOTE_KIND) {
+        const text = operatingNoteText(partial.payload);
+        if (text) {
+            const recentNotes = readLedgerEntries(meshId, {
+                kind: [OPERATING_NOTE_KIND],
+                tail: OPERATING_NOTE_DEDUPE_WINDOW,
+            });
+            const existing = recentNotes.find(e => operatingNoteText(e.payload) === text);
+            if (existing) return existing;
+        }
+    }
+
     const entry: MeshLedgerEntry = {
         id: randomUUID(),
         meshId,
@@ -653,10 +701,147 @@ export function appendLedgerEntry(
         appendFileSync(filePath, line, { encoding: 'utf-8', mode: 0o600 });
         invalidateLedgerCache(meshId);
         meshLedgerEvents.emit('append', meshId, entry);
+        // Fix (3) keep-latest-N: operating notes are never archived by compactLedger,
+        // so cap their store footprint here. Runs only when a note (or its tombstone)
+        // is recorded, and is a no-op until the live-note count exceeds the bound.
+        if (entry.kind === OPERATING_NOTE_KIND || entry.kind === OPERATING_NOTE_TOMBSTONE_KIND) {
+            try { pruneOperatingNotes(meshId); } catch { /* prune is best-effort */ }
+        }
         return entry;
     } catch (e: any) {
         throw new Error(`Failed to append to ledger for mesh ${meshId}: ${e.message}`);
     }
+}
+
+// ─── Operating-note growth controls ─────────────
+
+/** Extract the trimmed note text from a coordinator_operating_note payload. */
+function operatingNoteText(payload: Record<string, unknown> | undefined): string | undefined {
+    const text = payload && typeof payload.text === 'string' ? payload.text.trim() : '';
+    return text || undefined;
+}
+
+/**
+ * Set of trimmed-text fingerprints and note ids retracted by tombstone entries in
+ * the given entry set. A tombstone targets by note id and/or by text fingerprint.
+ */
+function collectOperatingNoteTombstones(entries: MeshLedgerEntry[]): { ids: Set<string>; fingerprints: Set<string> } {
+    const ids = new Set<string>();
+    const fingerprints = new Set<string>();
+    for (const e of entries) {
+        if (e.kind !== OPERATING_NOTE_TOMBSTONE_KIND) continue;
+        const p = e.payload || {};
+        const targetId = typeof p.targetNoteId === 'string' ? p.targetNoteId.trim() : '';
+        const targetFp = typeof p.targetFingerprint === 'string' ? p.targetFingerprint.trim() : '';
+        if (targetId) ids.add(targetId);
+        if (targetFp) fingerprints.add(targetFp);
+    }
+    return { ids, fingerprints };
+}
+
+/** True if the operating note is retracted by any tombstone in `tombstones`. */
+export function isOperatingNoteTombstoned(
+    entry: Pick<MeshLedgerEntry, 'id' | 'payload'>,
+    tombstones: { ids: Set<string>; fingerprints: Set<string> },
+): boolean {
+    if (tombstones.ids.has(entry.id)) return true;
+    const text = operatingNoteText(entry.payload);
+    return text ? tombstones.fingerprints.has(text) : false;
+}
+
+/**
+ * Fix (2) supersede/remove: append a tombstone that retracts a coordinator
+ * operating note. Targets by note id and/or by exact trimmed text (a text target
+ * retracts every note with that text). History is preserved — the notes stay in
+ * the ledger but readers filter them out. Returns how many currently-live notes
+ * the tombstone will hide.
+ */
+export function tombstoneOperatingNote(
+    meshId: string,
+    target: { noteId?: string; text?: string; reason?: string },
+): { tombstone: MeshLedgerEntry; matched: number } {
+    const noteId = typeof target.noteId === 'string' ? target.noteId.trim() : '';
+    const fingerprint = typeof target.text === 'string' ? target.text.trim() : '';
+    if (!noteId && !fingerprint) {
+        throw new Error('tombstoneOperatingNote requires a noteId or text target');
+    }
+
+    // Count currently-live matches (not already tombstoned) for the caller's report.
+    const notes = readOperatingNotes(meshId);
+    const matched = notes.filter(n =>
+        (noteId && n.id === noteId) || (fingerprint && operatingNoteText(n.payload) === fingerprint),
+    ).length;
+
+    const tombstone = appendLedgerEntry(meshId, {
+        kind: OPERATING_NOTE_TOMBSTONE_KIND,
+        payload: {
+            ...(noteId ? { targetNoteId: noteId } : {}),
+            ...(fingerprint ? { targetFingerprint: fingerprint } : {}),
+            ...(target.reason && target.reason.trim() ? { reason: target.reason.trim() } : {}),
+            forgottenAt: new Date().toISOString(),
+        },
+    });
+    return { tombstone, matched };
+}
+
+/**
+ * Read live operating notes (tombstoned notes filtered out), oldest→newest.
+ * `tail` bounds the number of live notes returned (the freshest N).
+ */
+export function readOperatingNotes(meshId: string, opts?: { tail?: number }): MeshLedgerEntry[] {
+    const raw = getCachedRawEntries(meshId);
+    const tombstones = collectOperatingNoteTombstones(raw);
+    let notes = raw.filter(e => e.kind === OPERATING_NOTE_KIND && !isOperatingNoteTombstoned(e, tombstones));
+    if (opts?.tail && opts.tail > 0 && notes.length > opts.tail) {
+        notes = notes.slice(-opts.tail);
+    }
+    return notes;
+}
+
+/**
+ * Fix (3) keep-latest-N prune for coordinator_operating_note. Removes, from the
+ * store, (a) every note retracted by a tombstone, and (b) the oldest live notes
+ * beyond `keepLatest`. Tombstone entries themselves are retained as an audit trail
+ * of what was forgotten. Returns the number of note entries removed.
+ */
+export function pruneOperatingNotes(meshId: string, keepLatest: number = OPERATING_NOTE_KEEP_LATEST): number {
+    const raw = getCachedRawEntries(meshId);
+    const tombstones = collectOperatingNoteTombstones(raw);
+
+    const removeIds: string[] = [];
+    const liveNotes: MeshLedgerEntry[] = [];
+    for (const e of raw) {
+        if (e.kind !== OPERATING_NOTE_KIND) continue;
+        if (isOperatingNoteTombstoned(e, tombstones)) {
+            removeIds.push(e.id); // tombstoned notes are pruned first
+        } else {
+            liveNotes.push(e);
+        }
+    }
+
+    // Drop the oldest live notes beyond keepLatest; the freshest (prompt tail) survive.
+    const bound = Math.max(0, Math.floor(keepLatest));
+    if (liveNotes.length > bound) {
+        for (const e of liveNotes.slice(0, liveNotes.length - bound)) removeIds.push(e.id);
+    }
+
+    if (removeIds.length === 0) return 0;
+
+    try {
+        MeshRuntimeStore.getInstance().deleteLedgerEntries(meshId, removeIds);
+    } catch { /* store unavailable — JSONL rewrite below still trims */ }
+
+    // Rewrite the JSONL mirror without the pruned note entries so the export
+    // artifact stays consistent with the store.
+    try {
+        const remaining = readLedgerFile(meshId).filter(e => !removeIds.includes(e.id));
+        const filePath = getLedgerPath(meshId);
+        const lines = remaining.length ? remaining.map(e => JSON.stringify(e)).join('\n') + '\n' : '';
+        writeFileSync(filePath, lines, { encoding: 'utf-8', mode: 0o600 });
+    } catch { /* JSONL rewrite best-effort; store is the primary read path */ }
+
+    invalidateLedgerCache(meshId);
+    return removeIds.length;
 }
 
 function clampLedgerSliceLimit(limit: unknown): number {

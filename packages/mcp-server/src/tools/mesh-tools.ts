@@ -48,6 +48,7 @@ export {
     MESH_READ_NODE_LOGS_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
     MESH_RECORD_NOTE_TOOL,
+    MESH_FORGET_NOTE_TOOL,
     MESH_REFINE_BATCH_TOOL,
     MESH_REFINE_CONFIG_SCHEMA_TOOL,
     MESH_REFINE_NODE_TOOL,
@@ -98,6 +99,7 @@ export {
     meshMissionUpsert,
     meshReconcileLedger,
     meshRecordNote,
+    meshForgetNote,
     meshReviewInbox,
     meshTaskHistory,
 } from './mesh-tools-mission.js';

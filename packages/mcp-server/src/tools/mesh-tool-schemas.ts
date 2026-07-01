@@ -403,6 +403,22 @@ export const MESH_RECORD_NOTE_TOOL = {
     },
 };
 
+export const MESH_FORGET_NOTE_TOOL = {
+    name: 'mesh_forget_note',
+    description: 'Retract a stale or wrong operating note recorded via mesh_record_note. '
+        + 'Appends a tombstone to the mesh ledger so the targeted note(s) stop riding into future coordinators\' system prompts and drop out of the operating-notes list. '
+        + 'History is preserved (append-only) — this suppresses, it does not rewrite. '
+        + 'Target by note_id (from mesh_record_note / mesh_task_history) for an exact match, or by text to retract every note with that exact wording. Provide at least one.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            note_id: { type: 'string', description: 'The ledger note id to retract (exact). Returned by mesh_record_note as noteId, or visible in mesh_task_history entries.' },
+            text: { type: 'string', description: 'Retract every operating note whose trimmed text exactly matches this string. Use when you do not have the note id.' },
+            reason: { type: 'string', description: 'Optional short reason for the retraction, recorded on the tombstone for audit.' },
+        },
+    },
+};
+
 export const MESH_RECONCILE_LEDGER_TOOL = {
     name: 'mesh_reconcile_ledger',
     description: 'Reconcile daemon-local mesh ledgers by querying bounded ledger slices over P2P/DataChannel and importing missing entries into the coordinator local JSONL ledger. Cloud/D1 is not used as a ledger source of truth.',
@@ -776,6 +792,7 @@ export const ALL_MESH_TOOLS = [
     MESH_PRUNE_STALE_DIRECT_TOOL,
     MESH_TASK_HISTORY_TOOL,
     MESH_RECORD_NOTE_TOOL,
+    MESH_FORGET_NOTE_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
     MESH_MISSION_UPSERT_TOOL,
     MESH_MISSION_LIST_TOOL,

@@ -1006,6 +1006,18 @@ var MESH_RECORD_NOTE_TOOL = {
     required: ["text"]
   }
 };
+var MESH_FORGET_NOTE_TOOL = {
+  name: "mesh_forget_note",
+  description: "Retract a stale or wrong operating note recorded via mesh_record_note. Appends a tombstone to the mesh ledger so the targeted note(s) stop riding into future coordinators' system prompts and drop out of the operating-notes list. History is preserved (append-only) \u2014 this suppresses, it does not rewrite. Target by note_id (from mesh_record_note / mesh_task_history) for an exact match, or by text to retract every note with that exact wording. Provide at least one.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note_id: { type: "string", description: "The ledger note id to retract (exact). Returned by mesh_record_note as noteId, or visible in mesh_task_history entries." },
+      text: { type: "string", description: "Retract every operating note whose trimmed text exactly matches this string. Use when you do not have the note id." },
+      reason: { type: "string", description: "Optional short reason for the retraction, recorded on the tombstone for audit." }
+    }
+  }
+};
 var MESH_RECONCILE_LEDGER_TOOL = {
   name: "mesh_reconcile_ledger",
   description: "Reconcile daemon-local mesh ledgers by querying bounded ledger slices over P2P/DataChannel and importing missing entries into the coordinator local JSONL ledger. Cloud/D1 is not used as a ledger source of truth.",
@@ -1349,6 +1361,7 @@ var ALL_MESH_TOOLS = [
   MESH_PRUNE_STALE_DIRECT_TOOL,
   MESH_TASK_HISTORY_TOOL,
   MESH_RECORD_NOTE_TOOL,
+  MESH_FORGET_NOTE_TOOL,
   MESH_RECONCILE_LEDGER_TOOL,
   MESH_MISSION_UPSERT_TOOL,
   MESH_MISSION_LIST_TOOL,
@@ -4005,6 +4018,30 @@ async function meshRecordNote(ctx, args) {
     recorded: { text, category: category ?? null, createdAt },
     note: 'Recorded to the mesh ledger. Future coordinators on this mesh will see it under "## Operating Notes" at launch.'
   }, null, 2);
+}
+async function meshForgetNote(ctx, args) {
+  const { mesh } = ctx;
+  const noteId = readString(args.note_id) || readString(args.noteId) || void 0;
+  const text = typeof args.text === "string" ? args.text.trim() : "";
+  if (!noteId && !text) {
+    return JSON.stringify({ success: false, error: "note_id or text required" }, null, 2);
+  }
+  try {
+    const { tombstone, matched } = (0, import_daemon_core4.tombstoneOperatingNote)(mesh.id, {
+      ...noteId ? { noteId } : {},
+      ...text ? { text } : {},
+      ...typeof args.reason === "string" && args.reason.trim() ? { reason: args.reason.trim() } : {}
+    });
+    return JSON.stringify({
+      success: true,
+      meshId: mesh.id,
+      tombstoneId: tombstone.id,
+      forgot: { noteId: noteId ?? null, text: text || null, matched },
+      note: matched > 0 ? `Retracted ${matched} operating note(s). Future coordinators on this mesh will no longer see them at launch. History is preserved (append-only tombstone).` : "No live operating note matched \u2014 recorded a tombstone anyway so any matching note appended later is also suppressed."
+    }, null, 2);
+  } catch (e) {
+    return JSON.stringify({ success: false, error: e?.message || String(e) }, null, 2);
+  }
 }
 async function meshReconcileLedger(ctx, args) {
   await refreshMeshFromDaemon(ctx);
@@ -7925,6 +7962,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_record_note":
             text = await meshRecordNote(meshCtx, a);
+            break;
+          case "mesh_forget_note":
+            text = await meshForgetNote(meshCtx, a);
             break;
           case "mesh_reconcile_ledger":
             text = await meshReconcileLedger(meshCtx, a);
