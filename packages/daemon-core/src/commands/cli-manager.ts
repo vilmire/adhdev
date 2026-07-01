@@ -369,6 +369,18 @@ function expandResumeArgs(template: string[] | undefined, sessionId: string): st
     return template.map((part) => part === '{{id}}' ? sessionId : part);
 }
 
+/**
+ * Expand a provider's `modelLaunchArgs` template with the requested model, mirroring
+ * expandResumeArgs. `{{model}}` → the trimmed model string. Returns undefined when
+ * there is no template or no model (a model request without a template is a no-op —
+ * see startSession, where the caller logs the skip). MAGI kind-panel model axis.
+ */
+function expandModelLaunchArgs(template: string[] | undefined, model: string | undefined): string[] | undefined {
+    const m = typeof model === 'string' ? model.trim() : '';
+    if (!m || !Array.isArray(template) || template.length === 0) return undefined;
+    return template.map((part) => part === '{{model}}' ? m : part);
+}
+
 function readSubcommandSessionId(args: string[], subcommands: string[]): string | undefined {
     const resumeIndex = args.findIndex((arg) => subcommands.includes(arg));
     if (resumeIndex < 0) return undefined;
@@ -895,8 +907,23 @@ export class DaemonCliManager {
             console.log(colorize('cyan', `  📦 Using provider: ${provider.name} (${provider.type})`));
         }
 
+ // ─── Model axis (MAGI kind-panel): expand initialModel → launch args ───
+ // For a plain CLI provider the model is selected at spawn time via the manifest's
+ // modelLaunchArgs template ('{{model}}' → the requested model). ACP providers took
+ // the setConfigOption path above and never reach here. A provider with no template,
+ // or no requested model, is a no-op — model selection is best-effort and must never
+ // fail a launch. The model args are prepended so a caller's explicit cliArgs (e.g. a
+ // resume flag) still win positionally where order matters.
+        const modelLaunchArgs = expandModelLaunchArgs(provider?.modelLaunchArgs, initialModel);
+        const cliArgsWithModel = modelLaunchArgs
+            ? [...modelLaunchArgs, ...(cliArgs || [])]
+            : cliArgs;
+        if (initialModel && !modelLaunchArgs) {
+            LOG.warn('CLI', `[${normalizedType}] initialModel='${initialModel}' requested but provider declares no modelLaunchArgs template — launching without model selection.`);
+        }
+
  // ─── Resolve launch options → provider session binding ───
-        const sessionBinding = resolveCliSessionBinding(provider, normalizedType, cliArgs, options?.resumeSessionId);
+        const sessionBinding = resolveCliSessionBinding(provider, normalizedType, cliArgsWithModel, options?.resumeSessionId);
         const resolvedCliArgs = sessionBinding.cliArgs;
 
  // If InstanceManager exists, manage as CliProviderInstance unified

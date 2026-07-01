@@ -14,7 +14,7 @@
 import type { GitRepoStatus, GitCompactSummary } from './git/git-types.js';
 import type { MeshMissionSummary, MeshMissionSlimSummary } from './mesh/mesh-missions.js';
 import type { MeshMagiActivitySummary } from './mesh/mesh-magi-status.js';
-import type { MagiPanelMap } from '@adhdev/mesh-shared';
+import type { MagiPanelMap, MagiKindPanelMap } from '@adhdev/mesh-shared';
 
 // ─── Core Mesh Types ────────────────────────────
 
@@ -803,6 +803,14 @@ export interface LocalMeshConfig {
      * Optional: absent on configs written before MAGI existed.
      */
     magiPanels?: MagiPanelMap;
+    /**
+     * MAGI-KIND-PANEL: per-task_kind panel bindings (machine-local). Keyed by
+     * task_kind (rca / design / claim_audit / freeform); each maps to ≥1
+     * `(node × provider × model?)` slot. A `mesh_magi_review` invoked with a bare
+     * `task_kind` resolves its panel from here — an unconfigured kind is a hard
+     * error, never a synthesized fallback. Optional; absent on pre-feature configs.
+     */
+    magiKindPanels?: MagiKindPanelMap;
 }
 
 export interface LocalMeshEntry {

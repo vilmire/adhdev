@@ -594,6 +594,16 @@ export interface ProviderModule {
     /** Auto-implement spawn config — controls how this provider is invoked for autonomous script generation */
     autoImpl?: ProviderAutoImplSpawnConfig;
   };
+  /**
+   * MAGI-KIND-PANEL (model axis): template for expanding an `initialModel` selection
+   * into launch args for a CLI provider. `{{model}}` is substituted with the model
+   * string; e.g. `['--model', '{{model}}']` for claude-cli → `--model opus`. Applied
+   * at session launch when `initialModel` is passed AND this provider is a plain CLI
+   * (ACP providers instead route the model through setConfigOption). A CLI provider
+   * with no template silently ignores `initialModel` at launch (best-effort; a model
+   * request never fails a launch). Absent → no launch-time model selection for CLI.
+   */
+  modelLaunchArgs?: string[];
   /** Delay before submitting typed CLI input (provider-specific TUI tuning) */
   sendDelayMs?: number;
   /** Submit key used after typing into CLI PTY (default: carriage return) */

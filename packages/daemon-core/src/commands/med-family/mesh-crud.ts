@@ -302,6 +302,48 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         }
     },
 
+    // ─── MAGI kind → panel bindings (MAGI-KIND-PANEL, machine-local config) ───
+    // Per-task_kind slot lists in ~/.adhdev/meshes.json `magiKindPanels`. Same
+    // owner-only gating and structured-error precedent as the magi_panel_* handlers
+    // above (not listed in canPeerUsePrivilegedShareCommand → owner-only). set/remove
+    // are WRITE commands; list is read-only. normalizeMagiSlots (inside setMagiKindPanel)
+    // surfaces invalid_magi_kind_panel: … messages verbatim for the editor.
+    magi_kind_panel_list: async (_ctx: MedFamilyContext, _args: any) => {
+        try {
+            const { listMagiKindPanels } = await import('../../config/mesh-config.js');
+            return { success: true, kindPanels: listMagiKindPanels() };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
+    magi_kind_panel_set: async (_ctx: MedFamilyContext, args: any) => {
+        const kind = typeof args?.kind === 'string' ? args.kind.trim() : '';
+        if (!kind) return { success: false, error: 'invalid_magi_kind_panel: task_kind is required' };
+        try {
+            const { setMagiKindPanel } = await import('../../config/mesh-config.js');
+            // normalizeMagiTaskKindKey + normalizeMagiSlots (inside setMagiKindPanel)
+            // validate the kind and each slot (provider required; model/nodeId optional;
+            // replica counts clamped). Structured errors flow back as `error`.
+            const slots = setMagiKindPanel(kind, args?.slots);
+            return { success: true, kind, slots };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
+    magi_kind_panel_remove: async (_ctx: MedFamilyContext, args: any) => {
+        const kind = typeof args?.kind === 'string' ? args.kind.trim() : '';
+        if (!kind) return { success: false, error: 'invalid_magi_kind_panel: task_kind is required' };
+        try {
+            const { removeMagiKindPanel } = await import('../../config/mesh-config.js');
+            const removed = removeMagiKindPanel(kind);
+            return { success: true, removed };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
     add_mesh_node: async (ctx: MedFamilyContext, args: any) => {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         const workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';

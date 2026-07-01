@@ -124,6 +124,11 @@
       "minimum": 0,
       "description": "Delay between pasting prompt text and pressing Enter."
     },
+    "modelLaunchArgs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Template for expanding an initialModel selection into launch args. '{{model}}' is substituted with the model string (e.g. ['--model', '{{model}}'] → --model opus). Applied at launch when a model is requested for this CLI provider (MAGI kind-panel model axis). Absent → no launch-time model selection."
+    },
     "scriptCallBudgetMs": {
       "type": "integer",
       "minimum": 1,

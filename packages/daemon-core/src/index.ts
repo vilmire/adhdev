@@ -196,6 +196,7 @@ export {
   listMeshes, getMesh, getMeshByRepo, createMesh, updateMesh, deleteMesh,
   addNode, removeNode, updateNode, normalizeRepoIdentity,
   listMagiPanels, getMagiPanel, upsertMagiPanel, removeMagiPanel, normalizeMagiPanel,
+  listMagiKindPanels, getMagiKindPanel, setMagiKindPanel, removeMagiKindPanel, normalizeMagiSlots,
 } from './config/mesh-config.js';
 export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './config/mesh-config.js';
 // MAGI panel / common-output / synthesis types (re-exported from the mesh-shared

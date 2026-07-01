@@ -1150,14 +1150,14 @@ var MESH_REVIEW_INBOX_TOOL = {
 };
 var MESH_MAGI_REVIEW_TOOL = {
   name: "mesh_magi_review",
-  description: "Cross-verify a read-only investigation across a standing panel of independent mesh agents (different machines/providers), instead of sending a SINGLE read-only worker. Drop-in for any read-only investigation \u2014 bug RCA, defect/regression measurement, \"why does this code do X?\", or doc/design/API review. Fans the SAME question out to N independent (node \xD7 provider) replicas, then synthesizes consensus/disagreement/unique evidence into a needs_verification list \u2014 NOT a majority vote (high agreement among coupled agents \u2260 correct). Read-only is FORCED (no execute/write flag exists). COST: multiplies token spend by the total replica count (the call is the opt-in). NO pre-authored panel is required: omit `panel` and `members` and pass only `task_kind` (plus the question) to auto-synthesize a maximally-diverse cross-provider PRESET panel from the LIVE mesh \u2014 the resolver enumerates every routable (node \xD7 provider) pair (seeing a node's 2nd+ priority providers, matching the queue's per-provider claim check) and greedily picks the most independent set for that kind. Still resolves to \u22652 (node, provider) targets; never silently degrades to N=1 (errors magi_insufficient_providers if the live mesh cannot supply them).",
+  description: 'Cross-verify a read-only investigation across a standing panel of independent mesh agents (different machines/providers), instead of sending a SINGLE read-only worker. Drop-in for any read-only investigation \u2014 bug RCA, defect/regression measurement, "why does this code do X?", or doc/design/API review. Fans the SAME question out to N independent (node \xD7 provider) replicas, then synthesizes consensus/disagreement/unique evidence into a needs_verification list \u2014 NOT a majority vote (high agreement among coupled agents \u2260 correct). Read-only is FORCED (no execute/write flag exists). COST: multiplies token spend by the total replica count (the call is the opt-in). PANEL RESOLUTION: pass explicit inline `members`, OR a named `panel`, OR just a `task_kind` (with no panel/members) to resolve the USER-CONFIGURED kind-panel binding for that kind (mesh settings \u2192 magiKindPanels: task_kind \u2192 (node \xD7 provider \xD7 model) slots). There is NO automatic preset synthesis \u2014 a task_kind with no configured kind-panel errors `magi_kind_not_configured` (configure slots in mesh settings first). Every path still resolves to \u22652 (node, provider) targets; never silently degrades to N=1 (errors magi_insufficient_targets if the live mesh cannot supply the configured slots).',
   inputSchema: {
     type: "object",
     properties: {
       question: { type: "string", description: 'The single investigation question every agent answers \u2014 e.g. "What is the root cause of this defect?", "Refute this RCA.", "Why does this code do X?". Not only "review this".' },
       target: { type: "string", description: "What to investigate \u2014 file path(s), a bug symptom / error / stack trace, a code area / symbol, or omitted when the question is self-contained." },
       artifacts: { type: "array", items: { type: "string" }, description: "Inline content when not file-backed: a doc/diff, a log/error dump, or a prior single-worker RCA to refute." },
-      panel: { type: "string", description: 'Named panel from meshes.json (mesh_magi_panel_set). When omitted: if task_kind is given (and no inline members), a maximally-diverse cross-provider preset panel is auto-synthesized from the live mesh; otherwise falls back to a panel named "default" and errors clearly if none exists. Ignored when inline members are provided.' },
+      panel: { type: "string", description: 'Named panel from meshes.json (mesh_magi_panel_set). When omitted: if task_kind is given (and no inline members), the USER-CONFIGURED kind-panel binding for that task_kind is used (mesh settings \u2192 magiKindPanels; errors magi_kind_not_configured if unset \u2014 NO preset synthesis); otherwise falls back to a panel named "default" and errors clearly if none exists. Ignored when inline members are provided.' },
       members: {
         type: "array",
         description: "Inline ad-hoc panel override (NOT persisted): same member shape as a configured panel. When present, the named panel is ignored. Maximize distinct providers AND machines for real independence.",
@@ -1167,13 +1167,14 @@ var MESH_MAGI_REVIEW_TOOL = {
             nodeId: { type: "string", description: "Optional \u2014 pin to a specific mesh node id." },
             capabilityTags: { type: "array", items: { type: "string" }, description: "Optional routing tags (ANDed with the provider tag) when nodeId is absent." },
             provider: { type: "string", description: "REQUIRED \u2014 provider type, e.g. claude-cli / codex-cli / hermes-cli / gemini-cli." },
+            model: { type: "string", description: "Optional model override applied at replica launch (e.g. opus / sonnet for claude-cli). For CLI providers it is expanded via the provider manifest modelLaunchArgs template; for ACP providers it sets the model via setConfigOption. Best-effort \u2014 a provider that cannot honor it still runs." },
             n: { type: "number", description: "Optional per-member replica count (default 1)." }
           },
           required: ["provider"]
         }
       },
       n: { type: "number", description: "Global replica override per member (clamped by the total-replica guard cap, default 12)." },
-      task_kind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "Selects the SINGLE output schema injected into each replica prompt and the strict parser used at collection (no schema-on-schema conflict). claim_audit (DEFAULT, backward-compatible): {claims[],top_findings[],open_questions[]}. rca: {rootCause,failsAt,mechanism,evidence[],fixDirection,confidence}. design: {recommendation,rationale,alternatives[],tradeoffs[],risks[],evidence[],confidence}. freeform: no schema \u2014 natural-language answer, parsing/evidence checks waived, cross-verification is weak. When `panel` and `members` are both omitted, task_kind ALSO drives auto-synthesis of a maximally-diverse cross-provider preset panel from the live mesh (design fans out widest, claim_audit/rca a triad, freeform the minimum pair). Every kind except freeform requires non-empty evidence[]; an empty-evidence or schema-invalid answer triggers ONE delta re-request before being dropped as unparseable. Do NOT also embed an output-format schema in the question \u2014 it collides with this contract (a warning is surfaced if detected)." },
+      task_kind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "Selects the SINGLE output schema injected into each replica prompt and the strict parser used at collection (no schema-on-schema conflict). claim_audit (DEFAULT, backward-compatible): {claims[],top_findings[],open_questions[]}. rca: {rootCause,failsAt,mechanism,evidence[],fixDirection,confidence}. design: {recommendation,rationale,alternatives[],tradeoffs[],risks[],evidence[],confidence}. freeform: no schema \u2014 natural-language answer, parsing/evidence checks waived, cross-verification is weak. When `panel` and `members` are both omitted, task_kind ALSO selects the user-configured kind-panel binding for that kind (mesh settings \u2192 magiKindPanels; errors magi_kind_not_configured if that kind has no configured slots \u2014 no automatic preset synthesis). Every kind except freeform requires non-empty evidence[]; an empty-evidence or schema-invalid answer triggers ONE delta re-request before being dropped as unparseable. Do NOT also embed an output-format schema in the question \u2014 it collides with this contract (a warning is surfaced if detected)." },
       mode: { type: "string", enum: ["rca", "investigation", "claim_audit", "design_review", "code_audit"], description: "Synthesis emphasis hint \u2014 affects labels only, never the agent count or schema. Distinct from task_kind (which selects the output schema)." },
       use_judge: { type: "boolean", description: "Default false (clustering synthesis). STUB: judge synthesis is not yet implemented \u2014 passing true currently falls back to clustering with a warning. Reserved interface only." },
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
@@ -4089,12 +4090,6 @@ var MAGI_MAX_WAIT_MS = 6e5;
 var MAGI_POLL_INTERVAL_MS = 5e3;
 var VALID_TASK_KINDS = ["claim_audit", "rca", "design", "freeform"];
 var DEFAULT_TASK_KIND = "claim_audit";
-var MAGI_KIND_PRESETS = {
-  claim_audit: { targetK: 3, minK: 2, providerPreference: ["claude-cli", "codex-cli", "gemini-cli", "hermes-cli"], avoidConcurrentProviders: ["antigravity-cli"] },
-  rca: { targetK: 3, minK: 2, providerPreference: ["claude-cli", "codex-cli", "gemini-cli", "hermes-cli"], avoidConcurrentProviders: ["antigravity-cli"] },
-  design: { targetK: 4, minK: 2, providerPreference: ["claude-cli", "codex-cli", "gemini-cli", "hermes-cli"], avoidConcurrentProviders: ["antigravity-cli"] },
-  freeform: { targetK: 2, minK: 2, providerPreference: ["claude-cli", "codex-cli", "gemini-cli", "hermes-cli"], avoidConcurrentProviders: ["antigravity-cli"] }
-};
 function normalizeMagiTaskKind(raw) {
   const s = typeof raw === "string" ? raw.trim().toLowerCase() : "";
   return VALID_TASK_KINDS.includes(s) ? s : DEFAULT_TASK_KIND;
@@ -4536,6 +4531,7 @@ function buildMagiFanoutPlan(panel, nodes, opts = {}) {
   let totalRequested = 0;
   members.forEach((member, memberIndex) => {
     const provider = member.provider;
+    const model = typeof member.model === "string" && member.model.trim() ? member.model.trim() : void 0;
     const capabilityTags = (0, import_daemon_core4.normalizeMeshCapabilityTags)(member.capabilityTags);
     const requiredTags = (0, import_daemon_core4.normalizeMeshCapabilityTags)([`provider=${provider}`, ...capabilityTags]);
     const count = replicaCountFor(member, panel, opts.n);
@@ -4613,7 +4609,7 @@ function buildMagiFanoutPlan(panel, nodes, opts = {}) {
     nodeTargetSet.add(targetKey);
     memberResolutions.push(resolution);
     for (let i = 0; i < count; i++) {
-      replicas.push({ memberIndex, provider, targetNodeId, capabilityTags, requiredTags });
+      replicas.push({ memberIndex, provider, targetNodeId, capabilityTags, requiredTags, ...model ? { model } : {} });
     }
   });
   const droppedReplicas = Math.max(0, replicas.length - cap);
@@ -4817,77 +4813,6 @@ function buildInlineMagiPanel(members, opts = {}) {
     description: opts.description ?? "inline ad-hoc panel"
   });
 }
-function enumerateLivePresetCandidates(nodes) {
-  const out = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const node of Array.isArray(nodes) ? nodes : []) {
-    const nodeId = node?.id;
-    if (typeof nodeId !== "string" || !nodeId.trim()) continue;
-    for (const provider of readProviderPriority(node?.policy)) {
-      const tags = (0, import_daemon_core4.buildMeshNodeCapabilityTags)(node, provider);
-      if (!(0, import_daemon_core4.nodeSatisfiesRequiredTags)([`provider=${provider}`], tags)) continue;
-      const key = `${nodeId}|${provider}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ nodeId, provider });
-    }
-  }
-  return out;
-}
-function selectDiversePresetPairs(candidates, preset) {
-  const prefRank = /* @__PURE__ */ new Map();
-  (preset.providerPreference ?? []).forEach((p, i) => prefRank.set(p, i));
-  const prefOf = (provider) => prefRank.has(provider) ? prefRank.get(provider) : Number.MAX_SAFE_INTEGER;
-  const fragile = new Set(preset.avoidConcurrentProviders ?? []);
-  const scarcity = /* @__PURE__ */ new Map();
-  for (const c of candidates) scarcity.set(c.provider, (scarcity.get(c.provider) ?? 0) + 1);
-  const sorted = [...candidates].sort(
-    (a, b) => prefOf(a.provider) - prefOf(b.provider) || (scarcity.get(a.provider) ?? 0) - (scarcity.get(b.provider) ?? 0) || (a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0) || (a.provider < b.provider ? -1 : a.provider > b.provider ? 1 : 0)
-  );
-  const picked = [];
-  const usedNodes = /* @__PURE__ */ new Set();
-  const usedProviders = /* @__PURE__ */ new Set();
-  const fragileNodes = /* @__PURE__ */ new Set();
-  const tryPick = (c) => {
-    if (picked.length >= preset.targetK) return;
-    if (fragile.has(c.provider) && fragileNodes.has(c.nodeId)) return;
-    picked.push(c);
-    usedNodes.add(c.nodeId);
-    usedProviders.add(c.provider);
-    if (fragile.has(c.provider)) fragileNodes.add(c.nodeId);
-  };
-  const isPicked = (c) => picked.some((p) => p.nodeId === c.nodeId && p.provider === c.provider);
-  for (const c of sorted) {
-    if (picked.length >= preset.targetK) break;
-    if (isPicked(c)) continue;
-    if (!usedProviders.has(c.provider) && !usedNodes.has(c.nodeId)) tryPick(c);
-  }
-  for (const c of sorted) {
-    if (picked.length >= preset.targetK) break;
-    if (isPicked(c)) continue;
-    if (!usedProviders.has(c.provider) || !usedNodes.has(c.nodeId)) tryPick(c);
-  }
-  for (const c of sorted) {
-    if (picked.length >= preset.targetK) break;
-    if (isPicked(c)) continue;
-    tryPick(c);
-  }
-  return picked;
-}
-function buildPresetMagiPanelForKind(kind, nodes, opts = {}) {
-  const preset = MAGI_KIND_PRESETS[kind] ?? MAGI_KIND_PRESETS[DEFAULT_TASK_KIND];
-  const candidates = enumerateLivePresetCandidates(nodes);
-  const pairs = selectDiversePresetPairs(candidates, preset);
-  const members = pairs.map((p) => ({
-    provider: p.provider,
-    nodeId: p.nodeId,
-    ...opts.n !== void 0 ? { n: Math.max(1, Math.floor(opts.n)) } : { n: 1 }
-  }));
-  if (members.length === 0) {
-    return { members: [], description: `preset:${kind}` };
-  }
-  return buildInlineMagiPanel(members, { defaultN: opts.n, description: `preset:${kind}` });
-}
 async function meshMagiPanelList(ctx, args = {}) {
   await refreshMeshFromDaemon(ctx);
   const all = (0, import_daemon_core4.listMagiPanels)();
@@ -4942,7 +4867,7 @@ async function meshMagiReview(ctx, args) {
   const referenceCommit = resolveMagiReferenceCommit(ctx);
   const hasInlineMembers = Array.isArray(args.members) && args.members.length > 0;
   const explicitPanelName = readString(args.panel);
-  const usePresetPath = !hasInlineMembers && !explicitPanelName && typeof explicitTaskKind === "string" && VALID_TASK_KINDS.includes(explicitTaskKind.trim().toLowerCase());
+  const useKindPanelPath = !hasInlineMembers && !explicitPanelName && typeof explicitTaskKind === "string" && VALID_TASK_KINDS.includes(explicitTaskKind.trim().toLowerCase());
   let panel;
   let panelName;
   let presetKind;
@@ -4955,22 +4880,32 @@ async function meshMagiReview(ctx, args) {
         success: false,
         code: "invalid_magi_panel",
         error: e?.message || String(e),
-        hint: "Inline members use the same shape as a configured panel: [{ provider (REQUIRED), nodeId?, capabilityTags?, n? }]."
+        hint: "Inline members use the same shape as a configured panel: [{ provider (REQUIRED), nodeId?, model?, capabilityTags?, n? }]."
       });
     }
-  } else if (usePresetPath) {
+  } else if (useKindPanelPath) {
     presetKind = normalizeMagiTaskKind(explicitTaskKind);
-    panelName = `(preset:${presetKind})`;
-    const preset = MAGI_KIND_PRESETS[presetKind];
-    const maxReplicas = Math.max(1, Math.floor(Number(args.n) > 0 ? Number(args.n) : MAGI_MAX_REPLICAS));
-    panel = buildPresetMagiPanelForKind(presetKind, ctx.mesh.nodes, { n: args.n, referenceCommit, maxReplicas });
-    if (panel.members.length < preset.minK) {
+    panelName = `(kind:${presetKind})`;
+    const slots = (0, import_daemon_core4.getMagiKindPanel)(presetKind);
+    if (!slots || slots.length === 0) {
       return JSON.stringify({
         success: false,
-        code: "magi_insufficient_providers",
-        error: `task_kind '${presetKind}' auto-synthesis found only ${panel.members.length} independent (node, provider) target(s) in the live mesh; MAGI requires \u2265${preset.minK} and never silently degrades to N=1.`,
-        resolvedMembers: panel.members,
-        hint: "Bring a second provider or a second node online (mesh_status to inspect), or pass explicit inline members to mesh_magi_review."
+        code: "magi_kind_not_configured",
+        error: `\uC774 task_kind\uC5D0 \uB300\uD55C \uD328\uB110 \uC2AC\uB86F\uC774 \uBA54\uC2DC \uC138\uD305\uC5D0 \uC5C6\uC2B5\uB2C8\uB2E4. \uC138\uD305\uC5D0\uC11C (\uBA38\uC2E0+\uD504\uB85C\uBC14\uC774\uB354+\uBAA8\uB378) \uC2AC\uB86F\uC744 1\uAC1C \uC774\uC0C1 \uCC44\uC6B0\uC138\uC694 \u2014 task_kind '${presetKind}' has no configured kind-panel.`,
+        taskKind: presetKind,
+        configuredKinds: Object.keys((0, import_daemon_core4.listMagiKindPanels)()),
+        hint: "Configure this kind in mesh settings (MagiKindPanelEditor), or set it programmatically with the magi_kind_panel_set daemon command, then retry. Alternatively pass explicit inline members or a named panel to mesh_magi_review."
+      }, null, 2);
+    }
+    try {
+      panel = buildInlineMagiPanel(slots, { defaultN: args.n, description: `kind:${presetKind}` });
+    } catch (e) {
+      return JSON.stringify({
+        success: false,
+        code: "invalid_magi_kind_panel",
+        error: `configured kind-panel for '${presetKind}' is invalid: ${e?.message || String(e)}`,
+        taskKind: presetKind,
+        hint: "Re-save the kind-panel slots in mesh settings \u2014 each slot needs a provider; nodeId / model are optional."
       }, null, 2);
     }
   } else {
@@ -5025,6 +4960,7 @@ Target: ${args.target}` : ""}`,
         missionId: mission.id,
         consensusGroupId,
         ...replica.targetNodeId ? { targetNodeId: replica.targetNodeId } : {},
+        ...replica.model ? { model: replica.model } : {},
         ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
       });
       replicaRecords.push({ taskId: task.id, provider: replica.provider, targetNodeId: replica.targetNodeId, requiredTags: replica.requiredTags });

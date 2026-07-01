@@ -503,6 +503,14 @@ export interface MeshWorkQueueEntry {
      */
     consensusGroupId?: string;
     /**
+     * MAGI-KIND-PANEL (model axis): model override for the session that executes this
+     * task. When the task auto-launches a session, this is passed to launch_cli as
+     * `initialModel` (ACP → setConfigOption; CLI → modelLaunchArgs template). Absent on
+     * ordinary tasks. Rides in the payload JSON (no column). Best-effort — a provider
+     * that cannot honor the model still runs the task (never a fatal launch error).
+     */
+    model?: string;
+    /**
      * M1: why this task is held back (e.g. "dependency_failed:<taskId>").
      * Only set by the system on dependency failure under the 'block' policy;
      * waiting-on-dependency state is computed at view time, not stored.
@@ -772,6 +780,8 @@ export function enqueueTask(
         missionId?: string;
         /** MAGI: consensus group id shared by every replica of a mesh_magi_review fan-out. */
         consensusGroupId?: string;
+        /** MAGI-KIND-PANEL: model override forwarded to the executing session's launch (initialModel). */
+        model?: string;
         /** Explicit task id for batch/template flows (M5). Random UUID when omitted. */
         id?: string;
         /** (3) Originating coordinator session id (for session-anchored completion routing). */
@@ -816,6 +826,7 @@ export function enqueueTask(
             ...(dependsOn.length > 0 ? { dependsOn } : {}),
             ...(typeof opts?.missionId === 'string' && opts.missionId.trim() ? { missionId: opts.missionId.trim() } : {}),
             ...(typeof opts?.consensusGroupId === 'string' && opts.consensusGroupId.trim() ? { consensusGroupId: opts.consensusGroupId.trim() } : {}),
+            ...(typeof opts?.model === 'string' && opts.model.trim() ? { model: opts.model.trim() } : {}),
             ...(typeof opts?.sourceCoordinatorSessionId === 'string' && opts.sourceCoordinatorSessionId.trim()
                 ? { sourceCoordinatorSessionId: opts.sourceCoordinatorSessionId.trim() }
                 : {}),

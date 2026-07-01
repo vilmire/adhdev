@@ -29,9 +29,55 @@ export interface MagiPanelMember {
     capabilityTags?: string[]
     /** REQUIRED — provider type, e.g. 'claude-cli' | 'codex-cli' | 'hermes-cli' | 'gemini-cli'. */
     provider: string
+    /**
+     * Optional model override applied at replica launch (e.g. 'opus' | 'sonnet' for
+     * claude-cli). Threaded through enqueueTask → the auto-launched session's
+     * `launch_cli` payload as `initialModel`. For ACP providers it drives
+     * setConfigOption('model', …); for CLI providers it is expanded via the
+     * provider manifest's `modelLaunchArgs` template into launch args (a provider
+     * with no template silently ignores it — model is best-effort, never fatal).
+     */
+    model?: string
     /** Optional per-member replica count; defaults to the panel.defaultN / global n / 1. */
     n?: number
 }
+
+// ─── Kind → panel binding (machine-local config) ─────────
+//
+// MAGI-KIND-PANEL: an explicit, per-task_kind panel binding. `mesh_magi_review`
+// invoked with a bare `task_kind` (no panel name / inline members) resolves the
+// panel from THIS map — the user must have configured ≥1 slot for that kind in mesh
+// settings. There is NO hardcoded preset auto-synthesis fallback: an unconfigured
+// kind is a hard error (magi_kind_not_configured), never a silent synthetic panel.
+
+/**
+ * One kind-panel slot: a `(node × provider [× model])` target, structurally the same
+ * shape as a {@link MagiPanelMember}. `provider` required; `nodeId` pins a concrete
+ * mesh node; `model` optionally selects the agent model at launch; `n` is an optional
+ * per-slot replica count.
+ */
+export interface MagiSlot {
+    /** Optional — pin to a specific mesh node id. */
+    nodeId?: string
+    /** REQUIRED — provider type, e.g. 'claude-cli' | 'codex-cli' | 'gemini-cli'. */
+    provider: string
+    /** Optional model override applied at replica launch (see MagiPanelMember.model). */
+    model?: string
+    /** Optional routing tags, ANDed with the provider tag when nodeId is absent. */
+    capabilityTags?: string[]
+    /** Optional per-slot replica count; defaults to 1. */
+    n?: number
+}
+
+/**
+ * Per-task_kind panel binding, stored machine-local in `~/.adhdev/meshes.json`
+ * under the top-level `magiKindPanels` map (sibling to `magiPanels`). A kind absent
+ * from the map has NO configured panel → `mesh_magi_review({task_kind})` errors
+ * with `magi_kind_not_configured` rather than synthesizing one. `freeform` MAY be
+ * bound like any other kind (unlike a named panel's `defaultKind`, this is a direct
+ * kind→slots binding, not a panel-level default).
+ */
+export type MagiKindPanelMap = Partial<Record<MagiTaskKind, MagiSlot[]>>
 
 /**
  * The output-schema selector a MAGI fan-out injects into every replica prompt and

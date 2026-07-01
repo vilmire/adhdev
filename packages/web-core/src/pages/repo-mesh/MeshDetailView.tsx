@@ -6,6 +6,7 @@ import { AlertBanner } from '../../components/ui/AlertBanner'
 import { FormField } from '../../components/ui/FormField'
 import { IconMesh } from '../../components/Icons'
 import MagiPanelManager from '../../components/MeshGraph/MagiPanelManager'
+import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
@@ -298,6 +299,21 @@ export function MeshDetailView({
             {displayedMeshStatus && (
                 <Section title="MAGI panels" description="Saved (machine × AI) cross-verification quorums — machine-local config. Create, edit, or delete them here.">
                     <MagiPanelManager
+                        status={displayedMeshStatus}
+                        daemonId={activeDaemonId}
+                        sendDaemonCommand={sendCommand}
+                    />
+                </Section>
+            )}
+
+            {/* ── MAGI kind → panel bindings ──
+                 Bind each task_kind (rca / design / claim_audit / freeform) to slots.
+                 A bare mesh_magi_review({task_kind}) resolves the panel from these; an
+                 unconfigured kind errors (magi_kind_not_configured) instead of
+                 auto-synthesizing. Same seam as the MAGI panels Section above. */}
+            {displayedMeshStatus && (
+                <Section title="MAGI kind → panel bindings" description="Bind each task_kind (rca / design / claim_audit / freeform) to (machine + provider + model) slots. A bare mesh_magi_review({task_kind}) uses these — an unconfigured kind errors instead of auto-synthesizing a panel.">
+                    <MagiKindPanelEditor
                         status={displayedMeshStatus}
                         daemonId={activeDaemonId}
                         sendDaemonCommand={sendCommand}

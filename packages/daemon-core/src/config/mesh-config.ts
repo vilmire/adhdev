@@ -22,7 +22,7 @@ import type {
     RepoMeshHostMetadata,
     RepoMeshDaemonRole,
 } from '../repo-mesh-types.js';
-import type { MagiPanel, MagiPanelMember, MagiPanelDefaultKind } from '@adhdev/mesh-shared';
+import type { MagiPanel, MagiPanelMember, MagiPanelDefaultKind, MagiKindPanelMap, MagiSlot, MagiTaskKind } from '@adhdev/mesh-shared';
 import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 
@@ -650,11 +650,13 @@ export function normalizeMagiPanel(config: unknown): MagiPanel {
             throw new Error(`invalid_magi_panel: member[${idx}].provider is required`);
         }
         const nodeId = typeof m.nodeId === 'string' && m.nodeId.trim() ? m.nodeId.trim() : undefined;
+        const model = typeof m.model === 'string' && m.model.trim() ? m.model.trim() : undefined;
         const capabilityTags = normalizeCapabilityTags(m.capabilityTags);
         const n = normalizeReplicaCount(m.n);
         return {
             provider,
             ...(nodeId ? { nodeId } : {}),
+            ...(model ? { model } : {}),
             ...(capabilityTags ? { capabilityTags } : {}),
             ...(n !== undefined ? { n } : {}),
         };
@@ -723,6 +725,102 @@ export function removeMagiPanel(name: string): boolean {
     const stored = loadMeshConfig();
     if (!stored.magiPanels || !stored.magiPanels[key]) return false;
     delete stored.magiPanels[key];
+    saveMeshConfig(stored);
+    return true;
+}
+
+// ─── MAGI kind → panel bindings (MAGI-KIND-PANEL) ─────────
+//
+// Per-task_kind slot lists (machine-local, meshes.json `magiKindPanels`). A bare
+// `mesh_magi_review({task_kind})` resolves its panel exclusively from here — an
+// unconfigured kind is a hard error, never a synthesized fallback. Mirrors the named
+// panel accessors above (normalize / list / get / set / remove).
+
+/** The task kinds a kind-panel can be bound to. Unlike a named panel's defaultKind,
+ * 'freeform' IS a valid kind-panel key (this is a direct kind→slots binding). */
+const MAGI_KIND_PANEL_KINDS: readonly MagiTaskKind[] = ['claim_audit', 'rca', 'design', 'freeform'];
+const MAX_MAGI_KIND_SLOTS = 24;
+
+function normalizeMagiTaskKindKey(raw: unknown): MagiTaskKind {
+    const s = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+    if (!(MAGI_KIND_PANEL_KINDS as readonly string[]).includes(s)) {
+        throw new Error(`invalid_magi_kind_panel: task_kind must be one of ${MAGI_KIND_PANEL_KINDS.join(' / ')} (got '${s || '(empty)'}')`);
+    }
+    return s as MagiTaskKind;
+}
+
+/**
+ * Validate + normalize a kind-panel's slots. Mirrors normalizeMagiPanel's member
+ * normalization: provider required per slot, trims strings, drops empties, clamps
+ * replica counts, and additionally carries an optional per-slot `model`. Throws on
+ * structurally invalid input (empty list / no provider) so the write returns a clear
+ * error. Returns the normalized slot array.
+ */
+export function normalizeMagiSlots(slots: unknown): MagiSlot[] {
+    if (!Array.isArray(slots) || slots.length === 0) {
+        throw new Error('invalid_magi_kind_panel: slots must be a non-empty array');
+    }
+    if (slots.length > MAX_MAGI_KIND_SLOTS) {
+        throw new Error(`invalid_magi_kind_panel: too many slots (max ${MAX_MAGI_KIND_SLOTS})`);
+    }
+    return slots.map((entry, idx) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+            throw new Error(`invalid_magi_kind_panel: slot[${idx}] must be an object`);
+        }
+        const s = entry as Record<string, unknown>;
+        const provider = typeof s.provider === 'string' ? s.provider.trim() : '';
+        if (!provider) {
+            throw new Error(`invalid_magi_kind_panel: slot[${idx}].provider is required`);
+        }
+        const nodeId = typeof s.nodeId === 'string' && s.nodeId.trim() ? s.nodeId.trim() : undefined;
+        const model = typeof s.model === 'string' && s.model.trim() ? s.model.trim() : undefined;
+        const capabilityTags = normalizeCapabilityTags(s.capabilityTags);
+        const n = normalizeReplicaCount(s.n);
+        return {
+            provider,
+            ...(nodeId ? { nodeId } : {}),
+            ...(model ? { model } : {}),
+            ...(capabilityTags ? { capabilityTags } : {}),
+            ...(n !== undefined ? { n } : {}),
+        };
+    });
+}
+
+/** All configured kind-panels (machine-local), keyed by task_kind. Empty when none. */
+export function listMagiKindPanels(): MagiKindPanelMap {
+    return loadMeshConfig().magiKindPanels ?? {};
+}
+
+/** The slot list for one task_kind, or undefined when the kind is not configured. */
+export function getMagiKindPanel(kind: string): MagiSlot[] | undefined {
+    let key: MagiTaskKind;
+    try { key = normalizeMagiTaskKindKey(kind); } catch { return undefined; }
+    return loadMeshConfig().magiKindPanels?.[key];
+}
+
+/**
+ * Upsert the slot list for one task_kind. Unlike named panels this ALWAYS overwrites
+ * (a kind has exactly one binding) — the editor pushes the full desired slot set.
+ * Returns the normalized, persisted slots.
+ */
+export function setMagiKindPanel(kind: string, slots: unknown): MagiSlot[] {
+    const key = normalizeMagiTaskKindKey(kind);
+    const normalized = normalizeMagiSlots(slots);
+    const stored = loadMeshConfig();
+    const map = stored.magiKindPanels ?? {};
+    map[key] = normalized;
+    stored.magiKindPanels = map;
+    saveMeshConfig(stored);
+    return normalized;
+}
+
+/** Remove the binding for one task_kind. Returns true when a binding was removed. */
+export function removeMagiKindPanel(kind: string): boolean {
+    let key: MagiTaskKind;
+    try { key = normalizeMagiTaskKindKey(kind); } catch { return false; }
+    const stored = loadMeshConfig();
+    if (!stored.magiKindPanels || !stored.magiKindPanels[key]) return false;
+    delete stored.magiKindPanels[key];
     saveMeshConfig(stored);
     return true;
 }

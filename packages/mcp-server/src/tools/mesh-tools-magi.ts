@@ -24,6 +24,8 @@ import {
     getMeshMission,
     getQueue,
     isWeakCompletionEvidence,
+    getMagiKindPanel,
+    listMagiKindPanels,
     listMagiPanels,
     MAGI_RAW_ANSWER_CAP,
     meshNodeIdMatches,
@@ -102,37 +104,14 @@ export type { MagiTaskKind, MagiPanelDefaultKind } from './mesh-tools-internal.j
 const VALID_TASK_KINDS: readonly MagiTaskKind[] = ['claim_audit', 'rca', 'design', 'freeform'];
 const DEFAULT_TASK_KIND: MagiTaskKind = 'claim_audit';
 
-// ─── Kind → preset intent table (MAGI-KIND-PRESET) ───
+// ─── MAGI-KIND-PANEL ───
 //
-// A `task_kind` alone (no pre-authored panel name / members) auto-synthesizes the
-// most diverse cross-provider panel the LIVE mesh can supply. This static table is
-// pure INTENT — how wide a spectrum a kind wants, never WHICH provider. The resolver
-// (buildPresetMagiPanelForKind) treats providerPreference as an ordering hint only and
-// is satisfied by ANY mesh that has ≥2 distinct providers (or ≥2 distinct nodes); it
-// must never hard-restrict to a named provider.
-export interface MagiKindPreset {
-    /** Desired number of distinct (node, provider) targets to fan out to. */
-    targetK: number;
-    /** Hard floor — below this the handler errors (magi_insufficient_providers). */
-    minK: number;
-    /** Ordering hint ONLY (scarce/lexical break ties after it). Never a restriction. */
-    providerPreference?: readonly string[];
-    /** Providers that are fragile / cross-wire-prone: ≤1 replica per node, spread across distinct nodes. */
-    avoidConcurrentProviders?: readonly string[];
-}
-
-/**
- * Static per-kind intent. design wants the widest independent spectrum (targetK 4);
- * audit/rca a solid triad; freeform the minimum cross-check pair. providerPreference is
- * a soft ordering nudge — the resolver still satisfies any ≥2-distinct-provider mesh.
- * antigravity-cli is fragile (cross-wire prone) so it is capped at one replica per node.
- */
-export const MAGI_KIND_PRESETS: Readonly<Record<MagiTaskKind, MagiKindPreset>> = {
-    claim_audit: { targetK: 3, minK: 2, providerPreference: ['claude-cli', 'codex-cli', 'gemini-cli', 'hermes-cli'], avoidConcurrentProviders: ['antigravity-cli'] },
-    rca: { targetK: 3, minK: 2, providerPreference: ['claude-cli', 'codex-cli', 'gemini-cli', 'hermes-cli'], avoidConcurrentProviders: ['antigravity-cli'] },
-    design: { targetK: 4, minK: 2, providerPreference: ['claude-cli', 'codex-cli', 'gemini-cli', 'hermes-cli'], avoidConcurrentProviders: ['antigravity-cli'] },
-    freeform: { targetK: 2, minK: 2, providerPreference: ['claude-cli', 'codex-cli', 'gemini-cli', 'hermes-cli'], avoidConcurrentProviders: ['antigravity-cli'] },
-};
+// A bare `task_kind` (no pre-authored panel name / members) NO LONGER auto-synthesizes
+// a diverse cross-provider panel from the live mesh. It resolves the user's explicitly
+// configured kind-panel binding (magiKindPanels: task_kind → (node × provider × model?)
+// slots). An unconfigured kind is a hard error (magi_kind_not_configured), never a
+// synthetic fallback. The former MAGI_KIND_PRESETS intent table and its resolver
+// (buildPresetMagiPanelForKind + helpers) were removed with that behavior change.
 
 export function normalizeMagiTaskKind(raw: unknown): MagiTaskKind {
     const s = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
@@ -711,6 +690,8 @@ export interface MagiReplicaPlan {
     capabilityTags: string[];
     /** Tags the enqueued task hard-filters on: ['provider=<p>', ...capabilityTags]. */
     requiredTags: string[];
+    /** MAGI-KIND-PANEL model axis: model override forwarded to the replica's launch (initialModel). */
+    model?: string;
 }
 
 export interface MagiUnavailableMember {
@@ -814,6 +795,7 @@ export function buildMagiFanoutPlan(
 
     members.forEach((member, memberIndex) => {
         const provider = member.provider;
+        const model = typeof member.model === 'string' && member.model.trim() ? member.model.trim() : undefined;
         const capabilityTags = normalizeMeshCapabilityTags(member.capabilityTags);
         const requiredTags = normalizeMeshCapabilityTags([`provider=${provider}`, ...capabilityTags]);
         const count = replicaCountFor(member, panel, opts.n);
@@ -922,7 +904,7 @@ export function buildMagiFanoutPlan(
         nodeTargetSet.add(targetKey);
         memberResolutions.push(resolution);
         for (let i = 0; i < count; i++) {
-            replicas.push({ memberIndex, provider, targetNodeId, capabilityTags, requiredTags });
+            replicas.push({ memberIndex, provider, targetNodeId, capabilityTags, requiredTags, ...(model ? { model } : {}) });
         }
     });
 
@@ -1265,149 +1247,11 @@ export function buildInlineMagiPanel(members: unknown, opts: { defaultN?: number
     });
 }
 
-/** One live, individually-routable (node × provider) candidate pair for preset synthesis. */
-interface MagiPresetCandidate {
-    nodeId: string;
-    provider: string;
-}
-
-/**
- * Enumerate every live (node, provider) pair that is INDIVIDUALLY routable — i.e. the
- * node would actually claim a task whose required tag is `provider=<provider>`. This is
- * the bug-fix core (MAGI-KIND-PRESET §1): we advertise each provider with the provider
- * arg passed to buildMeshNodeCapabilityTags so a node's 2nd-and-lower priority providers
- * are visible, matching the queue's per-provider claim check (mesh-queue-assignment.ts)
- * rather than buildMagiFanoutPlan's tag-routed path which only sees the FIRST provider.
- * Pure / order-stable (nodes in mesh order, providers in each node's priority order).
- */
-function enumerateLivePresetCandidates(nodes: LocalMeshNodeEntry[]): MagiPresetCandidate[] {
-    const out: MagiPresetCandidate[] = [];
-    const seen = new Set<string>();
-    for (const node of Array.isArray(nodes) ? nodes : []) {
-        const nodeId = (node as any)?.id;
-        if (typeof nodeId !== 'string' || !nodeId.trim()) continue;
-        for (const provider of readProviderPriority((node as any)?.policy)) {
-            // Per-provider availability: does THIS provider on THIS node satisfy a
-            // `provider=<provider>` filter? Pass the provider so the advertised tag set
-            // carries provider=<provider> (the queue's per-provider check); without it
-            // only the node's first provider would ever match.
-            const tags = buildMeshNodeCapabilityTags(node as any, provider);
-            if (!nodeSatisfiesRequiredTags([`provider=${provider}`], tags)) continue;
-            const key = `${nodeId}|${provider}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            out.push({ nodeId, provider });
-        }
-    }
-    return out;
-}
-
-/**
- * Greedily pick up to targetK MAXIMALLY-DIVERSE (node, provider) pairs from the live
- * candidate set. Diversity = introduce a NEW provider AND a NEW node at each step when
- * possible; when one axis is exhausted, allow a new value on the other. Ordering is a
- * stable sort by: providerPreference rank → provider scarcity (rarest provider first, so
- * a singleton provider is never crowded out) → nodeId → provider (lexical). Deterministic:
- * same live mesh + same preset → same pairs. Fragile providers
- * (preset.avoidConcurrentProviders) are capped at one pick per node and never picked twice
- * on the same node. Pure.
- */
-function selectDiversePresetPairs(
-    candidates: MagiPresetCandidate[],
-    preset: MagiKindPreset,
-): MagiPresetCandidate[] {
-    const prefRank = new Map<string, number>();
-    (preset.providerPreference ?? []).forEach((p, i) => prefRank.set(p, i));
-    const prefOf = (provider: string): number => prefRank.has(provider) ? prefRank.get(provider)! : Number.MAX_SAFE_INTEGER;
-    const fragile = new Set(preset.avoidConcurrentProviders ?? []);
-
-    // Provider scarcity: how many candidate pairs each provider appears in (rarer first).
-    const scarcity = new Map<string, number>();
-    for (const c of candidates) scarcity.set(c.provider, (scarcity.get(c.provider) ?? 0) + 1);
-
-    const sorted = [...candidates].sort((a, b) =>
-        (prefOf(a.provider) - prefOf(b.provider))
-        || ((scarcity.get(a.provider) ?? 0) - (scarcity.get(b.provider) ?? 0))
-        || (a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0)
-        || (a.provider < b.provider ? -1 : a.provider > b.provider ? 1 : 0),
-    );
-
-    const picked: MagiPresetCandidate[] = [];
-    const usedNodes = new Set<string>();
-    const usedProviders = new Set<string>();
-    const fragileNodes = new Set<string>(); // nodes that already carry a fragile-provider pick
-
-    // Greedy passes over the SAME sorted order. Pass 1 demands both axes fresh; pass 2
-    // relaxes to either axis fresh; pass 3 fills any remaining distinct pair. Each pass
-    // walks the stable sorted list so the result is deterministic.
-    const tryPick = (c: MagiPresetCandidate): void => {
-        if (picked.length >= preset.targetK) return;
-        if (fragile.has(c.provider) && fragileNodes.has(c.nodeId)) return; // ≤1 fragile per node
-        picked.push(c);
-        usedNodes.add(c.nodeId);
-        usedProviders.add(c.provider);
-        if (fragile.has(c.provider)) fragileNodes.add(c.nodeId);
-    };
-    const isPicked = (c: MagiPresetCandidate): boolean =>
-        picked.some(p => p.nodeId === c.nodeId && p.provider === c.provider);
-
-    // Pass 1: both new provider AND new node.
-    for (const c of sorted) {
-        if (picked.length >= preset.targetK) break;
-        if (isPicked(c)) continue;
-        if (!usedProviders.has(c.provider) && !usedNodes.has(c.nodeId)) tryPick(c);
-    }
-    // Pass 2: either new provider OR new node (extend diversity on whichever axis survives).
-    for (const c of sorted) {
-        if (picked.length >= preset.targetK) break;
-        if (isPicked(c)) continue;
-        if (!usedProviders.has(c.provider) || !usedNodes.has(c.nodeId)) tryPick(c);
-    }
-    // Pass 3: any remaining distinct pair (fills targetK when the mesh is small/coupled).
-    for (const c of sorted) {
-        if (picked.length >= preset.targetK) break;
-        if (isPicked(c)) continue;
-        tryPick(c);
-    }
-    return picked;
-}
-
-/**
- * Synthesize an ad-hoc MAGI panel for a bare `task_kind` (no pre-authored panel name /
- * members) by selecting the most diverse cross-provider (node × provider) pairs the LIVE
- * mesh supports. Each selected pair becomes a PINNED member { provider, nodeId, n }, so it
- * routes through buildMagiFanoutPlan's deterministic pinned path — no new resolution path
- * is introduced. The returned panel flows through the identical normalizeMagiPanel →
- * buildMagiFanoutPlan → synthesis pipeline as named/inline panels.
- *
- * Degrades gracefully (MAGI-KIND-PRESET §5): a single-provider mesh spreads the same
- * provider across distinct nodes (synthesis still gets distinct nodes); only when the live
- * mesh has exactly one (node, provider) pair does it return < minK members, which the
- * handler surfaces as magi_insufficient_providers (never silently N=1). Deterministic.
- */
-export function buildPresetMagiPanelForKind(
-    kind: MagiTaskKind,
-    nodes: LocalMeshNodeEntry[],
-    opts: { n?: number; referenceCommit?: string; maxReplicas?: number } = {},
-): MagiPanel {
-    const preset = MAGI_KIND_PRESETS[kind] ?? MAGI_KIND_PRESETS[DEFAULT_TASK_KIND];
-    const candidates = enumerateLivePresetCandidates(nodes);
-    const pairs = selectDiversePresetPairs(candidates, preset);
-    const members: MagiPanelMember[] = pairs.map(p => ({
-        provider: p.provider,
-        nodeId: p.nodeId,
-        ...(opts.n !== undefined ? { n: Math.max(1, Math.floor(opts.n)) } : { n: 1 }),
-    }));
-    // Reuse the inline normalizer so the preset panel is validated identically. An empty
-    // member list would throw invalid_magi_panel; the handler checks minK BEFORE relying on
-    // a valid panel, but guard here too so a 0-candidate mesh yields a clear panel object
-    // (the handler's minK gate produces the user-facing magi_insufficient_providers error).
-    if (members.length === 0) {
-        // Return an un-normalized empty panel shape; the caller's minK check rejects it.
-        return { members: [], description: `preset:${kind}` };
-    }
-    return buildInlineMagiPanel(members, { defaultN: opts.n, description: `preset:${kind}` });
-}
+// MAGI-KIND-PANEL: the former preset auto-synthesis (enumerateLivePresetCandidates /
+// selectDiversePresetPairs / buildPresetMagiPanelForKind) has been REMOVED. A bare
+// `task_kind` no longer synthesizes a diverse cross-provider panel from the live mesh;
+// it resolves the user's explicitly configured kind-panel binding (magiKindPanels) or
+// errors magi_kind_not_configured. See the useKindPanelPath branch in meshMagiReview.
 
 export async function meshMagiPanelList(
     ctx: MeshContext,
@@ -1510,15 +1354,16 @@ export async function meshMagiReview(
     const referenceCommit = resolveMagiReferenceCommit(ctx);
 
     // 1. Resolve the panel. Inline `members` take precedence (ad-hoc panel, not
-    // persisted); next, a bare `task_kind` with no panel name auto-synthesizes a
-    // maximally-diverse cross-provider PRESET panel from the live mesh; otherwise look
-    // up the named panel (falling back to "default").
+    // persisted); next, a bare `task_kind` with no panel name resolves the panel from
+    // the user's CONFIGURED kind-panel binding (magiKindPanels) — an unconfigured kind
+    // is a hard error, NEVER a synthesized fallback; otherwise look up the named panel
+    // (falling back to "default").
     const hasInlineMembers = Array.isArray(args.members) && args.members.length > 0;
     const explicitPanelName = readString(args.panel);
-    // The preset path fires ONLY when the caller passed an explicit task_kind, named no
-    // panel, and gave no inline members — i.e. `mesh_magi_review({question, task_kind})`.
+    // The kind-panel path fires ONLY when the caller passed an explicit task_kind, named
+    // no panel, and gave no inline members — i.e. `mesh_magi_review({question, task_kind})`.
     // A named/default panel or inline members always take their existing path unchanged.
-    const usePresetPath = !hasInlineMembers
+    const useKindPanelPath = !hasInlineMembers
         && !explicitPanelName
         && typeof explicitTaskKind === 'string'
         && (VALID_TASK_KINDS as readonly string[]).includes(explicitTaskKind.trim().toLowerCase());
@@ -1534,23 +1379,41 @@ export async function meshMagiReview(
                 success: false,
                 code: 'invalid_magi_panel',
                 error: e?.message || String(e),
-                hint: 'Inline members use the same shape as a configured panel: [{ provider (REQUIRED), nodeId?, capabilityTags?, n? }].',
+                hint: 'Inline members use the same shape as a configured panel: [{ provider (REQUIRED), nodeId?, model?, capabilityTags?, n? }].',
             });
         }
-    } else if (usePresetPath) {
-        // Auto-synthesize the preset panel from the live mesh — no pre-authored members.
+    } else if (useKindPanelPath) {
+        // MAGI-KIND-PANEL: resolve the panel from the user's configured kind→slots
+        // binding. There is NO hardcoded preset auto-synthesis fallback — an unconfigured
+        // kind is a hard error so the user must explicitly bind (machine + provider + model)
+        // slots in mesh settings. Slots that fail to resolve live (offline node / provider
+        // unavailable) are NOT downgraded to a synthetic panel: the plan's ≥2-target guard
+        // below produces a clear magi_insufficient_targets error instead.
         presetKind = normalizeMagiTaskKind(explicitTaskKind);
-        panelName = `(preset:${presetKind})`;
-        const preset = MAGI_KIND_PRESETS[presetKind];
-        const maxReplicas = Math.max(1, Math.floor(Number(args.n) > 0 ? Number(args.n) : MAGI_MAX_REPLICAS));
-        panel = buildPresetMagiPanelForKind(presetKind, ctx.mesh.nodes, { n: args.n, referenceCommit, maxReplicas });
-        if (panel.members.length < preset.minK) {
+        panelName = `(kind:${presetKind})`;
+        const slots = getMagiKindPanel(presetKind);
+        if (!slots || slots.length === 0) {
             return JSON.stringify({
                 success: false,
-                code: 'magi_insufficient_providers',
-                error: `task_kind '${presetKind}' auto-synthesis found only ${panel.members.length} independent (node, provider) target(s) in the live mesh; MAGI requires ≥${preset.minK} and never silently degrades to N=1.`,
-                resolvedMembers: panel.members,
-                hint: 'Bring a second provider or a second node online (mesh_status to inspect), or pass explicit inline members to mesh_magi_review.',
+                code: 'magi_kind_not_configured',
+                error: `이 task_kind에 대한 패널 슬롯이 메시 세팅에 없습니다. 세팅에서 (머신+프로바이더+모델) 슬롯을 1개 이상 채우세요 — task_kind '${presetKind}' has no configured kind-panel.`,
+                taskKind: presetKind,
+                configuredKinds: Object.keys(listMagiKindPanels()),
+                hint: 'Configure this kind in mesh settings (MagiKindPanelEditor), or set it programmatically with the magi_kind_panel_set daemon command, then retry. Alternatively pass explicit inline members or a named panel to mesh_magi_review.',
+            }, null, 2);
+        }
+        // The slots are already normalized at write time (setMagiKindPanel → normalizeMagiSlots),
+        // but re-normalize through the shared inline-panel builder so model/nodeId/n are validated
+        // identically to every other panel path and a bad stored slot surfaces a clear error.
+        try {
+            panel = buildInlineMagiPanel(slots, { defaultN: args.n, description: `kind:${presetKind}` });
+        } catch (e: any) {
+            return JSON.stringify({
+                success: false,
+                code: 'invalid_magi_kind_panel',
+                error: `configured kind-panel for '${presetKind}' is invalid: ${e?.message || String(e)}`,
+                taskKind: presetKind,
+                hint: 'Re-save the kind-panel slots in mesh settings — each slot needs a provider; nodeId / model are optional.',
             }, null, 2);
         }
     } else {
@@ -1628,6 +1491,7 @@ export async function meshMagiReview(
                 missionId: mission.id,
                 consensusGroupId,
                 ...(replica.targetNodeId ? { targetNodeId: replica.targetNodeId } : {}),
+                ...(replica.model ? { model: replica.model } : {}),
                 ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
             });
             replicaRecords.push({ taskId: task.id, provider: replica.provider, targetNodeId: replica.targetNodeId, requiredTags: replica.requiredTags });
