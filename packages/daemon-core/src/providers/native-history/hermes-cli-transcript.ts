@@ -70,10 +70,17 @@ function openDb(): any | null {
 }
 
 function loadMessagesForSession(db: any, sessionId: string): NativeHistoryMessage[] {
+    // Assistant turns whose finish_reason='tool_calls' persist an EMPTY
+    // `content` — their payload lives in the `tool_calls` column. Filtering on
+    // `content != ''` alone drops those rows, so a turn whose terminal message
+    // is a tool call surfaces zero assistant bubbles. Accept a row when either
+    // `content` OR `tool_calls` is non-empty, and project `tool_calls` into the
+    // content slot when `content` is empty so the bubble still carries text.
     const rows: any[] = db.prepare(
-        `SELECT id, role, content, timestamp
+        `SELECT id, role, COALESCE(NULLIF(content, ''), tool_calls) AS content, timestamp
          FROM messages
-         WHERE session_id = ? AND content IS NOT NULL AND content != ''
+         WHERE session_id = ?
+           AND ((content IS NOT NULL AND content != '') OR (tool_calls IS NOT NULL AND tool_calls != ''))
          ORDER BY timestamp ASC, id ASC`,
     ).all(sessionId);
     const out: NativeHistoryMessage[] = [];
@@ -115,10 +122,16 @@ export function readSession(sessionPath: string, requestedSessionId?: string): N
                 sessionId = pinned;
             } else {
                 // No bound id yet (discovery): pick the newest source='cli'
-                // session that has at least one persisted message.
+                // session that has at least one persisted message. Use an
+                // EXISTS check against `messages` rather than the denormalized
+                // `message_count` column — a freshly-started session already
+                // has message rows while `message_count` (DEFAULT 0) can still
+                // lag at 0, and the old predicate excluded exactly that
+                // just-created session, resolving to nothing.
                 const row: any = db.prepare(
                     `SELECT id, started_at FROM sessions
-                     WHERE source = 'cli' AND message_count > 0
+                     WHERE source = 'cli'
+                       AND EXISTS (SELECT 1 FROM messages m WHERE m.session_id = sessions.id)
                      ORDER BY started_at DESC LIMIT 1`,
                 ).get();
                 if (!row) return null;
@@ -185,7 +198,8 @@ export async function listSessions(_watchPath: string): Promise<NativeHistorySes
             const rows: any[] = db.prepare(
                 `SELECT id, started_at, ended_at, message_count, title
                  FROM sessions
-                 WHERE source = 'cli' AND message_count > 0
+                 WHERE source = 'cli'
+                   AND EXISTS (SELECT 1 FROM messages m WHERE m.session_id = sessions.id)
                  ORDER BY started_at DESC LIMIT 100`,
             ).all();
             const mtime = statMtimeMs(HERMES_STATE_DB);
