@@ -286,6 +286,10 @@ export class DaemonCommandRouter {
      *  Spans separate mesh_status/get_mesh calls so the dashboard auto-retry
      *  loop cannot storm a slow peer with back-to-back refreshUpstream probes. */
     private meshGitProbeCache = new MeshGitProbeCache(MESH_DIRECT_PROBE_REUSE_MS);
+    /** Meshes with a background SWR freshen (async mesh_status refresh) already in
+     *  flight — so a burst of interactive detail-opens serves the cached snapshot
+     *  and coalesces onto ONE background refresh instead of storming the peers. */
+    private swrRefreshInFlight = new Set<string>();
     /** In-memory async Refinery jobs keyed by meshId:nodeId to reject/return duplicate in-flight requests. */
     private runningRefineJobs = new Map<string, MeshRefineJobHandle>();
     /** Terminal async Refinery jobs preserve a clear answer after the worktree node has been removed. */
@@ -403,13 +407,25 @@ export class DaemonCommandRouter {
         };
     }
 
-    private getCachedAggregateMeshStatus(meshId: string, mesh?: any, options?: { requireDirectPeerTruth?: boolean }): any | null {
+    private getCachedAggregateMeshStatus(
+        meshId: string,
+        mesh?: any,
+        options?: { requireDirectPeerTruth?: boolean; allowStalePending?: boolean },
+    ): any | null {
         const cached = this.aggregateMeshStatusCache.get(meshId);
         if (!cached?.snapshot || cached.snapshot.success !== true || !Array.isArray(cached.snapshot.nodes)) return null;
+        // Genuine invalidation still forces truth: a queue mutation bumps the
+        // revision, so a stale-revision snapshot is never served (even under the
+        // SWR allowStalePending path below).
         if (cached.queueRevision !== getMeshQueueRevision(meshId)) return null;
         let snapshot = this.cloneJsonValue(cached.snapshot);
         snapshot = this.hydrateCachedAggregateMeshStatusFromInline(snapshot, mesh, options);
-        if (shouldRefreshStalePendingAggregate(snapshot, options)) return null;
+        // SWR: allowStalePending lets the interactive detail-open serve a snapshot
+        // that still has pending peer-git nodes (would otherwise miss here) so the
+        // graph paints instantly; the caller fires a background freshen. The
+        // queueRevision guard above is NOT relaxed — only the pending-git freshness
+        // gate is, so a genuine queue/identity mutation still forces a live rebuild.
+        if (!options?.allowStalePending && shouldRefreshStalePendingAggregate(snapshot, options)) return null;
         const ageMs = Math.max(0, Date.now() - cached.builtAt);
         const sourceOfTruth = snapshot.sourceOfTruth && typeof snapshot.sourceOfTruth === 'object'
             ? snapshot.sourceOfTruth
@@ -677,6 +693,7 @@ export class DaemonCommandRouter {
             rememberAggregateMeshStatus: this.rememberAggregateMeshStatus.bind(this),
             execute: this.execute.bind(this),
             aggregateMeshStatusCache: this.aggregateMeshStatusCache,
+            swrRefreshInFlight: this.swrRefreshInFlight,
             runningRefineJobs: this.runningRefineJobs,
             inlineMeshCache: this.inlineMeshCache,
             meshGitProbeCache: this.meshGitProbeCache,

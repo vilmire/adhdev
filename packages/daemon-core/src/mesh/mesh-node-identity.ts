@@ -1309,6 +1309,28 @@ export class MeshGitProbeCache {
     }
 
     /**
+     * Local (same-machine) git_status dedup. The bootstrap direct-truth hydrate
+     * and the per-node render loop both call getGitRepoStatus(refreshUpstream:true)
+     * for the same local workspace within one mesh_status call. Each such probe
+     * fans out ~13-15 git subprocesses, and because the two passes are separated by
+     * the render/hydrate work of every OTHER node they routinely straddle the
+     * getGitRepoStatus 1.5s TTL, so the second pass re-shells the whole ~14-process
+     * collection. Routing both through this cache (namespaced under a reserved
+     * daemon id so it never collides with a remote-peer key) collapses them to one
+     * collection per workspace per request, and reuses it across the reuse window
+     * so the dashboard auto-retry loop can't restart a fresh local probe seconds
+     * apart either.
+     */
+    private static readonly LOCAL_PROBE_DAEMON_ID = '__local_git__';
+
+    async probeLocal(
+        workspace: string,
+        probe: () => Promise<Record<string, unknown> | null>,
+    ): Promise<Record<string, unknown> | null> {
+        return this.probe(MeshGitProbeCache.LOCAL_PROBE_DAEMON_ID, workspace, probe);
+    }
+
+    /**
      * Run `probe` for this peer, but reuse a fresh recent result or an in-flight
      * probe for the same key when one is available. `probe` is only invoked when
      * neither gate is satisfied.
@@ -1551,7 +1573,25 @@ export async function hydrateInlineMeshDirectTruth(args: {
     const unavailableNodeIds: string[] = [];
     const deadNodeIds: string[] = [];
 
-    for (const [nodeIndex, node] of nodes.entries()) {
+    // Each node's classification (local git probe, standing truth, or the remote
+    // P2P fan-out) is independent, so probing them serially stacked one slow
+    // (often TURN-relayed) peer's latency onto every other node — the 3×25s serial
+    // stall. Classify all nodes concurrently via Promise.allSettled; each node has
+    // its own bounded per-peer timeout + definitively-down fast-fail inside
+    // probeRemoteMeshGitStatusWithRetry, so a hung peer degrades to `unavailable`
+    // for THAT node only and never blocks the aggregate. The counters and
+    // unavailable/dead node lists are folded from the settled results afterward so
+    // no shared mutable state is touched concurrently.
+    type NodeTruthResult =
+        | { kind: 'dead'; nodeId: string }
+        | { kind: 'unavailable'; nodeId: string; attempted?: boolean }
+        | { kind: 'local' }
+        | { kind: 'standing' }
+        | { kind: 'peerConfirmed' }
+        | { kind: 'peerUnavailable'; nodeId: string }
+        | { kind: 'skip' };
+
+    const classifyNode = async (nodeIndex: number, node: any): Promise<NodeTruthResult> => {
         const nodeId = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
         const workspace = readStringValue(node?.workspace);
         const daemonId = readStringValue(node?.daemonId);
@@ -1573,23 +1613,27 @@ export async function hydrateInlineMeshDirectTruth(args: {
             daemonId && (daemonIdsEquivalent(daemonId, args.localMachineId) || daemonIdsEquivalent(daemonId, args.statusInstanceId)),
         );
         if ((isSelfNode || isSelfDaemonNode) && isDeadLocalWorktreeNode(node)) {
-            deadNodeIds.push(nodeId);
-            continue;
+            return { kind: 'dead', nodeId };
         }
 
         if (!workspace) {
-            if (!isSelfNode && daemonId) unavailableNodeIds.push(nodeId);
-            continue;
+            return (!isSelfNode && daemonId) ? { kind: 'unavailable', nodeId } : { kind: 'skip' };
         }
 
         if (fs.existsSync(workspace)) {
             try {
-                const localGit = await getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true });
+                // Route the local probe through the shared cache so the per-node
+                // render loop's getGitRepoStatus for the same workspace reuses this
+                // exact result instead of re-shelling ~14 git processes when the two
+                // passes straddle the getGitRepoStatus 1.5s TTL.
+                const runLocalProbe = () => getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true }) as unknown as Promise<Record<string, unknown> | null>;
+                const localGit = args.probeCache
+                    ? await args.probeCache.probeLocal(workspace, runLocalProbe)
+                    : await runLocalProbe();
                 if (localGit?.isGitRepo) {
                     const reporter = recordInlineMeshDirectGitTruth(node, localGit as unknown as Record<string, unknown>, 'selected_coordinator_local_git');
                     persistNodeReporterPlatform(args.meshSource, args.mesh, nodeId, reporter);
-                    localConfirmedCount += 1;
-                    continue;
+                    return { kind: 'local' };
                 }
             } catch {
                 // Fall through to remote classification.
@@ -1603,8 +1647,7 @@ export async function hydrateInlineMeshDirectTruth(args: {
         // block the bootstrap.
         const standingGit = buildInlineMeshTransitGitStatus(node);
         if (standingGit) {
-            standingEvidenceCount += 1;
-            continue;
+            return { kind: 'standing' };
         }
 
         if (!args.probeRemotePeers) {
@@ -1612,15 +1655,13 @@ export async function hydrateInlineMeshDirectTruth(args: {
             // pending (the per-node loop marks it gitProbePending and the graph
             // shows setup inventory for it). It is NOT unavailable — the graph
             // must still render. An explicit refresh will fan out and freshen it.
-            continue;
+            return { kind: 'skip' };
         }
 
         if (!daemonId || !args.dispatchMeshCommand) {
-            if (!isSelfNode) unavailableNodeIds.push(nodeId);
-            continue;
+            return !isSelfNode ? { kind: 'unavailable', nodeId } : { kind: 'skip' };
         }
 
-        peerAttemptedCount += 1;
         // Bounded retry, gated on the peer staying `connected`: a slow
         // (TURN-relayed) peer that just exceeds one probe window is recovered
         // instead of being hard-failed. The connection is re-checked before each
@@ -1642,8 +1683,7 @@ export async function hydrateInlineMeshDirectTruth(args: {
         if (remoteGit) {
             const reporter = recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
             persistNodeReporterPlatform(args.meshSource, args.mesh, nodeId, reporter);
-            peerConfirmedCount += 1;
-            continue;
+            return { kind: 'peerConfirmed' };
         }
 
         // Invariant: a connected peer that still holds standing git truth is
@@ -1652,8 +1692,56 @@ export async function hydrateInlineMeshDirectTruth(args: {
         // not currently connected, or it is connected but every bounded probe
         // failed — that is the genuine "connected, no truth, retries exhausted"
         // case that drives the explicit-refresh hard-fail.
-        unavailableNodeIds.push(nodeId);
-    }
+        return { kind: 'peerUnavailable', nodeId };
+    };
+
+    const nodeEntries = [...nodes.entries()];
+    const settledResults = await Promise.allSettled(
+        nodeEntries.map(([nodeIndex, node]) => classifyNode(nodeIndex, node)),
+    );
+    settledResults.forEach((settled, i) => {
+        const [nodeIndex, node] = nodeEntries[i];
+        // A classifier should never reject (every probe is caught internally), but
+        // if one does, degrade that node to `unavailable` when it is a remote peer —
+        // never silently drop it, never fail the whole aggregate.
+        const result: NodeTruthResult = settled.status === 'fulfilled'
+            ? settled.value
+            : (() => {
+                const nodeId = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
+                const daemonId = readStringValue(node?.daemonId);
+                const isSelfNode = Boolean(
+                    nodeId && selectedCoordinatorNodeId && nodeId === selectedCoordinatorNodeId,
+                ) || Boolean(
+                    daemonId && (daemonIdsEquivalent(daemonId, args.localMachineId) || daemonIdsEquivalent(daemonId, args.statusInstanceId)),
+                );
+                return (!isSelfNode && daemonId) ? { kind: 'unavailable', nodeId } as NodeTruthResult : { kind: 'skip' } as NodeTruthResult;
+            })();
+        switch (result.kind) {
+            case 'dead':
+                deadNodeIds.push(result.nodeId);
+                break;
+            case 'unavailable':
+                unavailableNodeIds.push(result.nodeId);
+                break;
+            case 'local':
+                localConfirmedCount += 1;
+                break;
+            case 'standing':
+                standingEvidenceCount += 1;
+                break;
+            case 'peerConfirmed':
+                peerAttemptedCount += 1;
+                peerConfirmedCount += 1;
+                break;
+            case 'peerUnavailable':
+                peerAttemptedCount += 1;
+                unavailableNodeIds.push(result.nodeId);
+                break;
+            case 'skip':
+            default:
+                break;
+        }
+    });
 
     return {
         directEvidenceCount: localConfirmedCount + peerConfirmedCount + standingEvidenceCount,

@@ -61,6 +61,11 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
     mesh_status: async (ctx: HighFamilyContext, args: any) => {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 if (!meshId) return { success: false, error: 'meshId required' };
+                // Latency telemetry: stamp handler entry so every return path can
+                // report durationMs. Makes the detail-open cost measurable in the
+                // repo-mesh-status debug log (cache hit ≈ single-digit ms; a full
+                // live rebuild is the ~seconds path this change is reducing).
+                const startedAtMs = Date.now();
                 try {
                     const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                     const mesh = meshRecord?.mesh;
@@ -94,9 +99,50 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                 meshId,
                                 command: 'mesh_status',
                                 refreshRequested,
+                                durationMs: Date.now() - startedAtMs,
                                 summary: summarizeRepoMeshStatusDebug(cachedStatus),
                             });
                             return cachedStatus;
+                        }
+                        // SWR stale-serve: the strict serve above missed only because
+                        // some node still has a pending peer-git probe (the
+                        // shouldRefreshStalePendingAggregate gate). Rather than block
+                        // this interactive detail-open on a full synchronous live
+                        // rebuild, serve the held (slightly stale) snapshot instantly
+                        // and kick ONE coalesced background freshen whose result
+                        // repopulates the cache for the next poll/subscription push.
+                        // allowStalePending relaxes ONLY the pending-git freshness gate;
+                        // getCachedAggregateMeshStatus still enforces the queueRevision
+                        // guard, so a genuine queue/identity mutation is never stale-served.
+                        const staleStatus = ctx.getCachedAggregateMeshStatus(meshId, mesh, {
+                            requireDirectPeerTruth: args?.requireDirectPeerTruth === true,
+                            allowStalePending: true,
+                        });
+                        if (staleStatus) {
+                            if (!ctx.swrRefreshInFlight.has(meshId)) {
+                                ctx.swrRefreshInFlight.add(meshId);
+                                // Fire-and-forget: a full refresh (peer fan-out) that
+                                // rewrites the aggregate cache. Errors are swallowed —
+                                // the stale snapshot was already returned to the caller.
+                                void Promise.resolve()
+                                    .then(() => ctx.execute('mesh_status', {
+                                        meshId,
+                                        inlineMesh: args?.inlineMesh,
+                                        coordinatorDaemonId: args?.coordinatorDaemonId,
+                                        requireDirectPeerTruth: args?.requireDirectPeerTruth === true,
+                                        refresh: true,
+                                    }, 'mesh_status_swr_freshen'))
+                                    .catch(() => {})
+                                    .finally(() => { ctx.swrRefreshInFlight.delete(meshId); });
+                            }
+                            logRepoMeshStatusDebug('return_stale_swr', {
+                                meshId,
+                                command: 'mesh_status',
+                                refreshRequested,
+                                durationMs: Date.now() - startedAtMs,
+                                summary: summarizeRepoMeshStatusDebug(staleStatus),
+                            });
+                            return staleStatus;
                         }
                     }
                     const refreshReason = refreshRequested
@@ -229,8 +275,15 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         ? selectedCoordinatorNodeId
                         : undefined;
                     const refreshedAt = new Date().toISOString();
-                    const nodeStatuses = [];
-                    for (const [nodeIndex, node] of (mesh.nodes || []).entries()) {
+                    // Per-node render is parallelized (Promise.allSettled below):
+                    // each node's git probe (local getGitRepoStatus or the remote
+                    // P2P fan-out) is independent, so serializing them stacked one
+                    // slow node's latency onto every other node. Each node has its
+                    // own bounded timeout; a rejected/timed-out node degrades to a
+                    // partial/last-known status for THAT node only and never rejects
+                    // the whole aggregate. Order is preserved by mapping over the
+                    // original entries() index and re-assembling in order.
+                    const renderMeshNode = async (nodeIndex: number, node: any): Promise<Record<string, unknown>> => {
                         const nodeId = normalizeMeshNodeId(node) ?? '';
                         const daemonId = readStringValue(node.daemonId);
                         const nodeMachineId = readMeshNodeMachineId(node as Record<string, unknown>);
@@ -425,19 +478,23 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                     )) {
                                         applyInlineMeshBranchConvergence(mesh, node, status);
                                         finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
-                                        nodeStatuses.push(status);
-                                        continue;
+                                        return status;
                                     }
                                     if (meshRecord?.source === 'inline_cache' && !isSelfNode) {
                                         applyInlineMeshBranchConvergence(mesh, node, status);
                                         finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
-                                        nodeStatuses.push(status);
-                                        continue;
+                                        return status;
                                     }
                                 }
                             } else {
                                 try {
-                                    const gitStatus = await getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true });
+                                    // Route through the shared per-request cache so this
+                                    // local probe reuses the bootstrap hydrate's probe for
+                                    // the same workspace (and vice versa) instead of
+                                    // re-shelling ~14 git processes across the 1.5s TTL.
+                                    const runLocalProbe = () => getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true }) as unknown as Promise<Record<string, unknown> | null>;
+                                    const gitStatus = (await meshGitProbeCache.probeLocal(workspace, runLocalProbe)) as any;
+                                    if (!gitStatus) throw new Error('local_git_probe_unavailable');
                                     status.git = gitStatus;
                                     status[MESH_NODE_LIVE_TRUTH_MARKER] = true;
                                     const reporter = recordInlineMeshDirectGitTruth(node, gitStatus as unknown as Record<string, unknown>, 'selected_coordinator_local_git');
@@ -459,8 +516,43 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         }
                         applyInlineMeshBranchConvergence(mesh, node, status);
                         finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
-                        nodeStatuses.push(status);
-                    }
+                        return status;
+                    };
+                    const meshNodeEntries = [...(mesh.nodes || []).entries()];
+                    const settledNodeStatuses = await Promise.allSettled(
+                        meshNodeEntries.map(([nodeIndex, node]) => renderMeshNode(nodeIndex, node)),
+                    );
+                    const nodeStatuses = settledNodeStatuses.map((settled, i) => {
+                        if (settled.status === 'fulfilled') return settled.value;
+                        // A per-node render should never reject (every git path is
+                        // caught internally), but if one does, degrade to a minimal
+                        // last-known/unknown entry for THAT node so a single failure
+                        // can't drop the whole aggregate. Best-effort recovery of the
+                        // node's cached inline truth, else an unknown-health stub.
+                        const [nodeIndex, node] = meshNodeEntries[i];
+                        const nodeId = normalizeMeshNodeId(node) ?? '';
+                        const daemonId = readStringValue(node.daemonId);
+                        const fallback: Record<string, unknown> = {
+                            nodeId,
+                            machineLabel: buildMeshNodeDisplayLabel(node as Record<string, unknown>, nodeId, readProviderPriorityFromPolicy(node.policy)),
+                            workspace: node.workspace,
+                            repoRoot: node.repoRoot,
+                            isLocalWorktree: node.isLocalWorktree,
+                            worktreeBranch: node.worktreeBranch,
+                            daemonId,
+                            machineId: readMeshNodeMachineId(node as Record<string, unknown>) || node.machineId,
+                            health: 'unknown',
+                            providers: node.providers || [],
+                            activeSessions: [],
+                            activeSessionDetails: [],
+                            launchReady: false,
+                            error: settled.reason instanceof Error ? settled.reason.message : 'node render failed',
+                        };
+                        applyCachedInlineMeshNodeStatus(fallback, node);
+                        applyInlineMeshBranchConvergence(mesh, node, fallback);
+                        finalizeMeshNodeStatus({ status: fallback, node, daemonId, isSelfNode: false, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
+                        return fallback;
+                    });
 
                     // (B3) Resolve the coordinator daemon scope for the peek.
                     // mesh_status is a read-only status query — it must not consume
@@ -620,6 +712,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         refreshReason,
                         meshSource: meshRecord.source,
                         directTruth,
+                        durationMs: Date.now() - startedAtMs,
                         summary: summarizeRepoMeshStatusDebug(returnedStatus),
                     });
                     return returnedStatus;

@@ -45,7 +45,7 @@ export interface HighFamilyContext {
     getCachedAggregateMeshStatus: (
         meshId: string,
         mesh?: any,
-        options?: { requireDirectPeerTruth?: boolean },
+        options?: { requireDirectPeerTruth?: boolean; allowStalePending?: boolean },
     ) => any | null;
 
     /** Bound `DaemonCommandRouter.rememberAggregateMeshStatus`. */
@@ -60,6 +60,10 @@ export interface HighFamilyContext {
 
     /** Router's aggregate-status memory cache (`.has()` probe in mesh_status). */
     aggregateMeshStatusCache: Map<string, { builtAt: number; snapshot: any; queueRevision: string }>;
+
+    /** Meshes with a background SWR freshen already in flight — coalesces the
+     *  async refresh a stale-serve interactive open kicks off. */
+    swrRefreshInFlight: Set<string>;
 
     /** Router's running-refine-job table (surfaced as activeRefineJobs in mesh_status). */
     runningRefineJobs: Map<string, MeshRefineJobHandle>;

@@ -2486,4 +2486,176 @@ describe('inline mesh node tombstone', () => {
       await cleanupTempDir(reborn.dir)
     }
   })
+
+  it('serves the held cached aggregate on a non-requireDirectPeerTruth detail-open even when a node is still gitProbePending (SWR: no forced live rebuild)', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-swr-plain-')
+    try {
+      // Remote node with online machineStatus but no held git truth and no
+      // dispatchMeshCommand wired → the render loop marks it gitProbePending.
+      const { router, sessionHostControl } = createRouter({})
+      const inlineMesh = {
+        id: 'mesh_swr_plain',
+        name: 'SWR Plain',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        coordinator: { preferredNodeId: 'node_local' },
+        policy: {},
+        nodes: [
+          { id: 'node_local', daemonId: 'daemon_local', machineLabel: 'Local', workspace: repoRoot, repoRoot, providers: ['hermes-cli'], policy: {} },
+          {
+            id: 'node_remote_pending',
+            daemonId: 'daemon_remote',
+            machineLabel: 'Remote',
+            workspace: '/Users/moltbot/does-not-exist-locally/repo',
+            repoRoot: '/Users/moltbot/does-not-exist-locally/repo',
+            machineStatus: 'online',
+            providers: [],
+            policy: {},
+          },
+        ],
+      }
+
+      // Cold cache miss → live build; remembers a snapshot whose remote node is
+      // gitProbePending (no held truth, no probe possible).
+      const first = await router.execute('mesh_status', {
+        meshId: 'mesh_swr_plain',
+        inlineMesh,
+        refresh: false,
+      }) as any
+      expect(first.success).toBe(true)
+      expect(first.sourceOfTruth.aggregateSnapshot).toMatchObject({ cached: false })
+      expect(first.nodes.find((n: any) => n.nodeId === 'node_remote_pending')?.gitProbePending).toBe(true)
+
+      sessionHostControl.listSessions.mockClear()
+
+      // Second identical plain (no requireDirectPeerTruth) detail-open must be
+      // served from the held cache — NOT forced into a fresh live rebuild — even
+      // though a node is still gitProbePending.
+      const second = await router.execute('mesh_status', {
+        meshId: 'mesh_swr_plain',
+        inlineMesh,
+        refresh: false,
+      }) as any
+      expect(second.success).toBe(true)
+      expect(second.sourceOfTruth.aggregateSnapshot).toMatchObject({
+        owner: 'coordinator_daemon_memory',
+        cached: true,
+        refreshReason: 'memory_cache_hit',
+      })
+      // A cache hit does not re-collect live session records.
+      expect(sessionHostControl.listSessions).not.toHaveBeenCalled()
+    } finally {
+      await cleanupTempDir(dir)
+    }
+  })
+
+  it('SWR stale-serves the cached aggregate to a requireDirectPeerTruth detail-open and coalesces one background freshen instead of a synchronous rebuild', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-swr-truth-')
+    try {
+      const { router, sessionHostControl } = createRouter({})
+      const inlineMesh = {
+        id: 'mesh_swr_truth',
+        name: 'SWR Truth',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        coordinator: { preferredNodeId: 'node_local' },
+        policy: {},
+        nodes: [
+          { id: 'node_local', daemonId: 'daemon_local', machineLabel: 'Local', workspace: repoRoot, repoRoot, providers: [], policy: {} },
+          {
+            id: 'node_remote_pending',
+            daemonId: 'daemon_remote',
+            machineLabel: 'Remote',
+            workspace: '/Users/moltbot/does-not-exist-locally/repo',
+            repoRoot: '/Users/moltbot/does-not-exist-locally/repo',
+            machineStatus: 'online',
+            providers: [],
+            policy: {},
+          },
+        ],
+      }
+
+      // Seed the cache with a snapshot that still has a gitProbePending node.
+      const seed = await router.execute('mesh_status', {
+        meshId: 'mesh_swr_truth',
+        inlineMesh,
+        refresh: false,
+      }) as any
+      expect(seed.success).toBe(true)
+      expect(seed.nodes.find((n: any) => n.nodeId === 'node_remote_pending')?.gitProbePending).toBe(true)
+
+      sessionHostControl.listSessions.mockClear()
+
+      // requireDirectPeerTruth:true + refresh:false. Pre-change this MISSED the
+      // cache (shouldRefreshStalePendingAggregate) and forced a full synchronous
+      // live rebuild. Now it stale-serves the held snapshot immediately and kicks
+      // ONE background freshen.
+      const stale = await router.execute('mesh_status', {
+        meshId: 'mesh_swr_truth',
+        inlineMesh,
+        requireDirectPeerTruth: true,
+        refresh: false,
+      }) as any
+      expect(stale.success).toBe(true)
+      expect(stale.sourceOfTruth.aggregateSnapshot).toMatchObject({
+        owner: 'coordinator_daemon_memory',
+        cached: true,
+      })
+
+      // Let the fire-and-forget background freshen run. It rebuilds live (calls
+      // listSessions). It must fire exactly once (coalesced), not per-call.
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(1)
+    } finally {
+      await cleanupTempDir(dir)
+    }
+  })
+
+  it('parallel local per-node probe degrades a single broken-workspace node without failing the aggregate', async () => {
+    const good = await createTempGitRepo('mesh-status-parallel-good-')
+    const alsoGood = await createTempGitRepo('mesh-status-parallel-good2-')
+    try {
+      const { router } = createRouter({})
+      // node_broken points at a path that exists as a directory but is NOT a git
+      // repo, so its local getGitRepoStatus resolves isGitRepo:false → that node
+      // degrades to 'degraded' health while the two real repos stay healthy.
+      const brokenWorkspace = good.dir // the temp dir itself is not a git repo (repo is under dir/repo)
+      const inlineMesh = {
+        id: 'mesh_parallel',
+        name: 'Parallel',
+        repoIdentity: 'github.com/vilmire/adhdev',
+        defaultBranch: 'main',
+        coordinator: { preferredNodeId: 'node_good' },
+        policy: {},
+        nodes: [
+          { id: 'node_good', daemonId: 'daemon_good', machineLabel: 'Good', workspace: good.repoRoot, repoRoot: good.repoRoot, providers: [], policy: {} },
+          { id: 'node_broken', daemonId: 'daemon_broken', machineLabel: 'Broken', workspace: brokenWorkspace, repoRoot: brokenWorkspace, providers: [], policy: {} },
+          { id: 'node_good2', daemonId: 'daemon_good2', machineLabel: 'Good2', workspace: alsoGood.repoRoot, repoRoot: alsoGood.repoRoot, providers: [], policy: {} },
+        ],
+      }
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh_parallel',
+        inlineMesh,
+        refresh: false,
+      }) as any
+
+      // The whole aggregate never fails just because one node's probe degraded.
+      expect(result.success).toBe(true)
+      expect(result.nodes).toHaveLength(3)
+      const good1 = result.nodes.find((n: any) => n.nodeId === 'node_good')
+      const good2 = result.nodes.find((n: any) => n.nodeId === 'node_good2')
+      const broken = result.nodes.find((n: any) => n.nodeId === 'node_broken')
+      expect(good1?.git?.isGitRepo).toBe(true)
+      expect(good2?.git?.isGitRepo).toBe(true)
+      // The broken node is present with degraded (non-online) health — degraded
+      // for THAT node only, not dropped and not fatal to the aggregate.
+      expect(broken).toBeDefined()
+      expect(broken?.git?.isGitRepo).toBe(false)
+      expect(broken?.health).toBe('degraded')
+    } finally {
+      await cleanupTempDir(good.dir)
+      await cleanupTempDir(alsoGood.dir)
+    }
+  })
 })
