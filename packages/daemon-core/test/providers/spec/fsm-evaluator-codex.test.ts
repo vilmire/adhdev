@@ -60,10 +60,20 @@ function makeScreenWithModal(bodyContent: string[], modalContent: string[]): str
     return lines.join('\n');
 }
 
-// Codex idle screen
+// Codex idle screen (no composer prompt rendered yet — e.g. banner only)
 const idleScreen = makeScreen([
     '',
     '  codex v0.9.1 · gpt-4o · ~/Work/myproject',
+    '',
+]);
+
+// Codex idle screen with the composer prompt line rendered (`› ` at line start).
+// This is the content anchor that gates the startup-grace → idle fast path.
+const composerReadyScreen = makeScreen([
+    '',
+    '  codex v0.9.1 · gpt-4o · ~/Work/myproject',
+    '',
+    '› ',
     '',
 ]);
 
@@ -127,16 +137,49 @@ describe('codex-cli v4 FSM', () => {
         expect(spec.id).toBe('codex-cli');
     });
 
-    it('stays in starting before 5s grace', () => {
+    // Startup-grace is now dual-safety: content-anchor (composer prompt rendered
+    // + screen quiescent) fires early, else an 8000ms blind fallback. The blind
+    // 5000ms timer was too short for codex's real startup (directory-trust /
+    // "Starting MCP servers" / composer first-paint) and flushed pendingSends
+    // while the composer was still redrawing — codex's clear/repaint then
+    // swallowed the head (~200 chars) of the paste. See RCA.
+
+    it('stays in starting before content anchor and before 8s fallback', () => {
         const row = idleScreen.split('\n').length - 1;
+        // No composer prompt rendered, only 2s elapsed → neither branch fires.
         const ev = evaluateFsm(spec, 'starting', idleScreen, { row, col: 2 }, undefined, clk(2000, 0));
         expect(ev.fired).toBeNull();
     });
 
-    it('starting → idle after 5s grace', () => {
+    it('does NOT idle at 6s when the composer prompt has not rendered (old 5s timer removed)', () => {
         const row = idleScreen.split('\n').length - 1;
+        // 6s elapsed but < 8s fallback AND no composer anchor → still starting.
         const ev = evaluateFsm(spec, 'starting', idleScreen, { row, col: 2 }, undefined, clk(6000, 0));
+        expect(ev.fired).toBeNull();
+    });
+
+    it('starting → idle via 8s blind fallback when composer never anchors', () => {
+        const row = idleScreen.split('\n').length - 1;
+        const ev = evaluateFsm(spec, 'starting', idleScreen, { row, col: 2 }, undefined, clk(8500, 0));
         expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('starting → idle early (before 8s) once the composer prompt renders and screen is quiescent', () => {
+        const row = composerReadyScreen.split('\n').length - 1;
+        // Composer `› ` present, not MCP-initing, not Working, and the region has
+        // been stable ≥1500ms → content anchor fires well before the 8s fallback.
+        const ev = evaluateFsm(spec, 'starting', composerReadyScreen, { row, col: 2 }, undefined, clk(2000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('composer rendered but NOT yet stable → stays in starting (no premature flush)', () => {
+        const row = composerReadyScreen.split('\n').length - 1;
+        // Region changed 200ms ago (< stable_ms 1500) → still redrawing, hold.
+        const ev = evaluateFsm(
+            spec, 'starting', composerReadyScreen, { row, col: 2 }, undefined,
+            clk(1000, 0, [[-1, 800], [4, 800]]),
+        );
+        expect(ev.fired).toBeNull();
     });
 
     it('idle → busy on Working ( spinner in body', () => {
