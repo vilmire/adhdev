@@ -10,7 +10,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { randomBytes, randomUUID } from 'crypto';
 import { shortHash } from '../system/hash.js';
-import { getConfigDir } from './config.js';
+import { getConfigDir, loadConfig } from './config.js';
 import type {
     LocalMeshConfig,
     LocalMeshEntry,
@@ -492,6 +492,11 @@ export interface AddNodeOptions {
     clonedFromNodeId?: string;
     worktreeBootstrap?: LocalMeshNodeEntry['worktreeBootstrap'];
     role?: RepoMeshDaemonRole;
+    /** Owning daemon's machine nickname. Defaults to this daemon's local
+     *  config.machineNickname when omitted — a node is always added by (and on)
+     *  the daemon that owns its workspace (self/base node or a local worktree
+     *  clone), so the local config is the correct source. */
+    machineNickname?: string;
 }
 
 export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntry | undefined {
@@ -508,12 +513,27 @@ export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntr
         throw new Error('This workspace is already in the mesh');
     }
 
+    // A node is always added by the daemon that owns its workspace (the self/base
+    // node, or a local worktree clone spawned from this daemon), so this daemon's
+    // config.machineNickname is the correct owner nickname. Explicit opt wins.
+    const machineNickname = (() => {
+        const explicit = typeof opts.machineNickname === 'string' ? opts.machineNickname.trim() : '';
+        if (explicit) return explicit;
+        try {
+            const local = loadConfig().machineNickname;
+            return typeof local === 'string' && local.trim() ? local.trim() : undefined;
+        } catch {
+            return undefined;
+        }
+    })();
+
     const node: LocalMeshNodeEntry = {
         id: `node_${randomUUID().replace(/-/g, '')}`,
         workspace: opts.workspace.trim(),
         repoRoot: opts.repoRoot,
         daemonId: opts.daemonId,
         machineId: opts.machineId,
+        ...(machineNickname ? { machineNickname } : {}),
         capabilities: normalizeCapabilityTags(opts.capabilities),
         userOverrides: opts.userOverrides || {},
         policy: opts.policy || {},
@@ -559,6 +579,10 @@ export function updateNode(
          *  operator intent) so capability-tag os=/arch= self-heals across loads. */
         reportedPlatform?: string;
         reportedArch?: string;
+        /** Owning daemon's self-reported machine nickname, carried on the
+         *  git_status envelope. Persisted so the friendly label survives across
+         *  coordinator restarts (mirrors reportedPlatform/reportedArch). */
+        reportedMachineNickname?: string;
     },
 ): LocalMeshNodeEntry | undefined {
     const config = loadMeshConfig();
@@ -571,6 +595,7 @@ export function updateNode(
     if (opts.userOverrides) node.userOverrides = { ...node.userOverrides, ...opts.userOverrides };
     if (opts.reportedPlatform && opts.reportedPlatform.trim()) node.reportedPlatform = opts.reportedPlatform.trim();
     if (opts.reportedArch && opts.reportedArch.trim()) node.reportedArch = opts.reportedArch.trim();
+    if (opts.reportedMachineNickname && opts.reportedMachineNickname.trim()) node.machineNickname = opts.reportedMachineNickname.trim();
     if (opts.policy) node.policy = { ...node.policy, ...opts.policy };
     if (opts.worktreeBootstrap) node.worktreeBootstrap = opts.worktreeBootstrap;
     if (Object.prototype.hasOwnProperty.call(opts, 'systemPrompt')) {

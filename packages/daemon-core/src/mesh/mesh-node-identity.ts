@@ -319,9 +319,9 @@ export function recordInlineMeshDirectGitTruth(
     node: any,
     git: Record<string, unknown>,
     source: 'selected_coordinator_local_git' | 'selected_coordinator_mesh_p2p_git',
-): { reporterPlatform: string | null; reporterArch: string | null } {
+): { reporterPlatform: string | null; reporterArch: string | null; reporterMachineNickname: string | null } {
     if (!node || typeof node !== 'object' || Array.isArray(node)) {
-        return { reporterPlatform: null, reporterArch: null };
+        return { reporterPlatform: null, reporterArch: null, reporterMachineNickname: null };
     }
     const checkedAt = readNumberValue(git.lastCheckedAt) ?? Date.now();
     const updatedAt = new Date(checkedAt).toISOString();
@@ -359,7 +359,14 @@ export function recordInlineMeshDirectGitTruth(
     // for an inline/cache mesh this keeps the runtime object self-consistent.
     if (reporterPlatform) node.reportedPlatform = reporterPlatform;
     if (reporterArch) node.reportedArch = reporterArch;
-    return { reporterPlatform, reporterArch };
+    // Machine nickname: only a remote member self-reports it (reporterMachineNickname
+    // rides the git_status envelope). For a local_source probe the workspace lives on
+    // THIS machine, but the self/base node already carries the local config nickname
+    // (addNode stamps it), so we only stamp from an explicit report here — never
+    // overwrite an existing nickname with an empty value.
+    const reporterMachineNickname = readStringValue(git.reporterMachineNickname) ?? null;
+    if (reporterMachineNickname) node.machineNickname = reporterMachineNickname;
+    return { reporterPlatform, reporterArch, reporterMachineNickname };
 }
 
 /**
@@ -396,16 +403,17 @@ export function persistNodeReporterPlatform(
     meshSource: 'inline_cache' | 'inline_bootstrap' | 'local_config',
     mesh: any,
     nodeId: string | undefined,
-    reporter: { reporterPlatform: string | null; reporterArch: string | null },
+    reporter: { reporterPlatform: string | null; reporterArch: string | null; reporterMachineNickname?: string | null },
 ): void {
     if (meshSource !== 'local_config') return;
     const meshId = readStringValue(mesh?.id);
     if (!meshId || !nodeId) return;
     const reportedPlatform = reporter.reporterPlatform ?? undefined;
     const reportedArch = reporter.reporterArch ?? undefined;
-    if (!reportedPlatform && !reportedArch) return;
+    const reportedMachineNickname = reporter.reporterMachineNickname ?? undefined;
+    if (!reportedPlatform && !reportedArch && !reportedMachineNickname) return;
     void import('../config/mesh-config.js')
-        .then(({ updateNode }) => updateNode(meshId, nodeId, { reportedPlatform, reportedArch }))
+        .then(({ updateNode }) => updateNode(meshId, nodeId, { reportedPlatform, reportedArch, reportedMachineNickname }))
         .catch(() => { /* best-effort self-heal; never block status assembly */ });
 }
 
@@ -1409,9 +1417,11 @@ async function probeRemoteMeshGitStatus(args: {
     // persist them to node.userOverrides without touching the git status shape.
     const reporterPlatform = readStringValue(remoteResult?.reporterPlatform);
     const reporterArch = readStringValue(remoteResult?.reporterArch);
+    const reporterMachineNickname = readStringValue(remoteResult?.reporterMachineNickname);
     const git = remoteGit as Record<string, unknown>;
     if (reporterPlatform) git.reporterPlatform = reporterPlatform;
     if (reporterArch) git.reporterArch = reporterArch;
+    if (reporterMachineNickname) git.reporterMachineNickname = reporterMachineNickname;
     return git;
 }
 

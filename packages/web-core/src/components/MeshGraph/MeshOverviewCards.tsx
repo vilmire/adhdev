@@ -234,6 +234,15 @@ export default function MeshOverviewCards({
     const [detail, setDetail] = useState<DetailSelection | null>(null)
     const closeDetail = useCallback(() => setDetail(null), [])
 
+    // nodeId → friendly machine label (nickname → workspace·host·provider), so
+    // ledger rows show the human-readable machine instead of a raw node_/daemon_ id.
+    // Falls back to the raw id when the node isn't in the current snapshot.
+    const resolveNodeLabel = useCallback((nodeId: string | undefined | null): string => {
+        if (!nodeId) return ''
+        const node = canonicalStatus.nodes.find(n => n.nodeId === nodeId)
+        return node?.machineLabel || nodeId
+    }, [canonicalStatus.nodes])
+
     const sessionEntries = useMemo(() => {
         const entries: { node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }[] = []
         for (const node of canonicalStatus.nodes) {
@@ -264,6 +273,7 @@ export default function MeshOverviewCards({
                     meshTheme={meshTheme}
                     ledgerSummary={ledgerSummary}
                     entries={ledgerEntries}
+                    resolveNodeLabel={resolveNodeLabel}
                     onSelect={entry => setDetail({ kind: 'ledger', entry })}
                 />
                 <QueueCard
@@ -293,6 +303,7 @@ export default function MeshOverviewCards({
                     daemonId={daemonId}
                     meshId={meshId ?? canonicalStatus.meshId ?? null}
                     sendDaemonCommand={sendDaemonCommand}
+                    resolveNodeLabel={resolveNodeLabel}
                 />
             )}
         </div>
@@ -430,10 +441,11 @@ function detailTitle(detail: DetailSelection): { kicker: string; title: string }
     }
 }
 
-function DetailModal({ meshTheme, detail, onClose, daemonId, meshId, sendDaemonCommand }: {
+function DetailModal({ meshTheme, detail, onClose, daemonId, meshId, sendDaemonCommand, resolveNodeLabel }: {
     meshTheme: MeshGraphTheme
     detail: DetailSelection
     onClose: () => void
+    resolveNodeLabel: (nodeId: string | undefined | null) => string
 } & MeshCommandSeam) {
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
@@ -485,7 +497,7 @@ function DetailModal({ meshTheme, detail, onClose, daemonId, meshId, sendDaemonC
                             sendDaemonCommand={sendDaemonCommand}
                         />
                     )}
-                    {detail.kind === 'ledger' && <LedgerDetail meshTheme={meshTheme} entry={detail.entry} />}
+                    {detail.kind === 'ledger' && <LedgerDetail meshTheme={meshTheme} entry={detail.entry} resolveNodeLabel={resolveNodeLabel} />}
                     {detail.kind === 'queue' && <QueueDetail meshTheme={meshTheme} task={detail.task} />}
                     {detail.kind === 'session' && <SessionDetail meshTheme={meshTheme} node={detail.node} session={detail.session} />}
                 </div>
@@ -610,7 +622,7 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
     )
 }
 
-function LedgerDetail({ meshTheme, entry }: { meshTheme: MeshGraphTheme; entry: RepoMeshLedgerEntryStatus }) {
+function LedgerDetail({ meshTheme, entry, resolveNodeLabel }: { meshTheme: MeshGraphTheme; entry: RepoMeshLedgerEntryStatus; resolveNodeLabel: (nodeId: string | undefined | null) => string }) {
     const summary = payloadSummary(entry.payload)
     let payloadJson = ''
     try {
@@ -627,7 +639,7 @@ function LedgerDetail({ meshTheme, entry }: { meshTheme: MeshGraphTheme; entry: 
             <div className="grid gap-1.5 text-xs">
                 <ModalRow meshTheme={meshTheme} label="Entry id" value={entry.id} />
                 <ModalRow meshTheme={meshTheme} label="When" value={relativeTime(entry.timestamp) ?? entry.timestamp} />
-                {entry.nodeId && <ModalRow meshTheme={meshTheme} label="Node" value={entry.nodeId} />}
+                {entry.nodeId && <ModalRow meshTheme={meshTheme} label="Node" value={resolveNodeLabel(entry.nodeId)} />}
                 {entry.sessionId && <ModalRow meshTheme={meshTheme} label="Session" value={shortSessionId(entry.sessionId)} />}
                 {entry.providerType && <ModalRow meshTheme={meshTheme} label="Provider" value={entry.providerType} />}
             </div>
@@ -764,10 +776,11 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
 
 // ── ledger / queue ──────────────────────────────────────────────────────────
 
-function LedgerCard({ meshTheme, ledgerSummary, entries, onSelect }: {
+function LedgerCard({ meshTheme, ledgerSummary, entries, resolveNodeLabel, onSelect }: {
     meshTheme: MeshGraphTheme
     ledgerSummary: RepoMeshLedgerSummaryStatus
     entries: RepoMeshLedgerEntryStatus[]
+    resolveNodeLabel: (nodeId: string | undefined | null) => string
     onSelect: (entry: RepoMeshLedgerEntryStatus) => void
 }) {
     const lastActivity = relativeTime(ledgerSummary.lastActivityAt)
@@ -793,7 +806,7 @@ function LedgerCard({ meshTheme, ledgerSummary, entries, onSelect }: {
                             return (
                                 <ListRow key={entry.id} meshTheme={meshTheme} onClick={() => onSelect(entry)}>
                                     <StatusBadge meshTheme={meshTheme} label={ledgerKindLabel(entry.kind)} tone={ledgerKindTone(entry.kind)} />
-                                    <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`}>{summary || entry.nodeId || entry.sessionId || '—'}</span>
+                                    <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={entry.nodeId || undefined}>{summary || resolveNodeLabel(entry.nodeId) || entry.sessionId || '—'}</span>
                                     <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{relativeTime(entry.timestamp) ?? ''}</span>
                                 </ListRow>
                             )

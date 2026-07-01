@@ -849,6 +849,16 @@ export interface LocalMeshNodeEntry {
      */
     reportedPlatform?: string;
     reportedArch?: string;
+    /**
+     * The operator-set machine nickname (config.machineNickname) of the daemon
+     * that owns this node's workspace. The local coordinator stamps its own
+     * config value onto its self/base node; a remote member self-reports its
+     * value on the git_status envelope (reporterMachineNickname), which the
+     * coordinator persists here on each direct git probe. Feeds
+     * buildMeshNodeDisplayLabel so the mesh UI renders the friendly nickname
+     * instead of a raw daemonId/nodeId. Absent until set/first-reported.
+     */
+    machineNickname?: string;
     policy: RepoMeshNodePolicy;
     /**
      * Per-node instruction surfaced in the coordinator prompt so the LLM

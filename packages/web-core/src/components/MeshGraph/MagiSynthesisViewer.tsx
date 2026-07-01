@@ -81,6 +81,18 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
     const groups = useMemo(() => readActivity(status), [status])
     const canCommand = !!daemonId && !!sendDaemonCommand
 
+    // Resolve a replica's nodeId to its friendly machine label (nickname →
+    // workspace·host·provider). Falls back to the raw id when the node isn't in the
+    // current status snapshot, so a stale replica id still renders something.
+    const nodeLabelById = useMemo(() => {
+        const map = new Map<string, string>()
+        for (const node of status.nodes ?? []) {
+            if (node.nodeId && node.machineLabel) map.set(node.nodeId, node.machineLabel)
+        }
+        return map
+    }, [status.nodes])
+    const resolveNodeLabel = useCallback((nodeId: string) => nodeLabelById.get(nodeId) || nodeId, [nodeLabelById])
+
     // Per-group live raw-answer fetch state, keyed by consensusGroupId.
     const [rawByGroup, setRawByGroup] = useState<Record<string, { loading: boolean; error: string | null; replicas: MagiResponseSource[] | null; fetched: boolean }>>({})
 
@@ -234,7 +246,7 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                                     {rawReplicas.map((replica, i) => (
                                         <details key={replica.taskId || i} className={`rounded-lg border text-[12px] ${dk ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
                                             <summary className={`flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 [&::-webkit-details-marker]:hidden ${meshTheme.textSecondary}`}>
-                                                <span className="flex-1 truncate">{replica.provider || '?'}{replica.nodeId ? ` @ ${replica.nodeId}` : ''}</span>
+                                                <span className="flex-1 truncate" title={replica.nodeId || undefined}>{replica.provider || '?'}{replica.nodeId ? ` @ ${resolveNodeLabel(replica.nodeId)}` : ''}</span>
                                                 {replica.rawAnswerTruncated && <span className={meshTheme.textMuted}>truncated</span>}
                                             </summary>
                                             <pre className={`max-h-64 overflow-auto whitespace-pre-wrap px-2.5 pb-2 font-mono text-[11px] ${meshTheme.textPrimary}`}>{replica.rawAnswer}</pre>

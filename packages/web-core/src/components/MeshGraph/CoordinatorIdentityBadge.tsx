@@ -23,6 +23,10 @@ export interface CoordinatorIdentityBadgeProps {
   sessionId?: string | null;
   /** Human-readable label override; defaults to short daemonId. */
   label?: string;
+  /** Resolved friendly machine label (nickname → workspace·host·provider) for the
+   *  coordinator node. Preferred over the short daemonId when present, so the badge
+   *  shows the human-readable machine instead of a raw daemon id slice. */
+  machineLabel?: string | null;
   /** When true, render an alert variant indicating the user should pay attention. */
   warning?: boolean;
   className?: string;
@@ -36,7 +40,10 @@ function shortDaemonId(daemonId: string): string {
 export function CoordinatorIdentityBadge(props: CoordinatorIdentityBadgeProps): React.JSX.Element | null {
   const daemonId = typeof props.daemonId === 'string' ? props.daemonId.trim() : '';
   if (!daemonId) return null;
-  const label = props.label ?? shortDaemonId(daemonId);
+  // Priority: explicit friendly machineLabel (nickname) → caller label override →
+  // short daemonId fallback. The raw daemonId still rides the tooltip below.
+  const machineLabel = typeof props.machineLabel === 'string' ? props.machineLabel.trim() : '';
+  const label = machineLabel || props.label || shortDaemonId(daemonId);
   const tooltipLines: string[] = [
     `daemon: ${daemonId}`,
   ];

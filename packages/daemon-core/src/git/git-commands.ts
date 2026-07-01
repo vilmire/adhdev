@@ -4,6 +4,7 @@ import { getGitDiffSummary, getGitFileDiff } from './git-diff.js';
 import { GitCommandError, isPathInside, resolveGitRepository, runGit } from './git-executor.js';
 import { createGitSnapshotStore } from './git-snapshot-store.js';
 import { getGitRepoStatus } from './git-status.js';
+import { loadConfig } from '../config/config.js';
 import type {
   GitCommandName,
   GitDiffSummary,
@@ -113,7 +114,9 @@ type GitCommandSuccess =
   // reporterPlatform/reporterArch carry the responding daemon's process.platform/
   // process.arch so a mesh coordinator probing this node over P2P can self-heal the
   // node's userOverrides.platform/arch (the fields capability-tag routing reads).
-  | { success: true; status: GitRepoStatus; reporterPlatform?: string; reporterArch?: string }
+  // reporterMachineNickname carries the responding daemon's config.machineNickname
+  // so the coordinator can populate node.machineNickname → the friendly display label.
+  | { success: true; status: GitRepoStatus; reporterPlatform?: string; reporterArch?: string; reporterMachineNickname?: string }
   | { success: true; diffSummary: GitDiffSummary }
   | { success: true; diff: GitFileDiff }
   | { success: true; snapshot: GitSnapshot }
@@ -315,7 +318,23 @@ export async function handleGitCommand(
       // stamps it onto the node's userOverrides.platform/arch (the fields
       // buildMeshNodeCapabilityTags reads). These are siblings of `status`, not
       // part of GitRepoStatus, so the git payload shape is untouched.
-      return { success: true, status, reporterPlatform: process.platform, reporterArch: process.arch };
+      // The machine nickname rides the same channel so the coordinator can render
+      // this node's friendly label instead of a raw daemonId/nodeId.
+      const reporterMachineNickname = (() => {
+        try {
+          const nick = loadConfig().machineNickname;
+          return typeof nick === 'string' && nick.trim() ? nick.trim() : undefined;
+        } catch {
+          return undefined;
+        }
+      })();
+      return {
+        success: true,
+        status,
+        reporterPlatform: process.platform,
+        reporterArch: process.arch,
+        ...(reporterMachineNickname ? { reporterMachineNickname } : {}),
+      };
     }
 
     case 'git_diff_summary': {

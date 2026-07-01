@@ -180,6 +180,13 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     const liveMeshSessions = partitionSessionHostRecords(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
 
                     const localMachineId = loadConfig().machineId || '';
+                    // Local daemon's operator-set nickname — stamped onto the self/base
+                    // node at render time so the friendly label resolves even before the
+                    // persisted node record (addNode) has been rewritten with it.
+                    const localMachineNickname = (() => {
+                        const nick = loadConfig().machineNickname;
+                        return typeof nick === 'string' && nick.trim() ? nick.trim() : '';
+                    })();
                     const requireDirectPeerTruth = args?.requireDirectPeerTruth === true;
                     // Shared probe gate for this mesh_status call: the bootstrap
                     // hydrate below and the per-node render loop further down both
@@ -302,6 +309,14 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                             daemonId && (daemonIdsEquivalent(daemonId, localMachineId) || daemonIdsEquivalent(daemonId, ctx.deps.statusInstanceId)),
                         ) || Boolean(meshRecord?.inline && nodeIndex === 0)
                             || sparseConfiguredCoordinatorNode;
+                        // The self/base node's friendly label comes from THIS daemon's
+                        // local config.machineNickname. Stamp it onto the node record (if
+                        // not already carried) so buildMeshNodeDisplayLabel below resolves
+                        // to the nickname and labelSource reads 'explicit_metadata' even
+                        // before addNode's persisted record has been rewritten.
+                        if (isSelfNode && localMachineNickname && !readStringValue(node.machineNickname, node.machine_nickname)) {
+                            node.machineNickname = localMachineNickname;
+                        }
                         const machineIdentity = buildMeshNodeMachineIdentity(node as Record<string, unknown>, {
                             localMachineId,
                             localDaemonId: ctx.deps.statusInstanceId,

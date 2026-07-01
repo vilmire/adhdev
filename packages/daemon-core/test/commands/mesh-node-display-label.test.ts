@@ -33,6 +33,27 @@ describe('buildMeshNodeDisplayLabel', () => {
         expect(label).toBe('My Windows Box')
     })
 
+    it('prefers the machineNickname over the workspace/host fallback', () => {
+        // The config.machineNickname propagated onto the node record (self node stamp
+        // or a remote member's reporterMachineNickname) must win over the raw
+        // workspace·host·provider fallback — the whole point of the propagation fix.
+        const label = buildMeshNodeDisplayLabel(
+            { machineNickname: 'moltbot', workspace: '/Users/me/Work/adhdev', hostname: 'mac-1' },
+            'node_abcdef',
+            ['claude-code'],
+        )
+        expect(label).toBe('moltbot')
+    })
+
+    it('reads the snake_case machine_nickname form', () => {
+        const label = buildMeshNodeDisplayLabel(
+            { machine_nickname: 'staging-box', workspace: '/Users/me/Work/adhdev' },
+            'node_abcdef',
+            [],
+        )
+        expect(label).toBe('staging-box')
+    })
+
     it('falls back to the node id when no workspace/host/provider is known', () => {
         expect(buildMeshNodeDisplayLabel({}, 'node_abcdef', [])).toBe('node_abcdef')
     })
