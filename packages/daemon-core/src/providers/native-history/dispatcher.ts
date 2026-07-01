@@ -239,6 +239,11 @@ function resolveAntigravityPath(workspace: string, sessionId: string): string | 
     }
 
     // (2) brain/<uuid>/.system_generated/logs/transcript.jsonl (legacy full source).
+    //     Only bind to a brain transcript that is NON-EMPTY: current antigravity
+    //     writes this file but leaves it 0 bytes (all real conversation data now
+    //     lives in the per-session .db), so an empty transcript here would
+    //     otherwise shadow the .db fallback below and return no messages. Skip
+    //     empty transcripts so an unbound read still reaches the .db.
     const brainRoot = path.join(agyRoot, 'brain');
     if (fs.existsSync(brainRoot)) {
         const cutoff = Date.now() - RECENT_WINDOW_MS;
@@ -249,7 +254,7 @@ function resolveAntigravityPath(workspace: string, sessionId: string): string | 
             .sort((a, b) => b.mtime - a.mtime);
         for (const e of entries) {
             const t = path.join(e.p, '.system_generated', 'logs', 'transcript.jsonl');
-            if (fs.existsSync(t)) return t;
+            if (fs.existsSync(t) && safeSize(t) > 0) return t;
         }
     }
 
@@ -352,6 +357,10 @@ function newestRecentFile(dir: string, pattern: RegExp): string | null {
 
 function safeMtime(p: string): number {
     try { return Math.floor(fs.statSync(p).mtimeMs); } catch { return 0; }
+}
+
+function safeSize(p: string): number {
+    try { return fs.statSync(p).size; } catch { return 0; }
 }
 
 function normalizeRole(r: any): 'user' | 'assistant' | 'system' {

@@ -57,6 +57,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { loadBetterSqlite3 } from '../../system/load-better-sqlite3.js';
+import { LOG } from '../../logging/logger.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -564,7 +565,18 @@ function parseConversationDb(
   try {
     const Database = loadBetterSqlite3();
     db = new Database(filePath, { readonly: true, fileMustExist: true });
-  } catch {
+  } catch (err) {
+    // better-sqlite3 unavailable (ABI mismatch / not installed in this bundle)
+    // or the db handle failed to open. This is the silent-degrade that made a
+    // live read_chat return 0 assistant messages with no trace — the answers
+    // are on disk but unreadable. Log it (once-ish, at WARN) so the failure is
+    // greppable in daemon logs and distinguishable from "no db file". The
+    // reader still degrades gracefully (returns null → dispatcher falls back to
+    // brain/.pb), but the operator now knows WHY the .db path produced nothing.
+    LOG.warn(
+      'NativeHistory',
+      `antigravity .db reader could not open ${path.basename(filePath)}: ${err instanceof Error ? err.message : String(err)} (better-sqlite3 load/open failed — assistant answers in this .db will not surface)`,
+    );
     return null;
   }
 
@@ -578,8 +590,15 @@ function parseConversationDb(
           ORDER BY idx ASC`,
       )
       .all() as AgyDbStepRow[];
-  } catch {
-    // `steps` table absent / unexpected schema.
+  } catch (err) {
+    // `steps` table absent / unexpected schema — a real (but recoverable)
+    // shape mismatch, not the binding-missing case above. Log at debug so a
+    // schema drift in a future antigravity release is diagnosable without
+    // spamming logs for every legacy db.
+    LOG.debug(
+      'NativeHistory',
+      `antigravity .db ${path.basename(filePath)} has no readable steps table: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   } finally {
     try { db.close(); } catch { /* ignore */ }
