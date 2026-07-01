@@ -43,7 +43,7 @@ const TASK_KINDS: { kind: MagiTaskKind; label: string; hint: string }[] = [
 const MODEL_SUGGESTIONS = ['opus', 'sonnet', 'haiku']
 
 interface MagiKindPanelEditorProps {
-    status: RepoMeshStatus
+    status: RepoMeshStatus | null
     daemonId?: string | null
     sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
 }
@@ -123,10 +123,10 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
     const [savingKind, setSavingKind] = useState<MagiTaskKind | null>(null)
 
     const liveNodes: LiveNode[] = useMemo(
-        () => status.nodes.map(n => ({ nodeId: n.nodeId, providers: n.providers, providerPriority: n.providerPriority })),
-        [status.nodes],
+        () => (status?.nodes ?? []).map(n => ({ nodeId: n.nodeId, providers: n.providers, providerPriority: n.providerPriority })),
+        [status?.nodes],
     )
-    const knownNodeIds = useMemo(() => status.nodes.map(n => n.nodeId), [status.nodes])
+    const knownNodeIds = useMemo(() => (status?.nodes ?? []).map(n => n.nodeId), [status?.nodes])
 
     // Providers offered per node, keyed by nodeId — used to filter the provider
     // dropdown to the selected node's providers.

@@ -296,13 +296,15 @@ export function MeshDetailView({
                  The named-panel CRUD (MagiPanelManager) Section stays hidden per the
                  2026-07-01 product decision; only the task_kind binding editor below is
                  mounted. Underlying magi_panel_* / magi_kind_panel_* commands are untouched. */}
-            <Section title="MAGI" description="task_kind → 패널 슬롯 바인딩">
-                <MagiKindPanelEditor
-                    status={displayedMeshStatus}
-                    daemonId={activeDaemonId}
-                    sendDaemonCommand={sendCommand}
-                />
-            </Section>
+            {displayedMeshStatus && (
+                <Section title="MAGI" description="task_kind → 패널 슬롯 바인딩">
+                    <MagiKindPanelEditor
+                        status={displayedMeshStatus}
+                        daemonId={activeDaemonId}
+                        sendDaemonCommand={sendCommand}
+                    />
+                </Section>
+            )}
 
             {/* ── Missions (fix b: full-goal fetch-more) ── */}
             <MeshMissionsSection
