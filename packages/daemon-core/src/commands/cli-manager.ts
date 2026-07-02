@@ -209,6 +209,16 @@ export interface CliTransportFactoryParams {
     cliArgs?: string[];
     providerSessionId?: string;
     attachExisting?: boolean;
+    /**
+     * Launch-time record meta (meshNodeId / meshNodeFor / launchedByCoordinator /
+     * autoLaunchedForQueueTaskId). Defense-in-depth for SESSION-ACCUMULATION-LEAK:
+     * a session-host factory impl SHOULD seed the create_session record with this
+     * so the node binding is present the instant the record exists, rather than
+     * relying solely on the post-spawn updateRuntimeMeta round-trip. Optional and
+     * additive — factory impls that ignore it keep the prior behavior; the
+     * post-spawn WTDISPATCH stamp in register() still runs as the primary path.
+     */
+    initialMeta?: Record<string, unknown>;
 }
 
 export interface HostedCliRuntimeDescriptor {
@@ -578,6 +588,7 @@ export class DaemonCliManager {
         cliArgs?: string[],
         providerSessionId?: string,
         attachExisting = false,
+        initialMeta?: Record<string, unknown>,
     ): PtyTransportFactory | undefined {
         return this.deps.createPtyTransportFactory?.({
             runtimeId,
@@ -586,6 +597,7 @@ export class DaemonCliManager {
             cliArgs,
             providerSessionId,
             attachExisting,
+            ...(initialMeta && Object.keys(initialMeta).length ? { initialMeta } : {}),
         }) || undefined;
     }
 
@@ -674,6 +686,24 @@ export class DaemonCliManager {
         const instanceManager = this.deps.getInstanceManager();
         const sessionRegistry = this.deps.getSessionRegistry?.() || null;
         if (!instanceManager) throw new Error('InstanceManager not available');
+
+        // Launch-time record meta (mesh node binding) — computed BEFORE the
+        // transport factory so the session-host record can be seeded with the
+        // binding at create_session time (Fix ②, defense-in-depth for
+        // SESSION-ACCUMULATION-LEAK), not only via the post-spawn WTDISPATCH
+        // updateRuntimeMeta round-trip below. See CliTransportFactoryParams.initialMeta.
+        const launchMeshNodeId = typeof settings?.meshNodeId === 'string' ? settings.meshNodeId.trim() : '';
+        const launchMeshNodeFor = typeof settings?.meshNodeFor === 'string' ? settings.meshNodeFor.trim() : '';
+        const launchAutoLaunchedForQueueTaskId = typeof settings?.autoLaunchedForQueueTaskId === 'string'
+            ? settings.autoLaunchedForQueueTaskId.trim()
+            : '';
+        const launchRecordMeta: Record<string, unknown> = {
+            ...(launchMeshNodeId ? { meshNodeId: launchMeshNodeId } : {}),
+            ...(launchMeshNodeFor ? { meshNodeFor: launchMeshNodeFor } : {}),
+            ...(settings?.launchedByCoordinator === true ? { launchedByCoordinator: true } : {}),
+            ...(launchAutoLaunchedForQueueTaskId ? { autoLaunchedForQueueTaskId: launchAutoLaunchedForQueueTaskId } : {}),
+        };
+
         const transportFactory = this.getTransportFactory(
             key,
             normalizedType,
@@ -681,6 +711,9 @@ export class DaemonCliManager {
             cliArgs,
             options?.providerSessionId,
             attachExisting,
+            // Only seed at create time for fresh launches — an attach restores an
+            // existing record whose meta is already stamped; re-seeding could clobber.
+            attachExisting ? undefined : launchRecordMeta,
         );
         const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key, transportFactory, options);
         try {
@@ -728,24 +761,15 @@ export class DaemonCliManager {
         // sibling worktree nodes cannot tell two co-located clones apart. Push the launch-time node
         // binding to the record meta so the record is 1:1 bound to its node (the spawned pty exists
         // by now, so updateMeta reaches the session-host store). Best-effort; guarded.
-        const launchMeshNodeId = typeof settings?.meshNodeId === 'string' ? settings.meshNodeId.trim() : '';
-        const launchMeshNodeFor = typeof settings?.meshNodeFor === 'string' ? settings.meshNodeFor.trim() : '';
-        // Auto-launch attribution: the queue stamps the task id it auto-launched this
-        // worker FOR (autoLaunchedForQueueTaskId). Mirror it onto the record meta so a
-        // later cleanup (e.g. MAGI post-review auto-cleanup) can verify a session was
-        // auto-launched for a SPECIFIC replica task before stopping/deleting it — a reused
-        // idle session never carries this marker, so it is preserved.
-        const launchAutoLaunchedForQueueTaskId = typeof settings?.autoLaunchedForQueueTaskId === 'string'
-            ? settings.autoLaunchedForQueueTaskId.trim()
-            : '';
-        if (launchMeshNodeId || launchMeshNodeFor || launchAutoLaunchedForQueueTaskId) {
+        //
+        // With the spec-CLI updateRuntimeMeta fix (SpecCliAdapter now forwards the FULL
+        // meta down to the transport, not just providerSessionId), this stamp finally
+        // reaches the session-host record for spec-backed providers too — previously it
+        // was silently dropped, which is what let orphans accumulate. launchRecordMeta
+        // is hoisted above and also seeds the create_session record via initialMeta.
+        if (Object.keys(launchRecordMeta).length) {
             try {
-                cliInstance.getAdapter().updateRuntimeMeta?.({
-                    ...(launchMeshNodeId ? { meshNodeId: launchMeshNodeId } : {}),
-                    ...(launchMeshNodeFor ? { meshNodeFor: launchMeshNodeFor } : {}),
-                    ...(settings?.launchedByCoordinator === true ? { launchedByCoordinator: true } : {}),
-                    ...(launchAutoLaunchedForQueueTaskId ? { autoLaunchedForQueueTaskId: launchAutoLaunchedForQueueTaskId } : {}),
-                });
+                cliInstance.getAdapter().updateRuntimeMeta?.({ ...launchRecordMeta });
             } catch { /* best-effort — record-meta stamp is cleanup hygiene, not on the dispatch path */ }
         }
 

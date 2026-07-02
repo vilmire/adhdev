@@ -9,7 +9,7 @@
  * Extracted verbatim from executeDaemonCommand; the inline-cache, session/worktree
  * cleanup and aggregate-status collaborators come from ctx.
  */
-import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId } from '@adhdev/mesh-shared';
 import { resolveMeshHostStatus, normalizeMeshDaemonRole } from '../../mesh/mesh-host-ownership.js';
 import {
     loadMeshWorktreeBootstrapConfig,
@@ -558,6 +558,15 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 && !Array.isArray(args.requireAutoLaunchedForTaskIds))
                 ? args.requireAutoLaunchedForTaskIds as Record<string, string>
                 : undefined;
+            // Opt-in orphan reclaim (SESSION-ACCUMULATION-LEAK). The live-node id set
+            // is the CURRENT mesh membership; a matched live session bound to a node
+            // still in this set is an active sibling and is never reclaimed. Only when
+            // the caller passes reclaimOrphans:true does the router loosen the
+            // shared-daemon guard for workspace-only / dead-node-bound live sessions.
+            const reclaimOrphans = args?.reclaimOrphans === true;
+            const liveMeshNodeIds = Array.isArray(mesh?.nodes)
+                ? mesh.nodes.map((n: any) => normalizeMeshNodeId(n)).filter(Boolean) as string[]
+                : [];
             const result = await ctx.cleanupMeshSessions({
                 meshId,
                 nodeId,
@@ -567,6 +576,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 dryRun: args?.dryRun === true,
                 source,
                 requireAutoLaunchedForTaskIds,
+                reclaimOrphans,
+                liveMeshNodeIds,
             });
             return result;
         } catch (e: any) {

@@ -116,6 +116,7 @@ export interface ISpecDriver {
     subscribe(listener: (ev: DashboardEvent) => void): () => void;
     start(): void;
     dispatch(cmd: DashboardCommand): void;
+    updateMeta(meta: Record<string, unknown>, replace?: boolean): void;
     snapshot(): string;
     getCursorPosition(): { row: number; col: number };
     getScreen(): string;
@@ -420,6 +421,14 @@ export class FsmDriver implements ISpecDriver {
             case 'cancel': this.adapter.send_keys('\x03'); return;
             case 'shutdown': this.shutdown(); return;
         }
+    }
+
+    /** Forward runtime metadata to the terminal transport so mesh binding
+     *  fields (meshNodeId / meshNodeFor / workspaceLabel / lifecycle) reach
+     *  the session registry. Not a DashboardCommand — this is a control-plane
+     *  update, not user input. */
+    updateMeta(meta: Record<string, unknown>, replace = false): void {
+        this.adapter.updateMeta(meta, replace);
     }
 
     snapshot(): string { return this.adapter.snapshot(); }

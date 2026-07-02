@@ -180,6 +180,17 @@ export class TerminalAdapter {
         this.pty?.write(text);
     }
 
+    /** Forward runtime metadata (meshNodeId, workspaceLabel, lifecycle, …) to
+     *  the underlying transport so it reaches the session registry. The spec
+     *  path previously dropped everything but providerSessionId here, which
+     *  left autoLaunch's meshNodeId stamp unbound on the record (see
+     *  SESSION-ACCUMULATION-LEAK). No-op when the transport does not support
+     *  metadata updates (e.g. plain node-pty). */
+    updateMeta(meta: Record<string, unknown>, replace = false): void {
+        if (!this.pty || typeof this.pty.updateMeta !== 'function') return;
+        this.pty.updateMeta(meta, replace);
+    }
+
     /** Debug-only: most-recent PTY input/output/resize/cursor events, oldest
      *  first. Pure observation — never consulted by the FSM. */
     getEventTimeline(limit = MAX_PTY_EVENTS): SpecPtyEvent[] {

@@ -86,6 +86,16 @@ export interface MedFamilyContext {
         dryRun?: boolean;
         source?: 'mesh_cleanup_sessions' | 'mesh_remove_node' | 'magi_session_cleanup';
         requireAutoLaunchedForTaskIds?: Record<string, string>;
+        /**
+         * Opt-in orphan reclaim (default false). When true, a workspace-only live
+         * session (no node binding) OR a session bound to a node that no longer
+         * exists in `liveMeshNodeIds` is stopped instead of skipped — reclaims the
+         * SESSION-ACCUMULATION-LEAK orphans. `liveMeshNodeIds` is the current mesh's
+         * node id set; a session whose meshNodeId is still present is treated as an
+         * active sibling and left alone.
+         */
+        reclaimOrphans?: boolean;
+        liveMeshNodeIds?: string[];
     }) => Promise<{ success: boolean; [key: string]: unknown }>;
 
     /** Bound `DaemonCommandRouter.cleanupLocalWorktreeNode`. */

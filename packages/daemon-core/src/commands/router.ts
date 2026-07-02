@@ -1468,6 +1468,16 @@ export class DaemonCommandRouter {
          * didn't itself spawn for this fan-out. Only consulted alongside explicit sessionIds.
          */
         requireAutoLaunchedForTaskIds?: Record<string, string>;
+        /**
+         * Opt-in orphan reclaim (default false). See SESSION-ACCUMULATION-LEAK.
+         * When true, a workspace-only live_runtime session (no node binding) OR a
+         * live_runtime session bound to a node absent from `liveMeshNodeIds` is
+         * stopped instead of skipped by the conservative shared-daemon guard. A
+         * session whose meshNodeId is STILL in `liveMeshNodeIds` (active sibling)
+         * is never reclaimed — that is the shared-daemon safety this preserves.
+         */
+        reclaimOrphans?: boolean;
+        liveMeshNodeIds?: string[];
     }): Promise<{ success: boolean; [key: string]: unknown }> {
         if (args.mode === 'preserve') {
             return { success: true, mode: 'preserve', matchedCount: 0, stoppedSessionIds: [], deletedSessionIds: [], skippedSessionIds: [] };
@@ -1477,6 +1487,23 @@ export class DaemonCommandRouter {
         const requestedSessionIds = Array.isArray(args.sessionIds)
             ? new Set(args.sessionIds.map(id => typeof id === 'string' ? id.trim() : '').filter(Boolean))
             : undefined;
+        // Orphan-reclaim support (opt-in). The live-node id list lets us tell an
+        // orphan (owning node gone from the mesh) apart from a still-active sibling
+        // sharing this daemon. daemonIdsEquivalent (not raw ===) guards against the
+        // canon-identity defect class: daemonId forms (daemon_mach_ vs mach_) and
+        // normalized vs raw meshNodeId must compare equivalent, not literally equal.
+        const reclaimOrphans = args.reclaimOrphans === true;
+        const liveMeshNodeIds = Array.isArray(args.liveMeshNodeIds)
+            ? args.liveMeshNodeIds.map(id => typeof id === 'string' ? id.trim() : '').filter(Boolean)
+            : [];
+        const isNodeStillLive = (candidateNodeId: string): boolean => {
+            if (!candidateNodeId) return false;
+            return liveMeshNodeIds.some(liveId =>
+                liveId === candidateNodeId
+                || meshNodeIdMatches({ id: liveId }, candidateNodeId)
+                || daemonIdsEquivalent(liveId, candidateNodeId));
+        };
+        const reclaimedOrphanSessionIds: string[] = [];
         const sessions = await this.deps.sessionHostControl.listSessions();
         const matched = sessions.filter(record => this.sessionMatchesMeshNode(record, args.node, args.nodeId, requestedSessionIds));
         const hasExplicitSessionIds = !!requestedSessionIds?.size;
@@ -1579,7 +1606,18 @@ export class DaemonCommandRouter {
             const matchedByWorkspaceOnly = !recordNodeId;
             const isWorktreeNodeRemoval = cleanupSource === 'mesh_remove_node' && args.node?.isLocalWorktree === true;
             const cleanWorkspaceOnlyForWorktree = isWorktreeNodeRemoval && matchedByWorkspaceOnly;
-            if (!hasExplicitSessionIds && liveRuntime && !delegateBoundToThisNode && !cleanWorkspaceOnlyForWorktree) {
+            // Opt-in orphan reclaim (SESSION-ACCUMULATION-LEAK): a live_runtime that
+            // is either workspace-only (no node binding — the leaked spec-CLI case)
+            // or bound to a node no longer present in the mesh is an orphan and safe
+            // to stop. A session bound to a node STILL live in the mesh is an active
+            // sibling on this shared daemon and is left to the normal guard. Node
+            // equivalence uses isNodeStillLive (daemonIdsEquivalent under the hood),
+            // never a raw === on the id form.
+            const reclaimableOrphan = reclaimOrphans
+                && liveRuntime
+                && !delegateBoundToThisNode
+                && (matchedByWorkspaceOnly || !isNodeStillLive(recordNodeId));
+            if (!hasExplicitSessionIds && liveRuntime && !delegateBoundToThisNode && !cleanWorkspaceOnlyForWorktree && !reclaimableOrphan) {
                 skippedSessionIds.push(sessionId);
                 skippedLiveSessionIds.push(sessionId);
                 const reason = recordNodeId && recordNodeId !== args.nodeId
@@ -1593,6 +1631,12 @@ export class DaemonCommandRouter {
             if (cleanWorkspaceOnlyForWorktree && !delegateBoundToThisNode) {
                 // A workspace-only live session on a worktree being removed is treated
                 // like a bound delegate for accounting (so callers can see it was acted on).
+                actedLiveDelegateSessionIds.push(sessionId);
+            }
+            if (reclaimableOrphan && !cleanWorkspaceOnlyForWorktree && !delegateBoundToThisNode) {
+                // Reclaimed orphan — surface it distinctly so callers can audit what
+                // the opt-in reclaim path stopped that the normal guard would have kept.
+                reclaimedOrphanSessionIds.push(sessionId);
                 actedLiveDelegateSessionIds.push(sessionId);
             }
             if (!hasExplicitSessionIds && liveRuntime && delegateBoundToThisNode && args.mode === 'delete_stopped') {
@@ -1674,6 +1718,7 @@ export class DaemonCommandRouter {
             skippedCoordinatorSessionIds,
             ...(skippedMarkerMismatchSessionIds.length ? { skippedMarkerMismatchSessionIds } : {}),
             ...(actedLiveDelegateSessionIds.length ? { actedLiveDelegateSessionIds } : {}),
+            ...(reclaimedOrphanSessionIds.length ? { reclaimedOrphanSessionIds } : {}),
             ...(skippedLiveSessionReasons.length ? { skippedLiveSessionReasons } : {}),
             ...(deleteUnsupported ? {
                 deleteUnsupported: true,

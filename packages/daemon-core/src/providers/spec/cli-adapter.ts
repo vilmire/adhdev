@@ -641,9 +641,17 @@ export class SpecCliAdapter implements CliAdapter {
         };
     }
     updateRuntimeMeta(meta?: Record<string, unknown>): void {
-        if (meta && typeof meta.providerSessionId === 'string') {
+        if (!meta) return;
+        if (typeof meta.providerSessionId === 'string') {
             this.providerSessionId = meta.providerSessionId;
         }
+        // Forward the FULL meta (meshNodeId / meshNodeFor / workspaceLabel /
+        // lifecycle / …) down to the transport so it reaches the session
+        // registry. The legacy ProviderCliAdapter.updateRuntimeMeta does the
+        // same via ptyProcess.updateMeta; the spec path previously dropped
+        // everything but providerSessionId, leaving autoLaunch's meshNodeId
+        // stamp unbound on the record — the root of SESSION-ACCUMULATION-LEAK.
+        try { this.driver.updateMeta(meta); } catch { /* transport may not support meta */ }
     }
     refreshProviderDefinition(): void { /* hot reload handled by SpecDriver fs.watch */ }
 
