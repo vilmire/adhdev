@@ -102,6 +102,39 @@ export function getSessionHostSurfaceKind(record: SessionHostSurfaceRecordLike |
   return 'inactive_record';
 }
 
+export function partitionSessionHostRecords<T extends SessionHostSurfaceRecordLike>(records: T[]): {
+  liveRuntimes: T[];
+  recoverySnapshots: T[];
+  inactiveRecords: T[];
+} {
+  const liveRuntimes: T[] = [];
+  const recoverySnapshots: T[] = [];
+  const inactiveRecords: T[] = [];
+
+  for (const record of records) {
+    const kind = getSessionHostSurfaceKind(record);
+    if (kind === 'live_runtime') {
+      liveRuntimes.push(record);
+    } else if (kind === 'recovery_snapshot') {
+      recoverySnapshots.push(record);
+    } else {
+      inactiveRecords.push(record);
+    }
+  }
+
+  return {
+    liveRuntimes,
+    recoverySnapshots,
+    inactiveRecords,
+  };
+}
+
+export function partitionSessionHostDiagnosticsSessions(
+  records: SessionHostRecord[] | null | undefined,
+): ReturnType<typeof partitionSessionHostRecords<SessionHostRecord>> {
+  return partitionSessionHostRecords(records || []);
+}
+
 export function resolveAttachableRuntimeRecord(records: SessionHostRecord[], identifier: string): SessionHostRecord {
   const record = resolveRuntimeRecord(records, identifier);
   const surfaceKind = getSessionHostSurfaceKind(record);

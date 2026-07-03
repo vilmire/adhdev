@@ -15,6 +15,15 @@ import type {
     DetectedIde,
     AgentEntry,
 } from './types.js';
+import type {
+    SessionAttachedClient as CoreSessionAttachedClient,
+    SessionWriteOwner as CoreSessionWriteOwner,
+    SessionHostRecord as CoreSessionHostRecord,
+    SessionHostLogEntry as CoreSessionHostLogEntry,
+    SessionHostRequestTrace as CoreSessionHostRequestTrace,
+    SessionHostRuntimeTransition as CoreSessionHostRuntimeTransition,
+    SessionHostDiagnostics as CoreSessionHostDiagnostics,
+} from '@adhdev/session-host-core';
 
 export type {
     StatusResponse,
@@ -134,70 +143,67 @@ export interface ProviderSummaryMetadata {
     items: ProviderSummaryItem[];
 }
 
-export interface SessionHostAttachedClient {
-    clientId: string;
+/**
+ * Wire-subset session-host types.
+ *
+ * These are the shapes daemon-core / web-core see over the wire — a subset of the
+ * authoritative types owned by @adhdev/session-host-core (which additionally carry
+ * transport / category / launchCommand / buffer and stricter union typing on wire
+ * scalars). They are DERIVED from the SSOT via Pick/Omit so shared fields cannot
+ * drift; only the deliberate wire looseness (string-typed `type`/`lifecycle`,
+ * optional `meta`) is re-applied here.
+ */
+export type SessionHostAttachedClient = Omit<CoreSessionAttachedClient, 'type'> & {
+    /** Widened over the wire — the raw client-type string is not re-validated here. */
     type: string;
-    readOnly: boolean;
-    attachedAt: number;
-    lastSeenAt: number;
-}
+};
 
-export interface SessionHostWriteOwner {
-    clientId: string;
-    ownerType: 'agent' | 'user';
-    acquiredAt: number;
-}
+export type SessionHostWriteOwner = CoreSessionWriteOwner;
 
-export interface SessionHostRecord {
-    sessionId: string;
-    runtimeKey: string;
-    displayName: string;
-    workspaceLabel: string;
-    providerType: string;
-    workspace: string;
-    lifecycle: 'starting' | 'running' | 'stopping' | 'stopped' | 'failed' | 'interrupted';
-    surfaceKind?: 'live_runtime' | 'recovery_snapshot' | 'inactive_record';
+export type SessionHostRecord = Pick<
+    CoreSessionHostRecord,
+    | 'sessionId'
+    | 'runtimeKey'
+    | 'displayName'
+    | 'workspaceLabel'
+    | 'providerType'
+    | 'workspace'
+    | 'lifecycle'
+    | 'surfaceKind'
+    | 'osPid'
+    | 'lastActivityAt'
+    | 'createdAt'
+    | 'startedAt'
+> & {
     writeOwner: SessionHostWriteOwner | null;
     attachedClients: SessionHostAttachedClient[];
-    osPid?: number;
-    lastActivityAt: number;
-    createdAt: number;
-    startedAt?: number;
+    /** Optional over the wire — omitted when the record carries no metadata. */
     meta?: Record<string, unknown>;
-}
+};
 
-export interface SessionHostLogEntry {
-    timestamp: number;
-    level: 'debug' | 'info' | 'warn' | 'error';
-    message: string;
-    sessionId?: string;
-}
+export type SessionHostLogEntry = Omit<CoreSessionHostLogEntry, 'data'>;
 
-export interface SessionHostRequestTrace {
-    timestamp: number;
-    requestId: string;
+export type SessionHostRequestTrace = Omit<CoreSessionHostRequestTrace, 'type'> & {
+    /** Widened over the wire — the request-type union is not re-validated here. */
     type: string;
-    sessionId?: string;
-    clientId?: string;
-    success: boolean;
-    durationMs: number;
-    error?: string;
-}
+};
 
-export interface SessionHostRuntimeTransition {
-    timestamp: number;
-    sessionId: string;
-    action: string;
+export type SessionHostRuntimeTransition = Omit<CoreSessionHostRuntimeTransition, 'lifecycle'> & {
+    /** Widened over the wire — the lifecycle union is not re-validated here. */
     lifecycle?: string;
-    detail?: string;
-    success?: boolean;
-    error?: string;
-}
+};
 
-export interface SessionHostDiagnosticsSnapshot {
-    hostStartedAt: number;
-    endpoint: string;
-    runtimeCount: number;
+export type SessionHostDiagnosticsSnapshot = Omit<
+    CoreSessionHostDiagnostics,
+    | 'supportedRequestTypes'
+    | 'sessions'
+    | 'liveRuntimes'
+    | 'recoverySnapshots'
+    | 'inactiveRecords'
+    | 'recentLogs'
+    | 'recentRequests'
+    | 'recentTransitions'
+> & {
     sessions?: SessionHostRecord[];
     liveRuntimes?: SessionHostRecord[];
     recoverySnapshots?: SessionHostRecord[];
@@ -205,7 +211,7 @@ export interface SessionHostDiagnosticsSnapshot {
     recentLogs: SessionHostLogEntry[];
     recentRequests: SessionHostRequestTrace[];
     recentTransitions: SessionHostRuntimeTransition[];
-}
+};
 
 export type TransportTopic = 'session.chat_tail' | 'session.runtime_output' | 'machine.runtime' | 'session_host.diagnostics' | 'session.modal' | 'daemon.metadata' | 'workspace.git';
 

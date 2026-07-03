@@ -60,9 +60,12 @@ export {
   getWorkspaceLabel,
   isSessionHostLiveRuntime,
   isSessionHostRecoverySnapshot,
+  partitionSessionHostDiagnosticsSessions,
+  partitionSessionHostRecords,
   resolveAttachableRuntimeRecord,
   resolveRuntimeRecord,
 } from './runtime-labels.js';
+export type { SessionHostSurfaceRecordLike } from './runtime-labels.js';
 export {
   SessionHostClient,
   createLineParser,
