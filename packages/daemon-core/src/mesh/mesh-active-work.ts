@@ -2,7 +2,7 @@ import type { MeshLedgerEntry } from './mesh-ledger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshWorkQueueEntry, DirectDispatchRecord } from './mesh-work-queue.js';
 import { deleteDirectDispatchesByTaskId } from './mesh-work-queue.js';
-import { meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 
 export type MeshActiveWorkSource = 'queue' | 'direct';
 export type MeshActiveWorkStatus = 'pending' | 'assigned' | 'generating' | 'idle' | 'failed' | 'awaiting_approval';
@@ -128,9 +128,9 @@ function sessionStatusFromNodes(nodes: any[] | undefined, nodeId?: string, sessi
         if (value && typeof value === 'object') candidates.push(value);
     }
     const session = candidates.find(item => {
-        if (typeof item === 'string') return item === sessionId;
+        if (typeof item === 'string') return sessionIdsEquivalent(item, sessionId);
         const id = readString(item?.id) || readString(item?.sessionId) || readString(item?.session_id) || readString(item?.runtimeSessionId) || readString(item?.instanceId);
-        return id === sessionId;
+        return sessionIdsEquivalent(id, sessionId);
     });
     if (!session) return { staleReason: 'direct task session is not present in live session records' };
     if (typeof session === 'string') return {};
@@ -158,8 +158,10 @@ function terminalMatchesDispatch(terminal: MeshLedgerEntry, dispatch: MeshLedger
     const terminalTaskId = readString(terminal.payload?.taskId);
     if (terminalTaskId && terminalTaskId === taskId) return true;
     if (terminalTaskId && terminalTaskId !== taskId) return false;
-    if (dispatch.sessionId && terminal.sessionId === dispatch.sessionId) return true;
-    return Boolean(dispatch.nodeId && terminal.nodeId === dispatch.nodeId && !dispatch.sessionId);
+    if (dispatch.sessionId && sessionIdsEquivalent(terminal.sessionId, dispatch.sessionId)) return true;
+    // Node ids can carry interchangeable daemon-id forms (bare `mach_X` vs
+    // `daemon_mach_X`); compare under the canonical machine core, not raw `===`.
+    return Boolean(dispatch.nodeId && daemonIdsEquivalent(terminal.nodeId, dispatch.nodeId) && !dispatch.sessionId);
 }
 
 function statusFromTerminal(entry: MeshLedgerEntry): MeshActiveWorkStatus {

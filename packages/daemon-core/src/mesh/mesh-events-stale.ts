@@ -4,7 +4,7 @@ import { updateDirectDispatchStatus, cleanupTerminalDirectDispatches } from './m
 import { markSessionDeliveriesTerminal } from './mesh-delivery-policy.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { readNonEmptyString, readRecord, resolveEventSessionId, readWorkerResultMetadata, isWeakCompletionEvidence, buildMeshSystemMessage } from './mesh-events-utils.js';
-import { meshNodeIdMatches, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, sessionIdsEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 
 // ---------------------------------------------------------------------------
 // Stale direct-dispatch detection & transcript reconciliation
@@ -42,7 +42,7 @@ export function findRecentTerminalLedgerEvidence(args: {
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
         if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') continue;
-        if (args.sessionId && entry.sessionId === args.sessionId) {
+        if (args.sessionId && sessionIdsEquivalent(entry.sessionId, args.sessionId)) {
             return { id: entry.id, kind: entry.kind, payload: entry.payload || {}, timestamp: entry.timestamp };
         }
         // Normalized node-id match (P4): a ledger entry may store its node id as `nodeId`
@@ -70,7 +70,7 @@ export function hasDispatchAfterTerminal(meshId: string, sessionId: string, term
             if (entry.id === terminalId) pastTerminal = true;
             continue;
         }
-        if (entry.kind === 'task_dispatched' && entry.sessionId === sessionId) return true;
+        if (entry.kind === 'task_dispatched' && sessionIdsEquivalent(entry.sessionId, sessionId)) return true;
     }
     return false;
 }
@@ -82,7 +82,7 @@ export function hasUnterminalDirectDispatchLedgerEntry(meshId: string, sessionId
     const entries = readLedgerEntries(meshId, { tail: 200 });
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
-        if (entry.sessionId !== sessionId) continue;
+        if (!sessionIdsEquivalent(entry.sessionId, sessionId)) continue;
         if (entry.kind === 'task_completed' || entry.kind === 'task_failed' || entry.kind === 'task_stalled') {
             return false;
         }
@@ -109,7 +109,7 @@ export function findTerminalLedgerEvidenceForTask(args: {
         const terminalTaskId = readNonEmptyString(entry.payload?.taskId);
         if (terminalTaskId !== taskId) continue;
         if (entry.kind === 'task_completed' && isWeakCompletionEvidence(entry.payload)) continue;
-        if (args.sessionId && entry.sessionId && entry.sessionId !== args.sessionId) continue;
+        if (args.sessionId && entry.sessionId && !sessionIdsEquivalent(entry.sessionId, args.sessionId)) continue;
         if (!args.sessionId && args.nodeId && entry.nodeId && !meshNodeIdMatches(entry as unknown as MeshNodeIdentified, args.nodeId)) continue;
         return { id: entry.id, kind: entry.kind, payload: entry.payload || {}, timestamp: entry.timestamp };
     }
@@ -127,7 +127,7 @@ function findDirectDispatchLedgerEntry(args: {
         if (entry.kind !== 'task_dispatched') continue;
         const payloadTaskId = readNonEmptyString(entry.payload?.taskId);
         if (payloadTaskId !== args.taskId) continue;
-        if (args.sessionId && entry.sessionId && entry.sessionId !== args.sessionId) continue;
+        if (args.sessionId && entry.sessionId && !sessionIdsEquivalent(entry.sessionId, args.sessionId)) continue;
         return {
             id: entry.id,
             timestamp: entry.timestamp,
@@ -172,7 +172,7 @@ function hasTerminalLedgerAfterDispatch(args: {
         const terminalTaskId = readNonEmptyString(entry.payload?.taskId);
         if (terminalTaskId && terminalTaskId === args.taskId) return true;
         if (terminalTaskId && terminalTaskId !== args.taskId) continue;
-        if (args.sessionId && entry.sessionId === args.sessionId) return true;
+        if (args.sessionId && sessionIdsEquivalent(entry.sessionId, args.sessionId)) return true;
     }
     return false;
 }

@@ -17,6 +17,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, renameSy
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { getConfigDir } from '../config/config.js';
+import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { EventEmitter } from 'events';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 // ─── Types ──────────────────────────────────────
@@ -1224,7 +1225,7 @@ export function getSessionRecoveryContext(
         if (!failureCountDone) {
             if (ts < recentWindow) {
                 failureCountDone = true;
-            } else if (opts.nodeId && e.nodeId !== opts.nodeId) {
+            } else if (opts.nodeId && !daemonIdsEquivalent(e.nodeId, opts.nodeId)) {
                 // Entry for a different node — skip for failure counting but continue scanning for dispatch
             } else if (e.kind === 'task_failed') {
                 if (!isIntentionalCleanupStopEntry(e)) consecutiveNodeFailures++;
@@ -1236,8 +1237,8 @@ export function getSessionRecoveryContext(
 
         // Dispatch search: find the last dispatch matching this session or node
         if (lastDispatch === null && e.kind === 'task_dispatched') {
-            if (opts.sessionId && e.sessionId === opts.sessionId) { lastDispatch = e; }
-            else if (!opts.sessionId && opts.nodeId && e.nodeId === opts.nodeId) { lastDispatch = e; }
+            if (opts.sessionId && sessionIdsEquivalent(e.sessionId, opts.sessionId)) { lastDispatch = e; }
+            else if (!opts.sessionId && opts.nodeId && daemonIdsEquivalent(e.nodeId, opts.nodeId)) { lastDispatch = e; }
         }
 
         // Stop once both tasks are done

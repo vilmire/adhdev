@@ -14,7 +14,7 @@
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { getGitRepoStatus } from '../git/git-status.js';
-import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, daemonIdsEquivalent, meshWorkspacesEquivalent } from '@adhdev/mesh-shared';
+import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, daemonIdsEquivalent, meshWorkspacesEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from '../mesh/mesh-warmup-deadline.js';
@@ -1606,7 +1606,7 @@ export async function hydrateInlineMeshDirectTruth(args: {
         const workspace = readStringValue(node?.workspace);
         const daemonId = readStringValue(node?.daemonId);
         const isSelfNode = Boolean(
-            nodeId && selectedCoordinatorNodeId && nodeId === selectedCoordinatorNodeId,
+            nodeId && selectedCoordinatorNodeId && daemonIdsEquivalent(nodeId, selectedCoordinatorNodeId),
         ) || Boolean(
             daemonId && (daemonIdsEquivalent(daemonId, args.localMachineId) || daemonIdsEquivalent(daemonId, args.statusInstanceId)),
         ) || Boolean(args.meshSource !== 'local_config' && nodeIndex === 0);
@@ -1720,7 +1720,7 @@ export async function hydrateInlineMeshDirectTruth(args: {
                 const nodeId = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
                 const daemonId = readStringValue(node?.daemonId);
                 const isSelfNode = Boolean(
-                    nodeId && selectedCoordinatorNodeId && nodeId === selectedCoordinatorNodeId,
+                    nodeId && selectedCoordinatorNodeId && daemonIdsEquivalent(nodeId, selectedCoordinatorNodeId),
                 ) || Boolean(
                     daemonId && (daemonIdsEquivalent(daemonId, args.localMachineId) || daemonIdsEquivalent(daemonId, args.statusInstanceId)),
                 );
@@ -1794,7 +1794,10 @@ export function summarizeMeshSessionRecord(record: any): Record<string, unknown>
 
 function liveSessionRecordMatchesMeshNode(record: any, meshId: string, nodeId: string, nodeWorkspace = '', nodeIsMissingLocalWorktree = false): boolean {
     const recordNodeId = readStringValue(record?.meta?.meshNodeId);
-    if (!recordNodeId || recordNodeId !== nodeId) return false;
+    // A session's stamped meshNodeId and the node's id can carry interchangeable
+    // daemon-id forms (bare `mach_X` vs `daemon_mach_X`) — compare under the
+    // canonical machine core, not raw `!==` (CANON-IDENTITY class).
+    if (!recordNodeId || !daemonIdsEquivalent(recordNodeId, nodeId)) return false;
     if (nodeIsMissingLocalWorktree) return false;
     const recordWorkspace = readStringValue(record?.workspace);
     // Normalized compare (shared WTCLAIM rule): a base node and a co-located worktree
@@ -1855,7 +1858,7 @@ export function collectLiveMeshSessionRecords(args: {
         && !fs.existsSync(nodeWorkspace);
     const matches = args.liveSessionRecords.filter((record) => {
         const recordNodeId = readStringValue(record?.meta?.meshNodeId);
-        if (recordNodeId && recordNodeId !== args.nodeId) return false;
+        if (recordNodeId && !daemonIdsEquivalent(recordNodeId, args.nodeId)) return false;
         if (liveSessionRecordMatchesMeshNode(record, args.meshId, args.nodeId, nodeWorkspace || '', nodeIsMissingLocalWorktree)) return true;
         if (nodeIsMissingLocalWorktree) return false;
         return !!nodeWorkspace && liveSessionRecordMatchesMeshWorkspace(record, args.meshId, nodeWorkspace);
@@ -1865,7 +1868,7 @@ export function collectLiveMeshSessionRecords(args: {
         for (const record of args.liveSessionRecords) {
             if (readStringValue(record?.meta?.meshCoordinatorFor) !== args.meshId) continue;
             const sessionId = readStringValue(record?.sessionId);
-            if (sessionId && matches.some((entry) => readStringValue(entry?.sessionId) === sessionId)) continue;
+            if (sessionId && matches.some((entry) => sessionIdsEquivalent(readStringValue(entry?.sessionId), sessionId))) continue;
             matches.push(record);
         }
     }

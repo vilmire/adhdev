@@ -4,7 +4,7 @@ import { hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { appendLedgerEntry, readLedgerEntries } from './mesh-ledger.js';
 import { LOG } from '../logging/logger.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 
 // ---------------------------------------------------------------------------
 // R1: single-source coordinator routing resolution
@@ -117,7 +117,7 @@ export function resolveWorkerDelegateRouting(
         let hasActiveDispatch = false;
         try {
             hasActiveDispatch =
-                getActiveDirectDispatches(coordinatorMeshId).some(d => d.sessionId === instanceId)
+                getActiveDirectDispatches(coordinatorMeshId).some(d => sessionIdsEquivalent(d.sessionId, instanceId))
                 || hasUnterminalDirectDispatchLedgerEntry(coordinatorMeshId, instanceId);
         } catch { /* best-effort */ }
         if (!hasActiveDispatch) return reject('coordinator_not_dispatch_target');

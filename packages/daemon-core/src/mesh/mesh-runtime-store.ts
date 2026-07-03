@@ -4,7 +4,7 @@ import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { getLedgerDir } from './mesh-ledger.js';
 import { nodeSatisfiesRequiredTags, isTaskReadonly } from './mesh-work-queue.js';
-import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
@@ -795,13 +795,11 @@ export class MeshRuntimeStore {
             // an empty session. Accept the candidate when the target resolves to the
             // same node under ANY equivalent form; keep targetSessionId an exact match.
             const targetMatches = (candidate: MeshWorkQueueEntry): boolean => {
-                // SESSION-ID IS SINGLE-FORM: unlike node/daemon ids (3 serialization
-                // forms requiring expandDaemonIdForms), a session id is a single
-                // canonical UUID minted once via crypto.randomUUID() in the provider
-                // instance (cli/acp/extension/ide) and carried verbatim across daemons
-                // (resolveEventSessionId applies no transformation). So an exact `!==`
-                // is correct here and needs no normalization helper.
-                if (candidate.targetSessionId && candidate.targetSessionId !== sessionId) return false;
+                // Session ids are single-form (unlike node/daemon ids with their 3
+                // serialization forms requiring expandDaemonIdForms) — see the
+                // sessionIdsEquivalent doc; it is the one canonical exact-match
+                // predicate for them.
+                if (candidate.targetSessionId && !sessionIdsEquivalent(candidate.targetSessionId, sessionId)) return false;
                 if (
                     candidate.targetNodeId
                     && !daemonIdsEquivalent(candidate.targetNodeId, nodeId)

@@ -15,7 +15,7 @@ import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
 import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
-import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { queuePendingMeshCoordinatorEvent, retractPendingDispatchBlockedEvent } from './mesh-events-pending.js';
@@ -834,7 +834,7 @@ function nodeHasActiveMeshWork(components: DaemonComponents, meshId: string, nod
         // task already running here — the CANON-IDENTITY duplicate dispatch.
         if (!daemonIdsEquivalent(instNodeId, nodeId)) return false;
         const sessionId = readNonEmptyString(state.instanceId);
-        if (currentSessionId && sessionId === currentSessionId && isIdleSessionState(state)) return false;
+        if (currentSessionId && sessionIdsEquivalent(sessionId, currentSessionId) && isIdleSessionState(state)) return false;
         return sessionStateLooksActive(state);
     });
 }
@@ -1042,7 +1042,7 @@ function activeProviderAssignedCount(meshId: string, nodeId: string, providerTyp
 }
 
 export function sessionHasActiveAssignment(meshId: string, sessionId: string): boolean {
-    if (getQueue(meshId, { status: ['assigned'] as any }).some(task => task.assignedSessionId === sessionId)) {
+    if (getQueue(meshId, { status: ['assigned'] as any }).some(task => sessionIdsEquivalent(task.assignedSessionId, sessionId))) {
         return true;
     }
     // Direct dispatches (mesh_send_task) are tracked in mesh_direct_dispatches, not the
@@ -1053,7 +1053,7 @@ export function sessionHasActiveAssignment(meshId: string, sessionId: string): b
     // session goes silently idle. This check runs before markSessionTerminal marks the
     // dispatch terminal, so the in-flight dispatch is still observable here.
     try {
-        if (getActiveDirectDispatches(meshId).some(d => d.sessionId === sessionId)) return true;
+        if (getActiveDirectDispatches(meshId).some(d => sessionIdsEquivalent(d.sessionId, sessionId))) return true;
         if (hasUnterminalDirectDispatchLedgerEntry(meshId, sessionId)) return true;
     } catch { /* best-effort — fall through to false */ }
     return false;

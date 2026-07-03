@@ -9,6 +9,7 @@ import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshLedgerKind } from './mesh-ledger.js';
 import { createSessionDelivery } from './mesh-delivery-policy.js';
 import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
+import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -1248,7 +1249,7 @@ export function updateSessionTaskStatus(
             // `assigned` for 19 minutes. If the session still has an assigned row we
             // failed to resolve, surface it loudly instead of dropping the completion.
             const assignedRows = store.getActiveAssignmentDetails(meshId)
-                .filter(r => r.sessionId === sessionId);
+                .filter(r => sessionIdsEquivalent(r.sessionId, sessionId));
             if (assignedRows.length > 0) {
                 LOG.warn('MeshQueue', `No assigned queue row matched completion for mesh ${meshId} session ${sessionId} `
                     + `(taskId=${opts?.taskId ?? 'none'}, occurredAt=${occurredAtIso ?? 'none'}); `

@@ -57,7 +57,7 @@ import {
 } from './mesh-unresolved-forward-outbox.js';
 import { readNonEmptyString, readMeshCompletionSummary, buildMeshSystemMessage } from './mesh-events-utils.js';
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
-import { expandDaemonIdForms, daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { expandDaemonIdForms, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { getActiveDirectDispatches, getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-work-queue.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
@@ -753,11 +753,10 @@ function drainAndInjectIntoTargets(
         // (unchanged behaviour — regression-0 for the common case).
         const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
         if (wantSession) {
-            // SESSION-ID IS SINGLE-FORM: a coordinator session id is one canonical
-            // UUID (crypto.randomUUID), carried verbatim end-to-end — no node/daemon-id
-            // style serialization variants. Exact `===` is the correct match; unlike
-            // the daemon-level set below it needs no equivalence helper.
-            const matched = targetCoordinators.filter(c => c.sessionId === wantSession);
+            // Session ids are single-form; sessionIdsEquivalent is the one canonical
+            // exact-match predicate — unlike the daemon-level set below it needs no
+            // form expansion.
+            const matched = targetCoordinators.filter(c => sessionIdsEquivalent(c.sessionId, wantSession));
             if (matched.length === 0) {
                 // The originating coordinator session is not deliverable on this daemon
                 // right now (gone, or modal-parked and excluded from targets). Strict mode

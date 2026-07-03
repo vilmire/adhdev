@@ -12,6 +12,7 @@
 
 import type { MeshLedgerEntry } from './mesh-ledger.js';
 import { buildMeshAsyncRefineJobs } from './mesh-refine-status.js';
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 
 export type MeshReviewInboxReason = 'merge_candidate' | 'refine_blocked_review';
 
@@ -171,7 +172,7 @@ function resolveNodeEvidence(nodeId: string, ledgerEntries: MeshLedgerEntry[]): 
 
     for (let i = ledgerEntries.length - 1; i >= 0; i--) {
         const entry = ledgerEntries[i];
-        if (entry.nodeId !== nodeId || !isTerminalLedgerKind(entry.kind)) continue;
+        if (!daemonIdsEquivalent(entry.nodeId, nodeId) || !isTerminalLedgerKind(entry.kind)) continue;
         const payload = readRecord(entry.payload) ?? {};
 
         if (!evidence.available) {
@@ -227,7 +228,7 @@ function resolveNodeEvidence(nodeId: string, ledgerEntries: MeshLedgerEntry[]): 
 function hasBlockedReviewRefineResult(nodeId: string, ledgerEntries: MeshLedgerEntry[]): boolean {
     for (let i = ledgerEntries.length - 1; i >= 0; i--) {
         const entry = ledgerEntries[i];
-        if (entry.nodeId !== nodeId || !isTerminalLedgerKind(entry.kind)) continue;
+        if (!daemonIdsEquivalent(entry.nodeId, nodeId) || !isTerminalLedgerKind(entry.kind)) continue;
         const payload = readRecord(entry.payload) ?? {};
         if (payload.source !== 'refine_mesh_node_async_job') continue;
         const result = readRecord(payload.result);
@@ -275,7 +276,7 @@ export function deriveMeshReviewInboxItems(args: {
 
         const { evidence, transcriptHandle } = resolveNodeEvidence(nodeId, args.ledgerEntries);
         const activeRefineJob = [...refineJobs].reverse().find(job =>
-            (job.nodeId === nodeId || job.targetNodeId === nodeId)
+            (daemonIdsEquivalent(job.nodeId, nodeId) || daemonIdsEquivalent(job.targetNodeId, nodeId))
             && (job.status === 'accepted' || job.status === 'running'),
         ) ?? null;
 

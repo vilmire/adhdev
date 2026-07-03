@@ -15,7 +15,7 @@ import { enqueueUnresolvedDelegateForward, peekUnresolvedDelegateForwards, ackUn
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { resolveDelegatedWorkerAutoApprove } from '../repo-mesh-types.js';
-import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
     hasDispatchAfterTerminal,
@@ -204,10 +204,9 @@ function hasRecentIntentionalCleanupStop(meshId: string, sessionId?: string, nod
         const timestamp = new Date(entry.timestamp).getTime();
         if (!Number.isNaN(timestamp) && timestamp < cutoff) break;
         if (!isIntentionalCleanupStopEntry(entry)) continue;
-        // SESSION-ID IS SINGLE-FORM: a session id is one canonical UUID (crypto.randomUUID
-        // in the provider instance), carried verbatim across daemons — no serialization
-        // variants like node/daemon ids. Exact `===` is correct; no equivalence helper.
-        if (sessionId && entry.sessionId === sessionId) return true;
+        // Session ids are single-form; sessionIdsEquivalent is the one canonical
+        // exact-match predicate (see its doc for why no form expansion is needed).
+        if (sessionId && sessionIdsEquivalent(entry.sessionId, sessionId)) return true;
         // Normalized node-id match (P4): the cleanup-stop entry's node id may be stored as
         // `nodeId` or `node_id` and the `nodeId` arg can be in either form — a raw `===`
         // would miss a genuine intentional-cleanup entry and fail to suppress the stop event.
@@ -439,9 +438,9 @@ function supersedesTruncatedTerminalSummary(args: {
 // task surfaces as status='unknown' / terminalKind=null in computeMeshTaskStats.
 function resolveActiveDirectDispatchTaskId(meshId: string, sessionId: string): string | undefined {
     try {
-        // SESSION-ID IS SINGLE-FORM (canonical crypto.randomUUID, carried verbatim across
-        // daemons) — exact `===` filter is correct; no node-id-style form normalization.
-        const matches = getActiveDirectDispatches(meshId).filter(d => d.sessionId === sessionId);
+        // Session ids are single-form; sessionIdsEquivalent is the one canonical
+        // exact-match predicate — no node-id-style form normalization needed.
+        const matches = getActiveDirectDispatches(meshId).filter(d => sessionIdsEquivalent(d.sessionId, sessionId));
         if (!matches.length) return undefined;
         // getActiveDirectDispatches returns rows ordered by dispatched_at ASC; the last is
         // the most recent dispatch (the re-dispatch / nudge whose completion this is).
@@ -1747,7 +1746,7 @@ export function flushPendingForMeshIdleCoordinators(components: DaemonComponents
     for (const pending of pendingEvents) {
         const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
         const targets = wantSession
-            ? idleCoordinators.filter(c => c.sessionId === wantSession)
+            ? idleCoordinators.filter(c => sessionIdsEquivalent(c.sessionId, wantSession))
             : idleCoordinators;
         // Not deliverable into an idle target here (wrong/absent session), or a message-less
         // lifecycle event (agent:ready / generating_started carry no coordinatorMessage and
@@ -1826,7 +1825,7 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
                         let hasDirectDispatch = false;
                         try {
                             hasDirectDispatch =
-                                getActiveDirectDispatches(coordinatorMeshId).some(d => d.sessionId === flushInstanceId)
+                                getActiveDirectDispatches(coordinatorMeshId).some(d => sessionIdsEquivalent(d.sessionId, flushInstanceId))
                                 || hasUnterminalDirectDispatchLedgerEntry(coordinatorMeshId, flushInstanceId);
                         } catch { /* best-effort */ }
                         if (!hasDirectDispatch) return;

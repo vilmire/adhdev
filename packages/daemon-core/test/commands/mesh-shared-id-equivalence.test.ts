@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared'
+import { daemonIdsEquivalent, meshNodeIdMatches, sessionIdsEquivalent } from '@adhdev/mesh-shared'
 
 /**
  * CANON-RAW3 regression: the remaining raw daemon-id / node-id comparison sites
@@ -46,5 +46,31 @@ describe('CANON-RAW3 legacy daemon-id / node-id equivalence', () => {
         expect(meshNodeIdMatches({ id: 'node_y' }, 'node_x')).toBe(false)
         expect(meshNodeIdMatches(null, 'node_x')).toBe(false)
         expect(meshNodeIdMatches({ id: 'node_x' }, '')).toBe(false)
+    })
+})
+
+/**
+ * A1 (UNIFY-REFACTOR-EXEC-AB): raw sessionId `===` sites across daemon-core's
+ * mesh matching/lookup paths were routed through sessionIdsEquivalent. Session
+ * ids are single-form (one canonical crypto.randomUUID carried verbatim), so the
+ * helper is an exact match after trimming that never matches empty-vs-empty —
+ * this pins that contract so the centralized predicate cannot silently drift.
+ */
+describe('A1 sessionIdsEquivalent single-form contract', () => {
+    it('matches identical non-empty ids and trims whitespace', () => {
+        expect(sessionIdsEquivalent('cli_abc', 'cli_abc')).toBe(true)
+        expect(sessionIdsEquivalent(' cli_abc ', 'cli_abc')).toBe(true)
+    })
+
+    it('never matches absent/empty ids — even against each other', () => {
+        expect(sessionIdsEquivalent(undefined, undefined)).toBe(false)
+        expect(sessionIdsEquivalent('', '')).toBe(false)
+        expect(sessionIdsEquivalent(null, 'cli_abc')).toBe(false)
+        expect(sessionIdsEquivalent('cli_abc', '')).toBe(false)
+    })
+
+    it('does NOT apply daemon-id form expansion (session ids are single-form)', () => {
+        expect(sessionIdsEquivalent('mach_x', 'daemon_mach_x')).toBe(false)
+        expect(sessionIdsEquivalent('cli_a', 'cli_b')).toBe(false)
     })
 })

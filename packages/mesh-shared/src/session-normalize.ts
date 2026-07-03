@@ -28,6 +28,23 @@ function deriveSyntheticSessionId(record: ReturnType<typeof readRecord>): string
     return `synthetic:${parts.join('|')}`
 }
 
+/**
+ * Session-id equivalence — the sessionId counterpart of daemonIdsEquivalent /
+ * meshNodeIdMatches. A session id is SINGLE-FORM: one canonical UUID minted once
+ * via crypto.randomUUID() in the provider instance and carried verbatim across
+ * daemons, with no node/daemon-id style serialization variants. Equivalence is
+ * therefore an exact match after trimming, never matching an absent/empty id
+ * against another absent/empty id. Routing every mesh comparison site through
+ * this one predicate keeps that single-form policy in one place (and gives any
+ * future session-id aliasing a single seam) instead of scattering raw `===`.
+ */
+export function sessionIdsEquivalent(a: string | null | undefined, b: string | null | undefined): boolean {
+    const idA = readString(a)
+    const idB = readString(b)
+    if (!idA || !idB) return false
+    return idA === idB
+}
+
 export function normalizeMeshSessionRecord(entry: unknown): RepoMeshSessionStatus | null {
     const record = readRecord(entry)
     // BUG FIX: cloud transit can reshape/strip the explicit id field. Fall back
