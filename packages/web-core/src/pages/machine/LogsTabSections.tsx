@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import type { LogEntry } from './types'
 import type { MachineDiagnosticsStreamsState } from '../../hooks/useMachineDiagnosticsStreams'
 import { DEBUG_TRACE_FILTERS } from '../../utils/logs-trace-filters'
+import Card from '../../components/Card'
 import {
     type DiagnosticEvent,
     type DiagnosticRepeatedPattern,
@@ -156,7 +157,7 @@ export function AdvancedSourceScope({
     onTraceCategoryChange: MachineDiagnosticsStreamsState['setTraceCategory']
 }) {
     return (
-        <div className="rounded-xl border border-border-subtle bg-bg-secondary p-3">
+        <Card padding="sm">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex flex-wrap gap-2 items-center">
                     <span className="text-[10px] uppercase tracking-wider text-text-muted font-semibold">Advanced source scope</span>
@@ -184,7 +185,7 @@ export function AdvancedSourceScope({
                     ))}
                 </div>
             </div>
-        </div>
+        </Card>
     )
 }
 

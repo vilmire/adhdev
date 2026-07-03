@@ -7,6 +7,7 @@ import {
     getSessionHostSectionHint,
     partitionSessionHostRecords,
 } from '../../utils/session-host-surface'
+import Card from '../../components/Card'
 import { IconRefresh, IconServer, IconTerminal, IconUsers, IconWarning } from '../../components/Icons'
 import { getHostedRuntimeRecoveryDescription } from '../../utils/dashboard-launch-copy'
 import {
@@ -395,7 +396,7 @@ export default function SessionHostPanel({
     }
 
     return (
-        <div className="px-5 py-4 rounded-xl mb-5 bg-bg-secondary border border-border-subtle">
+        <Card padding="lg" className="mb-5">
             <div className="flex items-center justify-between gap-3 mb-3">
                 <div>
                     <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5">
@@ -573,6 +574,6 @@ export default function SessionHostPanel({
                     </div>
                 </>
             )}
-        </div>
+        </Card>
     )
 }

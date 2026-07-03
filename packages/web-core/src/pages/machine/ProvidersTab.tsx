@@ -8,6 +8,7 @@ import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './
 import { extractProviderSourceConfigPayload, normalizeProviderDirInput, type ProviderSourceConfigPayload } from './providerSourceConfig'
 import ProviderCloneModal from './ProviderCloneModal'
 import InstalledProviderRow from './InstalledProviderRow'
+import Card from '../../components/Card'
 import SourcesPanel from './SourcesPanel'
 
 interface ProvidersTabProps {
@@ -173,7 +174,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
 
             {/* Advanced: provider source config (collapsed by default) */}
             {showSourceConfig && (
-                <div className="px-4.5 py-3.5 rounded-xl bg-bg-secondary border border-border-subtle">
+                <Card padding="none" className="px-4.5 py-3.5">
                     <div className="flex items-center justify-between gap-3 mb-3">
                         <div>
                             <div className="text-[11px] font-semibold uppercase tracking-wider text-violet-400">Provider source config</div>
@@ -214,20 +215,20 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                         <div><span className="text-text-secondary font-medium">Upstream root:</span> {sourceConfig?.upstreamDir || '—'}</div>
                         <div><span className="text-text-secondary font-medium">Provider roots:</span> {sourceConfig?.providerRoots?.join(' → ') || '—'}</div>
                     </div>
-                </div>
+                </Card>
             )}
 
             {/* Installed providers list */}
             {loading && settings.length === 0 ? (
                 <div className="p-10 text-center text-text-muted">Loading provider settings…</div>
             ) : filteredSettings.length === 0 ? (
-                <div className="px-4.5 py-8 rounded-xl border border-border-subtle bg-bg-secondary text-center">
+                <Card padding="none" className="px-4.5 py-8 text-center">
                     <div className="text-[12px] text-text-muted">
                         {filter === 'all'
                             ? 'No providers installed yet. Open "Add provider" above to install one.'
                             : `No ${filter.toUpperCase()} providers installed.`}
                     </div>
-                </div>
+                </Card>
             ) : (
                 <div className="flex flex-col gap-1.5">
                     {filteredSettings.map(prov => (

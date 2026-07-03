@@ -12,6 +12,7 @@
  */
 import { useCallback, useState } from 'react'
 import { getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
+import Card from '../../components/Card'
 import { IconFolder } from '../../components/Icons'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
 import type { useMachineActions } from './useMachineActions'
@@ -87,7 +88,7 @@ export default function ManagedWorkspacesSection({
 
     return (
         <>
-            <div className="px-5 py-4 rounded-xl mb-4 bg-bg-secondary border border-border-subtle">
+            <Card padding="lg" className="mb-4">
                 <div className="flex items-center justify-between gap-3 mb-3">
                     <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider flex items-center gap-1.5">
                         <IconFolder size={14} /> Workspaces
@@ -145,7 +146,7 @@ export default function ManagedWorkspacesSection({
                         })}
                     </ul>
                 )}
-            </div>
+            </Card>
 
             {browseDialogOpen && (
                 <WorkspaceBrowseDialog

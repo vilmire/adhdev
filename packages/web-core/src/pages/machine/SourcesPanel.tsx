@@ -8,6 +8,7 @@
  * and the installed-providers list.
  */
 import { useCallback, useEffect, useState } from 'react'
+import Card from '../../components/Card'
 
 interface Source {
     name: string
@@ -122,7 +123,7 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
     }
 
     return (
-        <div className="px-4.5 py-3.5 rounded-xl bg-bg-secondary border border-border-subtle">
+        <Card padding="none" className="px-4.5 py-3.5">
             <div className="flex items-center justify-between gap-3 mb-3">
                 <div>
                     <div className="text-[11px] font-semibold uppercase tracking-wider text-sky-400">External sources</div>
@@ -246,6 +247,6 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
                     </div>
                 </div>
             )}
-        </div>
+        </Card>
     )
 }

@@ -7,6 +7,7 @@
 import { formatUptime, formatBytes } from '../../utils/daemon-utils'
 import ProgressBar from '../../components/ProgressBar'
 import StatCard from '../../components/StatCard'
+import Card from '../../components/Card'
 import { IconClock, IconMonitor, IconTerminal, IconBot } from '../../components/Icons'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
 
@@ -40,7 +41,7 @@ export default function OverviewTab({
             </div>
 
             {/* Resource Usage */}
-            <div className="px-5 py-4 rounded-xl mb-5 bg-bg-secondary border border-border-subtle">
+            <Card padding="lg" className="mb-5">
                 <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-3">
                     Resource Usage
                 </div>
@@ -48,7 +49,7 @@ export default function OverviewTab({
                     <ProgressBar value={hasRuntimeStats ? Math.min(Math.round(loadAvg1m / machine.cpus * 100), 100) : 0} max={100} label="CPU Load" color="#8b5cf6" detail={hasRuntimeStats ? `${loadAvg1m.toFixed(2)} avg / ${machine.cpus} cores` : 'Polled from machine page'} />
                     <ProgressBar value={memUsedPct} max={100} label="Memory" color="#3b82f6" detail={hasRuntimeStats ? `${formatBytes(machine.totalMem - memAvail)} / ${formatBytes(machine.totalMem)}${machine.platform === 'darwin' ? ' (approx.)' : ''}` : `Polled from machine page · ${formatBytes(machine.totalMem)} total`} />
                 </div>
-            </div>
+            </Card>
 
             {/*
               * Workspaces live in the dedicated Workspace tab. Keeping a copy

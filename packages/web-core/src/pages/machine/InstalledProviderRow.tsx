@@ -10,6 +10,7 @@
  * can edit the manifest directly or use the Reset command + Detect cycle.
  */
 import { useState } from 'react'
+import Card from '../../components/Card'
 import type { ProviderInfo, ProviderSettingsEntry } from './types'
 import TrustBadge, { type ProviderTrust } from './TrustBadge'
 
@@ -96,7 +97,7 @@ export default function InstalledProviderRow({
     const isRuntime = isMachineRuntimeProvider(prov.category)
 
     return (
-        <div className="rounded-xl bg-bg-secondary border border-border-subtle">
+        <Card padding="none">
             {/* Compact header */}
             <button
                 onClick={() => setExpanded(v => !v)}
@@ -273,6 +274,6 @@ export default function InstalledProviderRow({
                     </div>
                 </div>
             )}
-        </div>
+        </Card>
     )
 }

@@ -32,6 +32,7 @@ import {
 import { getDashboardActiveTabHref } from '../../utils/dashboard-route-paths'
 import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state'
 import { IconChat, IconMonitor, IconSearch, IconPlay, IconRefresh, IconX } from '../../components/Icons'
+import Card from '../../components/Card'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, ProviderInfo } from './types'
 import type { GitCompactSummary } from '@adhdev/daemon-core'
 import type { useMachineActions } from './useMachineActions'
@@ -866,7 +867,7 @@ export default function AgentTab({
                         const normalizedStatus = normalizeManagedStatus(entry.status)
 
                         return (
-                            <div key={entry.id} className="px-4.5 py-3.5 rounded-xl bg-bg-secondary border border-border-subtle">
+                            <Card key={entry.id} padding="none" className="px-4.5 py-3.5">
                                 <div className="flex justify-between items-center mb-2">
                                     <div className="flex items-center gap-2.5">
                                         <span className="text-lg">{getIcon(entry.type)}</span>
@@ -1128,7 +1129,7 @@ export default function AgentTab({
                                         </div>
                                     </div>
                                 )}
-                            </div>
+                            </Card>
                         )
                     })}
                 </div>
