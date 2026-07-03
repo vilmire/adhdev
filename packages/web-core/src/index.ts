@@ -189,6 +189,8 @@ export {
     setMobileDashboardMode,
 } from './components/settings/MobileDashboardModeSection'
 export type { MobileDashboardMode } from './components/settings/MobileDashboardModeSection'
+export { AppearanceSettingsSection } from './components/settings/AppearanceSettingsSection'
+export type { AppearanceSettingsSectionProps } from './components/settings/AppearanceSettingsSection'
 
 // ── Icons ──
 export {
