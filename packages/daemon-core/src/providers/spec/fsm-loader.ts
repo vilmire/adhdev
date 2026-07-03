@@ -114,7 +114,15 @@ function validateCondition(c: FsmCondition, sectionIds: Set<string>, path: strin
     }
     if ('cursor_above' in w && 'changed' in w) return errs;
     if ('elapsed_ms' in w) { if (typeof w.elapsed_ms !== 'number') errs.push(`${path}.elapsed_ms must be a number`); return errs; }
-    if ('stable_ms' in w) { if (typeof w.stable_ms !== 'number') errs.push(`${path}.stable_ms must be a number`); return errs; }
+    if ('stable_ms' in w) {
+        if (typeof w.stable_ms !== 'number') errs.push(`${path}.stable_ms must be a number`);
+        if (w.section && !sectionIds.has(w.section)) errs.push(`${path}.section "${w.section}" unknown`);
+        if (w.ignore_lines !== undefined) {
+            if (typeof w.ignore_lines !== 'string') errs.push(`${path}.ignore_lines must be a string`);
+            else try { new RegExp(w.ignore_lines, 'm'); } catch (e) { errs.push(`${path}.ignore_lines invalid regex: ${(e as Error).message}`); }
+        }
+        return errs;
+    }
     errs.push(`${path} is not a recognized condition`);
     return errs;
 }

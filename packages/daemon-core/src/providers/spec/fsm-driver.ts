@@ -29,7 +29,7 @@ import {
     resolveSections, sectionText, extractTitle, extractButtonsFromRule,
     type ResolvedSection, type TraceEntry,
 } from './evaluator.js';
-import { evaluateFsm, type FsmClock, type TransitionEval, type FsmEvaluation } from './fsm-evaluator.js';
+import { evaluateFsm, stableRegionKey, type FsmClock, type TransitionEval, type FsmEvaluation } from './fsm-evaluator.js';
 import {
     type CliSpecV4, type FsmState, type FsmTransition,
     initialState, stateById, statusForState, modalKindForState, outgoingTransitions,
@@ -295,9 +295,11 @@ export class FsmDriver implements ISpecDriver {
     // ── Clock bookkeeping for time conditions.
     private startedAtMs = 0;
     private prevScreenLines: string[] = [];
-    /** Per cursor_above region (key: cursor_above, -1 = whole screen) → last
-     *  time that region's content changed. Drives stable_ms conditions. */
-    private regionLastChangedAt = new Map<number, number>();
+    /** Per stable region → last time that region's content changed. Drives
+     *  stable_ms conditions. Key = stableRegionKey(cond): numeric cursor_above
+     *  (−1 = whole screen), or a `section:<id>` / `<region>#ignore:<pat>` string
+     *  when the clause scopes to a section or declares an ignore_lines filter. */
+    private regionLastChangedAt = new Map<number | string, number>();
     /** Timer that re-runs evaluate() when a time-condition would flip true
      *  with no PTY frame to trigger it. */
     private wakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -801,36 +803,57 @@ export class FsmDriver implements ISpecDriver {
         return out;
     }
 
-    /** Track which cursor_above regions changed since the previous frame so
-     *  stable_ms conditions can measure quiet time. We record every region
-     *  size referenced by a stable_ms condition in the spec, plus the whole
-     *  screen (-1). */
+    /** Track which stable regions changed since the previous frame so
+     *  stable_ms conditions can measure quiet time. We record every distinct
+     *  stable region referenced in the current state (numeric cursor_above /
+     *  whole-screen -1, and named `section:<id>` regions) plus, for each, the
+     *  optional `ignore_lines` filter that folds into its key.
+     *
+     *  `ignore_lines` is the content-aware fix for the busy→idle wedge: lines
+     *  matching it are stripped from BOTH frames before the comparison, so a
+     *  benign residual ticker (bare token counter / elapsed timer that repaints
+     *  every frame post-generation) no longer resets the clock — while an active
+     *  spinner line, which does NOT match the benign pattern, still does (the
+     *  FALSEIDLE2 / FALSEBUSY-B whole-screen invariant is preserved). */
     private trackRegionChanges(currentLines: string[], cursor: { row: number; col: number }, now: number): void {
         if (this.prevScreenLines.length === 0) return;
-        const sizes = this.stableRegionSizes();
-        for (const size of sizes) {
-            let cur: string; let prev: string;
-            if (size < 0) {
-                cur = currentLines.join('\n');
-                prev = this.prevScreenLines.join('\n');
+        const descs = this.stableRegionDescriptors();
+        // Section ranges depend on screen content, so resolve per-frame for both
+        // frames — but only when some tracked region is actually section-scoped.
+        const needsSections = descs.some(d => !!d.section);
+        const curSections = needsSections ? resolveSections(this.spec.sections ?? {}, currentLines) : [];
+        const prevSections = needsSections ? resolveSections(this.spec.sections ?? {}, this.prevScreenLines) : [];
+        for (const d of descs) {
+            let curLines: string[]; let prevLines: string[];
+            if (d.section) {
+                curLines = sliceSectionLines(currentLines, curSections, d.section);
+                prevLines = sliceSectionLines(this.prevScreenLines, prevSections, d.section);
+            } else if (!d.cursor_above || d.cursor_above <= 0) {
+                curLines = currentLines;
+                prevLines = this.prevScreenLines;
             } else {
-                const start = Math.max(0, cursor.row - size);
-                cur = currentLines.slice(start, cursor.row).join('\n');
-                prev = this.prevScreenLines.slice(start, cursor.row).join('\n');
+                const start = Math.max(0, cursor.row - d.cursor_above);
+                curLines = currentLines.slice(start, cursor.row);
+                prevLines = this.prevScreenLines.slice(start, cursor.row);
             }
-            if (cur !== prev) this.regionLastChangedAt.set(size, now);
+            const cur = filterIgnoredLines(curLines, d.ignoreRe).join('\n');
+            const prev = filterIgnoredLines(prevLines, d.ignoreRe).join('\n');
+            if (cur !== prev) this.regionLastChangedAt.set(d.key, now);
         }
     }
 
-    /** All cursor_above region sizes referenced by stable_ms conditions in the
-     *  current state's outgoing transitions, plus whole-screen. Cached lazily
-     *  per spec load would be nicer but the set is tiny. */
-    private stableRegionSizes(): Set<number> {
-        const sizes = new Set<number>([-1]);
+    /** Every distinct stable-region descriptor referenced by stable_ms
+     *  conditions in the current state's outgoing transitions, plus the plain
+     *  whole-screen key (-1) that other machinery (stall watchdog) reads.
+     *  De-duplicated by key. Cached lazily per spec load would be nicer but the
+     *  set is tiny. */
+    private stableRegionDescriptors(): StableRegionDescriptor[] {
+        const byKey = new Map<number | string, StableRegionDescriptor>();
+        byKey.set(-1, { key: -1 });
         for (const t of outgoingTransitions(this.spec, this.currentStateId)) {
-            collectStableSizes(t.when, sizes);
+            collectStableDescriptors(t.when, byKey);
         }
-        return sizes;
+        return [...byKey.values()];
     }
 
     /** Schedule a re-evaluation for the soonest pending time-condition on any
@@ -1409,11 +1432,50 @@ function findStable(c: import('./fsm-evaluator.js').CondResult): { totalMs: numb
     return null;
 }
 
-function collectStableSizes(when: FsmTransition['when'], sizes: Set<number>): void {
+/** Resolved description of one stable region the driver must track: its map
+ *  key, the geometry (section / cursor_above / whole-screen), and a compiled
+ *  `ignore_lines` matcher. */
+interface StableRegionDescriptor {
+    key: number | string;
+    section?: string;
+    cursor_above?: number;
+    ignoreRe?: RegExp;
+}
+
+function collectStableDescriptors(when: FsmTransition['when'], byKey: Map<number | string, StableRegionDescriptor>): void {
     if (!when) return;
     const w = when as any;
-    if ('stable_ms' in w) { sizes.add(w.cursor_above && w.cursor_above > 0 ? w.cursor_above : -1); return; }
-    if ('all' in w) { for (const c of w.all) collectStableSizes(c, sizes); return; }
-    if ('any' in w) { for (const c of w.any) collectStableSizes(c, sizes); return; }
-    if ('not' in w) { collectStableSizes(w.not, sizes); return; }
+    if ('stable_ms' in w) {
+        const key = stableRegionKey(w);
+        if (!byKey.has(key)) {
+            let ignoreRe: RegExp | undefined;
+            if (w.ignore_lines) {
+                // Compile once here; a bad pattern is validated at load time, so
+                // this is best-effort and simply skips the filter if it throws.
+                try { ignoreRe = new RegExp(w.ignore_lines, 'm'); } catch { /* validated at load */ }
+            }
+            byKey.set(key, { key, section: w.section, cursor_above: w.cursor_above, ignoreRe });
+        }
+        return;
+    }
+    if ('all' in w) { for (const c of w.all) collectStableDescriptors(c, byKey); return; }
+    if ('any' in w) { for (const c of w.any) collectStableDescriptors(c, byKey); return; }
+    if ('not' in w) { collectStableDescriptors(w.not, byKey); return; }
+}
+
+/** Lines of section `id` on the given frame, or [] if that section is absent
+ *  this frame. Used to compute per-frame change of a section-scoped stable
+ *  region. */
+function sliceSectionLines(lines: string[], sections: ResolvedSection[], id: string): string[] {
+    const sec = sections.find(s => s.id === id);
+    if (!sec) return [];
+    return lines.slice(sec.fromLine, sec.toLine);
+}
+
+/** Drop lines matching `ignoreRe` so a per-frame repaint confined to them does
+ *  not register as a region change. No filter → lines returned unchanged.
+ *  Exported for unit tests of the stable_ms `ignore_lines` change-detection. */
+export function filterIgnoredLines(lines: string[], ignoreRe: RegExp | undefined): string[] {
+    if (!ignoreRe) return lines;
+    return lines.filter(l => !ignoreRe.test(l));
 }

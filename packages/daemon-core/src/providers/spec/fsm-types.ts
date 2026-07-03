@@ -45,12 +45,40 @@ export interface ElapsedCondition {
     elapsed_ms: number;
 }
 
-/** True once the region `cursor_above` lines above the cursor has been
- *  unchanged for `ms`. A stability gate — the inverse of a busy signal. */
+/** True once a region has been unchanged for `ms`. A stability gate — the
+ *  inverse of a busy signal.
+ *
+ *  Region selection (precedence order):
+ *   - `section`     : a named section from the spec's `sections{}` (e.g. "body").
+ *                     Only lines inside that section are watched for change.
+ *   - `cursor_above`: the N lines directly above the cursor.
+ *   - neither       : the whole screen (default).
+ *
+ *  `ignore_lines` is orthogonal to region choice: lines matching it are
+ *  stripped from BOTH frames before the change comparison, so a per-frame
+ *  animation on those lines cannot reset the stable clock. This is the
+ *  content-aware escape hatch for the busy→idle wedge — a benign residual
+ *  ticker (a bare token counter / elapsed timer that repaints every frame
+ *  after generation has finished) is filtered out, so a genuinely settled
+ *  transcript can reach `stable_ms`. It is deliberately CONTENT-based, not
+ *  geometric: an ACTIVE spinner line (glyph + esc/token trailer) does NOT
+ *  match the benign pattern, so a real below-prompt spinner tick still resets
+ *  the clock and holds busy (the FALSEIDLE2 / FALSEBUSY-B invariant). */
 export interface StableCondition {
     stable_ms: number;
-    /** Lines above the cursor that must be stable. Default: whole screen. */
+    /** Named section (from `sections{}`) that must be stable. Takes precedence
+     *  over `cursor_above`. */
+    section?: string;
+    /** Lines above the cursor that must be stable. Default: whole screen.
+     *  Ignored when `section` is set. */
     cursor_above?: number;
+    /** Regex (line-tested with `m` flag). Lines matching it are removed from
+     *  both the current and previous frame before deciding whether the region
+     *  changed — a per-frame repaint confined to these lines does NOT reset the
+     *  stability clock. Use for benign residual animation (token counter /
+     *  elapsed timer). Must NOT match an active-spinner line, or a real spinner
+     *  tick would be masked. */
+    ignore_lines?: string;
 }
 
 export interface FsmAllCondition {

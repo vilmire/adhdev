@@ -28,10 +28,11 @@ export interface FsmClock {
     now: number;
     /** When the current state was entered (ms). */
     stateEnteredAt: number;
-    /** Last-changed timestamp per cursor_above region. Key = cursor_above
-     *  value (0 / undefined → whole-screen, keyed as -1). Missing key means
+    /** Last-changed timestamp per stable region. Numeric key = cursor_above
+     *  value (0 / undefined → whole-screen, keyed as -1). String key =
+     *  `section:<id>` for a section-scoped stable region. Missing key means
      *  "never observed changing" → treated as stable since stateEnteredAt. */
-    regionLastChangedAt: Map<number, number>;
+    regionLastChangedAt: Map<number | string, number>;
 }
 
 /** Per-condition evaluation detail — the debugging payload. */
@@ -82,8 +83,23 @@ export interface FsmEvaluation {
 
 const WHOLE_SCREEN = -1;
 
-function regionKey(cursorAbove: number | undefined): number {
-    return cursorAbove && cursorAbove > 0 ? cursorAbove : WHOLE_SCREEN;
+/** The `regionLastChangedAt` key for a stable condition. The key must capture
+ *  everything that makes two stable clauses watch a DIFFERENT change signal:
+ *  the geometric region (`section` wins over `cursor_above`, else whole-screen)
+ *  AND the `ignore_lines` filter (two clauses on the same region but different
+ *  ignore patterns see different "did it change" answers). Kept in one place so
+ *  the driver (which populates the map) and the evaluator (which reads it)
+ *  agree on the key.
+ *
+ *  Bare whole-screen with no ignore filter keeps its historical numeric key -1
+ *  so existing callers/tests that seed `regionLastChangedAt` with [-1, ...]
+ *  keep working unchanged. */
+export function stableRegionKey(cond: { section?: string; cursor_above?: number; ignore_lines?: string }): number | string {
+    const region = cond.section
+        ? `section:${cond.section}`
+        : (cond.cursor_above && cond.cursor_above > 0 ? cond.cursor_above : WHOLE_SCREEN);
+    if (!cond.ignore_lines) return region;
+    return `${region}#ignore:${cond.ignore_lines}`;
 }
 
 function isRegex(c: FsmCondition): c is import('./types.js').RegexCondition {
@@ -150,7 +166,7 @@ function evalCond(
         return { kind: 'elapsed', result, detail: `elapsed ${age}ms / ${cond.elapsed_ms}ms`, remainingMs };
     }
     if (isStable(cond)) {
-        const key = regionKey(cond.cursor_above);
+        const key = stableRegionKey(cond);
         // If we never saw the region change, treat it as stable since the
         // state was entered (conservative — avoids a premature "stable" on
         // the very first frame).
@@ -158,8 +174,10 @@ function evalCond(
         const stableFor = clock.now - lastChanged;
         const result = stableFor >= cond.stable_ms;
         const remainingMs = result ? 0 : cond.stable_ms - stableFor;
-        const where = key === WHOLE_SCREEN ? 'screen' : `cursor_above=${cond.cursor_above}`;
-        return { kind: 'stable', result, detail: `stable ${where} ${stableFor}ms / ${cond.stable_ms}ms`, remainingMs };
+        const where = cond.section ? `section=${cond.section}`
+            : cond.cursor_above && cond.cursor_above > 0 ? `cursor_above=${cond.cursor_above}` : 'screen';
+        const ign = cond.ignore_lines ? ' (ignore_lines)' : '';
+        return { kind: 'stable', result, detail: `stable ${where}${ign} ${stableFor}ms / ${cond.stable_ms}ms`, remainingMs };
     }
     // regex / changed → shared evaluator (operates on v3 Condition shape)
     if (isRegex(cond) || isChanged(cond)) {

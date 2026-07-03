@@ -3,8 +3,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateFsmSpec } from '../../../src/providers/spec/fsm-loader.js';
-import { evaluateFsm, type FsmClock } from '../../../src/providers/spec/fsm-evaluator.js';
+import { evaluateFsm, stableRegionKey, type FsmClock } from '../../../src/providers/spec/fsm-evaluator.js';
 import { resolveSections, sectionText, extractButtonsFromRule, extractTitle } from '../../../src/providers/spec/evaluator.js';
+import { filterIgnoredLines } from '../../../src/providers/spec/fsm-driver.js';
 import type { CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
 
 function resolveSpecPath(): string {
@@ -26,8 +27,17 @@ function loadSpec(): CliSpecV4 {
     return raw as CliSpecV4;
 }
 
-function clk(now: number, entered: number, regions: [number, number][] = []): FsmClock {
+function clk(now: number, entered: number, regions: [number | string, number][] = []): FsmClock {
     return { now, stateEnteredAt: entered, regionLastChangedAt: new Map(regions) };
+}
+
+/** The regionLastChangedAt key the given transition's stable clause watches.
+ *  Derived from the spec so a change to the clause's region/ignore_lines keeps
+ *  these tests honest instead of hard-coding a brittle key string. */
+function stableKeyOf(spec: CliSpecV4, label: string): number | string {
+    const t = spec.transitions.find(tr => tr.label === label)!;
+    const stable = (t.when as any).all.find((c: any) => typeof c.stable_ms === 'number');
+    return stableRegionKey(stable);
 }
 
 function strip(screen: string): string[] {
@@ -549,23 +559,28 @@ describe('claude-cli v4 FSM — FALSEIDLE2 ellipsis-less spinner + whole-screen 
         expect(re.test('✻ Compacting conversation for 12s')).toBe(false);
     });
 
-    it('(b) busy→idle stable clause is whole-screen (no cursor_above key)', () => {
-        // With cursor_above dropped the stable region keys -1 (whole screen), so a
-        // below-cursor spinner tick (tracked by the driver into region -1) resets
-        // the timer — the structural fix for Gap A.
+    it('(b) busy→idle stable clause stays whole-screen (no cursor_above) but content-aware', () => {
+        // The clause is still whole-screen scoped (no cursor_above) so a below-
+        // cursor spinner tick still resets the timer — the FALSEIDLE2 structural
+        // fix for Gap A. SESSION-STATE-WEDGE additionally adds `ignore_lines` so a
+        // benign residual ticker (bare token counter / ✻ elapsed line) does NOT
+        // reset it; the two together let a real spinner hold busy while a settled
+        // transcript still reaches stable.
         const busyToIdle = spec.transitions.find(t => t.label === 'busy→idle')!;
         const stable = (busyToIdle.when as any).all.find((c: any) => typeof c.stable_ms === 'number');
         expect(stable.stable_ms).toBe(8000);
         expect(stable.cursor_above).toBeUndefined();
+        expect(stable.section).toBeUndefined();
+        expect(typeof stable.ignore_lines).toBe('string');
     });
 
-    it('(b) a recent whole-screen change holds busy even on a completion-looking frame', () => {
+    it('(b) a recent spinner-driven whole-screen change holds busy even on a completion-looking frame', () => {
         // genuineCompletion looks idle (not-spinner TRUE, footer TRUE) but the
-        // whole screen changed 1s ago (regionLastChangedAt[-1]) — the spinner tick
-        // analog. Whole-screen stable is unsatisfied → stays busy. Pre-fix the
-        // gate watched cursor_above=4 (above the cursor, static) and would have
-        // gone idle here.
-        const ev = evaluateFsm(spec, 'busy', genuineCompletion, undefined, undefined, clk(30000, 0, [[-1, 29000]]));
+        // whole screen changed 1s ago on a NON-ignored line (a spinner tick analog)
+        // — the driver records that into the clause's ignore-scoped key. Whole-
+        // screen stable is unsatisfied → stays busy.
+        const key = stableKeyOf(spec, 'busy→idle');
+        const ev = evaluateFsm(spec, 'busy', genuineCompletion, undefined, undefined, clk(30000, 0, [[key, 29000]]));
         expect(ev.fired?.to).not.toBe('idle');
     });
 
@@ -1051,12 +1066,14 @@ describe('claude-cli v4 FSM — FALSEBUSY B: footer pushed out of viewport (Cody
 
     it('(no false-idle) Cody generating, whole-screen changed 2s ago → stays busy', () => {
         // Spinner tick 2s ago keeps the whole-screen stable timer under 12s.
-        const ev = evaluateFsm(spec, 'busy', codyGenerating, undefined, undefined, clk(60000, 0, [[-1, 58000]]));
+        const key = stableKeyOf(spec, 'busy→idle-quiet');
+        const ev = evaluateFsm(spec, 'busy', codyGenerating, undefined, undefined, clk(60000, 0, [[key, 58000]]));
         expect(ev.fired?.to).not.toBe('idle');
     });
 
     it('(gate) Cody idle settled only 9s → not yet idle (12s window)', () => {
-        const ev = evaluateFsm(spec, 'busy', codyIdle, undefined, undefined, clk(60000, 0, [[-1, 51000]]));
+        const key = stableKeyOf(spec, 'busy→idle-quiet');
+        const ev = evaluateFsm(spec, 'busy', codyIdle, undefined, undefined, clk(60000, 0, [[key, 51000]]));
         expect(ev.fired?.to).not.toBe('idle');
     });
 
@@ -1114,6 +1131,77 @@ describe('claude-cli v4 FSM — FALSEBUSY B: footer pushed out of viewport (Cody
         const re = new RegExp(tokenGuard.not.matches, 'i');
         expect(re.test('"tokens": 1234, "nodes": 4')).toBe(false);
         expect(re.test('✻ Worked for 7s · ↑ 1.2k tokens')).toBe(true);
+    });
+
+    // ── SESSION-STATE-WEDGE (결함2): content-aware ignore_lines ────────────────
+    // The wedge: after generation finishes, a benign residual ticker keeps
+    // repainting the whole screen every frame (a bare token counter, an elapsed
+    // timer, a ✻ line). Pre-fix the whole-screen stable clock reset on every
+    // such tick → busy→idle / busy→idle-quiet never reached stable_ms → the
+    // session latched 'generating' for tens of minutes despite being idle.
+    //
+    // Fix: `ignore_lines` on the stable clauses strips those benign lines before
+    // the change comparison. It is CONTENT-based: an active spinner line does NOT
+    // match, so the FALSEIDLE2 "below-prompt spinner tick holds busy" invariant
+    // survives (asserted just above and here).
+
+    it('(wedge) busy→idle & busy→idle-quiet stable clauses carry an ignore_lines filter', () => {
+        for (const label of ['busy→idle', 'busy→idle-quiet']) {
+            const t = spec.transitions.find(tr => tr.label === label)! as any;
+            const stable = t.when.all.find((c: any) => typeof c.stable_ms === 'number');
+            expect(typeof stable.ignore_lines).toBe('string');
+        }
+    });
+
+    it('(wedge) ignore_lines matches benign residual tickers but NOT active spinners', () => {
+        const stable = (spec.transitions.find(t => t.label === 'busy→idle-quiet')!.when as any)
+            .all.find((c: any) => typeof c.stable_ms === 'number');
+        const re = new RegExp(stable.ignore_lines, 'm');
+        // benign residual animation that must be filtered (would otherwise wedge):
+        expect(re.test('✻ Worked for 29s')).toBe(true);            // frozen/ticking elapsed line
+        expect(re.test('✻ Compacting conversation for 12s')).toBe(true);
+        expect(re.test('  ↑ 6.1k tokens')).toBe(true);             // bare token counter line
+        expect(re.test('↓ 12.3k tokens · 4 files')).toBe(true);
+        // active spinners must NOT be filtered — a real tick must still hold busy:
+        expect(re.test('✽ Ebbing (3m · ↑10k tokens)')).toBe(false);
+        expect(re.test('✢ Spelunking… (1m 37s · ↓ 6.1k tokens)')).toBe(false);
+        expect(re.test('⣾ Running the test suite… (esc to interrupt)')).toBe(false);
+        // ordinary transcript lines are untouched:
+        expect(re.test('⏺ Done. Awaiting next instruction.')).toBe(false);
+        expect(re.test('· WARMUPGAP — guard dispatch-row updates')).toBe(false);
+    });
+
+    it('(wedge/driver) filterIgnoredLines masks benign ticker deltas but keeps spinner deltas', () => {
+        // This is exactly the comparison the driver's trackRegionChanges runs to
+        // decide whether the whole-screen stable clock resets. Two frames that
+        // differ ONLY on ignored lines must compare EQUAL (no reset → can settle);
+        // a frame whose spinner line changed must compare UNEQUAL (reset → busy).
+        const stable = (spec.transitions.find(t => t.label === 'busy→idle-quiet')!.when as any)
+            .all.find((c: any) => typeof c.stable_ms === 'number');
+        const re = new RegExp(stable.ignore_lines, 'm');
+        const join = (ls: string[]) => filterIgnoredLines(ls, re).join('\n');
+
+        // Frame N and N+1 differ only on a ticking ✻-elapsed line and a token
+        // counter — both ignored. Post-filter the two frames are identical.
+        const frameA = ['⏺ Done.', '✻ Worked for 7s', '  ↑ 1.1k tokens', '❯ '];
+        const frameB = ['⏺ Done.', '✻ Worked for 8s', '  ↑ 1.3k tokens', '❯ '];
+        expect(join(frameA)).toBe(join(frameB));
+
+        // But when the active spinner line itself changes frame-to-frame, the
+        // filter leaves it in → the frames differ → the clock resets (busy held).
+        const spinA = ['⏺ Working', '⣾ Running the test suite… (esc to interrupt)', '❯ '];
+        const spinB = ['⏺ Working', '⣿ Running the test suite… (esc to interrupt)', '❯ '];
+        expect(join(spinA)).not.toBe(join(spinB));
+    });
+
+    it('(wedge) a settled Cody frame with the ignore-key never marked changed → recovers idle', () => {
+        // The wedge scenario expressed at the evaluator boundary: the ONLY thing
+        // that animated post-completion was a benign ticker, so the driver never
+        // records a change into the clause's ignore-scoped key. With that key
+        // absent (measured from state entry), a 30s-old busy state is quiet ≥12s →
+        // busy→idle-quiet fires. codyIdle has no spinner and no arrow-token line.
+        const ev = evaluateFsm(spec, 'busy', codyIdle, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('idle');
     });
 });
 
