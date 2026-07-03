@@ -449,22 +449,25 @@ function MagiActivityCard({ status }: { status: RepoMeshStatus }) {
     )
 }
 
-function MeshStatusTab({ status }: { status: RepoMeshStatus }) {
+// Receives the already-canonicalized status from MeshObservabilitySurface (the
+// single boundary canonicalize), so `nodes` is guaranteed an array and no
+// re-guard / re-canonicalize is needed here.
+function MeshStatusTab({ canonicalStatus }: { canonicalStatus: RepoMeshStatus }) {
     const meshTheme = useContext(MeshGraphThemeContext)
     return (
         <div className="flex flex-col gap-3 p-1">
-            <MeshSchedulingCard scheduling={status.scheduling} />
-            <MagiActivityCard status={status} />
+            <MeshSchedulingCard scheduling={canonicalStatus.scheduling} />
+            <MagiActivityCard status={canonicalStatus} />
             <div className="flex flex-col gap-2">
                 <span className={`px-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
                     Nodes — runtime
                 </span>
-                {status.nodes.length === 0 ? (
+                {canonicalStatus.nodes.length === 0 ? (
                     <div className={`rounded-xl border p-3 text-[12px] ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10' : 'border-slate-200'}`}>
                         No nodes reporting runtime yet.
                     </div>
                 ) : (
-                    status.nodes.map(node => <MeshNodeRuntimeRow key={node.nodeId} node={node} />)
+                    canonicalStatus.nodes.map(node => <MeshNodeRuntimeRow key={node.nodeId} node={node} />)
                 )}
             </div>
         </div>
@@ -1232,7 +1235,7 @@ export default function MeshObservabilitySurface({
 
             {/* ── Status / Runtime tab: scheduling + per-node runtime (own scroll region) ── */}
             <div className={`${activeTab === 'status' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto`}>
-                {activeTab === 'status' && <MeshStatusTab status={canonicalStatus} />}
+                {activeTab === 'status' && <MeshStatusTab canonicalStatus={canonicalStatus} />}
             </div>
 
             {/* ── Graph tab: existing topology card (lazily mounted) ── */}

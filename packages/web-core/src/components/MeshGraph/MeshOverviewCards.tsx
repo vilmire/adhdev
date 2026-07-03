@@ -19,7 +19,6 @@ import type {
 type MeshMissionDisplay = MeshMissionSummary | MeshMissionSlimSummary
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
-import { canonicalizeRepoMeshStatus } from '../../utils/repo-mesh-status'
 import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 
 /**
@@ -213,14 +212,18 @@ type MeshCommandSeam = {
 }
 
 export default function MeshOverviewCards({
-    status,
+    status: canonicalStatus,
     daemonId = null,
     meshId = null,
     sendDaemonCommand = null,
 }: { status: RepoMeshStatus } & MeshCommandSeam) {
+    // `status` is already canonicalized once at the data boundary by the parent
+    // (MeshObservabilitySurface calls canonicalizeRepoMeshStatus and passes the
+    // result in), so nodes/queue/ledger are guaranteed arrays and we do NOT
+    // canonicalize a second time here — a canonical status is the SSOT that flows
+    // down. Aliased to `canonicalStatus` to make that contract explicit.
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
-    const canonicalStatus = useMemo(() => canonicalizeRepoMeshStatus(status), [status])
 
     const queueSummary: RepoMeshQueueSummary | null = canonicalStatus.queue?.summary ?? null
     const queueTasks: RepoMeshQueueTask[] = canonicalStatus.queue?.tasks ?? []
