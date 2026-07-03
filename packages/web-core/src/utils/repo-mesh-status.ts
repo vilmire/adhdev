@@ -367,11 +367,18 @@ function canonicalizeRepoMeshNodes(nodes: unknown[]): RepoMeshNodeStatus[] {
     return canonicalNodes
 }
 
-export function canonicalizeRepoMeshStatus(status: RepoMeshStatus): RepoMeshStatus {
-    const nodes = canonicalizeRepoMeshNodes(status.nodes ?? [])
+export function canonicalizeRepoMeshStatus(status: RepoMeshStatus | null | undefined): RepoMeshStatus {
+    // Null-safe boundary primitive: callers may hand us a status that hasn't
+    // arrived yet (mesh unselected / SWR uninitialized / pre-handshake). A null or
+    // missing `nodes` collapses to an empty-array canonical status so every
+    // downstream `.nodes.map/.length/.find` is safe — this is the single seam that
+    // absorbs the MESH-PAGE-NULL-NODES-CRASH regression class. Non-null callers are
+    // unaffected (`status ?? {}` === status). The `?? []` node defense stays.
+    const safe = (status ?? {}) as RepoMeshStatus
+    const nodes = canonicalizeRepoMeshNodes(safe.nodes ?? [])
     return {
-        ...status,
-        nodes: attachCoordinatorSessionsToNodes(status, nodes),
+        ...safe,
+        nodes: attachCoordinatorSessionsToNodes(safe, nodes),
     }
 }
 

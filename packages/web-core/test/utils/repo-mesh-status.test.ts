@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildMeshGraph } from '../../src/utils/mesh-visualization'
-import { extractRepoMeshStatus, pickBestRepoMeshStatus } from '../../src/utils/repo-mesh-status'
+import { canonicalizeRepoMeshStatus, extractRepoMeshStatus, pickBestRepoMeshStatus } from '../../src/utils/repo-mesh-status'
+import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { describeProviders, summarizeNodeDrift, summarizeSelectedHead } from '../../src/components/MeshGraph/MeshObservabilitySurface'
 
 describe('extractRepoMeshStatus', () => {
@@ -1677,5 +1678,44 @@ describe('pickBestRepoMeshStatus freshness tiebreaker', () => {
     })
     expect(pickBestRepoMeshStatus([satisfiedStale, unsatisfiedFresh])?.meshId).toBe('mesh_unsatisfied_fresh')
     expect(pickBestRepoMeshStatus([unsatisfiedFresh, satisfiedStale])?.meshId).toBe('mesh_unsatisfied_fresh')
+  })
+})
+
+describe('canonicalizeRepoMeshStatus null-safe boundary', () => {
+  // The boundary primitive must absorb a null / undefined status and a status with
+  // a missing `nodes` array so downstream `.nodes.map/.length/.find` never throws —
+  // this is the seam that closes the MESH-PAGE-NULL-NODES-CRASH regression class.
+  it('returns an empty-node canonical status for a null input (no throw)', () => {
+    const canonical = canonicalizeRepoMeshStatus(null)
+    expect(Array.isArray(canonical.nodes)).toBe(true)
+    expect(canonical.nodes).toHaveLength(0)
+  })
+
+  it('returns an empty-node canonical status for an undefined input (no throw)', () => {
+    const canonical = canonicalizeRepoMeshStatus(undefined)
+    expect(Array.isArray(canonical.nodes)).toBe(true)
+    expect(canonical.nodes).toHaveLength(0)
+  })
+
+  it('tolerates a status whose nodes array is missing at runtime', () => {
+    // `nodes` is typed non-optional but can be absent before data arrives; the
+    // canonicalizer must seed [] rather than crash on `.nodes`.
+    const status = { meshId: 'mesh_x', meshName: 'ADHDev', repoIdentity: 'r', refreshedAt: '2026-01-01T00:00:00Z' } as unknown as RepoMeshStatus
+    const canonical = canonicalizeRepoMeshStatus(status)
+    expect(canonical.meshId).toBe('mesh_x')
+    expect(canonical.nodes).toEqual([])
+  })
+
+  it('passes a non-null status through unchanged (existing callers unaffected)', () => {
+    const status = {
+      meshId: 'mesh_ok',
+      meshName: 'ADHDev',
+      repoIdentity: 'r',
+      refreshedAt: '2026-01-01T00:00:00Z',
+      nodes: [{ nodeId: 'n1', machineLabel: 'n1', workspace: '/repo/n1', health: 'online', providers: [] }],
+    } as unknown as RepoMeshStatus
+    const canonical = canonicalizeRepoMeshStatus(status)
+    expect(canonical.meshId).toBe('mesh_ok')
+    expect(canonical.nodes.map(n => n.nodeId)).toEqual(['n1'])
   })
 })

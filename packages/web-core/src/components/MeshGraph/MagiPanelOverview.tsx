@@ -16,11 +16,16 @@ import type { MagiPanelMap } from '@adhdev/mesh-shared'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
+import { canonicalizeRepoMeshStatus } from '../../utils/repo-mesh-status'
 import type { MagiResolveNode } from '../../utils/magi-panel-resolve'
 import { MagiPanelSummaryRow } from './MagiPanelManager'
 
 interface MagiPanelOverviewProps {
-    status: RepoMeshStatus
+    /**
+     * Nullable by design: the mesh status may not have arrived yet. Canonicalized
+     * once at the boundary below so every `.nodes` read is on a guaranteed array.
+     */
+    status: RepoMeshStatus | null
     daemonId?: string | null
     sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
 }
@@ -33,9 +38,13 @@ export default function MagiPanelOverview({ status, daemonId, sendDaemonCommand 
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
 
+    // Canonicalize once at the boundary — `canonicalStatus.nodes` is always an array
+    // (absorbs a null status / missing nodes) so the read below needs no `?? []`.
+    const canonicalStatus = useMemo(() => canonicalizeRepoMeshStatus(status), [status])
+
     const liveNodes: MagiResolveNode[] = useMemo(
-        () => status.nodes.map(n => ({ nodeId: n.nodeId, providers: n.providers, providerPriority: n.providerPriority })),
-        [status.nodes],
+        () => canonicalStatus.nodes.map(n => ({ nodeId: n.nodeId, providers: n.providers, providerPriority: n.providerPriority })),
+        [canonicalStatus.nodes],
     )
 
     const canCommand = !!daemonId && !!sendDaemonCommand

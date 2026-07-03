@@ -28,6 +28,7 @@ import type { MagiPanel, MagiPanelMember, MagiPanelMap, MagiPanelDefaultKind } f
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
+import { canonicalizeRepoMeshStatus } from '../../utils/repo-mesh-status'
 import {
     resolveMagiPanel,
     type MagiMemberAvailability,
@@ -56,7 +57,12 @@ const DEFAULT_KIND_OPTIONS: { value: MagiPanelDefaultKind; label: string }[] = [
 ]
 
 interface MagiPanelManagerProps {
-    status: RepoMeshStatus
+    /**
+     * Nullable by design: the mesh status may not have arrived yet (mesh
+     * unselected / SWR uninitialized). Canonicalized once at the boundary below so
+     * every `.nodes` read is on a guaranteed array.
+     */
+    status: RepoMeshStatus | null
     daemonId?: string | null
     sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
 }
@@ -249,11 +255,16 @@ export default function MagiPanelManager({ status, daemonId, sendDaemonCommand }
     const [editing, setEditing] = useState<PanelDraft | null>(null)
     const [saving, setSaving] = useState(false)
 
+    // Canonicalize once at the boundary — below this line `canonicalStatus.nodes`
+    // is always an array (canonicalizeRepoMeshStatus absorbs a null status / missing
+    // nodes), so no consumer needs its own `?? []` guard.
+    const canonicalStatus = useMemo(() => canonicalizeRepoMeshStatus(status), [status])
+
     const liveNodes: MagiResolveNode[] = useMemo(
-        () => status.nodes.map(n => ({ nodeId: n.nodeId, providers: n.providers, providerPriority: n.providerPriority })),
-        [status.nodes],
+        () => canonicalStatus.nodes.map(n => ({ nodeId: n.nodeId, providers: n.providers, providerPriority: n.providerPriority })),
+        [canonicalStatus.nodes],
     )
-    const knownNodeIds = useMemo(() => status.nodes.map(n => n.nodeId), [status.nodes])
+    const knownNodeIds = useMemo(() => canonicalStatus.nodes.map(n => n.nodeId), [canonicalStatus.nodes])
 
     // Default machine to pre-fill new members with: the first online node that
     // reports any provider, else the first node reporting any provider, else the
@@ -263,12 +274,12 @@ export default function MagiPanelManager({ status, daemonId, sendDaemonCommand }
     const prefillNodeId = useMemo(() => {
         const offersProvider = (n: RepoMeshStatus['nodes'][number]) =>
             (n.providers?.length ?? 0) > 0 || (n.providerPriority?.length ?? 0) > 0
-        const online = status.nodes.find(n => n.health === 'online' && offersProvider(n))
+        const online = canonicalStatus.nodes.find(n => n.health === 'online' && offersProvider(n))
         if (online) return online.nodeId
-        const anyWithProvider = status.nodes.find(offersProvider)
+        const anyWithProvider = canonicalStatus.nodes.find(offersProvider)
         if (anyWithProvider) return anyWithProvider.nodeId
-        return status.nodes[0]?.nodeId ?? ''
-    }, [status.nodes])
+        return canonicalStatus.nodes[0]?.nodeId ?? ''
+    }, [canonicalStatus.nodes])
 
     // Provider candidates for the (creatable) dropdown: every provider any live
     // node reports. Falls back to a static enum when the mesh reports none, so the

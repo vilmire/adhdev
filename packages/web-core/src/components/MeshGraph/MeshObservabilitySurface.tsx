@@ -919,8 +919,11 @@ export default function MeshObservabilitySurface({
 }: MeshObservabilitySurfaceProps) {
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
-    const isBootstrapMode = bootstrapFallback ?? isBootstrapFallbackStatus(status)
+    // Canonicalize once at the boundary; everything below consumes canonicalStatus
+    // (nodes guaranteed an array) rather than the raw prop, so no consumer re-guards
+    // against a null/missing nodes array (MESH-PAGE-NULL-NODES-CRASH class).
     const canonicalStatus = useMemo(() => canonicalizeRepoMeshStatus(status), [status])
+    const isBootstrapMode = bootstrapFallback ?? isBootstrapFallbackStatus(canonicalStatus)
     const statusGraphFingerprint = useMemo(() => getRepoMeshStatusGraphFingerprint(canonicalStatus), [canonicalStatus])
     const canonicalGraph = useMemo(() => buildMeshGraph(canonicalStatus), [statusGraphFingerprint]) as MeshGraphData
     // Tab / help state can be owned by the parent (controlled) or self-managed.
@@ -1210,7 +1213,7 @@ export default function MeshObservabilitySurface({
             <div className={`${activeTab === 'overview' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col gap-3 overflow-y-auto`}>
                 {activeTab === 'overview' && (
                     <MeshOverviewCards
-                        status={status}
+                        status={canonicalStatus}
                         daemonId={daemonId}
                         meshId={canonicalStatus.meshId}
                         sendDaemonCommand={sendDaemonCommand}
