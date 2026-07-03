@@ -28,6 +28,7 @@
   "author": "vilmire",
   "license": "AGPL-3.0-or-later",
   "dependencies": {
+    "@adhdev/daemon-core": "*",
     "@modelcontextprotocol/sdk": "^1.0.0"
   },
   "devDependencies": {

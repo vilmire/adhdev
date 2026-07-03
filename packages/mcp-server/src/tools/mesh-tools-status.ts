@@ -81,6 +81,25 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     const schedulingByNode = new Map(schedulingRuntime.nodes.map(n => [n.nodeId, n]));
 
     // Probe all nodes in parallel — git_status + session collection per node are independent.
+    //
+    // Dual-surface note (mesh-status-dual-surface): this coordinator-side node object
+    // is assembled here independently of the daemon-core finalize path
+    // (commands/high-family/mesh-status.ts, which stamps its own node via
+    // buildMeshNodeMachineIdentity). The two surfaces are INTENTIONALLY distinct:
+    //   • machine identity — buildNodeMachineIdentity (mesh-node-identity.ts) emits
+    //     the SAME output shape as daemon-core's buildMeshNodeMachineIdentity
+    //     (daemonId/machineId/hostname/machineName/displayName/coordinatorHostname/
+    //     sameMachine/locality/localityReason/identityEvidence), so a field added to
+    //     one must be added to the other. It cannot be collapsed into the daemon-core
+    //     builder because the coordinator surface derives sameMachine/locality from
+    //     richer control-plane evidence (isDirectLocalNode / isConfiguredCoordinatorNode /
+    //     cloned-from tracing / local session evidence) that needs the full MeshContext,
+    //     which the daemon-core `opts`-scalar signature does not carry.
+    //   • capability exposure — buildNodeCapabilityExposure already delegates its tag
+    //     computation to daemon-core's buildMeshNodeCapabilityTags (the SAME function
+    //     the queue/dispatch matcher uses), so the exposed tags cannot drift from
+    //     routing; only the exposure wrapper (byProvider map + raw capabilities) is local.
+    // When adding a node field on either surface, update the peer surface too.
     const results = await Promise.all(mesh.nodes.map(async (node) => {
         const entry: any = {
             nodeId: node.id,
