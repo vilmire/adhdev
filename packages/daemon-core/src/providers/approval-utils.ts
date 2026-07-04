@@ -16,7 +16,7 @@ const DEFAULT_APPROVAL_POSITIVE_HINTS = [
     'always allow',
 ];
 
-function normalizeApprovalLabel(value: string): string {
+export function normalizeApprovalLabel(value: string): string {
     return String(value || '')
         .toLowerCase()
         .replace(/^[\s\[(<{]*\d+(?:\s*[.)\]}>:-]|\s)+/, '')

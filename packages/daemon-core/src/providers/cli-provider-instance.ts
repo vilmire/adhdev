@@ -27,7 +27,7 @@ import { shouldCollectTraceCategory } from '../logging/debug-config.js';
 import { traceMeshEventStage, traceMeshEventDrop } from '../mesh/mesh-event-trace.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
-import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, hasReliableApprovalAffirmative, looksLikeActiveApprovalPromptText } from './approval-utils.js';
+import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, hasReliableApprovalAffirmative, looksLikeActiveApprovalPromptText, normalizeApprovalLabel } from './approval-utils.js';
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { normalizeProviderSessionId } from './provider-session-id.js';
@@ -2317,19 +2317,31 @@ export class CliProviderInstance implements ProviderInstance {
             // kind gate). Surface the modal so the user decides; never pick blindly.
             return autoApproveActive;
         }
-        // Modal *identity* signature — the question/button set only, NO volatile
-        // counters. This is what the settle gate tracks: the FSM bumps
-        // approvalEntrySeq on every fresh waiting_approval entry, and a
-        // modal→generating→modal flap (the question line scrolled out of the
-        // captured frame while the button block stays) re-enters and bumps it
-        // again. Folding that seq into the settle signature made the 600ms
-        // settle clock restart on every flap, so the modal never stayed stable
-        // long enough to fire — the gate was never satisfied. Identity excludes
-        // the seq so button/seq flap of the SAME modal keeps one settle clock.
+        // Modal *identity* signature — the question plus the STABLE affirmative
+        // anchor only, NO volatile counters and NO raw button set. This is what
+        // the settle gate tracks: the FSM bumps approvalEntrySeq on every fresh
+        // waiting_approval entry, and a modal→generating→modal flap (the question
+        // line scrolled out of the captured frame while the button block stays)
+        // re-enters and bumps it again. Folding that seq into the settle signature
+        // made the 600ms settle clock restart on every flap, so the modal never
+        // stayed stable long enough to fire — the gate was never satisfied.
+        // Identity excludes the seq so seq flap of the SAME modal keeps one clock.
+        //
+        // The raw button set is also excluded: on a TALL Write/Edit diff claude's
+        // TUI repaints the button block 3↔5↔none between frames (buttons scroll in
+        // and out of the captured region), which flipped both buttons.join('|') and
+        // the positional buttonIndex every frame → signature flap → the settle
+        // clock reset 4–9s and only mask-stalled episodes leaked to the coordinator
+        // (AUTOAPPROVE-SETTLE-FLAP). The affirmative the auto-approve will actually
+        // press is the invariant across those repaints, so we anchor on its
+        // NORMALIZED label (numbers/bullets/punctuation stripped, so "1. Yes" and
+        // "3. Yes" collapse to "yes"). Message + affirmative label uniquely
+        // identifies the consent question without tracking the volatile button
+        // positions.
+        const affirmativeAnchor = normalizeApprovalLabel(buttonLabel);
         const modalSignature = [
             typeof modal?.message === 'string' ? modal.message.trim() : '',
-            buttons.join('|'),
-            buttonIndex,
+            affirmativeAnchor,
         ].join('::');
         // Busy-window re-entry guard still needs the seq: two DISTINCT
         // back-to-back approvals can carry identical message/buttons (common
