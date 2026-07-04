@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest'
-import { createDebugTraceStore, sanitizeTracePayload } from '../../src/logging/debug-trace'
+import { afterEach, describe, expect, it } from 'vitest'
+import {
+  clearDebugTrace,
+  configureDebugTraceStore,
+  createDebugTraceStore,
+  getRecentDebugTrace,
+  recordDebugTrace,
+  sanitizeTracePayload,
+} from '../../src/logging/debug-trace'
 import { resetDebugRuntimeConfig, setDebugRuntimeConfig } from '../../src/logging/debug-config'
 
 describe('debug-trace', () => {
@@ -84,5 +91,62 @@ describe('debug-trace', () => {
       text: 'hello',
       nested: { message: 'world' },
     })
+  })
+
+  it('records always-on categories on the store even when disabled', () => {
+    const store = createDebugTraceStore({ enabled: false, capacity: 10 })
+
+    store.record({ category: 'completion-gate', stage: 'fire', level: 'debug', payload: { path: 'clean' } })
+    store.record({ category: 'fsm-transition', stage: 'transition', level: 'debug', payload: { to: 'idle' } })
+    // A non-always-on category is still dropped when disabled.
+    store.record({ category: 'command', stage: 'received', level: 'info', payload: { ignored: true } })
+
+    expect(store.list({ limit: 10 }).map((entry) => entry.category)).toEqual([
+      'completion-gate',
+      'fsm-transition',
+    ])
+  })
+})
+
+describe('recordDebugTrace always-on (production, collectDebugTrace=false)', () => {
+  afterEach(() => {
+    clearDebugTrace()
+    resetDebugRuntimeConfig()
+    configureDebugTraceStore()
+  })
+
+  it('stores completion-gate and retrieves it via getRecentDebugTrace, while blocking unrelated categories', () => {
+    // Simulate a production daemon: --trace unset ⇒ collectDebugTrace=false.
+    resetDebugRuntimeConfig()
+    configureDebugTraceStore()
+
+    const gate = recordDebugTrace({
+      category: 'completion-gate',
+      stage: 'fire',
+      level: 'debug',
+      sessionId: 'sess_1',
+      payload: { path: 'clean', duration: 3 },
+    })
+    const fsm = recordDebugTrace({
+      category: 'fsm-transition',
+      stage: 'transition',
+      level: 'debug',
+      sessionId: 'sess_1',
+      payload: { from: 'generating', to: 'idle' },
+    })
+    const unrelated = recordDebugTrace({
+      category: 'command',
+      stage: 'received',
+      level: 'info',
+      payload: { ignored: true },
+    })
+
+    expect(gate).not.toBeNull()
+    expect(fsm).not.toBeNull()
+    expect(unrelated).toBeNull()
+
+    expect(getRecentDebugTrace({ category: 'completion-gate', limit: 10 })).toHaveLength(1)
+    expect(getRecentDebugTrace({ category: 'fsm-transition', limit: 10 })).toHaveLength(1)
+    expect(getRecentDebugTrace({ category: 'command', limit: 10 })).toHaveLength(0)
   })
 })

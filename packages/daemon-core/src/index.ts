@@ -394,6 +394,8 @@ export {
     getDebugRuntimeConfig,
     resetDebugRuntimeConfig,
     shouldCollectTraceCategory,
+    isAlwaysOnTraceCategory,
+    ALWAYS_ON_TRACE_CATEGORIES,
 } from './logging/debug-config.js';
 export type { DebugRuntimeOptions, DebugRuntimeConfig } from './logging/debug-config.js';
 export {

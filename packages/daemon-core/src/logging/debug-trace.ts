@@ -1,4 +1,4 @@
-import { getDebugRuntimeConfig, shouldCollectTraceCategory } from './debug-config.js'
+import { getDebugRuntimeConfig, isAlwaysOnTraceCategory, shouldCollectTraceCategory } from './debug-config.js'
 
 export type DebugTraceLevel = 'debug' | 'info' | 'warn' | 'error'
 
@@ -80,7 +80,12 @@ export function createDebugTraceStore(options: DebugTraceStoreOptions): DebugTra
 
   return {
     record(event: DebugTraceEvent): DebugTraceEntry | null {
-      if (!options.enabled) return null
+      // The store's `enabled` flag mirrors collectDebugTrace (set by configureDebugTraceStore),
+      // so it is false on a production daemon. Always-on categories must still land in the ring
+      // even then — otherwise the second gate here would swallow what shouldCollectTraceCategory
+      // just admitted. They share the same fixed-capacity buffer, so heavy always-on traffic can
+      // evict older opt-in entries; that is accepted (no separate ring).
+      if (!options.enabled && !isAlwaysOnTraceCategory(event.category)) return null
       const entry = createEntry(event)
       entries.push(entry)
       if (entries.length > capacity) {
