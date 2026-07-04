@@ -5056,7 +5056,7 @@ async function meshMagiReview(ctx, args) {
       return JSON.stringify({
         success: false,
         code: "magi_kind_not_configured",
-        error: `\uC774 task_kind\uC5D0 \uB300\uD55C \uD328\uB110 \uC2AC\uB86F\uC774 \uBA54\uC2DC \uC138\uD305\uC5D0 \uC5C6\uC2B5\uB2C8\uB2E4. \uC138\uD305\uC5D0\uC11C (\uBA38\uC2E0+\uD504\uB85C\uBC14\uC774\uB354+\uBAA8\uB378) \uC2AC\uB86F\uC744 1\uAC1C \uC774\uC0C1 \uCC44\uC6B0\uC138\uC694 \u2014 task_kind '${presetKind}' has no configured kind-panel.`,
+        error: `No panel slots are configured for this task_kind in mesh settings. Add at least one (machine + provider + model) slot in settings \u2014 task_kind '${presetKind}' has no configured kind-panel.`,
         taskKind: presetKind,
         configuredKinds: Object.keys((0, import_daemon_core4.listMagiKindPanels)()),
         hint: "Configure this kind in mesh settings (MagiKindPanelEditor), or set it programmatically with the magi_kind_panel_set daemon command, then retry. Alternatively pass explicit inline members or a named panel to mesh_magi_review."
