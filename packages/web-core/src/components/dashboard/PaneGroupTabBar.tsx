@@ -406,8 +406,8 @@ export default function PaneGroupTabBar({
 
             {allowTabShortcuts && shortcutListening && (
                 <div
-                    className="fixed inset-0 z-[60] flex items-center justify-center"
-                    style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)' }}
+                    className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50"
+                    style={{ backdropFilter: 'blur(2px)' }}
                     onClick={() => setShortcutListening(null)}
                 >
                     <div

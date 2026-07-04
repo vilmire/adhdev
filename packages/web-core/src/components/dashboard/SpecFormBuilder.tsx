@@ -137,32 +137,32 @@ function ConditionEditor({ cond, path, sections, onChange, onRemove, onPreview, 
     }
 
     return (
-        <div className="border border-zinc-700/60 rounded bg-zinc-800/30 p-1.5 space-y-1">
+        <div className="border border-border-default/60 rounded bg-surface-secondary p-1.5 space-y-1">
             <div className="flex items-center gap-1.5">
                 <select
                     value={kind}
                     onChange={e => replaceKind(e.target.value as CondKind)}
-                    className="bg-zinc-900 text-zinc-200 text-[10px] font-mono rounded border border-zinc-700 px-1 py-0.5"
+                    className="bg-bg-secondary text-text-primary text-[10px] font-mono rounded border border-border-default px-1 py-0.5"
                 >
                     {PALETTE.map(p => <option key={p.kind} value={p.kind}>{p.label}</option>)}
                 </select>
                 {(kind === 'regex' || kind === 'stable' || kind === 'changed' || kind === 'elapsed') && (
                     <button
                         type="button"
-                        className="text-[10px] text-sky-300 hover:text-sky-100 px-1.5 py-0.5 rounded border border-sky-700/40 hover:bg-sky-600/20"
+                        className="text-[10px] text-accent-primary hover:text-accent-primary px-1.5 py-0.5 rounded border border-accent hover:bg-accent-primary/20"
                         onClick={() => onPreview(path, cond)}
                     >
                         test
                     </button>
                 )}
                 {pv && pv !== 'loading' && (
-                    <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${pv.result ? 'text-green-200 bg-green-600/25' : 'text-zinc-400 bg-zinc-700/40'}`}>
+                    <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${pv.result ? 'text-status-online bg-status-online/20' : 'text-text-secondary bg-bg-glass'}`}>
                         {pv.result ? 'match ✓' : 'no match'}
                     </span>
                 )}
-                {pv === 'loading' && <span className="text-[10px] text-zinc-500">testing…</span>}
+                {pv === 'loading' && <span className="text-[10px] text-text-muted">testing…</span>}
                 {onRemove && (
-                    <button type="button" className="ml-auto text-zinc-500 hover:text-red-300 text-xs px-1" onClick={onRemove}>×</button>
+                    <button type="button" className="ml-auto text-text-muted hover:text-status-error text-xs px-1" onClick={onRemove}>×</button>
                 )}
             </div>
 
@@ -172,7 +172,7 @@ function ConditionEditor({ cond, path, sections, onChange, onRemove, onPreview, 
                     <select
                         value={(cond as any).section ?? ''}
                         onChange={e => onChange({ ...(cond as any), section: e.target.value || undefined })}
-                        className="bg-zinc-900 text-sky-300 text-[10px] font-mono rounded border border-zinc-700 px-1 py-0.5"
+                        className="bg-bg-secondary text-accent-primary text-[10px] font-mono rounded border border-border-default px-1 py-0.5"
                     >
                         <option value="">(whole screen)</option>
                         {sections.map(s => <option key={s} value={s}>{s}</option>)}
@@ -182,7 +182,7 @@ function ConditionEditor({ cond, path, sections, onChange, onRemove, onPreview, 
                         onChange={e => onChange({ ...(cond as any), matches: e.target.value })}
                         placeholder="regex"
                         spellCheck={false}
-                        className="flex-1 bg-black/40 text-zinc-200 text-[10px] font-mono rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                        className="flex-1 bg-bg-secondary text-text-primary text-[10px] font-mono rounded border border-border-default px-1.5 py-0.5 outline-none focus:border-accent"
                     />
                 </div>
             )}
@@ -198,8 +198,8 @@ function ConditionEditor({ cond, path, sections, onChange, onRemove, onPreview, 
             {kind === 'changed' && (
                 <div className="flex items-center gap-2">
                     <NumField label="cursor_above" value={(cond as any).cursor_above} onChange={v => onChange({ ...(cond as any), cursor_above: v })} />
-                    <label className="flex items-center gap-1 text-[10px] text-zinc-400">
-                        <input type="checkbox" checked={!!(cond as any).changed} onChange={e => onChange({ ...(cond as any), changed: e.target.checked })} className="accent-sky-500" />
+                    <label className="flex items-center gap-1 text-[10px] text-text-secondary">
+                        <input type="checkbox" checked={!!(cond as any).changed} onChange={e => onChange({ ...(cond as any), changed: e.target.checked })} className="accent-[var(--accent-primary)]" />
                         changed
                     </label>
                 </div>
@@ -218,7 +218,7 @@ function ConditionEditor({ cond, path, sections, onChange, onRemove, onPreview, 
                 />
             )}
             {kind === 'not' && (
-                <div className="pl-2 border-l border-zinc-700">
+                <div className="pl-2 border-l border-border-default">
                     <ConditionEditor
                         cond={(cond as any).not}
                         path={`${path}.not`}
@@ -245,7 +245,7 @@ function CompositeEditor({ kind, cond, path, sections, onChange, onPreview, prev
     const children: FsmCond[] = (kind === 'all' ? cond.all : cond.any) ?? []
     const setChildren = (next: FsmCond[]) => onChange(kind === 'all' ? { all: next } : { any: next })
     return (
-        <div className="pl-2 border-l border-zinc-700 space-y-1">
+        <div className="pl-2 border-l border-border-default space-y-1">
             {children.map((c, i) => (
                 <ConditionEditor
                     key={i}
@@ -261,7 +261,7 @@ function CompositeEditor({ kind, cond, path, sections, onChange, onPreview, prev
             <div className="flex items-center gap-1 flex-wrap">
                 <button
                     type="button"
-                    className="text-[10px] text-zinc-300 hover:text-white px-1.5 py-0.5 rounded border border-zinc-700 hover:bg-zinc-700/40"
+                    className="text-[10px] text-text-secondary hover:text-text-primary px-1.5 py-0.5 rounded border border-border-default hover:bg-bg-glass-hover"
                     onClick={() => setChildren([...children, { section: sections[0], matches: '' }])}
                 >
                     + condition
@@ -270,7 +270,7 @@ function CompositeEditor({ kind, cond, path, sections, onChange, onPreview, prev
                     <button
                         key={s.label}
                         type="button"
-                        className="text-[10px] text-sky-300/80 hover:text-sky-100 px-1.5 py-0.5 rounded border border-sky-700/30 hover:bg-sky-600/15"
+                        className="text-[10px] text-accent-primary/80 hover:text-accent-primary px-1.5 py-0.5 rounded border border-accent hover:bg-accent-primary/20"
                         onClick={() => setChildren([...children, JSON.parse(JSON.stringify(s.cond))])}
                         title="insert verified pattern"
                     >
@@ -284,13 +284,13 @@ function CompositeEditor({ kind, cond, path, sections, onChange, onPreview, prev
 
 function NumField({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
     return (
-        <label className="flex items-center gap-1 text-[10px] text-zinc-400 font-mono">
+        <label className="flex items-center gap-1 text-[10px] text-text-secondary font-mono">
             {label}
             <input
                 type="number"
                 value={Number.isFinite(value) ? value : 0}
                 onChange={e => onChange(Number(e.target.value))}
-                className="w-20 bg-black/40 text-zinc-200 rounded border border-zinc-700 px-1 py-0.5 outline-none focus:border-sky-500/50"
+                className="w-20 bg-bg-secondary text-text-primary rounded border border-border-default px-1 py-0.5 outline-none focus:border-accent"
             />
         </label>
     )
@@ -335,22 +335,22 @@ function SectionsEditor({ sections, otherSectionIds, onChange, onTest, testResul
     return (
         <div>
             <div className="flex items-center gap-2 mb-1">
-                <span className="text-zinc-400 text-[10px] uppercase tracking-widest font-semibold">Sections</span>
-                <span className="text-zinc-600 text-[10px]">— how the screen is split; conditions match against these</span>
+                <span className="text-text-secondary text-[10px] uppercase tracking-widest font-semibold">Sections</span>
+                <span className="text-text-muted text-[10px]">— how the screen is split; conditions match against these</span>
                 <button
                     type="button"
-                    className="ml-auto text-[10px] text-sky-300 hover:text-sky-100 px-1.5 py-0.5 rounded border border-sky-700/40 hover:bg-sky-600/20"
+                    className="ml-auto text-[10px] text-accent-primary hover:text-accent-primary px-1.5 py-0.5 rounded border border-accent hover:bg-accent-primary/20"
                     onClick={onTest}
                     title="Resolve all sections against the live session screen"
                 >{testResult === 'loading' ? 'testing…' : 'test on live screen'}</button>
                 <button
                     type="button"
-                    className="text-[10px] text-zinc-300 hover:text-white px-1.5 py-0.5 rounded border border-zinc-700 hover:bg-zinc-700/40"
+                    className="text-[10px] text-text-secondary hover:text-text-primary px-1.5 py-0.5 rounded border border-border-default hover:bg-bg-glass-hover"
                     onClick={addSection}
                 >+ section</button>
             </div>
             {testResult && testResult !== 'loading' && 'error' in testResult && (
-                <div className="text-red-300 bg-red-900/30 border border-red-700/40 rounded p-1.5 text-[10px] mb-1">{testResult.error}</div>
+                <div className="text-status-error bg-status-error/15 border border-status-error/40 rounded p-1.5 text-[10px] mb-1">{testResult.error}</div>
             )}
             <div className="space-y-1.5">
                 {ids.map(id => {
@@ -361,18 +361,18 @@ function SectionsEditor({ sections, otherSectionIds, onChange, onTest, testResul
                         else updateSection(id, { from_top: def.from_top ?? 0, until: def.until })
                     }
                     return (
-                        <div key={id} className="border border-zinc-700/60 rounded bg-zinc-800/30 p-2 space-y-1.5">
+                        <div key={id} className="border border-border-default/60 rounded bg-surface-secondary p-2 space-y-1.5">
                             <div className="flex items-center gap-2">
                                 <input
                                     value={id}
                                     onChange={e => renameSection(id, e.target.value.trim())}
-                                    className="w-28 bg-black/40 text-sky-300 font-mono text-[11px] rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                                    className="w-28 bg-bg-secondary text-accent-primary font-mono text-[11px] rounded border border-border-default px-1.5 py-0.5 outline-none focus:border-accent"
                                 />
-                                <div className="inline-flex rounded border border-zinc-700 overflow-hidden text-[10px]">
-                                    <button type="button" className={`px-1.5 py-0.5 ${mode === 'positional' ? 'bg-sky-600/30 text-sky-100' : 'text-zinc-400 hover:bg-zinc-700/40'}`} onClick={() => setMode('positional')}>positional</button>
-                                    <button type="button" className={`px-1.5 py-0.5 ${mode === 'anchor' ? 'bg-sky-600/30 text-sky-100' : 'text-zinc-400 hover:bg-zinc-700/40'}`} onClick={() => setMode('anchor')}>anchor</button>
+                                <div className="inline-flex rounded border border-border-default overflow-hidden text-[10px]">
+                                    <button type="button" className={`px-1.5 py-0.5 ${mode === 'positional' ? 'bg-accent-primary/20 text-accent-primary' : 'text-text-secondary hover:bg-bg-glass-hover'}`} onClick={() => setMode('positional')}>positional</button>
+                                    <button type="button" className={`px-1.5 py-0.5 ${mode === 'anchor' ? 'bg-accent-primary/20 text-accent-primary' : 'text-text-secondary hover:bg-bg-glass-hover'}`} onClick={() => setMode('anchor')}>anchor</button>
                                 </div>
-                                <button type="button" className="ml-auto text-zinc-500 hover:text-red-300 text-sm px-1" onClick={() => removeSection(id)}>×</button>
+                                <button type="button" className="ml-auto text-text-muted hover:text-status-error text-sm px-1" onClick={() => removeSection(id)}>×</button>
                             </div>
 
                             {mode === 'positional' ? (
@@ -384,16 +384,16 @@ function SectionsEditor({ sections, otherSectionIds, onChange, onTest, testResul
                             ) : (
                                 <div className="space-y-1">
                                     <div className="flex items-center gap-1.5">
-                                        <span className="text-[10px] text-zinc-500 w-16">anchor</span>
+                                        <span className="text-[10px] text-text-muted w-16">anchor</span>
                                         <input
                                             value={def.anchor ?? ''}
                                             onChange={e => updateSection(id, { ...def, anchor: e.target.value })}
                                             placeholder="^regex locating section start"
                                             spellCheck={false}
-                                            className="flex-1 bg-black/40 text-zinc-200 text-[10px] font-mono rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                                            className="flex-1 bg-bg-secondary text-text-primary text-[10px] font-mono rounded border border-border-default px-1.5 py-0.5 outline-none focus:border-accent"
                                         />
-                                        <label className="flex items-center gap-1 text-[10px] text-zinc-400">
-                                            <input type="checkbox" checked={!!def.anchor_last} onChange={e => updateSection(id, { ...def, anchor_last: e.target.checked || undefined })} className="accent-sky-500" />
+                                        <label className="flex items-center gap-1 text-[10px] text-text-secondary">
+                                            <input type="checkbox" checked={!!def.anchor_last} onChange={e => updateSection(id, { ...def, anchor_last: e.target.checked || undefined })} className="accent-[var(--accent-primary)]" />
                                             last
                                         </label>
                                     </div>
@@ -401,13 +401,13 @@ function SectionsEditor({ sections, otherSectionIds, onChange, onTest, testResul
                                         <UntilField def={def} otherIds={otherSectionIds(id)} onChange={d => updateSection(id, d)} />
                                     </div>
                                     <div className="flex items-center gap-1.5">
-                                        <span className="text-[10px] text-zinc-500 w-16">ctx next</span>
+                                        <span className="text-[10px] text-text-muted w-16">ctx next</span>
                                         <input
                                             value={def.anchor_context?.next ?? ''}
                                             onChange={e => updateSection(id, { ...def, anchor_context: { ...def.anchor_context, next: e.target.value || undefined } })}
                                             placeholder="optional: line after anchor must match"
                                             spellCheck={false}
-                                            className="flex-1 bg-black/40 text-zinc-300 text-[10px] font-mono rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                                            className="flex-1 bg-bg-secondary text-text-secondary text-[10px] font-mono rounded border border-border-default px-1.5 py-0.5 outline-none focus:border-accent"
                                         />
                                     </div>
                                 </div>
@@ -415,12 +415,12 @@ function SectionsEditor({ sections, otherSectionIds, onChange, onTest, testResul
 
                             {/* Live preview: what this section actually captures */}
                             {previewById[id] && (
-                                <div className="border-t border-zinc-700/50 pt-1">
-                                    <div className="text-[9px] text-zinc-500 mb-0.5">
+                                <div className="border-t border-border-subtle pt-1">
+                                    <div className="text-[9px] text-text-muted mb-0.5">
                                         captured lines {previewById[id].fromLine}–{previewById[id].toLine}
                                         {previewById[id].text.trim() === '' && <span className="text-amber-400 ml-1">(empty — check bounds)</span>}
                                     </div>
-                                    <pre className="font-mono text-[10px] text-zinc-300 whitespace-pre-wrap break-all bg-black/40 rounded border border-zinc-700/50 px-2 py-1 max-h-28 overflow-y-auto">
+                                    <pre className="font-mono text-[10px] text-text-secondary whitespace-pre-wrap break-all bg-bg-secondary rounded border border-border-subtle px-2 py-1 max-h-28 overflow-y-auto">
                                         {previewById[id].text || '(empty)'}
                                     </pre>
                                 </div>
@@ -440,7 +440,7 @@ function UntilField({ def, otherIds, onChange }: {
     const val = def.until ?? ''
     const isRegex = val.startsWith('^')
     return (
-        <label className="flex items-center gap-1 text-[10px] text-zinc-400">
+        <label className="flex items-center gap-1 text-[10px] text-text-secondary">
             until
             <select
                 value={isRegex ? '__regex__' : val}
@@ -450,7 +450,7 @@ function UntilField({ def, otherIds, onChange }: {
                     else if (v === '__regex__') onChange({ ...def, until: val.startsWith('^') ? val : '^' })
                     else onChange({ ...def, until: v })
                 }}
-                className="bg-zinc-900 text-sky-300 rounded border border-zinc-700 px-1 py-0.5"
+                className="bg-bg-secondary text-accent-primary rounded border border-border-default px-1 py-0.5"
             >
                 <option value="">(none)</option>
                 {otherIds.map(s => <option key={s} value={s}>{s}</option>)}
@@ -461,7 +461,7 @@ function UntilField({ def, otherIds, onChange }: {
                     value={val}
                     onChange={e => onChange({ ...def, until: e.target.value })}
                     spellCheck={false}
-                    className="w-40 bg-black/40 text-zinc-200 font-mono rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                    className="w-40 bg-bg-secondary text-text-primary font-mono rounded border border-border-default px-1.5 py-0.5 outline-none focus:border-accent"
                 />
             )}
         </label>
@@ -504,44 +504,44 @@ export default function SpecFormBuilder({ model, onChange, onPreview, preview, o
             {/* States */}
             <div>
                 <div className="flex items-center gap-2 mb-1">
-                    <span className="text-zinc-400 text-[10px] uppercase tracking-widest font-semibold">States</span>
+                    <span className="text-text-secondary text-[10px] uppercase tracking-widest font-semibold">States</span>
                     <button
                         type="button"
-                        className="text-[10px] text-zinc-300 hover:text-white px-1.5 py-0.5 rounded border border-zinc-700 hover:bg-zinc-700/40"
+                        className="text-[10px] text-text-secondary hover:text-text-primary px-1.5 py-0.5 rounded border border-border-default hover:bg-bg-glass-hover"
                         onClick={() => patch({ states: [...model.states, { id: `state${model.states.length}`, label: 'New' }] })}
                     >+ state</button>
                 </div>
                 <div className="space-y-1.5">
                     {model.states.map((s, i) => (
-                        <div key={i} className="border border-zinc-700/60 rounded bg-zinc-800/30 p-2 space-y-1">
+                        <div key={i} className="border border-border-default/60 rounded bg-surface-secondary p-2 space-y-1">
                             <div className="flex items-end gap-2 flex-wrap">
                                 <label className="flex flex-col gap-0.5">
-                                    <span className="text-[9px] text-zinc-500 uppercase tracking-wide">id (used by transitions)</span>
+                                    <span className="text-[9px] text-text-muted uppercase tracking-wide">id (used by transitions)</span>
                                     <input
                                         value={s.id}
                                         onChange={e => updateState(i, { id: e.target.value })}
                                         placeholder="idle"
-                                        className="w-32 bg-black/40 text-sky-300 font-mono text-[11px] rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                                        className="w-32 bg-bg-secondary text-accent-primary font-mono text-[11px] rounded border border-border-default px-1.5 py-0.5 outline-none focus:border-accent"
                                     />
                                 </label>
                                 <label className="flex flex-col gap-0.5 flex-1">
-                                    <span className="text-[9px] text-zinc-500 uppercase tracking-wide">label (shown in dashboard)</span>
+                                    <span className="text-[9px] text-text-muted uppercase tracking-wide">label (shown in dashboard)</span>
                                     <input
                                         value={s.label}
                                         onChange={e => updateState(i, { label: e.target.value })}
                                         placeholder="Ready"
-                                        className="w-full bg-black/40 text-zinc-200 text-[11px] rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                                        className="w-full bg-bg-secondary text-text-primary text-[11px] rounded border border-border-default px-1.5 py-0.5 outline-none focus:border-accent"
                                     />
                                 </label>
-                                <button type="button" className="text-zinc-500 hover:text-red-300 text-sm px-1 pb-0.5" onClick={() => patch({ states: model.states.filter((_, si) => si !== i) })}>×</button>
+                                <button type="button" className="text-text-muted hover:text-status-error text-sm px-1 pb-0.5" onClick={() => patch({ states: model.states.filter((_, si) => si !== i) })}>×</button>
                             </div>
-                            <div className="flex items-center gap-3 text-[10px] text-zinc-400 flex-wrap">
+                            <div className="flex items-center gap-3 text-[10px] text-text-secondary flex-wrap">
                                 <label className="flex items-center gap-1">
-                                    <input type="radio" name="initial" checked={!!s.initial} onChange={() => patch({ states: model.states.map((x, xi) => ({ ...x, initial: xi === i })) })} className="accent-sky-500" />
+                                    <input type="radio" name="initial" checked={!!s.initial} onChange={() => patch({ states: model.states.map((x, xi) => ({ ...x, initial: xi === i })) })} className="accent-[var(--accent-primary)]" />
                                     initial
                                 </label>
                                 <label className="flex items-center gap-1">
-                                    <input type="checkbox" checked={!!s.modal} onChange={e => updateState(i, { modal: e.target.checked || undefined })} className="accent-sky-500" />
+                                    <input type="checkbox" checked={!!s.modal} onChange={e => updateState(i, { modal: e.target.checked || undefined })} className="accent-[var(--accent-primary)]" />
                                     modal
                                 </label>
                                 <label className="flex items-center gap-1">
@@ -549,7 +549,7 @@ export default function SpecFormBuilder({ model, onChange, onPreview, preview, o
                                     <select
                                         value={s.status ?? ''}
                                         onChange={e => updateState(i, { status: (e.target.value || undefined) as any })}
-                                        className="bg-zinc-900 text-zinc-200 rounded border border-zinc-700 px-1 py-0.5"
+                                        className="bg-bg-secondary text-text-primary rounded border border-border-default px-1 py-0.5"
                                     >
                                         <option value="">(auto)</option>
                                         <option value="idle">idle</option>
@@ -566,37 +566,37 @@ export default function SpecFormBuilder({ model, onChange, onPreview, preview, o
             {/* Transitions */}
             <div>
                 <div className="flex items-center gap-2 mb-1">
-                    <span className="text-zinc-400 text-[10px] uppercase tracking-widest font-semibold">Transitions</span>
+                    <span className="text-text-secondary text-[10px] uppercase tracking-widest font-semibold">Transitions</span>
                     <button
                         type="button"
-                        className="text-[10px] text-zinc-300 hover:text-white px-1.5 py-0.5 rounded border border-zinc-700 hover:bg-zinc-700/40"
+                        className="text-[10px] text-text-secondary hover:text-text-primary px-1.5 py-0.5 rounded border border-border-default hover:bg-bg-glass-hover"
                         onClick={() => patch({ transitions: [...model.transitions, { from: stateIds[0] ?? '', to: stateIds[0] ?? '' }] })}
                     >+ transition</button>
                 </div>
                 <div className="space-y-1.5">
                     {model.transitions.map((t, i) => {
                         return (
-                            <div key={i} className="border border-zinc-700/60 rounded bg-zinc-800/30 p-2 space-y-1.5">
+                            <div key={i} className="border border-border-default/60 rounded bg-surface-secondary p-2 space-y-1.5">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="text-[10px] text-zinc-500">from</span>
+                                    <span className="text-[10px] text-text-muted">from</span>
                                     <MultiStateSelect value={t.from} states={stateIds} onChange={from => updateTransition(i, { from })} />
-                                    <span className="text-[10px] text-zinc-500">→</span>
+                                    <span className="text-[10px] text-text-muted">→</span>
                                     <select
                                         value={t.to}
                                         onChange={e => updateTransition(i, { to: e.target.value })}
-                                        className="bg-zinc-900 text-green-200 font-mono text-[10px] rounded border border-zinc-700 px-1 py-0.5"
+                                        className="bg-bg-secondary text-status-online font-mono text-[10px] rounded border border-border-default px-1 py-0.5"
                                     >
                                         {stateIds.map(s => <option key={s} value={s}>{s}</option>)}
                                     </select>
-                                    <span className="text-[10px] text-zinc-500 ml-1">label</span>
+                                    <span className="text-[10px] text-text-muted ml-1">label</span>
                                     <input
                                         value={t.label ?? ''}
                                         onChange={e => updateTransition(i, { label: e.target.value || undefined })}
                                         placeholder="debug name only (optional)"
                                         title="Display name shown in the debug history/transition table. Does not affect behaviour."
-                                        className="flex-1 min-w-[120px] bg-black/40 text-zinc-300 text-[10px] rounded border border-zinc-700 px-1.5 py-0.5 outline-none focus:border-sky-500/50"
+                                        className="flex-1 min-w-[120px] bg-bg-secondary text-text-secondary text-[10px] rounded border border-border-default px-1.5 py-0.5 outline-none focus:border-accent"
                                     />
-                                    <button type="button" className="text-zinc-500 hover:text-red-300 text-sm px-1" onClick={() => patch({ transitions: model.transitions.filter((_, ti) => ti !== i) })}>×</button>
+                                    <button type="button" className="text-text-muted hover:text-status-error text-sm px-1" onClick={() => patch({ transitions: model.transitions.filter((_, ti) => ti !== i) })}>×</button>
                                 </div>
                                 <div className="flex items-center gap-3">
                                     <NumField label="min_hold_ms" value={t.min_hold_ms ?? 0} onChange={v => updateTransition(i, { min_hold_ms: v || undefined })} />
@@ -604,16 +604,16 @@ export default function SpecFormBuilder({ model, onChange, onPreview, preview, o
                                 </div>
                                 <div>
                                     <div className="flex items-center gap-2 mb-1">
-                                        <span className="text-[10px] text-zinc-500">when</span>
+                                        <span className="text-[10px] text-text-muted">when</span>
                                         {!t.when && (
                                             <button
                                                 type="button"
-                                                className="text-[10px] text-zinc-300 hover:text-white px-1.5 py-0.5 rounded border border-zinc-700 hover:bg-zinc-700/40"
+                                                className="text-[10px] text-text-secondary hover:text-text-primary px-1.5 py-0.5 rounded border border-border-default hover:bg-bg-glass-hover"
                                                 onClick={() => updateTransition(i, { when: { section: sectionIds[0], matches: '' } })}
                                             >+ guard condition</button>
                                         )}
                                         {t.when && (
-                                            <button type="button" className="text-[10px] text-zinc-500 hover:text-red-300" onClick={() => updateTransition(i, { when: undefined })}>remove guard</button>
+                                            <button type="button" className="text-[10px] text-text-muted hover:text-status-error" onClick={() => updateTransition(i, { when: undefined })}>remove guard</button>
                                         )}
                                     </div>
                                     {t.when && (
@@ -652,7 +652,7 @@ function MultiStateSelect({ value, states, onChange }: { value: string | string[
                     key={s}
                     type="button"
                     onClick={() => toggle(s)}
-                    className={`font-mono text-[10px] px-1 py-0.5 rounded border ${(isWildcard || selected.has(s)) ? 'text-sky-200 bg-sky-600/25 border-sky-500/40' : 'text-zinc-500 border-zinc-700 hover:border-zinc-500'}`}
+                    className={`font-mono text-[10px] px-1 py-0.5 rounded border ${(isWildcard || selected.has(s)) ? 'text-accent-primary bg-accent-primary/20 border-accent' : 'text-text-muted border-border-default hover:border-border-default'}`}
                 >{s}</button>
             ))}
         </div>

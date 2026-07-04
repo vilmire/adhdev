@@ -427,7 +427,7 @@ export default function DashboardMobileSessionHostSheet({
     }
 
     return (
-        <div className="fixed inset-0 z-[115] flex items-end justify-center bg-black/55 backdrop-blur-[2px] md:items-center md:p-4" onClick={onClose}>
+        <div className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center bg-black/55 backdrop-blur-[2px] md:items-center md:p-4" onClick={onClose}>
             <div
                 className="w-full max-h-[88vh] overflow-hidden rounded-t-[28px] border border-border-subtle bg-bg-primary shadow-[0_-20px_60px_rgba(0,0,0,0.35)] md:max-w-3xl md:rounded-[28px] md:shadow-[0_20px_60px_rgba(0,0,0,0.35)]"
                 onClick={(event) => event.stopPropagation()}

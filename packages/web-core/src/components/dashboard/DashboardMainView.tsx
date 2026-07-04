@@ -668,8 +668,8 @@ export default function DashboardMainView({
             )}
             {shortcutHelpOpen && (
                 <div
-                    className="fixed inset-0 z-[60] flex items-center justify-center"
-                    style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)' }}
+                    className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50"
+                    style={{ backdropFilter: 'blur(2px)' }}
                     onClick={handleCloseShortcutHelp}
                 >
                     <div
@@ -818,7 +818,7 @@ export default function DashboardMainView({
                                                     </div>
                                                 </div>
                                                 <div className="flex items-center gap-2 shrink-0">
-                                                    <span className="text-[11px] font-mono px-2 py-1 rounded bg-bg-tertiary border border-border-subtle min-w-[72px] text-center">
+                                                    <span className="text-[11px] font-mono px-2 py-1 rounded bg-surface-secondary border border-border-subtle min-w-[72px] text-center">
                                                         {shortcutListening === action.id
                                                             ? (shortcutListeningDraft.length > 0 ? `${shortcutListeningDraft.join(' ')} ...` : 'Listening...')
                                                             : (actionShortcuts[action.id] || 'Off')}

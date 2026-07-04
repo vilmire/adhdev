@@ -1657,7 +1657,7 @@ export default function DashboardDockviewWorkspace({
             {ctxMenu && createPortal(
                 <div
                     data-dockview-tab-context-menu
-                    className="fixed z-[55] min-w-[220px] rounded-xl border border-border-subtle bg-bg-primary shadow-2xl py-1"
+                    className="fixed z-[var(--z-popover)] min-w-[220px] rounded-xl border border-border-subtle bg-bg-primary shadow-2xl py-1"
                     style={{ left: ctxMenu.x, top: ctxMenu.y }}
                 >
                     {ctxMenuItems.map(item => {
@@ -1743,8 +1743,8 @@ export default function DashboardDockviewWorkspace({
             {shortcutListening && (
                 createPortal(
                     <div
-                        className="fixed inset-0 z-[60] flex items-center justify-center"
-                        style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)' }}
+                        className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50"
+                        style={{ backdropFilter: 'blur(2px)' }}
                         onClick={() => setShortcutListening(null)}
                     >
                         <div

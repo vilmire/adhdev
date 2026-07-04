@@ -114,7 +114,7 @@ export default function ConnectionBanner({
         accent: 'var(--accent-primary-light)',
     };
 
-    const overlayClassName = 'fixed left-1/2 top-4 z-[1400] flex items-center justify-center pointer-events-none';
+    const overlayClassName = 'fixed left-1/2 top-4 z-[var(--z-toast)] flex items-center justify-center pointer-events-none';
     const overlayStyle = {
         top: 'calc(env(safe-area-inset-top, 0px) + 16px)',
         transform: 'translateX(-50%)',

@@ -178,7 +178,7 @@ export default function DashboardRemoteDialog({
     }, [])
 
     return (
-        <div className="fixed inset-0 z-[1200] flex items-center justify-center p-0 md:p-3 bg-[#030617]/[0.56] backdrop-blur-md" onClick={onClose}>
+        <div className="fixed inset-0 z-[var(--z-modal-backdrop)] flex items-center justify-center p-0 md:p-3 bg-black/60 backdrop-blur-md" onClick={onClose}>
             <div
                 className="w-full h-[100dvh] md:h-[calc(100vh-24px)] md:w-[calc(100vw-24px)] flex flex-col overflow-hidden md:rounded-[14px] md:border border-border-default bg-surface-primary shadow-[0_24px_80px_rgba(2,6,23,0.32)]"
                 role="dialog"
@@ -266,7 +266,7 @@ export default function DashboardRemoteDialog({
                         </div>
                     )}
 
-                    <div className={`flex flex-col min-w-0 min-h-0 bg-black ${viewMode === 'split' ? 'order-1 md:order-2' : ''}`}>
+                    <div className={`flex flex-col min-w-0 min-h-0 bg-bg-primary ${viewMode === 'split' ? 'order-1 md:order-2' : ''}`}>
                         <RemoteView
                             addLog={() => {}}
                             connState={(modalAwareConv.connectionState || 'new') as 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed'}

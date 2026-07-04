@@ -117,7 +117,7 @@ export default function HistoryModal({
     );
 
     const content = (
-        <div className="fixed inset-0 z-[1300] flex items-end justify-center overflow-y-auto px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4">
+        <div className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4">
             <div onClick={onClose} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
             <div className="card fade-in relative w-full sm:w-[90%] max-w-[500px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[80vh] flex flex-col p-0 overflow-hidden shadow-[0_20px_40px_rgba(0,0,0,0.4)] rounded-[24px] sm:rounded-[20px]">
                 <div className="px-4 py-4 sm:px-6 sm:py-5 border-b border-border-subtle flex justify-between items-center bg-[var(--surface-primary)] shrink-0">

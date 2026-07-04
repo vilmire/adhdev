@@ -104,32 +104,32 @@ function formatDur(ms: number): string {
 }
 
 const REASON_COLORS: Record<string, string> = {
-    busy_hold_expired: 'text-amber-200 bg-amber-500/20 border border-amber-500/30',
-    idle_hold_committed: 'text-green-200 bg-green-500/20 border border-green-500/30',
-    completion_idle_after: 'text-sky-200 bg-sky-500/20 border border-sky-500/30',
+    busy_hold_expired: 'text-status-warning bg-status-warning/20 border border-status-warning/40',
+    idle_hold_committed: 'text-status-online bg-status-online/20 border border-status-online/40',
+    completion_idle_after: 'text-accent-primary bg-accent-primary/20 border border-accent',
     forced_completion: 'text-orange-200 bg-orange-500/20 border border-orange-500/30',
     forceEmit: 'text-purple-200 bg-purple-500/20 border border-purple-500/30',
     spec_reload: 'text-purple-200 bg-purple-500/20 border border-purple-500/30',
-    eval_match: 'text-zinc-300 bg-zinc-500/15 border border-zinc-500/20',
+    eval_match: 'text-text-secondary bg-bg-glass border border-border-default',
 }
 
 const STATE_BADGE: Record<string, string> = {
-    idle: 'text-green-100 bg-green-600/30 border border-green-500/40',
+    idle: 'text-status-online bg-status-online/20 border border-status-online/40',
     busy: 'text-yellow-100 bg-yellow-600/30 border border-yellow-500/40',
     generating: 'text-yellow-100 bg-yellow-600/30 border border-yellow-500/40',
     approval: 'text-orange-100 bg-orange-600/30 border border-orange-500/40',
     waiting_approval: 'text-orange-100 bg-orange-600/30 border border-orange-500/40',
-    picker: 'text-sky-100 bg-sky-600/30 border border-sky-500/40',
-    signing_in: 'text-sky-100 bg-sky-600/30 border border-sky-500/40',
+    picker: 'text-accent-primary bg-accent-primary/20 border border-accent',
+    signing_in: 'text-accent-primary bg-accent-primary/20 border border-accent',
 }
 
 function stateBadge(id: string): string {
-    return STATE_BADGE[id] ?? 'text-zinc-200 bg-zinc-600/20 border border-zinc-500/30'
+    return STATE_BADGE[id] ?? 'text-text-primary bg-bg-glass border border-border-default'
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
     return (
-        <div className="text-zinc-400 text-[10px] uppercase tracking-widest font-semibold mb-1.5 mt-0.5">
+        <div className="text-text-secondary text-[10px] uppercase tracking-widest font-semibold mb-1.5 mt-0.5">
             {children}
         </div>
     )
@@ -142,15 +142,15 @@ function Divider() {
 /** Recursive render of an FSM condition-eval tree — shows each leaf's match
  *  result and any time countdown so "why isn't it transitioning" is visible. */
 function CondTree({ node, depth = 0 }: { node: FsmCondNode; depth?: number }) {
-    const color = node.result ? 'text-green-300' : 'text-zinc-500'
+    const color = node.result ? 'text-status-online' : 'text-text-muted'
     const dot = node.result ? '●' : '○'
     return (
         <div style={{ marginLeft: depth * 10 }} className="font-mono text-[10px] leading-relaxed">
             <span className={color}>{dot} </span>
-            <span className="text-zinc-400">{node.kind}</span>
-            <span className="text-zinc-500"> {node.detail}</span>
+            <span className="text-text-secondary">{node.kind}</span>
+            <span className="text-text-muted"> {node.detail}</span>
             {node.remainingMs != null && node.remainingMs > 0 && (
-                <span className="text-amber-300"> ({node.remainingMs}ms left)</span>
+                <span className="text-status-warning"> ({node.remainingMs}ms left)</span>
             )}
             {node.children?.map((c, i) => <CondTree key={i} node={c} depth={depth + 1} />)}
         </div>
@@ -161,30 +161,30 @@ function CondTree({ node, depth = 0 }: { node: FsmCondNode; depth?: number }) {
 function TransitionRow({ t }: { t: FsmTransitionEval }) {
     const [open, setOpen] = useState(false)
     const status = t.fires
-        ? 'text-green-200 bg-green-600/25 border-green-500/40'
+        ? 'text-status-online bg-status-online/20 border-status-online/40'
         : !t.holdSatisfied
-            ? 'text-amber-200 bg-amber-600/20 border-amber-500/30'
-            : 'text-zinc-400 bg-zinc-700/30 border-zinc-600/30'
+            ? 'text-status-warning bg-status-warning/20 border-status-warning/40'
+            : 'text-text-secondary bg-bg-glass border-border-default'
     return (
-        <div className="border border-zinc-700/50 rounded bg-zinc-800/30 overflow-hidden">
+        <div className="border border-border-default rounded bg-surface-secondary overflow-hidden">
             <button
                 type="button"
-                className="w-full flex items-center gap-2 px-2 py-1 hover:bg-zinc-700/30 text-left"
+                className="w-full flex items-center gap-2 px-2 py-1 hover:bg-bg-glass-hover text-left"
                 onClick={() => setOpen(o => !o)}
             >
-                <span className="text-[10px] text-zinc-500 w-3">{t.cond ? (open ? '▾' : '▸') : ' '}</span>
+                <span className="text-[10px] text-text-muted w-3">{t.cond ? (open ? '▾' : '▸') : ' '}</span>
                 <span className={`font-mono text-[11px] px-1.5 py-0.5 rounded border ${status}`}>→ {t.to}</span>
-                <span className="text-zinc-400 font-mono text-[10px] truncate">{t.label}</span>
+                <span className="text-text-secondary font-mono text-[10px] truncate">{t.label}</span>
                 <span className="ml-auto flex items-center gap-1.5 shrink-0">
-                    {t.fires && <span className="text-green-300 text-[10px] font-mono">FIRES</span>}
-                    {!t.holdSatisfied && <span className="text-amber-300 text-[10px] font-mono">hold {t.holdRemainingMs}ms</span>}
-                    <span className={`text-[10px] font-mono ${t.condResult ? 'text-green-400' : 'text-zinc-600'}`}>
+                    {t.fires && <span className="text-status-online text-[10px] font-mono">FIRES</span>}
+                    {!t.holdSatisfied && <span className="text-status-warning text-[10px] font-mono">hold {t.holdRemainingMs}ms</span>}
+                    <span className={`text-[10px] font-mono ${t.condResult ? 'text-status-online' : 'text-text-muted'}`}>
                         {t.condResult ? 'cond✓' : 'cond✗'}
                     </span>
                 </span>
             </button>
             {open && t.cond && (
-                <div className="px-3 pb-1.5 pt-0.5 bg-black/30 border-t border-zinc-700/50">
+                <div className="px-3 pb-1.5 pt-0.5 bg-bg-secondary border-t border-border-default">
                     <CondTree node={t.cond} />
                 </div>
             )}
@@ -458,20 +458,20 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
             role="dialog"
             aria-modal="true"
             aria-label="Spec debug"
-            className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4"
+            className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4"
             onClick={onClose}
             style={{ pointerEvents: 'auto' }}
         >
             <div
-                className="bg-zinc-900 text-zinc-100 border border-zinc-700 rounded-t-xl sm:rounded-lg shadow-2xl max-w-2xl w-full max-h-[92vh] sm:max-h-[88vh] flex flex-col"
+                className="bg-bg-secondary text-text-primary border border-border-default rounded-t-xl sm:rounded-lg shadow-2xl max-w-2xl w-full max-h-[92vh] sm:max-h-[88vh] flex flex-col"
                 onClick={e => e.stopPropagation()}
             >
                 {/* Header */}
-                <div className="flex items-center justify-between border-b border-zinc-700 px-4 py-2.5 shrink-0 gap-2 min-w-0">
+                <div className="flex items-center justify-between border-b border-border-default px-4 py-2.5 shrink-0 gap-2 min-w-0">
                     <div className="flex items-center gap-2.5 min-w-0 overflow-hidden">
-                        <span className="text-sm font-semibold text-zinc-100 shrink-0">Spec Debug</span>
+                        <span className="text-sm font-semibold text-text-primary shrink-0">Spec Debug</span>
                         {snap && (
-                            <span className="text-[11px] text-zinc-400 font-mono bg-zinc-800 px-1.5 py-0.5 rounded truncate">
+                            <span className="text-[11px] text-text-secondary font-mono bg-surface-secondary px-1.5 py-0.5 rounded truncate">
                                 {snap.spec_id}
                             </span>
                         )}
@@ -480,7 +480,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                         {snap?.specPath && (
                             <button
                                 type="button"
-                                className={`text-[11px] transition-colors px-2 py-1 rounded border ${editing ? 'text-sky-200 bg-sky-600/25 border-sky-500/40' : 'text-zinc-300 hover:text-white hover:bg-zinc-700 border-transparent hover:border-zinc-600'}`}
+                                className={`text-[11px] transition-colors px-2 py-1 rounded border ${editing ? 'text-accent-primary bg-accent-primary/20 border-accent' : 'text-text-secondary hover:text-text-primary hover:bg-bg-glass-hover border-transparent hover:border-border-default'}`}
                                 onClick={() => { if (editing) { setEditing(false) } else { void openEditor() } }}
                                 disabled={loading}
                             >
@@ -489,7 +489,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                         )}
                         <button
                             type="button"
-                            className="text-[11px] text-zinc-300 hover:text-white transition-colors px-2 py-1 rounded hover:bg-zinc-700 border border-transparent hover:border-zinc-600"
+                            className="text-[11px] text-text-secondary hover:text-text-primary transition-colors px-2 py-1 rounded hover:bg-bg-glass-hover border border-transparent hover:border-border-default"
                             onClick={() => { void handleSnapshot() }}
                             disabled={loading}
                         >
@@ -497,7 +497,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                         </button>
                         <button
                             type="button"
-                            className="text-[11px] text-zinc-300 hover:text-white transition-colors px-2 py-1 rounded hover:bg-zinc-700 border border-transparent hover:border-zinc-600"
+                            className="text-[11px] text-text-secondary hover:text-text-primary transition-colors px-2 py-1 rounded hover:bg-bg-glass-hover border border-transparent hover:border-border-default"
                             onClick={() => { void load() }}
                             disabled={loading}
                         >
@@ -505,7 +505,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                         </button>
                         <button
                             type="button"
-                            className="text-zinc-400 hover:text-zinc-100 transition-colors text-xl leading-none w-7 h-7 flex items-center justify-center rounded hover:bg-zinc-700"
+                            className="text-text-secondary hover:text-text-primary transition-colors text-xl leading-none w-7 h-7 flex items-center justify-center rounded hover:bg-bg-glass-hover"
                             onClick={onClose}
                             aria-label="Close"
                         >
@@ -520,10 +520,10 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                 {editing && (
                     <div className="flex-1 flex flex-col min-h-0 px-4 py-3 gap-2">
                         <div className="flex items-center gap-2 shrink-0">
-                            <div className="inline-flex rounded border border-zinc-700 overflow-hidden text-[10px]">
+                            <div className="inline-flex rounded border border-border-default overflow-hidden text-[10px]">
                                 <button
                                     type="button"
-                                    className={`px-2 py-0.5 ${!rawMode ? 'bg-sky-600/30 text-sky-100' : 'text-zinc-400 hover:bg-zinc-700/40'}`}
+                                    className={`px-2 py-0.5 ${!rawMode ? 'bg-accent-primary/20 text-accent-primary' : 'text-text-secondary hover:bg-bg-glass-hover'}`}
                                     onClick={() => {
                                         // form → ensure model parsed from current source
                                         if (rawMode) {
@@ -535,18 +535,18 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                 >Form</button>
                                 <button
                                     type="button"
-                                    className={`px-2 py-0.5 ${rawMode ? 'bg-sky-600/30 text-sky-100' : 'text-zinc-400 hover:bg-zinc-700/40'}`}
+                                    className={`px-2 py-0.5 ${rawMode ? 'bg-accent-primary/20 text-accent-primary' : 'text-text-secondary hover:bg-bg-glass-hover'}`}
                                     onClick={() => { if (specModel) setSpecSource(JSON.stringify(specModel, null, 2)); setRawMode(true) }}
                                 >JSON</button>
                             </div>
-                            <span className="text-[10px] text-zinc-500 font-mono truncate flex-1" title={snap?.specPath}>{(snap?.specPath ?? '').split('/').slice(-3).join('/')}</span>
-                            {specDirty && <span className="text-amber-300 text-[10px]">unsaved</span>}
+                            <span className="text-[10px] text-text-muted font-mono truncate flex-1" title={snap?.specPath}>{(snap?.specPath ?? '').split('/').slice(-3).join('/')}</span>
+                            {specDirty && <span className="text-status-warning text-[10px]">unsaved</span>}
                             {!rawMode && validationErrors.length > 0 && (
-                                <span className="text-red-300 text-[10px]">{validationErrors.length} error{validationErrors.length > 1 ? 's' : ''}</span>
+                                <span className="text-status-error text-[10px]">{validationErrors.length} error{validationErrors.length > 1 ? 's' : ''}</span>
                             )}
                             <button
                                 type="button"
-                                className={`text-[11px] px-2.5 py-1 rounded border transition-colors ${(saveState === 'saving' || (!rawMode && validationErrors.length > 0)) ? 'text-zinc-600 border-zinc-700 cursor-not-allowed' : 'text-green-200 bg-green-600/25 border-green-500/40 hover:bg-green-600/40'}`}
+                                className={`text-[11px] px-2.5 py-1 rounded border transition-colors ${(saveState === 'saving' || (!rawMode && validationErrors.length > 0)) ? 'text-text-muted border-border-default cursor-not-allowed' : 'text-status-online bg-status-online/20 border-status-online/40 hover:bg-status-online/20'}`}
                                 onClick={() => { void saveSpec() }}
                                 disabled={saveState === 'saving' || (!rawMode && validationErrors.length > 0)}
                             >
@@ -554,10 +554,10 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                             </button>
                         </div>
                         {saveError && (
-                            <pre className="text-red-300 bg-red-900/40 border border-red-700/50 rounded p-2 text-[10px] whitespace-pre-wrap shrink-0 max-h-28 overflow-y-auto">{saveError}</pre>
+                            <pre className="text-status-error bg-status-error/20 border border-status-error/40 rounded p-2 text-[10px] whitespace-pre-wrap shrink-0 max-h-28 overflow-y-auto">{saveError}</pre>
                         )}
                         {!rawMode && validationErrors.length > 0 && (
-                            <div className="text-red-300 bg-red-900/30 border border-red-700/40 rounded p-1.5 text-[10px] shrink-0 max-h-24 overflow-y-auto space-y-0.5">
+                            <div className="text-status-error bg-status-error/20 border border-status-error/40 rounded p-1.5 text-[10px] shrink-0 max-h-24 overflow-y-auto space-y-0.5">
                                 {validationErrors.map((e, i) => <div key={i} className="font-mono">{e}</div>)}
                             </div>
                         )}
@@ -567,13 +567,13 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                     value={specSource}
                                     onChange={e => { setSpecSource(e.target.value); setSpecDirty(true); setSaveState('idle') }}
                                     spellCheck={false}
-                                    className="w-full h-full min-h-[300px] font-mono text-[11px] leading-relaxed bg-black/40 text-zinc-200 border border-zinc-700 rounded p-3 resize-none outline-none focus:border-sky-500/50"
+                                    className="w-full h-full min-h-[300px] font-mono text-[11px] leading-relaxed bg-bg-secondary text-text-primary border border-border-default rounded p-3 resize-none outline-none focus:border-accent"
                                 />
                             ) : (
                                 <SpecFormBuilder model={specModel} onChange={onModelChange} onPreview={onPreview} preview={preview} onTestSections={onTestSections} sectionPreview={sectionPreview} />
                             )}
                         </div>
-                        <div className="text-[10px] text-zinc-500 shrink-0">
+                        <div className="text-[10px] text-text-muted shrink-0">
                             {rawMode
                                 ? 'Raw JSON — validated on save.'
                                 : 'Build the FSM; from/to are constrained to existing states. "test" evaluates a condition against the live screen. Save hot-reloads the session.'}
@@ -585,15 +585,15 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                 {!editing && (
                 <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-[12px]">
                     {error && (
-                        <div className="text-red-300 bg-red-900/40 border border-red-700/50 rounded p-2">{error}</div>
+                        <div className="text-status-error bg-status-error/20 border border-status-error/40 rounded p-2">{error}</div>
                     )}
 
                     {loading && !data && (
-                        <div className="text-zinc-500 text-center py-6">Loading…</div>
+                        <div className="text-text-muted text-center py-6">Loading…</div>
                     )}
 
                     {data && !data.isSpecProvider && (
-                        <div className="text-zinc-500 text-center py-6">
+                        <div className="text-text-muted text-center py-6">
                             Not a spec-driven provider ({data.providerType || 'unknown'}).
                         </div>
                     )}
@@ -601,43 +601,43 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                     {snap && (
                         <>
                             {/* Provider info */}
-                            <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[11px] bg-zinc-800/60 rounded-md px-3 py-2 border border-zinc-700/50">
+                            <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[11px] bg-surface-secondary rounded-md px-3 py-2 border border-border-default">
                                 {snap.name && (
                                     <>
-                                        <span className="text-zinc-500">Provider</span>
-                                        <span className="font-mono text-zinc-200">{snap.name} <span className="text-zinc-500">({snap.cliType})</span></span>
+                                        <span className="text-text-muted">Provider</span>
+                                        <span className="font-mono text-text-primary">{snap.name} <span className="text-text-muted">({snap.cliType})</span></span>
                                     </>
                                 )}
                                 {snap.workingDir && (
                                     <>
-                                        <span className="text-zinc-500">Dir</span>
-                                        <span className="font-mono text-zinc-300 truncate" title={snap.workingDir}>{snap.workingDir}</span>
+                                        <span className="text-text-muted">Dir</span>
+                                        <span className="font-mono text-text-secondary truncate" title={snap.workingDir}>{snap.workingDir}</span>
                                     </>
                                 )}
                                 {snap.spawnedAtMs ? (
                                     <>
-                                        <span className="text-zinc-500">Spawned</span>
-                                        <span className="text-zinc-400">{formatAgo(snap.spawnedAtMs)}</span>
+                                        <span className="text-text-muted">Spawned</span>
+                                        <span className="text-text-secondary">{formatAgo(snap.spawnedAtMs)}</span>
                                     </>
                                 ) : null}
                                 {snap.providerSessionId && (
                                     <>
-                                        <span className="text-zinc-500">Session</span>
-                                        <span className="font-mono text-zinc-500 text-[10px] truncate" title={snap.providerSessionId}>{snap.providerSessionId}</span>
+                                        <span className="text-text-muted">Session</span>
+                                        <span className="font-mono text-text-muted text-[10px] truncate" title={snap.providerSessionId}>{snap.providerSessionId}</span>
                                     </>
                                 )}
                             </div>
 
                             {/* State summary */}
-                            <div className="flex items-center gap-2 flex-wrap bg-zinc-800/40 rounded-md px-3 py-2 border border-zinc-700/50">
-                                <span className={`font-semibold font-mono text-[12px] px-2 py-0.5 rounded ${snap.current_state ? stateBadge(snap.current_state.id) : 'text-zinc-500'}`}>
+                            <div className="flex items-center gap-2 flex-wrap bg-surface-secondary rounded-md px-3 py-2 border border-border-default">
+                                <span className={`font-semibold font-mono text-[12px] px-2 py-0.5 rounded ${snap.current_state ? stateBadge(snap.current_state.id) : 'text-text-muted'}`}>
                                     {snap.current_state ? snap.current_state.id : 'none'}
                                 </span>
                                 {snap.current_state?.label && snap.current_state.label !== snap.current_state.id && (
-                                    <span className="text-zinc-400 text-[11px]">{snap.current_state.label}</span>
+                                    <span className="text-text-secondary text-[11px]">{snap.current_state.label}</span>
                                 )}
                                 {snap.status && snap.status !== snap.current_state?.id && (
-                                    <span className="text-zinc-500 text-[11px]">
+                                    <span className="text-text-muted text-[11px]">
                                         engine: <span className={`font-mono ${stateBadge(snap.status)} px-1 py-0.5 rounded text-[10px]`}>{snap.status}</span>
                                     </span>
                                 )}
@@ -645,30 +645,30 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                     <span className="text-yellow-200 text-[10px] bg-yellow-600/25 border border-yellow-500/35 px-1.5 py-0.5 rounded font-mono">idle hold pending</span>
                                 )}
                                 {snap.exited && (
-                                    <span className="text-red-200 text-[10px] bg-red-600/25 border border-red-500/35 px-1.5 py-0.5 rounded font-mono">exited</span>
+                                    <span className="text-status-error text-[10px] bg-status-error/20 border border-status-error/40 px-1.5 py-0.5 rounded font-mono">exited</span>
                                 )}
                                 {snap.cursorPosition != null && (
-                                    <span className="text-zinc-500 text-[11px] font-mono">
-                                        cursor: <span className="text-zinc-300">{snap.cursorPosition.row},{snap.cursorPosition.col}</span>
+                                    <span className="text-text-muted text-[11px] font-mono">
+                                        cursor: <span className="text-text-secondary">{snap.cursorPosition.row},{snap.cursorPosition.col}</span>
                                     </span>
                                 )}
                                 {snap.lastBusyAt > 0 && (
-                                    <span className="text-zinc-500 text-[11px] ml-auto">last busy: <span className="text-zinc-400">{formatAgo(snap.lastBusyAt)}</span></span>
+                                    <span className="text-text-muted text-[11px] ml-auto">last busy: <span className="text-text-secondary">{formatAgo(snap.lastBusyAt)}</span></span>
                                 )}
                             </div>
                             {snap.completionIdleDebounce?.active && (
-                                <div className="flex items-center gap-2 text-[11px] bg-sky-900/20 border border-sky-700/30 rounded-md px-3 py-1.5 font-mono">
-                                    <span className="text-sky-400">completion_idle_after</span>
-                                    <span className="text-zinc-400">age: <span className="text-sky-200">{snap.completionIdleDebounce.ageMs}ms</span></span>
-                                    <span className="text-zinc-500">/</span>
-                                    <span className="text-zinc-400">hold: <span className="text-zinc-300">{snap.completionIdleDebounce.holdMs}ms</span></span>
-                                    <span className="text-zinc-400">force: <span className="text-zinc-300">{snap.completionIdleDebounce.forceAfterMs}ms</span></span>
-                                    <span className="text-zinc-500 ml-auto">
+                                <div className="flex items-center gap-2 text-[11px] bg-accent-primary/20 border border-accent rounded-md px-3 py-1.5 font-mono">
+                                    <span className="text-accent-primary">completion_idle_after</span>
+                                    <span className="text-text-secondary">age: <span className="text-accent-primary">{snap.completionIdleDebounce.ageMs}ms</span></span>
+                                    <span className="text-text-muted">/</span>
+                                    <span className="text-text-secondary">hold: <span className="text-text-secondary">{snap.completionIdleDebounce.holdMs}ms</span></span>
+                                    <span className="text-text-secondary">force: <span className="text-text-secondary">{snap.completionIdleDebounce.forceAfterMs}ms</span></span>
+                                    <span className="text-text-muted ml-auto">
                                         {snap.completionIdleDebounce.ageMs < snap.completionIdleDebounce.holdMs
-                                            ? <span className="text-amber-300">hold remaining: {snap.completionIdleDebounce.holdMs - snap.completionIdleDebounce.ageMs}ms</span>
+                                            ? <span className="text-status-warning">hold remaining: {snap.completionIdleDebounce.holdMs - snap.completionIdleDebounce.ageMs}ms</span>
                                             : snap.completionIdleDebounce.ageMs < snap.completionIdleDebounce.forceAfterMs
                                                 ? <span className="text-orange-300">force in: {snap.completionIdleDebounce.forceAfterMs - snap.completionIdleDebounce.ageMs}ms</span>
-                                                : <span className="text-red-300">overdue</span>
+                                                : <span className="text-status-error">overdue</span>
                                         }
                                     </span>
                                 </div>
@@ -677,9 +677,9 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                             {snap.current_modal && (
                                 <div className="bg-orange-900/30 border border-orange-600/40 rounded-md p-2.5">
                                     <span className="text-orange-200 font-semibold">Modal: </span>
-                                    <span className="text-zinc-300">{snap.current_modal.title || ''}</span>
+                                    <span className="text-text-secondary">{snap.current_modal.title || ''}</span>
                                     {snap.current_modal.buttons.length > 0 && (
-                                        <span className="text-zinc-400 ml-2">
+                                        <span className="text-text-secondary ml-2">
                                             [{snap.current_modal.buttons.map(b => b.label).join(' / ')}]
                                         </span>
                                     )}
@@ -692,15 +692,15 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                     <Divider />
                                     <div>
                                         <div className="flex items-center gap-2 mb-1.5">
-                                            <SectionLabel>FSM — outgoing from <span className="text-sky-300 font-mono normal-case">{snap.fsm.currentState}</span> (held {formatDur(snap.fsm.stateAgeMs)})</SectionLabel>
-                                            <label className="ml-auto flex items-center gap-1 text-[10px] text-zinc-500 cursor-pointer select-none mb-1.5">
-                                                <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} className="accent-sky-500" />
+                                            <SectionLabel>FSM — outgoing from <span className="text-accent-primary font-mono normal-case">{snap.fsm.currentState}</span> (held {formatDur(snap.fsm.stateAgeMs)})</SectionLabel>
+                                            <label className="ml-auto flex items-center gap-1 text-[10px] text-text-muted cursor-pointer select-none mb-1.5">
+                                                <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} className="accent-[var(--accent-primary)]" />
                                                 live
                                             </label>
                                         </div>
                                         <div className="space-y-1">
                                             {snap.fsm.transitions.length === 0 && (
-                                                <div className="text-zinc-600 text-[11px] italic px-1">no outgoing transitions (terminal state)</div>
+                                                <div className="text-text-muted text-[11px] italic px-1">no outgoing transitions (terminal state)</div>
                                             )}
                                             {snap.fsm.transitions.map((t, i) => <TransitionRow key={i} t={t} />)}
                                         </div>
@@ -720,21 +720,21 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                             const lines = text.split('\n')
                                             const preview = lines[0]?.slice(0, 80) || '(empty)'
                                             return (
-                                                <div key={id} className="border border-zinc-700 rounded overflow-hidden bg-zinc-800/30">
+                                                <div key={id} className="border border-border-default rounded overflow-hidden bg-surface-secondary">
                                                     <button
                                                         type="button"
-                                                        className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-zinc-700/40 transition-colors text-left"
+                                                        className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-bg-glass-hover transition-colors text-left"
                                                         onClick={() => toggleSection(id)}
                                                     >
-                                                        <span className="text-[10px] text-zinc-500 w-3">{expanded ? '▾' : '▸'}</span>
-                                                        <span className="font-mono text-sky-300 w-20 shrink-0 text-[11px]">{id}</span>
+                                                        <span className="text-[10px] text-text-muted w-3">{expanded ? '▾' : '▸'}</span>
+                                                        <span className="font-mono text-accent-primary w-20 shrink-0 text-[11px]">{id}</span>
                                                         {!expanded && (
-                                                            <span className="text-zinc-400 truncate font-mono text-[11px]">{preview}</span>
+                                                            <span className="text-text-secondary truncate font-mono text-[11px]">{preview}</span>
                                                         )}
-                                                        <span className="ml-auto text-zinc-600 text-[10px] shrink-0">{lines.length}L</span>
+                                                        <span className="ml-auto text-text-muted text-[10px] shrink-0">{lines.length}L</span>
                                                     </button>
                                                     {expanded && (
-                                                        <pre className="px-3 pb-2.5 pt-1 font-mono text-[11px] text-zinc-300 whitespace-pre-wrap break-all bg-black/30 max-h-40 overflow-y-auto border-t border-zinc-700/50">
+                                                        <pre className="px-3 pb-2.5 pt-1 font-mono text-[11px] text-text-secondary whitespace-pre-wrap break-all bg-bg-secondary max-h-40 overflow-y-auto border-t border-border-default">
                                                             {text || '(empty)'}
                                                         </pre>
                                                     )}
@@ -753,44 +753,44 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                     <SectionLabel>State History ({snap.stateHistory.length})</SectionLabel>
                                     <div className="space-y-px">
                                         {[...snap.stateHistory].reverse().slice(0, 20).map((entry, i) => (
-                                            <div key={i} className="rounded px-2 py-1 hover:bg-zinc-800/60 transition-colors">
+                                            <div key={i} className="rounded px-2 py-1 hover:bg-bg-glass-hover transition-colors">
                                                 <div className="flex items-center gap-2 flex-wrap">
                                                     <span className={`font-mono text-[11px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${stateBadge(entry.stateId)}`}>
                                                         {entry.stateId}
                                                     </span>
-                                                    <span className="text-zinc-400 text-[11px] shrink-0 tabular-nums">
+                                                    <span className="text-text-secondary text-[11px] shrink-0 tabular-nums">
                                                         {formatAgo(entry.at)}
                                                     </span>
                                                     {entry.durationMs > 0 && (
-                                                        <span className="text-zinc-500 text-[11px]">
-                                                            held <span className="text-zinc-400">{formatDur(entry.durationMs)}</span>
+                                                        <span className="text-text-muted text-[11px]">
+                                                            held <span className="text-text-secondary">{formatDur(entry.durationMs)}</span>
                                                         </span>
                                                     )}
                                                     {entry.reason && (
-                                                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono shrink-0 ${REASON_COLORS[String(entry.reason)] ?? 'text-zinc-400 bg-zinc-700/50 border border-zinc-600/30'}`}>
+                                                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono shrink-0 ${REASON_COLORS[String(entry.reason)] ?? 'text-text-secondary bg-bg-glass border border-border-default'}`}>
                                                             {String(entry.reason)}
                                                         </span>
                                                     )}
                                                     {entry.debounceKind && String(entry.debounceKind) !== 'none' && (
-                                                        <span className="text-zinc-500 text-[10px] font-mono">
+                                                        <span className="text-text-muted text-[10px] font-mono">
                                                             debounce:{String(entry.debounceKind)}
                                                         </span>
                                                     )}
                                                     {entry.matchedStateId && String(entry.matchedStateId) !== entry.stateId && (
-                                                        <span className="text-zinc-500 text-[10px] font-mono">
-                                                            eval→<span className="text-zinc-300">{String(entry.matchedStateId)}</span>
+                                                        <span className="text-text-muted text-[10px] font-mono">
+                                                            eval→<span className="text-text-secondary">{String(entry.matchedStateId)}</span>
                                                         </span>
                                                     )}
                                                 </div>
                                                 {entry.matchedRules && entry.matchedRules.length > 0 && (
-                                                    <div className="flex items-start gap-1 flex-wrap mt-0.5 ml-1 pl-1 border-l border-zinc-700">
+                                                    <div className="flex items-start gap-1 flex-wrap mt-0.5 ml-1 pl-1 border-l border-border-default">
                                                         {entry.matchedRules.slice(0, 3).map((rule, ri) => (
-                                                            <span key={ri} className="font-mono text-[10px] text-sky-200 bg-sky-900/40 border border-sky-700/40 px-1.5 py-0.5 rounded break-all">
+                                                            <span key={ri} className="font-mono text-[10px] text-accent-primary bg-accent-primary/20 border border-accent px-1.5 py-0.5 rounded break-all">
                                                                 {typeof rule === 'string' ? rule : JSON.stringify(rule)}
                                                             </span>
                                                         ))}
                                                         {entry.matchedRules.length > 3 && (
-                                                            <span className="text-[10px] text-zinc-500">+{entry.matchedRules.length - 3} more</span>
+                                                            <span className="text-[10px] text-text-muted">+{entry.matchedRules.length - 3} more</span>
                                                         )}
                                                     </div>
                                                 )}
@@ -813,11 +813,11 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                     <div>
                                         <SectionLabel>Transcript ({msgs.length} — {userCount}u / {assistantCount}a)</SectionLabel>
                                         {lastAssistant && (
-                                            <div className="bg-zinc-800/50 border border-zinc-700 rounded-md p-2.5 text-[11px]">
-                                                <div className="text-zinc-500 mb-1 text-[10px]">
+                                            <div className="bg-surface-secondary border border-border-default rounded-md p-2.5 text-[11px]">
+                                                <div className="text-text-muted mb-1 text-[10px]">
                                                     Last assistant {lastAssistant.receivedAt ? formatAgo(lastAssistant.receivedAt) : ''}
                                                 </div>
-                                                <div className="text-zinc-300 font-mono whitespace-pre-wrap line-clamp-4 break-all">
+                                                <div className="text-text-secondary font-mono whitespace-pre-wrap line-clamp-4 break-all">
                                                     {lastAssistant.content.slice(0, 400)}{lastAssistant.content.length > 400 ? '…' : ''}
                                                 </div>
                                             </div>
@@ -828,7 +828,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
 
                             {/* Spec path */}
                             {snap.specPath && (
-                                <div className="text-[10px] text-zinc-600 font-mono truncate border-t border-zinc-800 pt-2 mt-1" title={snap.specPath}>
+                                <div className="text-[10px] text-text-muted font-mono truncate border-t border-border-default pt-2 mt-1" title={snap.specPath}>
                                     {snap.specPath}
                                 </div>
                             )}
@@ -837,14 +837,14 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                             <div>
                                 <button
                                     type="button"
-                                    className="text-[11px] text-zinc-400 hover:text-zinc-200 transition-colors flex items-center gap-1.5"
+                                    className="text-[11px] text-text-secondary hover:text-text-primary transition-colors flex items-center gap-1.5"
                                     onClick={() => setShowScreen(v => !v)}
                                 >
-                                    <span className="text-zinc-600">{showScreen ? '▾' : '▸'}</span>
+                                    <span className="text-text-muted">{showScreen ? '▾' : '▸'}</span>
                                     <span>Raw screen ({snap.screen ? snap.screen.split('\n').length : 0} lines)</span>
                                 </button>
                                 {showScreen && (
-                                    <pre className="mt-1.5 px-3 py-2 font-mono text-[11px] text-zinc-300 whitespace-pre bg-black/40 rounded-md border border-zinc-700 max-h-64 overflow-auto">
+                                    <pre className="mt-1.5 px-3 py-2 font-mono text-[11px] text-text-secondary whitespace-pre bg-bg-secondary rounded-md border border-border-default max-h-64 overflow-auto">
                                         {snap.screen || '(empty)'}
                                     </pre>
                                 )}

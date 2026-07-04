@@ -580,8 +580,8 @@ export default function ControlsBar({
                                     </button>
                                     {isOpen && options.length > 0 && (
                                         <>
-                                            <div className="fixed inset-0 z-[59]" onClick={() => setOpenDropdown(null)} />
-                                            <div className="absolute bottom-full left-0 z-[60] mb-2 min-w-44 overflow-y-auto rounded-xl border border-border-subtle bg-[var(--surface-primary)] shadow-[0_-8px_24px_rgba(0,0,0,0.35)] max-h-[240px]">
+                                            <div className="fixed inset-0 z-[var(--z-dropdown)]" onClick={() => setOpenDropdown(null)} />
+                                            <div className="absolute bottom-full left-0 z-[var(--z-dropdown)] mb-2 min-w-44 overflow-y-auto rounded-xl border border-border-subtle bg-[var(--surface-primary)] shadow-[0_-8px_24px_rgba(0,0,0,0.35)] max-h-[240px]">
                                                 <div className="border-b border-border-subtle px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-text-muted">
                                                     {ctrl.label}
                                                 </div>

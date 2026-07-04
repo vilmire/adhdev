@@ -34,7 +34,7 @@ const TYPE_TONE: Record<string, { accent: string; chipBg: string; chipText: stri
 
 export default function ToastContainer({ toasts, onDismiss, onClickToast }: ToastContainerProps) {
     return (
-        <div className="fixed right-4 z-[9999] flex flex-col gap-2 pointer-events-none" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 16px)' }}>
+        <div className="fixed right-4 z-[var(--z-toast)] flex flex-col gap-2 pointer-events-none" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 16px)' }}>
             {toasts.map(toast => {
                 const tone = TYPE_TONE[toast.type] || TYPE_TONE.info
                 return (
