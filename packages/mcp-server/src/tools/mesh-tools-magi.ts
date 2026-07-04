@@ -1483,7 +1483,7 @@ export async function meshMagiReview(
             return JSON.stringify({
                 success: false,
                 code: 'magi_kind_not_configured',
-                error: `이 task_kind에 대한 패널 슬롯이 메시 세팅에 없습니다. 세팅에서 (머신+프로바이더+모델) 슬롯을 1개 이상 채우세요 — task_kind '${presetKind}' has no configured kind-panel.`,
+                error: `No panel slots are configured for this task_kind in mesh settings. Add at least one (machine + provider + model) slot in settings — task_kind '${presetKind}' has no configured kind-panel.`,
                 taskKind: presetKind,
                 configuredKinds: Object.keys(listMagiKindPanels()),
                 hint: 'Configure this kind in mesh settings (MagiKindPanelEditor), or set it programmatically with the magi_kind_panel_set daemon command, then retry. Alternatively pass explicit inline members or a named panel to mesh_magi_review.',
