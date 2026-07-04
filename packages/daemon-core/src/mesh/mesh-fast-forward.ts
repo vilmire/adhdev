@@ -1,6 +1,7 @@
 import type { GitRepoStatus, GitSubmoduleStatus } from '../git/git-types.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import { GitCommandError, runGit } from '../git/git-executor.js';
+import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 
 export interface MeshFastForwardNodeArgs {
   nodeId?: string;
@@ -521,31 +522,43 @@ async function resolveSubmodulePushes(
       results.push({ ...base, code: 'submodule_status_incomplete' });
       continue;
     }
-    // Refresh the submodule's origin/main, then require it to be an ancestor of
+    // Generalize the submodule's default branch (F18): '.gitmodules' branch →
+    // local remote HEAD → remote-advertised HEAD → 'main'. On a main-default
+    // submodule this resolves to 'main', keeping every ref below byte-identical.
+    const remoteBranch = await resolveSubmoduleDefaultBranch({
+      submoduleRepoPath: repoPath,
+      superprojectWorkspace: status.repoRoot ?? status.workspace,
+      submodulePath: submodule.path,
+      timeoutMs,
+    });
+    base.remoteBranch = remoteBranch;
+    const remoteRef = `refs/remotes/origin/${remoteBranch}`;
+    const fetchRefspec = `refs/heads/${remoteBranch}:${remoteRef}`;
+    // Refresh the submodule's origin/<branch>, then require it to be an ancestor of
     // the gitlink commit (strict ff-only).
     try {
-      await runGit(repoPath, ['-c', 'protocol.file.allow=always', 'fetch', 'origin', 'refs/heads/main:refs/remotes/origin/main'], { timeoutMs: timeoutMs ?? 30_000 });
+      await runGit(repoPath, ['-c', 'protocol.file.allow=always', 'fetch', 'origin', fetchRefspec], { timeoutMs: timeoutMs ?? 30_000 });
     } catch (error) {
       results.push({ ...base, code: 'submodule_fetch_failed', error: formatGitError(error) });
       continue;
     }
     let alreadyReachable = false;
     try {
-      await runGit(repoPath, ['merge-base', '--is-ancestor', submodule.commit, 'refs/remotes/origin/main'], { timeoutMs: timeoutMs ?? 15_000 });
+      await runGit(repoPath, ['merge-base', '--is-ancestor', submodule.commit, remoteRef], { timeoutMs: timeoutMs ?? 15_000 });
       alreadyReachable = true;
-    } catch { /* not yet on origin/main — candidate for push */ }
+    } catch { /* not yet on origin/<branch> — candidate for push */ }
     if (alreadyReachable) {
       results.push({ ...base, pushed: false, skipped: true, code: 'submodule_already_reachable' });
       continue;
     }
-    // Strict ff-only: origin/main must be an ancestor of the commit we publish.
+    // Strict ff-only: origin/<branch> must be an ancestor of the commit we publish.
     try {
-      await runGit(repoPath, ['merge-base', '--is-ancestor', 'refs/remotes/origin/main', submodule.commit], { timeoutMs: timeoutMs ?? 15_000 });
+      await runGit(repoPath, ['merge-base', '--is-ancestor', remoteRef, submodule.commit], { timeoutMs: timeoutMs ?? 15_000 });
     } catch (error) {
       results.push({ ...base, pushed: false, skipped: false, code: 'submodule_non_fast_forward', error: formatGitError(error) });
       continue;
     }
-    const refspec = `${submodule.commit}:refs/heads/main`;
+    const refspec = `${submodule.commit}:refs/heads/${remoteBranch}`;
     if (!execute) {
       results.push({ ...base, pushed: false, skipped: false, code: 'submodule_push_available', refspec });
       continue;
@@ -553,8 +566,8 @@ async function resolveSubmodulePushes(
     try {
       await runGit(repoPath, ['push', 'origin', refspec], { timeoutMs: timeoutMs ?? 30_000 });
       // Verify reachability after the push.
-      await runGit(repoPath, ['-c', 'protocol.file.allow=always', 'fetch', 'origin', 'refs/heads/main:refs/remotes/origin/main'], { timeoutMs: timeoutMs ?? 30_000 });
-      await runGit(repoPath, ['merge-base', '--is-ancestor', submodule.commit, 'refs/remotes/origin/main'], { timeoutMs: timeoutMs ?? 15_000 });
+      await runGit(repoPath, ['-c', 'protocol.file.allow=always', 'fetch', 'origin', fetchRefspec], { timeoutMs: timeoutMs ?? 30_000 });
+      await runGit(repoPath, ['merge-base', '--is-ancestor', submodule.commit, remoteRef], { timeoutMs: timeoutMs ?? 15_000 });
       results.push({ ...base, pushed: true, skipped: false, code: 'submodule_pushed', refspec });
     } catch (error) {
       results.push({ ...base, pushed: false, skipped: false, code: 'submodule_push_failed', refspec, error: formatGitError(error) });

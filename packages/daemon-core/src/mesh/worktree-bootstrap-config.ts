@@ -93,6 +93,136 @@ export function getRegisteredSubmodulePaths(workspace: string): Set<string> {
 }
 
 /**
+ * Read each registered submodule's configured `branch` from `.gitmodules`, keyed
+ * by the submodule's normalized path (matching {@link getRegisteredSubmodulePaths}).
+ *
+ * `.gitmodules` stores `submodule.<name>.path` and (optionally)
+ * `submodule.<name>.branch`; this joins the two on `<name>`. The special branch
+ * value `.` ("track the superproject's branch") is deliberately OMITTED so callers
+ * fall through to remote-HEAD detection instead of treating `.` as a literal branch
+ * name. Returns an empty map when there are no submodules, no `.gitmodules`, or the
+ * lookup fails (conservative — callers then detect or fall back).
+ */
+export function getSubmoduleConfiguredBranches(workspace: string): Map<string, string> {
+    const branchesByPath = new Map<string, string>();
+    try {
+        const out = execFileSync(
+            resolveWin32Executable('git'),
+            ['config', '--file', '.gitmodules', '--list'],
+            { cwd: workspace, encoding: 'utf8', timeout: 10_000, windowsHide: true },
+        );
+        // Join `submodule.<name>.path` with `submodule.<name>.branch` on <name>.
+        const pathByName = new Map<string, string>();
+        const branchByName = new Map<string, string>();
+        for (const line of String(out).split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            const eq = trimmed.indexOf('=');
+            if (eq < 0) continue;
+            const key = trimmed.slice(0, eq);
+            const value = trimmed.slice(eq + 1).trim();
+            // key: submodule.<name>.<field>; <name> may itself contain dots, so match
+            // the leading `submodule.` and trailing `.<field>` and take the middle.
+            const match = /^submodule\.(.+)\.(path|branch)$/.exec(key);
+            if (!match) continue;
+            const name = match[1];
+            if (match[2] === 'path') {
+                const norm = value.replace(/\\/g, '/').replace(/\/+$/, '');
+                if (norm) pathByName.set(name, norm);
+            } else if (value) {
+                branchByName.set(name, value);
+            }
+        }
+        for (const [name, submodulePath] of pathByName) {
+            const branch = branchByName.get(name);
+            if (branch && branch !== '.') branchesByPath.set(submodulePath, branch);
+        }
+    } catch {
+        // No .gitmodules / git error → no configured branches.
+    }
+    return branchesByPath;
+}
+
+/** Fallback submodule branch when no configured/detected default can be resolved. */
+export const SUBMODULE_DEFAULT_BRANCH_FALLBACK = 'main';
+
+function isPlausibleBranchName(name: unknown): name is string {
+    return typeof name === 'string' && name.length > 0 && !/\s/.test(name) && name !== 'HEAD';
+}
+
+/**
+ * Resolve the default branch a submodule's commits are published to / checked for
+ * reachability against. Generalizes the previously hardcoded `main` so a submodule
+ * whose default branch is `master`/`trunk`/etc. is handled. Priority (each tier
+ * falls through to the next on miss/error):
+ *
+ *   1. `.gitmodules` `submodule.<name>.branch` (via {@link getSubmoduleConfiguredBranches};
+ *      `.` is ignored) — an explicit, local, zero-cost declaration.
+ *   2. the submodule checkout's LOCAL remote HEAD: `git symbolic-ref --short
+ *      refs/remotes/<remote>/HEAD` → strip the `<remote>/` prefix (no network).
+ *   3. the submodule remote's advertised HEAD: `git ls-remote --symref <remote> HEAD`
+ *      → `ref: refs/heads/<branch>` (one network round-trip).
+ *   4. fallback {@link SUBMODULE_DEFAULT_BRANCH_FALLBACK} (`'main'`).
+ *
+ * Because the final fallback is `'main'` and every earlier tier that resolves `'main'`
+ * yields the same string, a repo whose submodules default to `main` (the common case)
+ * produces byte-identical downstream fetch/merge-base/push ref targets — only a
+ * read-only resolution probe is added.
+ */
+export async function resolveSubmoduleDefaultBranch(opts: {
+    /** The submodule's local checkout — cwd for symbolic-ref / ls-remote. */
+    submoduleRepoPath: string;
+    /** The superproject workspace — for the `.gitmodules` branch lookup (tier 1). */
+    superprojectWorkspace?: string;
+    /** The submodule's path relative to the superproject (key into `.gitmodules`). */
+    submodulePath?: string;
+    /** Remote name (default `origin`). */
+    remote?: string;
+    /** Timeout for the local probe (tier 2); the network probe (tier 3) gets max(this, 30s). */
+    timeoutMs?: number;
+}): Promise<string> {
+    const remote = opts.remote?.trim() || 'origin';
+    const localTimeout = opts.timeoutMs ?? 10_000;
+    const git = resolveWin32Executable('git');
+    const execFileAsync = promisify(execFile);
+
+    // Tier 1: .gitmodules configured branch (local, zero-cost).
+    if (opts.superprojectWorkspace && opts.submodulePath) {
+        try {
+            const normalized = opts.submodulePath.replace(/\\/g, '/').replace(/\/+$/, '');
+            const configured = getSubmoduleConfiguredBranches(opts.superprojectWorkspace).get(normalized);
+            if (isPlausibleBranchName(configured)) return configured;
+        } catch { /* fall through */ }
+    }
+
+    // Tier 2: the local remote HEAD (no network) — set by clone/`git remote set-head`.
+    try {
+        const { stdout } = await execFileAsync(
+            git,
+            ['symbolic-ref', '--short', `refs/remotes/${remote}/HEAD`],
+            { cwd: opts.submoduleRepoPath, encoding: 'utf8', timeout: localTimeout, windowsHide: true },
+        );
+        const short = String(stdout || '').trim();
+        const prefix = `${remote}/`;
+        const branch = short.startsWith(prefix) ? short.slice(prefix.length) : short;
+        if (isPlausibleBranchName(branch)) return branch;
+    } catch { /* fall through */ }
+
+    // Tier 3: the remote's advertised HEAD (one network round-trip).
+    try {
+        const { stdout } = await execFileAsync(
+            git,
+            ['ls-remote', '--symref', remote, 'HEAD'],
+            { cwd: opts.submoduleRepoPath, encoding: 'utf8', timeout: Math.max(localTimeout, 30_000), windowsHide: true },
+        );
+        const match = /^ref:\s+refs\/heads\/(\S+)\s+HEAD/m.exec(String(stdout || ''));
+        if (match && isPlausibleBranchName(match[1])) return match[1];
+    } catch { /* fall through */ }
+
+    return SUBMODULE_DEFAULT_BRANCH_FALLBACK;
+}
+
+/**
  * True when `git status --porcelain` output represents a worktree that is clean
  * EXCEPT for submodule-gitlink-pointer moves. A worktree task that commits inside a
  * registered submodule (e.g. oss/) leaves the superproject's gitlink outOfSync — a

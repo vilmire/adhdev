@@ -16,7 +16,7 @@ import { getGitRepoStatus } from '../git/git-status.js';
 import * as yaml from 'js-yaml';
 import { loadMeshRefineConfig, resolveMeshRefineValidationPlan } from '../mesh/refine-config.js';
 import type { MeshRefineValidationCommandPlan } from '../mesh/refine-config.js';
-import { evaluateWorktreeBootstrapState, loadMeshWorktreeBootstrapConfig, runMeshWorktreeBootstrap } from '../mesh/worktree-bootstrap-config.js';
+import { evaluateWorktreeBootstrapState, loadMeshWorktreeBootstrapConfig, runMeshWorktreeBootstrap, resolveSubmoduleDefaultBranch } from '../mesh/worktree-bootstrap-config.js';
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { basename as pathBasename, join as pathJoin, resolve as pathResolve } from 'path';
 import * as fs from 'fs';
@@ -1295,6 +1295,10 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                 commit: gitlink.commit,
                 reachable: false,
             };
+            // Resolved lazily once the submodule checkout/remote are confirmed; defaults
+            // to 'main' so error messages emitted before resolution stay byte-identical
+            // to the pre-generalization behavior on a main-default repo.
+            let submoduleDefaultBranch = 'main';
             try {
                 if (!fs.existsSync(submodulePath)) {
                     entry.error = `Submodule checkout missing at ${gitlink.path}`;
@@ -1350,9 +1354,18 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                         entries.push(entry);
                         continue;
                     }
-                    entry.remoteMainBranch = 'main';
+                    // Generalize the submodule's default branch (F18): '.gitmodules'
+                    // branch → local remote HEAD → remote-advertised HEAD → 'main'. On a
+                    // main-default submodule this resolves to 'main' and every ref target
+                    // below is byte-identical to the prior hardcoded path.
+                    submoduleDefaultBranch = await resolveSubmoduleDefaultBranch({
+                        submoduleRepoPath: submodulePath,
+                        superprojectWorkspace: repoRoot,
+                        submodulePath: gitlink.path,
+                    });
+                    entry.remoteMainBranch = submoduleDefaultBranch;
                     try {
-                        await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, 'main');
+                        await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, submoduleDefaultBranch);
                         entry.fetchedFromOrigin = true;
                         entry.remoteReachable = true;
                         entry.remoteMainReachable = true;
@@ -1362,17 +1375,17 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                         entry.remoteMainReachable = false;
                         entry.publishRequired = true;
                         const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
-                        entry.error = `Submodule remote main reachability check failed for origin/main: ${details}`;
+                        entry.error = `Submodule remote main reachability check failed for origin/${submoduleDefaultBranch}: ${details}`;
                         if (options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true) {
                             entry.autoPublishAllowed = true;
                             entry.autoPublishAttempted = true;
                             try {
-                                const publish = await publishCommitToRemoteMain(submodulePath, gitlink.commit, 'main');
+                                const publish = await publishCommitToRemoteMain(submodulePath, gitlink.commit, submoduleDefaultBranch);
                                 entry.autoPublishRefspec = publish.refspec;
                                 entry.publishStdout = truncateValidationOutput(publish.stdout);
                                 entry.publishStderr = truncateValidationOutput(publish.stderr);
                                 entry.autoPublishSucceeded = true;
-                                await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, 'main');
+                                await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, submoduleDefaultBranch);
                                 entry.fetchedFromOrigin = true;
                                 entry.remoteReachable = true;
                                 entry.remoteMainReachable = true;
@@ -1384,13 +1397,13 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                                 entry.autoPublishSucceeded = false;
                                 entry.autoPublishVerified = false;
                                 const publishDetails = truncateValidationOutput(publishError?.stderr || publishError?.message || String(publishError));
-                                entry.error = `Submodule auto-publish to origin/main failed or could not be verified: ${publishDetails}`;
+                                entry.error = `Submodule auto-publish to origin/${submoduleDefaultBranch} failed or could not be verified: ${publishDetails}`;
                             }
                         } else if (options.allowAutoPublishSubmoduleMainCommits === true) {
                             entry.autoPublishAllowed = true;
                             entry.autoPublishAttempted = false;
                             entry.autoPublishSkippedReason = entry.autoPublishSkippedReason
-                                || 'candidate commit is not reachable in the source checkout or worktree submodule, so Refinery cannot push it to origin/main';
+                                || `candidate commit is not reachable in the source checkout or worktree submodule, so Refinery cannot push it to origin/${submoduleDefaultBranch}`;
                         }
                     }
                 } catch (e: any) {
@@ -1398,7 +1411,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                     entry.remoteMainReachable = false;
                     entry.publishRequired = true;
                     const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
-                    entry.error = `Submodule remote main reachability check failed for origin/main: ${details}`;
+                    entry.error = `Submodule remote main reachability check failed for origin/${submoduleDefaultBranch}: ${details}`;
                 }
             } catch (e: any) {
                 entry.error = truncateValidationOutput(e?.message || String(e));
