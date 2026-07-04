@@ -575,3 +575,47 @@ describe('buildMeshActiveWork directDispatches path — classifier parity (F5)',
         expect(result.terminalDirectWork[0]).toMatchObject({ taskId: 'task-1', status: 'idle', terminal: true });
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APPROVAL-Q1-REALTIME — a resolved approval must not pin the node to awaiting_approval
+// ─────────────────────────────────────────────────────────────────────────────
+describe('buildMeshActiveWork — approval level state supersession', () => {
+    function approvalNeeded(overrides: Partial<MeshLedgerEntry> = {}): MeshLedgerEntry {
+        return {
+            id: overrides.id ?? 'approval-1',
+            meshId: overrides.meshId ?? 'mesh-1',
+            kind: 'task_approval_needed',
+            timestamp: overrides.timestamp ?? '2026-05-26T00:00:30.000Z',
+            nodeId: overrides.nodeId ?? 'node-1',
+            sessionId: overrides.sessionId ?? 'session-1',
+            providerType: overrides.providerType ?? 'codex-cli',
+            payload: { taskId: 'task-1', ...(overrides.payload ?? {}) },
+        };
+    }
+
+    it('shows awaiting_approval when only an approval-needed terminal exists (unresolved)', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatch(), approvalNeeded()],
+            nodes: undefined,
+        });
+        // Not a real terminal — surfaces as active work with awaiting_approval status.
+        expect(result.terminalDirectWork).toHaveLength(0);
+        const rec = result.activeWork.find(r => r.taskId === 'task-1');
+        expect(rec?.status).toBe('awaiting_approval');
+    });
+
+    it('supersedes an earlier approval-needed with a later task_completed (no stale awaiting_approval)', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            // approval at :30 THEN completion at :01:00 for the same dispatch/session.
+            ledgerEntries: [dispatch(), approvalNeeded(), completed()],
+            nodes: undefined,
+            includeTerminalDirect: true,
+        });
+        // The completion wins: the record is terminal (idle), NOT stuck on awaiting_approval.
+        expect(result.activeWork.some(r => r.status === 'awaiting_approval')).toBe(false);
+        const terminal = result.terminalDirectWork.find(r => r.taskId === 'task-1');
+        expect(terminal).toMatchObject({ status: 'idle', terminal: true, terminalKind: 'task_completed' });
+    });
+});

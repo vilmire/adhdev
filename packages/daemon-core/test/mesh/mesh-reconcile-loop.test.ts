@@ -2343,3 +2343,168 @@ describe('runMeshReconcileTick', () => {
     })
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APPROVAL-Q1-REALTIME — approval nudges are level-delivered (not idle-edge held)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('APPROVAL-Q1-REALTIME: approval nudge is delivered to a busy coordinator, not held', () => {
+  // A queued approval event (agent:waiting_approval) for a worker node. metadataEvent
+  // carries the worker session id (targetSessionId/sessionId) so the stale-resolved guard
+  // can correlate a later terminal ledger entry against it.
+  function queueApproval(
+    meshId: string,
+    jobSuffix: string,
+    opts?: { nodeId?: string; sessionId?: string; targetCoordinatorSessionId?: string; queuedAt?: number },
+  ) {
+    const nodeId = opts?.nodeId ?? 'node_child_1'
+    const sessionId = opts?.sessionId ?? `sess-${jobSuffix}`
+    return queuePendingMeshCoordinatorEvent({
+      event: 'agent:waiting_approval',
+      meshId,
+      nodeLabel: "Node 'node_child_1'",
+      nodeId,
+      metadataEvent: { sessionId, targetSessionId: sessionId, timestamp: Date.now() },
+      coordinatorMessage: `Node 'node_child_1' is waiting for approval to proceed (${jobSuffix}).`,
+      queuedAt: opts?.queuedAt ?? Date.now(),
+      ...(opts?.targetCoordinatorSessionId ? { targetCoordinatorSessionId: opts.targetCoordinatorSessionId } : {}),
+    })
+  }
+
+  // (1) The headline fix: a GENERATING coordinator (no idle edge) still receives the
+  // approval nudge within the reconcile tick — delivered NON-force (no PTY force-write),
+  // and the pending row is drained (not left held for an idle edge that may never come).
+  it('delivers a queued approval into a generating coordinator this tick (non-force), not held', async () => {
+    const meshId = `mesh_approval_generating_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'generating', sink)
+      const components = makeComponents([coordinator])
+      queueApproval(meshId, 'generating')
+
+      await runMeshReconcileTick(components)
+
+      // Delivered to the coordinator's inbox this tick — no idle edge required.
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      const [eventName, payload] = coordinator.onEvent.mock.calls[0]
+      expect(eventName).toBe('send_message')
+      expect(payload.input.textFallback).toContain('waiting for approval')
+      // NON-force: approval is level-backed, so it enters the adapter's pendingOutboundQueue
+      // (next turn boundary) — it is NOT a raw PTY force-write (force-inject stays removed).
+      expect(payload.force).toBeFalsy()
+      // The nudge was drained (level state re-derives it), not held for a later idle tick.
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // (2) No regression to completion hold semantics: with a generating coordinator, a queued
+  // approval is delivered while a queued completion stays HELD (its payload lives only in the
+  // pending event, so it must ride the idle edge). Only the approval kind is separated out.
+  it('delivers the approval but still HOLDS a co-queued completion when the coordinator is generating', async () => {
+    const meshId = `mesh_approval_plus_completion_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'generating', sink)
+      const components = makeComponents([coordinator])
+      queueApproval(meshId, 'appr')
+      queueCompletion(meshId, 'compl')
+
+      await runMeshReconcileTick(components)
+
+      // Exactly one delivery — the approval — and it is non-force.
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      const [, payload] = coordinator.onEvent.mock.calls[0]
+      expect(payload.input.textFallback).toContain('waiting for approval')
+      expect(payload.force).toBeFalsy()
+      // The completion is still held (drained=0), unchanged, for the coordinator's idle tick.
+      const remaining = getPendingMeshCoordinatorEvents(meshId)
+      expect(remaining).toHaveLength(1)
+      expect(remaining[0].event).toBe('agent:generating_completed')
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // (2b) Modal-parked coordinator (the coordinator itself parked on a harness modal) also
+  // receives the approval nudge — non-force queues safely behind the modal, never a raw
+  // keystroke write that a modal key-handler would consume.
+  it('delivers the approval into a modal-parked coordinator (non-force, no keystroke corruption)', async () => {
+    const meshId = `mesh_approval_modalparked_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'waiting_approval', sink)
+      const components = makeComponents([coordinator])
+      queueApproval(meshId, 'mp')
+
+      await runMeshReconcileTick(components)
+
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      const [, payload] = coordinator.onEvent.mock.calls[0]
+      expect(payload.force).toBeFalsy()
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // (3) A STALE approval — one whose approval was already resolved (a real terminal ledger
+  // entry landed for the same node/session at/after the nudge was queued) — is DROPPED, never
+  // delivered, so it can't mislead the coordinator into thinking the worker still waits.
+  it('drops a stale (already-resolved) approval nudge instead of delivering it', async () => {
+    const meshId = `mesh_approval_stale_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'generating', sink)
+      const components = makeComponents([coordinator])
+      const nodeId = 'node_child_1'
+      const sessionId = 'sess-stale'
+      // Nudge queued first…
+      queueApproval(meshId, 'stale', { nodeId, sessionId, queuedAt: Date.now() - 1000 })
+      // …then the worker completed (approval resolved) — a real terminal after the nudge.
+      appendLedgerEntry(meshId, {
+        kind: 'task_completed',
+        nodeId,
+        sessionId,
+        payload: { event: 'agent:generating_completed' },
+      })
+
+      await runMeshReconcileTick(components)
+
+      // Dropped: not delivered to the coordinator, and drained from the queue.
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // Guard: a NON-stale approval (no terminal, or a terminal that predates the nudge) is still
+  // delivered — the stale guard must not swallow a genuinely-pending approval.
+  it('still delivers when the only terminal ledger entry predates the approval nudge', async () => {
+    const meshId = `mesh_approval_old_terminal_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'generating', sink)
+      const components = makeComponents([coordinator])
+      const nodeId = 'node_child_1'
+      const sessionId = 'sess-fresh'
+      // An OLD terminal (a prior task on the same node) that predates this new approval nudge.
+      appendLedgerEntry(meshId, {
+        kind: 'task_completed',
+        nodeId,
+        sessionId,
+        timestamp: new Date(Date.now() - 60_000).toISOString(),
+        payload: { event: 'agent:generating_completed' },
+      } as any)
+      queueApproval(meshId, 'fresh', { nodeId, sessionId, queuedAt: Date.now() })
+
+      await runMeshReconcileTick(components)
+
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+})

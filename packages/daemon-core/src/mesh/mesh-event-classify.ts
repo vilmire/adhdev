@@ -49,3 +49,25 @@ export const MESH_FORCE_INJECT_EVENTS: ReadonlySet<string> = new Set([
 export function shouldForceInjectMeshEvent(eventName: unknown): boolean {
     return typeof eventName === 'string' && MESH_FORCE_INJECT_EVENTS.has(eventName);
 }
+
+// APPROVAL-Q1-REALTIME. Approval-kind coordinator events: a worker is blocked on an
+// approval prompt and needs the coordinator to act (mesh_approve). Approval is treated
+// differently from a completion in the reconcile loop's no-idle hold, and the reason is
+// WHERE each event's authoritative state lives:
+//   - A completion's payload (finalSummary / worker result) exists ONLY in the pending
+//     event, so a drain-without-inject loses it forever → it MUST ride the idle-edge hold
+//     until it can land in the coordinator as a real turn.
+//   - An approval's authoritative state is recorded at LEVEL in the ledger the moment the
+//     event is processed (task_approval_needed → mesh_status awaiting_approval, see
+//     onMeshCoordinatorEventForwarded + mesh-active-work). The pending approval event is
+//     therefore only a real-time NUDGE, not the source of truth: it can be delivered to a
+//     busy coordinator's inbox (and dropped) without data loss, because the level state
+//     re-derives it. That is why approval is exempt from the idle-edge hold completions
+//     require, and why a stale/resolved approval nudge can simply be dropped.
+export const MESH_APPROVAL_EVENTS: ReadonlySet<string> = new Set([
+    'agent:waiting_approval',
+]);
+
+export function isMeshApprovalEvent(eventName: unknown): boolean {
+    return typeof eventName === 'string' && MESH_APPROVAL_EVENTS.has(eventName);
+}

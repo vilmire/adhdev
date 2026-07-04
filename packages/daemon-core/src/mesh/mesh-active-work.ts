@@ -223,9 +223,18 @@ function buildLedgerDirectDispatchRecord(
     ctx: { terminals: MeshLedgerEntry[]; nodes: any[] | undefined; now: number },
 ): { record: MeshActiveWorkRecord; terminalRow: boolean } {
     const taskId = directDispatchTaskId(dispatch);
-    const terminal = ctx.terminals
+    const matching = ctx.terminals
         .filter(entry => new Date(entry.timestamp).getTime() >= new Date(dispatch.timestamp).getTime())
-        .find(entry => terminalMatchesDispatch(entry, dispatch, taskId));
+        .filter(entry => terminalMatchesDispatch(entry, dispatch, taskId));
+    // APPROVAL-Q1-REALTIME (stale level state): prefer a REAL terminal (task_completed /
+    // task_failed) over an earlier task_approval_needed for the same dispatch. An approval
+    // that was subsequently resolved — the worker went on to complete or fail — must NOT keep
+    // the node pinned to awaiting_approval, which would falsely tell the coordinator (via
+    // mesh_status/read_chat) the worker is still blocked (the UX inversion this fix avoids).
+    // Among real terminals the earliest still wins (unchanged); approval-needed is selected
+    // only when no real terminal followed it. `terminals` is sorted ascending, so `.find`
+    // returns the earliest real terminal.
+    const terminal = matching.find(entry => entry.kind !== 'task_approval_needed') || matching[0];
     const terminalStatus = terminal ? statusFromTerminal(terminal) : undefined;
     const live = sessionStatusFromNodes(ctx.nodes, dispatch.nodeId, dispatch.sessionId);
     const status = terminalStatus || live.status || 'assigned';

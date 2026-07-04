@@ -50,6 +50,7 @@ import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { handleMeshForwardEvent, shouldForceInjectMeshEvent, triggerMeshQueue, resolveForwardEventMeshId } from './mesh-events-coordinator.js';
+import { isMeshApprovalEvent, MESH_APPROVAL_EVENTS } from './mesh-event-classify.js';
 import {
     peekUnresolvedDelegateForwards,
     ackUnresolvedDelegateForward,
@@ -61,6 +62,7 @@ import { expandDaemonIdForms, daemonIdsEquivalent, sessionIdsEquivalent } from '
 import { getActiveDirectDispatches, getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-work-queue.js';
 import { isSessionActivelyGenerating } from './mesh-queue-assignment.js';
 import { readLedgerEntries } from './mesh-ledger.js';
+import type { MeshLedgerEntry } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
 import { findTerminalLedgerEvidenceForTask, reconcileDirectDispatchCompletionFromTranscript } from './mesh-events-stale.js';
 import { extractFinalAssistantSummaryEvidence } from '../providers/chat-message-normalization.js';
@@ -570,6 +572,7 @@ export function shouldHoldPendingDrainForBusyLocalCoordinator(
 function injectPendingIntoCoordinator(
     coordinator: LiveCoordinator['instance'],
     pending: PendingMeshCoordinatorEvent,
+    opts?: { forceOverride?: boolean },
 ): void {
     if (!coordinator) return;
     // NOTIF-DROP-SYNTH-NO-MESSAGE (defence-in-depth): a queued event with no coordinatorMessage
@@ -595,7 +598,11 @@ function injectPendingIntoCoordinator(
         if (!coordinatorMessage) return; // builder produced nothing — nothing to surface
         LOG.warn('MeshReconcile', `Lazily synthesized missing coordinatorMessage for ${pending.event} (mesh ${pending.meshId}) at inject time — a queued terminal event arrived message-less`);
     }
-    const force = shouldForceInjectMeshEvent(pending.event);
+    // forceOverride lets the APPROVAL-Q1-REALTIME nudge path deliver into a busy
+    // coordinator WITHOUT a raw PTY force-write (force-inject-into-generating stays
+    // intentionally removed): a non-force send_message enters the adapter's
+    // pendingOutboundQueue and is surfaced at the coordinator's next turn boundary.
+    const force = opts?.forceOverride ?? shouldForceInjectMeshEvent(pending.event);
     // EVTTRACE: event surfaced to the coordinator (injected into its live CLI session).
     // This is the terminal happy-path stage. Observation only.
     traceMeshEventStage('surfaced', {
@@ -774,6 +781,112 @@ function drainAndInjectIntoTargets(
         }
     }
     return pendingEvents.length;
+}
+
+// APPROVAL-Q1-REALTIME stale guard. An approval nudge is RESOLVED once a real terminal
+// ledger entry (task_completed / task_failed) for the same node/session landed at or
+// after the nudge was queued — the worker either finished or died, so it is no longer
+// waiting on that approval. Delivering the nudge then would falsely tell the coordinator
+// the worker is still blocked (the exact UX inversion this fix must avoid), so a resolved
+// nudge is dropped rather than delivered. Ledger-based so the check is daemon-local and
+// deterministic (no dependence on a possibly-remote worker instance's live state).
+function isApprovalNudgeResolved(meshId: string, pending: PendingMeshCoordinatorEvent): boolean {
+    const metadataEvent = (pending.metadataEvent && typeof pending.metadataEvent === 'object')
+        ? pending.metadataEvent as Record<string, unknown>
+        : {};
+    const nodeId = readNonEmptyString(pending.nodeId) || readNonEmptyString(metadataEvent.meshNodeId);
+    const sessionId = readNonEmptyString(metadataEvent.targetSessionId) || readNonEmptyString(metadataEvent.sessionId);
+    if (!nodeId && !sessionId) return false; // nothing to correlate a terminal against
+    const queuedAt = typeof pending.queuedAt === 'number' && Number.isFinite(pending.queuedAt) ? pending.queuedAt : 0;
+    let entries: MeshLedgerEntry[];
+    try {
+        entries = readLedgerEntries(meshId);
+    } catch {
+        return false; // best-effort — a read failure never blocks delivery
+    }
+    return entries.some(e => {
+        if (e.kind !== 'task_completed' && e.kind !== 'task_failed') return false;
+        if (queuedAt > 0) {
+            const t = new Date(e.timestamp).getTime();
+            if (Number.isFinite(t) && t < queuedAt) return false; // terminal predates the nudge
+        }
+        const nodeMatch = !!nodeId && !!e.nodeId && daemonIdsEquivalent(e.nodeId, nodeId);
+        const sessionMatch = !!sessionId && !!e.sessionId && sessionIdsEquivalent(e.sessionId, sessionId);
+        return nodeMatch || sessionMatch;
+    });
+}
+
+// APPROVAL-Q1-REALTIME. Deliver queued approval nudges to a mesh's coordinators every
+// reconcile tick, EVEN when the only coordinators are busy (generating / modal-parked)
+// and there is no idle drain target. This is the crux of the fix: a completion rides the
+// idle-edge hold below (its payload lives only in the pending event), but an approval is
+// LEVEL-backed (task_approval_needed ledger → mesh_status awaiting_approval) so it must
+// NOT wait for an idle edge — during orchestration a coordinator can stay `generating`
+// awaiting the very worker that is blocked on the approval, so the idle edge (the flush
+// point) may never come, and the coordinator's mesh_approve arrives only after a human
+// resolves it ('Not in approval state'). We drain ONLY approval events (leaving every
+// other event for the unchanged hold), drop any already-resolved (stale) nudge, and
+// deliver the rest into each coordinator's inbox WITHOUT a raw PTY force-write (non-force
+// send_message → adapter pendingOutboundQueue → surfaced at the coordinator's next turn
+// boundary). Dropping the pending copy after delivery is safe and prevents re-nudging
+// every 4s — the level ledger state remains the durable, re-derivable source of truth.
+// Returns the number of nudges delivered (0 when none were queued/deliverable).
+function drainAndDeliverApprovalNudges(
+    meshId: string,
+    drainDaemonIds: string[],
+    localDaemonId: string | undefined,
+    meshCoordinators: LiveCoordinator[],
+): number {
+    // O(1) guard: only touch the queue when an approval event is actually present.
+    let peeked: readonly PendingMeshCoordinatorEvent[];
+    try {
+        peeked = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : undefined);
+    } catch {
+        return 0;
+    }
+    if (!peeked.some(e => isMeshApprovalEvent(e.event))) return 0;
+
+    let drained: PendingMeshCoordinatorEvent[];
+    try {
+        drained = drainPendingMeshCoordinatorEvents(
+            meshId,
+            drainDaemonIds.length > 0 ? drainDaemonIds : localDaemonId,
+            { onlyEvents: MESH_APPROVAL_EVENTS },
+        );
+    } catch (e: any) {
+        LOG.warn('MeshReconcile', `Approval-nudge drain failed for mesh ${meshId}: ${e?.message || e}`);
+        return 0;
+    }
+
+    let delivered = 0;
+    for (const pending of drained) {
+        if (isApprovalNudgeResolved(meshId, pending)) {
+            // Stale: already resolved. Drop without delivery — re-surfacing it would
+            // mislead the coordinator into believing the worker is still awaiting approval.
+            traceMeshEventDrop('approval_nudge_stale_resolved', {
+                taskId: readNonEmptyString((pending.metadataEvent as Record<string, unknown>)?.taskId),
+                sessionId: readNonEmptyString((pending.metadataEvent as Record<string, unknown>)?.targetSessionId) ?? pending.targetCoordinatorSessionId,
+                nodeId: pending.nodeId,
+                meshId,
+                event: pending.event,
+            }, 'approval already resolved (terminal ledger entry present)');
+            LOG.info('MeshReconcile', `Dropped stale approval nudge for mesh ${meshId} (${pending.nodeLabel}) — approval already resolved`);
+            continue;
+        }
+        // Strict session routing (multi-coordinator): deliver only to the originating
+        // coordinator session when the nudge names one; otherwise broadcast to every
+        // coordinator for this mesh. Absent a live matching coordinator we drop the nudge —
+        // the level state (awaiting_approval) still surfaces via mesh_status, so nothing is lost.
+        const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
+        const targets = wantSession
+            ? meshCoordinators.filter(c => sessionIdsEquivalent(c.sessionId, wantSession))
+            : meshCoordinators;
+        if (targets.length === 0) continue;
+        for (const c of targets) injectPendingIntoCoordinator(c.instance, pending, { forceOverride: false });
+        delivered++;
+        LOG.info('MeshReconcile', `Delivered approval nudge (level) for mesh ${meshId} (${pending.nodeLabel}) → ${targets.length} coordinator(s) without waiting for an idle edge`);
+    }
+    return delivered;
 }
 
 // One reconcile tick. Two independent phases:
@@ -1116,6 +1229,22 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         // worker summary is recoverable even if the coordinator never returns or the pending
         // file is later trimmed.
         if (targetCoordinators.length === 0) {
+            // ── APPROVAL-Q1-REALTIME: level-deliver approval nudges BEFORE the hold ──
+            // Approval events are LEVEL-backed (task_approval_needed ledger →
+            // mesh_status awaiting_approval), so they must not be edge-held like a
+            // completion (whose payload lives only in the pending event). Drain and
+            // deliver them to the busy coordinator's inbox (non-force, next-turn-boundary)
+            // this tick, dropping any already-resolved (stale) nudge — and leave ONLY the
+            // completion/other events in the queue for the existing hold semantics below
+            // (their behaviour is unchanged: shouldForceInjectMeshEvent no longer sees the
+            // approval rows because this drained them). MUST run first so the modal-park
+            // orphan-escape and the generating-hold audit only ever see non-approval events.
+            drainAndDeliverApprovalNudges(meshId, drainDaemonIds, localDaemonId, meshCoordinators);
+            // If approval nudges were the only queued events, nothing remains to hold — skip
+            // the hold branches (and their "holding pending event(s)" log) entirely.
+            if (store) {
+                try { if (store.pendingEventCount(meshId) === 0) continue; } catch { /* fall through */ }
+            }
             if (modalParkedCoordinators.length > 0) {
                 // ── orphan escape (MUST precede the blanket modal-park hold) ──────────
                 // A modal-parked coordinator with no idle/generating sibling otherwise
