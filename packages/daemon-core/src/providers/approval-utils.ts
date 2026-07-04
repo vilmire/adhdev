@@ -41,6 +41,48 @@ export function hasNegativeApprovalOption(buttons: string[] | null | undefined):
     return (buttons || []).some((button) => isNegativeApprovalLabel(String(button || '')));
 }
 
+/**
+ * True when a button reliably identifies a tool-CONSENT modal on its own — a
+ * scoped permission-grant affirmative such as:
+ *   - "Yes, allow all edits in tmp/ during this session"
+ *   - "Yes, and don't ask again for example.com"
+ *   - "Yes, allow reading from etc/ from this project"
+ *   - "Always allow"
+ *
+ * These options only ever appear in a genuine approval/permission prompt; a
+ * /model or /mode picker ("1. Default  2. Opus  3. Sonnet") never offers a
+ * "grant this scope" choice. They therefore serve as a SECOND reliable
+ * structural anchor alongside {@link hasNegativeApprovalOption}.
+ *
+ * Why this exists (tall-diff fallback, #137): when a Write/Edit diff is tall,
+ * the trailing decline option ("3. No") can scroll off the bottom of the
+ * captured PTY frame, leaving only "1. Yes" + "2. Yes, allow … this session".
+ * hasNegativeApprovalOption then reads false and the auto-approve gate bails —
+ * a delegated worker sits forever on a modal it could safely have approved. The
+ * grant-scope affirmative lets the gate recognize the consent modal WITHOUT
+ * seeing the off-frame decline. The gate still selects the plain "Yes"
+ * (allow-once) via pickApprovalButton, never the broader grant, and the settle
+ * gate still requires a stable modal — so a half-rendered frame never fires.
+ * Kept deliberately narrow so no picker/confirm modal can trip it.
+ */
+export function hasReliableApprovalAffirmative(buttons: string[] | null | undefined): boolean {
+    return (buttons || []).some((button) => {
+        const label = normalizeApprovalLabel(String(button || ''));
+        if (!label) return false;
+        // "always allow …" as a standalone grant option.
+        if (/^always allow\b/.test(label)) return true;
+        // "yes, …" scoped grants: allow / always allow / don't ask again / etc.
+        // (normalizeApprovalLabel strips the apostrophe, so "don't" → "don t").
+        if (/^yes\b/.test(label)) {
+            if (/\ballow\b/.test(label)) return true;
+            if (/\bask again\b/.test(label)) return true;
+            if (/\bduring this session\b/.test(label)) return true;
+            if (/\bfrom this project\b/.test(label)) return true;
+        }
+        return false;
+    });
+}
+
 export function getApprovalPositiveHints(provider?: Pick<ProviderModule, 'approvalPositiveHints'> | null): string[] {
     const customHints = Array.isArray(provider?.approvalPositiveHints)
         ? provider.approvalPositiveHints

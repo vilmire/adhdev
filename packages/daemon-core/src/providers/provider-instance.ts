@@ -232,8 +232,13 @@ export interface ProviderInstance {
      * input). Provider-common signal that suppresses auto-approve for a short
      * window so the user can drive the session manually; background mesh worker
      * sessions never receive it, so their delegated auto-approve is unaffected.
+     *
+     * `opts.passive` marks a view-only action (select_session / open_panel). A
+     * delegated worker session ignores passive stamps so a coordinator merely
+     * watching its panel does not suppress its delegated auto-approve; explicit
+     * input still attends. Foreground sessions attend on passive views too.
      */
-    noteManualInteraction?(now?: number): void;
+    noteManualInteraction?(now?: number, opts?: { passive?: boolean }): void;
 
  /** cleanup */
     dispose(): void;

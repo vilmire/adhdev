@@ -3,6 +3,7 @@ import { CliProviderInstance } from '../../src/providers/cli-provider-instance.j
 import {
   AUTO_APPROVE_MANUAL_ATTENDANCE_SUPPRESS_MS,
   MANUAL_ATTENDANCE_COMMANDS,
+  MANUAL_ATTENDANCE_PASSIVE_VIEW_COMMANDS,
   ManualAttendanceTracker,
 } from '../../src/providers/manual-attendance.js'
 
@@ -151,6 +152,51 @@ describe('manual-attendance command set — provider-common signal', () => {
     for (const cmd of ['send_chat', 'read_chat', 'list_chats', 'new_chat', 'switch_chat']) {
       expect(MANUAL_ATTENDANCE_COMMANDS.has(cmd)).toBe(false)
     }
+  })
+
+  it('classifies select_session / open_panel as PASSIVE view-only', () => {
+    expect(MANUAL_ATTENDANCE_PASSIVE_VIEW_COMMANDS.has('select_session')).toBe(true)
+    expect(MANUAL_ATTENDANCE_PASSIVE_VIEW_COMMANDS.has('open_panel')).toBe(true)
+    // Passive set is a strict subset of the full attendance set.
+    for (const cmd of MANUAL_ATTENDANCE_PASSIVE_VIEW_COMMANDS) {
+      expect(MANUAL_ATTENDANCE_COMMANDS.has(cmd)).toBe(true)
+    }
+    // Explicit-input commands are NOT passive.
+    for (const cmd of ['invoke_provider_script', 'set_mode', 'resolve_action', 'pty_input']) {
+      expect(MANUAL_ATTENDANCE_PASSIVE_VIEW_COMMANDS.has(cmd)).toBe(false)
+    }
+  })
+})
+
+describe('passive-view exclusion for delegated workers (defect② secondary, #137)', () => {
+  it('a delegated worker ignores a passive view (select_session / open_panel)', () => {
+    const h = makeHarness()
+    h.instance.settings.meshNodeFor = 'mesh-1' // → isMeshWorkerSession() true
+    // Passive peek at the worker's panel must NOT attend → auto-approve unheld.
+    h.instance.noteManualInteraction(1000, { passive: true })
+    expect(h.instance.manualAttendance.isAttended(1100)).toBe(false)
+    // Delegated auto-approve therefore still fires normally.
+    h.call(APPROVAL(1), 1200)
+    h.call(APPROVAL(1), 1200 + SETTLE_MS + 20)
+    expect(h.fires.length).toBe(1)
+  })
+
+  it('a delegated worker STILL attends on explicit input (passive:false)', () => {
+    const h = makeHarness()
+    h.instance.settings.meshNodeFor = 'mesh-1'
+    h.instance.noteManualInteraction(1000, { passive: false }) // e.g. pty_input / resolve_action
+    expect(h.instance.manualAttendance.isAttended(1100)).toBe(true)
+    // ...so a human taking over the worker holds auto-approve.
+    expect(h.call(APPROVAL(1), 1200)).toBe(false)
+    expect(h.fires.length).toBe(0)
+  })
+
+  it('a FOREGROUND session still attends on a passive view (unchanged behavior)', () => {
+    const h = makeHarness() // no mesh settings → isMeshWorkerSession() false
+    h.instance.noteManualInteraction(1000, { passive: true })
+    expect(h.instance.manualAttendance.isAttended(1100)).toBe(true)
+    expect(h.call(APPROVAL(1), 1200)).toBe(false)
+    expect(h.fires.length).toBe(0)
   })
 })
 

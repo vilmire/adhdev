@@ -63,7 +63,12 @@ export interface ModalTuiSpec {
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
-const SEPARATOR_RE = /^(?:─|━|═|━){10,}\s*$/;
+// A horizontal rule line. Covers solid box-drawing rules (─ ━ ═) AND the dashed
+// variants (╌ ╍ ┄ ┅ ┈ ┉) that Claude Code draws as the INNER separators around a
+// Write/Edit diff body. This matches the coverage of the claude-cli v4 FSM spec
+// anchor `^[─╌]+$` (issue #137) so the SDK-v1 parser recognizes the same modal
+// frames the FSM does — a dashed rule is a separator, not modal content.
+const SEPARATOR_RE = /^[─━═╌╍┄┅┈┉]{10,}\s*$/;
 
 function compile(re: string, flags?: string): RegExp {
   try {
@@ -119,7 +124,13 @@ function scopeLines(
       }
     }
   }
-  if (lastSep >= 0 && prevSep >= 0) {
+  // Only scope to the separator frame when it actually BRACKETS the question
+  // line. Claude Write/Edit modals draw dashed (╌) inner rules around the diff
+  // body, so the last two separators can enclose the file diff while the
+  // question + button block sit BELOW the lower dashed rule. Scoping to that
+  // inner frame would drop every button (→ null → missed auto-approve, #137).
+  // When the question is outside the frame, fall through to a window around it.
+  if (lastSep >= 0 && prevSep >= 0 && questionIndex >= prevSep && questionIndex < lastSep + 1) {
     return { start: prevSep, end: lastSep + 1 };
   }
   // Fallback: window around question line.

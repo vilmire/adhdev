@@ -25,7 +25,7 @@ import { LOG } from '../logging/logger.js';
 import { traceMeshEventStage, traceMeshEventDrop } from '../mesh/mesh-event-trace.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
-import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, looksLikeActiveApprovalPromptText } from './approval-utils.js';
+import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, hasReliableApprovalAffirmative, looksLikeActiveApprovalPromptText } from './approval-utils.js';
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { normalizeProviderSessionId } from './provider-session-id.js';
@@ -2147,10 +2147,22 @@ export class CliProviderInstance implements ProviderInstance {
             return autoApproveActive;
         }
         const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, this.provider);
-        if (buttonIndex < 0 || !hasNegativeApprovalOption(buttons)) {
-            // No affirmative matched, or no decline option present (→ not a real
-            // consent prompt, e.g. a picker that slipped past the kind gate).
-            // Surface the modal so the user decides; never pick blindly.
+        // Structural decline anchor. A real approval offers BOTH an affirmative
+        // and a decline — but on a TALL Write/Edit diff the trailing "3. No"
+        // scrolls off the captured frame, leaving only "1. Yes" + "2. Yes, allow
+        // … this session" so hasNegativeApprovalOption reads false (#137). A
+        // scoped grant-affirmative ("Yes, allow … during this session" / "…don't
+        // ask again") ONLY appears in a genuine consent modal (never a picker),
+        // so it stands in for the off-frame decline as a reliable second anchor.
+        // Conservative by construction: a picker without a grant-scope option
+        // still bails here, and the fire below still picks the plain allow-once
+        // "Yes" via pickApprovalButton, not the broader grant.
+        const hasReliableConsentAnchor = hasNegativeApprovalOption(buttons)
+            || hasReliableApprovalAffirmative(buttons);
+        if (buttonIndex < 0 || !hasReliableConsentAnchor) {
+            // No affirmative matched, or no decline / reliable grant option present
+            // (→ not a real consent prompt, e.g. a picker that slipped past the
+            // kind gate). Surface the modal so the user decides; never pick blindly.
             return autoApproveActive;
         }
         // Modal *identity* signature — the question/button set only, NO volatile
@@ -3124,7 +3136,16 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /** @see ProviderInstance.noteManualInteraction */
-    noteManualInteraction(now = Date.now()): void {
+    noteManualInteraction(now = Date.now(), opts?: { passive?: boolean }): void {
+        // P1b (#137 secondary): a DELEGATED worker session must not treat a
+        // passive dashboard view (foreground tab selection / panel open) as
+        // manual attendance. A coordinator merely peeking at a worker's panel
+        // would otherwise suppress that worker's delegated auto-approve for the
+        // whole 60s window. Only explicit input/intervention (controlbar,
+        // resolve_action, pty_input) attends a worker. Non-worker (foreground)
+        // sessions keep noting on passive views so a user foregrounding their own
+        // session still holds auto-approve to act on the modal themselves.
+        if (opts?.passive && this.isMeshWorkerSession()) return;
         this.manualAttendance.note(now);
     }
 

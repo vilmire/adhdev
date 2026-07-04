@@ -26,7 +26,7 @@ import { reconcileIdeRuntimeSessions } from '../sessions/reconcile.js';
 import { LOG } from '../logging/logger.js';
 import { resolveLegacyProviderScript, type LegacyStringScript } from './provider-script-resolver.js';
 import { sha256Hex } from '../system/hash.js';
-import { MANUAL_ATTENDANCE_COMMANDS } from '../providers/manual-attendance.js';
+import { MANUAL_ATTENDANCE_COMMANDS, MANUAL_ATTENDANCE_PASSIVE_VIEW_COMMANDS } from '../providers/manual-attendance.js';
 
 // Sub-module imports
 import * as Chat from './chat-commands.js';
@@ -393,15 +393,18 @@ export class DaemonCommandHandler implements CommandHelpers {
      */
     private noteManualAttendanceIfApplicable(cmd: string, args: any): void {
         if (!MANUAL_ATTENDANCE_COMMANDS.has(cmd)) return;
+        // Passive view-only actions (select_session / open_panel) attend a
+        // foreground session but NOT a delegated worker — the instance decides.
+        const passive = MANUAL_ATTENDANCE_PASSIVE_VIEW_COMMANDS.has(cmd);
         const sessionId = this._currentRoute.session?.sessionId
             || (typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '');
         if (!sessionId) return;
         const session = this._ctx.sessionRegistry?.get(sessionId);
         const instanceKey = session?.adapterKey || session?.instanceKey || sessionId;
         const instance = this._ctx.instanceManager?.getInstance(instanceKey) as
-            { noteManualInteraction?: (now?: number) => void } | undefined;
+            { noteManualInteraction?: (now?: number, opts?: { passive?: boolean }) => void } | undefined;
         try {
-            instance?.noteManualInteraction?.();
+            instance?.noteManualInteraction?.(undefined, { passive });
         } catch {
             // attendance is best-effort — never block command dispatch
         }

@@ -239,6 +239,37 @@ describe('auto-approve gate — picker excluded, approval preserved (real evalua
     gate.call(status, 1_000 + SETTLE_MS + 50);
     expect(gate.resolves).toEqual([]);
   });
+
+  // ── P1a: tall-diff off-frame decline fallback (#137) ────────────────────────
+  it('DOES auto-approve when "No" scrolled off-frame but a grant-scope affirmative remains', async () => {
+    // Tall Write/Edit diff pushed "3. No" below the captured frame — only the
+    // allow-once "Yes" and the "Yes, allow … this session" grant survive. The
+    // grant option is a reliable consent anchor, so the gate still fires and
+    // picks the least-permissive "Yes" (index 0), never the broader grant.
+    const gate = makeGate();
+    const status = modalStatus('approval', [
+      'Yes',
+      'Yes, allow all edits in tmp/ during this session (shift+tab)',
+    ]);
+    gate.call(status, 1_000);
+    expect(gate.fires).toBe(0);
+    gate.call(status, 1_000 + SETTLE_MS + 50);
+    expect(gate.fires).toBe(1);
+    await new Promise(r => setTimeout(r, 10));
+    expect(gate.resolves).toEqual([0]);
+  });
+
+  it('still does NOT auto-approve a Yes-only modal with neither a decline nor a grant anchor', () => {
+    // "Yes" + "Continue" — an affirmative pair with no decline and no scoped
+    // grant. Not a reliable consent prompt; the gate must leave it for the user.
+    const gate = makeGate();
+    const status = modalStatus('approval', ['Yes', 'Continue']);
+    gate.call(status, 1_000);
+    gate.call(status, 1_000 + SETTLE_MS + 50);
+    gate.call(status, 1_000 + SETTLE_MS * 3);
+    expect(gate.resolves).toEqual([]);
+    expect(gate.fires).toBe(0);
+  });
 });
 
 describe('miniSpec sanity', () => {

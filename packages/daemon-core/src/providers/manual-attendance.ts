@@ -83,3 +83,23 @@ export const MANUAL_ATTENDANCE_COMMANDS: ReadonlySet<string> = new Set([
     'resolve_action',
     'pty_input',
 ]);
+
+/**
+ * The subset of {@link MANUAL_ATTENDANCE_COMMANDS} that are PASSIVE view-only
+ * actions — foregrounding a session's tab / opening its panel. They convey "I am
+ * looking at this session", not "I am driving it", and carry no user input.
+ *
+ * For a foreground (base-node) session these still attend: a user who
+ * foregrounds their own session should get the quiet window so an incoming
+ * approval stays visible for them to act on. But for a DELEGATED worker session
+ * a passive peek must NOT attend — a coordinator merely opening a worker's panel
+ * to watch progress would otherwise suppress that worker's delegated
+ * auto-approve for the whole window (secondary cause, #137). The per-instance
+ * hook decides: it drops a passive stamp only when the session is a delegated
+ * worker, so explicit input (controlbar / resolve_action / pty_input) still
+ * attends a worker and a foreground session is unaffected.
+ */
+export const MANUAL_ATTENDANCE_PASSIVE_VIEW_COMMANDS: ReadonlySet<string> = new Set([
+    'select_session',
+    'open_panel',
+]);
