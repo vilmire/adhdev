@@ -154,7 +154,8 @@ function getOrCreateConnection(WebSocketCtor, url) {
       conn.pending.delete(msg.payload.requestId);
       clearTimeout(req.timer);
       const payload = msg.payload;
-      if (payload?.success === false) {
+      const hasStructuredResult = payload != null && payload.result != null;
+      if (payload?.success === false && !hasStructuredResult) {
         req.reject(new Error(payload.error || "Daemon IPC command failed"));
       } else {
         req.resolve(payload?.result ?? payload);

@@ -163,7 +163,15 @@ function getOrCreateConnection(
       conn.pending.delete(msg.payload.requestId);
       clearTimeout(req.timer);
       const payload = msg.payload;
-      if (payload?.success === false) {
+      // A structured `result` means the responder actually processed the command
+      // and produced a semantic outcome — including a legitimate FAILURE such as a
+      // `blocked` fast-forward carrying `blockingReasons` (success:false, no top-level
+      // `error`). That is NOT a transport failure; rejecting here would discard the
+      // result and surface an opaque "Daemon IPC command failed" to the coordinator.
+      // Only reject when the reply carries no structured result to preserve (i.e. a
+      // genuine transport/handler failure with just an error string).
+      const hasStructuredResult = payload != null && payload.result != null;
+      if (payload?.success === false && !hasStructuredResult) {
         req.reject(new Error(payload.error || 'Daemon IPC command failed'));
       } else {
         req.resolve(payload?.result ?? payload);

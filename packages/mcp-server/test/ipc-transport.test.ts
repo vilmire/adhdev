@@ -142,6 +142,135 @@ test('IpcTransport.meshCommand sends daemon mesh relay command over local IPC we
   }
 });
 
+test('IpcTransport preserves a structured result on success:false (blocked ff response reaches the coordinator)', async () => {
+  const previousWebSocket = (globalThis as any).WebSocket;
+
+  // Emulate the daemon-cloud response builder for a legitimately BLOCKED
+  // fast_forward_mesh_node: success:false, no top-level `error`, but a full
+  // structured `result` carrying blockingReasons + code.
+  const blockedResult = {
+    success: false,
+    code: 'branch_ahead',
+    allowed: false,
+    willRun: false,
+    executed: false,
+    blockingReasons: ['branch_has_local_commits', 'gitlink_out_of_sync'],
+    node: 'node-a',
+  };
+
+  class FakeWebSocket {
+    private listeners = new Map<string, Array<(event: any) => void>>();
+
+    constructor(_url: string) {
+      queueMicrotask(() => this.emit('open', {}));
+    }
+
+    addEventListener(type: string, listener: (event: any) => void): void {
+      const list = this.listeners.get(type) ?? [];
+      list.push(listener);
+      this.listeners.set(type, list);
+    }
+
+    send(data: string): void {
+      const parsed = JSON.parse(data);
+      if (parsed.type === 'ext:register') {
+        queueMicrotask(() => this.emit('message', { data: JSON.stringify({ type: 'daemon:welcome' }) }));
+      }
+      if (parsed.type === 'ext:command') {
+        queueMicrotask(() => this.emit('message', {
+          data: JSON.stringify({
+            type: 'ext:command_result',
+            payload: {
+              requestId: parsed.payload.requestId,
+              success: false,
+              result: blockedResult,
+              error: blockedResult.code,
+            },
+          }),
+        }));
+      }
+    }
+
+    close(): void {
+      // noop
+    }
+
+    private emit(type: string, event: any): void {
+      for (const listener of this.listeners.get(type) ?? []) listener(event);
+    }
+  }
+
+  try {
+    (globalThis as any).WebSocket = FakeWebSocket;
+    const transport = new IpcTransport({ port: 19999 });
+    // Must resolve with the structured result — NOT reject with an opaque
+    // "Daemon IPC command failed" that discards blockingReasons.
+    const result = await transport.command('fast_forward_mesh_node', { nodeId: 'node-a', dryRun: true });
+
+    assert.deepEqual(result, blockedResult);
+  } finally {
+    if (previousWebSocket === undefined) delete (globalThis as any).WebSocket;
+    else (globalThis as any).WebSocket = previousWebSocket;
+  }
+});
+
+test('IpcTransport still rejects a transport failure with only an error string (no structured result)', async () => {
+  const previousWebSocket = (globalThis as any).WebSocket;
+
+  class FakeWebSocket {
+    private listeners = new Map<string, Array<(event: any) => void>>();
+
+    constructor(_url: string) {
+      queueMicrotask(() => this.emit('open', {}));
+    }
+
+    addEventListener(type: string, listener: (event: any) => void): void {
+      const list = this.listeners.get(type) ?? [];
+      list.push(listener);
+      this.listeners.set(type, list);
+    }
+
+    send(data: string): void {
+      const parsed = JSON.parse(data);
+      if (parsed.type === 'ext:register') {
+        queueMicrotask(() => this.emit('message', { data: JSON.stringify({ type: 'daemon:welcome' }) }));
+      }
+      if (parsed.type === 'ext:command') {
+        queueMicrotask(() => this.emit('message', {
+          data: JSON.stringify({
+            type: 'ext:command_result',
+            payload: {
+              requestId: parsed.payload.requestId,
+              success: false,
+              error: 'Mesh manager is not initialized',
+            },
+          }),
+        }));
+      }
+    }
+
+    close(): void {
+      // noop
+    }
+
+    private emit(type: string, event: any): void {
+      for (const listener of this.listeners.get(type) ?? []) listener(event);
+    }
+  }
+
+  try {
+    (globalThis as any).WebSocket = FakeWebSocket;
+    const transport = new IpcTransport({ port: 19999 });
+    await assert.rejects(
+      transport.command('fast_forward_mesh_node', { nodeId: 'node-a' }),
+      /Mesh manager is not initialized/,
+    );
+  } finally {
+    if (previousWebSocket === undefined) delete (globalThis as any).WebSocket;
+    else (globalThis as any).WebSocket = previousWebSocket;
+  }
+});
+
 test('IpcTransport gives ff-only and relayed mesh commands long timeouts with diagnostic context', () => {
   const source = readFileSync(join(__dirname, '../src/transports/ipc.ts'), 'utf8');
 
