@@ -745,6 +745,88 @@ describe('mesh_status', () => {
     }
   })
 
+  it('omits preview freshness for a repo without a configured preview pipeline (F15)', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-preview-unconfigured-')
+    try {
+      // No .adhdev/preview-deploy.json, no scripts/preview-freshness.mjs, and no
+      // deploy:preview npm script — an external repo joined to a mesh. The private
+      // release-pipeline guidance must not leak into the coordinator surface.
+      const { router } = createRouter()
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh-preview-unconfigured',
+        refresh: true,
+        inlineMesh: {
+          id: 'mesh-preview-unconfigured',
+          name: 'Preview Mesh',
+          repoIdentity: 'repo',
+          policy: {},
+          nodes: [
+            {
+              id: 'node-local',
+              daemonId: 'machine-local',
+              machineLabel: 'Local',
+              workspace: repoRoot,
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.previewFreshness).toBeUndefined()
+      expect(result.deployFreshness).toBeUndefined()
+    } finally {
+      await cleanupTempDir(dir)
+    }
+  })
+
+  it('surfaces preview freshness when the deploy:preview npm script is configured but no record exists (F15)', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-preview-npm-script-')
+    try {
+      const head = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })).stdout.trim()
+      await writeFile(join(repoRoot, 'package.json'), JSON.stringify({
+        name: 'demo',
+        scripts: { 'deploy:preview': 'node scripts/deploy-preview-local.mjs' },
+      }))
+      const { router } = createRouter()
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh-preview-npm-script',
+        refresh: true,
+        inlineMesh: {
+          id: 'mesh-preview-npm-script',
+          name: 'Preview Mesh',
+          repoIdentity: 'repo',
+          policy: {},
+          nodes: [
+            {
+              id: 'node-local',
+              daemonId: 'machine-local',
+              machineLabel: 'Local',
+              workspace: repoRoot,
+              providers: ['hermes-cli'],
+              policy: { providerPriority: ['hermes-cli'] },
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.previewFreshness).toEqual(expect.objectContaining({
+        status: 'unknown',
+        lastPreviewCommit: null,
+        currentMainCommit: head,
+        currentMainCommitSource: 'HEAD',
+        recordPath: '.adhdev/preview-deploy.json',
+      }))
+      expect(result.deployFreshness).toEqual(result.previewFreshness)
+    } finally {
+      await cleanupTempDir(dir)
+    }
+  })
+
   it('ignores unrelated live sessions that only share a workspace with the mesh node', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-unrelated-workspace-')
     try {

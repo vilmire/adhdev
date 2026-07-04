@@ -23,6 +23,46 @@ export interface PreviewFreshness {
 
 const PREVIEW_DEPLOY_RECORD = '.adhdev/preview-deploy.json';
 
+// Repo-relative driver scripts that indicate this repository actually ships the
+// preview-deploy pipeline. Presence of any one of these (or the deploy record,
+// or a `deploy:preview` npm script) means the private release-pipeline guidance
+// carried by buildPreviewFreshness is relevant here. In every other repo the
+// pipeline is not configured and the guidance must NOT leak (F15).
+const PREVIEW_PIPELINE_SCRIPTS = [
+    'scripts/preview-freshness.mjs',
+    'scripts/smoke-preview-web.mjs',
+    'scripts/deploy-preview-local.mjs',
+] as const;
+
+function hasDeployPreviewNpmScript(repoRoot: string): boolean {
+    const pkgPath = resolve(repoRoot, 'package.json');
+    if (!existsSync(pkgPath)) return false;
+    try {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, unknown> };
+        return typeof pkg?.scripts?.['deploy:preview'] === 'string';
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Gate: does this repository actually configure the preview-deploy pipeline?
+ *
+ * The preview-freshness surface embeds this project's private release-pipeline
+ * instructions (`npm run deploy:preview`, smoke preview, …). Those are only
+ * meaningful in a repo that ships the pipeline. An external repo joined to a
+ * mesh must not have that guidance leak into its coordinator prompt, so this
+ * gate keeps the surface off unless a concrete pipeline artifact is present.
+ */
+export function isPreviewPipelineConfigured(repoRoot: string): boolean {
+    // Strongest signal: the repo has produced a preview-deploy record before.
+    if (existsSync(resolve(repoRoot, PREVIEW_DEPLOY_RECORD))) return true;
+    // Otherwise the pipeline's own driver scripts are enough.
+    if (PREVIEW_PIPELINE_SCRIPTS.some((rel) => existsSync(resolve(repoRoot, rel)))) return true;
+    // Or the `deploy:preview` npm script that fronts the pipeline.
+    return hasDeployPreviewNpmScript(repoRoot);
+}
+
 function runGit(repoRoot: string, args: readonly string[]): string {
     try {
         return execFileSync('git', args, {
@@ -86,7 +126,12 @@ function readCurrentMainCommit(repoRoot: string): Pick<PreviewFreshness, 'curren
     return { currentMainCommit: null, currentMainCommitSource: 'unknown' };
 }
 
-export function buildPreviewFreshness(repoRoot: string): PreviewFreshness {
+export function buildPreviewFreshness(repoRoot: string): PreviewFreshness | null {
+    // F15 gate: only surface preview-freshness (and its private pipeline
+    // guidance) in repos that actually configure the preview-deploy pipeline.
+    // Unconfigured repos return null so the caller omits the field entirely.
+    if (!isPreviewPipelineConfigured(repoRoot)) return null;
+
     const current = readCurrentMainCommit(repoRoot);
     const record = readRecord(repoRoot);
     const lastPreviewCommit = normalizeCommit(record?.lastPreviewCommit);
