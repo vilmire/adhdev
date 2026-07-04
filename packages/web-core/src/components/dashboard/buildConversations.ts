@@ -232,7 +232,10 @@ export function buildIdeConversations(
             transport: ide.transport,
             daemonId: ide.daemonId || undefined,
             sessionCapabilities: ide.sessionCapabilities,
-            mode: isCliConv(ide) ? ((ide.mode || 'terminal') as 'terminal' | 'chat') : 'chat',
+            // Default unhydrated CLI mode to 'chat', not 'terminal': before the
+            // daemon snapshot delivers the persisted mode, a parsed-chat CLI
+            // provider must not flash raw PTY on refresh. See getCliConversationViewMode.
+            mode: isCliConv(ide) ? ((ide.mode || 'chat') as 'terminal' | 'chat') : 'chat',
             agentName,
             agentType: nativeProviderType,
             status: agentStatus,

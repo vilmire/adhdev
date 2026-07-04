@@ -75,7 +75,11 @@ export const getCliConversationViewMode = (
     override?: CliConversationViewMode,
 ): CliConversationViewMode => {
     if (!isCliConv(conv)) return 'chat';
-    return override || conv.mode || 'terminal';
+    // Unhydrated CLI mode (undefined before the daemon snapshot delivers the
+    // persisted mode) must default to 'chat', not 'terminal'. Parsed-chat CLI
+    // providers (e.g. antigravity-cli, transport=pty, real mode 'chat') would
+    // otherwise flash/stick on raw PTY on refresh until the snapshot arrives.
+    return override || conv.mode || 'chat';
 };
 
 /** CLI chat mode detection: PTY transport rendered as chat */
