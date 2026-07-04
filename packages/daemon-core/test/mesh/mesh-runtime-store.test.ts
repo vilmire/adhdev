@@ -1625,4 +1625,71 @@ describe('mesh-runtime-store', () => {
             expect(store.taskHasConfirmedDelivery(MESH, taskId)).toBe(false);
         });
     });
+
+    // T2 (B2b): acked-hold persistence accessors (mesh_inflight_hold table).
+    describe('inflight-hold accessors (T2 / B2b)', () => {
+        it('upsert then get round-trips every field', () => {
+            const store = MeshRuntimeStore.getInstance();
+            store.upsertInflightHold({
+                taskId: 'task-hold-1',
+                meshId: 'mesh-hold',
+                holdReason: 'live',
+                firstIdleSinceAck: 1_700_000_000_000,
+                readFailureCount: 2,
+            });
+            const row = store.getInflightHold('task-hold-1');
+            expect(row).toBeTruthy();
+            expect(row?.taskId).toBe('task-hold-1');
+            expect(row?.meshId).toBe('mesh-hold');
+            expect(row?.holdReason).toBe('live');
+            expect(row?.firstIdleSinceAck).toBe(1_700_000_000_000);
+            expect(row?.readFailureCount).toBe(2);
+            expect(typeof row?.heldAt).toBe('number');
+            expect(typeof row?.updatedAt).toBe('number');
+        });
+
+        it('getInflightHold returns null for an unknown task', () => {
+            expect(MeshRuntimeStore.getInstance().getInflightHold('never-held')).toBeNull();
+        });
+
+        it('upsert preserves held_at but overwrites the mutable fields on conflict', () => {
+            const store = MeshRuntimeStore.getInstance();
+            store.upsertInflightHold({ taskId: 't-conflict', meshId: 'm', holdReason: 'unconfirmed', readFailureCount: 1 });
+            const first = store.getInflightHold('t-conflict');
+            const heldAt = first!.heldAt;
+            expect(first?.holdReason).toBe('unconfirmed');
+            // Re-upsert with new state — held_at is immutable, the rest is overwritten.
+            store.upsertInflightHold({ taskId: 't-conflict', meshId: 'm', holdReason: 'live', firstIdleSinceAck: 42, readFailureCount: 0 });
+            const second = store.getInflightHold('t-conflict');
+            expect(second?.heldAt).toBe(heldAt); // preserved
+            expect(second?.holdReason).toBe('live'); // overwritten
+            expect(second?.firstIdleSinceAck).toBe(42);
+            expect(second?.readFailureCount).toBe(0);
+        });
+
+        it('firstIdleSinceAck round-trips NULL when omitted (streak not anchored)', () => {
+            const store = MeshRuntimeStore.getInstance();
+            store.upsertInflightHold({ taskId: 't-null-idle', meshId: 'm', holdReason: 'live', readFailureCount: 0 });
+            expect(store.getInflightHold('t-null-idle')?.firstIdleSinceAck).toBeNull();
+        });
+
+        it('listInflightHoldsByMesh returns only the given mesh rows', () => {
+            const store = MeshRuntimeStore.getInstance();
+            store.upsertInflightHold({ taskId: 'a', meshId: 'mesh-A', holdReason: 'live', readFailureCount: 0 });
+            store.upsertInflightHold({ taskId: 'b', meshId: 'mesh-A', holdReason: 'live', readFailureCount: 0 });
+            store.upsertInflightHold({ taskId: 'c', meshId: 'mesh-B', holdReason: 'live', readFailureCount: 0 });
+            const a = store.listInflightHoldsByMesh('mesh-A').map(r => r.taskId).sort();
+            expect(a).toEqual(['a', 'b']);
+            expect(store.listInflightHoldsByMesh('mesh-B').map(r => r.taskId)).toEqual(['c']);
+            expect(store.listInflightHoldsByMesh('mesh-none')).toEqual([]);
+        });
+
+        it('deleteInflightHold removes the row', () => {
+            const store = MeshRuntimeStore.getInstance();
+            store.upsertInflightHold({ taskId: 't-del', meshId: 'm', holdReason: 'live', readFailureCount: 0 });
+            expect(store.getInflightHold('t-del')).toBeTruthy();
+            store.deleteInflightHold('t-del');
+            expect(store.getInflightHold('t-del')).toBeNull();
+        });
+    });
 });

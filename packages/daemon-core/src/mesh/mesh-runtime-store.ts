@@ -21,6 +21,19 @@ function safeMeshId(meshId: string): string {
     return meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+// T2 (B2b): a persisted acked-hold record for one in-flight direct dispatch. The
+// reconcile loop keeps a Map cache of these but this row is the SSOT so the hold
+// survives a daemon restart. See the mesh_inflight_hold table comment.
+export interface MeshInflightHoldRow {
+    taskId: string;
+    meshId: string | null;
+    holdReason: string | null;
+    heldAt: number | null;
+    firstIdleSinceAck: number | null;
+    readFailureCount: number | null;
+    updatedAt: number | null;
+}
+
 function legacyQueuePath(meshId: string): string {
     return join(getLedgerDir(), `${safeMeshId(meshId)}.queue.json`);
 }
@@ -327,6 +340,38 @@ export class MeshRuntimeStore {
                 mesh_id TEXT PRIMARY KEY,
                 cursor INTEGER NOT NULL DEFAULT 0
             );
+
+            -- T2 (B2b): persistent acked-hold state for in-flight direct dispatches.
+            -- The reconcile loop's PHASE-4 acked-hold (death-consequence counter,
+            -- fast-track idle streak, live-confirmed flag) used to live only in a
+            -- process-local Map (mesh-reconcile-loop.ts inFlightAckedHoldState), so a
+            -- daemon restart lost it — re-opening the door to the duplicate-emit / drop
+            -- window that the PHASE-4 transcript synth backstop then had to correct after
+            -- the fact. Persisting it lets the state survive a restart: the loop
+            -- rehydrates the Map from this table on first touch and stays read-through /
+            -- write-through against it thereafter. Keyed by task_id (one hold per
+            -- in-flight dispatch); mesh_id is carried for per-mesh listing / prune.
+            --   hold_reason         — 'live' once a conclusive read confirmed the session
+            --                         reachable since the ack, else 'unconfirmed' (drives
+            --                         the death-backstop's liveConfirmedSinceAck gate).
+            --   held_at             — ms epoch the hold row was first created.
+            --   first_idle_since_ack — ms epoch of the FIRST tick in the current continuous
+            --                         idle-with-final-assistant run (fast-track streak); NULL
+            --                         when the streak is broken / not yet started.
+            --   read_failure_count  — consecutive read_chat failures since the last
+            --                         conclusive read (death backstop (a)).
+            CREATE TABLE IF NOT EXISTS mesh_inflight_hold (
+                task_id TEXT PRIMARY KEY,
+                mesh_id TEXT,
+                hold_reason TEXT,
+                held_at INTEGER,
+                first_idle_since_ack INTEGER,
+                read_failure_count INTEGER,
+                updated_at INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_inflight_hold_mesh
+                ON mesh_inflight_hold(mesh_id);
         `);
         this.migrateMeshIsolationColumns();
     }
@@ -679,6 +724,78 @@ export class MeshRuntimeStore {
             `).run(meshId, current + 1);
             return current;
         });
+    }
+
+    // ── Acked-Hold State (T2 / B2b) ──────────────────────────────────────────
+    //
+    // Persistent mirror of the reconcile loop's inFlightAckedHoldState Map. Keyed
+    // by task_id (one in-flight dispatch = one hold). These are plain read/write/
+    // delete/list accessors; the read-through/write-through cache and the restart
+    // rehydrate live in mesh-reconcile-loop.ts.
+
+    private mapInflightHoldRow(r: Record<string, unknown> | undefined): MeshInflightHoldRow | null {
+        if (!r) return null;
+        return {
+            taskId: r.task_id as string,
+            meshId: (r.mesh_id as string | null) ?? null,
+            holdReason: (r.hold_reason as string | null) ?? null,
+            heldAt: (r.held_at as number | null) ?? null,
+            firstIdleSinceAck: (r.first_idle_since_ack as number | null) ?? null,
+            readFailureCount: (r.read_failure_count as number | null) ?? null,
+            updatedAt: (r.updated_at as number | null) ?? null,
+        };
+    }
+
+    upsertInflightHold(entry: {
+        taskId: string;
+        meshId?: string | null;
+        holdReason?: string | null;
+        heldAt?: number | null;
+        firstIdleSinceAck?: number | null;
+        readFailureCount?: number | null;
+    }): void {
+        const now = Date.now();
+        // Preserve held_at across an upsert (it marks when the hold was first created);
+        // only set it from the incoming value when the row is new. All other fields are
+        // overwritten with the latest state — the caller passes the full current state.
+        this.db.prepare(`
+            INSERT INTO mesh_inflight_hold
+                (task_id, mesh_id, hold_reason, held_at, first_idle_since_ack, read_failure_count, updated_at)
+            VALUES (@taskId, @meshId, @holdReason, @heldAt, @firstIdleSinceAck, @readFailureCount, @updatedAt)
+            ON CONFLICT(task_id) DO UPDATE SET
+                mesh_id = excluded.mesh_id,
+                hold_reason = excluded.hold_reason,
+                first_idle_since_ack = excluded.first_idle_since_ack,
+                read_failure_count = excluded.read_failure_count,
+                updated_at = excluded.updated_at
+        `).run({
+            taskId: entry.taskId,
+            meshId: entry.meshId ?? null,
+            holdReason: entry.holdReason ?? null,
+            heldAt: entry.heldAt ?? now,
+            firstIdleSinceAck: entry.firstIdleSinceAck ?? null,
+            readFailureCount: entry.readFailureCount ?? null,
+            updatedAt: now,
+        });
+        this.maybeCheckpointWal();
+    }
+
+    getInflightHold(taskId: string): MeshInflightHoldRow | null {
+        const row = this.db.prepare(
+            'SELECT * FROM mesh_inflight_hold WHERE task_id = ?'
+        ).get(taskId) as Record<string, unknown> | undefined;
+        return this.mapInflightHoldRow(row);
+    }
+
+    listInflightHoldsByMesh(meshId: string): MeshInflightHoldRow[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM mesh_inflight_hold WHERE mesh_id = ?'
+        ).all(meshId) as Array<Record<string, unknown>>;
+        return rows.map(r => this.mapInflightHoldRow(r)).filter((r): r is MeshInflightHoldRow => r !== null);
+    }
+
+    deleteInflightHold(taskId: string): void {
+        this.db.prepare('DELETE FROM mesh_inflight_hold WHERE task_id = ?').run(taskId);
     }
 
     /**

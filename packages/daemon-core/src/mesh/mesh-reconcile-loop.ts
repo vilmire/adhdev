@@ -237,15 +237,124 @@ interface AckedHoldState {
     consecutiveReadFailures: number;
     transcriptIdleSinceMs?: number;
 }
+
+// T2 (B2b): acked-hold state persistence. The Map below is a process-local CACHE;
+// the SSOT is the mesh_inflight_hold table in MeshRuntimeStore. Every read goes
+// read-through (Map miss → load from store, then cache), every mutation goes
+// write-through (Map set → store upsert; Map delete → store delete). On daemon
+// boot the reconcile loop rehydrates the Map from the store per-mesh the first
+// time it touches that mesh (rehydrateAckedHoldsForMesh), so a hold established
+// before a restart survives it — closing the duplicate-emit / drop window the
+// PHASE-4 transcript synth backstop otherwise had to correct after the fact.
+//
+// Store row ↔ AckedHoldState mapping:
+//   hold_reason 'live'|'unconfirmed'  ↔ liveConfirmedSinceAck (boolean)
+//   read_failure_count                ↔ consecutiveReadFailures
+//   first_idle_since_ack              ↔ transcriptIdleSinceMs (undefined ⇒ NULL)
+//   mesh_id                            = the owning mesh (for listByMesh / prune)
+//   held_at                            = ms the hold was first created (store-managed)
 const inFlightAckedHoldState = new Map<string, AckedHoldState>();
+// Meshes whose store rows have already been rehydrated into the Map this process.
+// A restart resets this set, so the first touch of each mesh reloads from disk.
+const rehydratedHoldMeshes = new Set<string>();
 
 function inFlightSynthKey(meshId: string, taskId: string): string {
     return `${meshId}::${taskId}`;
 }
 
-// Test hook: clear the in-flight acked-hold state between cases.
+// Extract the taskId back out of a `${meshId}::${taskId}` synth key. The meshId
+// prefix can itself contain '::' only if the caller passed one (mesh ids are
+// config-derived and never do), so split on the FIRST '::' and treat the remainder
+// as the taskId.
+function taskIdFromSynthKey(meshId: string, synthKey: string): string {
+    const prefix = `${meshId}::`;
+    return synthKey.startsWith(prefix) ? synthKey.slice(prefix.length) : synthKey;
+}
+
+function holdStore(): MeshRuntimeStore | undefined {
+    try { return MeshRuntimeStore.getInstance(); } catch { return undefined; }
+}
+
+// Read-through: Map hit returns the cached state; a miss consults the store and,
+// when a row exists, hydrates the Map from it before returning. A store failure
+// degrades to Map-only (returns undefined on a miss) — identical to the pre-T2
+// in-memory behavior, never worse.
+function getHoldState(synthKey: string, meshId: string): AckedHoldState | undefined {
+    const cached = inFlightAckedHoldState.get(synthKey);
+    if (cached) return cached;
+    const store = holdStore();
+    if (!store) return undefined;
+    let row;
+    try { row = store.getInflightHold(taskIdFromSynthKey(meshId, synthKey)); } catch { return undefined; }
+    if (!row) return undefined;
+    const state: AckedHoldState = {
+        liveConfirmedSinceAck: row.holdReason === 'live',
+        consecutiveReadFailures: row.readFailureCount ?? 0,
+        ...(row.firstIdleSinceAck !== null && row.firstIdleSinceAck !== undefined
+            ? { transcriptIdleSinceMs: row.firstIdleSinceAck }
+            : {}),
+    };
+    inFlightAckedHoldState.set(synthKey, state);
+    return state;
+}
+
+// Write-through: update the Map cache AND the store row. A store failure leaves the
+// Map authoritative for this process (degrade, never crash the tick).
+function setHoldState(synthKey: string, meshId: string, state: AckedHoldState): void {
+    inFlightAckedHoldState.set(synthKey, state);
+    const store = holdStore();
+    if (!store) return;
+    try {
+        store.upsertInflightHold({
+            taskId: taskIdFromSynthKey(meshId, synthKey),
+            meshId,
+            holdReason: state.liveConfirmedSinceAck ? 'live' : 'unconfirmed',
+            firstIdleSinceAck: state.transcriptIdleSinceMs ?? null,
+            readFailureCount: state.consecutiveReadFailures,
+        });
+    } catch { /* degrade to Map-only */ }
+}
+
+// Write-through delete: drop the Map entry AND the store row.
+function deleteHoldState(synthKey: string, meshId: string): void {
+    inFlightAckedHoldState.delete(synthKey);
+    const store = holdStore();
+    if (!store) return;
+    try { store.deleteInflightHold(taskIdFromSynthKey(meshId, synthKey)); } catch { /* degrade */ }
+}
+
+// Restart rehydration: on the first touch of a mesh this process, pull its persisted
+// acked-hold rows from the store into the Map cache so a hold that outlived a daemon
+// restart is honored again. Idempotent per process via rehydratedHoldMeshes. A store
+// failure just skips rehydration (Map starts empty for the mesh — pre-T2 behavior).
+function rehydrateAckedHoldsForMesh(meshId: string): void {
+    if (rehydratedHoldMeshes.has(meshId)) return;
+    rehydratedHoldMeshes.add(meshId);
+    const store = holdStore();
+    if (!store) return;
+    let rows;
+    try { rows = store.listInflightHoldsByMesh(meshId); } catch { return; }
+    for (const row of rows) {
+        const synthKey = inFlightSynthKey(meshId, row.taskId);
+        if (inFlightAckedHoldState.has(synthKey)) continue; // a live tick already set fresher state
+        inFlightAckedHoldState.set(synthKey, {
+            liveConfirmedSinceAck: row.holdReason === 'live',
+            consecutiveReadFailures: row.readFailureCount ?? 0,
+            ...(row.firstIdleSinceAck !== null && row.firstIdleSinceAck !== undefined
+                ? { transcriptIdleSinceMs: row.firstIdleSinceAck }
+                : {}),
+        });
+    }
+    if (rows.length > 0) {
+        LOG.info('MeshReconcile', `Rehydrated ${rows.length} persisted acked-hold row(s) for mesh ${meshId} after (re)start`);
+    }
+}
+
+// Test hook: clear the in-flight acked-hold state between cases (both the Map cache
+// and the per-mesh rehydrate guard, so each case starts from a clean read-through).
 export function __resetReconcileInFlightSynthDebounceForTests(): void {
     inFlightAckedHoldState.clear();
+    rehydratedHoldMeshes.clear();
 }
 
 interface LiveCoordinator {
@@ -1836,21 +1945,42 @@ async function reconcileUnterminatedDirectDispatches(
     localDaemonId: string | undefined,
 ): Promise<void> {
     const dispatches = getActiveDirectDispatches(mesh.id);
-    if (dispatches.length === 0) return; // cheap exit — nothing dispatched, nothing to reconcile
 
-    // Prune the in-flight acked-hold map to the tasks still active in THIS mesh, so a
-    // completed/pruned task's state is dropped (the map never grows without bound).
+    // T2 (B2b): restart rehydration. Reload this mesh's persisted acked-hold rows into
+    // the Map cache the first time this process touches the mesh — a hold established
+    // before a daemon restart is honored again. Must run BEFORE the prune below so a
+    // rehydrated hold for a still-active task is not seen as absent-from-cache and lost.
+    rehydrateAckedHoldsForMesh(mesh.id);
+
+    // Prune the in-flight acked-hold state to the tasks still active in THIS mesh, so a
+    // completed/pruned task's state is dropped (both the Map cache AND the store row —
+    // the persisted table never grows without bound). Runs even when there are zero
+    // active dispatches so a restart that landed after every task terminated still
+    // reaps orphaned store rows. Iterate the union of Map keys and store rows so a row
+    // that exists ONLY on disk (not yet cached) is pruned too.
     const activeTaskKeys = new Set(
         dispatches
             .map(d => readNonEmptyString(d.taskId))
             .filter(Boolean)
             .map(taskId => inFlightSynthKey(mesh.id, taskId)),
     );
+    const heldKeys = new Set<string>();
     for (const key of inFlightAckedHoldState.keys()) {
-        if (key.startsWith(`${mesh.id}::`) && !activeTaskKeys.has(key)) {
-            inFlightAckedHoldState.delete(key);
-        }
+        if (key.startsWith(`${mesh.id}::`)) heldKeys.add(key);
     }
+    const store = holdStore();
+    if (store) {
+        try {
+            for (const row of store.listInflightHoldsByMesh(mesh.id)) {
+                heldKeys.add(inFlightSynthKey(mesh.id, row.taskId));
+            }
+        } catch { /* degrade — prune only what's in the Map */ }
+    }
+    for (const key of heldKeys) {
+        if (!activeTaskKeys.has(key)) deleteHoldState(key, mesh.id);
+    }
+
+    if (dispatches.length === 0) return; // nothing left to reconcile after the prune
 
     const dispatchMeshCommand = components.dispatchMeshCommand;
     const nodeById = new Map(mesh.nodes.map(n => [n.id, n] as const));
@@ -1918,12 +2048,12 @@ async function reconcileUnterminatedDirectDispatches(
             // we only record the death observation and STOP holding so those nets can take over,
             // rather than pinning the row on an indefinite hold for a session that is already gone.
             if (isAcked) {
-                const prior = inFlightAckedHoldState.get(synthKey);
+                const prior = getHoldState(synthKey, mesh.id);
                 const failures = (prior?.consecutiveReadFailures ?? 0) + 1;
                 const liveConfirmedSinceAck = prior?.liveConfirmedSinceAck ?? false;
                 // A read failure breaks the idle-with-final-assistant run → reset the fast-track streak
                 // (transcriptIdleSinceMs cleared by omission) so it must re-accumulate from scratch.
-                inFlightAckedHoldState.set(synthKey, { liveConfirmedSinceAck, consecutiveReadFailures: failures });
+                setHoldState(synthKey, mesh.id, { liveConfirmedSinceAck, consecutiveReadFailures: failures });
                 if (liveConfirmedSinceAck && failures >= ACKED_DEATH_CONSECUTIVE_READ_FAILURES) {
                     LOG.warn('MeshReconcile', `Acked-hold death signal: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) read_chat failed ${failures}x consecutively after a live-confirmed ack — worker session presumed gone mid-turn; releasing the indefinite synth hold to the stranded-reclaim / orphan-prune nets`);
                 }
@@ -1936,8 +2066,8 @@ async function reconcileUnterminatedDirectDispatches(
         // as a genuine liveness loss (backstop a) rather than a node that was never reachable. The
         // fast-track idle streak (transcriptIdleSinceMs) is PRESERVED across this reset — it is
         // managed below where the idle + final-assistant signal is actually evaluated.
-        const priorHoldState = inFlightAckedHoldState.get(synthKey);
-        inFlightAckedHoldState.set(synthKey, {
+        const priorHoldState = getHoldState(synthKey, mesh.id);
+        setHoldState(synthKey, mesh.id, {
             liveConfirmedSinceAck: true,
             consecutiveReadFailures: 0,
             ...(priorHoldState?.transcriptIdleSinceMs !== undefined ? { transcriptIdleSinceMs: priorHoldState.transcriptIdleSinceMs } : {}),
@@ -1951,7 +2081,7 @@ async function reconcileUnterminatedDirectDispatches(
             // Not idle → the worker is genuinely mid-turn (a clear live signal). Keep the
             // live-confirmed flag set (above) but RESET the fast-track idle streak: a turn that
             // resumed generating proves the prior idle was a mid-turn blip, not a settled turn-end.
-            inFlightAckedHoldState.set(synthKey, { liveConfirmedSinceAck: true, consecutiveReadFailures: 0 });
+            setHoldState(synthKey, mesh.id, { liveConfirmedSinceAck: true, consecutiveReadFailures: 0 });
             continue;
         }
 
@@ -1989,12 +2119,12 @@ async function reconcileUnterminatedDirectDispatches(
             // ACKED-HOLD-IDLE-OVERTRUST fast-track. Maintain the continuous idle-with-final-assistant
             // streak. The streak starts (or continues) only while a final visible assistant message is
             // present; a tick with idle-but-no-assistant breaks it (the answer is not yet rendered).
-            const holdState = inFlightAckedHoldState.get(synthKey);
+            const holdState = getHoldState(synthKey, mesh.id);
             let fastTrackReady = false;
             if (evidence.finalSummary) {
                 const idleSinceMs = holdState?.transcriptIdleSinceMs ?? nowMs;
                 if (holdState && holdState.transcriptIdleSinceMs === undefined) {
-                    inFlightAckedHoldState.set(synthKey, { ...holdState, transcriptIdleSinceMs: idleSinceMs });
+                    setHoldState(synthKey, mesh.id, { ...holdState, transcriptIdleSinceMs: idleSinceMs });
                 }
                 const fastTrackGraceMs = resolveAckedTranscriptFastTrackGraceMs();
                 const idleHeldMs = nowMs - idleSinceMs;
@@ -2004,7 +2134,7 @@ async function reconcileUnterminatedDirectDispatches(
                 }
             } else if (holdState?.transcriptIdleSinceMs !== undefined) {
                 // Idle but no final assistant yet → not a turn-end; reset the streak.
-                inFlightAckedHoldState.set(synthKey, { ...holdState, transcriptIdleSinceMs: undefined });
+                setHoldState(synthKey, mesh.id, { ...holdState, transcriptIdleSinceMs: undefined });
             }
 
             // Hold indefinitely UNLESS the fast-track grace was met OR the absolute death deadline is
@@ -2027,7 +2157,7 @@ async function reconcileUnterminatedDirectDispatches(
         // never-acked path and the post-death-deadline acked synth from racing an emit caught in
         // flight at synth-commit time.
         if (realTerminalEmitPendingForTask(mesh.id, taskId)) {
-            inFlightAckedHoldState.delete(synthKey);
+            deleteHoldState(synthKey, mesh.id);
             LOG.info('MeshReconcile', `Worker-emit priority: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) has a real terminal completion already queued — yielding synth to the worker's own emit`);
             continue;
         }
@@ -2070,7 +2200,7 @@ async function reconcileUnterminatedDirectDispatches(
         // turn); it stays as a final live-state guard at synth-commit time.
         const reprobeStatus = await reprobeWorkerStatus(components, { isLocalNode, nodeDaemonId, readArgs });
         if (reprobeStatus && reprobeStatus !== 'idle') {
-            inFlightAckedHoldState.delete(synthKey);
+            deleteHoldState(synthKey, mesh.id);
             LOG.info('MeshReconcile', `Live re-probe defer: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) read '${reprobeStatus}' at synth-commit time — worker resumed generating; deferring synth to a later tick`);
             continue;
         }

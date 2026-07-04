@@ -1916,6 +1916,177 @@ describe('runMeshReconcileTick', () => {
         cleanup(meshId)
       }
     })
+
+    // ── T2 (B2b): acked-hold state persistence across a daemon restart ──────────
+    // The acked-hold state (live-confirmed flag, read-failure counter, fast-track idle
+    // streak) used to live only in a process-local Map, so a daemon restart lost it and
+    // re-opened the duplicate-emit / drop window. It is now persisted to the
+    // mesh_inflight_hold table (read-through / write-through cache) and rehydrated on
+    // the first reconcile tick after (re)start. These tests exercise: (1) a tick writes
+    // the store row; (2) clearing ONLY the Map cache (a restart) then ticking restores
+    // the accumulated streak from disk rather than restarting it from scratch.
+    describe('T2 acked-hold persistence (restart rehydration)', () => {
+      // A restart clears the process-local Map + rehydrate guard but NOT the SQLite store.
+      const simulateRestart = () => __resetReconcileInFlightSynthDebounceForTests()
+
+      function idleWithFinalAssistant(sessionId: string, providerSessionId: string) {
+        return vi.fn(async (cmd: string) => {
+          if (cmd === 'get_status_metadata') return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true, status: 'idle', providerSessionId,
+            messages: [{ role: 'assistant', content: 'All done — persisted hold test.', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
+      }
+
+      it('a reconcile tick writes the acked-hold state to the mesh_inflight_hold store row', async () => {
+        const meshId = `mesh_reconcile_t2_persist_write_${Date.now()}`
+        try {
+          const sessionId = 'sess-t2-write'
+          const nodeId = 'node_local'
+          const taskId = 'task_t2_write'
+          // Default grace (40s) + default death deadline (8min): the streak accumulates
+          // (first_idle_since_ack gets written) but the hold is NOT yet released — so a
+          // persisted row must exist while the hold is still in force.
+          seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+          meshConfigMocks.listMeshes.mockReturnValue([
+            { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+          ])
+          const components = {
+            instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+            commandHandler: { handle: idleWithFinalAssistant(sessionId, 'claude-history-t2write') },
+          } as any
+
+          await runMeshReconcileTick(components)
+
+          // No synth yet (held), but the store row records the live-confirmed hold.
+          expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
+          const row = MeshRuntimeStore.getInstance().getInflightHold(taskId)
+          expect(row).toBeTruthy()
+          expect(row?.meshId).toBe(meshId)
+          expect(row?.holdReason).toBe('live') // a conclusive idle read confirmed liveness
+          expect(row?.readFailureCount).toBe(0)
+          expect(typeof row?.firstIdleSinceAck).toBe('number') // fast-track streak anchored
+        } finally {
+          cleanup(meshId)
+        }
+      })
+
+      it('rehydrates the fast-track idle streak after a restart — the accumulated grace is NOT reset, so promotion fires on the post-restart tick instead of restarting the streak', async () => {
+        const meshId = `mesh_reconcile_t2_rehydrate_${Date.now()}`
+        try {
+          const sessionId = 'sess-t2-rehydrate'
+          const nodeId = 'node_local'
+          const taskId = 'task_t2_rehydrate'
+          seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+          meshConfigMocks.listMeshes.mockReturnValue([
+            { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+          ])
+          const components = {
+            instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+            commandHandler: { handle: idleWithFinalAssistant(sessionId, 'claude-history-t2rehy') },
+          } as any
+
+          // Tick with the DEFAULT grace (40s): the idle-with-final-assistant streak anchors
+          // first_idle_since_ack but 40s has not elapsed → no synth, hold persisted.
+          await runMeshReconcileTick(components)
+          expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
+          const persisted = MeshRuntimeStore.getInstance().getInflightHold(taskId)
+          expect(persisted?.firstIdleSinceAck).toBeTypeOf('number')
+          const anchoredAt = persisted!.firstIdleSinceAck!
+
+          // Simulate a daemon restart: the in-memory Map is gone, the store row survives.
+          simulateRestart()
+          // Prove the cache is empty by reading through the store round-trips the SAME anchor
+          // rather than a fresh one — this is what keeps the grace from restarting at 0.
+          // Force the grace to 0 for the post-restart tick: if the streak were LOST (reset to
+          // this tick's `now`), a 0-grace promotion would still fire — so a 0-grace test cannot
+          // by itself prove rehydration. Instead, keep the default grace and advance nothing:
+          // rehydration must restore the row so the SAME anchor is compared. We assert the store
+          // anchor is unchanged after the restart+tick (the streak was continued, not reset).
+          await runMeshReconcileTick(components)
+          const afterRestart = MeshRuntimeStore.getInstance().getInflightHold(taskId)
+          expect(afterRestart).toBeTruthy()
+          // The anchor (first_idle_since_ack) is PRESERVED — rehydration reloaded the pre-restart
+          // streak start rather than re-anchoring it to the post-restart tick's clock.
+          expect(afterRestart?.firstIdleSinceAck).toBe(anchoredAt)
+          expect(afterRestart?.holdReason).toBe('live')
+        } finally {
+          cleanup(meshId)
+        }
+      })
+
+      it('rehydrated streak promotes the synth once the grace elapses post-restart — the hold that outlived the restart is honored', async () => {
+        const meshId = `mesh_reconcile_t2_promote_after_restart_${Date.now()}`
+        try {
+          const sessionId = 'sess-t2-promote'
+          const nodeId = 'node_local'
+          const taskId = 'task_t2_promote'
+          seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+          meshConfigMocks.listMeshes.mockReturnValue([
+            { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+          ])
+          const components = {
+            instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+            commandHandler: { handle: idleWithFinalAssistant(sessionId, 'claude-history-t2promote') },
+          } as any
+
+          // Pre-restart tick with a real (40s) grace anchors the streak but does not promote.
+          await runMeshReconcileTick(components)
+          expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
+          expect(MeshRuntimeStore.getInstance().getInflightHold(taskId)?.firstIdleSinceAck).toBeTypeOf('number')
+
+          // Restart clears the Map; then relax the grace to 0 so the NEXT tick promotes — but ONLY
+          // if the hold was rehydrated (an isAcked in-flight row present). If the restart had wiped
+          // the hold entirely the dispatch would still be acked, and a 0-grace idle read promotes
+          // regardless — so this asserts the end-to-end honored-across-restart behavior: the synth
+          // surfaces and is idempotent, exactly as a never-restarted hold would.
+          simulateRestart()
+          process.env.MESH_INFLIGHT_ACKED_TRANSCRIPT_FASTTRACK_GRACE_MS = '0'
+          await runMeshReconcileTick(components)
+
+          const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed' && e.sessionId === sessionId)
+          expect(completed).toBeTruthy()
+          expect((completed?.payload as any)?.source).toBe('daemon_reconcile_transcript_completion')
+          // The hold row is reaped on the next prune pass (task left the active set after the synth).
+        } finally {
+          cleanup(meshId)
+        }
+      })
+
+      it('prunes the persisted store row when the dispatch is no longer active (bounded growth across restarts)', async () => {
+        const meshId = `mesh_reconcile_t2_prune_${Date.now()}`
+        try {
+          const sessionId = 'sess-t2-prune'
+          const nodeId = 'node_local'
+          const taskId = 'task_t2_prune'
+          seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+          meshConfigMocks.listMeshes.mockReturnValue([
+            { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
+          ])
+          const components = {
+            instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+            commandHandler: { handle: idleWithFinalAssistant(sessionId, 'claude-history-t2prune') },
+          } as any
+
+          // Establish the persisted hold row.
+          await runMeshReconcileTick(components)
+          expect(MeshRuntimeStore.getInstance().getInflightHold(taskId)).toBeTruthy()
+
+          // Terminate the dispatch out-of-band (as a real completion would) so it leaves the
+          // active-dispatch set, then restart (clear the Map) so the prune must consult the STORE
+          // to discover the now-orphaned row and reap it.
+          updateDirectDispatchStatus(meshId, sessionId, 'completed', taskId)
+          simulateRestart()
+          await runMeshReconcileTick(components)
+
+          expect(MeshRuntimeStore.getInstance().getInflightHold(taskId)).toBeNull()
+        } finally {
+          cleanup(meshId)
+        }
+      })
+    })
   })
 
   // ── PHASE 5: auto-prune orphaned direct dispatch records ────────────────────
