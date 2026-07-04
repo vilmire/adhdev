@@ -45,7 +45,7 @@ import {
   isTaskDispatchInFlight,
   __resetTaskDispatchInFlightForTests,
 } from '../../src/mesh/mesh-task-inflight.js'
-import { runMeshReconcileTick } from '../../src/mesh/mesh-reconcile-loop.js'
+import { runMeshReconcileTick, __resetReclaimUnknownStreakForTests } from '../../src/mesh/mesh-reconcile-loop.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { createSessionDelivery } from '../../src/mesh/mesh-delivery-policy.js'
 import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
@@ -121,10 +121,14 @@ describe('COMPLETION-PROPAGATION F1: completion flip matches an equivalent-but-n
 // ─────────────────────────────────────────────────────────────────────────────
 // F3 + F4 — delivered-but-lost completion reclaim + single-flight lock release
 // ─────────────────────────────────────────────────────────────────────────────
-describe('COMPLETION-PROPAGATION F3/F4: delivered-no-turn deadline reclaim', () => {
+describe('COMPLETION-PROPAGATION F3/F4 + RECLAIM-FALSEPOS: delivered-no-turn tri-state verdict reclaim', () => {
   // > DELIVERED_NO_TURN_DEADLINE_MS (15 min) so the delivered row is provably past the window.
   const DELIVERED_LOST_MS = 16 * 60_000
   const WITHIN_DEADLINE_MS = 6 * 60_000
+  // Must match RECLAIM_UNKNOWN_GRACE_TICKS in mesh-reconcile-loop.ts.
+  const UNKNOWN_GRACE_TICKS = 3
+
+  afterEach(() => __resetReclaimUnknownStreakForTests())
 
   function backdateDispatch(meshId: string, taskId: string, ageMs: number) {
     const store = MeshRuntimeStore.getInstance()
@@ -132,11 +136,26 @@ describe('COMPLETION-PROPAGATION F3/F4: delivered-no-turn deadline reclaim', () 
     entry.dispatchTimestamp = new Date(Date.now() - ageMs).toISOString()
     store.updateQueueEntry(entry)
   }
-  // A local mesh with no idle session / launchable provider, and every session reported
-  // non-generating (getInstance → undefined → isSessionActivelyGenerating false), so the
-  // reclaim's effect is observable in isolation.
-  function makeIdleDeadComponents() {
+  // A local mesh whose assigned session is NOT present in this daemon's instance map — the
+  // remote / gone / id-form-skew case. resolveSessionBusyVerdict → UNKNOWN (never a definitive
+  // idle), so the reclaim defers behind the grace window instead of firing on the first tick.
+  function makeAbsentSessionComponents() {
     return { instanceManager: { getByCategory: () => [], getInstance: () => undefined } } as any
+  }
+  // A live cli instance present for the verdict lookup. `meshNodeFor` is a DIFFERENT mesh so the
+  // PHASE-3 triggerMeshQueue drain (which filters instances by meshNodeFor === meshId) never
+  // re-assigns it to the reclaimed task — the instance only feeds the busy-verdict lookup.
+  function makePresentSessionComponents(sessionId: string, status: string) {
+    const inst = {
+      category: 'cli',
+      getState: () => ({ instanceId: sessionId, status, settings: { meshNodeFor: '__verdict_only__' } }),
+    }
+    return {
+      instanceManager: {
+        getByCategory: (c: string) => (c === 'cli' ? [inst] : []),
+        getInstance: (id: string) => (sessionId === id ? inst : undefined),
+      },
+    } as any
   }
   function hostMesh(meshId: string, nodeId: string) {
     const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
@@ -144,20 +163,47 @@ describe('COMPLETION-PROPAGATION F3/F4: delivered-no-turn deadline reclaim', () 
     meshConfigMocks.getMesh.mockReturnValue(mesh)
   }
 
-  it('reclaims a delivered-but-uncompleted row once past the deadline with a non-generating session', async () => {
-    const meshId = `mesh_f3_lost_${Date.now()}`
+  // (1) Absent-locally (UNKNOWN) session past the deadline is DEFERRED, not reclaimed, on the first tick.
+  it('defers (does NOT reclaim) a delivered-no-turn row whose session is absent locally on the first tick', async () => {
+    const meshId = `mesh_f3_unknown_defer_${Date.now()}`
     const nodeId = 'node_w'
     try {
       enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
-      const claimed = claimNextTask(meshId, nodeId, 'sess-lost', [])!
+      const claimed = claimNextTask(meshId, nodeId, 'sess-remote', [])!
       backdateDispatch(meshId, claimed.id, DELIVERED_LOST_MS)
-      // Confirmed delivery but NO terminal completion ever landed (the lost-completion signature).
-      createSessionDelivery({ meshId, nodeId, sessionId: 'sess-lost', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
-      // Simulate the dispatch's single-flight mark still being held.
+      createSessionDelivery({ meshId, nodeId, sessionId: 'sess-remote', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
       beginTaskDispatchInFlight(meshId, claimed.id)
       hostMesh(meshId, nodeId)
 
-      await runMeshReconcileTick(makeIdleDeadComponents())
+      await runMeshReconcileTick(makeAbsentSessionComponents())
+
+      const row = getQueue(meshId).find(t => t.id === claimed.id)!
+      expect(row.status).toBe('assigned')
+      expect(row.assignedSessionId).toBe('sess-remote')
+      expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // (2) After the grace ticks, the UNKNOWN row IS reclaimed with the distinct grace reason.
+  it('reclaims an absent-session delivered-no-turn row after the UNKNOWN grace window with reclaim_after_unknown_grace', async () => {
+    const meshId = `mesh_f3_unknown_grace_${Date.now()}`
+    const nodeId = 'node_w'
+    try {
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      const claimed = claimNextTask(meshId, nodeId, 'sess-remote', [])!
+      backdateDispatch(meshId, claimed.id, DELIVERED_LOST_MS)
+      createSessionDelivery({ meshId, nodeId, sessionId: 'sess-remote', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+      beginTaskDispatchInFlight(meshId, claimed.id)
+      hostMesh(meshId, nodeId)
+
+      // First (GRACE-1) ticks defer; the tick that reaches the grace threshold reclaims.
+      for (let i = 0; i < UNKNOWN_GRACE_TICKS - 1; i++) {
+        await runMeshReconcileTick(makeAbsentSessionComponents())
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+      }
+      await runMeshReconcileTick(makeAbsentSessionComponents())
 
       const row = getQueue(meshId).find(t => t.id === claimed.id)!
       expect(row.status).toBe('pending')
@@ -165,8 +211,32 @@ describe('COMPLETION-PROPAGATION F3/F4: delivered-no-turn deadline reclaim', () 
       expect(row.dispatchTimestamp).toBeUndefined()
       const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
       expect(reclaimed).toHaveLength(1)
-      expect((reclaimed[0].payload as any).reason).toBe('delivered_no_turn_deadline')
+      expect((reclaimed[0].payload as any).reason).toBe('reclaim_after_unknown_grace')
       // F4: the reclaim ended the single-flight window so a re-dispatch/requeue is unblocked.
+      expect(isTaskDispatchInFlight(meshId, claimed.id)).toBe(false)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // (Genuine no-turn reclaim, positive local evidence) An IDLE_CONFIRMED local session reclaims
+  // immediately past the deadline, with the delivered-no-turn reason (no grace wait).
+  it('reclaims immediately when the delivered-no-turn session is locally present and idle (IDLE_CONFIRMED)', async () => {
+    const meshId = `mesh_f3_idle_${Date.now()}`
+    const nodeId = 'node_w'
+    try {
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      const claimed = claimNextTask(meshId, nodeId, 'sess-idle', [])!
+      backdateDispatch(meshId, claimed.id, DELIVERED_LOST_MS)
+      createSessionDelivery({ meshId, nodeId, sessionId: 'sess-idle', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+      beginTaskDispatchInFlight(meshId, claimed.id)
+      hostMesh(meshId, nodeId)
+
+      await runMeshReconcileTick(makePresentSessionComponents('sess-idle', 'idle'))
+
+      const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
+      expect(reclaimed).toHaveLength(1)
+      expect((reclaimed[0].payload as any).reason).toBe('delivered_no_turn_deadline')
       expect(isTaskDispatchInFlight(meshId, claimed.id)).toBe(false)
     } finally {
       cleanup(meshId)
@@ -183,7 +253,7 @@ describe('COMPLETION-PROPAGATION F3/F4: delivered-no-turn deadline reclaim', () 
       createSessionDelivery({ meshId, nodeId, sessionId: 'sess-live', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
       hostMesh(meshId, nodeId)
 
-      await runMeshReconcileTick(makeIdleDeadComponents())
+      await runMeshReconcileTick(makeAbsentSessionComponents())
 
       const row = getQueue(meshId).find(t => t.id === claimed.id)!
       expect(row.status).toBe('assigned')
@@ -194,7 +264,9 @@ describe('COMPLETION-PROPAGATION F3/F4: delivered-no-turn deadline reclaim', () 
     }
   })
 
-  it('does NOT reclaim a delivered row whose session is still actively generating', async () => {
+  // (3) A locally-present GENERATING session is never reclaimed, even after many ticks (the
+  // grace never applies to it — GENERATING resets the streak every tick).
+  it('never reclaims a delivered row whose session is locally present and actively generating', async () => {
     const meshId = `mesh_f3_generating_${Date.now()}`
     const nodeId = 'node_w'
     const sessionId = 'sess-busy'
@@ -204,17 +276,43 @@ describe('COMPLETION-PROPAGATION F3/F4: delivered-no-turn deadline reclaim', () 
       backdateDispatch(meshId, claimed.id, DELIVERED_LOST_MS)
       createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
       hostMesh(meshId, nodeId)
-      // A live local instance that reports an active/generating state must never be reclaimed.
-      const generatingComponents = {
-        instanceManager: {
-          getByCategory: () => [],
-          getInstance: (id: string) => (id === sessionId
-            ? { getState: () => ({ status: 'generating' }) }
-            : undefined),
-        },
-      } as any
 
-      await runMeshReconcileTick(generatingComponents)
+      // Run well past the UNKNOWN grace window — a GENERATING verdict must never reclaim.
+      for (let i = 0; i < UNKNOWN_GRACE_TICKS + 2; i++) {
+        await runMeshReconcileTick(makePresentSessionComponents(sessionId, 'generating'))
+      }
+
+      const row = getQueue(meshId).find(t => t.id === claimed.id)!
+      expect(row.status).toBe('assigned')
+      expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // (4) An id-form-skewed but locally-present generating session must be matched (not treated as
+  // absent/UNKNOWN) — the sessionIdsEquivalent lookup closes the id-skew hole, so it is never
+  // reclaimed. Stored assigned session carries a whitespace skew vs the live instance id.
+  it('treats an id-form-skewed but present generating session as present (never reclaimed)', async () => {
+    const meshId = `mesh_f3_skew_${Date.now()}`
+    const nodeId = 'node_w'
+    try {
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      const claimed = claimNextTask(meshId, nodeId, 'sess-skew', [])!
+      // Skew the STORED assigned session id (leading space) — the live instance reports the
+      // trimmed form. A raw Map.get(assignedSessionId) would miss it (→ UNKNOWN → grace reclaim);
+      // the sessionIdsEquivalent scan matches it (→ GENERATING → never reclaimed).
+      const store = MeshRuntimeStore.getInstance()
+      const entry = store.findQueueEntryById(meshId, claimed.id)!
+      entry.assignedSessionId = ' sess-skew'
+      store.updateQueueEntry(entry)
+      backdateDispatch(meshId, claimed.id, DELIVERED_LOST_MS)
+      createSessionDelivery({ meshId, nodeId, sessionId: 'sess-skew', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+      hostMesh(meshId, nodeId)
+
+      for (let i = 0; i < UNKNOWN_GRACE_TICKS + 2; i++) {
+        await runMeshReconcileTick(makePresentSessionComponents('sess-skew', 'generating'))
+      }
 
       const row = getQueue(meshId).find(t => t.id === claimed.id)!
       expect(row.status).toBe('assigned')

@@ -1110,6 +1110,44 @@ export function isSessionActivelyGenerating(components: DaemonComponents, sessio
     return sessionStateLooksActive(state);
 }
 
+/**
+ * RECLAIM-FALSEPOS tri-state busy verdict for a session id.
+ *
+ * The binary isSessionActivelyGenerating() folds "absence of a positive generating
+ * signal" into a definitive NEGATIVE (returns false when the instance is absent). But a
+ * REMOTE session (never in THIS daemon's instanceManager) — or a locally-present session
+ * looked up under a skewed id form — then looks "not generating" and can be reclaimed out
+ * from under a worker that is genuinely mid-turn. This resolves an explicit three-way
+ * verdict instead:
+ *   - GENERATING       — a locally-present instance reports an active/streaming state.
+ *   - IDLE_CONFIRMED    — a locally-present instance reports a non-active (idle/terminal)
+ *                         state. Positive local evidence the worker is not working.
+ *   - UNKNOWN           — no locally-present instance matches (remote / gone / id-skew) or
+ *                         the observation failed. NEVER treated as IDLE_CONFIRMED.
+ *
+ * The lookup scans getByCategory('cli') with sessionIdsEquivalent (the same equivalence
+ * matching nodeHasActiveMeshWork / liveSessionCountForNode use) rather than a raw
+ * instanceManager.getInstance(id) Map.get, so an id-form-skewed but present session is
+ * found (closing the same id-form-skew hole class e245c2f9's F1 fixed elsewhere).
+ */
+export type SessionBusyVerdict = 'GENERATING' | 'IDLE_CONFIRMED' | 'UNKNOWN';
+export function resolveSessionBusyVerdict(components: DaemonComponents, sessionId: string): SessionBusyVerdict {
+    if (!sessionId) return 'UNKNOWN';
+    try {
+        const instances = components.instanceManager?.getByCategory?.('cli') || [];
+        const inst = instances.find((i: any) => {
+            const sid = readNonEmptyString(i?.getState?.().instanceId);
+            return sid && sessionIdsEquivalent(sid, sessionId);
+        });
+        if (!inst) return 'UNKNOWN'; // remote / gone / id-form skew not present locally
+        const state = inst.getState?.();
+        if (!state) return 'UNKNOWN';
+        return sessionStateLooksActive(state) ? 'GENERATING' : 'IDLE_CONFIRMED';
+    } catch {
+        return 'UNKNOWN'; // failed observation ⇒ unknown, never a definitive idle
+    }
+}
+
 function liveSessionCountForNode(components: DaemonComponents, meshId: string, nodeId: string): number {
     return components.instanceManager.getByCategory('cli').filter((inst: any) => {
         const state = inst.getState();

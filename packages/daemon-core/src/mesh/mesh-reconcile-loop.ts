@@ -60,7 +60,7 @@ import { readNonEmptyString, readMeshCompletionSummary, buildMeshSystemMessage }
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { expandDaemonIdForms, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { getActiveDirectDispatches, getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-work-queue.js';
-import { isSessionActivelyGenerating } from './mesh-queue-assignment.js';
+import { resolveSessionBusyVerdict } from './mesh-queue-assignment.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerEntry } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
@@ -926,6 +926,28 @@ const ASSIGNED_STRANDED_DEADLINE_MS = 5 * 60_000;
 // reclaimed out from under itself.
 const DELIVERED_NO_TURN_DEADLINE_MS = 15 * 60_000;
 
+// RECLAIM-FALSEPOS: how many CONSECUTIVE UNKNOWN busy-verdict ticks (past the delivered-no-turn
+// deadline) must accumulate before a delivered row whose worker session cannot be positively
+// observed is reclaimed. An UNKNOWN verdict means the assigned session is not present in THIS
+// daemon's local instance map (remote / gone / id-form skew) — so it may be a REMOTE session that
+// is genuinely mid-turn. Reclaiming it on a single UNKNOWN tick tears a live remote worker off its
+// task and re-launches a near-duplicate (observed live 2026-07-04, session 21e34616 / task
+// a26806c1). We therefore DEFER on UNKNOWN and only reclaim after this bounded grace, so a
+// transient/remote absence never triggers a false reclaim while a genuinely-lost completion is
+// still eventually recovered. A GENERATING or IDLE_CONFIRMED verdict (locally-present positive
+// evidence) resets/bypasses the grace — see recoverStrandedAssignedDispatches.
+const RECLAIM_UNKNOWN_GRACE_TICKS = 3;
+
+// Per-row consecutive-UNKNOWN streak for delivered-no-turn reclaim, keyed `${meshId}::${taskId}`.
+// In-memory (per process); pruned each pass to the set of currently-assigned rows so a
+// completed/reclaimed/claimed-elsewhere row's counter is dropped (no unbounded growth).
+const deliveredNoTurnUnknownStreak = new Map<string, number>();
+
+// Test hook: clear the delivered-no-turn UNKNOWN streak between cases.
+export function __resetReclaimUnknownStreakForTests(): void {
+    deliveredNoTurnUnknownStreak.clear();
+}
+
 // PHASE 2.5 — assigned-stranded dispatch watchdog (Bug B). claimNextTask atomically
 // flips a row to 'assigned' BEFORE the fire-and-forget dispatch runs. If that dispatch
 // neither rejects (→ no .catch requeue) nor is confirmed delivered — a relay that hangs
@@ -942,6 +964,14 @@ function recoverStrandedAssignedDispatches(components: DaemonComponents, meshId:
     const assigned = getQueue(meshId, { status: ['assigned'] });
     if (!assigned.length) return;
     const nowMs = Date.now();
+    // RECLAIM-FALSEPOS: prune UNKNOWN streaks for rows of THIS mesh that are no longer
+    // 'assigned' (completed / reclaimed / claimed elsewhere) so the counter map cannot grow
+    // unbounded and a re-used task id starts its grace fresh.
+    const assignedKeys = new Set(assigned.map(r => `${meshId}::${r.id}`));
+    const meshKeyPrefix = `${meshId}::`;
+    for (const key of [...deliveredNoTurnUnknownStreak.keys()]) {
+        if (key.startsWith(meshKeyPrefix) && !assignedKeys.has(key)) deliveredNoTurnUnknownStreak.delete(key);
+    }
     for (const row of assigned) {
         const dispatchedAtMs = Date.parse(row.dispatchTimestamp ?? '');
         if (!Number.isFinite(dispatchedAtMs)) continue;              // no dispatch ts → can't age it
@@ -969,28 +999,71 @@ function recoverStrandedAssignedDispatches(components: DaemonComponents, meshId:
             // landed and none is in the ledger (checked just above). Normally this is PHASE 4's
             // job, but PHASE 4 only covers direct-dispatch rows / a live re-read; a claim-path
             // queue row whose completion event was lost (the manual-launch flip-miss signature)
-            // sits 'assigned' forever. Reclaim it — but ONLY once the session is idle/dead (its
-            // live local instance is not actively generating; a remote/absent instance reports
-            // non-generating too) AND a generous delivered-no-turn deadline has elapsed, so a
-            // worker genuinely mid-turn is never torn off its task. reclaimStrandedAssignedTask
-            // ends the single-flight window (F4), so a subsequent re-dispatch/requeue is unblocked.
+            // sits 'assigned' forever.
+            //
+            // RECLAIM-FALSEPOS tri-state verdict: the reclaim used to gate ONLY on
+            // isSessionActivelyGenerating(), whose local instance lookup returns "not generating"
+            // for a REMOTE (or id-form-skewed) session that is genuinely mid-turn — so such a
+            // worker was reclaimed at the deadline and re-launched same tick (near-duplicate
+            // execution; observed live 2026-07-04, session 21e34616 / task a26806c1). Resolve an
+            // explicit GENERATING / IDLE_CONFIRMED / UNKNOWN verdict instead:
+            //   - GENERATING     → worker demonstrably alive; never reclaim, reset grace.
+            //   - IDLE_CONFIRMED → positive LOCAL evidence (present instance, inactive) → reclaim
+            //                      now (past deadline) with the delivered-no-turn reason.
+            //   - UNKNOWN        → session not locally observable (remote / gone / id-skew). Do
+            //                      NOT fold into a definitive idle. DEFER: count consecutive
+            //                      UNKNOWN ticks and only reclaim after RECLAIM_UNKNOWN_GRACE_TICKS
+            //                      so a live remote worker is never torn off its task on a single
+            //                      absent observation; a genuinely-lost completion is still
+            //                      recovered after the bounded grace.
+            // reclaimStrandedAssignedTask ends the single-flight window (F4), so a subsequent
+            // re-dispatch/requeue is unblocked.
             if (nowMs - dispatchedAtMs < DELIVERED_NO_TURN_DEADLINE_MS) continue;   // still within turn budget
-            if (row.assignedSessionId && isSessionActivelyGenerating(components, row.assignedSessionId)) continue;  // worker still working
+            const streakKey = `${meshId}::${row.id}`;
+            const verdict = row.assignedSessionId
+                ? resolveSessionBusyVerdict(components, row.assignedSessionId)
+                : 'IDLE_CONFIRMED'; // no session bound → nothing live to protect
+            if (verdict === 'GENERATING') {
+                deliveredNoTurnUnknownStreak.delete(streakKey); // demonstrably alive → reset grace
+                continue;  // worker still working
+            }
+            let reclaimReason: 'delivered_no_turn_deadline' | 'reclaim_after_unknown_grace';
+            if (verdict === 'IDLE_CONFIRMED') {
+                deliveredNoTurnUnknownStreak.delete(streakKey);
+                reclaimReason = 'delivered_no_turn_deadline';
+            } else {
+                // UNKNOWN — defer and accumulate the consecutive-UNKNOWN streak.
+                const streak = (deliveredNoTurnUnknownStreak.get(streakKey) ?? 0) + 1;
+                deliveredNoTurnUnknownStreak.set(streakKey, streak);
+                if (streak < RECLAIM_UNKNOWN_GRACE_TICKS) {
+                    // Still within grace — hold this tick. Content-free trace (ids + streak only).
+                    traceMeshEventDrop('reclaim_deferred_unknown_verdict', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_completed',
+                    }, `unknown ${streak}/${RECLAIM_UNKNOWN_GRACE_TICKS}`);
+                    continue;
+                }
+                reclaimReason = 'reclaim_after_unknown_grace';
+            }
             const reclaimedLost = reclaimStrandedAssignedTask(meshId, row.id, {
-                reason: 'delivered_no_turn_deadline',
+                reason: reclaimReason,
                 ageMs: nowMs - dispatchedAtMs,
             });
             if (reclaimedLost) {
+                deliveredNoTurnUnknownStreak.delete(streakKey);
                 LOG.warn('MeshReconcile', `Reclaimed delivered-but-lost task ${row.id} on mesh ${meshId} `
                     + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}, delivered but no `
-                    + `completion in ${Math.round((nowMs - dispatchedAtMs) / 1000)}s, session non-generating → ${reclaimedLost.status})`);
+                    + `completion in ${Math.round((nowMs - dispatchedAtMs) / 1000)}s, verdict ${verdict} → ${reclaimReason} → ${reclaimedLost.status})`);
                 traceMeshEventDrop('assigned_stranded_delivered_no_turn', {
                     taskId: row.id,
                     sessionId: row.assignedSessionId,
                     nodeId: row.assignedNodeId,
                     meshId,
                     event: 'agent:generating_completed',
-                }, `delivered ${Math.round((nowMs - dispatchedAtMs) / 1000)}s → ${reclaimedLost.status}`);
+                }, `delivered ${Math.round((nowMs - dispatchedAtMs) / 1000)}s ${reclaimReason} → ${reclaimedLost.status}`);
             }
             continue;
         }
