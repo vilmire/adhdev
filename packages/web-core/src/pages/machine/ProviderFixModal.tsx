@@ -205,7 +205,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                         <div>
                             <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">Agent Output</label>
                             <div
-                                className="rounded-lg border border-border-subtle bg-[#0d0d0d] p-3 font-mono text-[11px] leading-relaxed text-text-secondary overflow-y-auto"
+                                className="rounded-lg border border-border-subtle bg-bg-secondary p-3 font-mono text-[11px] leading-relaxed text-text-secondary overflow-y-auto"
                                 style={{ maxHeight: 320, minHeight: 200 }}
                             >
                                 {logs.map((line, i) => (

@@ -16,7 +16,7 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
 
     return (
         <div
-            className="fixed inset-0 z-[100] flex items-end justify-center overflow-y-auto bg-black/55 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
+            className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto bg-black/55 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
             role="dialog"
             aria-modal="true"
             aria-labelledby="launch-pick-title"

@@ -33,7 +33,7 @@ function SectionTitle({ icon, children }: { icon?: ReactNode; children: ReactNod
 
 function SectionCard({ children, className = '' }: { children: ReactNode; className?: string }) {
     return (
-        <div className={`rounded-2xl border border-[#ffffff0a] bg-bg-surface/70 backdrop-blur-sm p-3 ${className}`}>
+        <div className={`rounded-2xl border border-border-subtle bg-bg-surface/70 backdrop-blur-sm p-3 ${className}`}>
             {children}
         </div>
     )
@@ -66,7 +66,7 @@ export default function MachineCommandCenter({
                                     <button
                                         key={conversation.tabKey}
                                         type="button"
-                                        className="flex flex-col gap-1 items-start text-left p-3 rounded-xl bg-[#ffffff08] border border-transparent hover:border-[#ffffff12] hover:bg-[#ffffff0c] transition-colors cursor-pointer group"
+                                        className="flex flex-col gap-1 items-start text-left p-3 rounded-xl bg-bg-glass border border-transparent hover:border-border-default hover:bg-bg-glass transition-colors cursor-pointer group"
                                         onClick={() => onOpenConversation(conversation)}
                                     >
                                         <div className="flex items-center justify-between gap-3 w-full">
@@ -101,7 +101,7 @@ export default function MachineCommandCenter({
                                     <button
                                         key={launch.id}
                                         type="button"
-                                        className="flex flex-col gap-1 items-start text-left p-3 rounded-xl bg-[#ffffff08] border border-transparent hover:border-[#ffffff12] hover:bg-[#ffffff0c] transition-colors cursor-pointer group"
+                                        className="flex flex-col gap-1 items-start text-left p-3 rounded-xl bg-bg-glass border border-transparent hover:border-border-default hover:bg-bg-glass transition-colors cursor-pointer group"
                                         onClick={() => onOpenRecent(launch)}
                                     >
                                         <div className="flex items-center justify-between gap-3 w-full">

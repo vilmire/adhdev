@@ -36,7 +36,7 @@ export default function AgentWorkspaceSelector({
                         }
                         if (nextValue !== '__custom__') onCustomPathChange('')
                     }}
-                    className="px-3 py-1.5 rounded-md min-w-[200px] flex-1 text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors"
+                    className="px-3 py-1.5 rounded-md min-w-[200px] flex-1 text-sm bg-bg-primary border border-border-default focus:border-accent-primary focus:outline-none transition-colors"
                 >
                     {(machine.workspaces || []).length > 0 ? (
                         <>
@@ -60,7 +60,7 @@ export default function AgentWorkspaceSelector({
                     canBrowse ? (
                         <button
                             type="button"
-                            className="px-3 py-1.5 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] hover:border-accent-primary text-text-secondary hover:text-text-primary transition-colors"
+                            className="px-3 py-1.5 rounded-md text-sm bg-bg-primary border border-border-default hover:border-accent-primary text-text-secondary hover:text-text-primary transition-colors"
                             onClick={onOpenBrowseDialog}
                         >
                             Select workspace…
@@ -71,7 +71,7 @@ export default function AgentWorkspaceSelector({
                             placeholder="Enter absolute path…"
                             value={customPath}
                             onChange={e => onCustomPathChange(e.target.value)}
-                            className="px-3 py-1.5 rounded-md flex-1 min-w-[200px] text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors"
+                            className="px-3 py-1.5 rounded-md flex-1 min-w-[200px] text-sm bg-bg-primary border border-border-default focus:border-accent-primary focus:outline-none transition-colors"
                             autoFocus
                         />
                     )

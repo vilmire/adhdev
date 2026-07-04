@@ -615,7 +615,7 @@ export default function AgentTab({
         <div>
             {/* ═══ Launch Form ═══ */}
             <div className={`px-5 py-5 rounded-xl mb-6 bg-bg-secondary border ${config.accent} relative overflow-hidden`}>
-                <div className="absolute top-0 left-0 w-full height-[1px] bg-gradient-to-r from-transparent via-[#ffffff20] to-transparent" />
+                <div className="absolute top-0 left-0 w-full height-[1px] bg-gradient-to-r from-transparent via-border-default to-transparent" />
                 <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-4 flex items-center gap-2">
                     <span className="w-1.5 h-1.5 rounded-full bg-accent-primary/60" />
                     Select {config.label} to Launch
@@ -649,7 +649,7 @@ export default function AgentTab({
                                     disabled={!!launchingIde || isPending}
                                     className={`flex flex-col items-center justify-center p-3.5 gap-2 rounded-xl border transition-all cursor-pointer group ${
                                         isReady ? 'bg-green-500/10 border-green-500/20 hover:bg-green-500/20' : 
-                                        isSelected ? 'bg-accent-primary/10 border-accent-primary scale-[1.02] shadow-glow' : 'bg-bg-primary border-[#ffffff1a] hover:bg-[#ffffff0c] hover:border-[#ffffff30]'
+                                        isSelected ? 'bg-accent-primary/10 border-accent-primary scale-[1.02] shadow-glow' : 'bg-bg-primary border-border-default hover:bg-bg-glass hover:border-border-accent'
                                     }`}
                                     style={{ opacity: (launchingIde && launchingIde !== d.type) ? 0.4 : 1 }}
                                 >
@@ -668,9 +668,9 @@ export default function AgentTab({
                                 </button>
                             )
                         }) : (
-                            <div className="col-span-full py-6 flex flex-col items-center justify-center bg-bg-primary/50 border border-dashed border-[#ffffff1a] rounded-xl text-xs text-text-muted italic gap-2">
+                            <div className="col-span-full py-6 flex flex-col items-center justify-center bg-bg-primary/50 border border-dashed border-border-default rounded-xl text-xs text-text-muted italic gap-2">
                                 No IDEs detected.
-                                <button onClick={handleDetectIdes} className="btn bg-[#ffffff0a] hover:bg-[#ffffff14] text-text-muted hover:text-text-primary px-3 py-1.5 rounded-lg flex items-center gap-1.5"><IconSearch size={14} /> Scan System</button>
+                                <button onClick={handleDetectIdes} className="btn bg-bg-glass hover:bg-bg-glass-hover text-text-muted hover:text-text-primary px-3 py-1.5 rounded-lg flex items-center gap-1.5"><IconSearch size={14} /> Scan System</button>
                             </div>
                         )
                     ) : (
@@ -685,7 +685,7 @@ export default function AgentTab({
                                     key={p.type}
                                     onClick={() => setSelectedType(prev => prev === p.type ? '' : p.type)}
                                     className={`flex flex-col items-center justify-center p-3.5 gap-2 rounded-xl border transition-all cursor-pointer group ${
-                                        isSelected ? 'bg-accent-primary/10 border-accent-primary scale-[1.02] shadow-glow' : 'bg-bg-primary border-[#ffffff1a] hover:bg-[#ffffff0c] hover:border-[#ffffff30]'
+                                        isSelected ? 'bg-accent-primary/10 border-accent-primary scale-[1.02] shadow-glow' : 'bg-bg-primary border-border-default hover:bg-bg-glass hover:border-border-accent'
                                     }`}
                                 >
                                     <div className="relative">
@@ -703,7 +703,7 @@ export default function AgentTab({
                                 </button>
                             )
                         }) : (
-                            <div className="col-span-full py-6 text-center bg-bg-primary/50 border border-dashed border-[#ffffff1a] rounded-xl text-xs text-text-muted">
+                            <div className="col-span-full py-6 text-center bg-bg-primary/50 border border-dashed border-border-default rounded-xl text-xs text-text-muted">
                                 No usable {category.toUpperCase()} providers available.
                                 <div className="mt-1 text-[11px] text-text-muted">
                                     Set a custom executable path in Providers if the binary is installed outside the default location.
@@ -715,7 +715,7 @@ export default function AgentTab({
 
                 {/* Configuration Panel (2-step setup) */}
                 {selectedType && (isIde ? launchableIdes.find(d => d.type === selectedType) : categoryProviders.find(p => p.type === selectedType)) && (
-                    <div className="mt-5 pt-5 border-t border-[#ffffff1a] flex flex-col gap-4 animate-in slide-in-from-top-2 fade-in duration-200">
+                    <div className="mt-5 pt-5 border-t border-border-default flex flex-col gap-4 animate-in slide-in-from-top-2 fade-in duration-200">
                         <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider flex items-center justify-between">
                             <span>Launch Settings</span>
                             <span className="text-accent-primary font-bold">{isIde ? formatIdeType(selectedType) : providerLabelMap.get(selectedType) || selectedType}</span>
@@ -766,7 +766,7 @@ export default function AgentTab({
                                                 placeholder="Leave empty for default"
                                                 value={launchModel}
                                                 onChange={e => setLaunchModel(e.target.value)}
-                                                className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors w-full"
+                                                className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-border-default focus:border-accent-primary focus:outline-none transition-colors w-full"
                                             />
                                         </div>
                                     )}
@@ -777,14 +777,14 @@ export default function AgentTab({
                                             placeholder="Optional flags..."
                                             value={launchArgs}
                                             onChange={e => setLaunchArgs(e.target.value)}
-                                            className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors w-full"
+                                            className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-border-default focus:border-accent-primary focus:outline-none transition-colors w-full"
                                         />
                                         {recentArgsOptions.length > 0 && (
                                             <div className="flex flex-wrap gap-1.5 mt-1.5">
                                                 {recentArgsOptions.map(argsOption => (
                                                     <div
                                                         key={argsOption}
-                                                        className="inline-flex max-w-full items-stretch overflow-hidden rounded-md border border-[#ffffff1a] bg-bg-tertiary text-xs text-text-secondary transition-colors hover:border-accent-primary/40 hover:text-text-primary"
+                                                        className="inline-flex max-w-full items-stretch overflow-hidden rounded-md border border-border-default bg-surface-secondary text-xs text-text-secondary transition-colors hover:border-accent-primary/40 hover:text-text-primary"
                                                         title={argsOption}
                                                     >
                                                         <button
@@ -796,7 +796,7 @@ export default function AgentTab({
                                                         </button>
                                                         <button
                                                             type="button"
-                                                            className="flex items-center justify-center border-l border-[#ffffff1a] px-1.5 text-text-muted transition-colors hover:bg-status-error/10 hover:text-status-error focus:outline-none focus:ring-1 focus:ring-status-error/50"
+                                                            className="flex items-center justify-center border-l border-border-default px-1.5 text-text-muted transition-colors hover:bg-status-error/10 hover:text-status-error focus:outline-none focus:ring-1 focus:ring-status-error/50"
                                                             onClick={() => removeRecentArgsOption(selectedType, argsOption)}
                                                             aria-label={`Remove startup arguments: ${argsOption}`}
                                                             title="Remove startup arguments"
@@ -904,7 +904,7 @@ export default function AgentTab({
                                                             <span className="font-mono text-text-secondary">adhdev attach {cli.runtimeKey}</span>
                                                             <button
                                                                 type="button"
-                                                                className="flex items-center justify-center px-1.5 py-0.5 rounded text-[9px] bg-[#ffffff0a] hover:bg-[#ffffff14] border border-[#ffffff0a] text-text-muted hover:text-text-primary transition-colors cursor-pointer"
+                                                                className="flex items-center justify-center px-1.5 py-0.5 rounded text-[9px] bg-bg-glass hover:bg-bg-glass-hover border border-border-subtle text-text-muted hover:text-text-primary transition-colors cursor-pointer"
                                                                 onClick={() => {
                                                                     void navigator.clipboard?.writeText(`adhdev attach ${cli.runtimeKey}`)
                                                                     setCopiedRuntimeKey(cli.runtimeKey || null)
@@ -948,7 +948,7 @@ export default function AgentTab({
                                                             state: { openRemoteForTabKey: entry.id },
                                                         })
                                                     }}
-                                                    className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-[#ffffff14] text-text-primary transition-colors cursor-pointer"
+                                                    className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-bg-glass-hover text-text-primary transition-colors cursor-pointer"
                                                     title="Open remote control"
                                                 >
                                                     <IconMonitor size={13} />
@@ -984,7 +984,7 @@ export default function AgentTab({
                                                             await handleRestartIde(entry as IdeSessionEntry)
                                                         })
                                                     }}
-                                                    className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-orange-500/20 text-orange-400 transition-colors cursor-pointer"
+                                                    className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-orange-500/20 text-orange-400 transition-colors cursor-pointer"
                                                     title="Restart"
                                                 >
                                                     <IconRefresh size={14} />
@@ -998,7 +998,7 @@ export default function AgentTab({
                                                     const targetSessionId = (entry as AcpSessionEntry).sessionId
                                                     if (targetSessionId) openSessionInDashboard(targetSessionId)
                                                 }}
-                                                className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-[#ffffff14] disabled:opacity-50 disabled:cursor-not-allowed text-text-primary transition-colors cursor-pointer"
+                                                className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-bg-glass-hover disabled:opacity-50 disabled:cursor-not-allowed text-text-primary transition-colors cursor-pointer"
                                                 title="View chat"
                                                 disabled={!(entry as AcpSessionEntry).sessionId}
                                             ><IconChat size={14} /></button>
@@ -1017,7 +1017,7 @@ export default function AgentTab({
                                                         const targetSessionId = (entry as CliSessionEntry).sessionId
                                                         if (targetSessionId) openSessionInDashboard(targetSessionId)
                                                     }}
-                                                    className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-[#ffffff14] disabled:opacity-50 disabled:cursor-not-allowed text-text-primary transition-colors cursor-pointer"
+                                                    className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-bg-glass-hover disabled:opacity-50 disabled:cursor-not-allowed text-text-primary transition-colors cursor-pointer"
                                                     title="Open current view in dashboard"
                                                     disabled={!(entry as CliSessionEntry).sessionId}
                                                 >
@@ -1059,13 +1059,13 @@ export default function AgentTab({
                                                     })
                                                 }}
                                                 disabled={pendingLaunchTypes.includes(entry.type)}
-                                                className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-green-500/20 text-green-400 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                                className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-green-500/20 text-green-400 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                                                 title="Restart"
                                             >
                                                 {pendingLaunchTypes.includes(entry.type) ? '⏳' : <IconPlay size={14} />}
                                             </button>
                                         ) : (
-                                            <button onClick={() => handleStop(entry)} className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer" title="Stop">
+                                            <button onClick={() => handleStop(entry)} className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer" title="Stop">
                                                 <IconX size={14} />
                                             </button>
                                         )}

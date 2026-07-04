@@ -95,7 +95,7 @@ export default function ManagedWorkspacesSection({
                     </div>
                     <button
                         type="button"
-                        className="btn bg-[#ffffff0a] hover:bg-[#ffffff14] text-text-muted hover:text-text-primary px-3 py-1 rounded transition-colors text-xs"
+                        className="btn bg-bg-glass hover:bg-bg-glass-hover text-text-muted hover:text-text-primary px-3 py-1 rounded transition-colors text-xs"
                         disabled={workspaceBusy}
                         onClick={openBrowseDialog}
                     >+ Add workspace</button>
