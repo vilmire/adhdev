@@ -12,6 +12,9 @@ import {
   meshSessionHandleKey,
   shouldDeliverPendingEventToCoordinator,
   MeshContractViolationError,
+  defaultScopeForEvent,
+  coordinatorIdentityFromEmitFields,
+  buildPendingEventEmitStamp,
   type CoordinatorIdentity,
   type PendingMeshCoordinatorEventV2,
 } from '../../src/mesh/contracts.js';
@@ -130,6 +133,7 @@ function buildV2Event(overrides: Partial<PendingMeshCoordinatorEventV2> = {}): P
     metadataEvent: { taskId: 't-1' },
     queuedAt: 1_000,
     protocolVersion: MESH_PROTOCOL_VERSION_V2,
+    eventId: 'evt-1',
     scope: 'broadcast',
     dispatchedBy: COORD_A,
     ...overrides,
@@ -158,6 +162,19 @@ describe('assertPendingMeshCoordinatorEventV2', () => {
   it('rejects unsupported protocolVersion', () => {
     expect(() => assertPendingMeshCoordinatorEventV2(buildV2Event({ protocolVersion: '9.9' as any })))
       .toThrow(/protocolVersion/);
+  });
+
+  it('requires a non-empty eventId', () => {
+    expect(() => assertPendingMeshCoordinatorEventV2(buildV2Event({ eventId: '' as any })))
+      .toThrow(/eventId/);
+    const { eventId: _drop, ...noEventId } = buildV2Event();
+    expect(() => assertPendingMeshCoordinatorEventV2(noEventId))
+      .toThrow(/eventId/);
+  });
+
+  it('round-trips eventId through validation', () => {
+    const out = assertPendingMeshCoordinatorEventV2(buildV2Event({ eventId: 'evt-xyz' }));
+    expect(out.eventId).toBe('evt-xyz');
   });
 });
 
@@ -190,5 +207,74 @@ describe('shouldDeliverPendingEventToCoordinator', () => {
     const bReceived = events.filter(e => shouldDeliverPendingEventToCoordinator(e, COORD_B));
     expect(aReceived.map(e => e.event)).toEqual(['task1:completed', 'task3:completed']);
     expect(bReceived.map(e => e.event)).toEqual(['task2:completed']);
+  });
+});
+
+describe('defaultScopeForEvent (B2a)', () => {
+  it('maps terminal task events to unicast', () => {
+    for (const e of ['agent:generating_completed', 'agent:stopped', 'refine:completed', 'refine:failed', 'refine:accepted']) {
+      expect(defaultScopeForEvent(e)).toBe('unicast');
+    }
+  });
+  it('maps dispatch-plane events to system', () => {
+    expect(defaultScopeForEvent('mesh:dispatch_blocked')).toBe('system');
+  });
+  it('defaults everything else to broadcast (v1-compatible)', () => {
+    expect(defaultScopeForEvent('node_joined')).toBe('broadcast');
+    expect(defaultScopeForEvent('agent:ready')).toBe('broadcast');
+    expect(defaultScopeForEvent('worktree_bootstrap_complete')).toBe('broadcast');
+  });
+});
+
+describe('coordinatorIdentityFromEmitFields (B2a)', () => {
+  it('returns undefined without a daemonId', () => {
+    expect(coordinatorIdentityFromEmitFields({})).toBeUndefined();
+    expect(coordinatorIdentityFromEmitFields({ daemonId: '' })).toBeUndefined();
+    expect(coordinatorIdentityFromEmitFields({ sessionId: 's' })).toBeUndefined();
+  });
+  it('falls coordinatorRunId back to daemonId when absent', () => {
+    expect(coordinatorIdentityFromEmitFields({ daemonId: 'd1' })).toEqual({ daemonId: 'd1', coordinatorRunId: 'd1' });
+  });
+  it('carries an explicit coordinatorRunId and sessionId', () => {
+    expect(coordinatorIdentityFromEmitFields({ daemonId: 'd1', coordinatorRunId: 'run', sessionId: 's' }))
+      .toEqual({ daemonId: 'd1', coordinatorRunId: 'run', sessionId: 's' });
+  });
+});
+
+describe('buildPendingEventEmitStamp (B2a)', () => {
+  const COORD: CoordinatorIdentity = { daemonId: 'd1', coordinatorRunId: 'd1' };
+
+  it('returns undefined without a dispatchedBy identity', () => {
+    expect(buildPendingEventEmitStamp({ eventName: 'agent:generating_completed', eventId: 'e1' })).toBeUndefined();
+  });
+
+  it('stamps a unicast terminal event addressed to intendedFor', () => {
+    const stamp = buildPendingEventEmitStamp({
+      eventName: 'agent:generating_completed', eventId: 'e1', dispatchedBy: COORD, intendedFor: COORD,
+    });
+    expect(stamp).toEqual({ protocolVersion: MESH_PROTOCOL_VERSION_V2, eventId: 'e1', scope: 'unicast', dispatchedBy: COORD, intendedFor: COORD });
+  });
+
+  it('downgrades a unicast event with no intendedFor to broadcast (contract-safe, never dropped)', () => {
+    const stamp = buildPendingEventEmitStamp({ eventName: 'agent:generating_completed', eventId: 'e1', dispatchedBy: COORD });
+    expect(stamp?.scope).toBe('broadcast');
+    expect(stamp?.intendedFor).toBeUndefined();
+  });
+
+  it('drops intendedFor for a non-unicast scope', () => {
+    const stamp = buildPendingEventEmitStamp({ eventName: 'node_joined', eventId: 'e1', dispatchedBy: COORD, intendedFor: COORD });
+    expect(stamp?.scope).toBe('broadcast');
+    expect(stamp?.intendedFor).toBeUndefined();
+  });
+
+  it('honors an explicit scope override', () => {
+    const stamp = buildPendingEventEmitStamp({ eventName: 'node_joined', eventId: 'e1', dispatchedBy: COORD, scope: 'system' });
+    expect(stamp?.scope).toBe('system');
+  });
+
+  it('produces a stamp that passes assertPendingMeshCoordinatorEventV2 when merged onto an event', () => {
+    const stamp = buildPendingEventEmitStamp({ eventName: 'agent:generating_completed', eventId: 'e1', dispatchedBy: COORD, intendedFor: COORD })!;
+    const evt = { event: 'agent:generating_completed', meshId: 'm', nodeLabel: 'n', metadataEvent: {}, queuedAt: 1, ...stamp };
+    expect(() => assertPendingMeshCoordinatorEventV2(evt)).not.toThrow();
   });
 });

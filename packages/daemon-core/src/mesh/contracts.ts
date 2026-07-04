@@ -193,6 +193,15 @@ export interface PendingMeshCoordinatorEventV2 {
 
   // v2 additions
   readonly protocolVersion: MeshProtocolVersion;
+  /**
+   * Idempotency key. A UUID generated ONCE at emit time and preserved verbatim
+   * across every store (SQLite payload + column, JSONL) and the P2P relay
+   * boundary. The receiving drain uses eventId as the authoritative dedup key
+   * (B3): an event whose eventId was already drained is skipped even if its
+   * content fingerprint differs. Distinct from the content fingerprint, which
+   * stays the v1 dedup mechanism during rollout.
+   */
+  readonly eventId: string;
   readonly scope: MeshEventScope;
   readonly dispatchedBy: CoordinatorIdentity;
   /**
@@ -264,6 +273,9 @@ export function assertPendingMeshCoordinatorEventV2(raw: unknown, path = '$'): P
   if (!isSupportedMeshProtocolVersion(obj.protocolVersion)) {
     throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path}.protocolVersion`, `must be one of ${SUPPORTED_MESH_PROTOCOL_VERSIONS.join(', ')}`);
   }
+  if (!isNonEmptyString(obj.eventId)) {
+    throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path}.eventId`, 'must be a non-empty string');
+  }
   if (!isMeshEventScope(obj.scope)) {
     throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path}.scope`, `must be one of ${MESH_EVENT_SCOPES.join(', ')}`);
   }
@@ -307,6 +319,7 @@ export function assertPendingMeshCoordinatorEventV2(raw: unknown, path = '$'): P
     coordinatorMessage: typeof obj.coordinatorMessage === 'string' ? obj.coordinatorMessage : undefined,
     queuedAt,
     protocolVersion: obj.protocolVersion,
+    eventId: obj.eventId,
     scope: obj.scope,
     dispatchedBy,
     ...(intendedFor ? { intendedFor } : {}),
@@ -335,4 +348,122 @@ export function shouldDeliverPendingEventToCoordinator(
   if (event.scope === 'broadcast') return true;
   if (!event.intendedFor) return false;
   return coordinatorIdentityEquals(event.intendedFor, drainer);
+}
+
+// ─── Emit-side scope defaulting (B2a) ────────────────────────────────────────
+
+/**
+ * Terminal task events. In v2 these are unicast: a completion/failure/approval
+ * belongs to exactly the coordinator (session) that dispatched the task, so
+ * delivering it to a sibling coordinator on the same daemon is a routing bug.
+ * The names match the v1 producer event strings queued by the emit call sites
+ * (mesh-event-forwarding, mesh-events-stale, router-refine).
+ */
+const TERMINAL_TASK_EVENTS: ReadonlySet<string> = new Set([
+  'agent:generating_completed',
+  'agent:stopped',
+  'refine:completed',
+  'refine:failed',
+  'refine:accepted',
+]);
+
+/**
+ * Infrastructure/system events that no coordinator should surface — ledger
+ * consistency and dispatch-plane signals. Delivered to the daemon-level handler
+ * only (scope 'system').
+ */
+const SYSTEM_EVENTS: ReadonlySet<string> = new Set([
+  'mesh:dispatch_blocked',
+]);
+
+/**
+ * Default the v2 scope for an event by its producer event name (design decision
+ * §3). Terminal task events → unicast (routed to the originating coordinator).
+ * Ledger-consistency / dispatch-plane events → system. Everything else — node
+ * lifecycle and progress signals — → broadcast, which also matches v1's
+ * implicit "deliver to any coordinator" behaviour, so an unstamped v1 event and
+ * a v2-stamped-as-broadcast event route identically during rollout.
+ */
+export function defaultScopeForEvent(eventName: string): MeshEventScope {
+  if (SYSTEM_EVENTS.has(eventName)) return 'system';
+  if (TERMINAL_TASK_EVENTS.has(eventName)) return 'unicast';
+  return 'broadcast';
+}
+
+/**
+ * The v2 envelope stamp applied to a pending coordinator event at emit time.
+ * Additive over the v1 shape: every field is consulted by v2-aware drainers
+ * only, so a v1 reader that ignores them is unaffected.
+ */
+export interface PendingEventEmitStampV2 {
+  readonly protocolVersion: typeof MESH_PROTOCOL_VERSION_V2;
+  readonly eventId: string;
+  readonly scope: MeshEventScope;
+  readonly dispatchedBy: CoordinatorIdentity;
+  readonly intendedFor?: CoordinatorIdentity;
+}
+
+/**
+ * Build a coordinator identity from the loosely-typed fields the v1 emit call
+ * sites already carry (a daemonId, and — sometimes — a coordinator session id).
+ * Returns undefined when no usable daemonId is present; the caller then leaves
+ * the event unstamped (v1, broadcast-treated) rather than fabricating identity.
+ * coordinatorRunId is not known at every emit site yet (B2 wires the registry),
+ * so it falls back to the daemonId — a stable, non-empty value that keeps the
+ * identity well-formed for assertCoordinatorIdentity without inventing a UUID
+ * that would differ per emit and defeat equality.
+ */
+export function coordinatorIdentityFromEmitFields(fields: {
+  daemonId?: string | null;
+  coordinatorRunId?: string | null;
+  sessionId?: string | null;
+}): CoordinatorIdentity | undefined {
+  const daemonId = typeof fields.daemonId === 'string' && fields.daemonId.length > 0 ? fields.daemonId : undefined;
+  if (!daemonId) return undefined;
+  const coordinatorRunId = typeof fields.coordinatorRunId === 'string' && fields.coordinatorRunId.length > 0
+    ? fields.coordinatorRunId
+    : daemonId;
+  const sessionId = typeof fields.sessionId === 'string' && fields.sessionId.length > 0 ? fields.sessionId : undefined;
+  return sessionId !== undefined
+    ? { daemonId, coordinatorRunId, sessionId }
+    : { daemonId, coordinatorRunId };
+}
+
+/**
+ * Compute the v2 emit stamp for an event (B2a). `eventId` MUST be supplied by
+ * the caller (generated via crypto.randomUUID at the daemon-core boundary so
+ * this module stays dependency-free and deterministically testable). Scope
+ * defaults from the event name unless explicitly overridden.
+ *
+ * When `dispatchedBy` cannot be constructed (no coordinator daemon known),
+ * returns undefined: the event stays a v1 (unstamped) event and is broadcast-
+ * treated during rollout, exactly as before — no regression, no fabricated
+ * identity. When the resolved scope is 'unicast' but no `intendedFor` is
+ * available, the scope is downgraded to 'broadcast' so the stamp never violates
+ * the "unicast requires intendedFor" contract (a terminal event that cannot be
+ * addressed to its originator is safest delivered broadly, not dropped).
+ */
+export function buildPendingEventEmitStamp(opts: {
+  eventName: string;
+  eventId: string;
+  dispatchedBy?: CoordinatorIdentity;
+  intendedFor?: CoordinatorIdentity;
+  scope?: MeshEventScope;
+}): PendingEventEmitStampV2 | undefined {
+  if (!opts.dispatchedBy) return undefined;
+  let scope: MeshEventScope = opts.scope ?? defaultScopeForEvent(opts.eventName);
+  let intendedFor = opts.intendedFor;
+  if (scope === 'unicast' && !intendedFor) {
+    // No addressable target for a unicast event — fall back to broadcast so the
+    // stamp is contract-valid and the event is still delivered (never dropped).
+    scope = 'broadcast';
+  }
+  if (scope !== 'unicast') intendedFor = undefined;
+  return {
+    protocolVersion: MESH_PROTOCOL_VERSION_V2,
+    eventId: opts.eventId,
+    scope,
+    dispatchedBy: opts.dispatchedBy,
+    ...(intendedFor ? { intendedFor } : {}),
+  };
 }

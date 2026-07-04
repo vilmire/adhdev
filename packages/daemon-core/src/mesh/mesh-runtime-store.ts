@@ -280,7 +280,18 @@ export class MeshRuntimeStore {
                 fingerprint TEXT,
                 queued_at INTEGER NOT NULL,
                 drained INTEGER NOT NULL DEFAULT 0,
-                drained_at INTEGER
+                drained_at INTEGER,
+                -- v2 protocol envelope (B2a). All nullable so pre-v2 rows and events
+                -- emitted before a coordinator identity is known coexist as v1. The
+                -- authoritative copy of each also rides inside the payload column; these
+                -- columns exist for queryable idempotency (event_id) and scope-based drain
+                -- filtering without JSON-parsing every row. dispatched_by / intended_for
+                -- hold the JSON-serialized CoordinatorIdentity.
+                protocol_version TEXT,
+                event_id TEXT,
+                scope TEXT,
+                dispatched_by TEXT,
+                intended_for TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_mesh_pending_events_mesh_drained
@@ -383,6 +394,26 @@ export class MeshRuntimeStore {
             if (!missionCols.has('source')) {
                 this.db.exec(`ALTER TABLE mesh_missions ADD COLUMN source TEXT`);
             }
+
+            // 4. mesh_pending_events v2 envelope columns (B2a). A pre-v2 DB has the
+            //    table (CREATE IF NOT EXISTS is a no-op) without these columns, so add
+            //    each missing one. All nullable — legacy rows read back as v1 events
+            //    (protocol_version NULL) with no reader change. Idempotent: the column
+            //    check short-circuits once present, and every ADD COLUMN is guarded.
+            const pendingCols = this.tableColumns('mesh_pending_events');
+            for (const col of ['protocol_version', 'event_id', 'scope', 'dispatched_by', 'intended_for'] as const) {
+                if (!pendingCols.has(col)) {
+                    this.db.exec(`ALTER TABLE mesh_pending_events ADD COLUMN ${col} TEXT`);
+                }
+            }
+            // Idempotency index on event_id (partial: only stamped v2 rows). Created
+            // unconditionally — IF NOT EXISTS makes it a no-op once present, and the
+            // event_id column is guaranteed to exist by the loop above.
+            this.db.exec(`
+                CREATE INDEX IF NOT EXISTS idx_mesh_pending_events_event_id
+                    ON mesh_pending_events(mesh_id, event_id)
+                    WHERE event_id IS NOT NULL
+            `);
         } catch (err: any) {
             // Best-effort: a failed isolation migration must not brick the store. The
             // CREATE-TABLE definitions above already carry the new schema for fresh DBs;
@@ -1652,11 +1683,19 @@ export class MeshRuntimeStore {
         payload?: unknown;
         fingerprint?: string | null;
         queuedAt: number;
+        // v2 envelope columns (B2a) — all optional so v1 callers/rows are unaffected.
+        // dispatchedBy / intendedFor are pre-serialized CoordinatorIdentity JSON.
+        protocolVersion?: string | null;
+        eventId?: string | null;
+        scope?: string | null;
+        dispatchedBy?: string | null;
+        intendedFor?: string | null;
     }): boolean {
         const result = this.db.prepare(
             `INSERT OR IGNORE INTO mesh_pending_events
-             (id, mesh_id, coordinator_daemon_id, event, payload, fingerprint, queued_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`
+             (id, mesh_id, coordinator_daemon_id, event, payload, fingerprint, queued_at,
+              protocol_version, event_id, scope, dispatched_by, intended_for)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
             event.id,
             event.meshId,
@@ -1665,6 +1704,11 @@ export class MeshRuntimeStore {
             JSON.stringify(event.payload ?? {}),
             event.fingerprint ?? null,
             event.queuedAt,
+            event.protocolVersion ?? null,
+            event.eventId ?? null,
+            event.scope ?? null,
+            event.dispatchedBy ?? null,
+            event.intendedFor ?? null,
         );
         this.maybeCheckpointWal();
         return result.changes > 0;

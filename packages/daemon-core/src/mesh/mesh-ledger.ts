@@ -20,6 +20,11 @@ import { getConfigDir } from '../config/config.js';
 import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { EventEmitter } from 'events';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import {
+    coordinatorIdentityFromEmitFields,
+    MESH_PROTOCOL_VERSION_V2,
+    type MeshLedgerOriginatingCoordinatorV2,
+} from './contracts.js';
 // ─── Types ──────────────────────────────────────
 
 export type MeshLedgerKind =
@@ -625,6 +630,32 @@ export function buildTaskCompletionEvidence(opts: BuildTaskCompletionEvidenceOpt
             reason: 'not_attempted_for_ordinary_completion',
         },
     };
+}
+
+/**
+ * Build the v2 originating-coordinator stamp for a task_dispatched ledger entry
+ * (B2a / design decision §2). This is the source of truth from which a worker's
+ * completion emit later restores `dispatchedBy` — it records which coordinator
+ * dispatched the task, so the terminal event can be routed (unicast) back to it.
+ *
+ * Nested under `payload.originatingCoordinator`; additive, so existing readers
+ * of the task_dispatched payload are unaffected. Returns undefined when no
+ * coordinator daemon id is known (the pre-v2 path) so the caller omits the stamp
+ * entirely rather than writing a malformed identity — those entries stay v1 and
+ * are broadcast-treated during rollout.
+ */
+export function buildLedgerOriginatingCoordinatorStamp(fields: {
+    coordinatorDaemonId?: string | null;
+    coordinatorRunId?: string | null;
+    coordinatorSessionId?: string | null;
+}): MeshLedgerOriginatingCoordinatorV2 | undefined {
+    const originatingCoordinator = coordinatorIdentityFromEmitFields({
+        daemonId: fields.coordinatorDaemonId,
+        coordinatorRunId: fields.coordinatorRunId,
+        sessionId: fields.coordinatorSessionId,
+    });
+    if (!originatingCoordinator) return undefined;
+    return { originatingCoordinator, protocolVersion: MESH_PROTOCOL_VERSION_V2 };
 }
 
 /**

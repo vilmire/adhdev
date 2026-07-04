@@ -131,7 +131,14 @@ export function queueRefineJobEvent(self: DaemonCommandRouter, event: 'refine:ac
 
 export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'task_dispatched' | 'task_completed' | 'task_failed', handle: MeshRefineJobHandle, result?: Record<string, unknown>): Promise<void> {
         try {
-            const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
+            const { appendLedgerEntry, buildLedgerOriginatingCoordinatorStamp } = await import('../mesh/mesh-ledger.js');
+            // B2a: on dispatch, stamp the originating coordinator so a later completion
+            // emit can restore `dispatchedBy` and route the terminal event back (unicast).
+            // Refine jobs carry only a coordinator DAEMON id (no session), which is enough
+            // to route to the daemon-level coordinator. Absent → omitted (v1 entry).
+            const originatingStamp = kind === 'task_dispatched'
+                ? buildLedgerOriginatingCoordinatorStamp({ coordinatorDaemonId: handle.targetCoordinatorDaemonId })
+                : undefined;
             appendLedgerEntry(handle.meshId, {
                 kind,
                 nodeId: handle.targetNodeId,
@@ -152,6 +159,7 @@ export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'ta
                     },
                     async: true,
                     retryOfJobId: handle.retryOfJobId,
+                    ...(originatingStamp ? { originatingCoordinator: originatingStamp } : {}),
                     ...(result ? {
                         success: result.success === true,
                         result,
@@ -1395,7 +1403,11 @@ export async function appendRefineBatchJobLedger(self: DaemonCommandRouter,
         result?: Record<string, unknown>,
     ): Promise<void> {
         try {
-            const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
+            const { appendLedgerEntry, buildLedgerOriginatingCoordinatorStamp } = await import('../mesh/mesh-ledger.js');
+            // B2a: stamp the originating coordinator on dispatch (see appendRefineJobLedger).
+            const originatingStamp = kind === 'task_dispatched'
+                ? buildLedgerOriginatingCoordinatorStamp({ coordinatorDaemonId: handle.targetCoordinatorDaemonId })
+                : undefined;
             appendLedgerEntry(handle.meshId, {
                 kind,
                 nodeId: handle.batchLabel,
@@ -1415,6 +1427,7 @@ export async function appendRefineBatchJobLedger(self: DaemonCommandRouter,
                     },
                     async: true,
                     batch: true,
+                    ...(originatingStamp ? { originatingCoordinator: originatingStamp } : {}),
                     ...(result ? {
                         success: result.success === true,
                         result,

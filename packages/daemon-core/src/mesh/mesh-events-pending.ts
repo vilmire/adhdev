@@ -6,6 +6,13 @@ import { getLedgerDir, readLedgerEntries, appendLedgerEntry } from './mesh-ledge
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId, readMeshCompletionSummary, isWeakCompletionMetadata } from './mesh-events-utils.js';
 import { expandDaemonIdForms } from '@adhdev/mesh-shared';
+import {
+    buildPendingEventEmitStamp,
+    coordinatorIdentityFromEmitFields,
+    MESH_PROTOCOL_VERSION_V2,
+    type CoordinatorIdentity,
+    type MeshEventScope,
+} from './contracts.js';
 
 // ---------------------------------------------------------------------------
 // MCP coordinator pending-event queue — FILE-BASED PERSISTENCE
@@ -44,6 +51,40 @@ export interface PendingMeshCoordinatorEvent {
      * the JSONL file without a dedicated column; it is NOT a drain-scoping key.
      */
     targetCoordinatorSessionId?: string;
+
+    // ─── v2 protocol envelope (B2a) — additive, populated at emit time ────────
+    // Stamped by queuePendingMeshCoordinatorEvent from the fields above plus an
+    // optional emit hint. A v1 reader that ignores these is unaffected (the v2
+    // shape is a strict superset). Absent → the event is a v1 event, treated as
+    // broadcast during rollout.
+    /** '2.0' once stamped. Absent on v1 events. */
+    protocolVersion?: typeof MESH_PROTOCOL_VERSION_V2;
+    /** Idempotency key (UUID). The receiver's authoritative dedup key (B3). */
+    eventId?: string;
+    /** Routing scope. Defaulted from the event name unless the emit hint overrides. */
+    scope?: MeshEventScope;
+    /** Identity of the coordinator that dispatched the work this event reports. */
+    dispatchedBy?: CoordinatorIdentity;
+    /** Present only for unicast scope: the coordinator this event is addressed to. */
+    intendedFor?: CoordinatorIdentity;
+}
+
+/**
+ * Optional emit-time hint passed to queuePendingMeshCoordinatorEvent so a call
+ * site can override the name-defaulted scope or supply richer coordinator
+ * identity (e.g. a coordinatorRunId the base event fields don't carry). Every
+ * field is optional; when omitted the stamp is derived entirely from the
+ * event's own targetCoordinatorDaemonId / targetCoordinatorSessionId. Kept
+ * separate from the event so existing single-arg callers are untouched.
+ */
+export interface PendingEventEmitHint {
+    scope?: MeshEventScope;
+    /** Overrides the coordinator identity derived from the event's target fields. */
+    dispatchedBy?: CoordinatorIdentity;
+    /** Overrides the unicast target derived from the event's target fields. */
+    intendedFor?: CoordinatorIdentity;
+    /** coordinatorRunId to fold into the derived identity when the event lacks one. */
+    coordinatorRunId?: string;
 }
 
 const REFINE_TERMINAL_EVENTS = new Set(['refine:completed', 'refine:failed']);
@@ -327,7 +368,67 @@ function trimPendingEventsIfNeeded(path: string): void {
     } catch { /* best-effort; if trim fails, append still proceeds */ }
 }
 
-export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEvent): boolean {
+/**
+ * Stamp the v2 protocol envelope onto a pending event at emit time (B2a).
+ *
+ * Non-breaking: returns a NEW event object with protocolVersion/eventId/scope/
+ * dispatchedBy/intendedFor added when a coordinator identity can be derived,
+ * otherwise returns the input unchanged (a v1 event, broadcast-treated during
+ * rollout). Identity and the unicast target are derived from the event's own
+ * targetCoordinatorDaemonId / targetCoordinatorSessionId (already carried by
+ * every producer), so most call sites need no change; the optional `hint`
+ * overrides scope/identity where a site knows better.
+ *
+ * The eventId is generated here (randomUUID) exactly once, so re-queues that
+ * pass an already-stamped event keep their original eventId — the idempotency
+ * key is stable across re-delivery. An already-stamped event is returned as-is.
+ */
+export function stampPendingEventV2(
+    event: PendingMeshCoordinatorEvent,
+    hint?: PendingEventEmitHint,
+): PendingMeshCoordinatorEvent {
+    // Preserve idempotency across re-queues: never re-stamp an event that already
+    // carries a v2 eventId (mesh-reconcile-loop / flushPendingForMeshIdleCoordinators
+    // re-queue built events verbatim).
+    if (event.protocolVersion === MESH_PROTOCOL_VERSION_V2 && readNonEmptyString(event.eventId)) {
+        return event;
+    }
+
+    const dispatchedBy = hint?.dispatchedBy ?? coordinatorIdentityFromEmitFields({
+        daemonId: event.targetCoordinatorDaemonId,
+        coordinatorRunId: hint?.coordinatorRunId,
+        sessionId: event.targetCoordinatorSessionId,
+    });
+    // The unicast target is, by default, the same coordinator the event is already
+    // routed to (its originating coordinator). A hint may override it.
+    const intendedFor: CoordinatorIdentity | undefined = hint?.intendedFor ?? dispatchedBy;
+
+    const stamp = buildPendingEventEmitStamp({
+        eventName: event.event,
+        eventId: randomUUID(),
+        dispatchedBy,
+        intendedFor,
+        scope: hint?.scope,
+    });
+    if (!stamp) return event; // no coordinator identity → stays a v1 event
+
+    return {
+        ...event,
+        protocolVersion: stamp.protocolVersion,
+        eventId: stamp.eventId,
+        scope: stamp.scope,
+        dispatchedBy: stamp.dispatchedBy,
+        ...(stamp.intendedFor ? { intendedFor: stamp.intendedFor } : {}),
+    };
+}
+
+export function queuePendingMeshCoordinatorEvent(
+    rawEvent: PendingMeshCoordinatorEvent,
+    hint?: PendingEventEmitHint,
+): boolean {
+    // B2a: stamp the v2 envelope before dedup/persist so the eventId/scope ride
+    // into both stores and the fingerprint/dedup logic sees the final shape.
+    const event = stampPendingEventV2(rawEvent, hint);
     try {
         if (hasPendingRefineTerminalEventDuplicate(event)) {
             LOG.info('MeshEvents', `Suppressed duplicate pending ${event.event} for refine job ${readRefineJobId(event)}`);
@@ -351,6 +452,15 @@ export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEv
                 payload: event,
                 fingerprint: fingerprint || null,
                 queuedAt: event.queuedAt,
+                // v2 envelope columns (B2a) — all nullable so v1 rows coexist. The
+                // authoritative copy still rides inside `payload`; these columns exist
+                // for queryable idempotency (event_id) and scope-based drain filtering
+                // (scope / intended_for) without JSON-parsing every row.
+                protocolVersion: event.protocolVersion ?? null,
+                eventId: event.eventId ?? null,
+                scope: event.scope ?? null,
+                dispatchedBy: event.dispatchedBy ? JSON.stringify(event.dispatchedBy) : null,
+                intendedFor: event.intendedFor ? JSON.stringify(event.intendedFor) : null,
             });
             sqliteOk = true;
         } catch {
