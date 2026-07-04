@@ -51,8 +51,14 @@ export interface CoordinatorRecentActivity {
         /** Short task title/message, already truncated by the caller. */
         summary?: string;
     }>;
-    /** Count of task_failed entries inside the recent (30-min) window. */
+    /** Count of task_failed entries inside the recent window. */
     recentFailureCount?: number;
+    /**
+     * Size of the "recent" window in minutes. Drives the "failed in the last
+     * N min" phrasing. Omitted → defaults to 30, matching the prior hardcoded
+     * wording so existing callers render identically.
+     */
+    windowMinutes?: number;
     /** Pending (unclaimed) tasks in the work queue. */
     pendingTasks?: number;
     /** Assigned-but-not-yet-terminal tasks in the work queue. */
@@ -122,7 +128,76 @@ export interface CoordinatorPromptContext {
  * That layering lets a user customize prompts at three increasing scopes
  * (machine, mesh, single launch) without losing the daemon's stock rules.
  */
+/**
+ * 6-4: total prompt soft cap. When the assembled prompt exceeds this, we shed
+ * the two runtime-accumulated, daemon-generated sections — operating notes
+ * first, then recent activity — because they grow unboundedly from the ledger.
+ * We NEVER trim user append/override content or the fixed hardcoded sections
+ * (identity/nodes/policy/tools/workflow/onboarding/rules): those carry user
+ * intent or invariant instructions. If shedding both still overflows, we keep
+ * the prompt as-is rather than mangling protected content.
+ */
+const PROMPT_SOFT_CAP_BYTES = 60 * 1024;
+
+/**
+ * Which daemon-generated optional sections to drop from the default base.
+ * Used only by the 6-4 soft-cap retry — an override base ignores these
+ * because its operating-notes/recent-activity content comes from the user's
+ * own {{placeholder}}s and is not ours to trim.
+ */
+interface DefaultPromptDropFlags {
+    dropOperatingNotes?: boolean;
+    dropRecentActivity?: boolean;
+}
+
 export function buildCoordinatorSystemPrompt(ctx: CoordinatorPromptContext): string {
+    // First pass: assemble with everything included.
+    let prompt = assembleCoordinatorPrompt(ctx, {});
+    if (byteLength(prompt) <= PROMPT_SOFT_CAP_BYTES) return prompt;
+
+    // Over the soft cap. Only the default base carries daemon-generated
+    // operating-notes / recent-activity sections we're allowed to shed; an
+    // override base is user content and stays whole. If we're on an override
+    // base there's nothing safe to trim, so return the first pass unchanged.
+    if (usesOverrideBase(ctx)) return prompt;
+
+    const shed: string[] = [];
+
+    // 1) Shed operating notes first.
+    prompt = assembleCoordinatorPrompt(ctx, { dropOperatingNotes: true });
+    shed.push('operating notes');
+    if (byteLength(prompt) <= PROMPT_SOFT_CAP_BYTES) {
+        return appendTruncationNotice(prompt, shed);
+    }
+
+    // 2) Still over → also shed recent activity.
+    prompt = assembleCoordinatorPrompt(ctx, { dropOperatingNotes: true, dropRecentActivity: true });
+    shed.push('recent activity');
+    return appendTruncationNotice(prompt, shed);
+}
+
+/** True when the base prompt is a mesh-level or user-file override (not the daemon default). */
+function usesOverrideBase(ctx: CoordinatorPromptContext): boolean {
+    if (ctx.mesh.coordinator?.systemPromptOverride?.trim()) return true;
+    return readUserPromptFile(ctx.coordinatorCliType, 'md') !== null;
+}
+
+/** UTF-8 byte length — the cap is a byte budget, not a code-unit count. */
+function byteLength(s: string): number {
+    return Buffer.byteLength(s, 'utf8');
+}
+
+/**
+ * Append a single trailing line recording which daemon-generated sections were
+ * shed to fit the soft cap, so the coordinator (and anyone reading the prompt)
+ * knows the omission was deliberate, not a data-loss bug.
+ */
+function appendTruncationNotice(prompt: string, shed: string[]): string {
+    if (shed.length === 0) return prompt;
+    return `${prompt}\n\n_Prompt exceeded the ${Math.floor(PROMPT_SOFT_CAP_BYTES / 1024)}KB soft cap; omitted to fit: ${shed.join(', ')}. Full detail remains in the ledger (\`mesh_task_history\` / \`mesh_record_note\`)._`;
+}
+
+function assembleCoordinatorPrompt(ctx: CoordinatorPromptContext, drop: DefaultPromptDropFlags): string {
     const { mesh, userInstruction, coordinatorCliType } = ctx;
 
     // ── Pick the base prompt ──
@@ -135,7 +210,7 @@ export function buildCoordinatorSystemPrompt(ctx: CoordinatorPromptContext): str
         if (userOverride !== null) {
             base = expandPromptPlaceholders(userOverride, ctx);
         } else {
-            base = buildDefaultCoordinatorPrompt(ctx);
+            base = buildDefaultCoordinatorPrompt(ctx, drop);
         }
     }
 
@@ -163,7 +238,7 @@ export function buildCoordinatorSystemPrompt(ctx: CoordinatorPromptContext): str
     return sections.join('\n\n');
 }
 
-function buildDefaultCoordinatorPrompt(ctx: CoordinatorPromptContext): string {
+function buildDefaultCoordinatorPrompt(ctx: CoordinatorPromptContext, drop: DefaultPromptDropFlags = {}): string {
     const { mesh, status, coordinatorCliType } = ctx;
     const sections: string[] = [];
 
@@ -187,13 +262,19 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
         sections.push(ctx.missionSection.trim());
     }
 
-    // ── Recent Activity (Gap1) — only present when there's something to show ──
-    const recentActivity = buildRecentActivitySection(ctx.recentActivity);
-    if (recentActivity) sections.push(recentActivity);
+    // ── Recent Activity (Gap1) — only present when there's something to show.
+    //     Shed under the 6-4 soft cap (drop.dropRecentActivity). ──
+    if (!drop.dropRecentActivity) {
+        const recentActivity = buildRecentActivitySection(ctx.recentActivity);
+        if (recentActivity) sections.push(recentActivity);
+    }
 
-    // ── Operating Notes (Gap2-A) — only present when notes exist ──
-    const operatingNotes = buildOperatingNotesSection(ctx.operatingNotes);
-    if (operatingNotes) sections.push(operatingNotes);
+    // ── Operating Notes (Gap2-A) — only present when notes exist. Shed first
+    //     under the 6-4 soft cap (drop.dropOperatingNotes). ──
+    if (!drop.dropOperatingNotes) {
+        const operatingNotes = buildOperatingNotesSection(ctx.operatingNotes);
+        if (operatingNotes) sections.push(operatingNotes);
+    }
 
     // ── Policy ──
     sections.push(buildPolicySection(mergeAndNormalizePolicy(undefined, mesh.policy)));
@@ -390,6 +471,9 @@ function buildRecentActivitySection(activity?: CoordinatorRecentActivity): strin
     const recentFailureCount = Number.isFinite(activity.recentFailureCount)
         ? Number(activity.recentFailureCount)
         : failures.length;
+    const windowMinutes = Number.isFinite(activity.windowMinutes) && Number(activity.windowMinutes) > 0
+        ? Math.floor(Number(activity.windowMinutes))
+        : 30;
 
     // Nothing actionable to show → omit the section entirely.
     if (failures.length === 0 && pending === 0 && assigned === 0 && stalled === 0 && recentFailureCount === 0) {
@@ -404,7 +488,7 @@ function buildRecentActivitySection(activity?: CoordinatorRecentActivity): strin
     if (pending > 0) counts.push(`**${pending}** pending`);
     if (assigned > 0) counts.push(`**${assigned}** assigned`);
     if (stalled > 0) counts.push(`**${stalled}** stalled`);
-    if (recentFailureCount > 0) counts.push(`**${recentFailureCount}** failed in the last 30 min`);
+    if (recentFailureCount > 0) counts.push(`**${recentFailureCount}** failed in the last ${windowMinutes} min`);
     if (counts.length) lines.push(`- Queue/ledger: ${counts.join(', ')}.`);
     if (activity.lastActivityAt) lines.push(`- Last ledger activity: ${activity.lastActivityAt}.`);
 
@@ -430,6 +514,15 @@ function buildRecentActivitySection(activity?: CoordinatorRecentActivity): strin
  * note gets the unchanged prompt. Notes are runtime-accumulated lessons that
  * persist across coordinator restarts and are provider-neutral.
  */
+/**
+ * 6-4 prompt-build caps for the Operating Notes section. These bound how much
+ * of the ledger rides into every coordinator prompt — the ledger itself keeps
+ * more (keep-latest 100 prune lives in mesh-ledger.ts); this is a separate,
+ * tighter cap applied only when composing the prompt.
+ */
+const OPERATING_NOTES_PROMPT_CAP = 20;
+const OPERATING_NOTE_MAX_CHARS = 300;
+
 function buildOperatingNotesSection(notes?: CoordinatorOperatingNote[]): string {
     const valid = Array.isArray(notes)
         ? notes.filter(n => n && typeof n.text === 'string' && n.text.trim())
@@ -442,14 +535,33 @@ function buildOperatingNotesSection(notes?: CoordinatorOperatingNote[]): string 
         recovery_lesson: 'recovery lesson',
     };
 
+    // Keep only the most recent OPERATING_NOTES_PROMPT_CAP notes in the prompt.
+    // `valid` is oldest-first (ledger order), so the newest are at the tail.
+    const omittedCount = Math.max(0, valid.length - OPERATING_NOTES_PROMPT_CAP);
+    const shown = omittedCount > 0 ? valid.slice(-OPERATING_NOTES_PROMPT_CAP) : valid;
+
     const lines: string[] = ['## Operating Notes', ''];
     lines.push('Lessons earlier coordinators on this mesh recorded via `mesh_record_note`. Treat them as accumulated operating knowledge — apply them. When you learn a durable lesson (a provider quirk, a pattern to avoid, a recovery lesson), record it with `mesh_record_note` so future coordinators inherit it.');
     lines.push('');
-    for (const n of valid) {
+    for (const n of shown) {
         const cat = n.category && categoryLabel[n.category] ? `[${categoryLabel[n.category]}] ` : '';
-        lines.push(`- ${cat}${n.text.trim()}`);
+        lines.push(`- ${cat}${truncateNote(n.text.trim())}`);
+    }
+    if (omittedCount > 0) {
+        lines.push('');
+        lines.push(`_${omittedCount} older note${omittedCount === 1 ? '' : 's'} omitted (kept in ledger; prune with \`mesh_forget_note\`)._`);
     }
     return lines.join('\n');
+}
+
+/**
+ * Truncate a single operating note to OPERATING_NOTE_MAX_CHARS, appending an
+ * ellipsis marker so the coordinator knows the note was clipped in the prompt
+ * (the full text stays in the ledger).
+ */
+function truncateNote(text: string): string {
+    if (text.length <= OPERATING_NOTE_MAX_CHARS) return text;
+    return `${text.slice(0, OPERATING_NOTE_MAX_CHARS).trimEnd()}… [truncated]`;
 }
 
 function buildPolicySection(policy: RepoMeshPolicy): string {

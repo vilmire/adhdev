@@ -405,5 +405,110 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('HEAD')
     expect(prompt).toContain('## Onboarding / Reinit')
   })
+
+  // ── 6-4: prompt-build caps ──
+
+  it('6-4: caps operating notes to the latest 20 and truncates each to 300 chars', () => {
+    // 50 notes, each far longer than 300 chars, tagged with a stable index so
+    // we can assert which survived the keep-latest-20 window.
+    const operatingNotes = Array.from({ length: 50 }, (_, i) => ({
+      text: `note#${i} ` + 'x'.repeat(600),
+    }))
+
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: baseMesh() as any,
+      operatingNotes: operatingNotes as any,
+    })
+
+    // Only the newest 20 (indices 30..49) are shown; older ones are gone.
+    expect(prompt).toContain('note#49')
+    expect(prompt).toContain('note#30')
+    expect(prompt).not.toContain('note#29')
+    expect(prompt).not.toContain('note#0 ')
+
+    // Per-note truncation: no single note line carries the full 600-char run,
+    // and the truncation marker is present.
+    expect(prompt).not.toContain('x'.repeat(400))
+    expect(prompt).toContain('[truncated]')
+
+    // Omitted-count line for the 30 dropped notes.
+    expect(prompt).toContain('30 older notes omitted (kept in ledger; prune with `mesh_forget_note`)')
+  })
+
+  it('6-4: windowMinutes overrides the hardcoded "last 30 min" phrasing', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: baseMesh() as any,
+      recentActivity: {
+        recentFailures: [],
+        recentFailureCount: 4,
+        pendingTasks: 0,
+        assignedTasks: 0,
+        stalledTasks: 0,
+        windowMinutes: 90,
+        lastActivityAt: null,
+      },
+    })
+    expect(prompt).toContain('**4** failed in the last 90 min')
+    expect(prompt).not.toContain('last 30 min')
+  })
+
+  it('6-4: defaults the recent-activity window to 30 min when unspecified', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: baseMesh() as any,
+      recentActivity: {
+        recentFailures: [],
+        recentFailureCount: 1,
+        pendingTasks: 0,
+        assignedTasks: 0,
+        stalledTasks: 0,
+        lastActivityAt: null,
+      },
+    })
+    expect(prompt).toContain('**1** failed in the last 30 min')
+  })
+
+  it('6-4: soft-cap sheds daemon-generated sections but never the user append', () => {
+    // A user (mesh-level) append that alone blows past the 60KB soft cap, plus
+    // a large operating-notes payload. The append must survive verbatim; the
+    // daemon-generated operating notes must be shed with a truncation notice.
+    const bigAppend = 'USER_APPEND_SENTINEL ' + 'A'.repeat(80 * 1024)
+    const operatingNotes = Array.from({ length: 30 }, (_, i) => ({
+      text: `sheddable-note#${i} ` + 'y'.repeat(250),
+    }))
+
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        ...baseMesh(),
+        coordinator: { systemPromptAppend: bigAppend },
+      } as any,
+      operatingNotes: operatingNotes as any,
+    })
+
+    // User append is preserved in full — not truncated.
+    expect(prompt).toContain('USER_APPEND_SENTINEL')
+    expect(prompt).toContain('A'.repeat(80 * 1024))
+
+    // Daemon-generated operating notes were shed to fit the cap.
+    expect(prompt).not.toContain('sheddable-note#0')
+    expect(prompt).not.toContain('## Operating Notes\n')
+
+    // The shedding is announced, not silent.
+    expect(prompt).toContain('soft cap')
+    expect(prompt).toContain('omitted to fit: operating notes')
+
+    // Invariant hardcoded sections stay intact.
+    expect(prompt).toContain('## Rules')
+    expect(prompt).toContain('## Available Tools')
+  })
+
+  it('6-4: an under-cap prompt is emitted unchanged with no truncation notice', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: baseMesh() as any,
+      operatingNotes: [{ text: 'a small durable lesson', category: 'recovery_lesson' }] as any,
+    })
+    expect(prompt).toContain('a small durable lesson')
+    expect(prompt).not.toContain('soft cap')
+    expect(prompt).not.toContain('omitted to fit')
+  })
 })
 
