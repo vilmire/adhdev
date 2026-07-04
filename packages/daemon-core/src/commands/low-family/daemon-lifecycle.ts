@@ -19,6 +19,10 @@ const CHANNEL_SERVER_URL: Record<ReleaseChannel, string> = {
     stable: 'https://api.adhf.dev',
     preview: 'https://api-preview.adhf.dev',
 };
+// Vendor-managed serverUrls. A serverUrl equal to one of these (or unset) is
+// steered to the channel default on upgrade; any other value is a user-set
+// custom/self-host URL that must be preserved across upgrades.
+const VENDOR_SERVER_URLS = new Set<string>(Object.values(CHANNEL_SERVER_URL));
 
 function normalizeReleaseChannel(value: unknown): ReleaseChannel | null {
     if (typeof value !== 'string') return null;
@@ -51,7 +55,16 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
             // Check channel-pinned dist-tag and resolve it to a concrete install version.
             const latest = String(execNpmCommandSync(['view', `${pkgName}@${npmTag}`, 'version'], { encoding: 'utf-8', timeout: 10000 }, npmSurface)).trim();
             LOG.info('Upgrade', `Latest ${pkgName}@${npmTag}: v${latest}`);
-            updateConfig({ updateChannel: channel, serverUrl: CHANNEL_SERVER_URL[channel] } as any);
+            // Only steer serverUrl to the channel's vendor default when the current
+            // value is unset or already a vendor default. A self-hoster's custom
+            // serverUrl must survive the upgrade instead of being clobbered.
+            const currentServerUrl = typeof loadConfig().serverUrl === 'string' ? loadConfig().serverUrl.trim() : '';
+            const useVendorServerUrl = currentServerUrl === '' || VENDOR_SERVER_URLS.has(currentServerUrl);
+            updateConfig(
+                useVendorServerUrl
+                    ? { updateChannel: channel, serverUrl: CHANNEL_SERVER_URL[channel] } as any
+                    : { updateChannel: channel } as any,
+            );
             let currentInstalled: string | null = null;
             try {
                 const currentJson = String(execNpmCommandSync(['ls', '-g', pkgName, '--depth=0', '--json'], {

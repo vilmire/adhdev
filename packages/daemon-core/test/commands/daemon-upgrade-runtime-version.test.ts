@@ -154,4 +154,32 @@ describe('daemon_upgrade runtime version handling', () => {
       serverUrl: 'https://api-preview.adhf.dev',
     })
   })
+
+  it('preserves a user-configured custom serverUrl (self-host) across upgrade', async () => {
+    // Self-hoster pinned a custom API endpoint; upgrade must not clobber it.
+    mocks.loadConfig.mockReturnValue({ updateChannel: 'stable', serverUrl: 'https://adhdev.internal.example.com' })
+    const router = createRouter('0.9.13')
+
+    const result = await router.execute('daemon_upgrade', { channel: 'preview' })
+
+    expect(result).toMatchObject({ success: true, upgraded: true, version: '0.9.14', channel: 'preview' })
+    // updateChannel still flips, but serverUrl is left untouched (no serverUrl key).
+    expect(mocks.updateConfig).toHaveBeenCalledWith({ updateChannel: 'preview' })
+    for (const call of mocks.updateConfig.mock.calls) {
+      expect(call[0]).not.toHaveProperty('serverUrl')
+    }
+  })
+
+  it('steers serverUrl to the channel vendor default when the current value is a vendor default', async () => {
+    // Default (non-self-host) users keep the existing behavior: serverUrl follows the channel.
+    mocks.loadConfig.mockReturnValue({ updateChannel: 'stable', serverUrl: 'https://api.adhf.dev' })
+    const router = createRouter('0.9.13')
+
+    await router.execute('daemon_upgrade', { channel: 'preview' })
+
+    expect(mocks.updateConfig).toHaveBeenCalledWith({
+      updateChannel: 'preview',
+      serverUrl: 'https://api-preview.adhf.dev',
+    })
+  })
 })
