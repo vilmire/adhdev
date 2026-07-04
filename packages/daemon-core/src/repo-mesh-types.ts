@@ -703,6 +703,23 @@ export interface RepoMeshNodeCapabilities {
     canPush?: boolean;
     readOnly?: boolean;
     userLabels?: string[];
+    /**
+     * Detected provider CLI/ACP versions on this node, keyed by provider id
+     * (e.g. `{ 'claude-cli': '1.2.3', 'codex-cli': '0.9.0' }`). Populated from the
+     * same CLI detection pass that feeds providerPriority (see buildProviderVersions
+     * over detectCLIs' CLIInfo[]). Absent/undefined when detection has not run or a
+     * daemon predates the exposure — never a hard signal, purely observability so a
+     * coordinator can spot a provider-version skew across nodes before dispatch.
+     * Additive: existing status consumers ignore it.
+     */
+    providerVersions?: Record<string, string>;
+    /**
+     * The daemon build version (package.json version baked into the running bundle,
+     * see getDaemonBuildInfo().version) that detected the above providerVersions.
+     * Complements the commit-level daemonBuild stamp with a human-readable version
+     * for node-card rendering. Absent when the build define was not injected.
+     */
+    daemonBuildVersion?: string;
 }
 
 export interface DetectedCommand {
@@ -850,6 +867,19 @@ export interface LocalMeshNodeEntry {
     reportedPlatform?: string;
     reportedArch?: string;
     /**
+     * Live, self-healed provider CLI/ACP versions reported by the daemon that owns
+     * this node's workspace, carried on the git_status envelope (reporterProviderVersions)
+     * and persisted by the coordinator on each direct git probe — mirrors the
+     * reportedPlatform/reportedArch self-heal pattern. Auto-detected truth, overwritten
+     * by the next report so a stale value never sticks. Absent until the first probe
+     * carrying versions succeeds. Surfaced as RepoMeshNodeStatus.providerVersions.
+     */
+    reportedProviderVersions?: Record<string, string>;
+    /** Live, self-healed daemon build version (getDaemonBuildInfo().version) of the
+     *  owning daemon, carried on the git_status envelope (reporterDaemonBuildVersion)
+     *  alongside the provider versions. Absent until first reported. */
+    reportedDaemonBuildVersion?: string;
+    /**
      * The operator-set machine nickname (config.machineNickname) of the daemon
      * that owns this node's workspace. The local coordinator stamps its own
      * config value onto its self/base node; a remote member self-reports its
@@ -974,6 +1004,44 @@ export interface RepoMeshStatus {
      * optional. Mirrors the MCP `mesh_status` tool's `magiActivity` field.
      */
     magiActivity?: MeshMagiActivitySummary[];
+    /**
+     * T7 (visibility 7-2b): provider CLI/ACP version skew across nodes. Each entry
+     * names a provider running ≥2 distinct versions across the nodes that reported
+     * it, with the node ids per version. Observational only — never a dispatch
+     * blocker. Omitted when every reported provider is uniform (or none reported).
+     * Mirrors the MCP `mesh_status` tool's `providerVersionSkew` field.
+     */
+    providerVersionSkew?: MeshProviderVersionSkew[];
+    /** Human-readable companion warning to providerVersionSkew. Omitted when no skew. */
+    providerVersionSkewWarning?: string;
+    /**
+     * T7 (B4): mesh-protocol-v2 adoption metrics for the batch of pending events
+     * surfaced in the drain backing this status. Snapshot, not a durable counter.
+     * Omitted when nothing was drained. Mirrors the MCP tool's meshProtocolMetrics.
+     */
+    meshProtocolMetrics?: MeshProtocolMetrics;
+}
+
+/** One provider's version skew across mesh nodes (see RepoMeshStatus.providerVersionSkew). */
+export interface MeshProviderVersionSkew {
+    /** Provider id (e.g. 'claude-cli'). */
+    provider: string;
+    /** Each distinct detected version and the node ids running it. */
+    versions: Array<{ version: string; nodeIds: string[] }>;
+}
+
+/** Mesh-protocol-v2 adoption snapshot over one drain (see RepoMeshStatus.meshProtocolMetrics). */
+export interface MeshProtocolMetrics {
+    /** Total pending events surfaced in the drain. */
+    total: number;
+    /** Count carrying a v2 envelope (protocolVersion '2.0'). */
+    v2: number;
+    /** Count still on v1 (unstamped). */
+    v1: number;
+    /** v2/total, rounded to 2 decimals (0 when total is 0). */
+    v2Ratio: number;
+    /** Scope breakdown of the v2 events (unicast/broadcast/system/unspecified → count). */
+    scopes: Record<string, number>;
 }
 
 // RepoMeshSessionStatus shape now lives in @adhdev/mesh-shared (shared with
@@ -1026,6 +1094,17 @@ export interface RepoMeshNodeStatus {
      */
     gitProbePending?: boolean;
     providers: string[];
+    /**
+     * Detected provider CLI/ACP versions on this node, keyed by provider id. Mirrors
+     * RepoMeshNodeCapabilities.providerVersions onto the status snapshot so the mesh
+     * UI / coordinator prompt can render per-provider versions and flag a version
+     * skew across nodes. Optional — omitted by daemons predating the exposure or when
+     * detection has not run. Additive; existing consumers ignore it. */
+    providerVersions?: Record<string, string>;
+    /** Human-readable daemon build version (getDaemonBuildInfo().version) of the
+     *  daemon that owns this node. Complements the per-daemon commit stamp
+     *  (daemonBuilds) for node-card display. Omitted when unknown. */
+    daemonBuildVersion?: string;
     activeSessions: string[];
     activeSessionDetails?: RepoMeshSessionStatus[];
     providerPriority?: string[];

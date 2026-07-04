@@ -319,9 +319,21 @@ export function recordInlineMeshDirectGitTruth(
     node: any,
     git: Record<string, unknown>,
     source: 'selected_coordinator_local_git' | 'selected_coordinator_mesh_p2p_git',
-): { reporterPlatform: string | null; reporterArch: string | null; reporterMachineNickname: string | null } {
+): {
+    reporterPlatform: string | null;
+    reporterArch: string | null;
+    reporterMachineNickname: string | null;
+    reporterProviderVersions: Record<string, string> | null;
+    reporterDaemonBuildVersion: string | null;
+} {
     if (!node || typeof node !== 'object' || Array.isArray(node)) {
-        return { reporterPlatform: null, reporterArch: null, reporterMachineNickname: null };
+        return {
+            reporterPlatform: null,
+            reporterArch: null,
+            reporterMachineNickname: null,
+            reporterProviderVersions: null,
+            reporterDaemonBuildVersion: null,
+        };
     }
     const checkedAt = readNumberValue(git.lastCheckedAt) ?? Date.now();
     const updatedAt = new Date(checkedAt).toISOString();
@@ -366,7 +378,38 @@ export function recordInlineMeshDirectGitTruth(
     // overwrite an existing nickname with an empty value.
     const reporterMachineNickname = readStringValue(git.reporterMachineNickname) ?? null;
     if (reporterMachineNickname) node.machineNickname = reporterMachineNickname;
-    return { reporterPlatform, reporterArch, reporterMachineNickname };
+    // T7: self-heal provider versions + daemon build version from the same git_status
+    // envelope. These are best-effort observability (never routing), so the raw
+    // reported map is stamped onto dedicated node fields and overwritten by the next
+    // report — never merged with a stale value the way an operator override would be.
+    const reporterProviderVersions = readProviderVersionsRecord(git.reporterProviderVersions);
+    if (reporterProviderVersions) node.reportedProviderVersions = reporterProviderVersions;
+    const reporterDaemonBuildVersion = readStringValue(git.reporterDaemonBuildVersion) ?? null;
+    if (reporterDaemonBuildVersion) node.reportedDaemonBuildVersion = reporterDaemonBuildVersion;
+    return {
+        reporterPlatform,
+        reporterArch,
+        reporterMachineNickname,
+        reporterProviderVersions,
+        reporterDaemonBuildVersion,
+    };
+}
+
+/**
+ * Coerce an unknown git-envelope `reporterProviderVersions` field into a clean
+ * `{ providerId: version }` record: only string→non-empty-string entries survive.
+ * Returns null when nothing usable is present so callers can skip the stamp.
+ */
+function readProviderVersionsRecord(value: unknown): Record<string, string> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const out: Record<string, string> = {};
+    for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+        if (typeof key !== 'string' || !key.trim()) continue;
+        const version = typeof raw === 'string' ? raw.trim() : '';
+        if (!version) continue;
+        out[key] = version;
+    }
+    return Object.keys(out).length > 0 ? out : null;
 }
 
 /**
@@ -403,7 +446,13 @@ export function persistNodeReporterPlatform(
     meshSource: 'inline_cache' | 'inline_bootstrap' | 'local_config',
     mesh: any,
     nodeId: string | undefined,
-    reporter: { reporterPlatform: string | null; reporterArch: string | null; reporterMachineNickname?: string | null },
+    reporter: {
+        reporterPlatform: string | null;
+        reporterArch: string | null;
+        reporterMachineNickname?: string | null;
+        reporterProviderVersions?: Record<string, string> | null;
+        reporterDaemonBuildVersion?: string | null;
+    },
 ): void {
     if (meshSource !== 'local_config') return;
     const meshId = readStringValue(mesh?.id);
@@ -411,9 +460,25 @@ export function persistNodeReporterPlatform(
     const reportedPlatform = reporter.reporterPlatform ?? undefined;
     const reportedArch = reporter.reporterArch ?? undefined;
     const reportedMachineNickname = reporter.reporterMachineNickname ?? undefined;
-    if (!reportedPlatform && !reportedArch && !reportedMachineNickname) return;
+    const reportedProviderVersions = reporter.reporterProviderVersions ?? undefined;
+    const reportedDaemonBuildVersion = reporter.reporterDaemonBuildVersion ?? undefined;
+    if (
+        !reportedPlatform &&
+        !reportedArch &&
+        !reportedMachineNickname &&
+        !reportedProviderVersions &&
+        !reportedDaemonBuildVersion
+    ) {
+        return;
+    }
     void import('../config/mesh-config.js')
-        .then(({ updateNode }) => updateNode(meshId, nodeId, { reportedPlatform, reportedArch, reportedMachineNickname }))
+        .then(({ updateNode }) => updateNode(meshId, nodeId, {
+            reportedPlatform,
+            reportedArch,
+            reportedMachineNickname,
+            reportedProviderVersions,
+            reportedDaemonBuildVersion,
+        }))
         .catch(() => { /* best-effort self-heal; never block status assembly */ });
 }
 
@@ -1428,6 +1493,12 @@ async function probeRemoteMeshGitStatus(args: {
     if (reporterPlatform) git.reporterPlatform = reporterPlatform;
     if (reporterArch) git.reporterArch = reporterArch;
     if (reporterMachineNickname) git.reporterMachineNickname = reporterMachineNickname;
+    // T7: propagate the member's self-reported provider versions + build version on
+    // the same reporter* channel so a remote node's providerVersions self-heal too.
+    const reporterProviderVersions = readProviderVersionsRecord(remoteResult?.reporterProviderVersions);
+    if (reporterProviderVersions) git.reporterProviderVersions = reporterProviderVersions;
+    const reporterDaemonBuildVersion = readStringValue(remoteResult?.reporterDaemonBuildVersion);
+    if (reporterDaemonBuildVersion) git.reporterDaemonBuildVersion = reporterDaemonBuildVersion;
     return git;
 }
 

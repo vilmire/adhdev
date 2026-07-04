@@ -1719,3 +1719,58 @@ describe('canonicalizeRepoMeshStatus null-safe boundary', () => {
     expect(canonical.nodes.map(n => n.nodeId)).toEqual(['n1'])
   })
 })
+
+describe('T7 provider versions + protocol metrics pass-through', () => {
+  const base = {
+    meshId: 'mesh_pv',
+    meshName: 'ADHDev',
+    repoIdentity: 'r',
+    refreshedAt: '2026-01-01T00:00:00Z',
+  }
+
+  it('carries per-node providerVersions + daemonBuildVersion through canonicalization', () => {
+    const status = {
+      ...base,
+      nodes: [
+        {
+          nodeId: 'n1',
+          machineLabel: 'n1',
+          workspace: '/repo/n1',
+          health: 'online',
+          providers: ['claude-cli'],
+          providerVersions: { 'claude-cli': '1.2.3' },
+          daemonBuildVersion: '0.9.82',
+        },
+      ],
+    } as unknown as RepoMeshStatus
+    const [node] = canonicalizeRepoMeshStatus(status).nodes
+    expect(node.providerVersions).toEqual({ 'claude-cli': '1.2.3' })
+    expect(node.daemonBuildVersion).toBe('0.9.82')
+  })
+
+  it('omits providerVersions when a node reports none (older-daemon compatibility)', () => {
+    const status = {
+      ...base,
+      nodes: [{ nodeId: 'n1', machineLabel: 'n1', workspace: '/repo/n1', health: 'online', providers: [] }],
+    } as unknown as RepoMeshStatus
+    const [node] = canonicalizeRepoMeshStatus(status).nodes
+    expect(node.providerVersions).toBeUndefined()
+    expect(node.daemonBuildVersion).toBeUndefined()
+  })
+
+  it('passes top-level providerVersionSkew + meshProtocolMetrics through unchanged', () => {
+    const status = {
+      ...base,
+      nodes: [],
+      providerVersionSkew: [
+        { provider: 'claude-cli', versions: [{ version: '1.2.3', nodeIds: ['n1'] }, { version: '1.1.0', nodeIds: ['n2'] }] },
+      ],
+      providerVersionSkewWarning: 'skew',
+      meshProtocolMetrics: { total: 4, v2: 3, v1: 1, v2Ratio: 0.75, scopes: { unicast: 2, broadcast: 1 } },
+    } as unknown as RepoMeshStatus
+    const canonical = canonicalizeRepoMeshStatus(status)
+    expect(canonical.providerVersionSkew).toHaveLength(1)
+    expect(canonical.providerVersionSkew?.[0].provider).toBe('claude-cli')
+    expect(canonical.meshProtocolMetrics?.v2Ratio).toBe(0.75)
+  })
+})

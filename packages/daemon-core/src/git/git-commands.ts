@@ -102,6 +102,14 @@ export interface GitCommandServices {
   checkoutFiles?: (params: { workspace: string; paths: string[] }) => Promise<{ checkedOut: string[] }>;
   getRemoteUrl?: (params: { workspace: string; remote?: string }) => Promise<{ remoteUrl: string; remote: string }>;
   push?: (params: { workspace: string; remote?: string; branch?: string; setUpstream?: boolean }) => Promise<GitPushResult>;
+  /**
+   * Best-effort, non-blocking source of this daemon's detected provider CLI/ACP
+   * versions (keyed by provider id) + its build version, folded onto the git_status
+   * envelope so a mesh coordinator can self-heal each node's providerVersions the
+   * same way it does platform/arch. Wired at daemon boot from the cached CLI
+   * detection snapshot; omitted (⇒ versions not reported) when unavailable.
+   */
+  getReporterProviderVersions?: () => { providerVersions?: Record<string, string>; daemonBuildVersion?: string };
 }
 
 type GitCommandFailure = {
@@ -116,7 +124,7 @@ type GitCommandSuccess =
   // node's userOverrides.platform/arch (the fields capability-tag routing reads).
   // reporterMachineNickname carries the responding daemon's config.machineNickname
   // so the coordinator can populate node.machineNickname → the friendly display label.
-  | { success: true; status: GitRepoStatus; reporterPlatform?: string; reporterArch?: string; reporterMachineNickname?: string }
+  | { success: true; status: GitRepoStatus; reporterPlatform?: string; reporterArch?: string; reporterMachineNickname?: string; reporterProviderVersions?: Record<string, string>; reporterDaemonBuildVersion?: string }
   | { success: true; diffSummary: GitDiffSummary }
   | { success: true; diff: GitFileDiff }
   | { success: true; snapshot: GitSnapshot }
@@ -179,7 +187,9 @@ const defaultSnapshotStore = createGitSnapshotStore({
   getDiffSummary: (workspace) => getGitDiffSummary(workspace),
 });
 
-export function createDefaultGitCommandServices(): GitCommandServices {
+export function createDefaultGitCommandServices(
+  overrides?: Pick<GitCommandServices, 'getReporterProviderVersions'>,
+): GitCommandServices {
   return {
     getStatus: ({ workspace, refreshUpstream }) => getGitRepoStatus(workspace, { refreshUpstream }),
     getDiffSummary: ({ workspace, base }) => getGitDiffSummary(workspace, base ? { baseRef: base } : {}),
@@ -199,6 +209,9 @@ export function createDefaultGitCommandServices(): GitCommandServices {
     getRemoteUrl: async ({ workspace, remote = 'origin' }) => gitGetRemoteUrl(workspace, remote),
     push: async ({ workspace, remote = 'origin', branch, setUpstream = false }) =>
       gitPush(workspace, remote, branch, setUpstream),
+    ...(overrides?.getReporterProviderVersions
+      ? { getReporterProviderVersions: overrides.getReporterProviderVersions }
+      : {}),
   };
 }
 
@@ -328,12 +341,32 @@ export async function handleGitCommand(
           return undefined;
         }
       })();
+      // Provider versions + build version ride the same self-report channel (T7
+      // visibility). Best-effort and non-blocking: the service reads a cached
+      // snapshot, so a cold cache simply omits the fields on this probe.
+      const reporterVersions = (() => {
+        try {
+          return services.getReporterProviderVersions?.() ?? {};
+        } catch {
+          return {};
+        }
+      })();
+      const reporterProviderVersions =
+        reporterVersions.providerVersions && Object.keys(reporterVersions.providerVersions).length > 0
+          ? reporterVersions.providerVersions
+          : undefined;
+      const reporterDaemonBuildVersion =
+        typeof reporterVersions.daemonBuildVersion === 'string' && reporterVersions.daemonBuildVersion.trim()
+          ? reporterVersions.daemonBuildVersion.trim()
+          : undefined;
       return {
         success: true,
         status,
         reporterPlatform: process.platform,
         reporterArch: process.arch,
         ...(reporterMachineNickname ? { reporterMachineNickname } : {}),
+        ...(reporterProviderVersions ? { reporterProviderVersions } : {}),
+        ...(reporterDaemonBuildVersion ? { reporterDaemonBuildVersion } : {}),
       };
     }
 

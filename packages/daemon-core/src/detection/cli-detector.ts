@@ -200,3 +200,69 @@ export async function detectCLI(
     const all = await detectCLIs(providerLoader, options);
     return all.find((c) => c.id === resolvedId && c.installed) || null;
 }
+
+/**
+ * Fold a detected CLIInfo[] into the `{ providerId: version }` map surfaced as a
+ * node's providerVersions (see RepoMeshNodeCapabilities.providerVersions). Only
+ * installed providers that produced a parseable version string are included, so a
+ * missing entry means "not installed or version unknown" — never a fabricated value.
+ * Pure/deterministic: the same detection input always yields the same map, which is
+ * what the git_status envelope carries and the mesh_status skew check compares.
+ */
+export function buildProviderVersions(detected: CLIInfo[]): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const cli of detected) {
+        if (!cli.installed) continue;
+        const version = typeof cli.version === 'string' ? cli.version.trim() : '';
+        if (!version) continue;
+        out[cli.id] = version;
+    }
+    return out;
+}
+
+// ─── Cached provider-versions snapshot (mesh visibility, T7) ────────────────
+//
+// A node's providerVersions rides the git_status envelope, which a coordinator
+// probes on every graph refresh. Running the full `--version` exec fan-out on
+// each probe would be far too costly (one spawn per provider per probe), so the
+// snapshot is memoized with a TTL and refreshed lazily in the background: a probe
+// reads the current cache immediately (empty until the first refresh completes)
+// and kicks off a refresh only when the cache is stale, never blocking the git
+// response on version detection. Best-effort observability — a cold/empty map
+// simply omits providerVersions from that probe, and the next probe carries it.
+const PROVIDER_VERSIONS_TTL_MS = 5 * 60 * 1000; // 5 min — provider installs change rarely
+let cachedProviderVersions: Record<string, string> = {};
+let cachedProviderVersionsAt = 0;
+let providerVersionsRefreshInFlight: Promise<void> | null = null;
+
+function refreshProviderVersionsSnapshot(providerLoader?: ProviderLoader): Promise<void> {
+    if (providerVersionsRefreshInFlight) return providerVersionsRefreshInFlight;
+    providerVersionsRefreshInFlight = (async () => {
+        try {
+            const detected = await detectCLIs(providerLoader, { includeVersion: true });
+            cachedProviderVersions = buildProviderVersions(detected);
+            cachedProviderVersionsAt = Date.now();
+        } catch {
+            // Best-effort: keep the last good snapshot on failure.
+        } finally {
+            providerVersionsRefreshInFlight = null;
+        }
+    })();
+    return providerVersionsRefreshInFlight;
+}
+
+/**
+ * Return the current cached provider-versions map for this daemon, triggering a
+ * lazy background refresh when the snapshot is stale/cold. Never blocks: returns
+ * whatever is currently cached (an empty object before the first refresh lands).
+ * This is the source the git_status envelope reads to self-report a node's
+ * provider versions to the mesh coordinator.
+ */
+export function getCachedProviderVersions(providerLoader?: ProviderLoader): Record<string, string> {
+    const stale = Date.now() - cachedProviderVersionsAt > PROVIDER_VERSIONS_TTL_MS;
+    if (stale) {
+        // Fire-and-forget; the current (possibly empty) snapshot is returned now.
+        void refreshProviderVersionsSnapshot(providerLoader);
+    }
+    return { ...cachedProviderVersions };
+}

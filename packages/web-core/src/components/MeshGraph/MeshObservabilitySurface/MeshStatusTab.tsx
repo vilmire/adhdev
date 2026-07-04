@@ -88,6 +88,17 @@ function MeshNodeRuntimeRow({ node }: { node: RepoMeshNodeStatus }) {
     const isWorktree = node.isLocalWorktree === true
     const bootstrap = node.worktreeBootstrap as { status?: string } | undefined
     const staleBuild = node.staleDaemonBuild
+    // T7: detected provider CLI/ACP versions on this node, rendered as
+    // `provider@version` chips so a version skew across nodes is visible at a glance.
+    const providerVersions = node.providerVersions && typeof node.providerVersions === 'object'
+        ? node.providerVersions
+        : undefined
+    const providerVersionEntries = providerVersions
+        ? Object.entries(providerVersions).filter(([, v]) => typeof v === 'string' && v)
+        : []
+    const daemonBuildVersion = typeof node.daemonBuildVersion === 'string' && node.daemonBuildVersion
+        ? node.daemonBuildVersion
+        : undefined
     return (
         <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
             <div className="flex flex-wrap items-center gap-2">
@@ -103,8 +114,16 @@ function MeshNodeRuntimeRow({ node }: { node: RepoMeshNodeStatus }) {
                 {sessionCount > 0 && <Badge label={`${sessionCount} session${sessionCount === 1 ? '' : 's'}`} tone="default" />}
                 {node.autoFastForwardEligible && <Badge label="fast-forward ready" tone="info" title="Clean, behind upstream — safe for fast-forward" />}
                 {!!staleBuild && <Badge label="stale build" tone="warn" title="Live daemon was built behind workspace HEAD — merged fixes may not be live" />}
+                {daemonBuildVersion && <Badge label={`build ${daemonBuildVersion}`} tone="default" title="Daemon build version reported by this node" />}
                 <MeshNodeSchedulingBadges scheduling={node.scheduling} />
             </div>
+            {providerVersionEntries.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    {providerVersionEntries.map(([provider, version]) => (
+                        <Badge key={provider} label={`${provider}@${version}`} tone="info" title="Detected provider version on this node" />
+                    ))}
+                </div>
+            )}
             <div className={`mt-1.5 text-[11px] ${meshTheme.textSecondary}`}>
                 {summarizeNodeDrift(node)}
                 {head ? <span className="ml-2 font-mono opacity-70">@{head}</span> : null}
@@ -170,6 +189,60 @@ function MagiActivityCard({ status }: { status: RepoMeshStatus }) {
     )
 }
 
+// T7 (B4): mesh-protocol-v2 adoption + provider-version-skew visibility card.
+// Renders only when the daemon surfaced either signal (both are omitted by
+// daemons predating the exposure), so it self-hides on older meshes.
+function MeshProtocolVisibilityCard({ status }: { status: RepoMeshStatus }) {
+    const meshTheme = useContext(MeshGraphThemeContext)
+    const metrics = status.meshProtocolMetrics
+    const skew = Array.isArray(status.providerVersionSkew) ? status.providerVersionSkew : []
+    if (!metrics && skew.length === 0) return null
+    return (
+        <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
+            <div className="flex flex-wrap items-center gap-2">
+                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>Protocol & provider versions</span>
+                {metrics && (
+                    <Badge
+                        label={`v2 ${Math.round(metrics.v2Ratio * 100)}% (${metrics.v2}/${metrics.total})`}
+                        tone={metrics.total > 0 && metrics.v2 === metrics.total ? 'good' : 'info'}
+                        title="Share of pending coordinator events carrying a mesh-protocol-v2 envelope in this drain"
+                    />
+                )}
+                {skew.length > 0 && (
+                    <Badge label={`${skew.length} provider skew`} tone="warn" title="Providers running different versions across nodes" />
+                )}
+            </div>
+            {metrics && Object.keys(metrics.scopes).length > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {Object.entries(metrics.scopes).map(([scope, count]) => (
+                        <Badge key={scope} label={`${scope}: ${count}`} tone="default" title="v2 event scope breakdown" />
+                    ))}
+                </div>
+            )}
+            {skew.length > 0 && (
+                <div className="mt-2 flex flex-col gap-1.5">
+                    {skew.map(entry => (
+                        <div key={entry.provider} className="flex flex-wrap items-center gap-1.5">
+                            <span className={`text-[11px] font-semibold ${meshTheme.textPrimary}`}>{entry.provider}</span>
+                            {entry.versions.map(v => (
+                                <Badge
+                                    key={v.version}
+                                    label={`${v.version} · ${v.nodeIds.length} node${v.nodeIds.length === 1 ? '' : 's'}`}
+                                    tone="default"
+                                    title={v.nodeIds.join(', ')}
+                                />
+                            ))}
+                        </div>
+                    ))}
+                </div>
+            )}
+            {status.providerVersionSkewWarning && (
+                <p className={`mt-2 text-[11px] ${meshTheme.textSecondary}`}>{status.providerVersionSkewWarning}</p>
+            )}
+        </div>
+    )
+}
+
 // Receives the already-canonicalized status from MeshObservabilitySurface (the
 // single boundary canonicalize), so `nodes` is guaranteed an array and no
 // re-guard / re-canonicalize is needed here.
@@ -178,6 +251,7 @@ export function MeshStatusTab({ canonicalStatus }: { canonicalStatus: RepoMeshSt
     return (
         <div className="flex flex-col gap-3 p-1">
             <MeshSchedulingCard scheduling={canonicalStatus.scheduling} />
+            <MeshProtocolVisibilityCard status={canonicalStatus} />
             <MagiActivityCard status={canonicalStatus} />
             <div className="flex flex-col gap-2">
                 <span className={`px-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>

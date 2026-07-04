@@ -25,7 +25,8 @@ import { VersionArchive, detectAllVersions } from '../providers/version-archive.
 import { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { DevServer } from '../daemon/dev-server.js';
 import { detectIDEs, type IDEInfo } from '../detection/ide-detector.js';
-import { detectCLI, detectCLIs } from '../detection/cli-detector.js';
+import { detectCLI, detectCLIs, getCachedProviderVersions } from '../detection/cli-detector.js';
+import { getDaemonBuildInfo } from '../build-info.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG, installGlobalInterceptor } from '../logging/logger.js';
 import {
@@ -304,7 +305,19 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         providerLoader,
         instanceManager,
         sessionRegistry,
-        gitCommandServices: createDefaultGitCommandServices(),
+        gitCommandServices: createDefaultGitCommandServices({
+            // T7: fold this daemon's cached provider versions + build version onto the
+            // git_status envelope so the mesh coordinator self-heals each node's
+            // providerVersions. Non-blocking: reads a TTL cache, lazily refreshed.
+            getReporterProviderVersions: () => {
+                const providerVersions = getCachedProviderVersions(providerLoader);
+                const daemonBuildVersion = getDaemonBuildInfo().version;
+                return {
+                    ...(Object.keys(providerVersions).length > 0 ? { providerVersions } : {}),
+                    ...(daemonBuildVersion && daemonBuildVersion !== 'unknown' ? { daemonBuildVersion } : {}),
+                };
+            },
+        }),
         onProviderSettingChanged: async (providerType) => {
             await refreshProviderAvailability(providerType);
             config.onStatusChange?.();

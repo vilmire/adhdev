@@ -280,6 +280,12 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
             ? { worktreeBootstrap: record.worktreeBootstrap as RepoMeshNodeStatus['worktreeBootstrap'] } : {}),
         ...(record.staleDaemonBuild && typeof record.staleDaemonBuild === 'object'
             ? { staleDaemonBuild: record.staleDaemonBuild as RepoMeshNodeStatus['staleDaemonBuild'] } : {}),
+        // T7: detected provider versions + daemon build version (per-node). Pass-through;
+        // omitted by daemons predating the exposure and by quiet compact-folded nodes.
+        ...(record.providerVersions && typeof record.providerVersions === 'object' && !Array.isArray(record.providerVersions)
+            ? { providerVersions: record.providerVersions as RepoMeshNodeStatus['providerVersions'] } : {}),
+        ...(readString(record.daemonBuildVersion, record.daemon_build_version)
+            ? { daemonBuildVersion: readString(record.daemonBuildVersion, record.daemon_build_version) } : {}),
         ...(error ? { error } : {}),
     }
 }

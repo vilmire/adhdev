@@ -921,6 +921,9 @@ function NodesCard({ meshTheme, nodes }: { meshTheme: MeshGraphTheme; nodes: Rep
                                 {branch && <span className={`max-w-full truncate font-mono text-[11px] ${meshTheme.textSecondary}`} title={branch}>{branch}</span>}
                                 <span className={`max-w-full truncate font-mono text-[10px] ${meshTheme.textMuted}`}>{nodeDriftSummary(node)}</span>
                                 {sessionCount > 0 && <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{sessionCount} session{sessionCount > 1 ? 's' : ''}</span>}
+                                {typeof node.daemonBuildVersion === 'string' && node.daemonBuildVersion && (
+                                    <span className={`shrink-0 font-mono text-[10px] ${meshTheme.textMuted}`} title="Daemon build version reported by this node">v{node.daemonBuildVersion}</span>
+                                )}
                                 {conv && <StatusBadge meshTheme={meshTheme} label={conv.label} tone={conv.tone} />}
                             </div>
                         )

@@ -392,9 +392,27 @@ function buildNodeStatusSection(nodes: RepoMeshNodeStatus[]): string {
             ? `sessions: ${n.activeSessions.join(', ')}`
             : 'no active sessions';
         const branch = n.git?.branch ? `branch: \`${n.git.branch}\`` : '';
+        // Render each provider with its detected version when known (T7 visibility)
+        // so the coordinator can eyeball a per-node provider-version skew inline —
+        // e.g. `claude-cli@1.2.3`. Providers without a reported version render bare.
+        const providerVersions = n.providerVersions && typeof n.providerVersions === 'object'
+            ? n.providerVersions
+            : undefined;
+        const providersRendered = n.providers?.length
+            ? n.providers
+                .map((p) => {
+                    const version = providerVersions?.[p];
+                    return version ? `${p}@${version}` : p;
+                })
+                .join(', ')
+            : '';
+        const buildVersion = typeof n.daemonBuildVersion === 'string' && n.daemonBuildVersion
+            ? `build: ${n.daemonBuildVersion}`
+            : '';
         const context = [
             n.daemonId ? `daemon: \`${n.daemonId}\`` : '',
-            n.providers?.length ? `providers: ${n.providers.join(', ')}` : '',
+            providersRendered ? `providers: ${providersRendered}` : '',
+            buildVersion,
         ].filter(Boolean).join(' | ');
         lines.push(`- ${healthIcon} **${n.machineLabel}** (nodeId: \`${n.nodeId}\`)`);
         lines.push(`  workspace: \`${n.workspace}\`${context ? ` | ${context}` : ''} | ${branch} | ${sessions}`);

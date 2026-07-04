@@ -583,6 +583,13 @@ export function updateNode(
          *  git_status envelope. Persisted so the friendly label survives across
          *  coordinator restarts (mirrors reportedPlatform/reportedArch). */
         reportedMachineNickname?: string;
+        /** Owning daemon's self-reported provider CLI/ACP versions + build version,
+         *  carried on the git_status envelope. Persisted distinctly from userOverrides
+         *  (auto-detected observability, not operator intent), mirroring the
+         *  reportedPlatform/reportedArch self-heal so the value survives restarts and
+         *  is overwritten by the next report. */
+        reportedProviderVersions?: Record<string, string>;
+        reportedDaemonBuildVersion?: string;
     },
 ): LocalMeshNodeEntry | undefined {
     const config = loadMeshConfig();
@@ -596,6 +603,12 @@ export function updateNode(
     if (opts.reportedPlatform && opts.reportedPlatform.trim()) node.reportedPlatform = opts.reportedPlatform.trim();
     if (opts.reportedArch && opts.reportedArch.trim()) node.reportedArch = opts.reportedArch.trim();
     if (opts.reportedMachineNickname && opts.reportedMachineNickname.trim()) node.machineNickname = opts.reportedMachineNickname.trim();
+    if (opts.reportedProviderVersions && Object.keys(opts.reportedProviderVersions).length > 0) {
+        node.reportedProviderVersions = { ...opts.reportedProviderVersions };
+    }
+    if (opts.reportedDaemonBuildVersion && opts.reportedDaemonBuildVersion.trim()) {
+        node.reportedDaemonBuildVersion = opts.reportedDaemonBuildVersion.trim();
+    }
     if (opts.policy) node.policy = { ...node.policy, ...opts.policy };
     if (opts.worktreeBootstrap) node.worktreeBootstrap = opts.worktreeBootstrap;
     if (Object.prototype.hasOwnProperty.call(opts, 'systemPrompt')) {

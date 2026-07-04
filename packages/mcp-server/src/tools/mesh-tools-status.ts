@@ -57,6 +57,44 @@ import type {
     MeshContext,
 } from './mesh-tools-internal.js';
 
+// The v2 protocol version literal (mirrors MESH_PROTOCOL_VERSION_V2 in
+// daemon-core mesh/contracts.ts). Kept as a local literal so this MCP-side
+// summarizer stays dependency-free of daemon-core internals — the wire value is
+// a stable contract, not an implementation detail.
+const MESH_PROTOCOL_VERSION_V2_WIRE = '2.0';
+
+/**
+ * T7 (B4): summarize mesh-protocol-v2 adoption over the batch of pending events
+ * surfaced in one mesh_status drain. Returns the count carrying a v2 envelope
+ * (protocolVersion '2.0'), the count still on v1 (unstamped), the v2 adoption
+ * ratio, and — for v2 events — a scope breakdown (unicast/broadcast/system).
+ * Returns null when there is nothing to report (empty batch) so the caller can
+ * omit the field. Read-only over the drained array — no store or counter mutation.
+ */
+export function summarizePendingEventProtocolMetrics(
+    pendingEvents: any[],
+): { total: number; v2: number; v1: number; v2Ratio: number; scopes: Record<string, number> } | null {
+    if (!Array.isArray(pendingEvents) || pendingEvents.length === 0) return null;
+    let v2 = 0;
+    const scopes: Record<string, number> = {};
+    for (const event of pendingEvents) {
+        const protocolVersion = typeof event?.protocolVersion === 'string' ? event.protocolVersion : '';
+        if (protocolVersion === MESH_PROTOCOL_VERSION_V2_WIRE) {
+            v2 += 1;
+            const scope = typeof event?.scope === 'string' && event.scope ? event.scope : 'unspecified';
+            scopes[scope] = (scopes[scope] ?? 0) + 1;
+        }
+    }
+    const total = pendingEvents.length;
+    return {
+        total,
+        v2,
+        v1: total - v2,
+        v2Ratio: total > 0 ? Math.round((v2 / total) * 100) / 100 : 0,
+        scopes,
+    };
+}
+
 
 
 // ─── Tool Implementations ───────────────────────
@@ -428,6 +466,39 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     const daemonAffectingStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting !== false);
     const webOnlyStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting === false);
 
+    // T7 (visibility 7-2b): provider-version skew across nodes. Mirrors the
+    // daemonBuilds/staleDaemonBuild aggregate pattern — fold each node's
+    // self-reported providerVersions into a per-provider view, then flag any
+    // provider whose version differs across the nodes that reported it. Purely
+    // observational (never fail-closed): a coordinator uses this to notice that
+    // node A is on claude-cli 1.2.3 while node B is on 1.1.0 before it delegates
+    // work that assumes a uniform toolchain — the exact gap daemonBuilds could not
+    // show (build-commit alone doesn't capture the installed CLI versions).
+    const providerVersionsByProvider: Record<string, Record<string, string[]>> = {};
+    for (const entry of results as any[]) {
+        const versions = entry?.providerVersions;
+        if (!versions || typeof versions !== 'object') continue;
+        const nodeId = typeof entry?.nodeId === 'string' ? entry.nodeId : '';
+        for (const [providerId, rawVersion] of Object.entries(versions as Record<string, unknown>)) {
+            const version = typeof rawVersion === 'string' ? rawVersion.trim() : '';
+            if (!providerId || !version) continue;
+            const byVersion = (providerVersionsByProvider[providerId] ??= {});
+            (byVersion[version] ??= []).push(nodeId);
+        }
+    }
+    const providerVersionSkew: Array<Record<string, unknown>> = [];
+    for (const [providerId, byVersion] of Object.entries(providerVersionsByProvider)) {
+        const distinctVersions = Object.keys(byVersion);
+        if (distinctVersions.length <= 1) continue; // uniform → no skew
+        providerVersionSkew.push({
+            provider: providerId,
+            versions: distinctVersions.map((version) => ({
+                version,
+                nodeIds: byVersion[version].filter(Boolean),
+            })),
+        });
+    }
+
     let stubbedNodeCount = 0;
     let foldedNodesSummary: Record<string, unknown> | undefined;
     const nodesForResponse = compact
@@ -565,6 +636,13 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         ...(webOnlyStaleBuilds.length > 0
             ? {
                 webOnlyStaleBuildNote: 'One or more live daemons are behind workspace HEAD, but only web packages changed in that range. The daemon does NOT need a rebuild/restart — redeploy the web app to reflect those changes. This is informational, not a "fix not live" condition.',
+            }
+            : {}),
+        // T7: provider CLI/ACP version skew across nodes (observational only).
+        ...(providerVersionSkew.length > 0
+            ? {
+                providerVersionSkew,
+                providerVersionSkewWarning: 'One or more provider CLIs/ACP agents are running different versions across mesh nodes (see providerVersionSkew). This is informational, not a dispatch blocker — but a task that assumes a uniform toolchain (e.g. a version-specific flag or output format) may behave differently per node. Consider aligning versions or pinning the task to a node with the expected version.',
             }
             : {}),
         activeWork: activeWorkForResponse.records,
@@ -713,6 +791,20 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
 
         if (pendingEvents.length > 0) {
             response.pendingCoordinatorEvents = pendingEvents;
+        }
+
+        // T7 (B4 visibility): mesh protocol v2 adoption metrics, derived from the
+        // events surfaced in THIS drain. T1 stamps every newly-emitted pending event
+        // with a v2 envelope (protocolVersion '2.0' + scope), so the share of drained
+        // events carrying protocolVersion is the observable adoption signal — a
+        // rollout gate that does NOT depend on daemonBuilds alone. This is a snapshot
+        // of the drained batch (not a durable counter): quarantine/violation counts
+        // and the PHASE-4 synthesis backstop counter are NOT aggregated here — those
+        // counters land with the enforce path (T6, in mesh-reconcile-loop.ts, which
+        // T7 does not touch). Omitted when nothing was drained.
+        const protocolMetrics = summarizePendingEventProtocolMetrics(pendingEvents);
+        if (protocolMetrics) {
+            response.meshProtocolMetrics = protocolMetrics;
         }
     } catch {
         // Non-fatal: pending events are best-effort.

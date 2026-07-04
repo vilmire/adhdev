@@ -340,6 +340,16 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                             machineStatus: node.machineStatus,
                             health: 'unknown',
                             providers: node.providers || [],
+                            // T7: surface self-healed provider versions + build version (from the
+                            // git_status envelope, persisted on the node) so the coordinator/UI can
+                            // spot a provider-version skew across nodes. Additive; omitted when a
+                            // node has never reported them.
+                            ...(node.reportedProviderVersions && typeof node.reportedProviderVersions === 'object'
+                                ? { providerVersions: node.reportedProviderVersions }
+                                : {}),
+                            ...(typeof node.reportedDaemonBuildVersion === 'string' && node.reportedDaemonBuildVersion
+                                ? { daemonBuildVersion: node.reportedDaemonBuildVersion }
+                                : {}),
                             providerPriority,
                             activeSessions: [],
                             activeSessionDetails: [],
