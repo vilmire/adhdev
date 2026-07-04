@@ -38,6 +38,17 @@
  *      pty parser (which only echoes the user's own input) — assistant
  *      answers appeared lost even though they were on disk.
  *
+ *      Schema-drift resilience: the exact field path (20 → 1/8 for the answer,
+ *      19 → 2/3 for the prompt) is empirically verified against real stores, but
+ *      antigravity may move it in a future build. So when the known path yields
+ *      no text, instead of silently dropping the turn we fall back to a UTF-8
+ *      printable-run scan of the payload (recoverMessageText) that recovers the
+ *      answer/prompt even if the field number drifted — while explicitly
+ *      EXCLUDING the reasoning subtree (20 → 3) so internal reasoning is never
+ *      surfaced as the answer. Only when even that finds nothing beyond
+ *      reasoning/metadata is the step dropped, and a content-free DEBUG
+ *      breadcrumb is logged so a real drift is greppable rather than invisible.
+ *
  * This adapter provides:
  *   - Full coverage from a per-session .db (current format) — preferred.
  *   - Full coverage when a brain transcript exists (legacy authoritative source).
@@ -546,6 +557,100 @@ function extractUserPrompt(payload: Buffer): string {
   return extractUserRequestContent(text);
 }
 
+/**
+ * The model step's private reasoning summary lives at field 20 → field 3. We
+ * surface it nowhere, but we DO need it: the schema-drift recovery below scans
+ * the raw payload for a plausible answer run, and the reasoning is itself a long
+ * natural-language run — so we extract it here purely to EXCLUDE it and avoid
+ * accidentally surfacing internal reasoning as the assistant answer.
+ */
+function extractModelReasoning(payload: Buffer): string {
+  const inner = firstLenField(payload, 20);
+  if (!inner) return '';
+  const reasoning = firstLenField(inner, 3);
+  if (!reasoning || !looksLikeText(reasoning)) return '';
+  return reasoning.toString('utf-8').trim();
+}
+
+/** Top-level protobuf field numbers present in a payload (for drift breadcrumbs). */
+function topLevelFieldNumbers(payload: Buffer): number[] {
+  return decodeProtoFields(payload).map((f) => f.field);
+}
+
+const MIN_RECOVERED_MESSAGE_CHARS = 12;
+
+/**
+ * Split a payload into UTF-8 text runs, schema-agnostically. Unlike
+ * extractStringsFromBuffer (ASCII-only, used for legacy .pb), this is UTF-8 aware
+ * so CJK / accented answers survive intact: we decode the whole blob as UTF-8
+ * (invalid byte sequences collapse to U+FFFD) and split on runs of C0/C1 control
+ * chars + the replacement char. Protobuf framing bytes (field tags, varint length
+ * prefixes) are almost always control or invalid-UTF-8, so each natural-language
+ * string field emerges as its own run while binary framing is discarded.
+ */
+function extractUtf8TextRuns(buf: Buffer): string[] {
+  if (buf.length === 0) return [];
+  const decoded = buf.toString('utf-8');
+  // Keep tab/newline/CR (0x09/0x0A/0x0D) inside runs — answers contain newlines.
+  // Everything else in C0 (incl. 0x1A, the field-3 tag that separates reasoning
+  // from the answer), DEL, and the replacement char are run separators.
+  const parts = decoded.split(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\uFFFD]+/);
+  const runs: string[] = [];
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (trimmed.length >= MIN_PRINTABLE_RUN) runs.push(trimmed);
+  }
+  return runs;
+}
+
+/**
+ * Is this run plausibly a user-visible prose message, as opposed to the other
+ * text the payload also carries — internal reasoning (excluded separately),
+ * tool-call JSON arguments, code blobs, file paths, and uuid/session-id
+ * metadata? These filters were tuned against real antigravity stores so that a
+ * blind printable-run scan recovers a genuinely drifted answer while surfacing
+ * NONE of the tool-call / metadata runs that legitimately answer-less steps
+ * carry (verified: zero false recoveries across real conversation dbs).
+ */
+function isPlausibleMessageText(s: string): boolean {
+  if (s.length < MIN_RECOVERED_MESSAGE_CHARS) return false;
+  if (!/[A-Za-zÀ-￿]/.test(s)) return false; // must contain letters (incl. CJK)
+  if (/^(file:\/\/|[A-Za-z]:[\\/]|\/[A-Za-z0-9._-]+\/)/.test(s)) return false; // path/URI
+  // Prose is multi-word: real answers have several spaces; uuids / ids / tokens
+  // have none. This is the single strongest prose-vs-metadata discriminator.
+  if ((s.match(/ /g) ?? []).length < 2) return false;
+  // Reject structured tool-call args / JSON / code blobs. A model tool step
+  // carries its arguments as JSON (e.g. {"Query":...}, {"CommandLine":...});
+  // those must never be surfaced as an assistant answer.
+  if (/[[{]\s*"/.test(s)) return false;
+  const structural = (s.match(/[{}[\]":\\]/g) ?? []).length;
+  if (structural / s.length > 0.12) return false;
+  return true;
+}
+
+/**
+ * Schema-agnostic recovery of a message's text when the known field path yields
+ * nothing (a possible antigravity step_payload schema drift). Scans the payload
+ * for UTF-8 text runs and returns the longest plausible message run, EXCLUDING
+ * any run that matches one of `excludeTexts` (e.g. the reasoning subtree) so we
+ * never surface internal reasoning as the answer. Returns '' when nothing beyond
+ * reasoning/metadata is present — i.e. a legitimately answer-less step.
+ */
+function recoverMessageText(payload: Buffer, excludeTexts: string[]): string {
+  const exclusions = excludeTexts.map((t) => t.trim()).filter(Boolean);
+  let best = '';
+  for (const run of extractUtf8TextRuns(payload)) {
+    const candidate = stripAnswerMarker(run).trim();
+    if (!isPlausibleMessageText(candidate)) continue;
+    // Drop runs that are (or are contained in / contain) an excluded subtree.
+    if (exclusions.some((e) => e === candidate || e.includes(candidate) || candidate.includes(e))) {
+      continue;
+    }
+    if (candidate.length > best.length) best = candidate;
+  }
+  return best;
+}
+
 interface AgyDbStepRow {
   idx: number;
   step_type: number;
@@ -678,8 +783,27 @@ function parseConversationDb(
     const receivedAt = baseTs + messages.length;
 
     if (row.step_type === AGY_STEP_TYPE_USER) {
-      const content = extractUserPrompt(payload);
-      if (!content) continue;
+      let content = extractUserPrompt(payload);
+      if (!content) {
+        // Primary field path (field 19 → 2/3) missed. Recover schema-agnostically
+        // rather than silently drop a user turn: scan the payload for the longest
+        // plausible prompt run (metadata/paths/tokens are filtered out). There is
+        // no reasoning subtree to exclude on the user side.
+        const recovered = extractUserRequestContent(recoverMessageText(payload, []));
+        if (recovered) {
+          content = recovered;
+          LOG.debug(
+            'NativeHistory',
+            `antigravity .db ${path.basename(filePath)} step ${row.idx} (type ${row.step_type}): user prompt absent at field 19; recovered ${content.length} chars via printable-run fallback — possible step_payload schema drift`,
+          );
+        } else {
+          LOG.debug(
+            'NativeHistory',
+            `antigravity .db ${path.basename(filePath)} step ${row.idx} (type ${row.step_type}) dropped: no user prompt text (payload ${payload.length}B, top-level fields [${topLevelFieldNumbers(payload).join(',')}])`,
+          );
+          continue;
+        }
+      }
       const msg: NativeHistoryMessage = {
         ts: new Date(receivedAt).toISOString(),
         receivedAt,
@@ -692,8 +816,34 @@ function parseConversationDb(
       if (normalizedWorkspace) msg.workspace = normalizedWorkspace;
       messages.push(msg);
     } else if (row.step_type === AGY_STEP_TYPE_MODEL) {
-      const content = extractModelAnswer(payload);
-      if (!content) continue; // reasoning-only / tool-only model step — no answer text
+      let content = extractModelAnswer(payload);
+      if (!content) {
+        // The known answer path (field 20 → 1/8) yielded nothing. This is either
+        // (a) a legitimate reasoning-only / tool-planning step — the common case,
+        // which carries no user-visible answer — or (b) antigravity moved the
+        // answer to a different field/subtree (schema drift). Attempt a
+        // schema-agnostic recovery that EXCLUDES the reasoning subtree (field
+        // 20 → 3) so internal reasoning is never surfaced as the answer.
+        const reasoning = extractModelReasoning(payload);
+        const recovered = recoverMessageText(payload, reasoning ? [reasoning] : []);
+        if (recovered) {
+          content = recovered;
+          LOG.debug(
+            'NativeHistory',
+            `antigravity .db ${path.basename(filePath)} step ${row.idx} (type ${row.step_type}): answer absent at field 20; recovered ${content.length} chars via printable-run fallback — possible step_payload schema drift`,
+          );
+        } else {
+          // No answer at the primary path and nothing recoverable beyond
+          // reasoning/metadata → drop. Content-free breadcrumb so a genuine
+          // future drift (answer present but unreadable) is greppable, and the
+          // expected reasoning-only case is distinguishable via reasoningOnly.
+          LOG.debug(
+            'NativeHistory',
+            `antigravity .db ${path.basename(filePath)} step ${row.idx} (type ${row.step_type}) dropped: no answer text (payload ${payload.length}B, top-level fields [${topLevelFieldNumbers(payload).join(',')}], reasoningOnly=${reasoning ? 'yes' : 'no'})`,
+          );
+          continue;
+        }
+      }
       const msg: NativeHistoryMessage = {
         ts: new Date(receivedAt).toISOString(),
         receivedAt,

@@ -107,6 +107,57 @@ function encodeModelStep(opts: { answer?: string; reasoning?: string }): Buffer 
   ]);
 }
 
+/**
+ * Build a step_type 15 (MODEL) payload whose answer has DRIFTED off the known
+ * field path (field 20 → 1/8) to field 20 → 9, with the reasoning still at
+ * field 20 → 3. Simulates a future antigravity step_payload schema drift: the
+ * known extractor returns '' and the reader must fall back to a printable-run
+ * scan to recover the answer without surfacing the reasoning.
+ */
+function encodeDriftedModelStep(answer: string, reasoning: string): Buffer {
+  const inner = Buffer.concat([
+    strField(3, reasoning),   // reasoning summary — must NOT be surfaced
+    strField(9, answer),      // answer moved off the known 20→1/8 path
+  ]);
+  return Buffer.concat([
+    varField(1, 15),
+    varField(4, 3),
+    lenField(20, inner),
+  ]);
+}
+
+/**
+ * Build a step_type 14 (USER) payload whose prompt has DRIFTED off the known
+ * field path (field 19 → 2/3) to field 19 → 7. Simulates a schema drift on the
+ * user side; the reader must recover the prompt via the printable-run fallback.
+ */
+function encodeDriftedUserStep(prompt: string): Buffer {
+  const inner = strField(7, prompt);
+  return Buffer.concat([
+    varField(1, 14),
+    varField(4, 3),
+    lenField(19, inner),
+  ]);
+}
+
+/**
+ * Build a step_type 15 (MODEL) payload that is really a tool-call step: it has
+ * reasoning (field 20 → 3) and JSON tool arguments (field 20 → 7), but NO answer
+ * at field 20 → 1/8. Real antigravity model tool steps look like this. The
+ * reader must drop it — the fallback must NOT surface the JSON args as an answer.
+ */
+function encodeToolArgModelStep(reasoning: string, toolArgsJson: string): Buffer {
+  const inner = Buffer.concat([
+    strField(3, reasoning),
+    strField(7, toolArgsJson),
+  ]);
+  return Buffer.concat([
+    varField(1, 15),
+    varField(4, 3),
+    lenField(20, inner),
+  ]);
+}
+
 /** Build a non-message step (e.g. a tool call) that the reader must ignore. */
 function encodeToolStep(): Buffer {
   return Buffer.concat([
@@ -611,6 +662,107 @@ describe('antigravity-cli-transcript — readSession (.db SQLite)', () => {
 
     vi.doUnmock('../../../src/system/load-better-sqlite3.js');
     vi.resetModules();
+  });
+
+  it('recovers an assistant answer when the field path drifts off 20→1/8 (schema-drift fallback)', async () => {
+    // Field 20 → 1/8 is absent; the answer lives at field 20 → 9 instead. The
+    // known extractor returns '' — the reader must NOT silently drop the turn,
+    // but recover the answer via the printable-run fallback while EXCLUDING the
+    // reasoning subtree (field 20 → 3) so reasoning is never surfaced.
+    const answer =
+      'The migration completed successfully across all twelve workspaces, and every submodule pointer was fast-forwarded onto the new main branch without any conflicts.';
+    const reasoning =
+      '**Prioritizing Tool Usage** I am considering which migration steps to run first and how to sequence the submodule fast-forwards safely.';
+    const dbPath = await makeConversationDb(SESSION_D, [
+      { step_type: 14, payload: encodeUserStep('Run the migration') },
+      { step_type: 15, payload: encodeDriftedModelStep(answer, reasoning) },
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_D);
+
+    expect(result).not.toBeNull();
+    const messages = result!.messages;
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    // Recovered (not dropped) and NOT '' — the whole point of the forward-fix.
+    expect(messages[1].content).not.toBe('');
+    expect(messages[1].content).toContain('migration completed successfully');
+    // The reasoning summary must never be surfaced as the answer.
+    expect(messages[1].content).not.toContain('Prioritizing Tool Usage');
+  });
+
+  it('recovers a user prompt when the field path drifts off 19→2/3 (schema-drift fallback)', async () => {
+    const prompt =
+      'Please explain in detail how the SQLite WAL journal mode interacts with a read-only reader that opens the database while a writer holds the checkpoint lock.';
+    const dbPath = await makeConversationDb(SESSION_D, [
+      { step_type: 14, payload: encodeDriftedUserStep(prompt) },
+      { step_type: 15, payload: encodeModelStep({ answer: 'In WAL mode readers do not block the writer.' }) },
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_D);
+
+    expect(result).not.toBeNull();
+    const messages = result!.messages;
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(messages[0].content).not.toBe('');
+    expect(messages[0].content).toContain('WAL journal mode interacts');
+  });
+
+  it('still drops a reasoning-only model step under the fallback (never surfaces reasoning)', async () => {
+    // A legitimately answer-less step: only reasoning (field 20 → 3), no answer
+    // anywhere. The fallback must find nothing beyond the excluded reasoning and
+    // drop the step — preserving the reasoning-skip contract.
+    const dbPath = await makeConversationDb(SESSION_D, [
+      { step_type: 14, payload: encodeUserStep('do it') },
+      {
+        step_type: 15,
+        payload: encodeModelStep({
+          reasoning: '**Prioritizing Tool Usage** Deciding which command to run before answering.',
+        }),
+      },
+      { step_type: 15, payload: encodeModelStep({ answer: 'All done.' }) },
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_D);
+
+    expect(result).not.toBeNull();
+    const messages = result!.messages;
+    // user + the ONE model step that actually has an answer; reasoning-only dropped.
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(messages[1].content).toBe('All done.');
+    expect(messages.some((m) => m.content.includes('Prioritizing Tool Usage'))).toBe(false);
+  });
+
+  it('never surfaces tool-call JSON arguments as an assistant answer (fallback stays prose-only)', async () => {
+    // Real antigravity model tool steps carry reasoning + JSON tool args but no
+    // answer. A naive printable-run fallback would surface the JSON as a fake
+    // answer — a regression worse than dropping. It must be filtered out.
+    const dbPath = await makeConversationDb(SESSION_D, [
+      { step_type: 14, payload: encodeUserStep('search the code') },
+      {
+        step_type: 15,
+        payload: encodeToolArgModelStep(
+          '**Prioritizing Tool Usage** I will grep the repository for the PTY adapter.',
+          '{"Query":"PTY.*adapter","SearchPath":"D:\\\\gh\\\\adhdev-cloud","IsRegex":true,"MatchPerLine":true}',
+        ),
+      },
+      { step_type: 15, payload: encodeModelStep({ answer: 'Found it in daemon-core.' }) },
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_D);
+
+    expect(result).not.toBeNull();
+    const messages = result!.messages;
+    // Only the user prompt + the real final answer; the tool-arg step is dropped.
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(messages[1].content).toBe('Found it in daemon-core.');
+    const combined = messages.map((m) => m.content).join('\n');
+    expect(combined).not.toContain('"Query"');
+    expect(combined).not.toContain('SearchPath');
+    expect(combined).not.toContain('Prioritizing Tool Usage');
   });
 
   it('returns null for a .db without a steps table', async () => {
