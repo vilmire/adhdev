@@ -47,6 +47,13 @@ type Tone = 'rose' | 'sky' | 'amber' | 'emerald' | 'muted' | 'default'
 /** How many rows each overview card shows before the "+N more" toggle. */
 const RECENT_LIMIT = 5
 
+/**
+ * Hard cap on how many recent queue rows the expanded view will ever render.
+ * The queue can hold thousands of historical tasks; the "+N more" toggle used
+ * to dump every one into the DOM. Bound the list before it reaches the UI.
+ */
+const RECENT_QUEUE_MAX = 40
+
 type AsyncRefineJob = {
     jobId: string
     status: 'accepted' | 'running' | 'completed' | 'failed'
@@ -140,10 +147,13 @@ function queueTaskSortRank(status: RepoMeshQueueTask['status']): number {
     switch (status) {
         case 'assigned': return 0
         case 'pending': return 1
-        case 'failed': return 2
-        case 'completed': return 3
-        case 'cancelled': return 4
-        default: return 5
+        // All historical statuses collapse to one rank so they interleave purely
+        // by updatedAt desc (the tiebreaker) — a days-old failed task no longer
+        // unconditionally pins above newer completed/cancelled rows.
+        case 'completed':
+        case 'failed':
+        case 'cancelled': return 2
+        default: return 3
     }
 }
 
@@ -836,13 +846,15 @@ function QueueCard({ meshTheme, queueSummary, tasks, onSelect }: {
     tasks: RepoMeshQueueTask[]
     onSelect: (task: RepoMeshQueueTask) => void
 }) {
-    // Live work (assigned/pending) first, then newest-updated history.
+    // Live work (assigned/pending) first, then newest-updated history. Bound the
+    // list to RECENT_QUEUE_MAX so both the "+N more" count and the expanded view
+    // stay capped — the queue can hold thousands of historical rows.
     const recent = useMemo(() => {
         return [...tasks].sort((a, b) => {
             const rank = queueTaskSortRank(a.status) - queueTaskSortRank(b.status)
             if (rank !== 0) return rank
             return (b.updatedAt || '').localeCompare(a.updatedAt || '')
-        })
+        }).slice(0, RECENT_QUEUE_MAX)
     }, [tasks])
     const list = useRecentList(recent)
 
