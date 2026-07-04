@@ -19,7 +19,7 @@ import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalD
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { queuePendingMeshCoordinatorEvent, retractPendingDispatchBlockedEvent } from './mesh-events-pending.js';
-import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
+import { isWorktreeBootstrapStaleRunning, shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
 import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 
@@ -318,13 +318,32 @@ export function tryAssignQueueTask(
     // 3-form normalizer the defer guard uses), never a raw === — canon-identity regression guard.
     // Conservative: any non-'running' status (idle/complete/failed/absent/unknown) does NOT gate,
     // so a base node and a fully-bootstrapped worktree keep prior behavior exactly.
-    if ((node as { worktreeBootstrap?: { status?: string } } | undefined)?.worktreeBootstrap?.status === 'running') {
-        // Fix (3) safety net: a 'running' bootstrap that is far older than any real bootstrap AND
-        // whose worktree is git-clean is almost certainly one whose terminal-state stamp never
-        // reached this daemon — downgrade it so a dispatch is allowed instead of stranded forever.
-        // The conservative threshold + git-clean co-requirement prevents downgrading a genuinely
-        // in-progress bootstrap (which would re-introduce the half-built-worktree dispatch).
-        if (isWorktreeBootstrapStaleRunning(node)) {
+    // COMPLETION-PROPAGATION F7 (C2 SSOT): resolve the node's bootstrap status from the router's
+    // synchronous inline cache FIRST — the authoritative source markWorktreeBootstrapTerminalState
+    // stamps synchronously — falling back to the merged claim view only when the inline node carries
+    // no bootstrap status. getMeshWithCache takes a config-REGISTERED node verbatim from local
+    // config, whose bootstrap status lags the inline stamp (the detached async persist chain), so a
+    // config-registered worktree node could read a stale 'running' here and defer a claim whose
+    // bootstrap is already complete. Reading the inline node removes that stale-'running' defer,
+    // symmetric with the remote dispatch guard (cli-agent.ts F6). Conservative: only override with
+    // the inline node when it actually carries a status (an incomplete inline entry never masks a
+    // genuine config 'running').
+    const inlineBootstrapNode = (() => {
+        try {
+            const inlineMesh = components.router?.getCachedInlineMesh?.(meshId);
+            const inlineNode = Array.isArray(inlineMesh?.nodes)
+                ? inlineMesh.nodes.find((n: any) => meshNodeIdMatches(n, nodeId))
+                : undefined;
+            return readNonEmptyString(inlineNode?.worktreeBootstrap?.status) ? inlineNode : undefined;
+        } catch { return undefined; }
+    })();
+    const bootstrapGateNode = inlineBootstrapNode ?? node;
+    if ((bootstrapGateNode as { worktreeBootstrap?: { status?: string } } | undefined)?.worktreeBootstrap?.status === 'running') {
+        // Fix (3) safety net + F7: shouldDeferDispatchForBootstrap returns false when the 'running'
+        // state is stale (older than the backstop AND git-clean) — treat that as silently complete
+        // and allow the claim; otherwise defer (leave the task pending) so the claim re-fires once
+        // bootstrap reaches a terminal state and never dispatches into a half-built worktree.
+        if (!shouldDeferDispatchForBootstrap(bootstrapGateNode as any)) {
             LOG.warn('MeshQueue', `Worktree node ${nodeId} (${sessionId}) bootstrap stuck 'running' beyond the stale backstop and its worktree is git-clean — treating bootstrap as silently complete and allowing the claim (the terminal-state stamp likely never reached this daemon's mesh view)`);
         } else {
             LOG.info('MeshQueue', `Gating queue claim for worktree node ${nodeId} (${sessionId}): worktree bootstrap still running — task left pending; claim re-fires once bootstrap reaches a terminal state (guards against dispatching into a half-built worktree → empty session)`);
@@ -521,9 +540,17 @@ export function tryAssignQueueTask(
                 launchedByCoordinator: true,
                 autoApprove: resolveDelegatedWorkerAutoApprove(mesh?.policy, node?.policy),
                 ...(localDaemonId ? { meshCoordinatorDaemonId: localDaemonId } : {}),
-                // (3) Stamp the originating coordinator session for session-anchored routing
-                // of this co-located worker's completion. Absent → daemon-level fallback.
-                ...(localSourceCoordinatorSessionId ? { meshCoordinatorSessionId: localSourceCoordinatorSessionId } : {}),
+                // COMPLETION-PROPAGATION F5: (re)stamp the coordinator SESSION anchor from THIS
+                // task's sourceCoordinatorSessionId with PRIORITY — a manually-launched (or reused)
+                // session may already carry a stale anchor from mesh_launch_session or a prior task,
+                // and a stale session anchor makes the completion unicast to the wrong/absent
+                // coordinator session (targetCoordinatorSessionId), stranding it. When this task
+                // carries a source, overwrite; when it carries NONE, CLEAR the anchor to undefined
+                // (updateSettings merges, so an explicit undefined overrides) so the completion
+                // cannot be misrouted by a stale unicast anchor and instead BROADCASTS — the real
+                // coordinator (which drains its own pending queue) then picks it up. Daemon-level
+                // routing (meshCoordinatorDaemonId above) is unaffected.
+                meshCoordinatorSessionId: localSourceCoordinatorSessionId || undefined,
             });
         }
     } catch { /* best-effort — dispatch still proceeds */ }

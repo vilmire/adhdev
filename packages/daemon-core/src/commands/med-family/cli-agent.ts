@@ -114,32 +114,35 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
         if (isSendChat && dispatchNodeId && dispatchMeshId) {
             try {
                 const { getMesh } = await import('../../config/mesh-config.js');
-                const meshObj = getMesh(dispatchMeshId) ?? ctx.getCachedInlineMesh(dispatchMeshId);
+                // COMPLETION-PROPAGATION F6 (C1 SSOT): read the router's synchronous inline mesh
+                // cache FIRST, falling back to getMesh only when the inline view has nothing. The
+                // inline cache is the authoritative bootstrap-status source — markWorktreeBootstrapTerminalState
+                // stamps 'complete'/'failed' into it SYNCHRONOUSLY, then persists to local config
+                // (what getMesh reads) via a DETACHED async import chain that lags. Reading getMesh
+                // first therefore observed a stale 'running' and deferred a dispatch whose worktree
+                // was already bootstrapped — the stale-'running' defer this eliminates. Inline-first
+                // makes the freshest single source of truth win for both the running and terminal states.
+                const meshObj = ctx.getCachedInlineMesh(dispatchMeshId) ?? getMesh(dispatchMeshId);
                 const nodeObj = Array.isArray(meshObj?.nodes)
                     ? meshObj.nodes.find((n: any) => meshNodeIdMatches(n, dispatchNodeId))
                     : undefined;
-                const bootstrapStatus = readStringValue(nodeObj?.worktreeBootstrap?.status);
-                if (bootstrapStatus === 'running') {
-                    // Fix (3) safety net: a 'running' bootstrap far older than any real bootstrap whose
-                    // worktree is git-clean is almost certainly one whose terminal-state stamp never
-                    // reached this daemon — fall through and dispatch instead of deferring forever. The
-                    // conservative threshold + git-clean co-requirement keep a genuinely in-progress
-                    // bootstrap (which must still defer) gated.
-                    const { isWorktreeBootstrapStaleRunning } = await import('../../mesh/worktree-bootstrap-config.js');
-                    if (!isWorktreeBootstrapStaleRunning(nodeObj as any)) {
-                        return {
-                            success: false,
-                            recoverable: true,
-                            dispatched: false,
-                            code: 'mesh_node_bootstrap_pending',
-                            reason: 'bootstrap_still_running',
-                            nodeId: dispatchNodeId,
-                            meshId: dispatchMeshId,
-                            ...(readStringValue(meshCtx?.taskId) ? { taskId: readStringValue(meshCtx?.taskId) } : {}),
-                            error: `Node '${dispatchNodeId}' worktree bootstrap is still running; a task injected now would land in the session input buffer before the provider is ready to consume it and be silently lost. Dispatch deferred.`,
-                            nextAction: 'Wait for the worktree_bootstrap_complete event (or poll mesh_status until the node session is ready), then re-send the task with mesh_send_task. Alternatively use mesh_enqueue_task so the queue auto-assigns it once a ready session is available.',
-                        };
-                    }
+                // COMPLETION-PROPAGATION F7 (C2): the single shared consume-ready/bootstrap-pending
+                // defer predicate (honors the stale-'running' git-clean backstop internally), reused
+                // by the local queue-claim gate too so remote and local dispatch agree on when to defer.
+                const { shouldDeferDispatchForBootstrap } = await import('../../mesh/worktree-bootstrap-config.js');
+                if (shouldDeferDispatchForBootstrap(nodeObj as any)) {
+                    return {
+                        success: false,
+                        recoverable: true,
+                        dispatched: false,
+                        code: 'mesh_node_bootstrap_pending',
+                        reason: 'bootstrap_still_running',
+                        nodeId: dispatchNodeId,
+                        meshId: dispatchMeshId,
+                        ...(readStringValue(meshCtx?.taskId) ? { taskId: readStringValue(meshCtx?.taskId) } : {}),
+                        error: `Node '${dispatchNodeId}' worktree bootstrap is still running; a task injected now would land in the session input buffer before the provider is ready to consume it and be silently lost. Dispatch deferred.`,
+                        nextAction: 'Wait for the worktree_bootstrap_complete event (or poll mesh_status until the node session is ready), then re-send the task with mesh_send_task. Alternatively use mesh_enqueue_task so the queue auto-assigns it once a ready session is available.',
+                    };
                 }
             } catch { /* best-effort — if the bootstrap probe fails, fall through and dispatch */ }
         }

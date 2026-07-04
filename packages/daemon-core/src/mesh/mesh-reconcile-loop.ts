@@ -59,6 +59,7 @@ import { readNonEmptyString, readMeshCompletionSummary, buildMeshSystemMessage }
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { expandDaemonIdForms, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { getActiveDirectDispatches, getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-work-queue.js';
+import { isSessionActivelyGenerating } from './mesh-queue-assignment.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
 import { findTerminalLedgerEvidenceForTask, reconcileDirectDispatchCompletionFromTranscript } from './mesh-events-stale.js';
@@ -802,6 +803,16 @@ function drainAndInjectIntoTargets(
 // lost to a daemon restart between claim and confirm).
 const ASSIGNED_STRANDED_DEADLINE_MS = 5 * 60_000;
 
+// COMPLETION-PROPAGATION F3: how long a row may sit 'assigned' with a CONFIRMED delivery
+// (delivered/acked) but no terminal completion before the watchdog reclaims it as a
+// delivered-but-lost completion. Distinct from — and deliberately larger than —
+// ASSIGNED_STRANDED_DEADLINE_MS: a confirmed-delivered dispatch was genuinely handed to a
+// worker, so the deadline must comfortably exceed any realistic single worker turn (a large
+// generation) before we treat the missing completion as lost and re-open the task. Paired with
+// the non-generating + no-terminal-ledger guards below so a worker still mid-turn is never
+// reclaimed out from under itself.
+const DELIVERED_NO_TURN_DEADLINE_MS = 15 * 60_000;
+
 // PHASE 2.5 — assigned-stranded dispatch watchdog (Bug B). claimNextTask atomically
 // flips a row to 'assigned' BEFORE the fire-and-forget dispatch runs. If that dispatch
 // neither rejects (→ no .catch requeue) nor is confirmed delivered — a relay that hangs
@@ -814,7 +825,7 @@ const ASSIGNED_STRANDED_DEADLINE_MS = 5 * 60_000;
 // never reclaimed here. And the deadline is generous so a slow-but-live dispatch still in
 // its normal confirm window is never reclaimed early. Reclaimed rows return to 'pending'
 // with ownership cleared, so the PHASE 3 trigger below re-dispatches them this same tick.
-function recoverStrandedAssignedDispatches(meshId: string, store: MeshRuntimeStore): void {
+function recoverStrandedAssignedDispatches(components: DaemonComponents, meshId: string, store: MeshRuntimeStore): void {
     const assigned = getQueue(meshId, { status: ['assigned'] });
     if (!assigned.length) return;
     const nowMs = Date.now();
@@ -839,7 +850,37 @@ function recoverStrandedAssignedDispatches(meshId: string, store: MeshRuntimeSto
             }, terminal.kind);
             continue;
         }
-        if (store.taskHasConfirmedDelivery(meshId, row.id)) continue;          // dispatched → PHASE 4's job
+        if (store.taskHasConfirmedDelivery(meshId, row.id)) {
+            // COMPLETION-PROPAGATION F3 (delivered-but-lost completion): the dispatch WAS
+            // confirmed handed to a worker (delivered/acked) but no terminal completion ever
+            // landed and none is in the ledger (checked just above). Normally this is PHASE 4's
+            // job, but PHASE 4 only covers direct-dispatch rows / a live re-read; a claim-path
+            // queue row whose completion event was lost (the manual-launch flip-miss signature)
+            // sits 'assigned' forever. Reclaim it — but ONLY once the session is idle/dead (its
+            // live local instance is not actively generating; a remote/absent instance reports
+            // non-generating too) AND a generous delivered-no-turn deadline has elapsed, so a
+            // worker genuinely mid-turn is never torn off its task. reclaimStrandedAssignedTask
+            // ends the single-flight window (F4), so a subsequent re-dispatch/requeue is unblocked.
+            if (nowMs - dispatchedAtMs < DELIVERED_NO_TURN_DEADLINE_MS) continue;   // still within turn budget
+            if (row.assignedSessionId && isSessionActivelyGenerating(components, row.assignedSessionId)) continue;  // worker still working
+            const reclaimedLost = reclaimStrandedAssignedTask(meshId, row.id, {
+                reason: 'delivered_no_turn_deadline',
+                ageMs: nowMs - dispatchedAtMs,
+            });
+            if (reclaimedLost) {
+                LOG.warn('MeshReconcile', `Reclaimed delivered-but-lost task ${row.id} on mesh ${meshId} `
+                    + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}, delivered but no `
+                    + `completion in ${Math.round((nowMs - dispatchedAtMs) / 1000)}s, session non-generating → ${reclaimedLost.status})`);
+                traceMeshEventDrop('assigned_stranded_delivered_no_turn', {
+                    taskId: row.id,
+                    sessionId: row.assignedSessionId,
+                    nodeId: row.assignedNodeId,
+                    meshId,
+                    event: 'agent:generating_completed',
+                }, `delivered ${Math.round((nowMs - dispatchedAtMs) / 1000)}s → ${reclaimedLost.status}`);
+            }
+            continue;
+        }
         const reclaimed = reclaimStrandedAssignedTask(meshId, row.id, {
             reason: 'assigned_stranded_dispatch_unconfirmed',
             ageMs: nowMs - dispatchedAtMs,
@@ -914,7 +955,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
-                recoverStrandedAssignedDispatches(mesh.id, store);
+                recoverStrandedAssignedDispatches(components, mesh.id, store);
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Assigned-stranded watchdog failed for mesh ${mesh.id}: ${e?.message || e}`);
             }

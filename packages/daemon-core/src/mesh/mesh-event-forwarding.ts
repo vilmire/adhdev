@@ -18,10 +18,12 @@ import { resolveDelegatedWorkerAutoApprove } from '../repo-mesh-types.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
+    findTerminalLedgerEvidenceForTask,
     hasDispatchAfterTerminal,
     hasUnterminalDirectDispatchLedgerEntry,
     buildNoProgressCompletionReconciliation,
 } from './mesh-events-stale.js';
+import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import {
     buildMeshSystemMessage,
     readNonEmptyString,
@@ -833,6 +835,40 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             updateDirectDispatchStatus(args.meshId, sessionId, outcome, eventTaskId);
         }
         markSessionDeliveriesTerminal(args.meshId, sessionId, outcome);
+        // COMPLETION-PROPAGATION F2 (double safety net): the flip found no matching assigned
+        // row (task === null) but the completion echoed a taskId AND a queue row for that id is
+        // STILL 'assigned'. This is the stranded flip-miss case F1's equivalence match is meant
+        // to reconcile — NOT a direct dispatch (which legitimately has no queue row and is
+        // covered by updateDirectDispatchStatus above). Record a terminal ledger entry keyed by
+        // the echoed taskId and release the single-flight lock, so the reconcile PHASE 2.5
+        // terminal-ledger branch (findTerminalLedgerEvidenceForTask by row.id) has a taskId-based
+        // path to flip the stranded row terminal even if the direct SQL flip could not resolve
+        // it, and a subsequent reclaim/requeue is not blocked by a stale in-flight mark. Gated
+        // to GENUINE terminals (a weak / false-idle completion is left for the transcript
+        // reconcile, matching the leaveDirectDispatchActive philosophy above).
+        const genuineTerminal = outcome === 'failed' || !isWeakCompletionEvidence(args.metadataEvent);
+        if (!task && eventTaskId && genuineTerminal) {
+            try {
+                const strandedRow = MeshRuntimeStore.getInstance().findQueueEntryById(args.meshId, eventTaskId);
+                if (strandedRow && strandedRow.status === 'assigned') {
+                    endTaskDispatchInFlight(args.meshId, eventTaskId);
+                    if (!findTerminalLedgerEvidenceForTask({ meshId: args.meshId, taskId: eventTaskId })) {
+                        appendLedgerEntry(args.meshId, {
+                            kind: outcome === 'completed' ? 'task_completed' : 'task_failed',
+                            sessionId,
+                            nodeId: readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
+                            providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+                            payload: {
+                                taskId: eventTaskId,
+                                event: args.event,
+                                source: 'flip_miss_safety_net',
+                                finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+                            },
+                        });
+                    }
+                }
+            } catch { /* best-effort safety net — never fail the completion path */ }
+        }
         setImmediate(() => cleanupTerminalDirectDispatches());
         return task ? { id: task.id } : null;
     }

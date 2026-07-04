@@ -154,6 +154,25 @@ export function isWorktreeBootstrapStaleRunning(
     }
 }
 
+/**
+ * COMPLETION-PROPAGATION F7 (C2): the single shared consume-ready / bootstrap-pending defer
+ * predicate. A task must NOT be injected into a worktree node whose bootstrap is still 'running'
+ * — the provider is not yet ready to consume input, so the inject lands in the input buffer and
+ * is silently swallowed (empty session). Both the remote dispatch guard (the router agent_command
+ * handler) and the local queue-claim gate (tryAssignQueueTask) route through THIS predicate so
+ * they agree on exactly when to defer. Returns true = defer. The stale-'running' backstop
+ * (isWorktreeBootstrapStaleRunning) is honored here too: a 'running' state far older than any real
+ * bootstrap whose worktree is git-clean is treated as silently complete (do NOT defer), so a node
+ * whose terminal stamp never reached this daemon is not stranded forever.
+ */
+export function shouldDeferDispatchForBootstrap(
+    node: { worktreeBootstrap?: { status?: string; startedAt?: string; updatedAt?: string; completedAt?: string }; workspace?: string } | undefined,
+    nowMs: number = Date.now(),
+): boolean {
+    if (node?.worktreeBootstrap?.status !== 'running') return false;
+    return !isWorktreeBootstrapStaleRunning(node, nowMs);
+}
+
 export interface WorktreeBootstrapConfigLoadResult {
     config?: RepoMeshWorktreeBootstrapConfig;
     source: string;

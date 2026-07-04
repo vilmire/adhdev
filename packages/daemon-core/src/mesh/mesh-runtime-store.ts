@@ -883,25 +883,39 @@ export class MeshRuntimeStore {
     ): MeshWorkQueueEntry | null {
         this.ensureLegacyQueueMigrated(meshId);
 
-        // 1. Exact taskId match — robust against clock skew and stale rows.
+        // WRITE/READ PREDICATE SYMMETRY (COMPLETION-PROPAGATION F1): the claim path writes
+        // assigned_session_id RAW (claimNextTask), and the sibling gates that decide whether a
+        // session already holds work (sessionHasActiveAssignment) and which pending row a
+        // session may claim (targetMatches) compare it through sessionIdsEquivalent — the
+        // canonical single-form predicate that TRIMS both sides. A raw SQL `assigned_session_id
+        // = ?` here is asymmetric with that write/sibling predicate: a completion whose
+        // resolveEventSessionId-reinterpreted sessionId is equivalent-but-not-byte-identical to
+        // the stored column (e.g. a whitespace/serialization skew from a manually-launched
+        // session) silently fetched zero rows and stranded the finished task as `assigned`
+        // forever (the mesh-work-queue :1251 "N assigned row(s) exist" warning is that exact
+        // signature). Fetch every `assigned` row for the mesh and filter session membership in
+        // JS with sessionIdsEquivalent, mirroring the node-id IN(...)+JS-revalidate pattern the
+        // claim SELECT uses (claimNextTask :720-736 / targetMatches :797-811).
+        const allRows = this.db.prepare(
+            `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND status = 'assigned'`
+        ).all(meshId) as Array<{ payload: string }>;
+        const sessionEntries = allRows
+            .map(r => { try { return JSON.parse(r.payload) as MeshWorkQueueEntry; } catch { return null; } })
+            .filter((e): e is MeshWorkQueueEntry => e !== null)
+            .filter(e => sessionIdsEquivalent(e.assignedSessionId, sessionId));
+
+        // 1. Exact taskId match — robust against clock skew and stale rows. Scoped to the
+        // session-equivalent set (as the raw `AND assigned_session_id = ? AND id = ?` was),
+        // now via the trimming equivalence predicate.
         if (taskId) {
-            const row = this.db.prepare(
-                `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND assigned_session_id = ? AND status = 'assigned' AND id = ? LIMIT 1`
-            ).get(meshId, sessionId, taskId) as { payload: string } | undefined;
-            if (row) return JSON.parse(row.payload) as MeshWorkQueueEntry;
+            const byId = sessionEntries.find(e => e.id === taskId);
+            if (byId) return byId;
             // Fall through to session-based matching if the id didn't line up
             // (e.g. event carried a stale/foreign taskId).
         }
 
         // 2. Session-based match WITHOUT the mutable updated_at filter.
-        const rows = this.db.prepare(
-            `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND assigned_session_id = ? AND status = 'assigned'`
-        ).all(meshId, sessionId) as Array<{ payload: string }>;
-        if (rows.length === 0) return null;
-
-        const entries = rows
-            .map(r => { try { return JSON.parse(r.payload) as MeshWorkQueueEntry; } catch { return null; } })
-            .filter((e): e is MeshWorkQueueEntry => e !== null);
+        const entries = sessionEntries;
         if (entries.length === 0) return null;
         if (entries.length === 1) return entries[0];
 
