@@ -2963,7 +2963,13 @@ function buildMeshForwardPayloadFromPendingEvent(event) {
     ...readString(metadataEvent.reason) ? { reason: readString(metadataEvent.reason) } : {},
     ...readString(metadataEvent.stopReason) ? { stopReason: readString(metadataEvent.stopReason) } : {},
     ...readString(metadataEvent.cleanupReason) ? { cleanupReason: readString(metadataEvent.cleanupReason) } : {},
-    ...readString(metadataEvent.source) ? { source: readString(metadataEvent.source) } : {}
+    ...readString(metadataEvent.source) ? { source: readString(metadataEvent.source) } : {},
+    // T4 (B3b): carry the v2 envelope across the P2P relay so a remote worker's
+    // completion pulled by an MCP/LLM coordinator re-forwards with its ORIGINAL
+    // eventId (idempotency) and unicast routing intact, matching the reconcile-loop
+    // relay path (buildForwardPayloadFromPending). Spread LAST so the authoritative
+    // envelope always wins. Empty for a v1 event (version-skew safe).
+    ...(0, import_daemon_core3.serializeV2EnvelopeToWire)(event)
   };
 }
 async function drainCoordinatorPendingEvents(ctx, opts) {
@@ -3128,6 +3134,28 @@ function resolveRefineConfigNode(ctx, nodeId) {
 }
 
 // src/tools/mesh-tools-status.ts
+var MESH_PROTOCOL_VERSION_V2_WIRE = "2.0";
+function summarizePendingEventProtocolMetrics(pendingEvents) {
+  if (!Array.isArray(pendingEvents) || pendingEvents.length === 0) return null;
+  let v2 = 0;
+  const scopes = {};
+  for (const event of pendingEvents) {
+    const protocolVersion = typeof event?.protocolVersion === "string" ? event.protocolVersion : "";
+    if (protocolVersion === MESH_PROTOCOL_VERSION_V2_WIRE) {
+      v2 += 1;
+      const scope = typeof event?.scope === "string" && event.scope ? event.scope : "unspecified";
+      scopes[scope] = (scopes[scope] ?? 0) + 1;
+    }
+  }
+  const total = pendingEvents.length;
+  return {
+    total,
+    v2,
+    v1: total - v2,
+    v2Ratio: total > 0 ? Math.round(v2 / total * 100) / 100 : 0,
+    scopes
+  };
+}
 async function meshStatus(ctx, args = {}) {
   const rateResult = (0, import_daemon_core4.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_status" });
   const compact = args.verbose === true ? false : args.compact ?? true;
@@ -3357,6 +3385,30 @@ async function meshStatus(ctx, args = {}) {
   }
   const daemonAffectingStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting !== false);
   const webOnlyStaleBuilds = staleDaemonBuilds.filter((b) => b.isDaemonAffecting === false);
+  const providerVersionsByProvider = {};
+  for (const entry of results) {
+    const versions = entry?.providerVersions;
+    if (!versions || typeof versions !== "object") continue;
+    const nodeId = typeof entry?.nodeId === "string" ? entry.nodeId : "";
+    for (const [providerId, rawVersion] of Object.entries(versions)) {
+      const version = typeof rawVersion === "string" ? rawVersion.trim() : "";
+      if (!providerId || !version) continue;
+      const byVersion = providerVersionsByProvider[providerId] ??= {};
+      (byVersion[version] ??= []).push(nodeId);
+    }
+  }
+  const providerVersionSkew = [];
+  for (const [providerId, byVersion] of Object.entries(providerVersionsByProvider)) {
+    const distinctVersions = Object.keys(byVersion);
+    if (distinctVersions.length <= 1) continue;
+    providerVersionSkew.push({
+      provider: providerId,
+      versions: distinctVersions.map((version) => ({
+        version,
+        nodeIds: byVersion[version].filter(Boolean)
+      }))
+    });
+  }
   let stubbedNodeCount = 0;
   let foldedNodesSummary;
   const nodesForResponse = compact ? (() => {
@@ -3465,6 +3517,11 @@ async function meshStatus(ctx, args = {}) {
     ...webOnlyStaleBuilds.length > 0 ? {
       webOnlyStaleBuildNote: 'One or more live daemons are behind workspace HEAD, but only web packages changed in that range. The daemon does NOT need a rebuild/restart \u2014 redeploy the web app to reflect those changes. This is informational, not a "fix not live" condition.'
     } : {},
+    // T7: provider CLI/ACP version skew across nodes (observational only).
+    ...providerVersionSkew.length > 0 ? {
+      providerVersionSkew,
+      providerVersionSkewWarning: "One or more provider CLIs/ACP agents are running different versions across mesh nodes (see providerVersionSkew). This is informational, not a dispatch blocker \u2014 but a task that assumes a uniform toolchain (e.g. a version-specific flag or output format) may behave differently per node. Consider aligning versions or pinning the task to a node with the expected version."
+    } : {},
     activeWork: activeWorkForResponse.records,
     ...compact && activeWorkForResponse.omitted > 0 ? { activeWorkRowsOmitted: activeWorkForResponse.omitted } : {},
     ...compact ? { activeWorkHint: `Compact activeWork rows carry a short taskTitle + dispatch scalars only; full task prompt/summary text is omitted \u2014 use mesh_task_history or mesh_status verbose=true. First ${COMPACT_MAX_ACTIVE_WORK_ROWS} rows serialized.` } : {},
@@ -3567,6 +3624,10 @@ async function meshStatus(ctx, args = {}) {
     }
     if (pendingEvents.length > 0) {
       response.pendingCoordinatorEvents = pendingEvents;
+    }
+    const protocolMetrics = summarizePendingEventProtocolMetrics(pendingEvents);
+    if (protocolMetrics) {
+      response.meshProtocolMetrics = protocolMetrics;
     }
   } catch {
   }
