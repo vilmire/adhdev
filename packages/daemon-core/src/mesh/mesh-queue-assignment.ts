@@ -1094,6 +1094,57 @@ export function __orderEligibleNodesForTests(
     return orderEligibleNodes(meshId, strategy, nodes, opts);
 }
 
+/** One idle session eligible to claim a queued task, together with the resolved
+ *  mesh node record it belongs to. Local candidates come from live CLI instances,
+ *  remote candidates from the registered remote-idle-session store; the two arrive
+ *  with their `nodeId` under different serialization forms. */
+type IdleCandidate = { nodeId: string; sessionId: string; providerType: string; origin: 'local' | 'remote'; node: any };
+
+/**
+ * Merge local + remote idle candidates into the scheduling pool with a single,
+ * form-canonical node identity.
+ *
+ * INVARIANT: every candidate in the returned pool carries its `nodeId` in
+ * CANONICAL (normalized) form, and `uniqueNodes` has exactly one entry per
+ * physical node. Local and remote candidates arrive with their `nodeId` under
+ * mixed forms (config `id`, wire `nodeId`, DB `node_id`). Downstream scheduling
+ * keys the pool by raw-string equality (Set dedup, baseIndex, rankIndex,
+ * nodeActiveLoad), so two candidates for the SAME physical node under two
+ * different forms would otherwise be treated as two distinct nodes — form-drift
+ * that splits a node's load and double-ranks it. Canonicalizing here (via the
+ * resolved node record, which meshNodeIdMatches already matched form-agnostically)
+ * makes every later `=== nodeId` comparison operate on one agreed form. Falls back
+ * to the raw candidate id when the node is unresolved (an unresolved candidate
+ * cannot be normalized, but also has no sibling to collide with).
+ */
+function buildSchedulingPool(
+    localCandidates: IdleCandidate[],
+    remoteCandidates: IdleCandidate[],
+): { pool: IdleCandidate[]; uniqueNodes: RankableNode[] } {
+    const pool = [...localCandidates, ...remoteCandidates].map(c => ({
+        ...c,
+        nodeId: normalizeMeshNodeId(c.node) ?? c.nodeId,
+    }));
+    // Both sides are canonical now, so raw `===` in the Set dedup and the node
+    // re-lookup is form-safe.
+    const uniqueNodes: RankableNode[] = [...new Set(pool.map(c => c.nodeId))]
+        .map((nodeId, index) => ({
+            nodeId,
+            node: pool.find(c => meshNodeIdMatches({ id: c.nodeId } as MeshNodeIdentified, nodeId))?.node,
+            index,
+        }));
+    return { pool, uniqueNodes };
+}
+
+/** Test-only: the pool-canonicalization + unique-node collapse stage. Exposed so
+ *  the mixed-form dedup invariant can be unit-tested without a live daemon. */
+export function __buildSchedulingPoolForTests(
+    localCandidates: IdleCandidate[],
+    remoteCandidates: IdleCandidate[],
+): { pool: IdleCandidate[]; uniqueNodes: RankableNode[] } {
+    return buildSchedulingPool(localCandidates, remoteCandidates);
+}
+
 function orderEligibleNodes(
     meshId: string,
     strategy: RepoMeshSchedulingStrategy,
@@ -1946,7 +1997,6 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
     //     first and greedily absorbs all untargeted work before any remote idle
     //     session is even considered — the comparator alone can't spread work if
     //     local is always tried first.
-    type IdleCandidate = { nodeId: string; sessionId: string; providerType: string; origin: 'local' | 'remote'; node: any };
     const strategy = resolveSchedulingStrategy(mesh);
     const localCandidates: IdleCandidate[] = [];
 
@@ -2023,12 +2073,13 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         // Merge local + remote into one pool and drain in scheduling order. Each
         // assignment mutates a node's active load, and the next pick re-reads it,
         // so re-ranking after every assignment keeps the spread fair as load shifts.
-        const pool = [...localCandidates, ...remoteCandidates];
+        // buildSchedulingPool canonicalizes every candidate's nodeId so the Set
+        // dedup, baseIndex, rankIndex, and nodeActiveLoad keying below all agree on
+        // one form (see the invariant on that helper).
+        const { pool, uniqueNodes } = buildSchedulingPool(localCandidates, remoteCandidates);
         const baseIndex = new Map<string, number>();
         pool.forEach((c, i) => { if (!baseIndex.has(c.nodeId)) baseIndex.set(c.nodeId, i); });
         // Bump the round-robin cursor once for this whole drain pass.
-        const uniqueNodes = [...new Set(pool.map(c => c.nodeId))]
-            .map((nodeId, index) => ({ nodeId, node: pool.find(c => c.nodeId === nodeId)?.node, index }));
         const ranked = orderEligibleNodes(meshId, strategy, uniqueNodes, { bumpCursor: true });
         const rankIndex = new Map<string, number>(ranked.map((r, i) => [r.nodeId, i]));
         const remaining = [...pool];

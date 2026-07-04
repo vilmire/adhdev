@@ -544,6 +544,12 @@ export function foldMeshNodeIdentityToCanonical(node: any): any {
     // flips, because both always agree). Mutating in place (not returning a new
     // object) preserves the cached node-object identity that callers warming an
     // inline mesh from an already-shared snapshot rely on.
+    // Intentional per-field raw compare against the already-computed canonical
+    // value: this is the fold's no-op fast path, checking whether EACH form field
+    // is already folded. Using meshNodeIdMatches (which normalizes across forms)
+    // would defeat the point — we must inspect each raw field's current state, not
+    // a form-agnostic match. Hence the identity-guard opt-out below.
+    // eslint-disable-next-line no-restricted-syntax -- verified same-source canonical no-op guard (see above)
     if (node.id === canonical && node.nodeId === canonical && node.node_id === undefined) return node;
     node.id = canonical;
     node.nodeId = canonical;
