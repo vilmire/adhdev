@@ -9,6 +9,8 @@ import {
     AppPage,
     Section,
     AlertBanner,
+    Button,
+    Input,
     BrowserNotificationSettings,
     ConnectedMachinesSection,
     AppearanceSettingsSection,
@@ -318,14 +320,15 @@ export default function StandaloneSettings() {
                         </label>
                     </div>
                     <div className="flex flex-wrap gap-2 items-center">
-                        <button
+                        <Button
                             type="button"
+                            variant="primary"
+                            size="sm"
                             onClick={() => { void handleSaveBindHost() }}
                             disabled={authSaving}
-                            className="rounded-lg bg-accent text-white px-3 py-2 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {authSaving ? 'Saving…' : 'Save default network mode'}
-                        </button>
+                        </Button>
                         <span className="text-xs text-text-muted">Applies on next standalone restart. Current run stays bound to {preferences?.currentBindHost || authStatus?.boundHost || '127.0.0.1'}.</span>
                     </div>
                 </div>
@@ -341,46 +344,46 @@ export default function StandaloneSettings() {
                     {authError && <AlertBanner variant="error">{authError}</AlertBanner>}
                     {authNotice && <AlertBanner variant="success">{authNotice}</AlertBanner>}
                     <div className="grid gap-3 md:grid-cols-2">
-                        <input
+                        <Input
                             type="password"
-                            className="bg-bg-primary border border-border-strong rounded-lg px-3 py-2.5 text-sm focus:border-accent focus:outline-none transition-colors"
                             placeholder={authStatus?.hasPasswordAuth ? 'Current password' : 'Current password (not needed for first setup)'}
                             value={currentPassword}
                             onChange={e => setCurrentPassword(e.target.value)}
                         />
-                        <input
+                        <Input
                             type="password"
-                            className="bg-bg-primary border border-border-strong rounded-lg px-3 py-2.5 text-sm focus:border-accent focus:outline-none transition-colors"
                             placeholder={authStatus?.hasPasswordAuth ? 'New password' : 'New standalone password'}
                             value={newPassword}
                             onChange={e => setNewPassword(e.target.value)}
                         />
-                        <input
+                        <Input
                             type="password"
-                            className="bg-bg-primary border border-border-strong rounded-lg px-3 py-2.5 text-sm focus:border-accent focus:outline-none transition-colors md:col-span-2"
+                            className="md:col-span-2"
                             placeholder="Confirm new password"
                             value={confirmPassword}
                             onChange={e => setConfirmPassword(e.target.value)}
                         />
                     </div>
                     <div className="flex flex-wrap gap-2">
-                        <button
+                        <Button
                             type="button"
+                            variant="primary"
+                            size="sm"
                             onClick={() => { void handleSavePassword() }}
                             disabled={authSaving}
-                            className="rounded-lg bg-accent text-white px-3 py-2 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {authSaving ? 'Saving…' : authStatus?.hasPasswordAuth ? 'Update password' : 'Enable password'}
-                        </button>
+                        </Button>
                         {authStatus?.hasPasswordAuth && (
-                            <button
+                            <Button
                                 type="button"
+                                variant="danger"
+                                size="sm"
                                 onClick={() => { void handleClearPassword() }}
                                 disabled={authSaving}
-                                className="rounded-lg border border-red-500/30 bg-red-500/10 text-red-300 px-3 py-2 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 Disable password
-                            </button>
+                            </Button>
                         )}
                     </div>
                 </div>
@@ -463,9 +466,9 @@ export default function StandaloneSettings() {
                                 Your name shown in chat threads and on the team dashboard.
                             </span>
                         </div>
-                        <input
+                        <Input
                             type="text"
-                            className="bg-bg-primary border border-border-strong rounded-lg px-3 py-1.5 text-sm w-48 text-right focus:border-accent focus:outline-none transition-colors"
+                            className="w-48 text-right"
                             placeholder="Anonymous"
                             value={localUserName}
                             onChange={e => setLocalUserName(e.target.value)}

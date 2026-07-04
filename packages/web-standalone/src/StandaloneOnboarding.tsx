@@ -14,6 +14,7 @@
  * the curl test surface uses).
  */
 import { useState, useEffect, useCallback } from 'react'
+import { AlertBanner, Button, Dialog } from '@adhdev/web-core'
 
 const DEFAULTS = ['claude-cli', 'codex-cli', 'antigravity-cli', 'hermes-cli']
 
@@ -143,19 +144,50 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
     }, [results, installing, onDone, handleSkip])
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60" onClick={handleClose}>
-            <div
-                className="bg-bg-secondary border border-border-subtle rounded-2xl max-w-2xl w-full p-6 flex flex-col gap-5 max-h-[85vh] overflow-y-auto"
-                onClick={(e) => e.stopPropagation()}
-            >
-                {/* Header */}
-                <div>
-                    <div className="text-lg font-semibold text-text-primary">Welcome to ADHDev</div>
-                    <div className="text-[12px] text-text-muted mt-1">
-                        Pick the providers you want to use. Defaults to the four officially supported CLI
-                        providers; you can install IDE, ACP, or extension providers from the tabs below or
-                        later from <span className="text-text-secondary">Burrow → Providers → Add provider</span>.
+        <Dialog
+            open
+            onClose={handleClose}
+            size="lg"
+            contentClassName="max-w-2xl"
+            title="Welcome to ADHDev"
+            footer={(
+                <div className="flex w-full items-center gap-2">
+                    <div className="text-[11px] text-text-muted">
+                        {selected.size} provider{selected.size !== 1 ? 's' : ''} selected
                     </div>
+                    <div className="ml-auto flex gap-2">
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={handleSkip}
+                            disabled={installing}
+                        >Skip</Button>
+                        <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={() => {
+                                if (results) {
+                                    // Already installed; just close.
+                                    localStorage.setItem(STORAGE_KEY, '1')
+                                    onDone()
+                                } else {
+                                    void handleInstall()
+                                }
+                            }}
+                            disabled={installing || (!results && selected.size === 0)}
+                        >
+                            {installing ? 'Installing…' : results ? 'Done' : `Install ${selected.size}`}
+                        </Button>
+                    </div>
+                </div>
+            )}
+        >
+            <div className="flex flex-col gap-5">
+                {/* Intro */}
+                <div className="text-[12px] text-text-muted">
+                    Pick the providers you want to use. Defaults to the four officially supported CLI
+                    providers; you can install IDE, ACP, or extension providers from the tabs below or
+                    later from <span className="text-text-secondary">Burrow → Providers → Add provider</span>.
                 </div>
 
                 {/* Category tabs */}
@@ -171,7 +203,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                                     key={t.key}
                                     onClick={() => setFilter(t.key)}
                                     className={`machine-btn text-[10px] px-2 py-0.5 ${
-                                        filter === t.key ? 'bg-violet-500/15 border-violet-500/40 text-violet-400' : ''
+                                        filter === t.key ? 'bg-accent-primary/12 border-accent-primary/40 text-accent-primary' : ''
                                     }`}
                                 >{t.label} <span className="opacity-60">({count})</span></button>
                             )
@@ -184,9 +216,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                     <div className="text-text-muted text-[12px] py-8 text-center">Loading registry…</div>
                 )}
                 {!loading && error && (
-                    <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-3 py-2 text-[12px] text-red-400">
-                        Failed to load registry: {error}
-                    </div>
+                    <AlertBanner variant="error">Failed to load registry: {error}</AlertBanner>
                 )}
                 {!loading && !error && visible.length === 0 && (
                     <div className="text-text-muted text-[12px] py-8 text-center">No providers in this category.</div>
@@ -209,7 +239,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                                                 key={p.type}
                                                 className={`flex items-center gap-3 px-3 py-2 rounded-xl border cursor-pointer transition-colors ${
                                                     isSelected
-                                                        ? 'bg-violet-500/[0.06] border-violet-500/30'
+                                                        ? 'bg-accent-primary/[0.06] border-accent-primary/30'
                                                         : 'bg-bg-glass border-border-subtle hover:bg-bg-glass-hover'
                                                 }`}
                                             >
@@ -228,7 +258,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                                                     )}
                                                 </div>
                                                 {result && (
-                                                    <span className={`text-[10px] font-semibold ${result.ok ? 'text-green-400' : 'text-red-400'}`}>
+                                                    <span className={`text-[10px] font-semibold ${result.ok ? 'text-status-online' : 'text-status-error'}`}>
                                                         {result.ok ? '✓ installed' : `✗ ${result.error ?? 'failed'}`}
                                                     </span>
                                                 )}
@@ -240,37 +270,8 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                         ))}
                     </div>
                 )}
-
-                {/* Actions */}
-                <div className="flex items-center gap-2 pt-2 border-t border-border-subtle">
-                    <div className="text-[11px] text-text-muted">
-                        {selected.size} provider{selected.size !== 1 ? 's' : ''} selected
-                    </div>
-                    <div className="ml-auto flex gap-2">
-                        <button
-                            onClick={handleSkip}
-                            disabled={installing}
-                            className="machine-btn text-[11px] px-3 py-1"
-                        >Skip</button>
-                        <button
-                            onClick={() => {
-                                if (results) {
-                                    // Already installed; just close.
-                                    localStorage.setItem(STORAGE_KEY, '1')
-                                    onDone()
-                                } else {
-                                    void handleInstall()
-                                }
-                            }}
-                            disabled={installing || (!results && selected.size === 0)}
-                            className="machine-btn text-[11px] px-3 py-1 bg-violet-500/15 border-violet-500/40 text-violet-400 hover:bg-violet-500/25"
-                        >
-                            {installing ? 'Installing…' : results ? 'Done' : `Install ${selected.size}`}
-                        </button>
-                    </div>
-                </div>
             </div>
-        </div>
+        </Dialog>
     )
 }
 

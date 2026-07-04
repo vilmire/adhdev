@@ -14,7 +14,7 @@ import {
     initStandaloneFontPreferences,
     normalizeStandaloneFontPreferences,
 } from './standalone-font-preferences'
-import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt } from '@adhdev/web-core'
+import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, Button, Input } from '@adhdev/web-core'
 import StandaloneLayout from './StandaloneLayout'
 import StandaloneAbout from './StandaloneAbout'
 import StandaloneSettings from './StandaloneSettings'
@@ -124,31 +124,29 @@ function StandaloneAuthGate({ children }: { children: ReactNode }) {
                 </div>
                 {status.hasPasswordAuth ? (
                     <form className="flex flex-col gap-3" onSubmit={handleLogin}>
-                        <input
+                        <Input
                             type="password"
                             value={password}
                             onChange={e => setPassword(e.target.value)}
-                            className="bg-bg-primary border border-border-strong rounded-lg px-3 py-2.5 text-sm focus:border-accent focus:outline-none transition-colors"
                             placeholder="Enter standalone password"
                             autoFocus
                         />
-                        <button
+                        <Button
                             type="submit"
+                            variant="primary"
                             disabled={submitting || !password}
-                            className="rounded-lg bg-accent text-white px-3 py-2.5 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="justify-center"
                         >
                             {submitting ? 'Signing in…' : 'Unlock dashboard'}
-                        </button>
+                        </Button>
                     </form>
                 ) : (
-                    <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-300">
+                    <AlertBanner variant="warning">
                         Password login is not enabled on this server.
-                    </div>
+                    </AlertBanner>
                 )}
                 {error && (
-                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-                        {error}
-                    </div>
+                    <AlertBanner variant="error">{error}</AlertBanner>
                 )}
             </div>
         </div>

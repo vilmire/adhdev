@@ -1,3 +1,4 @@
+import { AlertBanner, Button, Input, Select } from '@adhdev/web-core'
 import {
   CHAT_FONT_PRESET_OPTIONS,
   MONO_FONT_PRESET_OPTIONS,
@@ -50,8 +51,7 @@ function FontControl({
         <div className="text-xs text-text-muted mt-1">{description}</div>
       </div>
       <div className="flex flex-col gap-2">
-        <select
-          className="bg-bg-primary border border-border-strong rounded-lg px-3 py-2.5 text-sm focus:border-accent focus:outline-none transition-colors"
+        <Select
           value={value.preset}
           onChange={event => {
             const preset = event.target.value
@@ -63,11 +63,11 @@ function FontControl({
           {options.map(option => (
             <option key={option.id} value={option.id}>{option.label}</option>
           ))}
-        </select>
+        </Select>
         {value.preset === 'custom' && (
-          <input
+          <Input
             type="text"
-            className="bg-bg-primary border border-border-strong rounded-lg px-3 py-2.5 text-sm focus:border-accent focus:outline-none transition-colors font-mono"
+            className="font-mono"
             placeholder="e.g. &quot;Pretendard&quot;, &quot;Noto Sans KR&quot;, sans-serif"
             value={value.customFamily || ''}
             onChange={event => onChange({ preset: 'custom', customFamily: event.target.value })}
@@ -101,12 +101,8 @@ export default function StandaloneFontSettingsSection({
         Standalone-only font overrides. These do not affect the cloud dashboard. Chat bubbles, markdown prose, code blocks, tool rows, and terminal output all use the preferences below.
       </div>
 
-      {error && (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>
-      )}
-      {notice && (
-        <div className="rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm text-green-300">{notice}</div>
-      )}
+      {error && <AlertBanner variant="error">{error}</AlertBanner>}
+      {notice && <AlertBanner variant="success">{notice}</AlertBanner>}
 
       <div className="grid gap-3 lg:grid-cols-3">
         <FontControl
@@ -173,30 +169,33 @@ export default function StandaloneFontSettingsSection({
       </div>
 
       <div className="flex flex-wrap gap-2 items-center">
-        <button
+        <Button
           type="button"
+          variant="primary"
+          size="sm"
           onClick={onSave}
           disabled={saving || !isDirty}
-          className="rounded-lg bg-accent text-white px-3 py-2 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {saving ? 'Saving…' : 'Save font settings'}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="secondary"
+          size="sm"
           onClick={onResetToSaved}
           disabled={saving || !isDirty}
-          className="rounded-lg border border-border-subtle bg-bg-glass px-3 py-2 text-sm font-medium text-text-secondary disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Revert to saved
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="secondary"
+          size="sm"
           onClick={onResetToDefaults}
           disabled={saving}
-          className="rounded-lg border border-border-subtle bg-bg-glass px-3 py-2 text-sm font-medium text-text-secondary disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Reset to defaults
-        </button>
+        </Button>
       </div>
     </div>
   )
