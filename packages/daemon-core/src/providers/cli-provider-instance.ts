@@ -572,6 +572,13 @@ export class CliProviderInstance implements ProviderInstance {
     // mask is dropped so the real waiting_approval surfaces. Cleared when the episode ends
     // (modal genuinely gone, manual attendance takes over, or auto-approve fires).
     private autoApproveMaskSince = 0;
+    // NOTIF-APPROVAL-MASKED (Q1b): the autoApproveMaskSince episode value for which a
+    // stalled-approval coordinator nudge has already been emitted, so the nudge fires
+    // exactly once per stalled auto-approve episode (0 = none emitted). Reusing the
+    // per-episode mask-clock value as the key makes it provider-agnostic (no reliance on
+    // approvalEntrySeq) and self-resetting: each new episode gets a fresh
+    // autoApproveMaskSince timestamp, and the episode-end reset zeroes it.
+    private stalledApprovalNudgeEpisode = 0;
     // Provider-common manual-attendance signal: while a human is actively driving
     // this session from the dashboard, auto-approve holds so they can take manual
     // control. Background mesh workers are never attended → delegated auto-approve
@@ -2056,6 +2063,7 @@ export class CliProviderInstance implements ProviderInstance {
             // Manual attendance takes over — the modal stays surfaced (maybeAutoApproveStatus
             // returns false), so end the mask episode.
             this.autoApproveMaskSince = 0;
+            this.stalledApprovalNudgeEpisode = 0;
             if (this.autoApproveSettleTimer) clearTimeout(this.autoApproveSettleTimer);
             this.autoApproveSettleTimer = setTimeout(() => {
                 this.autoApproveSettleTimer = null;
@@ -2100,6 +2108,7 @@ export class CliProviderInstance implements ProviderInstance {
             // Modal has genuinely been gone past the hysteresis window → the episode ended;
             // end the mask episode too (a later approval starts a fresh stall clock).
             this.autoApproveMaskSince = 0;
+            this.stalledApprovalNudgeEpisode = 0;
             if (this.autoApproveSettleTimer) { clearTimeout(this.autoApproveSettleTimer); this.autoApproveSettleTimer = null; }
             return autoApproveActive;
         }
@@ -2110,6 +2119,12 @@ export class CliProviderInstance implements ProviderInstance {
         // when zero so it survives modal-signature changes and hysteresis blips — it measures
         // the true age of the unresolved auto-approve, not the per-signature settle window.
         if (!this.autoApproveMaskSince) this.autoApproveMaskSince = now;
+        // NOTIF-APPROVAL-MASKED (Q1b): once this episode has stalled past the mask threshold,
+        // surface the raw waiting_approval to the mesh coordinator (decoupled from the dashboard
+        // mask). Placed on the active-approval path here — the single choke point that owns the
+        // mask-stall clock and is re-driven throughout a silent stall (getState heartbeat,
+        // detectStatusTransition, recheckAutoApproveSettled). No-op until the stall threshold trips.
+        this.maybeEmitStalledApprovalNudge(adapterStatus, now);
         const modal = adapterStatus.activeModal;
         // (fix) Do not auto-approve when no concrete modal/buttons are present.
         // Claude TUI flaps between paints; without this guard adapterStatus
@@ -2227,6 +2242,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.autoApproveInactiveSince = 0;
         // Fired (resolveModal in flight) — the episode resolved; end the mask-stall clock.
         this.autoApproveMaskSince = 0;
+        this.stalledApprovalNudgeEpisode = 0;
         if (this.autoApproveBusyTimer) clearTimeout(this.autoApproveBusyTimer);
         this.autoApproveBusyTimer = setTimeout(() => {
             this.autoApproveBusy = false;
@@ -3173,6 +3189,50 @@ export class CliProviderInstance implements ProviderInstance {
     private autoApproveMaskStalled(now = Date.now()): boolean {
         return this.autoApproveMaskSince > 0
             && now - this.autoApproveMaskSince > CliProviderInstance.AUTO_APPROVE_MASK_STALL_MS;
+    }
+
+    /**
+     * NOTIF-APPROVAL-MASKED (Q1b): surface a delegated worker's STALLED auto-approve modal
+     * to the mesh COORDINATOR, decoupled from the dashboard visible-status mask.
+     *
+     * When auto-approve is configured but the episode never settles (modal parse miss / the
+     * settle gate never satisfied), getState()/detectStatusTransition() fold the raw
+     * `waiting_approval` into `generating` to suppress dashboard flicker — so
+     * detectStatusTransition()'s `waiting_approval` arm never runs and NO agent:waiting_approval
+     * event is emitted. The coordinator's real-time approval-nudge delivery then has no input and
+     * the worker's stuck modal is never surfaced (the live ~25s stall). The dashboard mask is
+     * intentional and stays; this emits the coordinator nudge exactly ONCE, gated on the SAME
+     * raw-waiting_approval + mask-stalled signal resolveModalParkStatus() distinguishes, the
+     * instant the mask-stall threshold trips (the same moment getState un-folds the mask).
+     *
+     * Only delegated worker sessions qualify: a foreground session has no coordinator to notify,
+     * and its own dashboard mask already reveals the modal on stall. A normally-resolving
+     * auto-approve never reaches AUTO_APPROVE_MASK_STALL_MS, so it emits nothing here; and if a
+     * masked approval clears just as this fires, rc.455's isApprovalNudgeResolved stale-drop
+     * discards the nudge coordinator-side without noise. Dedup is per-episode (keyed on the
+     * mask-clock value) so a modal that flaps between parsed/unparsed states is announced once.
+     */
+    private maybeEmitStalledApprovalNudge(adapterStatus: any, now: number): void {
+        if (!this.isMeshWorkerSession()) return;
+        if (adapterStatus?.status !== 'waiting_approval') return;
+        if (!this.autoApproveMaskStalled(now)) return;
+        // Exactly once per stalled episode (autoApproveMaskSince uniquely identifies it).
+        if (this.stalledApprovalNudgeEpisode === this.autoApproveMaskSince) return;
+        this.stalledApprovalNudgeEpisode = this.autoApproveMaskSince;
+        const modal = adapterStatus.activeModal;
+        const dirName = workingDirBasename(this.workingDir);
+        const chatTitle = `${this.provider.name} · ${dirName}`;
+        this.appendRuntimeSystemMessage(
+            this.formatApprovalRequestMessage(modal?.message, modal?.buttons),
+            `approval_request:${now}`,
+            now,
+        );
+        this.pushEvent({
+            event: 'agent:waiting_approval', chatTitle, timestamp: now,
+            modalMessage: modal?.message,
+            modalButtons: modal?.buttons,
+        });
+        LOG.info('CLI', `[${this.type}] stalled auto-approve nudge → coordinator (masked ${Math.round((now - this.autoApproveMaskSince) / 1000)}s)`);
     }
 
     private recordAutoApproval(modalMessage?: string, buttonLabel?: string, now = Date.now()): void {
