@@ -123,6 +123,22 @@ export interface ADHDevConfig {
  // Optional explicit provider override root (for example a local adhdev-providers checkout)
     providerDir?: string;
 
+    /**
+     * Optional provider registry base URL override (for example a self-hosted
+     * registry). Highest-priority source in the registry resolver, ahead of the
+     * `ADHDEV_REGISTRY_URL` env var and the vendor default. See
+     * `config/registry-resolver.ts`.
+     */
+    registryUrl?: string;
+
+    /**
+     * Optional provider tarball (archive) URL override so self-hosters can point
+     * the daemon at their own provider mirror instead of the vendor GitHub repo.
+     * Highest-priority source, ahead of `ADHDEV_PROVIDER_TARBALL_URL` and the
+     * vendor default. See `config/registry-resolver.ts`.
+     */
+    providerTarballUrl?: string;
+
     /** Preferred daemon update channel. Defaults to stable/latest. */
     updateChannel?: ReleaseChannel;
 
@@ -233,6 +249,8 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
         ideSettings: isPlainObject(parsed.ideSettings) ? parsed.ideSettings : {},
         providerSourceMode: resolveProviderSourceMode(parsed.providerSourceMode, parsed.disableUpstream),
         providerDir: asOptionalString(parsed.providerDir),
+        registryUrl: asOptionalString(parsed.registryUrl),
+        providerTarballUrl: asOptionalString(parsed.providerTarballUrl),
         updateChannel: parsed.updateChannel === 'preview' ? 'preview' : 'stable',
         terminalSizingMode: parsed.terminalSizingMode === 'fit' ? 'fit' : 'measured',
     };

@@ -37,6 +37,11 @@ import {
   resolveActiveSource,
 } from './external-sources.js';
 import type { ProviderSourceMode } from '../config/config.js';
+import {
+  resolveRegistryBaseUrl,
+  resolveProviderTarballUrl,
+  resolveProviderTarballTarget,
+} from '../config/registry-resolver.js';
 import type { ProviderSourceConfigSnapshot, ProviderUserDirSource } from '../config/provider-source-config.js';
 import { executeNativeHistory } from './spec/native-history-executor.js';
 import { createNativeHistoryDispatcher, type ReaderId } from './native-history/dispatcher.js';
@@ -186,13 +191,19 @@ export class ProviderLoader {
   private versionArchive: VersionArchive | null = null;
   private scriptsCache = new Map<string, Partial<ProviderScripts>>();
 
+  /**
+   * Resolved registry base URL and provider tarball URL. Resolution order:
+   * explicit config field (constructor option) → env var → vendor default.
+   * See `config/registry-resolver.ts`.
+   */
+  private readonly registryBaseUrl: string;
+  private readonly providerTarballUrl: string;
+
   /** Inject VersionArchive so resolve() can auto-detect installed versions */
   setVersionArchive(archive: VersionArchive): void {
     this.versionArchive = archive;
   }
 
-  private static readonly GITHUB_TARBALL_URL = 'https://github.com/vilmire/adhdev-providers/archive/refs/heads/main.tar.gz';
-  private static readonly REGISTRY_BASE_URL = 'https://api.adhf.dev/api/v1/registry';
   private static readonly META_FILE = '.meta.json';
   private static readonly REGISTRY_META_FILE = '.registry-meta.json';
   private static readonly REPO_PROVIDER_DIRNAME = 'adhdev-providers';
@@ -278,9 +289,21 @@ export class ProviderLoader {
      * probing; production code should leave this unset.
      */
     probeStarts?: string[];
+    /**
+     * Explicit provider registry base URL override (config.registryUrl).
+     * Highest-priority resolver source, ahead of ADHDEV_REGISTRY_URL + default.
+     */
+    registryUrl?: string;
+    /**
+     * Explicit provider tarball URL override (config.providerTarballUrl).
+     * Highest-priority resolver source, ahead of ADHDEV_PROVIDER_TARBALL_URL + default.
+     */
+    providerTarballUrl?: string;
   }) {
     this.logFn = options?.logFn || LOG.forComponent('Provider').asLogFn();
     this.probeStarts = options?.probeStarts ?? [process.cwd(), __dirname];
+    this.registryBaseUrl = resolveRegistryBaseUrl(options?.registryUrl);
+    this.providerTarballUrl = resolveProviderTarballUrl(options?.providerTarballUrl);
 
     // Default directory for auto-downloads
     this.defaultProvidersDir = path.join(os.homedir(), '.adhdev', 'providers');
@@ -1554,7 +1577,7 @@ export class ProviderLoader {
       this.log('Registry sync skipped (sourceMode=no-upstream)');
       return { updated: false };
     }
-    this.log(`Registry sync starting (${ProviderLoader.REGISTRY_BASE_URL})...`);
+    this.log(`Registry sync starting (${this.registryBaseUrl})...`);
 
     const https = require('https') as typeof import('https');
     const regMetaPath = path.join(this.upstreamDir, ProviderLoader.REGISTRY_META_FILE);
@@ -1569,7 +1592,7 @@ export class ProviderLoader {
 
     try {
       // 1. Fetch provider list
-      const listUrl = `${ProviderLoader.REGISTRY_BASE_URL}/providers`;
+      const listUrl = `${this.registryBaseUrl}/providers`;
       const listBody = await new Promise<string>((resolve, reject) => {
         const req = https.get(listUrl, { headers: { 'User-Agent': 'adhdev-daemon', 'Accept': 'application/json' }, timeout: 10000 }, (res) => {
           if (res.statusCode !== 200) { reject(new Error(`registry list HTTP ${res.statusCode}`)); return; }
@@ -1592,7 +1615,7 @@ export class ProviderLoader {
         if (cachedChecksums[cacheKey] === checksum) continue; // already current
 
         // Download this provider's manifest
-        const dlUrl = `${ProviderLoader.REGISTRY_BASE_URL}/providers/${type}/${version}/download`;
+        const dlUrl = `${this.registryBaseUrl}/providers/${type}/${version}/download`;
         const manifestBody = await new Promise<string>((resolve, reject) => {
           const req = https.get(dlUrl, { headers: { 'User-Agent': 'adhdev-daemon', 'Accept': 'application/json' }, timeout: 30000 }, (res) => {
             if (res.statusCode !== 200) { reject(new Error(`registry download HTTP ${res.statusCode} for ${type}@${version}`)); return; }
@@ -1667,13 +1690,17 @@ export class ProviderLoader {
       return { updated: false };
     }
 
+    // Resolve the tarball target (config → env → vendor default) once so the
+    // HEAD probe and the download below hit the same (possibly self-hosted) URL.
+    const tarballTarget = resolveProviderTarballTarget(this.providerTarballUrl);
+
     try {
  // Step 1: HEAD request to check ETag
       const etag = await new Promise<string>((resolve, reject) => {
         const options = {
           method: 'HEAD',
-          hostname: 'github.com',
-          path: '/vilmire/adhdev-providers/archive/refs/heads/main.tar.gz',
+          hostname: tarballTarget.hostname,
+          path: tarballTarget.path,
           headers: { 'User-Agent': 'adhdev-launcher' },
           timeout: 10000,
         };
@@ -1718,7 +1745,7 @@ export class ProviderLoader {
       const tmpExtract = path.join(os.tmpdir(), `adhdev-providers-extract-${Date.now()}`);
 
  // Download tarball
-      await this.downloadFile(ProviderLoader.GITHUB_TARBALL_URL, tmpTar);
+      await this.downloadFile(tarballTarget.url, tmpTar);
 
  // Extract
       fs.mkdirSync(tmpExtract, { recursive: true });
@@ -1825,7 +1852,7 @@ export class ProviderLoader {
         etag,
         timestamp,
         lastCheck: new Date(timestamp).toISOString(),
-        source: ProviderLoader.GITHUB_TARBALL_URL,
+        source: this.providerTarballUrl,
       }, null, 2));
     } catch { }
   }

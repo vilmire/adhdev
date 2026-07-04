@@ -20,6 +20,7 @@ import type { ProviderModule, ProviderScripts } from '../providers/contracts.js'
 import type { DaemonAgentStreamManager } from '../agent-stream/index.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import { loadConfig } from '../config/config.js';
+import { resolveRegistryBaseUrl } from '../config/registry-resolver.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import type { SessionRegistry, SessionRuntimeTarget } from '../sessions/registry.js';
 import { reconcileIdeRuntimeSessions } from '../sessions/reconcile.js';
@@ -692,7 +693,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         const https = require('https') as typeof import('https');
         const fs = require('fs') as typeof import('fs');
         const path = require('path') as typeof import('path');
-        const REGISTRY = 'https://api.adhf.dev/api/v1/registry';
+        const REGISTRY = resolveRegistryBaseUrl(loadConfig().registryUrl);
 
         function fetchText(url: string, timeoutMs: number): Promise<string> {
             return new Promise((resolve, reject) => {
@@ -1121,7 +1122,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         if (!installed.success) return installed;
 
         const https = require('https') as typeof import('https');
-        const REGISTRY = 'https://api.adhf.dev/api/v1/registry';
+        const REGISTRY = resolveRegistryBaseUrl(loadConfig().registryUrl);
 
         function fetchJson(url: string): Promise<any> {
             return new Promise((resolve, reject) => {

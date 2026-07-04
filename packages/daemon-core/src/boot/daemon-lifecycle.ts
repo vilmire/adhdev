@@ -180,6 +180,8 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         logFn: config.providerLogFn,
         sourceMode: providerSourceMode,
         userDir: appConfig.providerDir,
+        registryUrl: appConfig.registryUrl,
+        providerTarballUrl: appConfig.providerTarballUrl,
     });
 
     // Boot-time auto-sync is intentionally disabled. The user picks which
