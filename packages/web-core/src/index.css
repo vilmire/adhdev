@@ -63,7 +63,41 @@
 
     /* Transition */
     --transition-base: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* ── Z-index scale (canonical) ──────────────────────
+       Single ordered scale replacing the ad-hoc 50→1400 values scattered
+       across components (z-[50], z-[80], z-[110], z-[1200], z-[1300], z-[1400], …).
+       New primitives (Dialog) consume these via var(--z-*). Existing call sites
+       are migrated in a later wave — do NOT rewrite them here.
+       Layering order (low → high): base < sticky < dropdown < popover
+       < modal-backdrop < modal < toast < tooltip. */
+    --z-base: 0;
+    --z-sticky: 100;
+    --z-dropdown: 1000;
+    --z-popover: 1100;
+    --z-modal-backdrop: 1200;
+    --z-modal: 1300;
+    --z-toast: 1400;
+    --z-tooltip: 1500;
 }
+
+/* ── Canonical token mapping (documentation only) ───────────────────────
+   Several existing components reference Tailwind color classes whose backing
+   `--color-*` variable is NOT defined in the @theme block above, so they
+   currently resolve to nothing. This wave introduces no new tokens for them;
+   it records the canonical target a later migration wave should substitute at
+   the consuming call sites. New primitives added in this wave already use the
+   canonical classes on the right.
+
+     absent (used in code)      →  canonical (defined above)
+     ───────────────────────────  ──────────────────────────────
+     --border-primary           →  --color-border-default   (class: border-border-primary   → border-border-default)
+     --border-secondary         →  --color-border-subtle    (class: border-border-secondary → border-border-subtle)
+     --bg-tertiary              →  --color-surface-secondary(class: bg-bg-tertiary           → bg-surface-secondary)
+     --surface-tertiary         →  --color-surface-secondary(class: bg-surface-tertiary      → bg-surface-secondary)
+     --surface-alt              →  --color-surface-secondary(class: bg-surface-alt           → bg-surface-secondary)
+     border-strong              →  --color-border-default   (class: border-border-strong     → border-border-default)
+   ──────────────────────────────────────────────────────────────────── */
 
 @layer base {
     /* ═══════════════════════════════════════════════════
