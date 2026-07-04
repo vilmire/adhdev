@@ -1917,6 +1917,36 @@ export class MeshRuntimeStore {
         return row !== undefined;
     }
 
+    /**
+     * B3a — v2 eventId idempotency. Returns true when a row with this event_id has
+     * ALREADY been drained (drained = 1) for the mesh. Drained rows are retained
+     * (soft-marked, not deleted until mesh deletion), so this is a durable, restart-
+     * surviving dedup: a v2 event whose eventId was already consumed is skipped on
+     * re-delivery even when its content fingerprint differs. Scoped by mesh_id +
+     * the partial event_id index (idx_mesh_pending_events_event_id).
+     */
+    hasDrainedEventId(meshId: string, eventId: string): boolean {
+        if (!eventId) return false;
+        const row = this.db.prepare(
+            'SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND event_id = ? AND drained = 1 LIMIT 1'
+        ).get(meshId, eventId);
+        return row !== undefined;
+    }
+
+    /**
+     * B3a — snapshot of the v2 event_ids ALREADY drained (drained = 1) for the mesh.
+     * Taken BEFORE a drain call marks the current batch drained=1, so the resulting
+     * set names only PRIOR drains — the re-delivery dedup baseline. (Reading it after
+     * the drain would self-match the batch's own freshly-drained rows.) Non-v2 rows
+     * have a NULL event_id and are excluded by the index/WHERE.
+     */
+    drainedEventIdsForMesh(meshId: string): Set<string> {
+        const rows = this.db.prepare(
+            'SELECT DISTINCT event_id FROM mesh_pending_events WHERE mesh_id = ? AND drained = 1 AND event_id IS NOT NULL'
+        ).all(meshId) as Array<{ event_id: string }>;
+        return new Set(rows.map(r => r.event_id));
+    }
+
     // ── M3: Mission Records ─────────────────────────────────────────────────
 
     upsertMission(mission: {

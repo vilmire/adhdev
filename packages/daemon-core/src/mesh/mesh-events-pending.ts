@@ -5,13 +5,18 @@ import { LOG } from '../logging/logger.js';
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId, readMeshCompletionSummary, isWeakCompletionMetadata } from './mesh-events-utils.js';
-import { expandDaemonIdForms } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, expandDaemonIdForms } from '@adhdev/mesh-shared';
 import {
+    assertPendingMeshCoordinatorEventV2,
     buildPendingEventEmitStamp,
+    coordinatorIdentityEquals,
     coordinatorIdentityFromEmitFields,
+    coordinatorIdentityKey,
     MESH_PROTOCOL_VERSION_V2,
+    shouldDeliverPendingEventToCoordinator,
     type CoordinatorIdentity,
     type MeshEventScope,
+    type PendingMeshCoordinatorEventV2,
 } from './contracts.js';
 
 // ---------------------------------------------------------------------------
@@ -106,6 +111,257 @@ function normalizeCoordinatorDaemonIds(
     coordinatorDaemonId?: string | null | ReadonlyArray<string>,
 ): string[] {
     return expandDaemonIdForms(coordinatorDaemonId);
+}
+
+// ─── B3a: drain-side v2 routing (accept-and-warn) ────────────────────────────
+//
+// Stage-1 of the v2 receive path. The drain scope is still primarily gated by the
+// SQLite/JSONL `coordinator_daemon_id` filter (v1 mechanism, untouched here), so
+// this layer runs on top of an already daemon-scoped candidate set and adds:
+//
+//   1. v2 unicast routing — an event whose intendedFor addresses a DIFFERENT
+//      coordinator on THIS daemon (a sibling CLI/MCP session) is skipped, so a
+//      completion doesn't cross-surface. Broadcast/system-as-broadcast pass.
+//   2. eventId idempotency — a v2 event whose eventId was already drained is
+//      skipped (durable, via MeshRuntimeStore.hasDrainedEventId) plus a per-drain
+//      batch guard against same-batch duplicates.
+//   3. accept-and-warn — a v2 event that FAILS validation, or has NO version, is
+//      NOT dropped: it passes through (no v1 regression) with a one-shot WARN and
+//      a counter bump. Hard rejection is T6 (enforce mode), not here.
+//   4. re-attribution fallback — a unicast event whose intendedFor does not match
+//      the drainer by identity is NOT dropped when its intendedFor.daemonId is the
+//      SAME machine as the drainer (a coordinatorRunId change from a restart
+//      orphaned it): it is delivered to the current coordinator on that daemon.
+
+/** Observability counters for the accept-and-warn rollout. Read by tests and (later,
+ *  B4) surfaced in mesh_status. Process-lifetime totals — never reset in production. */
+const meshV2DrainCounters = {
+    /** v2 events that passed validation and unicast/broadcast routing → delivered. */
+    v2Delivered: 0,
+    /** v2 unicast events skipped because intendedFor addressed another coordinator. */
+    v2RoutedAway: 0,
+    /** v2 events skipped because their eventId was already drained (idempotency). */
+    v2DedupSkipped: 0,
+    /** v2 events that failed assertPendingMeshCoordinatorEventV2 but were PASSED
+     *  THROUGH (accept mode). Non-zero here is the rollout signal that a producer
+     *  emits a malformed envelope. */
+    v2ValidationFailedAccepted: 0,
+    /** unicast events re-attributed to the drainer via daemon-core match (a
+     *  coordinatorRunId change orphaned them). */
+    v2ReattributedToDrainer: 0,
+    /** v1 (unversioned) events passed through as broadcast (rollout baseline). */
+    v1BroadcastAccepted: 0,
+};
+
+/** Test/observability accessor for the v2 drain counters (snapshot copy). */
+export function getMeshV2DrainCounters(): Readonly<typeof meshV2DrainCounters> {
+    return { ...meshV2DrainCounters };
+}
+
+/** Test helper: zero the v2 drain counters so a test starts from a clean slate. */
+export function __resetMeshV2DrainCountersForTests(): void {
+    for (const k of Object.keys(meshV2DrainCounters) as Array<keyof typeof meshV2DrainCounters>) {
+        meshV2DrainCounters[k] = 0;
+    }
+}
+
+// One-shot WARN dedup: an accept-mode warning is logged once per (meshId, eventId)
+// so a re-polled malformed event doesn't spam the log every 4s reconcile tick.
+const warnedV2Violations = new Set<string>();
+function warnV2Once(key: string, message: string): void {
+    if (warnedV2Violations.has(key)) return;
+    warnedV2Violations.add(key);
+    // Bound the set so a long-lived daemon churning many distinct eventIds can't leak.
+    if (warnedV2Violations.size > 2000) {
+        const first = warnedV2Violations.values().next().value;
+        if (first !== undefined) warnedV2Violations.delete(first);
+    }
+    LOG.warn('MeshEventsV2', message);
+}
+
+/** Test helper: clear the one-shot WARN dedup set. */
+export function __resetMeshV2WarnDedupForTests(): void {
+    warnedV2Violations.clear();
+}
+
+/**
+ * Resolve the drainer's CoordinatorIdentity for v2 routing from the daemon-id
+ * argument the (untouchable) reconcile-loop already passes. The daemon ids are the
+ * dual/expanded self-identity forms from resolveCoordinatorDaemonIds; the FIRST is
+ * the primary. coordinatorRunId is not threaded through the drain call yet, so it
+ * falls back to the daemonId exactly as the emit side does
+ * (coordinatorIdentityFromEmitFields) — this keeps drain-side identity CONSISTENT
+ * with how v1→v2 events were stamped, and unicast equality then reduces to the
+ * daemon-core match, which is the correct rollout-window granularity. A caller that
+ * knows the full identity (with a real coordinatorRunId) may pass it explicitly to
+ * override. Returns undefined when no daemon id is known (→ v2 routing is a no-op,
+ * everything passes as-is).
+ */
+function resolveDrainerIdentity(
+    daemonIds: ReadonlyArray<string>,
+    explicit?: CoordinatorIdentity,
+): CoordinatorIdentity | undefined {
+    if (explicit) return explicit;
+    return coordinatorIdentityFromEmitFields({ daemonId: daemonIds[0] });
+}
+
+/** A v2 event carries a '2.0' protocolVersion. Everything else is a v1 event. */
+function isV2Event(event: PendingMeshCoordinatorEvent): boolean {
+    return event.protocolVersion === MESH_PROTOCOL_VERSION_V2;
+}
+
+/**
+ * True when an identity's coordinatorRunId is merely its own daemonId form (the
+ * B2a fallback in coordinatorIdentityFromEmitFields — no real coordinatorRunId was
+ * threaded through the emit/drain site yet). For such an identity the runId carries
+ * NO information beyond the daemon, so two different daemon-id FORMS of the same
+ * machine (mach_ vs daemon_mach_) must not be treated as different coordinators.
+ */
+function runIdIsDaemonFormFallback(identity: CoordinatorIdentity): boolean {
+    return daemonIdsEquivalent(identity.coordinatorRunId, identity.daemonId);
+}
+
+/**
+ * Delivery equality for the rollout window. When BOTH sides carry only a
+ * daemon-form-fallback runId (no real coordinatorRunId wired yet), a match reduces
+ * to same-machine — so a completion stamped `daemon_mach_X` is delivered to a
+ * coordinator that knows itself as bare `mach_X` (the canon-identity heterogeneous-
+ * form case). The session is compared ONLY when BOTH sides carry one: a session-less
+ * drainer is a daemon-level drain (what the reconcile loop passes) that accepts any
+ * session's events on that machine — targetCoordinatorSessionId is a PHASE-2 inject
+ * key, not a drain-scoping key (see the v1 field comment). When only the drainer AND
+ * the event both name a session do we require them to match, so a session-specific
+ * coordinator does not receive a sibling session's unicast event.
+ *
+ * When EITHER side has a real (non-daemon-form) runId, fall back to strict
+ * coordinatorIdentityEquals so two genuinely distinct coordinators on the same
+ * daemon (different real runIds) stay separated.
+ */
+function identityDeliversTo(intendedFor: CoordinatorIdentity, drainer: CoordinatorIdentity): boolean {
+    if (runIdIsDaemonFormFallback(intendedFor) && runIdIsDaemonFormFallback(drainer)) {
+        if (!daemonIdsEquivalent(intendedFor.daemonId, drainer.daemonId)) return false;
+        // Session filter applies only when the drainer itself is session-specific.
+        if (intendedFor.sessionId && drainer.sessionId) {
+            return intendedFor.sessionId === drainer.sessionId;
+        }
+        return true;
+    }
+    return coordinatorIdentityEquals(intendedFor, drainer);
+}
+
+/**
+ * Apply v2 receive-side routing + idempotency to a merged, already daemon-scoped
+ * candidate list (accept-and-warn — never drops on validation failure).
+ *
+ * - `drainer` undefined → routing is skipped, list returned unchanged (safety).
+ * - Marks each surviving v2 event's eventId in `batchSeen` so a same-batch dup is
+ *   skipped; a caller that persists drains uses `alreadyDrained` for the durable
+ *   check (getPending peek passes a no-op so a peek never dedups against itself).
+ */
+function routeV2EventsForDrainer(
+    events: PendingMeshCoordinatorEvent[],
+    drainer: CoordinatorIdentity | undefined,
+    ctx: {
+        alreadyDrained: (eventId: string) => boolean;
+        batchSeen: Set<string>;
+        /** false for a non-destructive peek so the frequent status-poll path does
+         *  not inflate the delivery counters (only the real drain counts). */
+        countMetrics: boolean;
+    },
+): PendingMeshCoordinatorEvent[] {
+    if (!drainer) return events;
+    const bump = (k: keyof typeof meshV2DrainCounters) => { if (ctx.countMetrics) meshV2DrainCounters[k]++; };
+    const kept: PendingMeshCoordinatorEvent[] = [];
+    for (const event of events) {
+        if (!isV2Event(event)) {
+            // v1 / unversioned event → broadcast during rollout (existing policy).
+            bump('v1BroadcastAccepted');
+            kept.push(event);
+            continue;
+        }
+
+        // Validate the v2 envelope. ACCEPT MODE: a validation failure does NOT drop
+        // the event — it passes through with a one-shot WARN + counter. (T6 enforce
+        // mode is where this becomes a quarantine.)
+        let validated: PendingMeshCoordinatorEventV2;
+        try {
+            validated = assertPendingMeshCoordinatorEventV2(event);
+        } catch (e: any) {
+            bump('v2ValidationFailedAccepted');
+            warnV2Once(
+                `${event.meshId}::${event.eventId ?? event.event}::invalid`,
+                `v2 envelope validation failed for ${event.event} on mesh ${event.meshId} — PASSED THROUGH (accept mode): ${e?.message || e}`,
+            );
+            kept.push(event);
+            continue;
+        }
+
+        // eventId idempotency: skip if already drained (durable) or already seen in
+        // this same batch (guards the SQLite+JSONL dual-store merge duplicate).
+        const eventId = validated.eventId;
+        if (ctx.batchSeen.has(eventId) || ctx.alreadyDrained(eventId)) {
+            bump('v2DedupSkipped');
+            continue;
+        }
+
+        // Broadcast → any coordinator; system → daemon handler only (never a
+        // coordinator). Delegates to the contract helper for those two scopes.
+        if (validated.scope !== 'unicast') {
+            if (shouldDeliverPendingEventToCoordinator(validated, drainer)) {
+                ctx.batchSeen.add(eventId);
+                bump('v2Delivered');
+                kept.push(event);
+            } else {
+                // system scope → not for any coordinator.
+                bump('v2RoutedAway');
+            }
+            continue;
+        }
+
+        // Unicast: deliver iff intendedFor addresses THIS drainer. identityDeliversTo
+        // treats a daemon-form-fallback runId (no real coordinatorRunId wired yet) as
+        // form-agnostic so a `daemon_mach_X`-addressed event reaches a bare-`mach_X`
+        // drainer (heterogeneous-form same coordinator), while keeping two REAL
+        // distinct runIds on one daemon separated.
+        if (validated.intendedFor && identityDeliversTo(validated.intendedFor, drainer)) {
+            ctx.batchSeen.add(eventId);
+            bump('v2Delivered');
+            kept.push(event);
+            continue;
+        }
+
+        // Not delivered by identity. Apply the re-attribution fallback (plan risk
+        // §4): if intendedFor addresses the SAME MACHINE as the drainer AND the
+        // mismatch is a genuine coordinatorRunId change (a restart minted a fresh
+        // runId), deliver it to the current coordinator rather than orphaning it.
+        //
+        // Guard: when BOTH sides carry only a daemon-form-fallback runId, a mismatch
+        // that survived identityDeliversTo is a SESSION mismatch (a sibling
+        // coordinator on the same daemon) — that is a legitimate route-away, NOT an
+        // orphaned event, so re-attribution must not fire. Re-attribution requires a
+        // REAL runId difference, which means at least one side carries a real runId.
+        const realRunIdMismatch = !runIdIsDaemonFormFallback(validated.intendedFor!)
+            || !runIdIsDaemonFormFallback(drainer);
+        if (
+            validated.intendedFor
+            && realRunIdMismatch
+            && daemonIdsEquivalent(validated.intendedFor.daemonId, drainer.daemonId)
+        ) {
+            ctx.batchSeen.add(eventId);
+            bump('v2ReattributedToDrainer');
+            warnV2Once(
+                `${event.meshId}::${eventId}::reattributed`,
+                `v2 unicast ${event.event} on mesh ${event.meshId} re-attributed to current coordinator ${coordinatorIdentityKey(drainer)} (originating coordinatorRunId no longer live)`,
+            );
+            kept.push(event);
+            continue;
+        }
+
+        // Addressed to a genuinely different coordinator (different machine, or
+        // system scope) → not for this drainer. Skipped (left for its own drainer).
+        bump('v2RoutedAway');
+    }
+    return kept;
 }
 
 export function readRefineJobId(event: { metadataEvent?: Record<string, unknown> } | Record<string, unknown>): string {
@@ -569,7 +825,7 @@ function selectiveDrainFile(
 export function drainPendingMeshCoordinatorEvents(
     meshId?: string,
     coordinatorDaemonId?: string | ReadonlyArray<string>,
-    opts?: { onlyEvents?: ReadonlySet<string> },
+    opts?: { onlyEvents?: ReadonlySet<string>; drainerIdentity?: CoordinatorIdentity },
 ): PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
 
@@ -579,6 +835,18 @@ export function drainPendingMeshCoordinatorEvents(
     // accept any of them.
     const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
     const primaryDaemonId = daemonIds[0];
+
+    // B3a: the drainer's v2 identity, for unicast routing + eventId dedup. Derived
+    // from the daemon ids the (untouchable) reconcile-loop already passes, so no
+    // caller change is required; a caller may still pass the full identity.
+    const drainer = resolveDrainerIdentity(daemonIds, opts?.drainerIdentity);
+    // Snapshot the ALREADY-drained v2 eventIds BEFORE the SQLite drain marks this
+    // batch drained=1 — the re-delivery dedup baseline. Reading it after would
+    // self-match the batch's own rows.
+    let priorDrainedEventIds = new Set<string>();
+    try {
+        priorDrainedEventIds = MeshRuntimeStore.getInstance().drainedEventIdsForMesh(meshId);
+    } catch { /* store unavailable — no durable baseline; batch guard still applies */ }
 
     const onlyEvents = opts?.onlyEvents;
     const matchesFilter = (eventName: string): boolean => !onlyEvents || onlyEvents.has(eventName);
@@ -648,7 +916,17 @@ export function drainPendingMeshCoordinatorEvents(
     // longer exists — delivery is now queue-drain-only (reconcile loop or MCP pull),
     // so an event is consumed by exactly one drainer via the atomic SQLite drained=1
     // marking. There is no PTY-vs-poll double path left to dedup against.
-    return reconcilePendingMeshCoordinatorEvents(meshId, merged);
+    //
+    // B3a: v2 receive-side routing (accept-and-warn) — unicast targeting, eventId
+    // idempotency, malformed-envelope pass-through-with-warn. v1 events broadcast.
+    // Runs AFTER the merge/reconcile so a single eventId dedup batch covers both
+    // stores. Non-destructive to v1 behaviour when no drainer identity is known.
+    const routed = routeV2EventsForDrainer(merged, drainer, {
+        alreadyDrained: (eventId) => priorDrainedEventIds.has(eventId),
+        batchSeen: new Set<string>(),
+        countMetrics: true,
+    });
+    return reconcilePendingMeshCoordinatorEvents(meshId, routed);
 }
 
 /**
@@ -703,9 +981,21 @@ export function retractPendingDispatchBlockedEvent(
 }
 
 /** Peek at pending coordinator events without draining (non-destructive). */
-export function getPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string | ReadonlyArray<string>): readonly PendingMeshCoordinatorEvent[] {
+export function getPendingMeshCoordinatorEvents(
+    meshId?: string,
+    coordinatorDaemonId?: string | ReadonlyArray<string>,
+    opts?: { drainerIdentity?: CoordinatorIdentity },
+): readonly PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
     const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
+    // B3a: same v2 routing the destructive drain applies, so a peek (mesh_status
+    // count, reconcile pre-check) sees the SAME set the drain would deliver — a
+    // unicast event for another coordinator is not counted for this one.
+    const drainer = resolveDrainerIdentity(daemonIds, opts?.drainerIdentity);
+    let priorDrainedEventIds = new Set<string>();
+    try {
+        priorDrainedEventIds = MeshRuntimeStore.getInstance().drainedEventIdsForMesh(meshId);
+    } catch { /* store unavailable — batch guard still applies */ }
 
     // Merge SQLite (primary) + JSONL (legacy) with fingerprint dedup.
     const merged: PendingMeshCoordinatorEvent[] = [];
@@ -737,7 +1027,14 @@ export function getPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaem
 
     // (Former R3 direct-delivered filter removed — no PTY direct-inject path exists
     // anymore, so a peeked pending event has genuinely not yet been consumed.)
-    return reconcilePendingMeshCoordinatorEvents(meshId, merged);
+    // B3a: apply the SAME v2 routing the drain applies (non-destructive: no counter
+    // inflation on the frequent status-poll path).
+    const routed = routeV2EventsForDrainer(merged, drainer, {
+        alreadyDrained: (eventId) => priorDrainedEventIds.has(eventId),
+        batchSeen: new Set<string>(),
+        countMetrics: false,
+    });
+    return reconcilePendingMeshCoordinatorEvents(meshId, routed);
 }
 
 /**
