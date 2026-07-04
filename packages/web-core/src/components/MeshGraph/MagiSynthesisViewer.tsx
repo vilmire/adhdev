@@ -28,6 +28,7 @@ import { useCallback, useMemo, useState } from 'react'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import type { MagiSynthesis, MagiResponseSource } from '@adhdev/mesh-shared'
 import { useTheme } from '../../hooks/useTheme'
+import Button from '../ui/Button'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 
 /** One folded synthesis summary as carried in status.magiActivity[]. Mirrors
@@ -215,9 +216,9 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                         <div className={`mt-3 pt-3 ${sepClass}`}>
                             <div className="flex flex-wrap items-center gap-2">
                                 <span className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>Raw replica answers</span>
-                                <button
-                                    type="button"
-                                    className="btn btn-secondary btn-sm"
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
                                     onClick={() => void loadRaw(group.consensusGroupId)}
                                     disabled={!canCommand || rawState?.loading}
                                     title={canCommand
@@ -225,7 +226,7 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                                         : 'A live coordinator daemon is required to fetch raw replica answers.'}
                                 >
                                     {rawState?.loading ? 'Loading…' : rawState?.fetched ? 'Reload raw answers' : 'Load raw answers'}
-                                </button>
+                                </Button>
                             </div>
                             <p className={`mt-1 text-[11px] ${meshTheme.textMuted}`}>
                                 Raw per-replica text is not persisted (only this synthesis summary is). It is

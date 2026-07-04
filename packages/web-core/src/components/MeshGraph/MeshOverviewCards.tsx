@@ -467,7 +467,7 @@ function DetailModal({ meshTheme, detail, onClose, daemonId, meshId, sendDaemonC
 
     return (
         <div
-            className={`fixed inset-0 z-[1300] flex items-stretch justify-center p-0 md:items-center md:p-4 ${overlayClass}`}
+            className={`fixed inset-0 z-[var(--z-modal)] flex items-stretch justify-center p-0 md:items-center md:p-4 ${overlayClass}`}
             role="dialog"
             aria-modal="true"
             onClick={onClose}
