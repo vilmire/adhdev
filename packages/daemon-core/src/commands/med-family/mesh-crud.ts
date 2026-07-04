@@ -12,6 +12,7 @@
 import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId } from '@adhdev/mesh-shared';
 import { resolveMeshHostStatus, normalizeMeshDaemonRole } from '../../mesh/mesh-host-ownership.js';
 import {
+    getRegisteredSubmodulePaths,
     loadMeshWorktreeBootstrapConfig,
     runMeshWorktreeBootstrap,
     type WorktreeBootstrapState,
@@ -79,6 +80,83 @@ export async function decideOssCloneSync(
     if (await isAncestor(worktreeOssSha, sourceSha)) return 'advance';
     // Neither is an ancestor → diverged → keep the fresh worktree HEAD.
     return 'skip_diverged';
+}
+
+/**
+ * Sync every registered submodule of a freshly-cloned worktree to its clone source
+ * node's working submodule HEAD, applying decideOssCloneSync's origin-tip-priority
+ * rewind guard per submodule.
+ *
+ * Generic over the submodule set: the paths come from `.gitmodules` via
+ * getRegisteredSubmodulePaths, so this operates identically over EVERY registered
+ * submodule (oss, adhdev-providers, …) instead of a hardcoded 'oss' literal. In a
+ * repo whose only synced submodule is `oss` the emitted git commands are byte-identical
+ * to the original oss-only path.
+ *
+ * Best-effort by design: a failure on one submodule is logged and skipped; it never
+ * blocks the other submodules or the clone. A submodule is only ever advanced to a
+ * STRICTLY-NEWER source SHA — the fresh (origin/main-derived) worktree tip is never
+ * rewound onto a behind/diverged source.
+ */
+export async function syncClonedWorktreeSubmodules(
+    worktreePath: string,
+    sourceWorkspace: string,
+    rg: (ctx: GitRepoIdentity, argv: string[], opts?: { timeoutMs?: number }) => Promise<unknown>,
+): Promise<void> {
+    const submodulePaths = getRegisteredSubmodulePaths(worktreePath);
+    if (submodulePaths.size === 0) return;
+
+    const sourceCtx: GitRepoIdentity = { workspace: sourceWorkspace, repoRoot: sourceWorkspace, isGitRepo: true };
+    const worktreeCtx: GitRepoIdentity = { workspace: worktreePath, repoRoot: worktreePath, isGitRepo: true };
+    const readStdout = (out: unknown): string =>
+        (typeof out === 'string' ? out : (out as any)?.stdout ?? '').trim();
+
+    for (const submodulePath of submodulePaths) {
+        try {
+            // Read the source node's working submodule SHA.
+            const sourceStatusOut = await rg(sourceCtx, ['submodule', 'status', submodulePath], { timeoutMs: 10000 });
+            const sourceSha = readStdout(sourceStatusOut).match(/^[+\- ]?([0-9a-f]{40})/)?.[1];
+            if (!sourceSha) continue;
+
+            // Read the worktree's freshly-checked-out submodule HEAD.
+            const subCtx: GitRepoIdentity = {
+                workspace: `${worktreePath}/${submodulePath}`,
+                repoRoot: `${worktreePath}/${submodulePath}`,
+                isGitRepo: true,
+            };
+            const worktreeSubSha = readStdout(await rg(subCtx, ['rev-parse', 'HEAD'], { timeoutMs: 10000 }));
+            if (!worktreeSubSha || worktreeSubSha === sourceSha) continue;
+
+            // Bring the source node's submodule HEAD into the worktree submodule object
+            // DB so both SHAs are resolvable for the ancestry (rewind) guard below.
+            await rg(subCtx, ['fetch', `${sourceWorkspace}/${submodulePath}`, 'HEAD'], { timeoutMs: 60000 });
+
+            // Rewind guard: the worktree submodule HEAD was just checked out from the
+            // FRESH (origin/main-derived) root base. Only advance to the source SHA when
+            // it is strictly newer — never rewind to a stale source.
+            let action: OssCloneSyncAction;
+            try {
+                action = await decideOssCloneSync(subCtx, worktreeSubSha, sourceSha, rg);
+            } catch (decideErr: any) {
+                action = 'skip_diverged';
+                console.warn(`[mesh] ${submodulePath} submodule sync guard could not resolve ancestry (kept fresh worktree HEAD): ${decideErr?.message ?? decideErr}`);
+            }
+
+            if (action === 'advance') {
+                await rg(subCtx, ['checkout', sourceSha], { timeoutMs: 10000 });
+                await rg(worktreeCtx, ['add', submodulePath], { timeoutMs: 10000 });
+                await rg(worktreeCtx, ['commit', '-m', `chore: sync ${submodulePath} to source node HEAD on clone`], { timeoutMs: 10000 });
+                console.log(`[mesh] Advanced ${submodulePath} submodule to newer source HEAD ${sourceSha.slice(0, 8)} in worktree`);
+            } else if (action === 'skip_rewind') {
+                console.warn(`[mesh] Skipped ${submodulePath} submodule rewind on clone: source node ${submodulePath} ${sourceSha.slice(0, 8)} is an ancestor of the fresh worktree ${submodulePath} ${worktreeSubSha.slice(0, 8)} — kept fresher worktree HEAD`);
+            } else if (action === 'skip_diverged') {
+                console.warn(`[mesh] Skipped ${submodulePath} submodule sync on clone: source node ${submodulePath} ${sourceSha.slice(0, 8)} diverged from the fresh worktree ${submodulePath} ${worktreeSubSha.slice(0, 8)} — kept worktree HEAD (coordinator reconciles)`);
+            }
+        } catch (subErr: any) {
+            // Per-submodule best-effort: never let one submodule's failure block the rest.
+            console.warn(`[mesh] ${submodulePath} submodule sync to source HEAD failed (best-effort):`, subErr?.message ?? subErr);
+        }
+    }
 }
 
 export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
@@ -1019,57 +1097,13 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                         );
                         submodulesInitialized = true;
 
-                        // Sync oss submodule to source node HEAD (best-effort)
+                        // Sync every registered submodule to the clone source node's
+                        // working HEAD (best-effort, generic over .gitmodules — no
+                        // hardcoded 'oss'; the rewind guard is applied per submodule).
                         const sourceWorkspace = sourceNode.repoRoot || sourceNode.workspace;
                         if (sourceWorkspace) {
-                            try {
-                                const { runGit: rg } = await import('../../git/git-executor.js');
-                                const sourceCtx = { workspace: sourceWorkspace, repoRoot: sourceWorkspace, isGitRepo: true };
-                                const worktreeCtx = { workspace: result.worktreePath, repoRoot: result.worktreePath, isGitRepo: true };
-
-                                // Read source node's oss submodule SHA
-                                const sourceStatusOut = await rg(sourceCtx, ['submodule', 'status', 'oss'], { timeoutMs: 10000 });
-                                const sourceStatusLine = (typeof sourceStatusOut === 'string' ? sourceStatusOut : (sourceStatusOut as any)?.stdout ?? '').trim();
-                                const sourceShaMatch = sourceStatusLine.match(/^[+\- ]?([0-9a-f]{40})/);
-                                const sourceSha = sourceShaMatch?.[1];
-
-                                if (sourceSha) {
-                                    // Read worktree's current oss HEAD
-                                    const ossCtx = { workspace: `${result.worktreePath}/oss`, repoRoot: `${result.worktreePath}/oss`, isGitRepo: true };
-                                    const worktreeOssHeadOut = await rg(ossCtx, ['rev-parse', 'HEAD'], { timeoutMs: 10000 });
-                                    const worktreeOssSha = (typeof worktreeOssHeadOut === 'string' ? worktreeOssHeadOut : (worktreeOssHeadOut as any)?.stdout ?? '').trim();
-
-                                    if (worktreeOssSha && worktreeOssSha !== sourceSha) {
-                                        // Bring the source node's oss HEAD into the worktree object DB so
-                                        // both SHAs are resolvable for the ancestry (rewind) guard below.
-                                        await rg(ossCtx, ['fetch', `${sourceWorkspace}/oss`, 'HEAD'], { timeoutMs: 60000 });
-
-                                        // Rewind guard: the worktree oss HEAD was just checked out from the
-                                        // FRESH (origin/main-derived) root base. Only advance to the source
-                                        // SHA when it is strictly newer — never rewind to a stale source.
-                                        let ossAction: OssCloneSyncAction;
-                                        try {
-                                            ossAction = await decideOssCloneSync(ossCtx, worktreeOssSha, sourceSha, rg);
-                                        } catch (decideErr: any) {
-                                            ossAction = 'skip_diverged';
-                                            console.warn(`[mesh] oss submodule sync guard could not resolve ancestry (kept fresh worktree HEAD): ${decideErr?.message ?? decideErr}`);
-                                        }
-
-                                        if (ossAction === 'advance') {
-                                            await rg(ossCtx, ['checkout', sourceSha], { timeoutMs: 10000 });
-                                            await rg(worktreeCtx, ['add', 'oss'], { timeoutMs: 10000 });
-                                            await rg(worktreeCtx, ['commit', '-m', 'chore: sync oss to source node HEAD on clone'], { timeoutMs: 10000 });
-                                            console.log(`[mesh] Advanced oss submodule to newer source HEAD ${sourceSha.slice(0, 8)} in worktree`);
-                                        } else if (ossAction === 'skip_rewind') {
-                                            console.warn(`[mesh] Skipped oss submodule rewind on clone: source node oss ${sourceSha.slice(0, 8)} is an ancestor of the fresh worktree oss ${worktreeOssSha.slice(0, 8)} — kept fresher worktree HEAD`);
-                                        } else if (ossAction === 'skip_diverged') {
-                                            console.warn(`[mesh] Skipped oss submodule sync on clone: source node oss ${sourceSha.slice(0, 8)} diverged from the fresh worktree oss ${worktreeOssSha.slice(0, 8)} — kept worktree HEAD (coordinator reconciles)`);
-                                        }
-                                    }
-                                }
-                            } catch (ossErr: any) {
-                                console.warn('[mesh] oss submodule sync to source HEAD failed (best-effort):', ossErr.message);
-                            }
+                            const { runGit: rg } = await import('../../git/git-executor.js');
+                            await syncClonedWorktreeSubmodules(result.worktreePath, sourceWorkspace, rg);
                         }
                     } catch (subErr: any) {
                         // Submodule init is best-effort; don't fail the clone

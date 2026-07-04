@@ -69,7 +69,7 @@ export const WORKTREE_BOOTSTRAP_STALE_RUNNING_MS = 10 * 60 * 1000;
  * trailing slash stripped. Returns an empty set when there are no submodules or the
  * lookup fails — callers must then treat any change as dirty (conservative).
  */
-function getRegisteredSubmodulePaths(workspace: string): Set<string> {
+export function getRegisteredSubmodulePaths(workspace: string): Set<string> {
     const paths = new Set<string>();
     try {
         const out = execFileSync(
