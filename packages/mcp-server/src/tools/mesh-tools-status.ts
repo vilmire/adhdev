@@ -806,6 +806,16 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         if (protocolMetrics) {
             response.meshProtocolMetrics = protocolMetrics;
         }
+
+        // T6 (B3c): the live enforce/backstop counters the daemon rode on the drain
+        // above (drainCoordinatorPendingEvents stashed them on ctx). Unlike
+        // meshProtocolMetrics (a per-batch adoption snapshot), these are process-lifetime
+        // enforce-health totals: quarantine tallies + the last-resort backstop fire
+        // counts (target 0 under a healthy v2 contract). Omitted on version-skewed
+        // daemons that don't ride the field.
+        if (ctx.lastMeshProtocolV2Counters) {
+            response.meshProtocolV2Counters = ctx.lastMeshProtocolV2Counters;
+        }
     } catch {
         // Non-fatal: pending events are best-effort.
     }

@@ -13,6 +13,8 @@ export {
     clearPendingMeshCoordinatorEvents,
     serializeV2EnvelopeToWire,
     readV2EnvelopeFromWire,
+    getMeshV2DrainCounters,
+    isMeshProtocolV2EnforceEnabled,
 } from './mesh-events-pending.js';
 
 export {
@@ -24,6 +26,7 @@ export {
     runMeshReconcileTick,
     resolveCoordinatorDrainDeliverability,
     shouldHoldPendingDrainForBusyLocalCoordinator,
+    getMeshV2BackstopCounters,
 } from './mesh-reconcile-loop.js';
 
 export type { MeshQueueTriggerResult } from './mesh-events-coordinator.js';

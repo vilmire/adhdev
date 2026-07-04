@@ -134,8 +134,68 @@ function normalizeCoordinatorDaemonIds(
 //      SAME machine as the drainer (a coordinatorRunId change from a restart
 //      orphaned it): it is delivered to the current coordinator on that daemon.
 
-/** Observability counters for the accept-and-warn rollout. Read by tests and (later,
- *  B4) surfaced in mesh_status. Process-lifetime totals — never reset in production. */
+/**
+ * T6 (B3c) enforce switch. When ON, the drain path stops passing an unversioned
+ * (v1) or a validation-failing v2 event through to the coordinator — it QUARANTINES
+ * it instead (excluded from the delivered batch + WARN + counter), and unicast
+ * routing is the only delivery path (there is no v1 broadcast fallback). Off (the
+ * default) preserves the accept-and-warn rollout behaviour exactly.
+ *
+ * Per the rollout plan (§1 decision 4): enforce is `MESH_PROTOCOL_V2_ENFORCE` (env)
+ * — its activation is a deliberate operational step taken ONLY after daemonBuilds
+ * confirms every node emits v2 (§배포 게이트 1 / risk §4). So the code default is
+ * OFF; flipping the env back to accept mode is a pure-env rollback (no code change,
+ * no data migration — the schema is additive). Read at call time so a test /
+ * operator can toggle it without a restart.
+ *
+ * Quarantine (not drop) keeps the loss-free invariant. The DESTRUCTIVE drain has
+ * already consumed the event from its store by the time routing runs, so "held
+ * back" here means: excluded from the delivered batch AND mirrored into the mesh
+ * ledger as a recoverable `event_held` entry (the same recovery channel the
+ * pending-trim path uses). It is observable via the counters + the ledger, so an
+ * operator can requeue it after fixing the producer. The non-destructive PEEK path
+ * (countMetrics=false) merely omits the event from the returned list — it never
+ * consumed it and must not ledger-record on every status poll.
+ */
+export function isMeshProtocolV2EnforceEnabled(): boolean {
+    const raw = readNonEmptyString(process.env.MESH_PROTOCOL_V2_ENFORCE);
+    if (!raw) return false;
+    const v = raw.trim().toLowerCase();
+    return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+}
+
+/**
+ * Record a v2-enforce-quarantined event into the mesh ledger as recoverable, so a
+ * destructively-drained event held back by enforce is auditable and requeue-able
+ * (loss-free invariant). Mirrors the pending-trim `event_held` shape. Best-effort:
+ * a ledger write failure must not break the drain. Called ONLY on the destructive
+ * drain path (the peek path never consumed the event, so nothing to recover).
+ */
+function ledgerRecordQuarantinedEvent(event: PendingMeshCoordinatorEvent, reason: string): void {
+    try {
+        const finalSummary = readMeshCompletionSummary(event.metadataEvent || {});
+        appendLedgerEntry(event.meshId, {
+            kind: 'event_held',
+            ...(event.nodeId ? { nodeId: event.nodeId } : {}),
+            payload: {
+                event: event.event,
+                reason,
+                recoverable: true,
+                nodeLabel: event.nodeLabel,
+                ...(event.workspace ? { workspace: event.workspace } : {}),
+                targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
+                ...(readNonEmptyString(event.eventId) ? { eventId: event.eventId } : {}),
+                queuedAt: event.queuedAt,
+                ...(finalSummary ? { finalSummary } : {}),
+            },
+        });
+    } catch (e: any) {
+        LOG.warn('MeshEventsV2', `Failed to ledger-record v2-quarantined ${event.event} for mesh ${event.meshId}: ${e?.message || e}`);
+    }
+}
+
+/** Observability counters for the v2 drain path. Read by tests and surfaced in
+ *  mesh_status (B4/T6). Process-lifetime totals — never reset in production. */
 const meshV2DrainCounters = {
     /** v2 events that passed validation and unicast/broadcast routing → delivered. */
     v2Delivered: 0,
@@ -152,6 +212,14 @@ const meshV2DrainCounters = {
     v2ReattributedToDrainer: 0,
     /** v1 (unversioned) events passed through as broadcast (rollout baseline). */
     v1BroadcastAccepted: 0,
+    /** T6 enforce: v2 events that FAILED validation and were QUARANTINED (held back
+     *  from delivery, not dropped). Non-zero here means a producer is still emitting a
+     *  malformed envelope after enforce was turned on. */
+    v2ValidationFailedQuarantined: 0,
+    /** T6 enforce: v1 (unversioned) events QUARANTINED because no v2 envelope could be
+     *  derived at emit time. Non-zero here means a producer path still emits v1 after
+     *  enforce — it should reach 0 once every node is on a v2-stamping build. */
+    v1UnversionedQuarantined: 0,
 };
 
 /** Test/observability accessor for the v2 drain counters (snapshot copy). */
@@ -271,23 +339,49 @@ function routeV2EventsForDrainer(
     },
 ): PendingMeshCoordinatorEvent[] {
     if (!drainer) return events;
+    // Read the enforce flag ONCE per drain so the whole batch is classified under a
+    // single, consistent policy (a mid-batch env flip cannot split one drain).
+    const enforce = isMeshProtocolV2EnforceEnabled();
     const bump = (k: keyof typeof meshV2DrainCounters) => { if (ctx.countMetrics) meshV2DrainCounters[k]++; };
     const kept: PendingMeshCoordinatorEvent[] = [];
     for (const event of events) {
         if (!isV2Event(event)) {
-            // v1 / unversioned event → broadcast during rollout (existing policy).
+            // v1 / unversioned event. ACCEPT MODE: broadcast during rollout (existing
+            // policy). ENFORCE MODE: quarantine — an unversioned event has no scope, so
+            // there is no safe unicast target; hold it back (not delivered) and mirror
+            // it to the ledger as recoverable, with a one-shot WARN + counter.
+            if (enforce) {
+                bump('v1UnversionedQuarantined');
+                if (ctx.countMetrics) ledgerRecordQuarantinedEvent(event, 'v2_enforce_unversioned_quarantined');
+                warnV2Once(
+                    `${event.meshId}::${event.eventId ?? event.event}::v1-quarantined`,
+                    `v2 ENFORCE: unversioned ${event.event} on mesh ${event.meshId} QUARANTINED (no v2 envelope — held back, not delivered; ledger-recorded recoverable). A producer path still emits v1.`,
+                );
+                continue;
+            }
             bump('v1BroadcastAccepted');
             kept.push(event);
             continue;
         }
 
         // Validate the v2 envelope. ACCEPT MODE: a validation failure does NOT drop
-        // the event — it passes through with a one-shot WARN + counter. (T6 enforce
-        // mode is where this becomes a quarantine.)
+        // the event — it passes through with a one-shot WARN + counter. ENFORCE MODE:
+        // a validation failure is QUARANTINED (held back, not delivered) — the malformed
+        // envelope carries no trustworthy scope/target, so delivering it risks a
+        // cross-surface. It is ledger-recorded recoverable on the destructive path.
         let validated: PendingMeshCoordinatorEventV2;
         try {
             validated = assertPendingMeshCoordinatorEventV2(event);
         } catch (e: any) {
+            if (enforce) {
+                bump('v2ValidationFailedQuarantined');
+                if (ctx.countMetrics) ledgerRecordQuarantinedEvent(event, 'v2_enforce_validation_failed_quarantined');
+                warnV2Once(
+                    `${event.meshId}::${event.eventId ?? event.event}::invalid-quarantined`,
+                    `v2 ENFORCE: envelope validation failed for ${event.event} on mesh ${event.meshId} — QUARANTINED (held back, not delivered; ledger-recorded recoverable): ${e?.message || e}`,
+                );
+                continue;
+            }
             bump('v2ValidationFailedAccepted');
             warnV2Once(
                 `${event.meshId}::${event.eventId ?? event.event}::invalid`,

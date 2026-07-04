@@ -28,7 +28,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
   getMeshByRepo: meshConfigMocks.getMeshByRepo,
 }))
 
-import { runMeshReconcileTick, __resetReconcileInFlightSynthDebounceForTests } from '../../src/mesh/mesh-reconcile-loop.js'
+import { runMeshReconcileTick, __resetReconcileInFlightSynthDebounceForTests, getMeshV2BackstopCounters, __resetMeshV2BackstopCountersForTests } from '../../src/mesh/mesh-reconcile-loop.js'
 import { setLogLevel, getRecentLogs } from '../../src/logging/logger.js'
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
 import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, claimNextTask, reclaimStrandedAssignedTask } from '../../src/mesh/mesh-work-queue.js'
@@ -1915,6 +1915,148 @@ describe('runMeshReconcileTick', () => {
       } finally {
         cleanup(meshId)
       }
+    })
+
+    // ── T6 (B3c): PHASE-4 / acked-hold demoted to a last-resort backstop ─────────
+    // Under mesh-protocol-v2 enforce the completion contract is explicit, so the
+    // transcript-synthesis nets should NEVER fire (target 0). They are NOT removed
+    // (they remain the correctness net for a genuinely lost emit) but every fire now
+    // bumps an observability counter, and under enforce additionally WARNs. These
+    // tests assert the counter is bumped on an ACTUAL synth commit — once per path,
+    // and only when the synth reconciled (a held/deferred tick must NOT bump it).
+    describe('T6 last-resort backstop counters (PHASE-4 / acked-hold demotion)', () => {
+      afterEach(() => { __resetMeshV2BackstopCountersForTests(); delete process.env.MESH_PROTOCOL_V2_ENFORCE })
+
+      it('bumps phase4SynthesisFired when a never-acked PHASE-4 transcript synth commits', async () => {
+        const meshId = `mesh_t6_phase4_${Date.now()}`
+        __resetMeshV2BackstopCountersForTests()
+        try {
+          const sessionId = 'sess-t6-phase4'
+          const nodeId = 'node_local'
+          const taskId = 'task_t6_phase4'
+          // A never-acked (plain 'dispatched') direct dispatch with no terminal ledger.
+          appendLedgerEntry(meshId, {
+            kind: 'task_dispatched', nodeId, sessionId, providerType: 'claude-cli',
+            payload: { source: 'direct', via: 'local_direct', taskId, message: 'do work' },
+            timestamp: dispatchTimeIso(60),
+          } as any)
+          insertDirectDispatch(meshId, {
+            taskId, nodeId, sessionId, providerType: 'claude-cli', message: 'do work',
+            via: 'local_direct', dispatchedAt: dispatchTimeIso(60),
+          })
+          meshConfigMocks.listMeshes.mockReturnValue([{ id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] }])
+          const readChat = vi.fn(async (cmd: string) => {
+            if (cmd !== 'read_chat') return { success: true }
+            return {
+              success: true, status: 'idle', providerSessionId: 'claude-history-t6p4',
+              messages: [{ role: 'assistant', content: 'All done — built and tests pass.', timestamp: 1_700_000_000_000 - 5_000 }],
+            }
+          })
+          const components = { instanceManager: { getByCategory: () => [], getInstance: () => undefined }, commandHandler: { handle: readChat } } as any
+
+          await runMeshReconcileTick(components)
+          expect(getMeshV2BackstopCounters().phase4SynthesisFired).toBe(1)
+          expect(getMeshV2BackstopCounters().ackedHoldFastTrackFired).toBe(0)
+          expect(getMeshV2BackstopCounters().ackedHoldDeathDeadlineFired).toBe(0)
+
+          // Idempotent: the dispatch is now terminal → a second tick does NOT re-bump.
+          await runMeshReconcileTick(components)
+          expect(getMeshV2BackstopCounters().phase4SynthesisFired).toBe(1)
+        } finally {
+          cleanup(meshId)
+        }
+      })
+
+      it('bumps ackedHoldFastTrackFired when the acked-hold fast-track promotes a synth', async () => {
+        const meshId = `mesh_t6_fasttrack_${Date.now()}`
+        __resetMeshV2BackstopCountersForTests()
+        process.env.MESH_INFLIGHT_ACKED_TRANSCRIPT_FASTTRACK_GRACE_MS = '0'
+        try {
+          const sessionId = 'sess-t6-ft'
+          const nodeId = 'node_local'
+          const taskId = 'task_t6_ft'
+          seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+          meshConfigMocks.listMeshes.mockReturnValue([{ id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] }])
+          const readChat = vi.fn(async (cmd: string) => {
+            if (cmd === 'get_status_metadata') return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+            if (cmd !== 'read_chat') return { success: true }
+            return {
+              success: true, status: 'idle', providerSessionId: 'claude-history-t6ft',
+              messages: [{ role: 'assistant', content: 'All done — built and tests pass.', timestamp: 1_700_000_000_000 - 5_000 }],
+            }
+          })
+          const components = { instanceManager: { getByCategory: () => [], getInstance: () => undefined }, commandHandler: { handle: readChat } } as any
+
+          await runMeshReconcileTick(components)
+          expect(getMeshV2BackstopCounters().ackedHoldFastTrackFired).toBe(1)
+          expect(getMeshV2BackstopCounters().ackedHoldDeathDeadlineFired).toBe(0)
+          expect(getMeshV2BackstopCounters().phase4SynthesisFired).toBe(0)
+        } finally {
+          delete process.env.MESH_INFLIGHT_ACKED_TRANSCRIPT_FASTTRACK_GRACE_MS
+          cleanup(meshId)
+        }
+      })
+
+      it('bumps ackedHoldDeathDeadlineFired when the death-deadline backstop releases a held synth', async () => {
+        const meshId = `mesh_t6_death_${Date.now()}`
+        __resetMeshV2BackstopCountersForTests()
+        process.env.MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS = '0'
+        try {
+          const sessionId = 'sess-t6-death'
+          const nodeId = 'node_local'
+          const taskId = 'task_t6_death'
+          seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+          meshConfigMocks.listMeshes.mockReturnValue([{ id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] }])
+          const readChat = vi.fn(async (cmd: string) => {
+            if (cmd === 'get_status_metadata') return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+            if (cmd !== 'read_chat') return { success: true }
+            return {
+              success: true, status: 'idle', providerSessionId: 'claude-history-t6death',
+              messages: [{ role: 'assistant', content: 'All done — built and tests pass.', timestamp: 1_700_000_000_000 - 5_000 }],
+            }
+          })
+          const components = { instanceManager: { getByCategory: () => [], getInstance: () => undefined }, commandHandler: { handle: readChat } } as any
+
+          await runMeshReconcileTick(components)
+          expect(getMeshV2BackstopCounters().ackedHoldDeathDeadlineFired).toBe(1)
+          expect(getMeshV2BackstopCounters().ackedHoldFastTrackFired).toBe(0)
+          expect(getMeshV2BackstopCounters().phase4SynthesisFired).toBe(0)
+        } finally {
+          delete process.env.MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS
+          cleanup(meshId)
+        }
+      })
+
+      it('does NOT bump any backstop counter when an acked task is HELD (no synth commits)', async () => {
+        const meshId = `mesh_t6_held_${Date.now()}`
+        __resetMeshV2BackstopCountersForTests()
+        // Default 8-min death-deadline, no fast-track override → a mid-turn idle blip is
+        // held indefinitely: nothing synthesizes, so no backstop fires. Target-0 baseline.
+        try {
+          const sessionId = 'sess-t6-held'
+          const nodeId = 'node_local'
+          const taskId = 'task_t6_held'
+          seedAckedDispatch(meshId, nodeId, sessionId, taskId, 5 * 60)
+          meshConfigMocks.listMeshes.mockReturnValue([{ id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] }])
+          const readChat = vi.fn(async (cmd: string) => {
+            if (cmd === 'get_status_metadata') return { success: true, status: { sessions: [{ id: sessionId, status: 'idle' }] } }
+            if (cmd !== 'read_chat') return { success: true }
+            return {
+              success: true, status: 'idle', providerSessionId: 'claude-history-t6held',
+              messages: [{ role: 'assistant', content: 'intermediate text', timestamp: 1_700_000_000_000 - 5_000 }],
+            }
+          })
+          const components = { instanceManager: { getByCategory: () => [], getInstance: () => undefined }, commandHandler: { handle: readChat } } as any
+
+          await runMeshReconcileTick(components)
+          expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
+          expect(getMeshV2BackstopCounters().phase4SynthesisFired).toBe(0)
+          expect(getMeshV2BackstopCounters().ackedHoldFastTrackFired).toBe(0)
+          expect(getMeshV2BackstopCounters().ackedHoldDeathDeadlineFired).toBe(0)
+        } finally {
+          cleanup(meshId)
+        }
+      })
     })
 
     // ── T2 (B2b): acked-hold state persistence across a daemon restart ──────────

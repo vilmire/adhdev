@@ -369,6 +369,22 @@ export interface MeshContext {
      * falls back to the daemon-level anchor.
      */
     coordinatorSessionId?: string;
+    /**
+     * T6 (B3c): the mesh-protocol-v2 enforce/backstop counters snapshot ridden on the
+     * most recent local get_pending_mesh_events drain response (set by
+     * drainCoordinatorPendingEvents). Lets a pure stdio MCP coordinator surface the
+     * enforce state + quarantine / last-resort-backstop tallies in mesh_status without
+     * a second daemon round-trip. Absent on version-skewed daemons that don't ride it.
+     */
+    lastMeshProtocolV2Counters?: MeshProtocolV2CountersSnapshot;
+}
+
+/** T6 (B3c) live v2 enforce/observability counters snapshot (mirrors the daemon-core
+ *  RepoMeshStatus.meshProtocolV2Counters shape). Structural type — no daemon-core import. */
+export interface MeshProtocolV2CountersSnapshot {
+    enforce: boolean;
+    drain: Record<string, number>;
+    backstop: Record<string, number>;
 }
 
 export type MeshSessionProviderMetadata = {
@@ -2095,6 +2111,12 @@ export async function drainCoordinatorPendingEvents(
         const drainLocalToSurface = async (): Promise<void> => {
             const raw = await transport.command('get_pending_mesh_events', localPendingEventArgs) as any;
             const payloadRaw = unwrapCommandPayload(raw);
+            // T6 (B3c): capture the enforce/backstop counters the daemon rode on this
+            // local drain so mesh_status can surface them (see MeshContext).
+            const counters = payloadRaw?.meshProtocolV2Counters ?? raw?.meshProtocolV2Counters;
+            if (counters && typeof counters === 'object') {
+                ctx.lastMeshProtocolV2Counters = counters as MeshProtocolV2CountersSnapshot;
+            }
             const hasLiveCliCoordinator = payloadRaw?.hasLiveCliCoordinator === true
                 || raw?.hasLiveCliCoordinator === true;
             // SELF-COORDINATOR INBOX LEVEL-DRAIN (Defect 2): the daemon relaxed the busy-coordinator

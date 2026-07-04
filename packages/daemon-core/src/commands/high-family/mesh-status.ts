@@ -19,7 +19,13 @@ import {
     normalizeMeshNodeId,
     daemonIdsEquivalent,
 } from '@adhdev/mesh-shared';
-import { getPendingMeshCoordinatorEvents } from '../../mesh/mesh-events.js';
+import {
+    getPendingMeshCoordinatorEvents,
+    getMeshV2DrainCounters,
+    getMeshV2BackstopCounters,
+    isMeshProtocolV2EnforceEnabled,
+} from '../../mesh/mesh-events.js';
+import type { MeshProtocolV2Counters } from '../../repo-mesh-types.js';
 import { getRecentUnroutableDeliveries } from '../../mesh/mesh-routing.js';
 import { normalizeMeshDaemonRole, resolveMeshHostStatus } from '../../mesh/mesh-host-ownership.js';
 import { buildPreviewFreshness } from '../../mesh/preview-freshness.js';
@@ -592,6 +598,15 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // that a worker completion was lost (envelope present, mesh unresolved) instead
                     // of it vanishing silently. Diagnostic-only — never cached (see omit below).
                     const unroutableDeliveries = getRecentUnroutableDeliveries();
+                    // T6 (B3c): live enforce/observability counters from this daemon. A
+                    // process-lifetime snapshot (never cached — like unroutableDeliveries)
+                    // so an operator/coordinator can read enforce state, quarantine tallies,
+                    // and last-resort backstop fires straight from the aggregate status.
+                    const meshProtocolV2Counters: MeshProtocolV2Counters = {
+                        enforce: isMeshProtocolV2EnforceEnabled(),
+                        drain: { ...getMeshV2DrainCounters() },
+                        backstop: { ...getMeshV2BackstopCounters() },
+                    };
                     const previewFreshness = (() => {
                         const localRepoRoot = nodeStatuses
                             .map((node: any) => readStringValue(node?.git?.repoRoot, node?.repoRoot, node?.workspace))
@@ -707,6 +722,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         ...(historicalSessions ? { historicalSessions } : {}),
                         ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
                         ...(unroutableDeliveries.length > 0 ? { unroutableDeliveries } : {}),
+                        meshProtocolV2Counters,
                         activeRefineJobs: Array.from(ctx.runningRefineJobs.values())
                             .filter(job => job.meshId === meshId)
                             .map(job => ({
@@ -718,7 +734,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                 targetCoordinatorDaemonId: job.targetCoordinatorDaemonId,
                             })),
                     };
-                    const { pendingCoordinatorEvents: _pendingCoordinatorEvents, unroutableDeliveries: _unroutableDeliveries, ...cacheableStatusResult } = statusResult as any;
+                    const { pendingCoordinatorEvents: _pendingCoordinatorEvents, unroutableDeliveries: _unroutableDeliveries, meshProtocolV2Counters: _meshProtocolV2Counters, ...cacheableStatusResult } = statusResult as any;
                     // Verbose carries full mission goals; never store it in the shared
                     // (compact) aggregate cache or a later compact poll would return the
                     // heavy goals from cache. Return it without caching.
@@ -729,6 +745,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         ...rememberedStatus,
                         ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
                         ...(unroutableDeliveries.length > 0 ? { unroutableDeliveries } : {}),
+                        meshProtocolV2Counters,
                     };
                     logRepoMeshStatusDebug('return_live', {
                         meshId,

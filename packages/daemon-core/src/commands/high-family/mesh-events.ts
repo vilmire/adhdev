@@ -12,6 +12,9 @@ import {
     drainPendingMeshCoordinatorEvents,
     shouldHoldPendingDrainForBusyLocalCoordinator,
     resolveCoordinatorDrainDeliverability,
+    getMeshV2DrainCounters,
+    getMeshV2BackstopCounters,
+    isMeshProtocolV2EnforceEnabled,
 } from '../../mesh/mesh-events.js';
 import { normalizeInteractivePromptResponse } from '../../providers/types/interactive-prompt.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
@@ -66,11 +69,21 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
             return { success: true, events: [], heldForBusyLocalCoordinator: true, hasLiveCliCoordinator };
         }
         const events = drainPendingMeshCoordinatorEvents(meshId || undefined, coordinatorDaemonId);
+        // T6 (B3c): ride the live v2 enforce/backstop counters on the drain response so a
+        // pure stdio MCP coordinator (which reads its inbox via this IPC call, not the
+        // daemon-core mesh_status command) sees the same enforce state + quarantine /
+        // last-resort-backstop tallies. Process-lifetime snapshot; the counters were just
+        // updated by the drain above. Additive — omitting it keeps version-skewed pullers safe.
+        const meshProtocolV2Counters = {
+            enforce: isMeshProtocolV2EnforceEnabled(),
+            drain: { ...getMeshV2DrainCounters() },
+            backstop: { ...getMeshV2BackstopCounters() },
+        };
         // SELF-COORDINATOR INBOX LEVEL-DRAIN: when the busy local coordinator drained its OWN
         // inbox (selfCoordinatorInboxRead), tell the puller these events were surfaced through
         // the caller's tool result — it must NOT re-forward them into the (busy) PTY (that is the
         // lossy path). Absent the flag, delivery is unchanged (reconcile-owned PTY / remote pull).
-        return { success: true, events, hasLiveCliCoordinator, ...(selfCoordinatorInboxRead ? { surfacedForSelfCoordinator: true } : {}) };
+        return { success: true, events, hasLiveCliCoordinator, meshProtocolV2Counters, ...(selfCoordinatorInboxRead ? { surfacedForSelfCoordinator: true } : {}) };
     },
 
     interactive_prompt_response: async (ctx: HighFamilyContext, args: any) => {

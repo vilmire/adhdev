@@ -1020,6 +1020,38 @@ export interface RepoMeshStatus {
      * Omitted when nothing was drained. Mirrors the MCP tool's meshProtocolMetrics.
      */
     meshProtocolMetrics?: MeshProtocolMetrics;
+    /**
+     * T6 (B3c): live process-lifetime mesh-protocol-v2 enforce counters from THIS
+     * daemon — the enforce flag state, drain-routing tallies (deliver / route-away /
+     * dedup / quarantine), and the last-resort backstop fire counts (PHASE-4 synth,
+     * acked-hold fast-track / death-deadline). Diagnostic-only and never cached (a
+     * live snapshot). Under enforce, non-zero quarantine or backstop counts are the
+     * rollout-health signal (target 0). Omitted when unavailable.
+     */
+    meshProtocolV2Counters?: MeshProtocolV2Counters;
+}
+
+/** T6 (B3c) live v2 enforce/observability counters (see RepoMeshStatus.meshProtocolV2Counters). */
+export interface MeshProtocolV2Counters {
+    /** True when MESH_PROTOCOL_V2_ENFORCE is active on this daemon. */
+    enforce: boolean;
+    /** Drain-path routing tallies (accept + enforce). Process-lifetime totals. */
+    drain: {
+        v2Delivered: number;
+        v2RoutedAway: number;
+        v2DedupSkipped: number;
+        v2ValidationFailedAccepted: number;
+        v2ReattributedToDrainer: number;
+        v1BroadcastAccepted: number;
+        v2ValidationFailedQuarantined: number;
+        v1UnversionedQuarantined: number;
+    };
+    /** Last-resort backstop fire counts. Target 0 under a healthy v2 contract. */
+    backstop: {
+        phase4SynthesisFired: number;
+        ackedHoldFastTrackFired: number;
+        ackedHoldDeathDeadlineFired: number;
+    };
 }
 
 /** One provider's version skew across mesh nodes (see RepoMeshStatus.providerVersionSkew). */
