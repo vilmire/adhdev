@@ -46,6 +46,7 @@ import {
     resolvePreferredWorktreeNodeId,
     sanitizeQueueStatusFilter,
     summarizeTaskMessage,
+    taskDependenciesSatisfied,
     triggerMeshQueueAndReport,
     unwrapCommandPayload,
 } from './mesh-tools-internal.js';
@@ -136,9 +137,24 @@ export async function meshEnqueueTask(
             const queueTrigger = await triggerMeshQueueAndReport(ctx);
 
             // 2. For each remote node, directly dispatch to an idle session via P2P
+            //
+            // DEPENDSON-GATE-SYMMETRY: gate the eager push with the SAME predicate the
+            // queue-claim (claimNextQueueTask) and auto-launch paths use. If the task we
+            // just enqueued still has unmet dependencies (or a system block), pushing it
+            // straight to a remote idle session would bypass the gate the pull path
+            // enforces and run the task BEFORE its prerequisites. Defer it entirely to the
+            // queue drain (claim path), which re-evaluates the same predicate once the
+            // dependency completes. Tasks with no dependsOn are unaffected (predicate is
+            // true), preserving the prior eager-push behavior. The status index spans the
+            // FULL queue (incl. completed) so terminal dependency states are visible.
+            const dependencyStatusById = new Map(
+                getQueue(ctx.mesh.id).map(t => [t.id, t.status] as const),
+            );
+            const eagerPushDeferred = !taskDependenciesSatisfied(task, dependencyStatusById);
             const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
             const dispatchPromises: Promise<void>[] = [];
-            for (const node of ctx.mesh.nodes) {
+            const eagerPushTargets = eagerPushDeferred ? [] : ctx.mesh.nodes;
+            for (const node of eagerPushTargets) {
                 const isLocalNode = isLocalControlPlaneNode(ctx, node);
                 if (isLocalNode || !node.daemonId) continue;
                 // When the task targets a specific node, only that node's daemon
@@ -217,6 +233,7 @@ export async function meshEnqueueTask(
                 requiredTags: task.requiredTags,
                 ...(targetNodeId ? { targetNodeId } : {}),
                 ...(preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {}),
+                ...(eagerPushDeferred ? { eagerPushDeferred: true, eagerPushDeferredReason: 'dependencies_unsatisfied' } : {}),
                 queueTrigger,
                 ...buildQueueTriggerGuidance(queueTrigger),
             });

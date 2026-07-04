@@ -1277,9 +1277,35 @@ export function hasPendingDependents(meshId: string, taskId: string): boolean {
 }
 
 /**
+ * M1: THE single dependency-gate predicate. A task is claimable from a
+ * dependency standpoint iff it carries no system block (`blockedReason`) AND
+ * every id in `dependsOn` has reached 'completed'.
+ *
+ * DEPENDSON-GATE-SYMMETRY: every scheduler surface that decides whether a
+ * pending task may run MUST route through this one predicate — the queue claim
+ * (claimNextQueueTask), the auto-launch candidate filter
+ * (maybeAutoLaunchOneQueueSession), and the cloud eager P2P push
+ * (enqueue-and-push). If any surface computes dependency readiness on its own,
+ * the gate goes asymmetric and a task blocked from the pull path can still be
+ * eager-pushed straight to an idle session, silently bypassing its
+ * prerequisites. The semantics here (all deps completed && !blocked) are the
+ * invariant — do not fork them.
+ */
+export function taskDependenciesSatisfied(
+    entry: Pick<MeshWorkQueueEntry, 'dependsOn' | 'blockedReason'>,
+    statusById: Map<string, MeshTaskStatus | string>,
+): boolean {
+    if (entry.blockedReason) return false;
+    const deps = Array.isArray(entry.dependsOn) ? entry.dependsOn : [];
+    return deps.every(depId => statusById.get(depId) === 'completed');
+}
+
+/**
  * M1-4: view-time dependency state for a task — unmet dependency ids and
  * whether the task is currently claimable from a dependency standpoint.
- * Not stored (truth stays in task statuses).
+ * Not stored (truth stays in task statuses). The `dependenciesSatisfied` field
+ * is derived from {@link taskDependenciesSatisfied} so the view and the
+ * scheduler gates can never disagree.
  */
 export function describeTaskDependencyState(
     entry: Pick<MeshWorkQueueEntry, 'dependsOn' | 'blockedReason'>,
@@ -1289,7 +1315,7 @@ export function describeTaskDependencyState(
     const waitingOn = deps.filter(depId => statusById.get(depId) !== 'completed');
     return {
         waitingOn,
-        dependenciesSatisfied: waitingOn.length === 0 && !entry.blockedReason,
+        dependenciesSatisfied: taskDependenciesSatisfied(entry, statusById),
     };
 }
 

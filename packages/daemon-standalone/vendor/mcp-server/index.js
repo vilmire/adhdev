@@ -3634,9 +3634,14 @@ async function meshEnqueueTask(ctx, args) {
     }
     {
       const queueTrigger = await triggerMeshQueueAndReport(ctx);
+      const dependencyStatusById = new Map(
+        (0, import_daemon_core4.getQueue)(ctx.mesh.id).map((t) => [t.id, t.status])
+      );
+      const eagerPushDeferred = !(0, import_daemon_core4.taskDependenciesSatisfied)(task, dependencyStatusById);
       const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
       const dispatchPromises = [];
-      for (const node of ctx.mesh.nodes) {
+      const eagerPushTargets = eagerPushDeferred ? [] : ctx.mesh.nodes;
+      for (const node of eagerPushTargets) {
         const isLocalNode = isLocalControlPlaneNode(ctx, node);
         if (isLocalNode || !node.daemonId) continue;
         if (targetNodeId && node.id !== targetNodeId) continue;
@@ -3704,6 +3709,7 @@ async function meshEnqueueTask(ctx, args) {
         requiredTags: task.requiredTags,
         ...targetNodeId ? { targetNodeId } : {},
         ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},
+        ...eagerPushDeferred ? { eagerPushDeferred: true, eagerPushDeferredReason: "dependencies_unsatisfied" } : {},
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger)
       });

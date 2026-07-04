@@ -140,6 +140,50 @@ describe('DOUBLE-DISPATCH Layer (a) — auto-launch suppressed when node has a l
     }
   })
 
+  it('DEPENDSON-GATE-SYMMETRY: a task with an unmet dependency is excluded from auto-launch (dependencies_unsatisfied, no spawn)', async () => {
+    const meshId = `mesh_al_dep_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId)
+      const components = createComponents([]) // empty node — dependent would otherwise be a legitimate first spawn
+      // The prerequisite is in-flight (assigned, NOT completed) so it is not itself a pending
+      // auto-launch candidate, leaving the dependent as the sole pending task the loop reaches.
+      const dep = enqueueTask(meshId, 'prerequisite', { taskMode: 'code_change' })
+      MeshRuntimeStore.getInstance().updateQueueEntry({
+        ...dep, status: 'assigned', assignedNodeId: NODE_ID, assignedSessionId: 'other-sess',
+        updatedAt: new Date().toISOString(),
+      } as any)
+      const dependent = enqueueTask(meshId, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id] })
+
+      await triggerMeshQueue(components, meshId)
+
+      // The dependent must NOT spawn a session — the launched session would idle→claim and be
+      // refused by the SAME dependency gate in claimNextQueueTask (re-launch churn).
+      expect(autoLaunchReason(meshId, dependent.id)).toBe('dependencies_unsatisfied')
+      expect(launchCliCalls(components)).toBe(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('DEPENDSON-GATE-SYMMETRY: once the dependency completes, the dependent auto-launches (gate opens)', async () => {
+    const meshId = `mesh_al_depdone_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId)
+      const components = createComponents([]) // empty node → legitimate spawn when unblocked
+      const dep = enqueueTask(meshId, 'prerequisite', { taskMode: 'code_change' })
+      const dependent = enqueueTask(meshId, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id] })
+      // Complete the prerequisite so the gate opens.
+      MeshRuntimeStore.getInstance().updateQueueEntry({ ...dep, status: 'completed' } as any)
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(autoLaunchReason(meshId, dependent.id)).not.toBe('dependencies_unsatisfied')
+      expect(launchCliCalls(components)).toBe(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   it('regression: a read-only task still launches when the node\'s only session is genuinely BUSY (holds its own assigned task)', async () => {
     const meshId = `mesh_al_busy_${randomUUID().slice(0, 8)}`
     try {

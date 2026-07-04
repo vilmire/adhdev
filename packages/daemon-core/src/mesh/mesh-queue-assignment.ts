@@ -6,7 +6,7 @@ import { getMesh } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
-import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly, taskDependenciesSatisfied } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-delivery-policy.js';
@@ -1287,6 +1287,10 @@ function readMeshNodeId(node: any): string {
 
 async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, meshId: string, mesh: any): Promise<boolean> {
     const queue = getQueue(meshId);
+    // DEPENDSON-GATE-SYMMETRY: status index over the FULL queue (incl. completed)
+    // so the dependency gate below sees the terminal state of every referenced
+    // dependency, not just the still-active rows.
+    const statusById = new Map(queue.map(task => [task.id, task.status] as const));
     const pending = queue.filter(task => task.status === 'pending');
     if (!pending.length) return false;
 
@@ -1300,6 +1304,16 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
     // higher safety cap (default 2× the write cap).
     const maxReadonlyParallelTasks = resolveMaxReadonlyParallelTasks(maxParallelTasks);
     for (const task of pending) {
+        // DEPENDSON-GATE-SYMMETRY: never spawn a session for a task whose
+        // dependsOn set is not all-completed (or that carries a system block). The
+        // launched session would idle→claim and be refused by the SAME predicate in
+        // claimNextQueueTask, producing orphan-session / re-launch churn. Skip it so
+        // a later tick — after the dependency completes — launches it. Tasks with no
+        // dependsOn pass through unchanged (predicate is true).
+        if (!taskDependenciesSatisfied(task, statusById)) {
+            markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'dependencies_unsatisfied' });
+            continue;
+        }
         const isReadonly = isTaskReadonly(task);
         if (isReadonly) {
             if (activeReadonlyAssignedCount(meshId) >= maxReadonlyParallelTasks) {

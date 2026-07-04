@@ -3,7 +3,7 @@ import { dirname, join } from 'path';
 import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { getLedgerDir } from './mesh-ledger.js';
-import { nodeSatisfiesRequiredTags, isTaskReadonly } from './mesh-work-queue.js';
+import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied } from './mesh-work-queue.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -756,11 +756,11 @@ export class MeshRuntimeStore {
                 ).all(meshId, ...depIds) as Array<{ id: string; status: string }>;
                 for (const r of depRows) depStatus.set(r.id, r.status);
             }
-            const dependenciesSatisfied = (candidate: MeshWorkQueueEntry): boolean => {
-                if (candidate.blockedReason) return false;
-                const deps = Array.isArray(candidate.dependsOn) ? candidate.dependsOn : [];
-                return deps.every(depId => depStatus.get(depId) === 'completed');
-            };
+            // DEPENDSON-GATE-SYMMETRY: the claim gate shares the single
+            // taskDependenciesSatisfied predicate with the auto-launch filter and
+            // the cloud eager P2P push, so a task blocked here is blocked there too.
+            const dependenciesSatisfied = (candidate: MeshWorkQueueEntry): boolean =>
+                taskDependenciesSatisfied(candidate, depStatus);
 
             // Per-candidate node-conflict gate: write tasks require an idle node; read-only
             // tasks bypass the node-busy check so N read-only diagnoses can run on one node
