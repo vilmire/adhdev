@@ -76,7 +76,7 @@ export function MeshQueueSection({ queueSummary, queueLoading, queueError, activ
                                             <span className="text-[10px] text-red-300 bg-red-500/10 border border-red-500/20 rounded-full px-2 py-0.5" title={item.blockedReason}>blocked</span>
                                         )}
                                         {describeTaskDuration(item) && (
-                                            <span className="text-[10px] text-text-muted bg-bg-tertiary border border-border-subtle rounded-full px-2 py-0.5" title="Dispatched → terminal wall clock">
+                                            <span className="text-[10px] text-text-muted bg-surface-secondary border border-border-subtle rounded-full px-2 py-0.5" title="Dispatched → terminal wall clock">
                                                 {describeTaskDuration(item)}{(item.requeueCount ?? 0) > 0 ? ` · ${item.requeueCount} retr${item.requeueCount === 1 ? 'y' : 'ies'}` : ''}
                                             </span>
                                         )}

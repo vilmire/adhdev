@@ -53,7 +53,7 @@ function OptionButton({
       className={`w-full text-left rounded-md border px-3 py-2 transition ${
         selected
           ? 'border-accent-primary bg-accent-primary/15 text-text-primary'
-          : 'border-border-primary bg-surface-secondary text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+          : 'border-border-default bg-surface-secondary text-text-secondary hover:bg-surface-secondary hover:text-text-primary'
       } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
     >
       <span className="flex items-start gap-2">
@@ -61,7 +61,7 @@ function OptionButton({
         <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border ${
           multiSelect ? 'rounded-sm' : 'rounded-full'
         } ${
-          selected ? 'border-accent-primary bg-accent-primary text-accent-on-primary' : 'border-border-secondary'
+          selected ? 'border-accent-primary bg-accent-primary text-accent-on-primary' : 'border-border-subtle'
         }`}>
           {selected ? <IconCheckCircle size={12} /> : null}
         </span>
@@ -151,9 +151,9 @@ export default function InteractivePromptModal({
 
   return (
     <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 px-4 pt-[calc(24px+env(safe-area-inset-top,0px))] pb-[calc(24px+env(safe-area-inset-bottom,0px))]">
-      <div className="flex max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-48px)] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border-primary bg-surface-primary shadow-2xl">
+      <div className="flex max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-48px)] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border-default bg-surface-primary shadow-2xl">
         {/* Header */}
-        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border-primary px-5 py-4">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border-default px-5 py-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-normal text-status-warning">
               <IconWarning size={15} /> Action Required
@@ -190,7 +190,7 @@ export default function InteractivePromptModal({
                     ? 'bg-accent-primary'
                     : i === currentStep
                     ? 'bg-accent-primary/60'
-                    : 'bg-border-primary'
+                    : 'bg-border-default'
                 }`}
               />
             ))}
@@ -240,7 +240,7 @@ export default function InteractivePromptModal({
                     value={selection[currentQuestion.questionId]?.freeformText || ''}
                     disabled={isSubmitting}
                     onChange={(event) => setFreeformText(currentQuestion.questionId, event.currentTarget.value)}
-                    className="w-full min-h-20 rounded-md border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent-primary"
+                    className="w-full min-h-20 rounded-md border border-border-default bg-surface-secondary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent-primary"
                   />
                 </label>
               )}
@@ -255,7 +255,7 @@ export default function InteractivePromptModal({
         </div>
 
         {/* Footer */}
-        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border-primary px-5 pt-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))]">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border-default px-5 pt-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))]">
           <div>
             {!isSingleQuestion && currentStep > 0 && (
               <button type="button" className="btn btn-ghost btn-sm" onClick={handleBack} disabled={isSubmitting}>
