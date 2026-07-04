@@ -22,6 +22,8 @@ import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pt
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter, isNativeSourceCanonicalHistory, materializeProviderNativeHistory, readChatHistory, readProviderChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
+import { recordDebugTrace } from '../logging/debug-trace.js';
+import { shouldCollectTraceCategory } from '../logging/debug-config.js';
 import { traceMeshEventStage, traceMeshEventDrop } from '../mesh/mesh-event-trace.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
@@ -1526,9 +1528,23 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     private completionFinalAssistantEvidence(parsedMessages: unknown, turnStartedAt?: number): CompletionFinalAssistantEvidence {
+        // (FALSEIDLE FixB) UPPER-BOUND turn-end evidence. completionHasFinalAssistantMessage is a
+        // pure message-content check ("does the last visible bubble read as a finalized assistant
+        // reply, post-dating the turn start?"). That LOWER bound alone treated the FIRST assistant
+        // bubble of a turn that is STILL running — a tool call in flight between two assistant
+        // bubbles — as proof the turn ended (RCA cases a & b). Require in ADDITION that the turn is
+        // genuinely OVER: hasAdapterPendingResponse() folds the three upper-bound discriminators
+        // into one — currentTurnScope closed, no in-flight tool (isProcessing false), and no partial
+        // response buffer. So a mid-turn point-sample (short-gen / fast-collapse inline paths that
+        // do NOT route through getCompletedFinalizationBlock) yields present=false and is held/settled
+        // rather than fired. A genuinely-finished turn (adapter idle, no pending) is unaffected — the
+        // gate stays open and the completion fires exactly as before. This mirrors the established
+        // `completionHasFinalAssistantMessage(...) && !hasAdapterPendingResponse()` pairing already
+        // used by the no-progress monitor reconcile path.
+        const turnClosed = !this.hasAdapterPendingResponse();
         if (this.completionHasFinalAssistantMessage(parsedMessages, turnStartedAt)) {
             return {
-                present: true,
+                present: turnClosed,
                 messages: Array.isArray(parsedMessages) ? parsedMessages : [],
                 source: 'parsed',
             };
@@ -1537,7 +1553,7 @@ export class CliProviderInstance implements ProviderInstance {
         const externalMessages = this.readExternalCompletionMessages();
         if (externalMessages) {
             return {
-                present: this.completionHasFinalAssistantMessage(externalMessages, turnStartedAt),
+                present: turnClosed && this.completionHasFinalAssistantMessage(externalMessages, turnStartedAt),
                 messages: externalMessages,
                 source: 'external-native',
             };
@@ -1690,11 +1706,21 @@ export class CliProviderInstance implements ProviderInstance {
 
         const adapterAny = this.adapter as any;
         const approvalResolvedIdle = pending.previousStatus === 'waiting_approval';
-        if (!approvalResolvedIdle) {
-            if (adapterAny?.isWaitingForResponse === true) return { reason: 'adapter_waiting_for_response', terminal: true };
-            if (adapterAny?.currentTurnScope) return { reason: 'adapter_turn_scope_active', terminal: true };
-            if (this.hasAdapterPendingResponse()) return { reason: 'adapter_pending_response', terminal: true };
-        }
+        // (FALSEIDLE-a FixA) The adapter pending-response checks run UNCONDITIONALLY.
+        // Previously they were SKIPPED when approvalResolvedIdle, on the assumption that
+        // a waiting_approval→idle transition proved the approval's turn was over. But
+        // auto-approve RESOLVES the modal and the agent RESUMES the same turn — currentTurnScope
+        // / isWaitingForResponse stay set, or a tool runs — so skipping the guard let the FIRST
+        // assistant bubble of the still-running turn be mistaken for the last and fired an early
+        // completion the coordinator could never correct (RCA case a). Keep the guard live for the
+        // approval path too: when the resumed turn genuinely ends these clear and the completion
+        // fires. Approval-resolved holds are NON-terminal (bounded by COMPLETED_FINALIZATION_MAX_WAIT_MS)
+        // so a provider that never closes its turn-scope still force-fires a weak completion rather
+        // than wedging; the non-approval path keeps its terminal hold (a genuinely-busy adapter must
+        // never force a completion out).
+        if (adapterAny?.isWaitingForResponse === true) return { reason: 'adapter_waiting_for_response', terminal: !approvalResolvedIdle };
+        if (adapterAny?.currentTurnScope) return { reason: 'adapter_turn_scope_active', terminal: !approvalResolvedIdle };
+        if (this.hasAdapterPendingResponse()) return { reason: 'adapter_pending_response', terminal: !approvalResolvedIdle };
 
         const partial = typeof this.adapter.getPartialResponse === 'function'
             ? this.adapter.getPartialResponse()
@@ -1891,6 +1917,40 @@ export class CliProviderInstance implements ProviderInstance {
         };
     }
 
+    // COMPLETION-EARLYNOTIFY instrumentation. A session-keyed FSM-transition +
+    // completion-gate snapshot recorded into the shared debug-trace ring buffer
+    // (secret-safe, length/role/pattern-name only — never screen or bubble text).
+    // Retrieved via getRecentDebugTrace (chat_debug_bundle). Both categories are a
+    // no-op unless collectDebugTrace is on AND the category is selected, so the
+    // hot-path guards below (completionTraceOn / fsmTraceOn) keep production cost
+    // at a single boolean check.
+    private completionTraceOn(): boolean {
+        return shouldCollectTraceCategory('completion-gate');
+    }
+    private fsmTraceOn(): boolean {
+        return shouldCollectTraceCategory('fsm-transition');
+    }
+    private recordCompletionGateTrace(stage: string, payload: Record<string, unknown>): void {
+        recordDebugTrace({
+            category: 'completion-gate',
+            stage,
+            level: 'debug',
+            sessionId: this.instanceId,
+            providerType: this.type,
+            payload,
+        });
+    }
+    private recordFsmTransitionTrace(payload: Record<string, unknown>): void {
+        recordDebugTrace({
+            category: 'fsm-transition',
+            stage: 'transition',
+            level: 'debug',
+            sessionId: this.instanceId,
+            providerType: this.type,
+            payload,
+        });
+    }
+
     private flushCompletedDebounceIfFinalized(): void {
         const pending = this.completedDebouncePending;
         if (!pending) {
@@ -1904,6 +1964,13 @@ export class CliProviderInstance implements ProviderInstance {
         LOG.debug('CLI', `[${this.type}] flush attempt: adapterStatus=${latestStatus.status} latestVisible=${latestVisibleStatus} generatingStartedAt=${this.generatingStartedAt} isWaitingForResponse=${!!(this.adapter as any)?.isWaitingForResponse} hasPartial=${!!this.adapter.getPartialResponse?.()}`);
         if (latestVisibleStatus !== 'idle') {
             LOG.info('CLI', `[${this.type}] cancelled pending completed (resumed ${latestVisibleStatus})`);
+            if (this.completionTraceOn()) this.recordCompletionGateTrace('cancel', {
+                blockReason: 'resumed_status',
+                latestVisibleStatus,
+                previousStatus: pending.previousStatus,
+                busyEpochAtArm: pending.busyEpochAtArm,
+                busyEpoch: this.busyEpoch,
+            });
             this.completedDebouncePending = null;
             this.completedDebounceTimer = null;
             return;
@@ -1921,6 +1988,14 @@ export class CliProviderInstance implements ProviderInstance {
         // so shared behaviour for claude/codex/antigravity is strictly stricter, never looser.
         if (typeof pending.busyEpochAtArm === 'number' && this.busyEpoch !== pending.busyEpochAtArm) {
             LOG.info('CLI', `[${this.type}] cancelled pending completed (busy re-entry during settle: epoch ${pending.busyEpochAtArm}→${this.busyEpoch})`);
+            if (this.completionTraceOn()) this.recordCompletionGateTrace('cancel', {
+                blockReason: 'busy_reentry',
+                latestVisibleStatus,
+                previousStatus: pending.previousStatus,
+                busyEpochAtArm: pending.busyEpochAtArm,
+                busyEpoch: this.busyEpoch,
+                busyEpochDelta: this.busyEpoch - pending.busyEpochAtArm,
+            });
             this.completedDebouncePending = null;
             this.completedDebounceTimer = null;
             return;
@@ -1930,6 +2005,14 @@ export class CliProviderInstance implements ProviderInstance {
             && typeof latestOutputAt === 'number'
             && latestOutputAt > pending.lastOutputAtArm) {
             LOG.info('CLI', `[${this.type}] cancelled pending completed (new PTY output during settle: ${pending.lastOutputAtArm}→${latestOutputAt})`);
+            if (this.completionTraceOn()) this.recordCompletionGateTrace('cancel', {
+                blockReason: 'new_pty_output',
+                latestVisibleStatus,
+                previousStatus: pending.previousStatus,
+                lastOutputAtArm: pending.lastOutputAtArm,
+                lastOutputAt: latestOutputAt,
+                lastOutputAtDelta: latestOutputAt - pending.lastOutputAtArm,
+            });
             this.completedDebouncePending = null;
             this.completedDebounceTimer = null;
             return;
@@ -1975,6 +2058,17 @@ export class CliProviderInstance implements ProviderInstance {
                     if (this.isMeshWorkerSession()) {
                         traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `${blockReason} waited=${waitedMs}ms`);
                     }
+                    // COMPLETION-EARLYNOTIFY: a hold is the CORRECT outcome when the turn is not
+                    // yet proven done (the FixA/FixB gates route here); trace it so an early-notify
+                    // investigation can see the gate holding rather than firing.
+                    if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
+                        blockReason,
+                        latestVisibleStatus,
+                        terminal: block.terminal === true,
+                        holdForTranscript: block.holdForTranscript === true,
+                        approvalResolvedIdle: pending.previousStatus === 'waiting_approval',
+                        waitedMs,
+                    });
                     pending.loggedBlockReason = blockReason;
                 }
                 this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
@@ -1997,6 +2091,19 @@ export class CliProviderInstance implements ProviderInstance {
             if (this.isMeshWorkerSession()) {
                 traceMeshEventStage('fired', this.meshTraceCtx(), `forced after ${waitedMs}ms (${blockReason})`);
             }
+            if (this.completionTraceOn()) this.recordCompletionGateTrace('fire', {
+                path: isTranscriptEvidenceGate && !emittedAfterFinalizationTimeout ? 'canon_c_decoupled' : 'forced_timeout',
+                blockReason,
+                latestVisibleStatus,
+                approvalResolvedIdle: pending.previousStatus === 'waiting_approval',
+                finalAssistantPresent: (completionDiagnostic as any).finalAssistantPresent === true,
+                evidenceSource: (completionDiagnostic as any).finalAssistantEvidenceSource ?? null,
+                lastVisibleRole: (completionDiagnostic as any).lastVisibleRole ?? null,
+                lastVisibleContentLen: (completionDiagnostic as any).lastVisibleContentLength ?? null,
+                emittedAfterFinalizationTimeout,
+                waitedMs,
+                busyEpoch: this.busyEpoch,
+            });
             this.pushEvent({
                 event: 'agent:generating_completed',
                 chatTitle: pending.chatTitle,
@@ -2028,6 +2135,14 @@ export class CliProviderInstance implements ProviderInstance {
         if (this.isMeshWorkerSession()) {
             traceMeshEventStage('fired', this.meshTraceCtx(), `duration=${pending.duration}s`);
         }
+        if (this.completionTraceOn()) this.recordCompletionGateTrace('fire', {
+            path: 'clean',
+            latestVisibleStatus,
+            approvalResolvedIdle: pending.previousStatus === 'waiting_approval',
+            finalAssistantPresent: true,
+            duration: pending.duration,
+            busyEpoch: this.busyEpoch,
+        });
         this.pushEvent({
             event: 'agent:generating_completed',
             chatTitle: pending.chatTitle,
@@ -2424,6 +2539,22 @@ export class CliProviderInstance implements ProviderInstance {
         const previousStatus = this.lastStatus;
         if (newStatus !== this.lastStatus) {
             LOG.info('CLI', `[${this.type}] status: ${this.lastStatus} → ${newStatus}`);
+            // COMPLETION-EARLYNOTIFY: snapshot every FSM status transition (the arm/fire/cancel
+            // decisions downstream all hang off these edges). Guarded so production pays only a
+            // boolean check; payload carries the visibility/auto-approve flags and the continuity
+            // clocks (busyEpoch / lastOutputAt / lastScreenChangeAt) that the completion gate reads.
+            if (this.fsmTraceOn()) this.recordFsmTransitionTrace({
+                from: this.lastStatus,
+                to: newStatus,
+                rawStatus,
+                autoApproveActive,
+                autoApproveHoldIdle,
+                autoApproveBusy: this.autoApproveBusy,
+                hasPending: this.hasAdapterPendingResponse(),
+                busyEpoch: this.busyEpoch,
+                lastOutputAt: typeof adapterStatus?.lastOutputAt === 'number' ? adapterStatus.lastOutputAt : null,
+                lastScreenChangeAt: typeof adapterStatus?.lastScreenChangeAt === 'number' ? adapterStatus.lastScreenChangeAt : null,
+            });
             // GENERATING-MISSING (win32 fresh-worktree first-turn): a freshly-launched session
             // is in 'starting' until its startup-grace settles to idle. When the FIRST inject
             // lands inside that grace window, the adapter can report status DIRECTLY
@@ -2661,6 +2792,17 @@ export class CliProviderInstance implements ProviderInstance {
                         if (this.isMeshWorkerSession()) {
                             traceMeshEventStage('arm', this.meshTraceCtx(), `short-generating settle-arm (source=${shortEvidenceSource}, missingEvidence=${missingEvidence})`);
                         }
+                        if (this.completionTraceOn()) this.recordCompletionGateTrace('arm', {
+                            branch: 'short_generating',
+                            previousStatus: this.lastStatus,
+                            turnStartedAt: shortTurnStartedAt || null,
+                            busyEpochAtArm: this.busyEpoch,
+                            lastOutputAtArm: typeof adapterStatus?.lastOutputAt === 'number' ? adapterStatus.lastOutputAt : null,
+                            flushDelay: NATIVE_HISTORY_MESH_IDLE_SETTLE_MS,
+                            evidenceSource: shortEvidenceSource,
+                            missingEvidence,
+                            hasFinalSummary: !!shortFinalSummary,
+                        });
                         this.scheduleCompletedDebounceFlush(NATIVE_HISTORY_MESH_IDLE_SETTLE_MS);
                     } else if (missingEvidence) {
                         // NON-MESH, missing evidence: suppress the completion event entirely (the
@@ -2749,6 +2891,16 @@ export class CliProviderInstance implements ProviderInstance {
                         ? (meshSettleSession ? NATIVE_HISTORY_MESH_IDLE_SETTLE_MS : 0)
                         : 3000;
                     LOG.debug('CLI', `[${this.type}] set completedDebouncePending duration=${duration}s ownsExternalHistory=${ownsExternalHistory} meshSettle=${meshSettleSession} flushDelay=${flushDelay}ms generatingStartedAt=${this.generatingStartedAt}`);
+                    if (this.completionTraceOn()) this.recordCompletionGateTrace('arm', {
+                        branch: 'normal',
+                        previousStatus: this.completedDebouncePending.previousStatus,
+                        turnStartedAt: this.completedDebouncePending.turnStartedAt ?? null,
+                        busyEpochAtArm: this.completedDebouncePending.busyEpochAtArm ?? null,
+                        lastOutputAtArm: this.completedDebouncePending.lastOutputAtArm ?? null,
+                        flushDelay,
+                        ownsExternalHistory,
+                        meshSettle: meshSettleSession,
+                    });
                     this.scheduleCompletedDebounceFlush(flushDelay);
                 }
             } else if (newStatus === 'idle' && this.lastStatus === 'starting') {

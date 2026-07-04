@@ -38,6 +38,8 @@ import { loadFsmSpec } from './fsm-loader.js';
 import { applyPreLaunchTrust } from './pre-launch-trust.js';
 import type { Control, DelegateTrigger } from './types.js';
 import { LOG } from '../../logging/logger.js';
+import { recordDebugTrace } from '../../logging/debug-trace.js';
+import { shouldCollectTraceCategory } from '../../logging/debug-config.js';
 import {
     WIN32_PTY_WRITE_CHUNK_CHARS,
     WIN32_PTY_WRITE_CHUNK_GAP_MS,
@@ -300,6 +302,11 @@ export class FsmDriver implements ISpecDriver {
      *  (−1 = whole screen), or a `section:<id>` / `<region>#ignore:<pat>` string
      *  when the clause scopes to a section or declares an ignore_lines filter. */
     private regionLastChangedAt = new Map<number | string, number>();
+    /** COMPLETION-EARLYNOTIFY stable-eval trace: last stable/not-stable verdict
+     *  recorded per stable region, so the trace fires only when the verdict FLIPS
+     *  (not every quiet frame). Cleared on every transition alongside
+     *  regionLastChangedAt. Diagnostic-only — never consulted by the FSM. */
+    private stableVerdictCache = new Map<number | string, boolean>();
     /** Timer that re-runs evaluate() when a time-condition would flip true
      *  with no PTY frame to trigger it. */
     private wakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -684,6 +691,7 @@ export class FsmDriver implements ISpecDriver {
         // Region change timestamps are relative to the previous state's
         // activity; reset so stable_ms in the new state measures from entry.
         this.regionLastChangedAt.clear();
+        this.stableVerdictCache.clear();
         this.pushHistory(fired.to, stateById(this.spec, fired.to)?.label ?? fired.to, {
             reason: 'transition',
             via: `${from}→${fired.to}`,
@@ -818,6 +826,13 @@ export class FsmDriver implements ISpecDriver {
     private trackRegionChanges(currentLines: string[], cursor: { row: number; col: number }, now: number): void {
         if (this.prevScreenLines.length === 0) return;
         const descs = this.stableRegionDescriptors();
+        // COMPLETION-EARLYNOTIFY hook 4: record the stable/not-stable verdict for each
+        // tracked region, but ONLY when the verdict flips (see stableVerdictCache) so a
+        // quiet screen does not spam the ring buffer. This is the case-b diagnostic — an
+        // ignore_lines-scoped stable clause declaring a tool-execution screen "stable-idle"
+        // shows up here as verdict:true with a short fingerprint. Payload carries lengths
+        // and the pattern SOURCE only — never screen text.
+        const stableTraceOn = shouldCollectTraceCategory('fsm-transition');
         // Section ranges depend on screen content, so resolve per-frame for both
         // frames — but only when some tracked region is actually section-scoped.
         const needsSections = descs.some(d => !!d.section);
@@ -839,6 +854,28 @@ export class FsmDriver implements ISpecDriver {
             const cur = filterIgnoredLines(curLines, d.ignoreRe).join('\n');
             const prev = filterIgnoredLines(prevLines, d.ignoreRe).join('\n');
             if (cur !== prev) this.regionLastChangedAt.set(d.key, now);
+            if (stableTraceOn && typeof d.holdMs === 'number') {
+                const lastChanged = this.regionLastChangedAt.get(d.key) ?? this.stateEnteredAt;
+                const ageMs = now - lastChanged;
+                const verdict = ageMs >= d.holdMs;
+                if (this.stableVerdictCache.get(d.key) !== verdict) {
+                    this.stableVerdictCache.set(d.key, verdict);
+                    recordDebugTrace({
+                        category: 'fsm-transition',
+                        stage: 'stable-eval',
+                        level: 'debug',
+                        payload: {
+                            state: this.currentStateId,
+                            regionKey: String(d.key),
+                            ignorePattern: d.ignoreRe?.source ?? null,
+                            fingerprintLen: cur.length,
+                            ageMs,
+                            holdMs: d.holdMs,
+                            verdict,
+                        },
+                    });
+                }
+            }
         }
     }
 
@@ -1440,6 +1477,11 @@ interface StableRegionDescriptor {
     section?: string;
     cursor_above?: number;
     ignoreRe?: RegExp;
+    /** The stable_ms threshold the FIRST clause on this region declares. Used
+     *  only by the COMPLETION-EARLYNOTIFY stable-eval trace to report the
+     *  stable/not-stable verdict; the FSM decision itself is owned by the
+     *  evaluator against the live clause. */
+    holdMs?: number;
 }
 
 function collectStableDescriptors(when: FsmTransition['when'], byKey: Map<number | string, StableRegionDescriptor>): void {
@@ -1447,14 +1489,19 @@ function collectStableDescriptors(when: FsmTransition['when'], byKey: Map<number
     const w = when as any;
     if ('stable_ms' in w) {
         const key = stableRegionKey(w);
-        if (!byKey.has(key)) {
+        const existing = byKey.get(key);
+        if (!existing) {
             let ignoreRe: RegExp | undefined;
             if (w.ignore_lines) {
                 // Compile once here; a bad pattern is validated at load time, so
                 // this is best-effort and simply skips the filter if it throws.
                 try { ignoreRe = new RegExp(w.ignore_lines, 'm'); } catch { /* validated at load */ }
             }
-            byKey.set(key, { key, section: w.section, cursor_above: w.cursor_above, ignoreRe });
+            byKey.set(key, { key, section: w.section, cursor_above: w.cursor_above, ignoreRe, holdMs: typeof w.stable_ms === 'number' ? w.stable_ms : undefined });
+        } else if (existing.holdMs === undefined && typeof w.stable_ms === 'number') {
+            // Enrich the -1 whole-screen seed (or an earlier clause) with a threshold
+            // so its verdict can be traced. Geometry/ignoreRe from the first set win.
+            existing.holdMs = w.stable_ms;
         }
         return;
     }
