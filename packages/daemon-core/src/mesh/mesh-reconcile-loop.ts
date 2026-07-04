@@ -45,7 +45,7 @@ import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { loadConfig } from '../config/config.js';
 import { listMeshes } from '../config/mesh-config.js';
 import { LOG, getLogLevel } from '../logging/logger.js';
-import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, buildPendingEventFingerprint, queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, buildPendingEventFingerprint, queuePendingMeshCoordinatorEvent, serializeV2EnvelopeToWire } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -2360,6 +2360,13 @@ function buildForwardPayloadFromPending(event: any): Record<string, unknown> {
             const tid = readNonEmptyString(metadata.taskId) || readNonEmptyString(metadata.meshActiveTaskId);
             return tid ? { taskId: tid } : {};
         })(),
+        // T4 (B3b): carry the v2 envelope (protocolVersion/eventId/scope/dispatchedBy/
+        // intendedFor) across the P2P relay boundary at the TOP LEVEL. These live on the
+        // pending event itself, not inside metadataEvent, so without this the remote pull
+        // re-queue would re-stamp a fresh eventId — breaking cross-machine idempotency and
+        // downgrading the relayed completion to v1 broadcast routing. Spread LAST so the
+        // authoritative envelope always wins over any stale key the metadata spread carried.
+        ...serializeV2EnvelopeToWire(event as PendingMeshCoordinatorEvent),
     };
 }
 

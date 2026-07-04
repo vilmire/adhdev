@@ -7,7 +7,7 @@ import type { SessionRecoveryContext } from './mesh-ledger.js';
 import { updateSessionTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue } from './mesh-work-queue.js';
 import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, readV2EnvelopeFromWire, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { resolveMeshHostStatus } from './mesh-host-ownership.js';
@@ -681,6 +681,13 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     nodeLabel: string;
     event: string;
     metadataEvent: Record<string, unknown>;
+    // T4 (B3b): v2 envelope restored from a remote (P2P) relay's flat payload. Only the
+    // relay path (handleMeshForwardEvent) sets it; the in-process forward path leaves it
+    // undefined and the local emit stamp applies as usual. When present with a preserved
+    // eventId, it is spread onto the re-queued pending event so stampPendingEventV2's
+    // already-stamped short-circuit keeps the ORIGINAL eventId (cross-machine idempotency).
+    v2Envelope?: Partial<Pick<PendingMeshCoordinatorEvent,
+        'protocolVersion' | 'eventId' | 'scope' | 'dispatchedBy' | 'intendedFor'>>;
 }) {
     const eventSessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
     const eventNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
@@ -1363,6 +1370,12 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         // Top-level session anchor for the local PHASE 2 strict-match on the coordinator
         // daemon. Absent → daemon-level broadcast (legacy / single-coordinator path).
         ...(workerCoordinatorSessionId ? { targetCoordinatorSessionId: workerCoordinatorSessionId } : {}),
+        // T4 (B3b): restore the v2 envelope from the remote relay so the re-queue keeps the
+        // ORIGINAL eventId. Spread LAST so its authoritative eventId/scope/identity win over
+        // any default. queuePendingMeshCoordinatorEvent → stampPendingEventV2 then no-ops
+        // (already-stamped short-circuit) instead of minting a fresh eventId. Empty object
+        // for a v1 relay → unchanged v1 emit-stamp path (version-skew safe).
+        ...(args.v2Envelope ?? {}),
     };
     if (queuePendingMeshCoordinatorEvent(pendingEvent)) {
         LOG.info('MeshEvents', `Queued ${args.event} for coordinator (mesh ${args.meshId}${workerCoordinatorDaemonId ? `, coordinator daemon ${workerCoordinatorDaemonId}` : ''}${workerCoordinatorSessionId ? `, coordinator session ${workerCoordinatorSessionId}` : ''})`);
@@ -1518,6 +1531,11 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
         nodeLabel,
         event: eventName,
         metadataEvent: buildRelayMetadataEvent(payload),
+        // T4 (B3b): restore the v2 envelope carried at the top level of the relayed flat
+        // payload (buildForwardPayloadFromPending → serializeV2EnvelopeToWire) so the
+        // re-queue preserves the original eventId (idempotency) and unicast routing rather
+        // than re-stamping a fresh v1/broadcast event. Empty for a v1 relay (version-skew safe).
+        v2Envelope: readV2EnvelopeFromWire(payload),
     });
 }
 

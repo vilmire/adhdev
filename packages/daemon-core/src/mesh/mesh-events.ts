@@ -11,6 +11,8 @@ export {
     drainPendingMeshCoordinatorEvents,
     getPendingMeshCoordinatorEvents,
     clearPendingMeshCoordinatorEvents,
+    serializeV2EnvelopeToWire,
+    readV2EnvelopeFromWire,
 } from './mesh-events-pending.js';
 
 export {

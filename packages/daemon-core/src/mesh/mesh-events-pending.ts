@@ -12,6 +12,7 @@ import {
     coordinatorIdentityEquals,
     coordinatorIdentityFromEmitFields,
     coordinatorIdentityKey,
+    isMeshEventScope,
     MESH_PROTOCOL_VERSION_V2,
     shouldDeliverPendingEventToCoordinator,
     type CoordinatorIdentity,
@@ -676,6 +677,74 @@ export function stampPendingEventV2(
         dispatchedBy: stamp.dispatchedBy,
         ...(stamp.intendedFor ? { intendedFor: stamp.intendedFor } : {}),
     };
+}
+
+// ─── v2 envelope: remote (P2P) boundary preservation (B3b/T4) ─────────────
+//
+// The remote pull round-trip (mesh-reconcile-loop pullRemoteNodeQueues →
+// get_pending_mesh_events → buildForwardPayloadFromPending → handleMeshForwardEvent
+// → queuePendingMeshCoordinatorEvent) flattens a queued PendingMeshCoordinatorEvent
+// into a flat wire payload and rebuilds it on the receiving daemon. The v2 envelope
+// fields (protocolVersion / eventId / scope / dispatchedBy / intendedFor) live at the
+// TOP LEVEL of the event, not inside metadataEvent, so the flatten/rebuild whitelist
+// dropped them: the re-queue then re-stamped a FRESH eventId, breaking cross-machine
+// idempotency and downgrading the relayed completion to v1 (broadcast) routing.
+//
+// These two helpers are the single serialization/deserialization pair for that
+// boundary. serializeV2EnvelopeToWire copies the present v2 fields onto the flat
+// payload; readV2EnvelopeFromWire validates and restores them for the re-queue. The
+// eventId is carried verbatim so stampPendingEventV2's already-stamped short-circuit
+// preserves it (no new UUID). Kept pure + exported so the round-trip is unit-testable.
+
+/** Read a CoordinatorIdentity off an untrusted wire object, or undefined if malformed. */
+function readCoordinatorIdentityFromWire(raw: unknown): CoordinatorIdentity | undefined {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+    const obj = raw as Record<string, unknown>;
+    const daemonId = readNonEmptyString(obj.daemonId);
+    const coordinatorRunId = readNonEmptyString(obj.coordinatorRunId);
+    if (!daemonId || !coordinatorRunId) return undefined;
+    const sessionId = readNonEmptyString(obj.sessionId);
+    return { daemonId, coordinatorRunId, ...(sessionId ? { sessionId } : {}) };
+}
+
+/**
+ * Copy the v2 envelope fields that are present on `event` onto a flat wire
+ * payload. Only sets a field when it is present, so a v1 event contributes
+ * nothing (the payload stays v1-shaped and version-skew safe).
+ */
+export function serializeV2EnvelopeToWire(event: PendingMeshCoordinatorEvent): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    if (event.protocolVersion) out.protocolVersion = event.protocolVersion;
+    if (readNonEmptyString(event.eventId)) out.eventId = event.eventId;
+    if (event.scope) out.scope = event.scope;
+    if (event.dispatchedBy) out.dispatchedBy = event.dispatchedBy;
+    if (event.intendedFor) out.intendedFor = event.intendedFor;
+    return out;
+}
+
+/**
+ * Restore the v2 envelope fields from a flat wire payload for a re-queue. Only
+ * returns fields that survive validation; a payload missing/malforming a field
+ * yields a partial (or empty) object so the re-queue path stays v1-safe. The
+ * eventId is returned verbatim — its preservation is the idempotency guarantee.
+ */
+export function readV2EnvelopeFromWire(payload: Record<string, unknown>): Partial<Pick<
+    PendingMeshCoordinatorEvent,
+    'protocolVersion' | 'eventId' | 'scope' | 'dispatchedBy' | 'intendedFor'
+>> {
+    const out: Partial<Pick<
+        PendingMeshCoordinatorEvent,
+        'protocolVersion' | 'eventId' | 'scope' | 'dispatchedBy' | 'intendedFor'
+    >> = {};
+    if (payload.protocolVersion === MESH_PROTOCOL_VERSION_V2) out.protocolVersion = MESH_PROTOCOL_VERSION_V2;
+    const eventId = readNonEmptyString(payload.eventId);
+    if (eventId) out.eventId = eventId;
+    if (isMeshEventScope(payload.scope)) out.scope = payload.scope;
+    const dispatchedBy = readCoordinatorIdentityFromWire(payload.dispatchedBy);
+    if (dispatchedBy) out.dispatchedBy = dispatchedBy;
+    const intendedFor = readCoordinatorIdentityFromWire(payload.intendedFor);
+    if (intendedFor) out.intendedFor = intendedFor;
+    return out;
 }
 
 export function queuePendingMeshCoordinatorEvent(
