@@ -4,7 +4,18 @@ import { updateDirectDispatchStatus, cleanupTerminalDirectDispatches } from './m
 import { markSessionDeliveriesTerminal } from './mesh-delivery-policy.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { readNonEmptyString, readRecord, resolveEventSessionId, readWorkerResultMetadata, isWeakCompletionEvidence, buildMeshSystemMessage } from './mesh-events-utils.js';
+import { recordDebugTrace } from '../logging/debug-trace.js';
 import { meshNodeIdMatches, sessionIdsEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+
+// EARLYNOTIFY-GATEBYPASS (d): every completed-emit producer that bypasses the CLI-provider
+// completion gate (transcript-reconcile synth here, no-progress reconcile below, the fast-collapse
+// synth in cli-provider-instance) records a completion-gate trace so a synthesized "completed and
+// idle" emit can never again be silent. Content-free by construction — keyed by taskId + source
+// only, never worker/screen text. completion-gate is an ALWAYS_ON_TRACE_CATEGORY, so recordDebugTrace
+// self-gates and lands in the ring even on a production daemon.
+function recordSynthCompletionGateTrace(stage: string, payload: Record<string, unknown>): void {
+    recordDebugTrace({ category: 'completion-gate', stage, level: 'debug', payload });
+}
 
 // ---------------------------------------------------------------------------
 // Stale direct-dispatch detection & transcript reconciliation
@@ -232,6 +243,14 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
         completedAt,
     });
     const workerResult = evidence.workerResult;
+    // EARLYNOTIFY-GATEBYPASS (c): a transcript-reconcile synth is TENTATIVE unless the worker's
+    // summary self-attributes to this turn — i.e. it parsed a worker-result-shaped JSON
+    // (`final_summary_json`), the same self-attribution the grace gate below exempts. A plain-text
+    // transcript tail proves neither turn-finality nor that this reconcile beat the real completion,
+    // so it is marked WEAK: buildPendingEventFingerprint then keys it `…::weak`, leaving the
+    // `…::genuine` slot free for the worker's own later agent:generating_completed to surface (the
+    // CANON-B weak→genuine supersession) instead of being dropped as a duplicate.
+    const selfAttributing = workerResult.source === 'final_summary_json';
     const dispatchTime = dispatch?.timestamp ? new Date(dispatch.timestamp).getTime() : Number.NaN;
     const transcriptTime = args.transcriptMessageAt ? new Date(args.transcriptMessageAt).getTime() : Number.NaN;
     const transcriptAfterDispatch = Number.isFinite(dispatchTime) && Number.isFinite(transcriptTime) && transcriptTime >= dispatchTime;
@@ -281,7 +300,9 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
                 dispatchEntryId: dispatch?.id,
                 dispatchTimestamp: dispatch?.timestamp,
                 transcriptMessageAt: readNonEmptyString(args.transcriptMessageAt),
-                transcriptFinalAssistantPresent: true,
+                // Honestly reflect self-attribution: a plain-text tail did NOT prove a turn-final
+                // assistant message (only a self-attributing final_summary_json did).
+                transcriptFinalAssistantPresent: selfAttributing,
             },
             evidence,
         },
@@ -308,6 +329,11 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
         finalSummary,
         taskId: args.taskId,
         workerResult,
+        // EARLYNOTIFY-GATEBYPASS (c): mark a non-self-attributing synth WEAK so its pending
+        // fingerprint is `…::weak` (isWeakCompletionMetadata reads evidenceLevel), never claiming
+        // the genuine dedup slot. evidenceLevel:'weak' is deliberately NOT a false-idle marker
+        // (the transcript tail existed) — it keeps the completion superseable, not suppressed.
+        ...(selfAttributing ? {} : { evidenceLevel: 'weak' as const }),
         completionDiagnostic: {
             reason: 'direct_task_transcript_reconciliation',
             terminalLedgerKind: kind,
@@ -331,6 +357,16 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
         ...(targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}),
     });
 
+    // (d) The synth fired — record it so this gate-bypassing emit is observable.
+    recordSynthCompletionGateTrace('synth-fire', {
+        producer: 'transcript_reconcile',
+        source: args.source || 'direct_task_transcript_reconciliation',
+        taskId: args.taskId,
+        kind,
+        selfAttributing,
+        evidenceLevel: selfAttributing ? 'sufficient' : 'weak',
+    });
+
     return { reconciled: true, kind, workerResult, ledgerEntryId: entry.id };
 }
 
@@ -349,15 +385,29 @@ export function buildNoProgressCompletionReconciliation(args: {
     const completionDiagnostic = readRecord(args.metadataEvent.completionDiagnostic);
     const finalSummary = readNonEmptyString(args.metadataEvent.finalSummary);
     const status = readNonEmptyString(args.metadataEvent.status).toLowerCase();
+    // EARLYNOTIFY-GATEBYPASS (c): a bare status flag (idle/ready/completed) with NO worker text is
+    // the weakest possible "done" evidence — it is exactly the false-idle the no-progress monitor
+    // fires on. Only a real assistant summary / worker result / confirmed final-assistant makes this
+    // reconcile self-attributing. When it is not, mark the synthesized completion WEAK so a later
+    // genuine completion can still supersede it (and buildMeshSystemMessage appends a verify hint).
+    const noProgressSelfAttributing = Boolean(
+        finalSummary || workerResult || completionDiagnostic?.finalAssistantPresent === true,
+    );
     const explicitCompletionEvidence = Boolean(
-        finalSummary
-        || workerResult
-        || completionDiagnostic?.finalAssistantPresent === true
+        noProgressSelfAttributing
         || status === 'idle'
         || status === 'ready'
         || status === 'completed',
     );
     if (explicitCompletionEvidence) {
+        // (d) A no-progress→completion synth bypasses the CLI provider gate — trace it.
+        recordSynthCompletionGateTrace('synth-fire', {
+            producer: 'no_progress_reconcile',
+            source: 'no_progress_reconciliation',
+            taskId: readNonEmptyString(args.metadataEvent.taskId),
+            selfAttributing: noProgressSelfAttributing,
+            evidenceLevel: noProgressSelfAttributing ? 'sufficient' : 'weak',
+        });
         return {
             ...args.metadataEvent,
             targetSessionId: sessionId,
@@ -367,6 +417,7 @@ export function buildNoProgressCompletionReconciliation(args: {
             source: 'no_progress_reconciliation',
             reconciledFromEvent: 'monitor:no_progress',
             timestamp: args.metadataEvent.timestamp ?? Date.now(),
+            ...(noProgressSelfAttributing ? {} : { evidenceLevel: 'weak' as const }),
             completionDiagnostic: {
                 ...(completionDiagnostic || {}),
                 reconciliationReason: 'provider_completion_evidence',

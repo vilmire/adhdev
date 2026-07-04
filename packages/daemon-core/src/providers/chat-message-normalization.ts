@@ -104,22 +104,56 @@ export function extractFinalAssistantSummaryEvidence(
   messages: ChatMessage[] | null | undefined,
   maxChars: number = DEFAULT_FINAL_SUMMARY_MAX_CHARS,
 ): { finalSummary: string; transcriptMessageAt?: string } {
-  if (!Array.isArray(messages) || messages.length === 0) return { finalSummary: '' };
+  const turnEnd = selectFinalAssistantTurnEndMessage(messages);
+  if (!turnEnd) return { finalSummary: '' };
+  return {
+    finalSummary: flattenContent(turnEnd.content).trim().slice(0, maxChars),
+    transcriptMessageAt: readChatMessageTimestampIso(turnEnd),
+  };
+}
+
+/**
+ * EARLYNOTIFY-GATEBYPASS (a)/(b) — the shared turn-finality selector for the completion
+ * final-assistant judgement, so the ~duplicated "which bubble is the turn's final answer"
+ * logic is decided ONE way (UNIFY A-6).
+ *
+ * Returns the message that qualifies as the turn's FINAL assistant bubble, or null when the
+ * transcript does not (yet) prove a turn end. The rule is a NON-EMPTY LATEST user-facing
+ * assistant/model bubble:
+ *   - Scanning from the end, the FIRST user-facing assistant/model bubble encountered IS the
+ *     turn-end candidate. If it is EMPTY (a streaming placeholder / mid-turn narration whose
+ *     text has not landed), the turn is still in flight → return null. Crucially we do NOT walk
+ *     back past that empty bubble to promote an EARLIER assistant narration to "final" (the
+ *     Defect-B walk-back).
+ *   - Trailing activity/internal bubbles (tool/thought/status) are skipped — they are not the
+ *     assistant's user-facing answer.
+ *   - A trailing user-facing USER message (a freshly dispatched task with no reply yet) means the
+ *     assistant did not have the last word — no earlier bubble is promoted here; callers that must
+ *     still reach a prior turn's tail use the timestamp-scoped extractor instead.
+ *
+ * A bare snapshot-idle with an arbitrary non-empty tail therefore does NOT qualify as a turn end;
+ * only a genuine latest-assistant bubble does. Turn-finality signals that live OUTSIDE the
+ * transcript (a committed generating→idle FSM transition, a self-attributing final_summary_json,
+ * or a continuous-idle streak) are enforced by the callers (the CLI completion gate, the reconcile
+ * grace gate) on top of this structural check.
+ */
+export function selectFinalAssistantTurnEndMessage(
+  messages: ChatMessage[] | null | undefined,
+): ChatMessage | null {
+  if (!Array.isArray(messages) || messages.length === 0) return null;
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (!msg) continue;
     const classification = classifyChatMessageVisibility(msg);
-    if (classification.isUserFacing && (msg.role === 'assistant' || msg.role === 'model')) {
-      const text = flattenContent(msg.content).trim();
-      if (text) {
-        return {
-          finalSummary: text.slice(0, maxChars),
-          transcriptMessageAt: readChatMessageTimestampIso(msg),
-        };
-      }
+    if (!classification.isUserFacing) continue; // skip tool/thought/status activity + internal
+    if (msg.role === 'assistant' || msg.role === 'model') {
+      // The latest user-facing assistant bubble: it is the turn end iff it has real text.
+      return flattenContent(msg.content).trim() ? msg : null;
     }
+    // A user (or other role) had the last user-facing word → the assistant turn is not complete.
+    return null;
   }
-  return { finalSummary: '' };
+  return null;
 }
 
 export const BUILTIN_CHAT_MESSAGE_KINDS = ['standard', 'thought', 'tool', 'terminal', 'system'] as const;

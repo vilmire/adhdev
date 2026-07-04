@@ -253,7 +253,10 @@ describe('COMPLETION-EARLYNOTIFY trace hooks', () => {
     expect(holds[0].payload?.blockReason).toBe('adapter_turn_scope_active')
   })
 
-  it('t4c: records nothing when the category is not collected', () => {
+  it('t4c: completion-gate is ALWAYS-ON — a fire still records even with debug collection off', () => {
+    // completion-gate (and fsm-transition) are ALWAYS_ON_TRACE_CATEGORIES, so the gate's
+    // decisions must land in the ring even on a production daemon where collectDebugTrace is
+    // off — a completed-emit producer can never bypass the gate silently (EARLYNOTIFY-GATEBYPASS).
     resetDebugRuntimeConfig()
     configureDebugTraceStore()
     clearDebugTrace()
@@ -265,6 +268,6 @@ describe('COMPLETION-EARLYNOTIFY trace hooks', () => {
     })
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
-    expect(getRecentDebugTrace({ category: 'completion-gate' })).toHaveLength(0)
+    expect(getRecentDebugTrace({ category: 'completion-gate' }).length).toBeGreaterThanOrEqual(1)
   })
 })

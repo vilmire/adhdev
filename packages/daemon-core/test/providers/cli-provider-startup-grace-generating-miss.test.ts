@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { clearDebugTrace, configureDebugTraceStore, getRecentDebugTrace } from '../../src/logging/debug-trace.js'
+import { resetDebugRuntimeConfig, setDebugRuntimeConfig } from '../../src/logging/debug-config.js'
 
 // GENERATING-MISSING (win32 fresh-worktree first-turn): a freshly-launched mesh worker
 // session is in FSM state 'starting' (CliStateEngine.currentStatus defaults to 'starting';
@@ -251,10 +253,41 @@ describe('CliProviderInstance — fresh-session startup-grace generating miss', 
     const completions = completionEvents(events)
     expect(completions.length).toBe(1)
     expect(completions[0].completionDiagnostic?.reason).toBe('startup_grace_fast_collapse')
+    // EARLYNOTIFY-GATEBYPASS (c): the fast-collapse never observed the turn's generating phase,
+    // so its synth is weak-by-default (evidenceLevel:'weak') — a later genuine completion can
+    // still supersede it.
+    expect(completions[0].evidenceLevel).toBe('weak')
     // A well-formed started→completed pair (chat bubble + CANON-B dispatch ack).
     expect(events.some((e) => e.event === 'agent:generating_started')).toBe(true)
     // agent:ready is still emitted (preserved behavior).
     expect(events.some((e) => e.event === 'agent:ready')).toBe(true)
+  })
+
+  // EARLYNOTIFY-GATEBYPASS (d): the fast-collapse synth is a completed-emit producer that bypasses
+  // the flush-gate — it must record a completion-gate trace so the bypass is never silent.
+  describe('fast-collapse records a completion-gate trace', () => {
+    beforeEach(() => {
+      // traceContent:true so the assertion can read the raw payload.path string (the secret-safe
+      // sanitizer otherwise summarizes every string value to `[N chars]`).
+      setDebugRuntimeConfig({ logLevel: 'debug', collectDebugTrace: true, traceContent: true, traceBufferSize: 200, traceCategories: [] })
+      configureDebugTraceStore(); clearDebugTrace()
+    })
+    afterEach(() => { clearDebugTrace(); resetDebugRuntimeConfig(); configureDebugTraceStore() })
+
+    it('records a completion-gate synth-fire trace for the fast-collapse (always-on category)', () => {
+      const { instance, setAdapterStatus, setAdapterWaiting } = makeInstance('starting')
+      instance.adapter.currentTurnTaskId = 'task-grace-1'
+      setAdapterWaiting(false)
+      setAdapterStatus('idle')
+      instance.detectStatusTransition() // starting → idle — fast-collapse synth fires
+
+      const traces = getRecentDebugTrace({ category: 'completion-gate' })
+        .filter((t) => t.stage === 'synth-fire' && t.payload?.path === 'startup_grace_fast_collapse')
+      expect(traces.length).toBeGreaterThanOrEqual(1)
+      expect(traces[0].sessionId).toBe('sess-grace-1')
+      // Content-free: no worker/screen text leaks.
+      expect(Object.keys(traces[0].payload ?? {})).not.toContain('finalSummary')
+    })
   })
 
   it('GUARD: a genuine idle boot (starting → idle, no turn ever started) emits ready only, no completion', () => {

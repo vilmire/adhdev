@@ -10,6 +10,7 @@ import {
   buildToolChatMessage,
   buildUserChatMessage,
   DEFAULT_FINAL_SUMMARY_MAX_CHARS,
+  extractFinalAssistantSummaryEvidence,
   extractFinalSummaryFromMessages,
   filterUserFacingChatMessages,
   isBuiltinChatMessageKind,
@@ -17,6 +18,7 @@ import {
   normalizeChatMessage,
   normalizeChatMessageKind,
   normalizeChatMessages,
+  selectFinalAssistantTurnEndMessage,
 } from '../../src/providers/chat-message-normalization';
 
 describe('chat message normalization', () => {
@@ -197,5 +199,49 @@ describe('chat message normalization', () => {
       { role: 'assistant', content: 'assistant message', meta: { userFacing: true } },
     ] as any;
     expect(extractFinalSummaryFromMessages(messages)).toBe('assistant message');
+  });
+});
+
+// EARLYNOTIFY-GATEBYPASS (a)/(b): the completion final-assistant evidence must require a genuine
+// turn end — a NON-EMPTY LATEST user-facing assistant bubble. An empty (streaming / mid-turn)
+// latest assistant bubble must NOT walk back to promote an earlier narration to "final".
+describe('extractFinalAssistantSummaryEvidence — turn-finality (Defect-B)', () => {
+  it('returns the latest non-empty assistant bubble as the turn end', () => {
+    const messages = [
+      { role: 'user', content: 'task' },
+      { role: 'assistant', content: 'the final answer' },
+    ] as any;
+    expect(extractFinalAssistantSummaryEvidence(messages).finalSummary).toBe('the final answer');
+  });
+
+  it('returns empty when the LATEST assistant bubble is empty (streaming) — no walk-back to an earlier one', () => {
+    const messages = [
+      { role: 'user', content: 'task A' },
+      { role: 'assistant', content: 'earlier mid-turn narration' },
+      { role: 'user', content: 'task B' },
+      // The B turn is streaming: its assistant bubble exists but has no text yet.
+      { role: 'assistant', content: '' },
+    ] as any;
+    // Must NOT promote 'earlier mid-turn narration' — the turn has not ended.
+    expect(extractFinalAssistantSummaryEvidence(messages).finalSummary).toBe('');
+    expect(selectFinalAssistantTurnEndMessage(messages)).toBeNull();
+  });
+
+  it('returns empty when the last user-facing word is a user message (dispatched task, no reply yet)', () => {
+    const messages = [
+      { role: 'assistant', content: 'prior task answer' },
+      { role: 'user', content: 'new task with no assistant reply yet' },
+    ] as any;
+    expect(extractFinalAssistantSummaryEvidence(messages).finalSummary).toBe('');
+    expect(selectFinalAssistantTurnEndMessage(messages)).toBeNull();
+  });
+
+  it('skips trailing activity (tool/thought) bubbles and still finds the assistant turn end', () => {
+    const messages = [
+      { role: 'user', content: 'task' },
+      { role: 'assistant', content: 'the final answer' },
+      { role: 'assistant', content: 'ran a tool', kind: 'tool' },
+    ] as any;
+    expect(extractFinalAssistantSummaryEvidence(messages).finalSummary).toBe('the final answer');
   });
 });

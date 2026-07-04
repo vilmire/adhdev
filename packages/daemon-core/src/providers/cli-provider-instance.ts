@@ -2505,12 +2505,27 @@ export class CliProviderInstance implements ProviderInstance {
         if (this.isMeshWorkerSession()) {
             traceMeshEventStage('fired', this.meshTraceCtx(), `${reason} (source=${fcEvidenceSource})`);
         }
+        // EARLYNOTIFY-GATEBYPASS (c): a startup-grace fast-collapse never OBSERVED the turn's
+        // generating phase — its evidence is a plain transcript tail, never a self-attributing
+        // final_summary_json — so this synth is TENTATIVE by default. Mark it WEAK
+        // (evidenceLevel:'weak') so buildPendingEventFingerprint keys it `…::weak` and any later
+        // genuine agent:generating_completed for the same task can still surface (CANON-B). The
+        // stronger missing_final_assistant marker is preserved when there is also no summary.
+        if (this.completionTraceOn()) this.recordCompletionGateTrace('synth-fire', {
+            path: 'startup_grace_fast_collapse',
+            reason,
+            evidenceSource: fcEvidenceSource,
+            hadFinalSummary: !!fcFinalSummary,
+            missingEvidence,
+            evidenceLevel: 'weak',
+        });
         this.pushEvent({
             event: 'agent:generating_completed',
             chatTitle,
             duration: 0,
             timestamp: now,
             finalSummary: fcFinalSummary,
+            evidenceLevel: 'weak',
             completionDiagnostic: {
                 reason,
                 finalAssistantEvidenceSource: fcEvidenceSource,

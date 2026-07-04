@@ -672,20 +672,33 @@ export function readMessageTimestampIso(message: any): string | undefined {
     return undefined;
 }
 
+// EARLYNOTIFY-GATEBYPASS (a)/(b): mirror daemon-core's selectFinalAssistantTurnEndMessage
+// turn-finality rule so the MCP mesh_status transcript reconcile applies the SAME "which bubble is
+// the turn's final answer" judgement as the daemon path it delegates to. A genuine turn end is a
+// NON-EMPTY LATEST coordinator-visible assistant/agent bubble: scanning from the end, the first
+// coordinator-visible message must itself be a non-empty assistant reply. An empty (streaming /
+// mid-turn) latest assistant bubble, or a trailing user message, means the turn is not proven done
+// — we do NOT walk back past it to promote an earlier narration to "final" (the Defect-B walk-back)
+// and we do NOT fall back to a bare payload.summary in that case. This structural check plus the
+// daemon-side grace gate (reconcileDirectDispatchCompletionFromTranscript) keep a coordinator poll
+// from synthesizing a completion mid-turn.
 export function readFinalAssistantTranscriptEvidence(payload: any): { finalSummary?: string; transcriptMessageAt?: string } {
     const rawMessages = Array.isArray(payload?.messages) ? payload.messages : [];
-    const finalAssistant = [...rawMessages]
-        .reverse()
-        .filter(isCoordinatorVisibleMessage)
-        .find((message: any) => {
-            const role = String(message?.role ?? '').toLowerCase();
-            return (role === 'assistant' || role === 'agent') && messageContent(message).trim();
-        });
-    const finalSummary = messageContent(finalAssistant).trim()
-        || (typeof payload?.summary === 'string' && payload.summary.trim() ? payload.summary.trim() : undefined);
+    let turnEnd: any | undefined;
+    for (let i = rawMessages.length - 1; i >= 0; i--) {
+        const message = rawMessages[i];
+        if (!isCoordinatorVisibleMessage(message)) continue; // skip tool/thought/status activity
+        const role = String(message?.role ?? '').toLowerCase();
+        // First coordinator-visible message from the end = who had the last word.
+        turnEnd = (role === 'assistant' || role === 'agent') && messageContent(message).trim()
+            ? message
+            : undefined;
+        break;
+    }
+    if (!turnEnd) return { finalSummary: undefined, transcriptMessageAt: undefined };
     return {
-        finalSummary,
-        transcriptMessageAt: finalAssistant ? readMessageTimestampIso(finalAssistant) : undefined,
+        finalSummary: messageContent(turnEnd).trim(),
+        transcriptMessageAt: readMessageTimestampIso(turnEnd),
     };
 }
 
@@ -744,6 +757,13 @@ export async function reconcileDirectDispatchesFromTranscriptEvidence(
             continue;
         }
         const { session } = findNodeSession(liveNodes, nodeId, sessionId);
+        // EARLYNOTIFY-GATEBYPASS (e): a single snapshot-idle sample is NOT sufficient to synthesize
+        // a completion — a mid-turn poll routinely reads idle for an instant. This idle check only
+        // makes the session ELIGIBLE for a transcript read; the actual turn-finality gate is
+        // enforced downstream: readFinalAssistantTranscriptEvidence requires a genuine non-empty
+        // latest-assistant turn end, and reconcileDirectDispatchCompletionFromTranscript (the
+        // guarded daemon path this delegates to) applies the dispatch grace window + stale-summary
+        // guard before it will write a terminal. So a coordinator poll cannot force a mid-turn synth.
         if (!session || !isIdleSessionRecord(session)) {
             skipped += 1;
             continue;
