@@ -2026,14 +2026,18 @@ function readMessageTimestampIso(message) {
 }
 function readFinalAssistantTranscriptEvidence(payload) {
   const rawMessages = Array.isArray(payload?.messages) ? payload.messages : [];
-  const finalAssistant = [...rawMessages].reverse().filter(isCoordinatorVisibleMessage).find((message) => {
+  let turnEnd;
+  for (let i = rawMessages.length - 1; i >= 0; i--) {
+    const message = rawMessages[i];
+    if (!isCoordinatorVisibleMessage(message)) continue;
     const role = String(message?.role ?? "").toLowerCase();
-    return (role === "assistant" || role === "agent") && messageContent(message).trim();
-  });
-  const finalSummary = messageContent(finalAssistant).trim() || (typeof payload?.summary === "string" && payload.summary.trim() ? payload.summary.trim() : void 0);
+    turnEnd = (role === "assistant" || role === "agent") && messageContent(message).trim() ? message : void 0;
+    break;
+  }
+  if (!turnEnd) return { finalSummary: void 0, transcriptMessageAt: void 0 };
   return {
-    finalSummary,
-    transcriptMessageAt: finalAssistant ? readMessageTimestampIso(finalAssistant) : void 0
+    finalSummary: messageContent(turnEnd).trim(),
+    transcriptMessageAt: readMessageTimestampIso(turnEnd)
   };
 }
 function findNodeSession(nodes, nodeId, sessionId) {
