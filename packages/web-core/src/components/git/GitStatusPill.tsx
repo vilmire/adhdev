@@ -29,14 +29,14 @@ export function getGitStatusPillTone(git?: GitCompactSummary | null): 'quiet' | 
 function getToneClassName(tone: NonNullable<ReturnType<typeof getGitStatusPillTone>>): string {
     switch (tone) {
         case 'conflict':
-            return 'border-red-500/25 bg-red-500/[0.08] text-red-400'
+            return 'border-status-error/40 bg-status-error/10 text-status-error'
         case 'error':
             return 'border-yellow-500/25 bg-yellow-500/[0.08] text-yellow-500'
         case 'dirty':
             return 'border-orange-500/25 bg-orange-500/[0.08] text-orange-400'
         case 'quiet':
         default:
-            return 'border-emerald-500/15 bg-emerald-500/[0.06] text-emerald-500'
+            return 'border-status-online/40 bg-status-online/10 text-status-online'
     }
 }
 

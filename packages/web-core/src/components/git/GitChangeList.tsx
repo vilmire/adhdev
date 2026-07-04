@@ -19,13 +19,13 @@ const STATUS_LABEL: Record<GitFileChangeStatus, string> = {
 }
 
 const STATUS_CLASS: Record<GitFileChangeStatus, string> = {
-    added: 'text-emerald-400',
+    added: 'text-status-online',
     modified: 'text-orange-400',
-    deleted: 'text-red-400',
-    renamed: 'text-sky-400',
-    copied: 'text-sky-400',
-    untracked: 'text-zinc-400',
-    conflict: 'text-red-400 font-bold',
+    deleted: 'text-status-error',
+    renamed: 'text-accent-primary',
+    copied: 'text-accent-primary',
+    untracked: 'text-text-muted',
+    conflict: 'text-status-error font-bold',
 }
 
 function basename(path: string): string {
@@ -48,11 +48,11 @@ export default function GitChangeList({ files, truncated, onFileClick, selectedP
                 {files.map((file) => {
                     const isSelected = selectedPath === file.path
                     const label = STATUS_LABEL[file.status] ?? '?'
-                    const labelClass = STATUS_CLASS[file.status] ?? 'text-zinc-400'
+                    const labelClass = STATUS_CLASS[file.status] ?? 'text-text-muted'
                     const dir = dirname(file.path)
                     const name = basename(file.path)
                     const stagedDot = file.staged
-                        ? <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 align-middle" title="Staged" />
+                        ? <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-status-online align-middle" title="Staged" />
                         : null
 
                     return (
@@ -74,9 +74,9 @@ export default function GitChangeList({ files, truncated, onFileClick, selectedP
                             </span>
                             {!file.binary && (file.insertions > 0 || file.deletions > 0) && (
                                 <span className="shrink-0 font-mono text-[10px]">
-                                    {file.insertions > 0 && <span className="text-emerald-500">+{file.insertions}</span>}
+                                    {file.insertions > 0 && <span className="text-status-online">+{file.insertions}</span>}
                                     {file.insertions > 0 && file.deletions > 0 && <span className="text-text-secondary"> </span>}
-                                    {file.deletions > 0 && <span className="text-red-400">-{file.deletions}</span>}
+                                    {file.deletions > 0 && <span className="text-status-error">-{file.deletions}</span>}
                                 </span>
                             )}
                             {file.binary && <span className="shrink-0 text-[10px] text-text-secondary">bin</span>}

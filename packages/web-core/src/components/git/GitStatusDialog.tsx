@@ -174,7 +174,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                                 href={`${githubUrl}/tree/${status?.branch || 'main'}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="truncate text-[10px] text-text-secondary hover:text-sky-400 underline"
+                                className="truncate text-[10px] text-text-secondary hover:text-accent-primary underline"
                                 title="Open on GitHub"
                             >
                                 GitHub ↗
@@ -209,18 +209,18 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                         )}
                         {status.ahead > 0 && <span className="text-orange-400">↑{status.ahead} ahead</span>}
                         {status.behind > 0 && <span className="text-orange-400">↓{status.behind} behind</span>}
-                        {status.staged > 0 && <span className="text-emerald-400">{status.staged} staged</span>}
+                        {status.staged > 0 && <span className="text-status-online">{status.staged} staged</span>}
                         {status.modified > 0 && <span>{status.modified} modified</span>}
                         {status.untracked > 0 && <span>{status.untracked} untracked</span>}
-                        {status.deleted > 0 && <span className="text-red-400">{status.deleted} deleted</span>}
+                        {status.deleted > 0 && <span className="text-status-error">{status.deleted} deleted</span>}
                         {status.stashCount > 0 && <span>{status.stashCount} stashed</span>}
-                        {status.hasConflicts && <span className="font-bold text-red-400">conflicts</span>}
-                        {totalChanged === 0 && !status.error && <span className="text-emerald-500">clean</span>}
+                        {status.hasConflicts && <span className="font-bold text-status-error">conflicts</span>}
+                        {totalChanged === 0 && !status.error && <span className="text-status-online">clean</span>}
                         {diffSummary && diffSummary.files.length > 0 && (
                             <span className="text-text-secondary">
                                 {diffSummary.files.length} file{diffSummary.files.length !== 1 ? 's' : ''}
-                                {diffSummary.totalInsertions > 0 && <span className="text-emerald-500"> +{diffSummary.totalInsertions}</span>}
-                                {diffSummary.totalDeletions > 0 && <span className="text-red-400"> -{diffSummary.totalDeletions}</span>}
+                                {diffSummary.totalInsertions > 0 && <span className="text-status-online"> +{diffSummary.totalInsertions}</span>}
+                                {diffSummary.totalDeletions > 0 && <span className="text-status-error"> -{diffSummary.totalDeletions}</span>}
                             </span>
                         )}
                     </div>
@@ -228,7 +228,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
 
                 {/* Error */}
                 {error && (
-                    <div className="shrink-0 border-b border-border/50 bg-red-500/10 px-4 py-2 text-xs text-red-400">
+                    <div className="shrink-0 border-b border-border/50 bg-status-error/10 px-4 py-2 text-xs text-status-error">
                         {error}
                     </div>
                 )}
@@ -274,9 +274,9 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
 
                 {/* Action success banner */}
                 {actionSuccess && (
-                    <div className="shrink-0 border-t border-border/50 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-400 flex items-center justify-between">
+                    <div className="shrink-0 border-t border-border/50 bg-status-online/10 px-4 py-2 text-xs text-status-online flex items-center justify-between">
                         <span>{actionSuccess}</span>
-                        <button onClick={() => setActionSuccess(null)} className="ml-2 text-emerald-400 hover:text-text-primary">&times;</button>
+                        <button onClick={() => setActionSuccess(null)} className="ml-2 text-status-online hover:text-text-primary">&times;</button>
                     </div>
                 )}
 
@@ -354,7 +354,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                                     onChange={(e) => setActionMessage(e.target.value)}
                                     maxLength={200}
                                     placeholder="Message (required)"
-                                    className="rounded border border-border bg-surface-alt px-2 py-1 text-xs text-text-primary placeholder:text-text-secondary focus:outline-none focus:ring-1 focus:ring-border"
+                                    className="rounded border border-border bg-surface-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-secondary focus:outline-none focus:ring-1 focus:ring-border"
                                     autoFocus
                                 />
                                 <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer">
@@ -369,7 +369,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                         )}
 
                         {actionError && (
-                            <p className="text-xs text-red-400">{actionError}</p>
+                            <p className="text-xs text-status-error">{actionError}</p>
                         )}
 
                         <div className="flex justify-end gap-2">

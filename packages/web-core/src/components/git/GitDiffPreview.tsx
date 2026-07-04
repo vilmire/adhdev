@@ -11,9 +11,9 @@ export interface GitDiffPreviewProps {
 
 function renderDiffLine(line: string, idx: number) {
     let cls = 'text-text-secondary'
-    if (line.startsWith('+') && !line.startsWith('+++')) cls = 'bg-emerald-500/10 text-emerald-300'
-    else if (line.startsWith('-') && !line.startsWith('---')) cls = 'bg-red-500/10 text-red-300'
-    else if (line.startsWith('@@')) cls = 'text-sky-400'
+    if (line.startsWith('+') && !line.startsWith('+++')) cls = 'bg-status-online/10 text-status-online'
+    else if (line.startsWith('-') && !line.startsWith('---')) cls = 'bg-status-error/10 text-status-error'
+    else if (line.startsWith('@@')) cls = 'text-accent-primary'
     else if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) cls = 'text-text-secondary'
 
     return (
@@ -40,7 +40,7 @@ export default function GitDiffPreview({ diff, binary, truncated, loading, error
 
     if (error) {
         return (
-            <div className={`px-3 py-4 text-xs text-red-400 ${className}`}>
+            <div className={`px-3 py-4 text-xs text-status-error ${className}`}>
                 {error}
             </div>
         )
