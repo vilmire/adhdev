@@ -16,11 +16,16 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VENDOR_PATH = 'packages/daemon-standalone/vendor/mcp-server';
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const isWin = process.platform === 'win32';
+const npm = isWin ? 'npm.cmd' : 'npm';
 
 function run(cmd, args) {
   console.log(`$ ${cmd} ${args.join(' ')}`);
-  execFileSync(cmd, args, { stdio: 'inherit', cwd: root });
+  // Node 24 on Windows refuses to spawn .cmd/.bat shims (npm.cmd) via execFile
+  // without a shell — it throws `spawnSync npm.cmd EINVAL`. Run npm through the
+  // shell on win32 only; POSIX behavior is unchanged. Args here are fixed and
+  // space-free, so shell word-splitting is not a concern.
+  execFileSync(cmd, args, { stdio: 'inherit', cwd: root, shell: isWin });
 }
 
 run(npm, ['run', 'build', '-w', 'packages/mcp-server']);
