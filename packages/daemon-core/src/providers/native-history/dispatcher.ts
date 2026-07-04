@@ -19,6 +19,11 @@ import { readSession as readCodexCliSession } from './codex-cli-transcript.js';
 import { readSession as readAntigravityCliSession } from './antigravity-cli-transcript.js';
 import { readSession as readHermesCliSession } from './hermes-cli-transcript.js';
 import { SPAWN_BIND_GRACE_MS } from './constants.js';
+import {
+    antigravityOwnerToken,
+    claimAntigravityConversation,
+    isAntigravityConversationClaimedByOther,
+} from './antigravity-claim-registry.js';
 
 export type ReaderId = 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'hermes-cli';
 
@@ -27,6 +32,10 @@ export interface NativeHistoryInput {
     sessionId?: string;
     providerSessionId?: string;
     historySessionId?: string;
+    /** Daemon instance id of the reading session. Used (with workspace +
+     *  sessionStartedAtMs) to derive the antigravity conversation-claim owner
+     *  token so two concurrent sessions never bind to the same .db. */
+    instanceId?: string;
     workspace?: string;
     sessionStartedAtMs?: number;
     format?: string;
@@ -60,7 +69,12 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
             : typeof input.args?.sessionStartedAtMs === 'number'
                 ? input.args.sessionStartedAtMs
                 : 0;
-        const sourcePath = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs);
+        const instanceId = typeof input.instanceId === 'string'
+            ? input.instanceId
+            : typeof input.args?.instanceId === 'string'
+                ? (input.args.instanceId as string)
+                : '';
+        const sourcePath = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId);
         if (!sourcePath) return null;
         if (input.forceRefresh === true || input.args?.forceRefresh === true) {
             try { fs.statSync(sourcePath); } catch { /* best-effort metadata refresh */ }
@@ -93,11 +107,11 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
 // Per-provider path resolution
 // ────────────────────────────────────────────────────────────────────────────
 
-function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: string, sessionStartedAtMs: number): string | null {
+function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: string, sessionStartedAtMs: number, instanceId: string): string | null {
     switch (reader) {
         case 'claude-cli':   return resolveClaudePath(workspace, sessionId);
         case 'codex-cli':    return resolveCodexPath(workspace, sessionId, sessionStartedAtMs);
-        case 'antigravity-cli': return resolveAntigravityPath(workspace, sessionId);
+        case 'antigravity-cli': return resolveAntigravityPath(workspace, sessionId, sessionStartedAtMs, instanceId);
         case 'hermes-cli':   return resolveHermesPath(workspace, sessionId);
     }
 }
@@ -225,17 +239,40 @@ function resolveRealPath(value: string): string {
     try { return fs.realpathSync(value); } catch { return value; }
 }
 
-function resolveAntigravityPath(workspace: string, sessionId: string): string | null {
-    void workspace;
-    const agyRoot = path.join(os.homedir(), '.gemini', 'antigravity-cli');
+/**
+ * The daemon may stamp a session's spawn time a hair before the CLI child
+ * actually creates its conversation .db, so treat a store born within this
+ * grace of the spawn floor as still belonging to this session. Kept small
+ * (< a typical concurrent-spawn gap) so a sibling's PRE-spawn store is still
+ * excluded rather than mis-bound.
+ */
+const AGY_SPAWN_CLAIM_GRACE_MS = 2000;
 
-    // (1) Exact session bind: current antigravity writes a per-session SQLite db
-    //     at conversations/<uuid>.db. If the caller knows the session id and the
-    //     db exists, bind straight to it — this is the authoritative source and
-    //     carries the assistant answers the brain/pty path was losing.
+function resolveAntigravityPath(
+    workspace: string,
+    sessionId: string,
+    sessionStartedAtMs: number,
+    instanceId: string,
+): string | null {
+    const agyRoot = path.join(os.homedir(), '.gemini', 'antigravity-cli');
+    // Owner token identifies THIS reading session. The provider instance derives
+    // the identical token (workspace + startedAt, or instanceId) so it can
+    // release these claims on shutdown. '' when there is no stable identity to
+    // key on — claiming is then skipped but exclusion still runs.
+    const owner = antigravityOwnerToken(workspace, sessionStartedAtMs, instanceId);
+
+    // (1) Exact session bind + LOCK: current antigravity writes a per-session
+    //     SQLite db at conversations/<uuid>.db. Once the caller knows the session
+    //     id, bind straight to it — this is authoritative and never re-resolves
+    //     by mtime, so an already-bound session cannot be hijacked by a newer
+    //     .db on a later read. Claim it so a concurrent unbound sibling can never
+    //     grab this same conversation.
     if (sessionId && isUuidLikeSessionId(sessionId)) {
         const dbPath = path.join(agyRoot, 'conversations', `${sessionId}.db`);
-        if (fs.existsSync(dbPath)) return dbPath;
+        if (fs.existsSync(dbPath)) {
+            if (owner) claimAntigravityConversation(sessionId, owner);
+            return dbPath;
+        }
     }
 
     // (2) brain/<uuid>/.system_generated/logs/transcript.jsonl (legacy full source).
@@ -243,28 +280,106 @@ function resolveAntigravityPath(workspace: string, sessionId: string): string | 
     //     writes this file but leaves it 0 bytes (all real conversation data now
     //     lives in the per-session .db), so an empty transcript here would
     //     otherwise shadow the .db fallback below and return no messages. Skip
-    //     empty transcripts so an unbound read still reaches the .db.
+    //     empty transcripts so an unbound read still reaches the .db. Exclude any
+    //     brain conversation already claimed by a DIFFERENT live session.
     const brainRoot = path.join(agyRoot, 'brain');
     if (fs.existsSync(brainRoot)) {
-        const cutoff = Date.now() - RECENT_WINDOW_MS;
+        const cutoff = spawnAwareCutoff(sessionStartedAtMs);
         const entries = fs.readdirSync(brainRoot, { withFileTypes: true })
-            .filter(e => e.isDirectory())
-            .map(e => ({ p: path.join(brainRoot, e.name), mtime: safeMtime(path.join(brainRoot, e.name)) }))
+            .filter(e => e.isDirectory() && isUuidLikeSessionId(e.name))
+            .filter(e => !isAntigravityConversationClaimedByOther(e.name, owner))
+            .map(e => ({ uuid: e.name, p: path.join(brainRoot, e.name), mtime: safeMtime(path.join(brainRoot, e.name)) }))
             .filter(e => e.mtime >= cutoff)
             .sort((a, b) => b.mtime - a.mtime);
         for (const e of entries) {
             const t = path.join(e.p, '.system_generated', 'logs', 'transcript.jsonl');
-            if (fs.existsSync(t) && safeSize(t) > 0) return t;
+            if (fs.existsSync(t) && safeSize(t) > 0) {
+                if (owner) claimAntigravityConversation(e.uuid, owner);
+                return t;
+            }
         }
     }
 
-    // (3) No brain transcript and no bound session id: fall back to the most
-    //     recently touched conversations/<uuid>.db (within the recency window).
+    // (3) No brain transcript and no bound session id: pick a conversations/<uuid>.db
+    //     that is NOT claimed by another live session, guarded by this session's
+    //     spawn time so we never mis-bind to a sibling's earlier store.
     const convRoot = path.join(agyRoot, 'conversations');
-    const newestDb = newestRecentFile(convRoot, /^[0-9a-f-]+\.db$/i);
-    if (newestDb) return newestDb;
+    const picked = pickUnboundConversationDb(convRoot, sessionStartedAtMs, owner);
+    if (picked) {
+        if (owner) claimAntigravityConversation(picked.uuid, owner);
+        return picked.path;
+    }
 
     return null;
+}
+
+/**
+ * Choose the conversations/<uuid>.db for an as-yet-unbound antigravity session.
+ *
+ * Two isolation rules keep concurrent sessions apart:
+ *   - claim exclusion: skip any .db already owned by a DIFFERENT live session,
+ *     so two sessions can never resolve to the same conversation;
+ *   - spawn-window guard: a session's own store is created at/after it spawned,
+ *     so when a spawn floor is known, only stores born at/after (floor - grace)
+ *     are eligible. A store that predates this session's spawn belongs to an
+ *     earlier session and is never bound — if none qualifies we return null
+ *     (native_history_empty) and let the caller retry once this session's own
+ *     store appears, rather than binding a sibling's conversation.
+ *
+ * Among eligible unclaimed stores the OLDEST-created wins: in the normal case
+ * (each session polls native history only after its own store exists, and an
+ * earlier-spawned session polls earlier) this hands each session the first
+ * store created after it started — its own. When no spawn floor is available
+ * (legacy/unpinned discovery) we fall back to newest-by-mtime within the
+ * recency window, preserving the original single-session behaviour.
+ */
+function pickUnboundConversationDb(
+    convRoot: string,
+    sessionFloorMs: number,
+    owner: string,
+): { path: string; uuid: string } | null {
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(convRoot, { withFileTypes: true }); } catch { return null; }
+
+    const recencyCutoff = Date.now() - RECENT_WINDOW_MS;
+    const candidates: Array<{ path: string; uuid: string; mtime: number; birth: number }> = [];
+    for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const match = /^([0-9a-f-]+)\.db$/i.exec(entry.name);
+        if (!match || !isUuidLikeSessionId(match[1])) continue;
+        const uuid = match[1];
+        // (isolation) never consider a conversation a different live session owns.
+        if (isAntigravityConversationClaimedByOther(uuid, owner)) continue;
+        const p = path.join(convRoot, entry.name);
+        const mtime = safeMtime(p);
+        if (mtime < recencyCutoff) continue;
+        candidates.push({ path: p, uuid, mtime, birth: safeBirthtime(p) });
+    }
+    if (candidates.length === 0) return null;
+
+    if (sessionFloorMs > 0) {
+        const floor = sessionFloorMs - AGY_SPAWN_CLAIM_GRACE_MS;
+        const own = candidates.filter(c => (c.birth > 0 ? c.birth : c.mtime) >= floor);
+        // A store created before this session spawned belongs to an earlier
+        // session — do NOT bind to it. Wait for our own store on the next read.
+        if (own.length === 0) return null;
+        own.sort((a, b) => (a.birth || a.mtime) - (b.birth || b.mtime));
+        return { path: own[0].path, uuid: own[0].uuid };
+    }
+
+    candidates.sort((a, b) => b.mtime - a.mtime);
+    return { path: candidates[0].path, uuid: candidates[0].uuid };
+}
+
+/**
+ * mtime floor for the brain-transcript scan: the later of the recency window
+ * and this session's spawn floor (minus the claim grace), so a fresh read
+ * cannot surface a brain dir last touched before this session started.
+ */
+function spawnAwareCutoff(sessionStartedAtMs: number): number {
+    const recency = Date.now() - RECENT_WINDOW_MS;
+    if (sessionStartedAtMs > 0) return Math.max(recency, sessionStartedAtMs - AGY_SPAWN_CLAIM_GRACE_MS);
+    return recency;
 }
 
 function resolveHermesPath(workspace: string, sessionId: string): string | null {
@@ -357,6 +472,21 @@ function newestRecentFile(dir: string, pattern: RegExp): string | null {
 
 function safeMtime(p: string): number {
     try { return Math.floor(fs.statSync(p).mtimeMs); } catch { return 0; }
+}
+
+/**
+ * File creation time in ms. birthtimeMs is high-precision on all shipped
+ * runners (NTFS/ext4/APFS), and a conversation .db is created by the CLI child
+ * strictly AFTER the daemon spawned it, so birthtime > the session's spawn
+ * floor for its own store. Falls back to mtime when birthtime is unavailable
+ * (0 / not tracked) so the caller still has a usable ordering key.
+ */
+function safeBirthtime(p: string): number {
+    try {
+        const st = fs.statSync(p);
+        const birth = Math.floor(st.birthtimeMs);
+        return birth > 0 ? birth : Math.floor(st.mtimeMs);
+    } catch { return 0; }
 }
 
 function safeSize(p: string): number {

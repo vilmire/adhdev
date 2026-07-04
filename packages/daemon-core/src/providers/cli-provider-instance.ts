@@ -31,6 +31,11 @@ import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOptio
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { normalizeProviderSessionId } from './provider-session-id.js';
+import {
+    antigravityOwnerToken,
+    claimAntigravityConversation,
+    releaseAntigravityOwner,
+} from './native-history/antigravity-claim-registry.js';
 import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages, extractFinalSummaryFromMessagesAfter, readChatMessageTimestampMs } from './chat-message-normalization.js';
 import { workingDirBasename } from './working-dir.js';
 import { ManualAttendanceTracker } from './manual-attendance.js';
@@ -1394,7 +1399,24 @@ export class CliProviderInstance implements ProviderInstance {
         }
     }
 
+    /**
+     * Owner token for this session in the antigravity conversation-claim
+     * registry. Derived identically to the dispatcher's read-side token
+     * (workspace + spawn time) so the claims the dispatcher records under this
+     * session are the ones dispose() releases.
+     */
+    private antigravityClaimOwner(): string {
+        return antigravityOwnerToken(this.workingDir, this.startedAt);
+    }
+
     dispose(): void {
+        // Release this session's antigravity conversation claims so the store
+        // becomes available again (e.g. a later resume) and the registry doesn't
+        // leak entries for dead sessions.
+        if (this.type === 'antigravity-cli') {
+            const owner = this.antigravityClaimOwner();
+            if (owner) releaseAntigravityOwner(owner);
+        }
         this.adapter.shutdown();
         this.monitor.reset();
         // Cancel any armed auto-approve timers so a pending settle re-check
@@ -3604,6 +3626,15 @@ export class CliProviderInstance implements ProviderInstance {
         const previousHistorySessionId = this.providerSessionId || this.instanceId;
         const previousProviderSessionId = this.providerSessionId;
         this.providerSessionId = nextSessionId;
+        // Conversation-binding lock (antigravity): the moment this session is
+        // authoritatively bound to a conversation uuid, claim it so a concurrent
+        // sibling session's newest-on-disk discovery can never resolve to the
+        // same .db (RCA: two antigravity sessions ~94ms apart shared one store
+        // and cross-routed completions). Released on dispose().
+        if (this.type === 'antigravity-cli') {
+            const owner = this.antigravityClaimOwner();
+            if (owner) claimAntigravityConversation(nextSessionId, owner);
+        }
         this.historyWriter.promoteHistorySession(this.type, previousHistorySessionId, nextSessionId);
         this.historyWriter.writeSessionStart(this.type, nextSessionId, this.workingDir, this.instanceId);
         if (this.shouldHydrateExistingProviderHistory()) {
