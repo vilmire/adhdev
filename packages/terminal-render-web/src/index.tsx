@@ -147,6 +147,11 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
     const onScrollMetricsRef = useRef(onScrollMetrics);
     const readOnlyRef = useRef(readOnly);
     const lastReportedSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+    // Dedup guards: during generation, output deltas fire auto-follow scroll
+    // events every frame. Re-emitting identical metrics re-renders the (large)
+    // consuming pane needlessly. Only invoke the callbacks when a value changes.
+    const lastScrollMetricsRef = useRef<{ scrollTop: number; scrollHeight: number; clientHeight: number; canScroll: boolean; atTop: boolean } | null>(null);
+    const lastViewportMetricsRef = useRef<{ width: number; height: number } | null>(null);
     const [ready, setReady] = useState(false);
     const [rendererKind, setRendererKind] = useState<RendererKind | null>(null);
 
@@ -185,13 +190,24 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
       const scrollHeight = viewport.scrollHeight;
       const clientHeight = viewport.clientHeight;
       const canScroll = scrollHeight > clientHeight + 2;
-      onScrollMetricsRef.current?.({
+      const next = {
         scrollTop,
         scrollHeight,
         clientHeight,
         canScroll,
         atTop: canScroll && scrollTop <= 2,
-      });
+      };
+      const prev = lastScrollMetricsRef.current;
+      if (prev
+        && prev.scrollTop === next.scrollTop
+        && prev.scrollHeight === next.scrollHeight
+        && prev.clientHeight === next.clientHeight
+        && prev.canScroll === next.canScroll
+        && prev.atTop === next.atTop) {
+        return;
+      }
+      lastScrollMetricsRef.current = next;
+      onScrollMetricsRef.current?.(next);
     };
 
     const reportViewportMetrics = () => {
@@ -204,7 +220,11 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
       if (width <= 0 || height <= 0) return;
       width += TERMINAL_CHROME_PADDING_X * 2;
       height += TERMINAL_CHROME_PADDING_Y * 2;
-      onViewportMetricsRef.current?.({ width, height });
+      const prev = lastViewportMetricsRef.current;
+      if (!prev || prev.width !== width || prev.height !== height) {
+        lastViewportMetricsRef.current = { width, height };
+        onViewportMetricsRef.current?.({ width, height });
+      }
       reportScrollMetrics();
     };
 
@@ -323,7 +343,11 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           scrollback: TERMINAL_REPLAY_SCROLLBACK_ROWS,
           scrollSensitivity: 1.15,
           fastScrollSensitivity: 4,
-          smoothScrollDuration: 120,
+          // Instant auto-follow. With a non-zero duration, generation output
+          // deltas arriving faster than the animation window each restart a
+          // scroll animation from mid-flight, producing continuous downward
+          // stutter (over-scroll). 0 = jump straight to the follow position.
+          smoothScrollDuration: 0,
           scrollOnUserInput: false,
           // Bare LF (\n without preceding \r) should move cursor to column 0 as well as down.
           // Full-screen TUI apps (e.g. Antigravity) use bare-LF cursor-down sequences combined
