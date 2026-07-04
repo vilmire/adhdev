@@ -42,6 +42,8 @@ vi.mock('../../src/detection/cli-detector.js', () => ({ detectCLI: detectCliMock
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
+import { __resetAutoLaunchAwaitClaimBackoffForTests, __seedAutoLaunchAwaitClaimBackoffForTests } from '../../src/mesh/mesh-queue-assignment.js'
+import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
 
 const NODE_ID = 'node_main'
 
@@ -99,6 +101,7 @@ function launchCliCalls(components: any): number {
 function cleanup(meshId: string) {
   __clearMeshQueueForTests(meshId)
   __resetMeshRuntimeStoreForTests()
+  __resetAutoLaunchAwaitClaimBackoffForTests()
   meshConfigMocks.getMesh.mockReset()
   try { fs.rmSync(testTmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
 }
@@ -203,6 +206,140 @@ describe('DOUBLE-DISPATCH Layer (a) — auto-launch suppressed when node has a l
 
       expect(autoLaunchReason(meshId, task.id)).not.toBe('node_has_live_session_pending_claim')
       expect(launchCliCalls(components)).toBe(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+})
+
+// AUTOLAUNCH-CLAIM-CHURN: a REMOTE launched-but-not-yet-claimed session is invisible to the local
+// instanceManager. Before the fix, the respawn guards could not see it, so after the 90s
+// await-claim window the loop respawned a ghost every ~90s (observed live: 7 ghosts on one task).
+// The fix makes the respawn guards remote-aware (in-window auto-launch record counts as a live
+// pending-claim session), re-drives the claim on window expiry with backoff, and — after the
+// backoff cap — direct-dispatches into the existing session instead of respawning.
+describe('AUTOLAUNCH-CLAIM-CHURN — remote-aware await-claim (no ghost respawns)', () => {
+  const REMOTE_DAEMON = 'daemon_remote'
+
+  afterEach(() => { vi.clearAllMocks() })
+
+  function setRemoteMesh(meshId: string) {
+    meshConfigMocks.getMesh.mockReturnValue({
+      id: meshId,
+      name: 'Remote Mesh',
+      policy: {},
+      nodes: [{ id: NODE_ID, daemonId: REMOTE_DAEMON, workspace: `/repo/${NODE_ID}`, repoRoot: `/repo/${NODE_ID}`, policy: { providerPriority: ['codex-cli'] } }],
+    })
+  }
+
+  // Components for a remote node: launch_cli / agent_command flow over dispatchMeshCommand.
+  function createRemoteComponents() {
+    const dispatchMeshCommand = vi.fn(async (_daemonId: string, cmd: string) =>
+      cmd === 'launch_cli' ? { success: true, sessionId: 'remote-sess-A' } : { success: true })
+    return {
+      instanceManager: {
+        getByCategory: vi.fn((category: string) => (category === 'cli' ? [] : [])),
+        getInstance: vi.fn(() => undefined),
+      },
+      cliManager: { adapters: new Map(), handleCliCommand: vi.fn(async () => ({ success: true })) },
+      providerLoader: {
+        resolveAlias: vi.fn((t: string) => t),
+        isMachineProviderEnabled: vi.fn(() => true),
+        setCliDetectionResults: vi.fn(),
+      },
+      dispatchMeshCommand,
+      statusInstanceId: 'daemon-local',
+      onStatusChange: vi.fn(),
+    } as any
+  }
+
+  function dispatchCalls(components: any, cmd: string): number {
+    return components.dispatchMeshCommand.mock.calls.filter((c: any[]) => c[1] === cmd).length
+  }
+
+  // Seed a task's auto-launch record as a launched remote session, optionally aged past the window.
+  function seedAutoLaunch(meshId: string, taskId: string, ageMs: number) {
+    const store = MeshRuntimeStore.getInstance()
+    const e = store.findQueueEntryById(meshId, taskId)!
+    e.autoLaunch = {
+      status: 'completed',
+      sessionId: 'remote-sess-A',
+      nodeId: NODE_ID,
+      providerType: 'codex-cli',
+      updatedAt: new Date(Date.now() - ageMs).toISOString(),
+    }
+    store.updateQueueEntry(e)
+  }
+
+  // (1) A node with an in-window remote auto-launch record suppresses a second launch for another
+  // pending task — the record counts as a live pending-claim session even though it is remote.
+  it('suppresses a second launch when the node already has an in-window (remote) auto-launch record', async () => {
+    const meshId = `mesh_alc_inwindow_${randomUUID().slice(0, 8)}`
+    try {
+      setRemoteMesh(meshId)
+      const components = createRemoteComponents()
+      const taskA = enqueueTask(meshId, 'work A', { taskMode: 'code_change' })
+      const taskB = enqueueTask(meshId, 'work B', { taskMode: 'code_change' })
+      seedAutoLaunch(meshId, taskA.id, 0) // fresh — inside the 90s await-claim window
+
+      await triggerMeshQueue(components, meshId)
+
+      // Task A is awaiting its claim; task B must NOT spawn a duplicate (ghost) session.
+      expect(autoLaunchReason(meshId, taskB.id)).toBe('node_has_live_session_pending_claim')
+      expect(dispatchCalls(components, 'launch_cli')).toBe(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // (2) On window expiry with unknown liveness (no remote idle registration, no backoff cap),
+  // the window is extended with backoff — NOT respawned.
+  it('extends the await-claim window with backoff (no respawn) when liveness is unknown on expiry', async () => {
+    const meshId = `mesh_alc_backoff_${randomUUID().slice(0, 8)}`
+    try {
+      setRemoteMesh(meshId)
+      const components = createRemoteComponents()
+      const taskA = enqueueTask(meshId, 'work A', { taskMode: 'code_change' })
+      seedAutoLaunch(meshId, taskA.id, 100_000) // > 90s → base window expired
+
+      await triggerMeshQueue(components, meshId)
+
+      // No respawn (no launch_cli, no direct-dispatch): the window was extended with backoff.
+      expect(dispatchCalls(components, 'launch_cli')).toBe(0)
+      expect(dispatchCalls(components, 'agent_command')).toBe(0)
+      expect(getQueue(meshId).find(t => t.id === taskA.id)?.status).toBe('pending')
+      const backoffLogged = readLedgerEntries(meshId).some(e =>
+        e.kind === 'session_auto_launch' && (e.payload as any)?.reason === 'awaiting_launched_session_claim_backoff')
+      expect(backoffLogged).toBe(true)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // (3) After the backoff cap, the task is direct-dispatched into the EXISTING launched session
+  // (mesh_send_task-equivalent) rather than respawning a new one.
+  it('direct-dispatches into the existing session after the backoff cap (no respawn)', async () => {
+    const meshId = `mesh_alc_fallback_${randomUUID().slice(0, 8)}`
+    try {
+      setRemoteMesh(meshId)
+      const components = createRemoteComponents()
+      const taskA = enqueueTask(meshId, 'work A', { taskMode: 'code_change' })
+      seedAutoLaunch(meshId, taskA.id, 100_000) // past window
+      // Drive straight to the cap: cycles at the cap, next attempt due now.
+      __seedAutoLaunchAwaitClaimBackoffForTests(meshId, taskA.id, { cycles: 2, nextAttemptAtMs: 0 })
+
+      await triggerMeshQueue(components, meshId)
+
+      // No new session spawned; the task was delivered directly into the existing session and
+      // the row is now assigned to it.
+      expect(dispatchCalls(components, 'launch_cli')).toBe(0)
+      expect(dispatchCalls(components, 'agent_command')).toBe(1)
+      const row = getQueue(meshId).find(t => t.id === taskA.id)!
+      expect(row.status).toBe('assigned')
+      expect(row.assignedSessionId).toBe('remote-sess-A')
+      const fallbackLogged = readLedgerEntries(meshId).some(e =>
+        e.kind === 'session_auto_launch' && (e.payload as any)?.reason === 'await_claim_direct_dispatch_fallback')
+      expect(fallbackLogged).toBe(true)
     } finally {
       cleanup(meshId)
     }

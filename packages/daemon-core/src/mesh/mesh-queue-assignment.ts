@@ -606,6 +606,80 @@ const AUTO_LAUNCH_COOLDOWN_MS = 5_000;
 // seconds) but bounded so a launch that silently never reaches idle is eventually retried.
 const AUTO_LAUNCH_AWAIT_CLAIM_MS = 90_000;
 
+// AUTOLAUNCH-CLAIM-CHURN. For a REMOTE node the launch→claim handshake is purely
+// event-sourced: the worker's agent:ready must be pulled (reconcile PHASE 1) to run
+// setRemoteIdleSession before the drain can claim. If that pull is lost, nothing recovers,
+// and after AUTO_LAUNCH_AWAIT_CLAIM_MS the loop used to blindly RESPAWN a new session — whose
+// respawn guards (nodeHasLiveSessionPendingClaim / liveSessionCountForNode) scan only the LOCAL
+// instanceManager, so the remote pending-claim session is invisible and a fresh ghost accumulates
+// every ~90s (observed live 2026-07-04: task 8b188c64, and 7 ghost sessions on this worktree's
+// own task at 11:23-11:34). Instead of respawning on window expiry, we re-drive the claim for the
+// EXISTING session; when its liveness cannot be positively determined we EXTEND the window with
+// exponential backoff (90 → 180 → 360s) and, only after the cap, deliver the task directly into
+// the launched session (the mesh_send_task-equivalent) rather than spawning another worker.
+const AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES = 2;
+// Local mirror of REMOTE_IDLE_SESSION_TTL_MS (mesh-event-forwarding) — kept here to avoid a
+// cross-module import cycle. Used when (re)registering a launched remote session as an idle
+// claim candidate during the await-claim re-drive.
+const AUTO_LAUNCH_REMOTE_IDLE_TTL_MS = 5 * 60 * 1000;
+
+// Per-task await-claim backoff state, keyed `${meshId}::${taskId}`. `cycles` counts how many
+// times the window has been extended; `nextAttemptAtMs` rate-limits the re-drive to the backoff
+// cadence so the 4s reconcile tick does not hammer it. Cleared once the task claims, the direct
+// dispatch fires, or a respawn is authorized. In-memory (per process); a stale entry is harmless
+// (it only defers a respawn) and self-clears on the next resolution.
+interface AwaitClaimBackoffState { cycles: number; nextAttemptAtMs: number; }
+const autoLaunchAwaitClaimBackoff = new Map<string, AwaitClaimBackoffState>();
+
+// Test hooks: reset / seed the await-claim backoff state between cases.
+export function __resetAutoLaunchAwaitClaimBackoffForTests(): void {
+    autoLaunchAwaitClaimBackoff.clear();
+}
+export function __seedAutoLaunchAwaitClaimBackoffForTests(meshId: string, taskId: string, state: AwaitClaimBackoffState): void {
+    autoLaunchAwaitClaimBackoff.set(`${meshId}::${taskId}`, { ...state });
+}
+
+// Backoff window for a given cycle count: 90 → 180 → 360s (capped at the cap-cycle multiplier).
+function awaitClaimWindowMs(cycles: number): number {
+    return AUTO_LAUNCH_AWAIT_CLAIM_MS * Math.pow(2, Math.min(cycles, AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES));
+}
+
+// Does the coordinator's remote-session view (MeshRuntimeStore remote idle sessions, populated by
+// mesh event forwarding) currently show this session as a live idle claim candidate? Positive
+// evidence the launched remote session is reachable — used to re-drive its claim directly instead
+// of respawning. Absence is NOT proof the session is gone (the agent:ready pull may simply have
+// been lost), so callers treat a false here as UNKNOWN liveness, never a definitive terminal.
+function remoteSessionAppearsLive(meshId: string, sessionId: string): boolean {
+    if (!sessionId) return false;
+    try {
+        return MeshRuntimeStore.getInstance().getRemoteIdleSessions(meshId)
+            .some(s => sessionIdsEquivalent(s.sessionId, sessionId));
+    } catch {
+        return false;
+    }
+}
+
+// (A) Respawn-guard remote-awareness. The session ids of pending tasks whose auto-launch record
+// targets `nodeId` (status started/completed with a sessionId) and is still inside its await-claim
+// window — the base 90s window OR an active backoff extension. Such a session is ALREADY on its way
+// to claim even when it is REMOTE (invisible to this daemon's instanceManager), so counting it
+// suppresses a duplicate launch that would otherwise spawn a ghost.
+function inWindowAutoLaunchSessionIdsForNode(meshId: string, nodeId: string): string[] {
+    const nowMs = Date.now();
+    const out: string[] = [];
+    for (const task of getQueue(meshId, { status: ['pending'] as any })) {
+        const al = task.autoLaunch;
+        const sid = al ? readNonEmptyString(al.sessionId) : '';
+        if (!al || (al.status !== 'started' && al.status !== 'completed') || !sid) continue;
+        if (!daemonIdsEquivalent(al.nodeId, nodeId)) continue;
+        const launchedAtMs = Date.parse(al.updatedAt);
+        const inBaseWindow = Number.isFinite(launchedAtMs) && nowMs - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
+        const inBackoff = autoLaunchAwaitClaimBackoff.has(`${meshId}::${task.id}`);
+        if (inBaseWindow || inBackoff) out.push(sid);
+    }
+    return out;
+}
+
 // De-dup for repeated `skipped` ledger noise: the reconcile loop re-runs the queue
 // trigger every 4s, so a task that can't be claimed (e.g. a remote node with no
 // transport, or a node under cooldown) would otherwise append an identical
@@ -1149,7 +1223,7 @@ export function resolveSessionBusyVerdict(components: DaemonComponents, sessionI
 }
 
 function liveSessionCountForNode(components: DaemonComponents, meshId: string, nodeId: string): number {
-    return components.instanceManager.getByCategory('cli').filter((inst: any) => {
+    const localInstances = components.instanceManager.getByCategory('cli').filter((inst: any) => {
         const state = inst.getState();
         const settings = state.settings as Record<string, unknown> || {};
         if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
@@ -1160,7 +1234,20 @@ function liveSessionCountForNode(components: DaemonComponents, meshId: string, n
         if (!daemonIdsEquivalent(instNodeId, nodeId)) return false;
         const status = readNonEmptyString(state.status).toLowerCase();
         return !isTerminalSessionStatus(status);
-    }).length;
+    });
+    let count = localInstances.length;
+    // (A) AUTOLAUNCH-CLAIM-CHURN: also count launched-but-not-yet-claimed sessions targeting this
+    // node whose await-claim window is still open. A REMOTE such session is invisible to the local
+    // instanceManager above, so without this the maxConcurrentSessions cap undercounts it and a
+    // duplicate ghost launch slips through. Exclude any id already represented by a local instance
+    // so a co-located launch is not double-counted.
+    const localSessionIds = localInstances
+        .map((inst: any) => readNonEmptyString(inst.getState().instanceId))
+        .filter(Boolean);
+    for (const sid of inWindowAutoLaunchSessionIdsForNode(meshId, nodeId)) {
+        if (!localSessionIds.some(local => sessionIdsEquivalent(local, sid))) count += 1;
+    }
+    return count;
 }
 
 /**
@@ -1179,6 +1266,12 @@ function liveSessionCountForNode(components: DaemonComponents, meshId: string, n
  * not match, preserving the legitimate first-session spawn.
  */
 function nodeHasLiveSessionPendingClaim(components: DaemonComponents, meshId: string, nodeId: string): boolean {
+    // (A) AUTOLAUNCH-CLAIM-CHURN remote-awareness: a task whose auto-launch record targets this
+    // node and is still inside its await-claim window (base or backoff) already has a session on
+    // its way to claim — even when that session is REMOTE and thus invisible to the local
+    // instanceManager scan below. Treat it as a live pending-claim session so a duplicate launch
+    // is suppressed and no ghost accumulates every ~90s.
+    if (inWindowAutoLaunchSessionIdsForNode(meshId, nodeId).length > 0) return true;
     // Session ids currently holding an assigned queue task on this node — those are busy,
     // not pending claimers, so they must NOT suppress a (read-only) launch.
     const busySessionIds = new Set(
@@ -1350,6 +1443,69 @@ function readMeshNodeId(node: any): string {
     return normalizeMeshNodeId(node) ?? '';
 }
 
+// AUTOLAUNCH-CLAIM-CHURN. The await-claim window for a launched (remote) session has expired
+// without a claim. Instead of a blind respawn, re-drive the claim for the EXISTING session,
+// backing off when its liveness is unknown, and only respawning when it is provably unclaimable.
+// Returns a directive for the caller:
+//   - 'claimed'  — the re-drive claimed/dispatched the task into the existing session (progress).
+//   - 'fallback' — the post-cap direct dispatch delivered the task into the existing session.
+//   - 'backoff'  — liveness unknown; the window was extended (or is still cooling down). No launch.
+//   - 'respawn'  — the session is provably gone/unclaimable; the caller may launch a fresh one.
+function driveExpiredAwaitClaim(
+    components: DaemonComponents,
+    meshId: string,
+    task: MeshWorkQueueEntry,
+    ctx: { sessionId: string; nodeId: string; providerType: string },
+): 'claimed' | 'fallback' | 'backoff' | 'respawn' {
+    const { sessionId, nodeId, providerType } = ctx;
+    const backoffKey = `${meshId}::${task.id}`;
+    const nowMs = Date.now();
+    const state = autoLaunchAwaitClaimBackoff.get(backoffKey) || { cycles: 0, nextAttemptAtMs: 0 };
+    // Rate-limit re-drive attempts to the backoff cadence so the 4s reconcile tick does not hammer
+    // a still-cooling-down window. The initial (no-state) expiry proceeds immediately.
+    if (state.nextAttemptAtMs && nowMs < state.nextAttemptAtMs) return 'backoff';
+
+    const atCap = state.cycles >= AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES;
+    const live = remoteSessionAppearsLive(meshId, sessionId);
+
+    // (B) Re-drive when the remote view shows the session live; (C) after the backoff cap, force the
+    // same direct dispatch unconditionally. Both funnel through tryAssignQueueTask, which
+    // idempotently (re)registers the session, delivers the task message (send_chat), and marks the
+    // row assigned — the exact operation a coordinator performs manually via mesh_send_task. (D)
+    // The setRemoteIdleSession re-register makes this robust to a dropped agent:ready.
+    if ((live || atCap) && nodeId && providerType) {
+        try {
+            MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, nodeId, sessionId, providerType, nowMs + AUTO_LAUNCH_REMOTE_IDLE_TTL_MS);
+        } catch { /* best-effort re-register */ }
+        const assigned = tryAssignQueueTask(components, meshId, nodeId, sessionId, providerType);
+        if (assigned) {
+            autoLaunchAwaitClaimBackoff.delete(backoffKey);
+            const isFallback = atCap && !live;
+            recordAutoLaunchEvent(meshId, {
+                phase: 'completed',
+                taskId: task.id,
+                reason: isFallback ? 'await_claim_direct_dispatch_fallback' : 'await_claim_redriven',
+                nodeId,
+                sessionId,
+            });
+            // Content-free progress line (ids only).
+            LOG.info('MeshQueue', `Auto-launch await-claim ${isFallback ? 'direct-dispatch fallback' : 're-drive'} claimed task ${task.id} into existing session ${sessionId} on node ${nodeId} (mesh ${meshId})`);
+            return isFallback ? 'fallback' : 'claimed';
+        }
+        if (atCap) {
+            // The forced dispatch could not claim — the session is genuinely gone/unclaimable.
+            // Authorize a fresh respawn (ghosts were already prevented through the backoff window).
+            autoLaunchAwaitClaimBackoff.delete(backoffKey);
+            return 'respawn';
+        }
+    }
+    // Liveness unknown (or live-but-not-claimable) and not at cap → extend the window with backoff.
+    const cycles = Math.min(state.cycles + 1, AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES);
+    autoLaunchAwaitClaimBackoff.set(backoffKey, { cycles, nextAttemptAtMs: nowMs + awaitClaimWindowMs(cycles) });
+    recordAutoLaunchEvent(meshId, { phase: 'skipped', taskId: task.id, reason: 'awaiting_launched_session_claim_backoff', nodeId, sessionId });
+    return 'backoff';
+}
+
 async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, meshId: string, mesh: any): Promise<boolean> {
     const queue = getQueue(meshId);
     // DEPENDSON-GATE-SYMMETRY: status index over the FULL queue (incl. completed)
@@ -1357,6 +1513,15 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
     // dependency, not just the still-active rows.
     const statusById = new Map(queue.map(task => [task.id, task.status] as const));
     const pending = queue.filter(task => task.status === 'pending');
+    // AUTOLAUNCH-CLAIM-CHURN: prune await-claim backoff state for tasks of this mesh that are no
+    // longer pending (claimed/completed/cancelled) so the map cannot grow without bound.
+    {
+        const pendingIds = new Set(pending.map(t => t.id));
+        const prefix = `${meshId}::`;
+        for (const key of [...autoLaunchAwaitClaimBackoff.keys()]) {
+            if (key.startsWith(prefix) && !pendingIds.has(key.slice(prefix.length))) autoLaunchAwaitClaimBackoff.delete(key);
+        }
+    }
     if (!pending.length) return false;
 
     // Write cap + read-only cap resolved through the shared helpers from the
@@ -1405,13 +1570,27 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
         // session never reaches idle within the window, a later tick retries.
         if (task.autoLaunch?.status === 'completed' && task.autoLaunch.sessionId) {
             const launchedAtMs = Date.parse(task.autoLaunch.updatedAt);
+            const alSessionId = readNonEmptyString(task.autoLaunch.sessionId);
+            const alNodeId = readNonEmptyString(task.autoLaunch.nodeId);
+            const alProvider = readNonEmptyString(task.autoLaunch.providerType);
             if (Number.isFinite(launchedAtMs) && Date.now() - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS) {
                 // Record the skip in the ledger ONLY (dedup'd). Do NOT call markAutoLaunch
                 // here: recordTaskAutoLaunch overwrites task.autoLaunch wholesale, which would
                 // erase the very `completed` record (status + sessionId + updatedAt) this guard
                 // reads on the next tick, reopening the duplicate-launch hole it closes.
-                recordAutoLaunchEvent(meshId, { phase: 'skipped', taskId: task.id, reason: 'awaiting_launched_session_claim', nodeId: task.autoLaunch.nodeId, sessionId: task.autoLaunch.sessionId });
+                recordAutoLaunchEvent(meshId, { phase: 'skipped', taskId: task.id, reason: 'awaiting_launched_session_claim', nodeId: alNodeId, sessionId: alSessionId });
                 continue;
+            }
+            // AUTOLAUNCH-CLAIM-CHURN: the initial await-claim window expired. Rather than a blind
+            // respawn (which the local-only respawn guards can't dedup for a remote pending-claim
+            // session → ghost accumulation), re-drive the claim for the EXISTING launched session,
+            // backing off on unknown liveness and direct-dispatching after the cap. Only a
+            // 'respawn' directive falls through to a fresh launch below.
+            if (Number.isFinite(launchedAtMs) && alSessionId && alNodeId) {
+                const outcome = driveExpiredAwaitClaim(components, meshId, task, { sessionId: alSessionId, nodeId: alNodeId, providerType: alProvider });
+                if (outcome === 'claimed' || outcome === 'fallback') return true; // progress; suppress a duplicate launch
+                if (outcome === 'backoff') continue;                              // window extended; no respawn
+                // outcome === 'respawn' → session provably gone; proceed to a fresh launch below.
             }
         }
 
