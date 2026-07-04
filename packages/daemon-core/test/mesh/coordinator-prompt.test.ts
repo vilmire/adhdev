@@ -29,6 +29,36 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('Coordinator runtime is not a delegation default')
   })
 
+  it('6-2: includes Task Messaging Requirements — OSS English commits, scoped tests, convergence state', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [
+          {
+            id: 'node_1',
+            workspace: '/repo',
+            daemonId: 'daemon_1',
+            userOverrides: {},
+            policy: {},
+          },
+        ],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+      coordinatorCliType: 'claude-cli',
+    })
+
+    expect(prompt).toContain('### Task Messaging Requirements')
+    // Rule 1 — OSS English commits.
+    expect(prompt).toContain('commit messages in `oss/` MUST be English')
+    // Rule 2 — scoped test runs.
+    expect(prompt).toContain('run only the tests covering the changed files')
+    // Rule 3 — branch convergence final state in the completion report.
+    expect(prompt).toContain('require the completion report to classify the touched branch into exactly one final state')
+  })
+
   it('requires mesh tool exposure before doing coordinator work', () => {
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {

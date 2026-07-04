@@ -584,5 +584,13 @@ function buildRulesSection(coordinatorCliType?: string): string {
 - **Honor per-node instructions.** When a node carries a 📌 Node instruction in the nodes section, include the relevant parts of that instruction in the task message you send to that node. Don't paraphrase the instruction into your own words — quote it verbatim so the worker agent sees exactly what the user wrote.
 - **Mission status does not update itself.** When a mission's tasks are all done or the work is abandoned, explicitly call \`mesh_mission_upsert\` to set status \`completed\` or \`abandoned\`. Never leave a finished mission in \`active\`. All-cancelled tasks with no further work → \`abandoned\`.
 - **Never fabricate tool results.** Always call the actual tool.
-- **Keep the user informed.** One or two sentences after each delegation round.${coordinatorNote}`;
+- **Keep the user informed.** One or two sentences after each delegation round.${coordinatorNote}
+
+### Task Messaging Requirements
+
+When you compose the task message you dispatch to a node, include these requirements so the worker follows repo conventions the daemon can't enforce for it:
+
+- **OSS English commits.** If a task commits anything under \`oss/\` (an AGPL public repo whose history external contributors read), tell the worker explicitly that commit messages in \`oss/\` MUST be English. Root-level commits (proprietary packages) may use any language.
+- **Scoped test runs.** For a validation or code-change task, instruct the worker to run only the tests covering the changed files (\`vitest run <path>\` or \`-t <name>\`), not the whole suite. Run the full suite only when the task is explicitly a full-suite gate — a broad daemon-core run is minutes of wall-clock and the biggest source of worker slowness.
+- **Branch convergence state.** For a worktree task, require the completion report to classify the touched branch into exactly one final state: \`merged_to_main\`, \`pushed_feature_branch_needs_merge\`, \`blocked_review\`, \`cleanup_candidate\`, or \`not_mergeable\`. A task that ends on a non-main branch is not complete unless the report names that state and the next step.`;
 }
