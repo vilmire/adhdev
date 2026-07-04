@@ -82,12 +82,12 @@ function ConfirmDialog({ title, message, confirmLabel, confirmColor, onConfirm, 
     onCancel: () => void
 }) {
     const colorClass = confirmColor === 'red'
-        ? 'bg-red-500/20 text-red-400 border-red-500/30 hover:bg-red-500/30'
+        ? 'bg-status-error/20 text-status-error border-status-error/40 hover:bg-status-error/30'
         : ''
 
     return createPortal(
         <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-            style={{ zIndex: 9999 }}
+            style={{ zIndex: 'var(--z-modal)' }}
             onClick={onCancel}
         >
             <div
@@ -297,7 +297,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                         <div className="flex items-center gap-1.5 text-[11px]">
                             <span
                                 className={`w-1.5 h-1.5 rounded-full ${
-                                    p2p.state === 'connected' ? 'bg-green-400' :
+                                    p2p.state === 'connected' ? 'bg-status-online' :
                                     'bg-text-muted/30'
                                 } ${p2p.state === 'connecting' || p2p.state === 'new' ? 'animate-pulse' : ''}`}
                                 style={(p2p.state === 'connecting' || p2p.state === 'new') ? { background: 'var(--status-warning)' } : undefined}
@@ -330,7 +330,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                                         <span>{label.name}</span>
                                         {cdp !== undefined && (
                                             <span
-                                                className={`w-1.5 h-1.5 rounded-full ${cdp ? 'bg-green-400' : 'animate-pulse'}`}
+                                                className={`w-1.5 h-1.5 rounded-full ${cdp ? 'bg-status-online' : 'animate-pulse'}`}
                                                 style={!cdp ? { background: 'var(--status-warning)' } : undefined}
                                                 title={cdp ? 'CDP connected' : 'CDP connecting...'} />
                                         )}
@@ -358,8 +358,8 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                 {/* Action messages */}
                 {(upgradeMsg || actionMsg) && (
                     <div className={`text-xs mt-2 px-1 ${
-                        (upgradeState === 'error' || actionState === 'error') ? 'text-red-400' :
-                        (upgradeState === 'done' || actionState === 'done') ? 'text-green-400' :
+                        (upgradeState === 'error' || actionState === 'error') ? 'text-status-error' :
+                        (upgradeState === 'done' || actionState === 'done') ? 'text-status-online' :
                         'text-text-muted'
                     }`}>
                         {actionMsg || upgradeMsg}

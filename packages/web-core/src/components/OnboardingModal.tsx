@@ -47,7 +47,7 @@ export default function OnboardingModal({ onClose }: OnboardingModalProps) {
     <div
       className="onboarding-overlay"
       style={{
-        position: 'fixed', inset: 0, zIndex: 9999,
+        position: 'fixed', inset: 0, zIndex: 'var(--z-modal)',
         background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         animation: 'fadeIn 0.3s ease-out',

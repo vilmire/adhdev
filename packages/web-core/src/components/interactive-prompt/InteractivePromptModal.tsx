@@ -150,7 +150,7 @@ export default function InteractivePromptModal({
   const answerPreview = buildInteractivePromptResponse(promptSession.prompt, selection)
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 px-4 pt-[calc(24px+env(safe-area-inset-top,0px))] pb-[calc(24px+env(safe-area-inset-bottom,0px))]">
+    <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 px-4 pt-[calc(24px+env(safe-area-inset-top,0px))] pb-[calc(24px+env(safe-area-inset-bottom,0px))]">
       <div className="flex max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-48px)] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border-primary bg-surface-primary shadow-2xl">
         {/* Header */}
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border-primary px-5 py-4">

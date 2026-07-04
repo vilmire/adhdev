@@ -130,7 +130,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                 </p>
             </div>
 
-            {error && <div className="text-[12px] text-red-400 bg-red-500/10 border border-red-500/20 rounded px-3 py-2">{error}</div>}
+            {error && <div className="text-[12px] text-status-error bg-status-error/10 border border-status-error/40 rounded px-3 py-2">{error}</div>}
             {loading && <div className="text-[12px] text-text-muted">Loading…</div>}
 
             <div className="flex flex-col gap-6">

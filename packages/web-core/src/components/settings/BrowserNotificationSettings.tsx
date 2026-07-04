@@ -72,7 +72,7 @@ export function BrowserNotificationSettings({ onPrefChange }: BrowserNotificatio
                         Browser alerts only fire while this dashboard tab stays open in the background. If you close it, standalone cannot deliver hosted push notifications for you.
                     </div>
                     {browserPermission === 'default' && (
-                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-amber-300">
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-status-warning">
                             <span>This browser has not granted notification permission yet. Allow it to receive local browser alerts.</span>
                             <button
                                 onClick={() => { void requestNotificationPermission().then(setBrowserPermission) }}
@@ -83,12 +83,12 @@ export function BrowserNotificationSettings({ onPrefChange }: BrowserNotificatio
                         </div>
                     )}
                     {browserPermission === 'denied' && (
-                        <div className="text-[11px] text-amber-300">
+                        <div className="text-[11px] text-status-warning">
                             Browser notifications are blocked in site or browser settings. Re-enable them there to receive standalone desktop alerts.
                         </div>
                     )}
                     {browserPermission === 'unsupported' && (
-                        <div className="text-[11px] text-amber-300">
+                        <div className="text-[11px] text-status-warning">
                             This browser cannot show desktop notifications here. Keep the dashboard visible, or use another supported browser on this device.
                         </div>
                     )}
