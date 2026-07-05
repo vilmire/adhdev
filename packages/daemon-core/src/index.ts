@@ -304,7 +304,7 @@ export type { PendingMeshCoordinatorEvent } from './mesh/mesh-events.js';
 export { resolveMeshSurfacedSessionPreview, readMeshCompletionSummary, isWeakCompletionEvidence } from './mesh/mesh-events-utils.js';
 
 // ── Mesh Delivery Policy ──
-export { resolveDeliveryDecision, createSessionDelivery, updateSessionDeliveryStatus, getActiveSessionDeliveries, markSessionDeliveriesTerminal, recordCompletionConflict, getRecentCompletionConflicts } from './mesh/mesh-delivery-policy.js';
+export { resolveDeliveryDecision, createSessionDelivery, updateSessionDeliveryStatus, getActiveSessionDeliveries, markSessionDeliveriesTerminal } from './mesh/mesh-delivery-policy.js';
 export type { MeshSessionDeliveryStatus, MeshSessionDeliveryKind, MeshDeliveryDecision, MeshDeliveryPolicyResult, SessionDeliveryRecord } from './mesh/mesh-delivery-policy.js';
 
 // ── Mesh P2P Relay Failure Classification ──

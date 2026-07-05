@@ -254,44 +254,13 @@ export function getActiveSessionDeliveries(meshId: string, sessionId?: string) {
     }
 }
 
-/**
- * Record a completion conflict diagnostic when a duplicate event points to
- * different task/session than the already-seen event with the same fingerprint.
- */
-export function recordCompletionConflict(opts: {
-    meshId: string;
-    fingerprint: string;
-    conflictingTaskId?: string;
-    conflictingSessionId?: string;
-    originalTaskId?: string;
-    originalSessionId?: string;
-    event: string;
-}): void {
-    try {
-        MeshRuntimeStore.getInstance().recordCompletionConflict({
-            id: randomUUID(),
-            meshId: opts.meshId,
-            fingerprint: opts.fingerprint,
-            conflictingTaskId: opts.conflictingTaskId,
-            conflictingSessionId: opts.conflictingSessionId,
-            originalTaskId: opts.originalTaskId,
-            originalSessionId: opts.originalSessionId,
-            event: opts.event,
-            createdAt: new Date().toISOString(),
-        });
-    } catch { /* best-effort diagnostics */ }
-}
-
-/**
- * Get recent completion conflicts for diagnostic inspection.
- */
-export function getRecentCompletionConflicts(meshId: string, limitMs?: number) {
-    try {
-        return MeshRuntimeStore.getInstance().getRecentCompletionConflicts(meshId, limitMs);
-    } catch {
-        return [];
-    }
-}
+// MESH-COMPLEXITY-AUDIT Part 8-2: the completion-conflict diagnostic
+// (recordCompletionConflict / getRecentCompletionConflicts, backed by
+// mesh_completion_conflicts) was dropped. It recorded WHICH task lost a
+// fingerprint-dedup collision but had no production reader and no role in the
+// no-loss delivery contract — the dedup DECISION lives entirely in the
+// fingerprint match in mesh-event-forwarding.ts, which is unchanged. Removing
+// the side-record does not alter any completion-delivery outcome.
 
 export function __clearSessionDeliveriesForTests(meshId: string): void {
     MeshRuntimeStore.getInstance().deleteSessionDeliveries(meshId);

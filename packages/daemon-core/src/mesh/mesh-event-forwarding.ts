@@ -5,7 +5,7 @@ import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { SessionRecoveryContext } from './mesh-ledger.js';
 import { updateSessionTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue } from './mesh-work-queue.js';
-import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
+import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, prunePendingMeshCoordinatorEventsRetention, readV2EnvelopeFromWire, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
@@ -312,15 +312,14 @@ function isDuplicateMeshCompletionEvent(args: {
     const fingerprint = buildMeshCompletionFingerprint(args);
     if (!fingerprint) return false;
     if (hasFingerprintSeen(args.meshId, fingerprint)) {
-        if (args.taskId) {
-            recordCompletionConflict({
-                meshId: args.meshId,
-                fingerprint,
-                conflictingTaskId: args.taskId,
-                conflictingSessionId: args.sessionId,
-                event: args.event,
-            });
-        }
+        // MESH-COMPLEXITY-AUDIT Part 8-2: the dedup DECISION is the fingerprint
+        // match on the line above — that is the no-loss-neutral gate and it is
+        // unchanged. The former mesh_completion_conflicts diagnostic side-record
+        // (which task lost a fingerprint collision) had no production reader and
+        // played no part in the delivery contract, so it was dropped. Suppressing
+        // the duplicate here is unaffected: a genuine second, distinct completion
+        // has a different fingerprint (different taskId/timestamp/summary) and
+        // therefore does not match, so it is NOT suppressed here.
         return true;
     }
     recordFingerprintSeen(args.meshId, fingerprint);

@@ -1185,54 +1185,11 @@ describe('mesh-runtime-store', () => {
         });
     });
 
-    // ── Phase A6: completion conflict table tests ────────────────────────────
-
-    describe('Phase A6: mesh_completion_conflicts table', () => {
-        afterEach(() => {
-            __resetMeshRuntimeStoreForTests();
-        });
-
-        it('recordCompletionConflict inserts and getRecentCompletionConflicts retrieves it', () => {
-            const meshId = `mesh-conflict-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const id = randomUUID();
-            const fp = `fp-${randomUUID()}`;
-            db.recordCompletionConflict({
-                id,
-                meshId,
-                fingerprint: fp,
-                conflictingTaskId: 'task-c',
-                conflictingSessionId: 'sess-c',
-                originalTaskId: 'task-o',
-                originalSessionId: 'sess-o',
-                event: 'agent:generating_completed',
-                createdAt: new Date().toISOString(),
-            });
-
-            const conflicts = db.getRecentCompletionConflicts(meshId);
-            expect(conflicts).toHaveLength(1);
-            expect(conflicts[0].fingerprint).toBe(fp);
-            expect(conflicts[0].conflictingTaskId).toBe('task-c');
-        });
-
-        it('returns empty array when no conflicts for mesh', () => {
-            const meshId = `mesh-no-conflict-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            expect(db.getRecentCompletionConflicts(meshId)).toEqual([]);
-        });
-
-        it('duplicate same-id insert is silently ignored (INSERT OR IGNORE)', () => {
-            const meshId = `mesh-conflict-dedup-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const id = randomUUID();
-            const fp = `fp-${randomUUID()}`;
-            db.recordCompletionConflict({ id, meshId, fingerprint: fp, event: 'agent:generating_completed', createdAt: new Date().toISOString() });
-            db.recordCompletionConflict({ id, meshId, fingerprint: fp, event: 'agent:generating_completed', createdAt: new Date().toISOString() });
-
-            const conflicts = db.getRecentCompletionConflicts(meshId);
-            expect(conflicts).toHaveLength(1);
-        });
-    });
+    // MESH-COMPLEXITY-AUDIT Part 8-2: the Phase A6 mesh_completion_conflicts
+    // table tests were removed with the table. It was a write-only fingerprint-
+    // collision diagnostic with no production reader and no no-loss role; the
+    // dedup DECISION it observed is covered by the completion-dedup tests and is
+    // unchanged. The table is now dropped in migrateMeshIsolationColumns step 6.
 
     // ── Phase E1: queue retry cap ────────────────────────────────────────────
 

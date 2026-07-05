@@ -270,20 +270,9 @@ export class MeshRuntimeStore {
             CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_task
                 ON mesh_session_delivery(mesh_id, task_id);
 
-            CREATE TABLE IF NOT EXISTS mesh_completion_conflicts (
-                id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                fingerprint TEXT NOT NULL,
-                conflicting_task_id TEXT,
-                conflicting_session_id TEXT,
-                original_task_id TEXT,
-                original_session_id TEXT,
-                event TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_completion_conflicts_mesh
-                ON mesh_completion_conflicts(mesh_id, created_at);
+            -- MESH-COMPLEXITY-AUDIT Part 8-2: mesh_completion_conflicts removed
+            -- (write-only fingerprint-collision diagnostic, no production reader,
+            -- no no-loss role). Dropped in migrateMeshIsolationColumns step 6.
 
             CREATE TABLE IF NOT EXISTS mesh_tool_call_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -504,6 +493,16 @@ export class MeshRuntimeStore {
             //    the dormant table has it removed once. Idempotent — DROP TABLE IF EXISTS is
             //    a no-op on every subsequent boot.
             this.db.exec(`DROP TABLE IF EXISTS mesh_direct_delivered_events`);
+
+            // 6. MESH-COMPLEXITY-AUDIT Part 8-2: drop the mesh_completion_conflicts
+            //    diagnostic table. It recorded which task lost a completion-fingerprint
+            //    dedup collision but had NO production reader (getRecentCompletionConflicts
+            //    was test-only) and played NO part in the no-loss delivery contract — the
+            //    dedup DECISION is the fingerprint match in mesh-event-forwarding.ts and is
+            //    unchanged. Pure runtime-residue cleanup with no behavior change: a fresh
+            //    store never creates it; an old install drops the dormant table once.
+            //    Idempotent — DROP TABLE IF EXISTS is a no-op on every subsequent boot.
+            this.db.exec(`DROP TABLE IF EXISTS mesh_completion_conflicts`);
         } catch (err: any) {
             // Best-effort: a failed isolation migration must not brick the store. The
             // CREATE-TABLE definitions above already carry the new schema for fresh DBs;
@@ -1478,58 +1477,11 @@ export class MeshRuntimeStore {
 
     // ── Completion Conflict Diagnostics ──────────────────────────────────────
 
-    recordCompletionConflict(entry: {
-        id: string;
-        meshId: string;
-        fingerprint: string;
-        conflictingTaskId?: string;
-        conflictingSessionId?: string;
-        originalTaskId?: string;
-        originalSessionId?: string;
-        event: string;
-        createdAt: string;
-    }): void {
-        this.db.prepare(`
-            INSERT OR IGNORE INTO mesh_completion_conflicts
-                (id, mesh_id, fingerprint, conflicting_task_id, conflicting_session_id,
-                 original_task_id, original_session_id, event, created_at)
-            VALUES (@id, @meshId, @fingerprint, @conflictingTaskId, @conflictingSessionId,
-                    @originalTaskId, @originalSessionId, @event, @createdAt)
-        `).run({
-            id: entry.id,
-            meshId: entry.meshId,
-            fingerprint: entry.fingerprint,
-            conflictingTaskId: entry.conflictingTaskId ?? null,
-            conflictingSessionId: entry.conflictingSessionId ?? null,
-            originalTaskId: entry.originalTaskId ?? null,
-            originalSessionId: entry.originalSessionId ?? null,
-            event: entry.event,
-            createdAt: entry.createdAt,
-        });
-        this.maybeCheckpointWal();
-    }
-
-    getRecentCompletionConflicts(meshId: string, limitMs: number = 60 * 60 * 1000): Array<{
-        id: string; meshId: string; fingerprint: string; conflictingTaskId: string | null;
-        conflictingSessionId: string | null; originalTaskId: string | null;
-        originalSessionId: string | null; event: string; createdAt: string;
-    }> {
-        const cutoff = new Date(Date.now() - limitMs).toISOString();
-        const rows = this.db.prepare(
-            'SELECT * FROM mesh_completion_conflicts WHERE mesh_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 50'
-        ).all(meshId, cutoff) as Array<Record<string, unknown>>;
-        return rows.map(r => ({
-            id: r.id as string,
-            meshId: r.mesh_id as string,
-            fingerprint: r.fingerprint as string,
-            conflictingTaskId: r.conflicting_task_id as string | null,
-            conflictingSessionId: r.conflicting_session_id as string | null,
-            originalTaskId: r.original_task_id as string | null,
-            originalSessionId: r.original_session_id as string | null,
-            event: r.event as string,
-            createdAt: r.created_at as string,
-        }));
-    }
+    // MESH-COMPLEXITY-AUDIT Part 8-2: recordCompletionConflict /
+    // getRecentCompletionConflicts (and their mesh_completion_conflicts table)
+    // were removed. They were a write-only diagnostic of fingerprint-dedup
+    // collisions with no production reader and no part in the no-loss delivery
+    // contract; the table is dropped in migrateMeshIsolationColumns (step 6).
 
     /**
      * Record a mesh tool call and check whether this mesh+tool combination is

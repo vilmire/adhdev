@@ -20,8 +20,6 @@ import {
     createSessionDelivery,
     updateSessionDeliveryStatus,
     getActiveSessionDeliveries,
-    recordCompletionConflict,
-    getRecentCompletionConflicts,
     __clearSessionDeliveriesForTests,
 } from '../../src/mesh/mesh-delivery-policy.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
@@ -232,41 +230,9 @@ describe('mesh-delivery-policy', () => {
         });
     });
 
-    // ── recordCompletionConflict + getRecentCompletionConflicts ─────────────
-
-    describe('recordCompletionConflict', () => {
-        it('records a conflict and retrieves it via getRecentCompletionConflicts', () => {
-            const meshId = `mesh-conflict-${randomUUID().slice(0, 8)}`;
-            const fingerprint = `fp-${randomUUID()}`;
-            recordCompletionConflict({
-                meshId,
-                fingerprint,
-                conflictingTaskId: 'task-conflict',
-                conflictingSessionId: 'sess-conflict',
-                originalTaskId: 'task-original',
-                originalSessionId: 'sess-original',
-                event: 'agent:generating_completed',
-            });
-            const conflicts = getRecentCompletionConflicts(meshId);
-            expect(conflicts.length).toBe(1);
-            expect(conflicts[0].fingerprint).toBe(fingerprint);
-            expect(conflicts[0].conflictingTaskId).toBe('task-conflict');
-            expect(conflicts[0].originalTaskId).toBe('task-original');
-            expect(conflicts[0].event).toBe('agent:generating_completed');
-        });
-
-        it('returns empty array when no conflicts for mesh', () => {
-            const meshId = `mesh-no-conflict-${randomUUID().slice(0, 8)}`;
-            const conflicts = getRecentCompletionConflicts(meshId);
-            expect(conflicts).toEqual([]);
-        });
-
-        it('does not raise on repeated inserts with same id (best-effort)', () => {
-            const meshId = `mesh-conflict-safe-${randomUUID().slice(0, 8)}`;
-            expect(() => {
-                recordCompletionConflict({ meshId, fingerprint: 'fp-x', event: 'agent:generating_completed' });
-                recordCompletionConflict({ meshId, fingerprint: 'fp-x', event: 'agent:generating_completed' });
-            }).not.toThrow();
-        });
-    });
+    // MESH-COMPLEXITY-AUDIT Part 8-2: the recordCompletionConflict /
+    // getRecentCompletionConflicts diagnostic (mesh_completion_conflicts table)
+    // was removed — write-only, no production reader, no no-loss role — so its
+    // tests were removed with it. The fingerprint-dedup DECISION it observed is
+    // covered by mesh-events-pending-completion-dedup.test.ts and unchanged.
 });
