@@ -67,6 +67,33 @@ import { pruneStaleDirectDispatches } from './mesh-active-work.js';
 import { findTerminalLedgerEvidenceForTask, reconcileDirectDispatchCompletionFromTranscript } from './mesh-events-stale.js';
 import { extractFinalAssistantSummaryEvidence } from '../providers/chat-message-normalization.js';
 import type { ChatMessage } from '../types.js';
+import {
+    resolveCoordinatorDaemonIds,
+    daemonHostsMesh,
+    daemonIdListIncludes,
+    resolveCoordinatorSelfIds,
+} from './mesh-reconcile-identity.js';
+import {
+    getMeshV2BackstopCounters,
+    recordBackstopFire,
+} from './mesh-reconcile-v2-backstop.js';
+import {
+    ACKED_DEATH_CONSECUTIVE_READ_FAILURES,
+    resolveTunedReconcileMs,
+    resolveAckedDeathDeadlineMs,
+    resolveAckedTranscriptFastTrackGraceMs,
+    inFlightSynthKey,
+    getHoldState,
+    setHoldState,
+    deleteHoldState,
+    rehydrateAckedHoldsForMesh,
+    collectHeldSynthKeysForMesh,
+} from './mesh-reconcile-acked-hold.js';
+
+// Re-export the extracted public API so existing importers (mesh-events.ts barrel;
+// the reconcile-loop test suite) keep their `from './mesh-reconcile-loop.js'` paths.
+export { getMeshV2BackstopCounters, __resetMeshV2BackstopCountersForTests } from './mesh-reconcile-v2-backstop.js';
+export { __resetReconcileInFlightSynthDebounceForTests } from './mesh-reconcile-acked-hold.js';
 
 // Default reconcile cadence. approval/completion notifications to a live CLI
 // coordinator land within at most one interval. Overridable via env for tuning.
@@ -120,297 +147,6 @@ function resolveReconcileIntervalMs(): number {
     return DEFAULT_RECONCILE_INTERVAL_MS;
 }
 
-// R4f (GENERATING-BOUNDARY, acked-hold redesign). PHASE 4 only synthesizes a missing completion
-// when the worker session reads `idle`. But a worker that is GENUINELY generating (it emitted
-// agent:generating_started — the dispatch row is 'acked' — and has not yet completed) can
-// momentarily read `idle` mid-turn (a CLI PTY inter-tool-call settle, or the final assistant text
-// already rendered while the turn's generating_completed lifecycle close still lags). A premature
-// synth writes a terminal that then masks the worker's REAL completion when it lands seconds later
-// (drop:duplicate_completion_terminal_ledger; the observed 71s task a250fb44 lost its [System]
-// notification this way; the R4e 53s task synth fired 16s BEFORE the worker's real emit).
-//
-// R4 → R4e used FINITE timers (consecutive ticks / MIN_IDLE_SETTLE / ACKED_TURN_SETTLE) to delay the
-// synth. That class of fix is fundamentally a RACE: the worker's real emit latency is variable and
-// unbounded (win32 idle reads can flip before the emit arrives), so ANY finite timer eventually
-// loses to a slow-enough turn — and the synth pre-empts the real completion. R4e live-FAILED for
-// exactly this reason.
-//
-// R4f redesign (direction B). An `acked` task means the worker ECHOED generating_started (the
-// taskId flip) — it is alive and mid-turn, so it WILL eventually emit a real terminal. We therefore
-// HOLD the synth INDEFINITELY for an acked task. This is safe against the emit actually arriving:
-// when the worker's real generating_completed lands, it writes a terminal ledger, and
-// reconcileDirectDispatchCompletionFromTranscript's hasTerminalLedgerAfterDispatch check makes any
-// later synth an idempotent no-op (alreadyTerminal). So the hold never costs a missed notification —
-// the real emit always wins, no matter how late.
-//
-// The indefinite hold is released ONLY by a genuine-DEATH / emit-loss BACKSTOP — never a finite
-// timer that races normal lag:
-//   (a) liveness failure — read_chat reports the session is gone, OR N consecutive read failures
-//       accumulate (a transport/session-gone signal, counted as death rather than swallowed via
-//       `continue`). A worker that died mid-turn will never emit, so the synth must eventually fire.
-//   (b) an absolute LONG death-deadline — time since the generating_started ack exceeds
-//       ACKED_DEATH_DEADLINE_MS, a backstop set FAR above any observed emit latency (default 8 min)
-//       so it does not race a normal slow turn; it only catches a worker that is genuinely wedged or
-//       whose emit was permanently lost. This is a notification-loss net, not a completion timer.
-//
-// A dispatch that was never acked (worker never started) is NOT held here: there is no in-flight
-// generation to protect, so it keeps the existing first-idle-tick synth behavior (its lost-dispatch
-// case is covered by the downstream grace + stale-summary guards). The map is pruned each PHASE-4
-// pass to the set of currently active dispatches, so a completed/pruned task's state is dropped (no
-// unbounded growth). Keyed by `${meshId}::${taskId}`.
-
-// R4f backstop (a): how many CONSECUTIVE read_chat failures (transport error / success:false /
-// no payload) for an acked task are treated as a death signal that releases the indefinite hold.
-// A single failed read is a transient probe blip; a session that genuinely died reads-fail every
-// tick, so a small streak distinguishes the two without racing a live-but-slow worker.
-const ACKED_DEATH_CONSECUTIVE_READ_FAILURES = 3;
-
-// R4f backstop (b): the absolute death-deadline. An acked task is held indefinitely until this much
-// time has elapsed since its generating_started ack (dispatch.updatedAt); past it, a persistently
-// idle session is synthesized as a notification-loss net. This is set FAR above any observed emit
-// latency (R4e's worst case was ~16s) so it does NOT race a normal slow turn — it only catches a
-// genuinely wedged worker or a permanently-lost emit. Read at call time so tests can tune it.
-function resolveTunedReconcileMs(envName: string, def: number, min: number, max: number): number {
-    const raw = readNonEmptyString(process.env[envName]);
-    if (raw) {
-        const parsed = Number.parseInt(raw, 10);
-        if (Number.isFinite(parsed) && parsed >= min && parsed <= max) return parsed;
-    }
-    return def;
-}
-function resolveAckedDeathDeadlineMs(): number {
-    // Default 8 min — FAR above the variable emit latency the finite R4..R4e timers raced (R4e's
-    // worst case was ~16s); by the time this fires a live worker would long since have emitted its
-    // real terminal. The env-override floor is 0 so tests can force the deadline (production never
-    // sets it that low); the ceiling is 60min so a mis-set env cannot disable the loss-net forever.
-    return resolveTunedReconcileMs('MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS', 8 * 60_000, 0, 60 * 60_000);
-}
-
-// ACKED-HOLD-IDLE-OVERTRUST (transcript-completion fast-track). The indefinite acked-hold above is
-// safe but SLOW: when the worker's real generating_completed emit is dropped/lost, the only thing
-// that promotes the missing completion is the 8-min death backstop — even though the answer has been
-// FULLY rendered in the transcript for minutes (read_chat reports idle WITH a final visible assistant
-// message every ~4s). Observed live: completions surfaced 144s / 492s late, both incompatible with the
-// provider's own emit ceiling (COMPLETED_FINALIZATION_MAX_WAIT_MS 30s + NATIVE_HISTORY_MESH_IDLE_SETTLE
-// 4s ≈ 34s). That gap = a worker that finished, whose PTY generating→idle edge / real emit was lost,
-// held hostage to the 8-min net.
-//
-// Fast-track: when an acked task reads idle AND a final visible assistant message is present (the same
-// transcript-completion evidence PHASE 4 already requires to synth), and that idle-with-final-assistant
-// state has PERSISTED for a short continuous grace, promote the synth EARLY — ahead of the 8-min
-// backstop. The grace is the correctness gate: a SINGLE idle read could be a mid-turn blip (PTY
-// inter-tool-call settle, or final text rendered while the next tool call is about to start), so we
-// require the idle-with-final-assistant signal to hold continuously for the grace window before
-// trusting it as a genuine turn-end. Any non-idle read (generating / waiting_approval), a read
-// failure, or the disappearance of the final assistant message RESETS the streak — so an actively
-// streaming worker that momentarily reads idle never crosses the grace.
-//
-// Safety: this only changes WHEN an acked synth fires (earlier), never WHETHER it is correct —
-// reconcileDirectDispatchCompletionFromTranscript's hasTerminalLedgerAfterDispatch makes a real
-// emit that lands later an idempotent no-op, exactly as the death-backstop synth relies on. The
-// death backstop (8 min) is PRESERVED unchanged as the final net; the fast-track is a faster path in
-// front of it. The grace is set ABOVE the provider's own emit ceiling (~34s) so a worker still inside
-// its normal finalization window is never pre-empted — we only fast-track once enough continuous idle
-// has elapsed that a live emit would already have arrived.
-function resolveAckedTranscriptFastTrackGraceMs(): number {
-    // Default 40s — above the provider emit ceiling (30s COMPLETED_FINALIZATION_MAX_WAIT_MS + 4s
-    // NATIVE_HISTORY_MESH_IDLE_SETTLE ≈ 34s): a genuinely-live worker would have emitted its real
-    // terminal within that window, so 40s of CONTINUOUS idle-with-final-assistant means the emit was
-    // lost, not late. Far below the 8-min death backstop, so the fast-track is the dominant path for a
-    // lost emit while the backstop remains the last-resort net. Floor 0 lets tests force an immediate
-    // fast-track; ceiling 5min keeps a mis-set env from collapsing it into the death backstop.
-    return resolveTunedReconcileMs('MESH_INFLIGHT_ACKED_TRANSCRIPT_FASTTRACK_GRACE_MS', 40_000, 0, 5 * 60_000);
-}
-
-// Per-task in-flight hold state for an acked dispatch:
-//   - liveConfirmedSinceAck: we have seen at least one conclusive read (idle OR generating) since
-//     the ack — proves the session is reachable, so a later read FAILURE is a genuine liveness loss
-//     rather than a node that was never reachable.
-//   - consecutiveReadFailures: streak of inconclusive read_chat results (death backstop (a)).
-//   - transcriptIdleSinceMs: the timestamp of the FIRST tick in the current continuous run of
-//     idle-with-final-assistant reads (ACKED-HOLD-IDLE-OVERTRUST fast-track). Cleared to undefined
-//     whenever the signal breaks (non-idle read, read failure, or no final assistant message), so a
-//     mid-turn idle blip never accumulates grace. When `now - transcriptIdleSinceMs` exceeds the
-//     fast-track grace the synth is promoted ahead of the death backstop.
-interface AckedHoldState {
-    liveConfirmedSinceAck: boolean;
-    consecutiveReadFailures: number;
-    transcriptIdleSinceMs?: number;
-}
-
-// T2 (B2b): acked-hold state persistence. The Map below is a process-local CACHE;
-// the SSOT is the mesh_inflight_hold table in MeshRuntimeStore. Every read goes
-// read-through (Map miss → load from store, then cache), every mutation goes
-// write-through (Map set → store upsert; Map delete → store delete). On daemon
-// boot the reconcile loop rehydrates the Map from the store per-mesh the first
-// time it touches that mesh (rehydrateAckedHoldsForMesh), so a hold established
-// before a restart survives it — closing the duplicate-emit / drop window the
-// PHASE-4 transcript synth backstop otherwise had to correct after the fact.
-//
-// Store row ↔ AckedHoldState mapping:
-//   hold_reason 'live'|'unconfirmed'  ↔ liveConfirmedSinceAck (boolean)
-//   read_failure_count                ↔ consecutiveReadFailures
-//   first_idle_since_ack              ↔ transcriptIdleSinceMs (undefined ⇒ NULL)
-//   mesh_id                            = the owning mesh (for listByMesh / prune)
-//   held_at                            = ms the hold was first created (store-managed)
-const inFlightAckedHoldState = new Map<string, AckedHoldState>();
-// Meshes whose store rows have already been rehydrated into the Map this process.
-// A restart resets this set, so the first touch of each mesh reloads from disk.
-const rehydratedHoldMeshes = new Set<string>();
-
-// ─── T6 (B3c): PHASE-4 synthesis + acked-hold fast-track demoted to last-resort ──
-//
-// Under mesh-protocol-v2 enforce, the completion contract is explicit: a worker's
-// terminal emit is a v2 unicast event drained straight to the coordinator. The
-// PHASE-4 transcript-synthesis backstop and the acked-hold fast-track exist to
-// paper over a LOST emit — they should NEVER fire once v2 delivery is healthy. So
-// their firing is now a demoted last-resort signal: every fire bumps a counter, and
-// under enforce a fire additionally emits a WARN naming it a v2-contract violation
-// (a real emit was expected but never arrived). Target = 0 fires in steady state.
-//
-// The code is NOT removed — it stays as the correctness net for a genuinely lost
-// emit (rollout plan §B3c: "코드 삭제는 하지 않고 관측 후 다음 사이클에 판단"). Process-
-// lifetime totals; read by tests + surfaced in mesh_status.
-const meshV2BackstopCounters = {
-    /** PHASE-4 transcript synthesis actually reconciled a missing completion. */
-    phase4SynthesisFired: 0,
-    /** Acked-hold transcript fast-track promoted a synth ahead of the death deadline. */
-    ackedHoldFastTrackFired: 0,
-    /** Acked-hold death-deadline backstop released a held synth (the 8-min net). */
-    ackedHoldDeathDeadlineFired: 0,
-};
-
-/** Test/observability accessor for the v2 last-resort backstop counters (snapshot). */
-export function getMeshV2BackstopCounters(): Readonly<typeof meshV2BackstopCounters> {
-    return { ...meshV2BackstopCounters };
-}
-
-/** Test helper: zero the backstop counters so a case starts from a clean slate. */
-export function __resetMeshV2BackstopCountersForTests(): void {
-    for (const k of Object.keys(meshV2BackstopCounters) as Array<keyof typeof meshV2BackstopCounters>) {
-        meshV2BackstopCounters[k] = 0;
-    }
-}
-
-/** Enforce switch mirror (see isMeshProtocolV2EnforceEnabled in mesh-events-pending);
- *  re-read here (not imported) to keep the reconcile loop free of a cross-file coupling
- *  and to read env at fire time. On by default; set MESH_PROTOCOL_V2_ENFORCE=0/false/
- *  off/no to disable. Same vocabulary as the source of truth. */
-function meshProtocolV2EnforceOn(): boolean {
-    const raw = process.env.MESH_PROTOCOL_V2_ENFORCE;
-    if (typeof raw !== 'string' || !raw.trim()) return true;   // unset/blank = default ON
-    const v = raw.trim().toLowerCase();
-    return !(v === '0' || v === 'false' || v === 'off' || v === 'no');
-}
-
-/** Bump a backstop counter and, under enforce, WARN that a last-resort net fired —
- *  which under a healthy v2 contract should not happen (the real emit was lost). */
-function recordBackstopFire(kind: keyof typeof meshV2BackstopCounters, detail: string): void {
-    meshV2BackstopCounters[kind]++;
-    if (meshProtocolV2EnforceOn()) {
-        LOG.warn('MeshReconcileV2', `v2 ENFORCE last-resort backstop fired (${kind}): ${detail}. Under a healthy v2 completion contract this should be 0 — a worker's real terminal emit was lost/late.`);
-    }
-}
-
-function inFlightSynthKey(meshId: string, taskId: string): string {
-    return `${meshId}::${taskId}`;
-}
-
-// Extract the taskId back out of a `${meshId}::${taskId}` synth key. The meshId
-// prefix can itself contain '::' only if the caller passed one (mesh ids are
-// config-derived and never do), so split on the FIRST '::' and treat the remainder
-// as the taskId.
-function taskIdFromSynthKey(meshId: string, synthKey: string): string {
-    const prefix = `${meshId}::`;
-    return synthKey.startsWith(prefix) ? synthKey.slice(prefix.length) : synthKey;
-}
-
-function holdStore(): MeshRuntimeStore | undefined {
-    try { return MeshRuntimeStore.getInstance(); } catch { return undefined; }
-}
-
-// Read-through: Map hit returns the cached state; a miss consults the store and,
-// when a row exists, hydrates the Map from it before returning. A store failure
-// degrades to Map-only (returns undefined on a miss) — identical to the pre-T2
-// in-memory behavior, never worse.
-function getHoldState(synthKey: string, meshId: string): AckedHoldState | undefined {
-    const cached = inFlightAckedHoldState.get(synthKey);
-    if (cached) return cached;
-    const store = holdStore();
-    if (!store) return undefined;
-    let row;
-    try { row = store.getInflightHold(taskIdFromSynthKey(meshId, synthKey)); } catch { return undefined; }
-    if (!row) return undefined;
-    const state: AckedHoldState = {
-        liveConfirmedSinceAck: row.holdReason === 'live',
-        consecutiveReadFailures: row.readFailureCount ?? 0,
-        ...(row.firstIdleSinceAck !== null && row.firstIdleSinceAck !== undefined
-            ? { transcriptIdleSinceMs: row.firstIdleSinceAck }
-            : {}),
-    };
-    inFlightAckedHoldState.set(synthKey, state);
-    return state;
-}
-
-// Write-through: update the Map cache AND the store row. A store failure leaves the
-// Map authoritative for this process (degrade, never crash the tick).
-function setHoldState(synthKey: string, meshId: string, state: AckedHoldState): void {
-    inFlightAckedHoldState.set(synthKey, state);
-    const store = holdStore();
-    if (!store) return;
-    try {
-        store.upsertInflightHold({
-            taskId: taskIdFromSynthKey(meshId, synthKey),
-            meshId,
-            holdReason: state.liveConfirmedSinceAck ? 'live' : 'unconfirmed',
-            firstIdleSinceAck: state.transcriptIdleSinceMs ?? null,
-            readFailureCount: state.consecutiveReadFailures,
-        });
-    } catch { /* degrade to Map-only */ }
-}
-
-// Write-through delete: drop the Map entry AND the store row.
-function deleteHoldState(synthKey: string, meshId: string): void {
-    inFlightAckedHoldState.delete(synthKey);
-    const store = holdStore();
-    if (!store) return;
-    try { store.deleteInflightHold(taskIdFromSynthKey(meshId, synthKey)); } catch { /* degrade */ }
-}
-
-// Restart rehydration: on the first touch of a mesh this process, pull its persisted
-// acked-hold rows from the store into the Map cache so a hold that outlived a daemon
-// restart is honored again. Idempotent per process via rehydratedHoldMeshes. A store
-// failure just skips rehydration (Map starts empty for the mesh — pre-T2 behavior).
-function rehydrateAckedHoldsForMesh(meshId: string): void {
-    if (rehydratedHoldMeshes.has(meshId)) return;
-    rehydratedHoldMeshes.add(meshId);
-    const store = holdStore();
-    if (!store) return;
-    let rows;
-    try { rows = store.listInflightHoldsByMesh(meshId); } catch { return; }
-    for (const row of rows) {
-        const synthKey = inFlightSynthKey(meshId, row.taskId);
-        if (inFlightAckedHoldState.has(synthKey)) continue; // a live tick already set fresher state
-        inFlightAckedHoldState.set(synthKey, {
-            liveConfirmedSinceAck: row.holdReason === 'live',
-            consecutiveReadFailures: row.readFailureCount ?? 0,
-            ...(row.firstIdleSinceAck !== null && row.firstIdleSinceAck !== undefined
-                ? { transcriptIdleSinceMs: row.firstIdleSinceAck }
-                : {}),
-        });
-    }
-    if (rows.length > 0) {
-        LOG.info('MeshReconcile', `Rehydrated ${rows.length} persisted acked-hold row(s) for mesh ${meshId} after (re)start`);
-    }
-}
-
-// Test hook: clear the in-flight acked-hold state between cases (both the Map cache
-// and the per-mesh rehydrate guard, so each case starts from a clean read-through).
-export function __resetReconcileInFlightSynthDebounceForTests(): void {
-    inFlightAckedHoldState.clear();
-    rehydratedHoldMeshes.clear();
-}
-
 interface LiveCoordinator {
     meshId: string;
     instance: ReturnType<DaemonComponents['instanceManager']['getInstance']>;
@@ -434,96 +170,6 @@ interface LiveCoordinator {
     // user never made (data corruption). PHASE 2 excludes these from force-inject
     // and leaves the event queued for a later (modal-resolved) tick.
     modalParked: boolean;
-}
-
-// The set of coordinator-daemon ids THIS daemon answers to when draining the
-// pending-events queue. A unicast completion event is stamped with the worker's
-// meshCoordinatorDaemonId, which can be either:
-//   - the daemon's canonical status id (`standalone_<machineId>` / `daemon_<machineId>`),
-//     stamped by the MCP layer via ctx.localDaemonId (= getStatus().status.instanceId), or
-//   - the bare machineId, stamped by the local queue-assignment path (loadConfig().machineId).
-//   - the config-form node daemonId (`daemon_<machineId>`), which the MCP layer's
-//     resolveCoordinatorDaemonId prefers and stamps onto direct-dispatch workers.
-// Draining with only one of these silently misses events stamped with the other —
-// the exact reason a generating coordinator never self-received local completions,
-// and the base-node completion-surface bug (base completions land full-form
-// `daemon_<machineId>` while a coordinator that only knows itself as bare
-// `<machineId>` never matches them). We expand to EVERY equivalent form so the
-// scope match (host gate, self-node detection, and the drain IN-filter downstream)
-// succeeds regardless of which path stamped the event.
-function resolveCoordinatorDaemonIds(components: DaemonComponents): string[] {
-    const statusInstanceId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
-    const machineId = readNonEmptyString(loadConfig().machineId);
-    return expandDaemonIdForms([statusInstanceId, machineId]);
-}
-
-// Whether THIS daemon is the coordinator/host for a mesh — i.e. the daemon that
-// owns coordinator ownership and must collect every worker node's completion
-// events into its local queue. This is true regardless of whether a *live CLI*
-// coordinator session currently exists: the coordinator is frequently a pure
-// stdio MCP LLM (no live CLI session to inject into), and that LLM only sees the
-// queue when it next calls a mesh tool. For it to see remote worker completions
-// at all, the daemon must have already pulled them into the local queue on the
-// timer — which is exactly what this predicate gates.
-//
-// Rule: this daemon hosts the mesh when meshHost.role is 'host' (the default for
-// standalone-compat meshes with no host metadata) AND, when a hostDaemonId is
-// pinned, it resolves to one of this daemon's ids. Member-only daemons return
-// false — their own queue is pulled BY the host, not the other way around.
-//
-// `daemonIds` here is the EXPANDED self-identity set (runtime drain ids ∪ this
-// daemon's mesh-config node id forms) — see resolveCoordinatorSelfIds. The
-// pinned hostDaemonId is itself a config-form id and frequently does NOT equal a
-// runtime id (bare machineId / status id), so gating on the runtime ids alone
-// would wrongly classify the real host as a non-host and skip the remote pull
-// entirely.
-function daemonHostsMesh(mesh: LocalMeshEntry, daemonIds: string[]): boolean {
-    const host = mesh.meshHost;
-    // No metadata → default host (standalone compatibility, see createDefaultMeshHostMetadata).
-    if (!host) return true;
-    if (host.role && host.role !== 'host') return false;
-    const hostDaemonId = readNonEmptyString(host.hostDaemonId);
-    // Host role but no pinned hostDaemonId → treat as host (single-daemon / legacy).
-    if (!hostDaemonId) return true;
-    return daemonIdListIncludes(daemonIds, hostDaemonId);
-}
-
-function daemonIdListIncludes(ids: readonly string[], id: string | undefined): boolean {
-    if (!id) return false;
-    return ids.some(candidate => candidate === id || daemonIdsEquivalent(candidate, id));
-}
-
-// Resolve EVERY id-form this daemon answers to FOR A GIVEN MESH: the runtime drain
-// ids (status id + bare machineId) unioned with this daemon's mesh-config identity
-// forms — the self node's daemonId/machineId (the node whose daemonId/machineId
-// matches a runtime id) and the pinned meshHost.hostDaemonId WHEN it is provably
-// ours. This is the single source of truth for "is this id me?" across both the
-// host gate and the remote pull filter; the worker's meshCoordinatorDaemonId stamp
-// is guaranteed to be one of these forms (it comes from resolveCoordinatorDaemonId,
-// which prefers the coordinator node's config-form daemonId over the runtime status id).
-function resolveCoordinatorSelfIds(mesh: LocalMeshEntry, drainDaemonIds: string[]): string[] {
-    const ids = new Set<string>(drainDaemonIds);
-    // Expand with the config-form id(s) of the self node — the mesh node whose
-    // daemonId/machineId matches a runtime id. Its config-form daemonId is exactly
-    // what resolveCoordinatorNode()→resolveCoordinatorDaemonId() stamps onto a worker.
-    for (const node of mesh.nodes) {
-        const nodeDaemonId = readNonEmptyString(node.daemonId);
-        const nodeMachineId = readNonEmptyString(node.machineId);
-        const isSelf = (nodeDaemonId && daemonIdListIncludes(drainDaemonIds, nodeDaemonId))
-            || (nodeMachineId && daemonIdListIncludes(drainDaemonIds, nodeMachineId));
-        if (!isSelf) continue;
-        if (nodeDaemonId) ids.add(nodeDaemonId);
-        if (nodeMachineId) ids.add(nodeMachineId);
-    }
-    // The pinned host id is included ONLY when it is provably one of THIS daemon's ids
-    // (it already matches a runtime id or a resolved self-node id). A hostDaemonId that
-    // names a DIFFERENT daemon must NOT be claimed — that would make a member-only
-    // daemon believe it is the host and pull queues it does not own. Having a node on
-    // this daemon does not make this daemon the host; daemonHostsMesh still honours a
-    // foreign hostDaemonId and rejects ownership.
-    const hostDaemonId = readNonEmptyString(mesh.meshHost?.hostDaemonId);
-    if (hostDaemonId && daemonIdListIncludes([...ids], hostDaemonId)) ids.add(hostDaemonId);
-    return [...ids];
 }
 
 // Observability: last-seen modal-park state per coordinator session, so we LOG.info
@@ -2018,18 +1664,7 @@ async function reconcileUnterminatedDirectDispatches(
             .filter(Boolean)
             .map(taskId => inFlightSynthKey(mesh.id, taskId)),
     );
-    const heldKeys = new Set<string>();
-    for (const key of inFlightAckedHoldState.keys()) {
-        if (key.startsWith(`${mesh.id}::`)) heldKeys.add(key);
-    }
-    const store = holdStore();
-    if (store) {
-        try {
-            for (const row of store.listInflightHoldsByMesh(mesh.id)) {
-                heldKeys.add(inFlightSynthKey(mesh.id, row.taskId));
-            }
-        } catch { /* degrade — prune only what's in the Map */ }
-    }
+    const heldKeys = collectHeldSynthKeysForMesh(mesh.id);
     for (const key of heldKeys) {
         if (!activeTaskKeys.has(key)) deleteHoldState(key, mesh.id);
     }
