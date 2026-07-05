@@ -69,7 +69,59 @@ function openDb(): any | null {
     }
 }
 
+/**
+ * Expand an anchor session id to every session id in its logical cluster.
+ *
+ * hermes ≥0.14 splits a SINGLE logical turn across several `sessions` rows
+ * linked by `parent_session_id` (a 0-message intermediate row is common), and
+ * the turn's final assistant message lands in a DIFFERENT row than the one the
+ * daemon pins. A bidirectional walk — up the parent chain to the cluster root,
+ * then down through every descendant — returns the complete set from ANY anchor
+ * (root, middle, or leaf), mirroring the declarative executor's
+ * `session_cluster_query`. Falls back to the anchor alone if the schema has no
+ * `parent_session_id` column (older hermes) or the walk fails.
+ */
+function resolveClusterSessionIds(db: any, anchorId: string): string[] {
+    if (!anchorId) return [];
+    try {
+        const rows: any[] = db.prepare(
+            `WITH RECURSIVE
+               up(id) AS (
+                 SELECT id FROM sessions WHERE id = ?
+                 UNION
+                 SELECT s.parent_session_id FROM sessions s JOIN up ON s.id = up.id
+                   WHERE s.parent_session_id IS NOT NULL
+               ),
+               cluster(id) AS (
+                 SELECT id FROM up
+                 UNION
+                 SELECT s.id FROM sessions s JOIN cluster ON s.parent_session_id = cluster.id
+               )
+             SELECT id FROM cluster`,
+        ).all(anchorId);
+        const ids = new Set<string>([anchorId]);
+        for (const r of rows) {
+            if (r && r.id != null && String(r.id)) ids.add(String(r.id));
+        }
+        return Array.from(ids);
+    } catch {
+        // No parent_session_id column (older hermes) or a walk failure — the
+        // single anchor is still a valid (degenerate) cluster.
+        return [anchorId];
+    }
+}
+
 function loadMessagesForSession(db: any, sessionId: string): NativeHistoryMessage[] {
+    // Read the WHOLE sub-session cluster, not just the pinned anchor. hermes
+    // ≥0.14 writes a turn's final assistant into a descendant sub-session row,
+    // so an anchor-only read misses it → read_chat shows zero assistant bubbles
+    // and the completion gate false-fires missing_final_assistant. Gather every
+    // cluster member (parent-chain walk) and merge; the SQL `ORDER BY timestamp`
+    // re-interleaves bubbles from different sub-sessions into true chronological
+    // order so the final assistant lands last.
+    const clusterIds = resolveClusterSessionIds(db, sessionId);
+    if (clusterIds.length === 0) return [];
+    const placeholders = clusterIds.map(() => '?').join(', ');
     // Assistant turns whose finish_reason='tool_calls' persist an EMPTY
     // `content` — their payload lives in the `tool_calls` column. Filtering on
     // `content != ''` alone drops those rows, so a turn whose terminal message
@@ -79,10 +131,10 @@ function loadMessagesForSession(db: any, sessionId: string): NativeHistoryMessag
     const rows: any[] = db.prepare(
         `SELECT id, role, COALESCE(NULLIF(content, ''), tool_calls) AS content, timestamp
          FROM messages
-         WHERE session_id = ?
+         WHERE session_id IN (${placeholders})
            AND ((content IS NOT NULL AND content != '') OR (tool_calls IS NOT NULL AND tool_calls != ''))
          ORDER BY timestamp ASC, id ASC`,
-    ).all(sessionId);
+    ).all(...clusterIds);
     const out: NativeHistoryMessage[] = [];
     for (const r of rows) {
         const role = normalizeHermesRole(r.role);

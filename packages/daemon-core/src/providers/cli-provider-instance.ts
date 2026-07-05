@@ -1517,6 +1517,22 @@ export class CliProviderInstance implements ProviderInstance {
         return probe;
     }
 
+    /**
+     * The spawned CLI's env overrides (e.g. the mesh coordinator points hermes
+     * at a per-coordinator HERMES_HOME so its state.db lives in a tmpdir instead
+     * of ~/.hermes). The native-history executor expands `${HERMES_HOME:-~/.hermes}`
+     * from this map, so the completion gate MUST pass it through — otherwise the
+     * gate reads ~/.hermes, finds no coordinator-session transcript, and
+     * false-fires missing_final_assistant on every coordinator turn.
+     */
+    private spawnedEnvOverrides(): Record<string, string> | undefined {
+        const meta = typeof (this.adapter as any)?.getRuntimeMetadata === 'function'
+            ? (this.adapter as any).getRuntimeMetadata()
+            : undefined;
+        const env = meta && typeof meta === 'object' ? (meta as Record<string, unknown>).spawnedEnv : undefined;
+        return env && typeof env === 'object' ? env as Record<string, string> : undefined;
+    }
+
     private readExternalCompletionMessages(): unknown[] | null {
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
         if (!adapterOwnsMessagesElsewhere) return null;
@@ -1535,6 +1551,7 @@ export class CliProviderInstance implements ProviderInstance {
             historyBehavior: this.provider.historyBehavior,
             scripts: this.provider.scripts as any,
             sessionStartedAtMs: this.startedAt,
+            envOverrides: this.spawnedEnvOverrides(),
             forceRefresh: true,
         });
         if (restoredHistory.source !== 'provider-native') {

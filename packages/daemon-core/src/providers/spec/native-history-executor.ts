@@ -279,12 +279,53 @@ function executeSqlite(src: NativeHistorySqliteSource, input: NativeHistoryInput
         // this schema-agnostic and only rescues the mis-bound-id case: a genuine
         // discovered pin (codex/claude use jsonl sources and never reach here;
         // any real sqlite pin has rows) still short-circuits on its own rows.
-        const resolveMessagesFor = (sessionId: string): any[] | null => {
-            if (!sessionId) return null;
-            let rows: any[];
-            try { rows = db.prepare(src.message_query).all(sessionId); }
-            catch { return null; }
-            return rows && rows.length > 0 ? rows : null;
+        // Expand an anchor session id to every session id in its logical
+        // cluster. When the spec declares `session_cluster_query` the anchor is
+        // run through it (bound `?`) and each returned row's FIRST column is a
+        // cluster member id — typically a WITH RECURSIVE walk up to the cluster
+        // root and back down through all descendants, so passing a root, middle,
+        // or leaf anchor all resolve the same complete set. The anchor is always
+        // included even if the query omits it (defensive) so a spec with no
+        // cluster query, or a query that returns nothing, still reads the anchor
+        // itself. Absent query → just the anchor (single-session behaviour).
+        const resolveClusterIds = (anchorId: string): string[] => {
+            const ids = new Set<string>();
+            if (anchorId) ids.add(anchorId);
+            if (src.session_cluster_query && anchorId) {
+                try {
+                    const rows: any[] = db.prepare(src.session_cluster_query).all(anchorId);
+                    for (const row of rows) {
+                        const idRaw = Object.values(row)[0];
+                        if (idRaw != null && String(idRaw)) ids.add(String(idRaw));
+                    }
+                } catch { /* fall back to anchor-only on a malformed cluster query */ }
+            }
+            return Array.from(ids);
+        };
+
+        // Read messages for an anchor's WHOLE cluster, merged and re-sorted by
+        // their mapped timestamp so bubbles from different sub-sessions interleave
+        // in true chronological order (the turn's final assistant — written into a
+        // descendant sub-session in the split-turn case — lands last). No per-session
+        // short-circuit: an anchor whose OWN row has zero messages (hermes writes a
+        // 0-message intermediate `sessions` row) still yields the cluster's rows,
+        // and the whole cluster is scanned rather than stopping at the first
+        // non-empty session. Returns null only when the ENTIRE cluster is empty,
+        // preserving the pin-validation contract below (a pin that resolves no rows
+        // anywhere is a mis-bound id and falls through to newest-session recovery).
+        const resolveMessagesFor = (anchorId: string): any[] | null => {
+            if (!anchorId) return null;
+            const clusterIds = resolveClusterIds(anchorId);
+            const merged: any[] = [];
+            for (const id of clusterIds) {
+                let rows: any[];
+                try { rows = db.prepare(src.message_query).all(id); }
+                catch { continue; }
+                if (rows && rows.length > 0) merged.push(...rows);
+            }
+            if (merged.length === 0) return null;
+            if (clusterIds.length > 1) sortRowsByMappedTimestamp(merged, src.message_map);
+            return merged;
         };
 
         const resolveNewestSessionId = (): string => {
@@ -360,6 +401,32 @@ function executeSqlite(src: NativeHistorySqliteSource, input: NativeHistoryInput
     } finally {
         try { db.close(); } catch { /* ignore */ }
     }
+}
+
+/**
+ * Stable-sort merged cluster rows by their mapped timestamp so bubbles read
+ * from different sub-sessions interleave in true chronological order. Uses the
+ * same `message_map.timestamp_ms` jsonpath + `parseTimestamp` heuristic the
+ * projection uses, so the sort key agrees with the receivedAt each row will be
+ * given. Rows with no resolvable timestamp keep their pre-sort relative order
+ * (stable), and equal timestamps preserve insertion order — both matter because
+ * a turn's terminal bubbles can share a sub-second timestamp.
+ */
+function sortRowsByMappedTimestamp(rows: any[], map: NativeHistoryMessageMap): void {
+    if (!map.timestamp_ms) return;
+    const keyed = rows.map((row, index) => {
+        const parsed = parseTimestamp(jsonPathGet(row, map.timestamp_ms as string));
+        return { row, index, ts: parsed == null ? Number.NaN : parsed };
+    });
+    keyed.sort((a, b) => {
+        const aHas = !Number.isNaN(a.ts);
+        const bHas = !Number.isNaN(b.ts);
+        if (aHas && bHas && a.ts !== b.ts) return a.ts - b.ts;
+        // Missing-timestamp rows and ties fall back to original insertion order
+        // so the sort stays stable.
+        return a.index - b.index;
+    });
+    for (let i = 0; i < keyed.length; i += 1) rows[i] = keyed[i].row;
 }
 
 // ────────────────────────────────────────────────────────────────────────────

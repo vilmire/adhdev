@@ -103,6 +103,28 @@ export interface NativeHistorySqliteSource {
     path: string;
     session_query: string;
     message_query: string;
+    /**
+     * Optional sub-session cluster expansion. Some agents (hermes ≥0.14) split
+     * a SINGLE logical turn across several `sessions` rows linked by a parent
+     * pointer, and the turn's final assistant message lands in a DIFFERENT row
+     * than the one `session_query` / the daemon's pin resolves. Reading only
+     * the anchor session then surfaces zero (or stale) assistant bubbles even
+     * though the answer is physically present in a sibling/descendant row —
+     * `read_chat` returns no final assistant and the completion gate false-fires
+     * `missing_final_assistant`.
+     *
+     * When present, the executor treats the resolved session id as an ANCHOR
+     * and runs this query (bound `?` = anchor id) to expand it to every session
+     * id in the same logical cluster (typically a `WITH RECURSIVE` walk over the
+     * parent pointer, up to the root and back down through all descendants).
+     * `message_query` is then run once per cluster id and the rows merged and
+     * re-sorted by their mapped timestamp, so the turn's final assistant — in
+     * whichever sub-session it was written — is always included. Each returned
+     * row's first column is a cluster session id.
+     *
+     * Absent → single-session behaviour is unchanged (anchor session only).
+     */
+    session_cluster_query?: string;
     message_map: NativeHistoryMessageMap;
 }
 
