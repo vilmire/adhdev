@@ -222,6 +222,34 @@ export class CliProviderInstance implements ProviderInstance {
     private static readonly AUTO_APPROVE_GATE_HYSTERESIS_MS = 1500;
 
     /**
+     * AUTOAPPROVE-FLAP-RECUR (Fix B): extended busy-side continuity window for a
+     * DELEGATED-WORKER auto-approve episode that is genuinely still cycling.
+     *
+     * The default AUTO_APPROVE_GATE_HYSTERESIS_MS (1500) absorbs a *momentary*
+     * `generating` blip. But a delegated worker running a Bash approval observed
+     * the FSM cycle the FULL state waiting_approval → busy → waiting_approval on a
+     * 2–5s period (the button set scrolls in/out AND the modal question repaints,
+     * so the adapter genuinely reports status=generating for whole seconds between
+     * approval frames). Each busy phase outran the 1500ms hysteresis, so the
+     * settle clock was WIPED (the genuine-resolution branch), the 600ms settle
+     * window never accumulated across the flap, resolveModal never fired
+     * (resolveModal count 0), and the mask-stall clock instead tripped at 4500ms →
+     * coordinator nudge → the flap the coordinator observed.
+     *
+     * A genuine resolution and a flap both start with a busy phase; they diverge
+     * only in whether waiting_approval RETURNS. So we cannot simply lengthen the
+     * blanket hysteresis (that would make every real resolution hold the gate
+     * open for seconds). Instead this longer window applies ONLY while an active
+     * mask episode is alive (autoApproveMaskSince > 0) AND the session is a
+     * delegated worker — i.e. exactly the never-resolving-flap case. A foreground
+     * / attended session keeps the tight 1500ms window unchanged. The mask-stall
+     * bound below still caps the episode, so a worker whose approval truly never
+     * returns is surfaced to the coordinator within AUTO_APPROVE_MASK_STALL_MS
+     * rather than held forever.
+     */
+    private static readonly AUTO_APPROVE_FLAP_CONTINUITY_MS = 4000;
+
+    /**
      * STATUS-MISMATCH: upper bound on how long the auto-approve→`generating` SURFACE
      * mask may hide a worker's `waiting_approval` (status + activeModal) before we give
      * up and surface the real prompt. The mask exists because auto-approve is expected
@@ -296,9 +324,22 @@ export class CliProviderInstance implements ProviderInstance {
     private pendingAutoApprovalSince = 0;
     private autoApproveSettleTimer: NodeJS.Timeout | null = null;
     // Wall-clock when auto-approve first observed status!=waiting_approval while
-    // a settle gate was in progress. Drives AUTO_APPROVE_GATE_HYSTERESIS_MS so a
+    // a settle gate was in progress. Drives AUTO_APPROVE_GATE_HYSTERESIS_MS (or,
+    // for a delegated-worker flap episode, AUTO_APPROVE_FLAP_CONTINUITY_MS) so a
     // brief generating flip does not immediately wipe the settle clock.
     private autoApproveInactiveSince = 0;
+    // AUTOAPPROVE-FLAP-RECUR (Fix A): wall-clock when the CURRENT waiting_approval
+    // episode last presented a concrete, captured modal (buttons.length > 0). The
+    // Claude TUI momentarily reports status=waiting_approval with activeModal=null
+    // / an empty button block while the button block scrolls out of the captured
+    // frame; the raw guard below (buttons.length===0) used to bail on that frame,
+    // never advancing the settle gate and leaving no re-check armed — so a modal
+    // that flapped modal=none ↔ N-buttons around the settle boundary never
+    // accumulated its 600ms. This tracks the last GOOD-modal frame so a short
+    // scroll-out blip is absorbed (settle keeps running against the last captured
+    // signature) while a genuinely closed modal — buttons empty continuously past
+    // the continuity window — is still recognised and resets the gate.
+    private autoApproveLastModalSeenAt = 0;
     // STATUS-MISMATCH: wall-clock when the CURRENT auto-approve episode (waiting_approval
     // + shouldAutoApprove) first began wanting to mask. Unlike pendingAutoApprovalSince it
     // is NOT reset when the modal signature changes (a still-streaming/flapping prompt) and
@@ -1640,6 +1681,23 @@ export class CliProviderInstance implements ProviderInstance {
             || this.settings.meshNodeId || this.settings.launchedByCoordinator);
     }
 
+    /**
+     * AUTOAPPROVE-FLAP-RECUR (Fix A+B): how long a busy blip / modal scroll-out may
+     * persist before the in-progress settle gate is torn down. For a delegated
+     * worker whose auto-approve episode is genuinely still cycling (mask clock
+     * alive), the FSM's full waiting_approval → busy → waiting_approval flap runs
+     * on a multi-second period, so the settle continuity window is extended to
+     * AUTO_APPROVE_FLAP_CONTINUITY_MS to bridge it (still bounded, and still capped
+     * by AUTO_APPROVE_MASK_STALL_MS). Every other case — foreground/attended
+     * session, or no active mask episode — keeps the tight default hysteresis so a
+     * genuine resolution frees the gate promptly.
+     */
+    private autoApproveContinuityWindowMs(): number {
+        return this.autoApproveMaskSince > 0 && this.isMeshWorkerSession()
+            ? CliProviderInstance.AUTO_APPROVE_FLAP_CONTINUITY_MS
+            : CliProviderInstance.AUTO_APPROVE_GATE_HYSTERESIS_MS;
+    }
+
     // FALSE-IDLE (self-coordinator settle): an autonomously-progressing mesh session
     // is either a delegated worker (isMeshWorkerSession) OR the coordinator's OWN
     // claude-cli session (meshCoordinatorFor). Both run auto-approved tool turns whose
@@ -1946,6 +2004,7 @@ export class CliProviderInstance implements ProviderInstance {
             // returns false), so end the mask episode.
             this.autoApproveMaskSince = 0;
             this.stalledApprovalNudgeEpisode = 0;
+            this.autoApproveLastModalSeenAt = 0;
             if (this.autoApproveSettleTimer) clearTimeout(this.autoApproveSettleTimer);
             this.autoApproveSettleTimer = setTimeout(() => {
                 this.autoApproveSettleTimer = null;
@@ -1973,12 +2032,20 @@ export class CliProviderInstance implements ProviderInstance {
             if (this.pendingAutoApprovalSince) {
                 if (!this.autoApproveInactiveSince) this.autoApproveInactiveSince = now;
                 const goneForMs = now - this.autoApproveInactiveSince;
-                if (goneForMs < CliProviderInstance.AUTO_APPROVE_GATE_HYSTERESIS_MS) {
+                // AUTOAPPROVE-FLAP-RECUR (Fix B): a delegated-worker flap cycles the
+                // FULL waiting_approval → busy → waiting_approval state on a
+                // multi-second period, outrunning the tight default hysteresis and
+                // wiping the settle clock before 600ms ever accumulates. For an
+                // active worker mask episode the continuity window is widened (still
+                // capped by AUTO_APPROVE_MASK_STALL_MS) so the settle clock survives
+                // the busy phase and the returning approval keeps accruing settle time.
+                const continuityMs = this.autoApproveContinuityWindowMs();
+                if (goneForMs < continuityMs) {
                     if (this.autoApproveSettleTimer) clearTimeout(this.autoApproveSettleTimer);
                     this.autoApproveSettleTimer = setTimeout(() => {
                         this.autoApproveSettleTimer = null;
                         this.recheckAutoApproveSettled();
-                    }, CliProviderInstance.AUTO_APPROVE_GATE_HYSTERESIS_MS - goneForMs + 20);
+                    }, continuityMs - goneForMs + 20);
                     return autoApproveActive;
                 }
             }
@@ -1991,6 +2058,7 @@ export class CliProviderInstance implements ProviderInstance {
             // end the mask episode too (a later approval starts a fresh stall clock).
             this.autoApproveMaskSince = 0;
             this.stalledApprovalNudgeEpisode = 0;
+            this.autoApproveLastModalSeenAt = 0;
             if (this.autoApproveSettleTimer) { clearTimeout(this.autoApproveSettleTimer); this.autoApproveSettleTimer = null; }
             return autoApproveActive;
         }
@@ -2018,8 +2086,40 @@ export class CliProviderInstance implements ProviderInstance {
             ? modal.buttons.map((b: any) => String(b || '').trim()).filter(Boolean)
             : [];
         if (!modal || buttons.length === 0) {
+            // AUTOAPPROVE-FLAP-RECUR (Fix A): the button block momentarily scrolled
+            // out of the captured frame (status is still waiting_approval — we are
+            // on the active path). Do NOT tear the settle gate down on this frame:
+            // if a concrete modal was captured within the continuity window and a
+            // settle gate is in progress, this is a short scroll-out blip — keep the
+            // gate warm against the last-captured signature and arm a re-check so a
+            // silent PTY still re-drives the decision when the buttons repaint. Only
+            // once the modal has stayed empty PAST the continuity window is it a
+            // genuine close, and the gate is cleared here so a later approval
+            // re-settles from scratch (never fires on a stale timestamp).
+            const blipForMs = this.autoApproveLastModalSeenAt ? now - this.autoApproveLastModalSeenAt : Infinity;
+            if (this.pendingAutoApprovalSince && blipForMs < this.autoApproveContinuityWindowMs()) {
+                if (this.autoApproveSettleTimer) clearTimeout(this.autoApproveSettleTimer);
+                this.autoApproveSettleTimer = setTimeout(() => {
+                    this.autoApproveSettleTimer = null;
+                    this.recheckAutoApproveSettled();
+                }, this.autoApproveContinuityWindowMs() - blipForMs + 20);
+                return autoApproveActive;
+            }
+            if (blipForMs >= this.autoApproveContinuityWindowMs()) {
+                // Buttons empty continuously past the window → the modal genuinely
+                // closed (or never captured). Reset the per-signature settle gate so
+                // a later approval re-settles cleanly. The mask-stall clock keeps
+                // running underneath so a never-captured worker modal still surfaces
+                // to the coordinator within AUTO_APPROVE_MASK_STALL_MS.
+                this.pendingAutoApprovalSignature = '';
+                this.pendingAutoApprovalSince = 0;
+            }
             return autoApproveActive;
         }
+        // Concrete modal captured this frame — mark the last-good-modal timestamp so
+        // a subsequent scroll-out blip (buttons.length===0) can be told apart from a
+        // genuine close by how long it persists (Fix A above).
+        this.autoApproveLastModalSeenAt = now;
         // Picker/confirm exclusion (provider-common). A /model or /mode picker is
         // surfaced with status=waiting_approval so the dashboard shows it, but it
         // has no "correct" answer to auto-pick — blindly selecting the first
@@ -2137,6 +2237,7 @@ export class CliProviderInstance implements ProviderInstance {
         // Fired (resolveModal in flight) — the episode resolved; end the mask-stall clock.
         this.autoApproveMaskSince = 0;
         this.stalledApprovalNudgeEpisode = 0;
+        this.autoApproveLastModalSeenAt = 0;
         if (this.autoApproveBusyTimer) clearTimeout(this.autoApproveBusyTimer);
         this.autoApproveBusyTimer = setTimeout(() => {
             this.autoApproveBusy = false;
@@ -3162,6 +3263,18 @@ export class CliProviderInstance implements ProviderInstance {
         if (!this.isMeshWorkerSession()) return;
         if (adapterStatus?.status !== 'waiting_approval') return;
         if (!this.autoApproveMaskStalled(now)) return;
+        // AUTOAPPROVE-FLAP-RECUR (Fix C): the mask-stall bound tripped, but if a
+        // concrete approvable modal is on screen RIGHT NOW and the settle gate is
+        // already in progress, auto-approve is about to fire on its own (the same
+        // call runs the settle evaluation just below this nudge). Defer to the fire
+        // rather than paging the coordinator — the nudge would race a resolveModal
+        // that lands milliseconds later, producing the coordinator flap this fix
+        // targets. A genuinely stuck episode (no captured modal, or settle never
+        // engaged) still has pendingAutoApprovalSince === 0 here and pages normally.
+        const modalButtons = Array.isArray(adapterStatus.activeModal?.buttons)
+            ? adapterStatus.activeModal.buttons.map((b: any) => String(b || '').trim()).filter(Boolean)
+            : [];
+        if (this.pendingAutoApprovalSince && modalButtons.length > 0) return;
         // Exactly once per stalled episode (autoApproveMaskSince uniquely identifies it).
         if (this.stalledApprovalNudgeEpisode === this.autoApproveMaskSince) return;
         this.stalledApprovalNudgeEpisode = this.autoApproveMaskSince;
