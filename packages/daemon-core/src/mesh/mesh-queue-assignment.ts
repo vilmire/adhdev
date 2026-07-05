@@ -6,7 +6,7 @@ import { getMesh } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
-import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly, taskDependenciesSatisfied } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-delivery-policy.js';
@@ -1563,7 +1563,13 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
     // so the dependency gate below sees the terminal state of every referenced
     // dependency, not just the still-active rows.
     const statusById = new Map(queue.map(task => [task.id, task.status] as const));
-    const pending = queue.filter(task => task.status === 'pending');
+    // G6: scan higher task-level priority first so a high-priority task auto-launches its
+    // session ahead of an older normal/low task (getQueue is FIFO; a stable sort by priority
+    // rank descending keeps created_at order within a priority band). The claim path applies
+    // the same ordering, so the launched session pulls the same task the scan chose.
+    const pending = queue
+        .filter(task => task.status === 'pending')
+        .sort((a, b) => meshTaskPriorityRank(b.priority) - meshTaskPriorityRank(a.priority));
     // AUTOLAUNCH-CLAIM-CHURN: prune await-claim backoff state for tasks of this mesh that are no
     // longer pending (claimed/completed/cancelled) so the map cannot grow without bound.
     {
@@ -1593,6 +1599,14 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
         // dependsOn pass through unchanged (predicate is true).
         if (!taskDependenciesSatisfied(task, statusById)) {
             markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'dependencies_unsatisfied' });
+            continue;
+        }
+        // G7: never spawn a session for a task still held by its notBefore gate — the launched
+        // session would idle→claim and be refused by the SAME gate in claimNextQueueTask,
+        // producing orphan-session churn. Skip it so a later tick (after not_before passes)
+        // launches it. Tasks with no notBefore pass through unchanged.
+        if (!meshTaskNotBeforeReady(task)) {
+            markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'not_before_delayed' });
             continue;
         }
         const isReadonly = isTaskReadonly(task);

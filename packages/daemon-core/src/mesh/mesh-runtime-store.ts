@@ -4,7 +4,7 @@ import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { getConfigDir } from '../config/config.js';
 import { getLedgerDir } from './mesh-ledger.js';
-import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied } from './mesh-work-queue.js';
+import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -911,31 +911,35 @@ export class MeshRuntimeStore {
             // targetMatches() JS gate above re-validates each fetched row.
             const nodeIdForms = expandDaemonIdForms(nodeId);
             const nodePinnedPlaceholders = nodeIdForms.map(() => '?').join(', ');
-            // Priority: session-targeted > node-targeted (no session) > unconstrained
-            const rows = [
-                ...(
-                this.db.prepare(`
+            // Priority: session-targeted > node-targeted (no session) > unconstrained.
+            // G6: WITHIN each targeting tier, a higher task-level priority is pulled first;
+            // created_at ASC (from the SQL ORDER BY) is the intra-priority tie-break. The
+            // tier ordering is preserved (a high-priority unconstrained task never jumps
+            // ahead of a session/node-pinned task) so targeting stays the outer key and
+            // priority is the inner key. Sort is stable, so equal-priority rows keep FIFO.
+            const parseTier = (query: string, ...params: unknown[]): MeshWorkQueueEntry[] => {
+                const tierRows = this.db.prepare(query).all(...params) as Array<{ payload: string }>;
+                return tierRows
+                    .map(row => JSON.parse(row.payload) as MeshWorkQueueEntry)
+                    .sort((a, b) => meshTaskPriorityRank(b.priority) - meshTaskPriorityRank(a.priority));
+            };
+            const candidates = [
+                ...parseTier(`
                     SELECT payload FROM mesh_queue
                     WHERE mesh_id = ? AND status = 'pending' AND target_session_id = ?
                     ORDER BY created_at ASC
-                `).all(meshId, sessionId) as Array<{ payload: string }>
-                ),
-                ...(
-                this.db.prepare(`
+                `, meshId, sessionId),
+                ...parseTier(`
                     SELECT payload FROM mesh_queue
                     WHERE mesh_id = ? AND status = 'pending' AND target_node_id IN (${nodePinnedPlaceholders}) AND target_session_id IS NULL
                     ORDER BY created_at ASC
-                `).all(meshId, ...nodeIdForms) as Array<{ payload: string }>
-                ),
-                ...(
-                this.db.prepare(`
+                `, meshId, ...nodeIdForms),
+                ...parseTier(`
                     SELECT payload FROM mesh_queue
                     WHERE mesh_id = ? AND status = 'pending' AND target_node_id IS NULL AND target_session_id IS NULL
                     ORDER BY created_at ASC
-                `).all(meshId) as Array<{ payload: string }>
-                ),
+                `, meshId),
             ];
-            const candidates = rows.map(row => JSON.parse(row.payload) as MeshWorkQueueEntry);
 
             // M1: a task with unmet dependencies (or a system blockedReason) is not claimable.
             // Resolve dependency statuses in one query over the union of referenced ids.
@@ -962,6 +966,13 @@ export class MeshRuntimeStore {
                 if (isTaskReadonly(candidate)) return true;
                 return !nodeBusy;
             };
+
+            // G7: delayed execution. A task with a notBefore in the future is held pending
+            // (skipped as a claim candidate) until the wall clock passes it. Fail-open on an
+            // unparseable timestamp (meshTaskNotBeforeReady) so a bad value never strands work.
+            const claimNowMs = Date.now();
+            const notBeforeReady = (candidate: MeshWorkQueueEntry): boolean =>
+                meshTaskNotBeforeReady(candidate, claimNowMs);
 
             // WTDISPATCH-FANOUT: a `convergence` task lands its work onto base (merge →
             // push → cleanup against the real checkout). It must NEVER be claimed by a
@@ -1005,6 +1016,7 @@ export class MeshRuntimeStore {
             const entry = candidates.find(candidate =>
                 nodeSatisfiesRequiredTags(candidate.requiredTags, capabilityTags)
                 && dependenciesSatisfied(candidate)
+                && notBeforeReady(candidate)
                 && convergenceAllows(candidate)
                 && targetMatches(candidate)
                 && nodeConflictAllows(candidate));

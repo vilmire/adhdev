@@ -35,7 +35,9 @@ export const MESH_LIST_NODES_TOOL = {
 
 export const MESH_ENQUEUE_TASK_TOOL = {
     name: 'mesh_enqueue_task',
-    description: 'Add a new task to the mesh work queue. Idle nodes will automatically pull and execute tasks from this queue. Use this instead of mesh_send_task when you do not need to target a specific node.',
+    description: 'Add a new task to the mesh work queue. Idle nodes will automatically pull and execute tasks from this queue. Use this instead of mesh_send_task when you do not need to target a specific node. '
+        + 'Supports task-level priority (high tasks are pulled ahead of older normal/low tasks), not_before delayed execution (hold a task pending until a time), maxRetries (auto-fail after N requeues), and duplicate detection '
+        + '(by default warns in the response when an in-flight task with the same message+target already exists; pass block_duplicate=true to refuse instead, or allow_duplicate=true to silence the warning).',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -56,6 +58,15 @@ export const MESH_ENQUEUE_TASK_TOOL = {
             dependsOn: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for depends_on.' },
             mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id).' },
             missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
+            priority: { type: 'string', enum: ['low', 'normal', 'high'], description: 'G6 (task-level scheduling priority). Within the claim tier a high task is pulled ahead of an older normal/low task (created_at is the tie-break); low is pulled last. Defaults to normal. This is the TASK priority (which task a node pulls first) — distinct from a node\'s schedulingPriority (which node work goes to). Use high to jump an urgent fix ahead of a backlog without cancelling the queue.' },
+            not_before: { type: 'number', description: 'G7 (delayed execution). Hold the task pending until this time — it will not be claimed or auto-launched until the wall clock passes it. Accepts an absolute epoch-ms timestamp, or a small value (< ~1 year in ms) treated as a relative ms offset from now (e.g. 600000 = start no earlier than 10 minutes from now). A past value is a no-op (immediately claimable). A pure time gate — cron/webhook triggers are out of scope.' },
+            notBefore: { type: 'number', description: 'CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string.' },
+            max_retries: { type: 'number', description: 'P3 (retry cap). Max automatic requeue attempts before the task auto-fails instead of returning to pending. When requeueCount reaches this, mesh_queue_requeue auto-fails the task unless force=true. Omit to use the mesh policy default (maxTaskRetries, typically 1).' },
+            maxRetries: { type: 'number', description: 'CamelCase alias for max_retries.' },
+            block_duplicate: { type: 'boolean', description: 'G4 (duplicate detection, block mode). Default false = warn-only: if an in-flight (pending/assigned) task with the same message (+ target node when pinned) already exists, the task is still enqueued but the response carries duplicateSuspect. Set true to REFUSE the enqueue with code duplicate_suspect instead (structural TASKBUBBLE-DUP defense — use when re-sending a task that a slow prior turn may have already enqueued).' },
+            blockDuplicate: { type: 'boolean', description: 'CamelCase alias for block_duplicate.' },
+            allow_duplicate: { type: 'boolean', description: 'G4. Set true to skip duplicate detection entirely (no warning, no block) for an intentional re-enqueue of the same instruction.' },
+            allowDuplicate: { type: 'boolean', description: 'CamelCase alias for allow_duplicate.' },
         },
         required: ['message'],
     },

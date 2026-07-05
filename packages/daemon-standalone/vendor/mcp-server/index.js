@@ -679,7 +679,7 @@ var MESH_LIST_NODES_TOOL = {
 };
 var MESH_ENQUEUE_TASK_TOOL = {
   name: "mesh_enqueue_task",
-  description: "Add a new task to the mesh work queue. Idle nodes will automatically pull and execute tasks from this queue. Use this instead of mesh_send_task when you do not need to target a specific node.",
+  description: "Add a new task to the mesh work queue. Idle nodes will automatically pull and execute tasks from this queue. Use this instead of mesh_send_task when you do not need to target a specific node. Supports task-level priority (high tasks are pulled ahead of older normal/low tasks), not_before delayed execution (hold a task pending until a time), maxRetries (auto-fail after N requeues), and duplicate detection (by default warns in the response when an in-flight task with the same message+target already exists; pass block_duplicate=true to refuse instead, or allow_duplicate=true to silence the warning).",
   inputSchema: {
     type: "object",
     properties: {
@@ -699,7 +699,16 @@ var MESH_ENQUEUE_TASK_TOOL = {
       depends_on: { type: "array", items: { type: "string" }, description: "Task ids that must complete before this task becomes claimable. Cycles are rejected at enqueue." },
       dependsOn: { type: "array", items: { type: "string" }, description: "CamelCase alias for depends_on." },
       mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id)." },
-      missionId: { type: "string", description: "CamelCase alias for mission_id." }
+      missionId: { type: "string", description: "CamelCase alias for mission_id." },
+      priority: { type: "string", enum: ["low", "normal", "high"], description: "G6 (task-level scheduling priority). Within the claim tier a high task is pulled ahead of an older normal/low task (created_at is the tie-break); low is pulled last. Defaults to normal. This is the TASK priority (which task a node pulls first) \u2014 distinct from a node's schedulingPriority (which node work goes to). Use high to jump an urgent fix ahead of a backlog without cancelling the queue." },
+      not_before: { type: "number", description: "G7 (delayed execution). Hold the task pending until this time \u2014 it will not be claimed or auto-launched until the wall clock passes it. Accepts an absolute epoch-ms timestamp, or a small value (< ~1 year in ms) treated as a relative ms offset from now (e.g. 600000 = start no earlier than 10 minutes from now). A past value is a no-op (immediately claimable). A pure time gate \u2014 cron/webhook triggers are out of scope." },
+      notBefore: { type: "number", description: "CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string." },
+      max_retries: { type: "number", description: "P3 (retry cap). Max automatic requeue attempts before the task auto-fails instead of returning to pending. When requeueCount reaches this, mesh_queue_requeue auto-fails the task unless force=true. Omit to use the mesh policy default (maxTaskRetries, typically 1)." },
+      maxRetries: { type: "number", description: "CamelCase alias for max_retries." },
+      block_duplicate: { type: "boolean", description: "G4 (duplicate detection, block mode). Default false = warn-only: if an in-flight (pending/assigned) task with the same message (+ target node when pinned) already exists, the task is still enqueued but the response carries duplicateSuspect. Set true to REFUSE the enqueue with code duplicate_suspect instead (structural TASKBUBBLE-DUP defense \u2014 use when re-sending a task that a slow prior turn may have already enqueued)." },
+      blockDuplicate: { type: "boolean", description: "CamelCase alias for block_duplicate." },
+      allow_duplicate: { type: "boolean", description: "G4. Set true to skip duplicate detection entirely (no warning, no block) for an intentional re-enqueue of the same instruction." },
+      allowDuplicate: { type: "boolean", description: "CamelCase alias for allow_duplicate." }
     },
     required: ["message"]
   }
@@ -3663,12 +3672,36 @@ async function meshListNodes(ctx) {
 }
 
 // src/tools/mesh-tools-queue.ts
+function normalizeDedupMessage(message) {
+  return (message || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+function findInFlightDuplicate(ctx, message, targetNodeId) {
+  const fingerprint = normalizeDedupMessage(message);
+  if (!fingerprint) return null;
+  for (const task of (0, import_daemon_core4.getQueue)(ctx.mesh.id)) {
+    if (task.status !== "pending" && task.status !== "assigned") continue;
+    if (normalizeDedupMessage(task.message) !== fingerprint) continue;
+    if (targetNodeId) {
+      const existingTarget = task.targetNodeId || task.assignedNodeId;
+      if (!existingTarget || !(0, import_daemon_core4.meshNodeIdMatches)({ id: existingTarget }, targetNodeId)) continue;
+    }
+    return { id: task.id, status: task.status, assignedNodeId: task.assignedNodeId, targetNodeId: task.targetNodeId };
+  }
+  return null;
+}
 async function meshEnqueueTask(ctx, args) {
   const taskMode = readString(args.task_mode) || readString(args.taskMode);
   const readonly = args.readonly === true || args.read_only === true;
   const requiredTags = (0, import_daemon_core4.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
   const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : void 0;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
+  const priority = (0, import_daemon_core4.normalizeMeshTaskPriority)(readString(args.priority)) || void 0;
+  const notBeforeRaw = args.notBefore !== void 0 ? args.notBefore : args.not_before;
+  const notBefore = (0, import_daemon_core4.resolveNotBefore)(notBeforeRaw);
+  const maxRetriesRaw = typeof args.maxRetries === "number" ? args.maxRetries : typeof args.max_retries === "number" ? args.max_retries : void 0;
+  const maxRetries = typeof maxRetriesRaw === "number" && Number.isFinite(maxRetriesRaw) && maxRetriesRaw >= 0 ? Math.floor(maxRetriesRaw) : void 0;
+  const allowDuplicate = args.allowDuplicate === true || args.allow_duplicate === true;
+  const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
   const explicitTargetRaw = readString(args.targetNodeId) || readString(args.target_node_id) || readString(args.targetNode) || readString(args.target_node) || void 0;
   const preferWorktree = args.preferWorktree === true || args.prefer_worktree === true;
   let targetNodeId;
@@ -3687,8 +3720,34 @@ async function meshEnqueueTask(ctx, args) {
   } else if (preferWorktree) {
     targetNodeId = resolvePreferredWorktreeNodeId(ctx) || void 0;
   }
+  const duplicateSuspect = allowDuplicate ? null : findInFlightDuplicate(ctx, args.message, targetNodeId);
+  if (duplicateSuspect && blockDuplicate) {
+    return JSON.stringify({
+      success: false,
+      code: "duplicate_suspect",
+      error: `an in-flight task with the same message${targetNodeId ? " and target node" : ""} already exists (task '${duplicateSuspect.id}', status '${duplicateSuspect.status}'). Refusing because block_duplicate=true. Cancel it, wait for it, or re-enqueue with allow_duplicate=true.`,
+      duplicateOf: { taskId: duplicateSuspect.id, status: duplicateSuspect.status, assignedNodeId: duplicateSuspect.assignedNodeId, targetNodeId: duplicateSuspect.targetNodeId }
+    });
+  }
   try {
-    const task = (0, import_daemon_core4.enqueueTask)(ctx.mesh.id, args.message, { taskMode, ...readonly ? { readonly: true } : {}, requiredTags, dependsOn, missionId, targetNodeId, ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {} });
+    const task = (0, import_daemon_core4.enqueueTask)(ctx.mesh.id, args.message, {
+      taskMode,
+      ...readonly ? { readonly: true } : {},
+      requiredTags,
+      dependsOn,
+      missionId,
+      targetNodeId,
+      ...priority ? { priority } : {},
+      ...notBefore ? { notBefore } : {},
+      ...maxRetries !== void 0 ? { maxRetries } : {},
+      ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
+    });
+    const duplicateWarning = duplicateSuspect ? { duplicateSuspect: { taskId: duplicateSuspect.id, status: duplicateSuspect.status, assignedNodeId: duplicateSuspect.assignedNodeId, targetNodeId: duplicateSuspect.targetNodeId }, duplicateSuspectHint: "An in-flight task with the same message+target already exists. This new task was enqueued anyway (warn-only). Cancel one via mesh_queue_cancel if it is an accidental re-enqueue, or pass allow_duplicate=true to silence this, or block_duplicate=true to refuse next time." } : {};
+    const enqueueEcho = {
+      ...task.priority ? { priority: task.priority } : {},
+      ...task.notBefore ? { notBefore: task.notBefore } : {},
+      ...task.maxRetries !== void 0 ? { maxRetries: task.maxRetries } : {}
+    };
     if (!(ctx.transport instanceof IpcTransport)) {
       const queueTrigger = await triggerMeshQueueAndReport(ctx);
       return JSON.stringify({
@@ -3698,8 +3757,10 @@ async function meshEnqueueTask(ctx, args) {
         status: task.status,
         taskMode: task.taskMode,
         requiredTags: task.requiredTags,
+        ...enqueueEcho,
         ...targetNodeId ? { targetNodeId } : {},
         ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},
+        ...duplicateWarning,
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger)
       });
@@ -3779,9 +3840,11 @@ async function meshEnqueueTask(ctx, args) {
         status: task.status,
         taskMode: task.taskMode,
         requiredTags: task.requiredTags,
+        ...enqueueEcho,
         ...targetNodeId ? { targetNodeId } : {},
         ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},
         ...eagerPushDeferred ? { eagerPushDeferred: true, eagerPushDeferredReason: "dependencies_unsatisfied" } : {},
+        ...duplicateWarning,
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger)
       });

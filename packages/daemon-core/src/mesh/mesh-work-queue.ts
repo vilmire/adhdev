@@ -16,9 +16,66 @@ export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned
 export type MeshHistoricalTaskStatus = Extract<MeshTaskStatus, 'completed' | 'failed' | 'cancelled'>;
 export type MeshTaskMode = 'code_change' | 'validation' | 'live_debug_readonly' | 'launch_app' | 'convergence';
 
+/** G6: task-level scheduling priority. Ranks which task a node pulls first (created_at tie-break). */
+export type MeshTaskPriority = 'low' | 'normal' | 'high';
+
 export const ACTIVE_MESH_QUEUE_STATUSES: MeshActiveTaskStatus[] = ['pending', 'assigned'];
 export const HISTORICAL_MESH_QUEUE_STATUSES: MeshHistoricalTaskStatus[] = ['completed', 'failed', 'cancelled'];
 export const MESH_TASK_MODES: MeshTaskMode[] = ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'];
+export const MESH_TASK_PRIORITIES: MeshTaskPriority[] = ['low', 'normal', 'high'];
+
+/**
+ * G6: numeric rank of a task priority (higher = pulled first). Absent/unknown → 'normal' (1).
+ * Shared by the claim-candidate ordering and any surface that must sort by task priority.
+ */
+export function meshTaskPriorityRank(priority: unknown): number {
+    switch (priority) {
+        case 'high': return 2;
+        case 'low': return 0;
+        default: return 1; // 'normal' and any absent/unknown value
+    }
+}
+
+/** G6: coerce an arbitrary input to a valid MeshTaskPriority, or undefined when not one of the three. */
+export function normalizeMeshTaskPriority(value: unknown): MeshTaskPriority | undefined {
+    return value === 'low' || value === 'normal' || value === 'high' ? value : undefined;
+}
+
+/**
+ * G7: resolve a not_before input to a stored ISO string (or undefined when absent/invalid).
+ * Accepts an ISO/date string, an absolute epoch-ms number, or a small relative-ms offset from
+ * `nowMs`. Disambiguation for numbers: a value below {@link NOT_BEFORE_RELATIVE_THRESHOLD_MS}
+ * (~1 year in ms) is treated as a relative offset added to now; a larger value is an absolute
+ * epoch-ms timestamp. A past/negative result is normalized to now (immediately claimable).
+ */
+export const NOT_BEFORE_RELATIVE_THRESHOLD_MS = 365 * 24 * 60 * 60 * 1000;
+export function resolveNotBefore(value: unknown, nowMs: number = Date.now()): string | undefined {
+    if (value === undefined || value === null) return undefined;
+    let absMs: number;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        absMs = value < NOT_BEFORE_RELATIVE_THRESHOLD_MS ? nowMs + value : value;
+    } else if (typeof value === 'string' && value.trim()) {
+        const parsed = Date.parse(value.trim());
+        if (Number.isNaN(parsed)) return undefined;
+        absMs = parsed;
+    } else {
+        return undefined;
+    }
+    if (absMs <= nowMs) return new Date(nowMs).toISOString();
+    return new Date(absMs).toISOString();
+}
+
+/** G7: is a task claimable now, or is it still held back by its notBefore gate? */
+export function meshTaskNotBeforeReady(
+    task: { notBefore?: string } | null | undefined,
+    nowMs: number = Date.now(),
+): boolean {
+    const nb = task?.notBefore;
+    if (!nb) return true;
+    const parsed = Date.parse(nb);
+    if (Number.isNaN(parsed)) return true; // unparseable → do not block (fail-open)
+    return parsed <= nowMs;
+}
 
 /**
  * QUEUE-NODE-SERIALIZATION: single source of truth for "is this task read-only?".
@@ -489,6 +546,22 @@ export interface MeshWorkQueueEntry {
     /** If specified, a node must expose all tags before it can claim the task. */
     requiredTags?: string[];
     /**
+     * G6 (task-level scheduling priority): 'low' | 'normal' | 'high'. Orders the
+     * claim candidate list so a high-priority task is pulled ahead of an older
+     * normal/low task within the same claim tier (created_at is the tie-break).
+     * Absent → treated as 'normal'. This is the TASK-level priority, distinct from
+     * the NODE-level schedulingPriority (resolveNodeSchedulingPriority), which ranks
+     * which node a task goes to, not which task a node pulls first.
+     */
+    priority?: MeshTaskPriority;
+    /**
+     * G7 (delayed execution): ISO timestamp before which the task is NOT claimable.
+     * The claim gate holds the task pending while now < notBefore; once the wall
+     * clock passes it the task becomes a normal claim candidate. A pure time gate —
+     * cron/webhook triggers are out of scope. Absent → immediately claimable.
+     */
+    notBefore?: string;
+    /**
      * M1: ids of tasks that must reach 'completed' before this task is claimable.
      * Forward references (ids not yet enqueued) are allowed for batch flows and
      * simply keep the task waiting until the referenced task exists and completes.
@@ -777,6 +850,12 @@ export function enqueueTask(
         requiredTags?: string[];
         /** M1: tasks that must complete before this one is claimable. */
         dependsOn?: string[];
+        /** G6: task-level scheduling priority ('low' | 'normal' | 'high'). Absent → 'normal'. */
+        priority?: MeshTaskPriority | string;
+        /** G7: hold the task pending until this time. ISO string, absolute epoch-ms, or relative-ms offset from now. */
+        notBefore?: string | number;
+        /** P3: max automatic requeue attempts before the task auto-fails. Absent → policy default (1). */
+        maxRetries?: number;
         /** M1/M3: mission this task belongs to. */
         missionId?: string;
         /** MAGI: consensus group id shared by every replica of a mesh_magi_review fan-out. */
@@ -797,6 +876,11 @@ export function enqueueTask(
     }
     const id = typeof opts?.id === 'string' && opts.id.trim() ? opts.id.trim() : randomUUID();
     const dependsOn = normalizeDependsOn(opts?.dependsOn);
+    const priority = normalizeMeshTaskPriority(opts?.priority);
+    const notBefore = resolveNotBefore(opts?.notBefore);
+    const maxRetries = typeof opts?.maxRetries === 'number' && Number.isFinite(opts.maxRetries) && opts.maxRetries >= 0
+        ? Math.floor(opts.maxRetries)
+        : undefined;
     return withQueueLock(meshId, () => {
         if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, id)) {
             throw new Error(`duplicate_task_id: task '${id}' already exists in mesh '${meshId}'`);
@@ -825,6 +909,12 @@ export function enqueueTask(
             targetSessionId: opts?.targetSessionId,
             requiredTags: resolvedRequiredTags,
             ...(dependsOn.length > 0 ? { dependsOn } : {}),
+            // G6: only persist a non-default priority so legacy/normal rows stay minimal.
+            ...(priority && priority !== 'normal' ? { priority } : {}),
+            // G7: hold-until gate (stored ISO). Omitted when absent/immediate.
+            ...(notBefore ? { notBefore } : {}),
+            // P3: explicit retry cap. Omitted → requeue path falls back to policy default.
+            ...(maxRetries !== undefined ? { maxRetries } : {}),
             ...(typeof opts?.missionId === 'string' && opts.missionId.trim() ? { missionId: opts.missionId.trim() } : {}),
             ...(typeof opts?.consensusGroupId === 'string' && opts.consensusGroupId.trim() ? { consensusGroupId: opts.consensusGroupId.trim() } : {}),
             ...(typeof opts?.model === 'string' && opts.model.trim() ? { model: opts.model.trim() } : {}),
