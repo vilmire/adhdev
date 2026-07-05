@@ -145,8 +145,19 @@ export class CliProviderInstance implements ProviderInstance {
      * bound below still caps the episode, so a worker whose approval truly never
      * returns is surfaced to the coordinator within AUTO_APPROVE_MASK_STALL_MS
      * rather than held forever.
+     *
+     * INVARIANT (do not regress the ordering): this window must fully BRIDGE a
+     * single busy phase, and the mask-stall bound below must in turn exceed it —
+     * AUTO_APPROVE_MASK_STALL_MS > AUTO_APPROVE_FLAP_CONTINUITY_MS + max_busy_phase
+     * + AUTO_APPROVE_SETTLE_MS. Observed flap geometry (delegated-worker Bash
+     * approval): approval frames last ~1.5s, busy phases (modal=none) last
+     * ~4.3–4.5s. With the old 4000ms this window was SHORTER than a busy phase, so
+     * the settle clock was torn down every cycle and never accrued 600ms while the
+     * 4500ms mask-stall tripped INSIDE the first busy phase → a stalled-approval
+     * nudge leaked to the coordinator. 6000ms bridges the ~4.5s busy phase with
+     * margin so the returning approval frame survives to resume its settle clock.
      */
-    private static readonly AUTO_APPROVE_FLAP_CONTINUITY_MS = 4000;
+    private static readonly AUTO_APPROVE_FLAP_CONTINUITY_MS = 6000;
 
     /**
      * STATUS-MISMATCH: upper bound on how long the auto-approve→`generating` SURFACE
@@ -164,8 +175,17 @@ export class CliProviderInstance implements ProviderInstance {
      * genuine never-resolving stall surfaces within this window. The settle gate keeps
      * running underneath, so a prompt that finally stabilises still auto-approves, and
      * mesh_approve (raw FSM, unmasked) works throughout.
+     *
+     * INVARIANT (do not regress): must be STRICTLY GREATER than
+     * AUTO_APPROVE_FLAP_CONTINUITY_MS + max_busy_phase + AUTO_APPROVE_SETTLE_MS so
+     * that during a flap the settle clock (which FLAP_CONTINUITY keeps alive across
+     * each ~4.3–4.5s busy phase) gets to accrue its 600ms on the RETURNING approval
+     * frame before this stall bound can trip. Observed geometry: approval ~1.5s,
+     * busy ~4.3–4.5s. 9000ms ≥ CONTINUITY(6000) + busy(~4.5s) + SETTLE(600) headroom;
+     * the old 4500ms tripped inside the very first busy phase (while modal=none, so
+     * the nudge was NOT deferred) and leaked to the coordinator.
      */
-    private static readonly AUTO_APPROVE_MASK_STALL_MS = 4500;
+    private static readonly AUTO_APPROVE_MASK_STALL_MS = 9000;
 
     private adapter: ProviderCliAdapter;
     private context: InstanceContext | null = null;

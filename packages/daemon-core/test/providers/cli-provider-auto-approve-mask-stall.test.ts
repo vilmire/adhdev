@@ -18,7 +18,7 @@ import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.j
 // `now` (Object.create skips the native backend), mirroring the settle-gate suite.
 
 const SETTLE_MS = 600
-const MASK_STALL_MS = 4500
+const MASK_STALL_MS = 9000
 
 const liveInstances: any[] = []
 

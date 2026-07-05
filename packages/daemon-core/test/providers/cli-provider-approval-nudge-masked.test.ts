@@ -20,12 +20,12 @@ import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.j
 // native backend), mirroring the mask-stall + settle-gate suites. pushEvent is stubbed to
 // capture emissions.
 
-const MASK_STALL_MS = 4500
+const MASK_STALL_MS = 9000
 // Worker flap-continuity window (AUTOAPPROVE-FLAP-RECUR Fix B): a delegated worker's
 // settle+mask episode survives a busy/generating blip for this long before a modal
 // that stays gone is treated as a genuine close. Kept in sync with
 // CliProviderInstance.AUTO_APPROVE_FLAP_CONTINUITY_MS.
-const FLAP_CONTINUITY_MS = 4000
+const FLAP_CONTINUITY_MS = 6000
 
 const liveInstances: any[] = []
 
@@ -147,9 +147,9 @@ describe('NOTIF-APPROVAL-MASKED: stalled auto-approve coordinator nudge', () => 
     expect(nudges(h.events).length).toBe(1)
 
     // Modal genuinely goes away and STAYS gone past the worker flap-continuity window
-    // (AUTO_APPROVE_FLAP_CONTINUITY_MS = 4000ms, measured from the first generating
+    // (AUTO_APPROVE_FLAP_CONTINUITY_MS = 6000ms, measured from the first generating
     // frame) → the settle+mask episode ends, keys reset. The first generating frame
-    // arms the continuity clock; the second, > 4000ms later, crosses it — this is a
+    // arms the continuity clock; the second, > 6000ms later, crosses it — this is a
     // genuine close, not a transient busy blip (which the continuity window bridges).
     h.call(GENERATING(3), 1000 + MASK_STALL_MS + 300)
     h.call(GENERATING(3), 1000 + MASK_STALL_MS + 300 + FLAP_CONTINUITY_MS + 20)

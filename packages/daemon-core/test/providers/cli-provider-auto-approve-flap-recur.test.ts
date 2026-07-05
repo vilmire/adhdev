@@ -17,16 +17,19 @@ import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.j
 //   Vector 2 (FSM full-state cycling): a busy phase longer than the tight 1500ms
 //     hysteresis wiped the settle clock, so the 600ms window never accumulated
 //     across the flap and resolveModal fired 0 times → the mask-stall clock tripped
-//     at 4500ms → coordinator nudge. Fix B widens the settle-continuity window to
+//     → coordinator nudge. Fix B widens the settle-continuity window to
 //     AUTO_APPROVE_FLAP_CONTINUITY_MS for an ACTIVE delegated-worker mask episode.
+//     The continuity/mask-stall constants must satisfy MASK_STALL_MS >
+//     FLAP_CONTINUITY_MS + max_busy_phase + SETTLE_MS against the observed geometry
+//     (approval ~1.5s, busy ~4.3–4.5s) so a bridged flap never leaks a nudge.
 //   Fix C: even if the mask-stall bound trips, a concrete modal + in-progress
 //     settle defers to the imminent fire rather than paging the coordinator.
 //
 // Exercises maybeAutoApproveStatus() directly (Object.create to skip the native
 // terminal backend), driving `now` manually so the settle math is deterministic.
 
-const FLAP_CONTINUITY_MS = 4000
-const MASK_STALL_MS = 4500
+const FLAP_CONTINUITY_MS = 6000
+const MASK_STALL_MS = 9000
 
 type Harness = {
   instance: any
@@ -118,7 +121,7 @@ describe('cli-provider auto-approve — AUTOAPPROVE-FLAP-RECUR', () => {
     // accumulated 600ms and resolveModal fired 0 times. The 4000ms flap-continuity
     // window (worker episode alive) keeps both clocks warm across the whole phase.
     h.call(GENERATING(2), 1400) // inactiveSince = 1400
-    h.call(GENERATING(3), 3200) // goneForMs = 1800 > 1500 hysteresis, < 4000 continuity
+    h.call(GENERATING(3), 3200) // goneForMs = 1800 > 1500 hysteresis, < 6000 continuity
     expect(h.instance.pendingAutoApprovalSince).toBe(1000) // NOT wiped
     expect(h.instance.autoApproveMaskSince).toBe(1000)     // NOT wiped
 
@@ -174,10 +177,10 @@ describe('cli-provider auto-approve — AUTOAPPROVE-FLAP-RECUR', () => {
     h.call(APPROVAL(1), 1000)
     expect(h.instance.pendingAutoApprovalSince).toBe(1000)
 
-    // Buttons gone and stay gone past the 4000ms continuity window — this is a
+    // Buttons gone and stay gone past the 6000ms continuity window — this is a
     // real close, not a blip. Approaching via modal=none while status is somehow
-    // still waiting_approval: last-good-modal was 1000, now 5100 → 4100ms > 4000.
-    h.call(APPROVAL_NO_MODAL(2), 5100)
+    // still waiting_approval: last-good-modal was 1000, now 7200 → 6200ms > 6000.
+    h.call(APPROVAL_NO_MODAL(2), 7200)
     expect(h.instance.pendingAutoApprovalSince).toBe(0) // gate reset
     expect(h.fires.length).toBe(0)
   })
