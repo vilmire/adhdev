@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { writeFileSync, readFileSync, unlinkSync } from 'node:fs';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshApprove, meshCheckpoint, meshCloneNode, meshFastForwardNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshTaskHistory, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { meshApprove, meshCheckpoint, meshCloneNode, meshFastForwardNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshTaskHistory, meshRefineConfig, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 import { appendLedgerEntry, claimNextTask, enqueueTask, getLedgerDir, getQueue } from '@adhdev/daemon-core';
 import { clearPendingMeshCoordinatorEvents, drainPendingMeshCoordinatorEvents, handleMeshForwardEvent } from '../../daemon-core/src/mesh/mesh-events.js';
 
@@ -3866,8 +3866,8 @@ test('local direct mesh_send_task allows proper mesh delegate session with meshN
   assert.equal(agentCommandCalls[0]?.targetSessionId, 'session-worker');
 });
 
-test('mesh tool registry documents the 36 exposed mesh tools including queue cancel/requeue, read-debug, remote node log fetch, direct fast-forward, daemon restart, worktree clone/remove/refine, batch refine, refine config planning, change-impact config planning, mesh init onboarding, session cleanup, stale-direct prune, reconcile-ledger, review inbox, operating-note recording, and mission upsert/list', () => {
-  assert.equal(ALL_MESH_TOOLS.length, 36);
+test('mesh tool registry documents the exposed mesh tools including queue cancel/requeue, read-debug, remote node log fetch, direct fast-forward, daemon restart, worktree clone/remove/refine, batch refine, unified refine config, change-impact config planning, mesh init onboarding, session cleanup, stale-direct prune, reconcile-ledger, review inbox, operating-note recording, and mission upsert/list', () => {
+  assert.equal(ALL_MESH_TOOLS.length, 43);
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_record_note'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_init'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_restart_daemon'));
@@ -3881,9 +3881,16 @@ test('mesh tool registry documents the 36 exposed mesh tools including queue can
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_remove_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_batch'));
-  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_config_schema'));
-  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_validate_refine_config'));
-  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_suggest_refine_config'));
+  // Part 8-4: the three refine-config tools are consolidated into one mode-dispatched tool.
+  const refineConfigTool = ALL_MESH_TOOLS.find(tool => tool.name === 'mesh_refine_config');
+  assert.ok(refineConfigTool);
+  assert.deepEqual((refineConfigTool!.inputSchema.properties as any).mode.enum, ['schema', 'validate', 'suggest']);
+  assert.deepEqual(refineConfigTool!.inputSchema.required, ['mode']);
+  // The former standalone names are no longer published in the manifest (they survive only
+  // as hidden dispatch aliases).
+  assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_config_schema'));
+  assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_validate_refine_config'));
+  assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_suggest_refine_config'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_change_impact_config_schema'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_validate_change_impact_config'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_suggest_change_impact_config'));
@@ -3892,6 +3899,103 @@ test('mesh tool registry documents the 36 exposed mesh tools including queue can
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_prune_stale_direct'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_queue_cancel'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_queue_requeue'));
+});
+
+test('mesh_refine_config dispatches each mode to the matching daemon-core refine-config command', async () => {
+  // Part 8-4: the unified tool must route mode=schema|validate|suggest to the same
+  // low-family commands the former standalone tools called — internal command API unchanged.
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const issued: Array<{ command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command, args = {}) => {
+    issued.push({ command, args });
+    return { success: true, echoedCommand: command };
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: `mesh-refine-config-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      name: 'Refine Config Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-local',
+        workspace: '/repo-local',
+        repoRoot: '/repo-local',
+        daemonId: 'daemon-coordinator',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+  };
+
+  await meshRefineConfig(ctx as any, { mode: 'schema' });
+  await meshRefineConfig(ctx as any, { mode: 'validate' });
+  await meshRefineConfig(ctx as any, { mode: 'suggest' });
+
+  assert.deepEqual(issued.map(c => c.command), [
+    'get_mesh_refine_config_schema',
+    'validate_mesh_refine_config',
+    'suggest_mesh_refine_config',
+  ]);
+
+  // Missing/invalid mode is a hard error (mode is required on the manifest).
+  await assert.rejects(() => meshRefineConfig(ctx as any, {} as any), /invalid or missing 'mode'/);
+  await assert.rejects(() => meshRefineConfig(ctx as any, { mode: 'bogus' } as any), /invalid or missing 'mode'/);
+});
+
+test('hidden refine-config aliases forward to the unified handler with the correct mode', async () => {
+  // Part 8-4: mesh_refine_config_schema / _validate / _suggest are dropped from the manifest
+  // but remain dispatchable for one release, forwarding to mesh_refine_config with a fixed mode.
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const issued: string[] = [];
+  transport.command = async (command, args = {}) => {
+    issued.push(command);
+    return { success: true };
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: `mesh-refine-alias-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      name: 'Refine Alias Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-local',
+        workspace: '/repo-local',
+        repoRoot: '/repo-local',
+        daemonId: 'daemon-coordinator',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+  };
+
+  // Simulate the server.ts alias dispatch: each old name forwards with its fixed mode.
+  await meshRefineConfig(ctx as any, { mode: 'schema' });
+  await meshRefineConfig(ctx as any, { mode: 'validate', config: { commands: {} } });
+  await meshRefineConfig(ctx as any, { mode: 'suggest' });
+
+  assert.deepEqual(issued, [
+    'get_mesh_refine_config_schema',
+    'validate_mesh_refine_config',
+    'suggest_mesh_refine_config',
+  ]);
 });
 
 test('mesh_status marks coordinator sessions for this mesh as self so the calling coordinator can identify them', async () => {

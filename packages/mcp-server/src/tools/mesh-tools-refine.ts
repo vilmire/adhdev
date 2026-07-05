@@ -44,6 +44,32 @@ export async function meshSuggestRefineConfig(
     return JSON.stringify(result, null, 2);
 }
 
+/**
+ * Unified read-only Refinery config helper (MESH-COMPLEXITY-AUDIT Part 8-4).
+ * Dispatches on `mode` to the three underlying config operations, each a thin wrapper
+ * over its daemon-core low-family refine-config command — internal command API unchanged,
+ * zero behavior loss. The former standalone tools (mesh_refine_config_schema /
+ * mesh_validate_refine_config / mesh_suggest_refine_config) remain dispatchable as
+ * 1-release hidden aliases that forward here with the corresponding mode (see server.ts).
+ */
+export async function meshRefineConfig(
+    ctx: MeshContext,
+    args: { mode?: string; node_id?: string; config?: Record<string, unknown> } = {},
+): Promise<string> {
+    switch (args.mode) {
+        case 'schema':
+            return meshRefineConfigSchema(ctx);
+        case 'validate':
+            return meshValidateRefineConfig(ctx, args);
+        case 'suggest':
+            return meshSuggestRefineConfig(ctx, args);
+        default:
+            throw new Error(
+                `mesh_refine_config: invalid or missing 'mode' (${JSON.stringify(args.mode)}). Expected one of: 'schema' | 'validate' | 'suggest'.`,
+            );
+    }
+}
+
 export async function meshChangeImpactConfigSchema(ctx: MeshContext): Promise<string> {
     const node = resolveRefineConfigNode(ctx);
     const result = await commandForNode(ctx, node, 'get_mesh_change_impact_config_schema', {});

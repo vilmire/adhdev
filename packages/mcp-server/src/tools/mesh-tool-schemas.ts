@@ -486,32 +486,31 @@ export const MESH_REFINE_BATCH_TOOL = {
     },
 };
 
-export const MESH_REFINE_CONFIG_SCHEMA_TOOL = {
-    name: 'mesh_refine_config_schema',
-    description: 'Return the Repo Mesh Refinery config JSON schema and supported repo-local config locations. This is the validation source of truth; heuristic command detection is suggestions-only.',
-    inputSchema: { type: 'object' as const, properties: {} },
-};
-
-export const MESH_VALIDATE_REFINE_CONFIG_TOOL = {
-    name: 'mesh_validate_refine_config',
-    description: 'Validate the repo mesh/refine config for a node/workspace without running validation commands or merging.',
+// Unified read-only Refinery config helper. Consolidates the former
+// mesh_refine_config_schema / mesh_validate_refine_config / mesh_suggest_refine_config
+// tools into a single `mode`-dispatched tool (MESH-COMPLEXITY-AUDIT Part 8-4). The old
+// three names remain dispatchable as 1-release hidden aliases (see server.ts), but only
+// this unified tool is published in ALL_MESH_TOOLS. These are read-only helpers — they
+// never run validation commands or git merges (that is mesh_refine_node / mesh_refine_plan).
+export const MESH_REFINE_CONFIG_TOOL = {
+    name: 'mesh_refine_config',
+    description: 'Repo Mesh Refinery config helper — unified read-only entry for the three refine-config operations. Select the operation with `mode` (REQUIRED). '
+        + 'mode=\'schema\': return the Refinery config JSON schema and supported repo-local config locations (the validation source of truth; heuristic command detection is suggestions-only) — takes no other parameters. '
+        + 'mode=\'validate\': validate the repo mesh/refine config for a node/workspace without running validation commands or merging — accepts optional `node_id` (defaults to the first mesh node) and an optional inline `config` object (validated instead of loading from the repo). '
+        + 'mode=\'suggest\': suggest a refine config scaffold from project context/package scripts (never executed until saved) — accepts optional `node_id`. '
+        + 'Does NOT run validation commands or git merges — use mesh_refine_node / mesh_refine_plan for execution.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            node_id: { type: 'string', description: 'Optional node/workspace whose refine config should be loaded. Defaults to the first mesh node.' },
-            config: { type: 'object', description: 'Optional inline config object to validate instead of loading from the repo.' },
+            mode: {
+                type: 'string',
+                enum: ['schema', 'validate', 'suggest'],
+                description: 'Which config operation to run (required). schema: return the config JSON schema (no other params). validate: validate a node/workspace refine config (optional node_id, optional inline config). suggest: scaffold a config from project context (optional node_id).',
+            },
+            node_id: { type: 'string', description: 'Optional node/workspace. Used by mode=validate (config to load) and mode=suggest (context source); defaults to the first mesh node. Ignored by mode=schema.' },
+            config: { type: 'object', description: 'Optional inline config object to validate instead of loading from the repo. Only used by mode=validate.' },
         },
-    },
-};
-
-export const MESH_SUGGEST_REFINE_CONFIG_TOOL = {
-    name: 'mesh_suggest_refine_config',
-    description: 'Suggest a repo mesh/refine config scaffold from project context/package scripts. Suggestions are never executed until saved as explicit refine config.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            node_id: { type: 'string', description: 'Optional node/workspace used for suggestions. Defaults to the first mesh node.' },
-        },
+        required: ['mode'],
     },
 };
 
@@ -778,9 +777,7 @@ export const ALL_MESH_TOOLS = [
     MESH_REMOVE_NODE_TOOL,
     MESH_REFINE_NODE_TOOL,
     MESH_REFINE_BATCH_TOOL,
-    MESH_REFINE_CONFIG_SCHEMA_TOOL,
-    MESH_VALIDATE_REFINE_CONFIG_TOOL,
-    MESH_SUGGEST_REFINE_CONFIG_TOOL,
+    MESH_REFINE_CONFIG_TOOL,
     MESH_CHANGE_IMPACT_CONFIG_SCHEMA_TOOL,
     MESH_VALIDATE_CHANGE_IMPACT_CONFIG_TOOL,
     MESH_SUGGEST_CHANGE_IMPACT_CONFIG_TOOL,

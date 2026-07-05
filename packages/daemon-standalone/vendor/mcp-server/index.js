@@ -1075,30 +1075,21 @@ var MESH_REFINE_BATCH_TOOL = {
     required: []
   }
 };
-var MESH_REFINE_CONFIG_SCHEMA_TOOL = {
-  name: "mesh_refine_config_schema",
-  description: "Return the Repo Mesh Refinery config JSON schema and supported repo-local config locations. This is the validation source of truth; heuristic command detection is suggestions-only.",
-  inputSchema: { type: "object", properties: {} }
-};
-var MESH_VALIDATE_REFINE_CONFIG_TOOL = {
-  name: "mesh_validate_refine_config",
-  description: "Validate the repo mesh/refine config for a node/workspace without running validation commands or merging.",
+var MESH_REFINE_CONFIG_TOOL = {
+  name: "mesh_refine_config",
+  description: "Repo Mesh Refinery config helper \u2014 unified read-only entry for the three refine-config operations. Select the operation with `mode` (REQUIRED). mode='schema': return the Refinery config JSON schema and supported repo-local config locations (the validation source of truth; heuristic command detection is suggestions-only) \u2014 takes no other parameters. mode='validate': validate the repo mesh/refine config for a node/workspace without running validation commands or merging \u2014 accepts optional `node_id` (defaults to the first mesh node) and an optional inline `config` object (validated instead of loading from the repo). mode='suggest': suggest a refine config scaffold from project context/package scripts (never executed until saved) \u2014 accepts optional `node_id`. Does NOT run validation commands or git merges \u2014 use mesh_refine_node / mesh_refine_plan for execution.",
   inputSchema: {
     type: "object",
     properties: {
-      node_id: { type: "string", description: "Optional node/workspace whose refine config should be loaded. Defaults to the first mesh node." },
-      config: { type: "object", description: "Optional inline config object to validate instead of loading from the repo." }
-    }
-  }
-};
-var MESH_SUGGEST_REFINE_CONFIG_TOOL = {
-  name: "mesh_suggest_refine_config",
-  description: "Suggest a repo mesh/refine config scaffold from project context/package scripts. Suggestions are never executed until saved as explicit refine config.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      node_id: { type: "string", description: "Optional node/workspace used for suggestions. Defaults to the first mesh node." }
-    }
+      mode: {
+        type: "string",
+        enum: ["schema", "validate", "suggest"],
+        description: "Which config operation to run (required). schema: return the config JSON schema (no other params). validate: validate a node/workspace refine config (optional node_id, optional inline config). suggest: scaffold a config from project context (optional node_id)."
+      },
+      node_id: { type: "string", description: "Optional node/workspace. Used by mode=validate (config to load) and mode=suggest (context source); defaults to the first mesh node. Ignored by mode=schema." },
+      config: { type: "object", description: "Optional inline config object to validate instead of loading from the repo. Only used by mode=validate." }
+    },
+    required: ["mode"]
   }
 };
 var MESH_CHANGE_IMPACT_CONFIG_SCHEMA_TOOL = {
@@ -1348,9 +1339,7 @@ var ALL_MESH_TOOLS = [
   MESH_REMOVE_NODE_TOOL,
   MESH_REFINE_NODE_TOOL,
   MESH_REFINE_BATCH_TOOL,
-  MESH_REFINE_CONFIG_SCHEMA_TOOL,
-  MESH_VALIDATE_REFINE_CONFIG_TOOL,
-  MESH_SUGGEST_REFINE_CONFIG_TOOL,
+  MESH_REFINE_CONFIG_TOOL,
   MESH_CHANGE_IMPACT_CONFIG_SCHEMA_TOOL,
   MESH_VALIDATE_CHANGE_IMPACT_CONFIG_TOOL,
   MESH_SUGGEST_CHANGE_IMPACT_CONFIG_TOOL,
@@ -6672,6 +6661,20 @@ async function meshSuggestRefineConfig(ctx, args) {
   });
   return JSON.stringify(result, null, 2);
 }
+async function meshRefineConfig(ctx, args = {}) {
+  switch (args.mode) {
+    case "schema":
+      return meshRefineConfigSchema(ctx);
+    case "validate":
+      return meshValidateRefineConfig(ctx, args);
+    case "suggest":
+      return meshSuggestRefineConfig(ctx, args);
+    default:
+      throw new Error(
+        `mesh_refine_config: invalid or missing 'mode' (${JSON.stringify(args.mode)}). Expected one of: 'schema' | 'validate' | 'suggest'.`
+      );
+  }
+}
 async function meshChangeImpactConfigSchema(ctx) {
   const node = resolveRefineConfigNode(ctx);
   const result = await commandForNode(ctx, node, "get_mesh_change_impact_config_schema", {});
@@ -8000,14 +8003,21 @@ async function startMcpServer(opts) {
           case "mesh_refine_batch":
             text = await meshRefineBatch(meshCtx, a);
             break;
+          case "mesh_refine_config":
+            text = await meshRefineConfig(meshCtx, a);
+            break;
+          // Hidden 1-release aliases (Part 8-4): the former standalone config tools are no
+          // longer published in ALL_MESH_TOOLS but stay dispatchable, forwarding to the
+          // unified mesh_refine_config handler with the corresponding mode so pre-consolidation
+          // callers keep working.
           case "mesh_refine_config_schema":
-            text = await meshRefineConfigSchema(meshCtx);
+            text = await meshRefineConfig(meshCtx, { ...a, mode: "schema" });
             break;
           case "mesh_validate_refine_config":
-            text = await meshValidateRefineConfig(meshCtx, a);
+            text = await meshRefineConfig(meshCtx, { ...a, mode: "validate" });
             break;
           case "mesh_suggest_refine_config":
-            text = await meshSuggestRefineConfig(meshCtx, a);
+            text = await meshRefineConfig(meshCtx, { ...a, mode: "suggest" });
             break;
           case "mesh_change_impact_config_schema":
             text = await meshChangeImpactConfigSchema(meshCtx);
