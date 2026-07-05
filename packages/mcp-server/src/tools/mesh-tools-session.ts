@@ -10,6 +10,7 @@ import {
     buildCoordinatorP2pRelayFailure,
     buildDirectTaskPayload,
     buildMeshActiveWork,
+    collectPendingApprovals,
     buildMeshReadChatCacheFallback,
     buildMissingCoordinatorDaemonIdFailure,
     buildMissingNodeReadChatRecovery,
@@ -33,6 +34,9 @@ import {
     hasRecentDuplicateDispatch,
     insertDirectDispatch,
     ipcDispatchToRemoteAgent,
+    markStaleDirectDispatches,
+    reconcileDirectDispatchesFromTranscriptEvidence,
+    recordMeshToolCall,
     isIdleSessionRecord,
     isLocalControlPlaneNode,
     isMeshCoordinatorSessionRecord,
@@ -967,6 +971,57 @@ export async function meshApprove(
         action: args.action === 'reject' ? 'reject' : 'approve',
     });
     return JSON.stringify(result, null, 2);
+}
+
+/**
+ * mesh_list_pending_approvals — read-only mesh-wide approval inbox.
+ *
+ * mesh_approve resolves a SINGLE (node_id, session_id) action; before this tool there was
+ * no way to enumerate which sessions are currently blocked awaiting an approval decision —
+ * the coordinator had to page mesh_status and eyeball each node's sessions. This lists every
+ * session in `awaiting_approval` across the mesh so a coordinator (or the UI approvals inbox)
+ * can see the full pending set and drive a follow-up mesh_approve for each.
+ *
+ * No new store or DB: it reuses the exact derivation mesh_status/mesh_view_queue already run
+ * (buildMeshActiveWork over the live-session-decorated nodes + queue + ledger + direct
+ * dispatches), then filters to `status === 'awaiting_approval'` via collectPendingApprovals.
+ * Read-only — probes node status but mutates no approval/session state.
+ */
+export async function meshListPendingApprovals(
+    ctx: MeshContext,
+    _args: Record<string, unknown> = {},
+): Promise<string> {
+    recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_list_pending_approvals' });
+    await refreshMeshFromDaemon(ctx);
+
+    const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
+    let ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
+    let directDispatches = getActiveDirectDispatches(ctx.mesh.id);
+    const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, directDispatches, ledgerEntries);
+    if (directReconciliation.reconciled > 0) {
+        ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
+        directDispatches = getActiveDirectDispatches(ctx.mesh.id);
+    }
+    markStaleDirectDispatches(ctx.mesh.id);
+    directDispatches = getActiveDirectDispatches(ctx.mesh.id);
+
+    const activeWorkEvidence = buildMeshActiveWork({
+        meshId: ctx.mesh.id,
+        queue: getQueue(ctx.mesh.id),
+        ledgerEntries,
+        directDispatches,
+        nodes: liveNodes,
+    });
+
+    const approvals = collectPendingApprovals(activeWorkEvidence.activeWork);
+
+    return JSON.stringify({
+        count: approvals.length,
+        approvals,
+        ...(approvals.length === 0
+            ? { note: 'No sessions are currently awaiting an approval decision.' }
+            : { nextStep: 'Resolve each with mesh_approve(node_id, session_id, action: "approve" | "reject").' }),
+    }, null, 2);
 }
 
 export async function meshCleanupSessions(

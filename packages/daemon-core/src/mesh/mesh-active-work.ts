@@ -273,6 +273,56 @@ function buildLedgerDirectDispatchRecord(
     return { record, terminalRow };
 }
 
+/**
+ * One session awaiting an approval decision — the derived row `mesh_list_pending_approvals`
+ * returns and the UI approvals inbox renders. A thin projection of the `awaiting_approval`
+ * MeshActiveWorkRecord: it carries exactly what a coordinator needs to route a follow-up
+ * mesh_approve(node_id, session_id) and what the inbox needs to label the item. No new
+ * store or data source — derived from the same buildMeshActiveWork records.
+ */
+export interface MeshPendingApproval {
+    nodeId?: string;
+    sessionId?: string;
+    providerType?: string;
+    taskId: string;
+    taskTitle: string;
+    /** Always 'awaiting_approval' — kept explicit so consumers can render/assert on it. */
+    status: 'awaiting_approval';
+    /** ISO timestamp the underlying task was created/dispatched — the "waiting since" anchor. */
+    waitingSince: string;
+    /** Milliseconds the record has been outstanding (elapsed from dispatch/create). */
+    waitingMs: number;
+}
+
+/**
+ * Derive the mesh-wide pending-approval inbox from already-built active-work records.
+ * Pure filter+projection over `status === 'awaiting_approval'` — no new store, no probe;
+ * the caller supplies the records (typically buildMeshActiveWork(...).activeWork so the
+ * enumeration reuses the exact classification `mesh_status` already computes). Records
+ * without a node/session are skipped: an approval that cannot be routed to a live
+ * node+session via mesh_approve is not actionable inbox content.
+ */
+export function collectPendingApprovals(activeWork: MeshActiveWorkRecord[]): MeshPendingApproval[] {
+    const approvals: MeshPendingApproval[] = [];
+    for (const record of activeWork) {
+        if (record.status !== 'awaiting_approval') continue;
+        if (!record.nodeId || !record.sessionId) continue;
+        approvals.push({
+            nodeId: record.nodeId,
+            sessionId: record.sessionId,
+            providerType: record.providerType,
+            taskId: record.taskId,
+            taskTitle: record.taskTitle,
+            status: 'awaiting_approval',
+            waitingSince: record.dispatchedAt || record.createdAt,
+            waitingMs: record.elapsedMs,
+        });
+    }
+    // Longest-waiting first — the coordinator/inbox should address the most-stalled approval first.
+    approvals.sort((a, b) => b.waitingMs - a.waitingMs);
+    return approvals;
+}
+
 export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): MeshActiveWorkSummary {
     const statusCounts: Record<MeshActiveWorkStatus, number> = {
         pending: 0,

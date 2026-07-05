@@ -20,6 +20,7 @@ type MeshMissionDisplay = MeshMissionSummary | MeshMissionSlimSummary
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization'
+import PendingApprovalsInbox, { type PendingApprovalAction } from './PendingApprovalsInbox'
 
 /**
  * MeshOverviewCards — the text/card "Overview" surface for a mesh. This is the
@@ -247,6 +248,22 @@ export default function MeshOverviewCards({
     const [detail, setDetail] = useState<DetailSelection | null>(null)
     const closeDetail = useCallback(() => setDetail(null), [])
 
+    // Resolve a mesh-wide pending approval through the daemon command seam. Routes to the
+    // coordinator's mesh_approve, which forwards resolve_action to the target node+session.
+    // Null seam (no daemon connection) → no-op; the inbox stays read-only in that case.
+    const resolveApproval = useCallback(
+        async (nodeId: string, sessionId: string, action: PendingApprovalAction) => {
+            if (!daemonId || !sendDaemonCommand) return
+            await sendDaemonCommand(daemonId, 'mesh_approve', {
+                meshId: meshId ?? undefined,
+                node_id: nodeId,
+                session_id: sessionId,
+                action,
+            })
+        },
+        [daemonId, meshId, sendDaemonCommand],
+    )
+
     // nodeId → friendly machine label (nickname → workspace·host·provider), so
     // ledger rows show the human-readable machine instead of a raw node_/daemon_ id.
     // Falls back to the raw id when the node isn't in the current snapshot.
@@ -273,6 +290,8 @@ export default function MeshOverviewCards({
         // non-scrolling, non-flex-1 column lets the wrapper's overflow-y-auto own
         // scrolling so all cards remain reachable in the dashboard full view.
         <div className="flex flex-col gap-3 pb-2">
+            <PendingApprovalsInbox nodes={canonicalStatus.nodes} onResolve={resolveApproval} />
+
             <MissionsCard
                 meshTheme={meshTheme}
                 liveMissions={liveMissions}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildMeshActiveWork, buildMeshActiveWorkSummary, classifyStaleDirectForPrune, PRUNABLE_ORPHAN_STALE_REASONS } from '../../src/mesh/mesh-active-work.js';
+import { buildMeshActiveWork, buildMeshActiveWorkSummary, collectPendingApprovals, classifyStaleDirectForPrune, PRUNABLE_ORPHAN_STALE_REASONS } from '../../src/mesh/mesh-active-work.js';
+import type { MeshActiveWorkRecord } from '../../src/mesh/mesh-active-work.js';
 import type { MeshLedgerEntry } from '../../src/mesh/mesh-ledger.js';
 
 function dispatch(overrides: Partial<MeshLedgerEntry> = {}): MeshLedgerEntry {
@@ -617,5 +618,73 @@ describe('buildMeshActiveWork — approval level state supersession', () => {
         expect(result.activeWork.some(r => r.status === 'awaiting_approval')).toBe(false);
         const terminal = result.terminalDirectWork.find(r => r.taskId === 'task-1');
         expect(terminal).toMatchObject({ status: 'idle', terminal: true, terminalKind: 'task_completed' });
+    });
+});
+
+describe('collectPendingApprovals', () => {
+    function record(overrides: Partial<MeshActiveWorkRecord> = {}): MeshActiveWorkRecord {
+        return {
+            taskId: overrides.taskId ?? 'task-1',
+            source: overrides.source ?? 'direct',
+            status: overrides.status ?? 'awaiting_approval',
+            nodeId: 'nodeId' in overrides ? overrides.nodeId : 'node-1',
+            sessionId: 'sessionId' in overrides ? overrides.sessionId : 'session-1',
+            providerType: overrides.providerType ?? 'codex-cli',
+            taskTitle: overrides.taskTitle ?? 'do the work',
+            taskSummary: overrides.taskSummary ?? 'do the work',
+            createdAt: overrides.createdAt ?? '2026-05-26T00:00:00.000Z',
+            updatedAt: overrides.updatedAt ?? '2026-05-26T00:00:00.000Z',
+            dispatchedAt: overrides.dispatchedAt,
+            elapsedMs: overrides.elapsedMs ?? 0,
+        };
+    }
+
+    it('returns only awaiting_approval records, projected to the inbox shape', () => {
+        const approvals = collectPendingApprovals([
+            record({ taskId: 'a', status: 'awaiting_approval', nodeId: 'node-a', sessionId: 'sess-a', elapsedMs: 1000 }),
+            record({ taskId: 'b', status: 'generating', nodeId: 'node-b', sessionId: 'sess-b' }),
+            record({ taskId: 'c', status: 'idle', nodeId: 'node-c', sessionId: 'sess-c' }),
+        ]);
+        expect(approvals).toHaveLength(1);
+        expect(approvals[0]).toMatchObject({
+            taskId: 'a',
+            nodeId: 'node-a',
+            sessionId: 'sess-a',
+            providerType: 'codex-cli',
+            status: 'awaiting_approval',
+        });
+    });
+
+    it('skips awaiting_approval records missing a node or session (not routable to mesh_approve)', () => {
+        const approvals = collectPendingApprovals([
+            record({ taskId: 'no-node', nodeId: undefined }),
+            record({ taskId: 'no-session', sessionId: undefined }),
+            record({ taskId: 'ok', nodeId: 'node-1', sessionId: 'session-1' }),
+        ]);
+        expect(approvals.map(a => a.taskId)).toEqual(['ok']);
+    });
+
+    it('orders longest-waiting first and anchors waitingSince to dispatchedAt when present', () => {
+        const approvals = collectPendingApprovals([
+            record({ taskId: 'short', sessionId: 's1', elapsedMs: 500, dispatchedAt: '2026-05-26T00:00:10.000Z' }),
+            record({ taskId: 'long', sessionId: 's2', elapsedMs: 9000, createdAt: '2026-05-26T00:00:01.000Z' }),
+        ]);
+        expect(approvals.map(a => a.taskId)).toEqual(['long', 'short']);
+        expect(approvals[0].waitingSince).toBe('2026-05-26T00:00:01.000Z');
+        expect(approvals[1].waitingSince).toBe('2026-05-26T00:00:10.000Z');
+    });
+
+    it('is a pure derivation of buildMeshActiveWork output — an approval-flagged live session surfaces', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: [dispatch()],
+            nodes: [{
+                id: 'node-1',
+                sessions: [{ id: 'session-1', providerType: 'codex-cli', status: 'awaiting_approval' }],
+            }],
+        });
+        const approvals = collectPendingApprovals(result.activeWork);
+        expect(approvals).toHaveLength(1);
+        expect(approvals[0]).toMatchObject({ nodeId: 'node-1', sessionId: 'session-1', status: 'awaiting_approval' });
     });
 });

@@ -634,6 +634,7 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_restart_daemon\` | Update a node's daemon to the latest published version on its channel and restart it (the dashboard "preview update" path, as a mesh command) |
 | \`mesh_checkpoint\` | Create a git checkpoint on a node |
 | \`mesh_approve\` | Approve/reject a pending agent action |
+| \`mesh_list_pending_approvals\` | List every session across the mesh awaiting an approval decision (the approval inbox) — read-only; enumerate all blocked sessions at once, then drive a mesh_approve for each |
 | \`mesh_clone_node\` | Create a worktree node for isolated parallel branch work |
 | \`mesh_refine_node\` | Validate and merge a completed worktree node back into its base branch |
 | \`mesh_refine_batch\` | Batch Refinery: converge multiple sibling worktree nodes onto the base branch in one conflict-aware sequential pipeline |

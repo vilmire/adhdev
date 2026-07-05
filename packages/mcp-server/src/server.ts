@@ -39,7 +39,7 @@ import {
   ALL_MESH_TOOLS, meshStatus, meshListNodes, meshSendTask, meshReadChat,
   meshEnqueueTask, meshViewQueue, meshQueueCancel, meshQueueRequeue,
   meshReadDebug,
-  meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon, meshCheckpoint, meshApprove,
+  meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon, meshCheckpoint, meshApprove, meshListPendingApprovals,
   meshCloneNode, meshRemoveNode, meshRefineNode,
   meshRefineConfig, meshInit, meshReinit, meshRefinePlan, meshRefineBatch,
   meshChangeImpactConfig,
@@ -215,6 +215,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_restart_daemon': text = await meshRestartDaemon(meshCtx, a as any); break;
           case 'mesh_checkpoint': text = await meshCheckpoint(meshCtx, a as any); break;
           case 'mesh_approve': text = await meshApprove(meshCtx, a as any); break;
+          case 'mesh_list_pending_approvals': text = await meshListPendingApprovals(meshCtx, a as any); break;
           case 'mesh_clone_node': text = await meshCloneNode(meshCtx, a as any); break;
           case 'mesh_remove_node': text = await meshRemoveNode(meshCtx, a as any); break;
           case 'mesh_refine_node': text = await meshRefineNode(meshCtx, a as any); break;

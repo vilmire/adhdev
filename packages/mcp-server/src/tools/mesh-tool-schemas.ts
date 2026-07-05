@@ -336,6 +336,17 @@ export const MESH_APPROVE_TOOL = {
     },
 };
 
+export const MESH_LIST_PENDING_APPROVALS_TOOL = {
+    name: 'mesh_list_pending_approvals',
+    description: 'List every session across the mesh that is currently awaiting an approval decision (status awaiting_approval) — the mesh-wide approval inbox. '
+        + 'mesh_approve resolves ONE (node_id, session_id) at a time; this read-only tool enumerates the full pending set so you can see all blocked sessions at once and drive a mesh_approve for each. '
+        + 'Each row carries nodeId, sessionId, providerType, taskTitle, and how long it has been waiting (waitingSince/waitingMs), longest-waiting first. Does not mutate anything.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {},
+    },
+};
+
 export const MESH_CLONE_NODE_TOOL = {
     name: 'mesh_clone_node',
     description: 'Create a new worktree-based node from an existing node for isolated parallel work. '
@@ -842,6 +853,7 @@ export const ALL_MESH_TOOLS = [
     MESH_RESTART_DAEMON_TOOL,
     MESH_CHECKPOINT_TOOL,
     MESH_APPROVE_TOOL,
+    MESH_LIST_PENDING_APPROVALS_TOOL,
     MESH_CLONE_NODE_TOOL,
     MESH_REMOVE_NODE_TOOL,
     MESH_REFINE_NODE_TOOL,
