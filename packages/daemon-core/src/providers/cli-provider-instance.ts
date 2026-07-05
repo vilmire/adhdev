@@ -1856,13 +1856,11 @@ export class CliProviderInstance implements ProviderInstance {
                 waitedMs,
                 busyEpoch: this.busyEpoch,
             });
-            this.pushEvent({
-                event: 'agent:generating_completed',
+            this.emitGeneratingCompleted({
                 chatTitle: pending.chatTitle,
                 duration: pending.duration,
                 timestamp: pending.timestamp,
-                // ARCH-REFACTOR R1: attribute to the turn captured at idle-transition.
-                ...(pending.taskId ? { taskId: pending.taskId } : {}),
+                taskId: pending.taskId,
                 // When finalization is forced past the timeout on a `parsed_status:` block
                 // (the parser never confirmed a final assistant turn) we previously rode an
                 // empty `finalSummary` unconditionally. That empty value propagates to the
@@ -1895,13 +1893,11 @@ export class CliProviderInstance implements ProviderInstance {
             duration: pending.duration,
             busyEpoch: this.busyEpoch,
         });
-        this.pushEvent({
-            event: 'agent:generating_completed',
+        this.emitGeneratingCompleted({
             chatTitle: pending.chatTitle,
             duration: pending.duration,
             timestamp: pending.timestamp,
-            // ARCH-REFACTOR R1: attribute to the turn captured at idle-transition.
-            ...(pending.taskId ? { taskId: pending.taskId } : {}),
+            taskId: pending.taskId,
             finalSummary: this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt),
         });
         this.completedDebouncePending = null;
@@ -1910,7 +1906,46 @@ export class CliProviderInstance implements ProviderInstance {
         this.lastApprovalEventFingerprint = '';
     }
 
+    /**
+     * A-3 (CLI 완료판정 통합): single authoritative emit for a CLI turn's
+     * `agent:generating_completed` event. The completion JUDGMENT — WHETHER and
+     * WHEN a turn is done (settle windows, continuity guards, the finalization
+     * gate, the short-gen / startup-grace / no-progress-monitor discriminators) —
+     * stays at each call site, where it is legitimately path-specific. What used
+     * to be duplicated across all five completion paths was the EVENT-SHAPE
+     * assembly: the `event` name, the conditional `taskId` spread, and the
+     * optional `finalSummary` / `evidenceLevel` / `completionDiagnostic` fields.
+     * Folding that assembly here removes the divergence (e.g. one site spreading
+     * taskId, others omitting it) without touching any judgment. Callers pass the
+     * values they have already computed; omitted optionals are simply absent from
+     * the emitted event, exactly as each inline builder produced before.
+     */
+    private emitGeneratingCompleted(opts: {
+        chatTitle: string;
+        duration: number | undefined;
+        timestamp: number;
+        taskId?: string;
+        finalSummary?: string;
+        evidenceLevel?: string;
+        completionDiagnostic?: Record<string, unknown>;
+    }): void {
+        this.pushEvent({
+            event: 'agent:generating_completed',
+            chatTitle: opts.chatTitle,
+            duration: opts.duration,
+            timestamp: opts.timestamp,
+            // ARCH-REFACTOR R1: attribute to the turn captured at idle-transition.
+            ...(opts.taskId ? { taskId: opts.taskId } : {}),
+            // finalSummary is always carried (value may be undefined) — every prior
+            // inline builder included the key, so downstream consumers see the same shape.
+            finalSummary: opts.finalSummary,
+            ...(opts.evidenceLevel !== undefined ? { evidenceLevel: opts.evidenceLevel } : {}),
+            ...(opts.completionDiagnostic !== undefined ? { completionDiagnostic: opts.completionDiagnostic } : {}),
+        });
+    }
+
     private maybeAutoApproveStatus(adapterStatus: any, now = Date.now()): boolean {
+        // Manual-attendance suppression (provider-common): when a human is
         // Manual-attendance suppression (provider-common): when a human is
         // actively driving this session from the dashboard, hold auto-approve so
         // the modal stays visible and they can pick a button / use the controlbar
@@ -2301,8 +2336,7 @@ export class CliProviderInstance implements ProviderInstance {
             missingEvidence,
             evidenceLevel: 'weak',
         });
-        this.pushEvent({
-            event: 'agent:generating_completed',
+        this.emitGeneratingCompleted({
             chatTitle,
             duration: 0,
             timestamp: now,
@@ -2638,8 +2672,7 @@ export class CliProviderInstance implements ProviderInstance {
                         // surface its completion promptly without a 4s settle) still holds, and a
                         // non-mesh session has no coordinator to be falsely notified — the false-idle
                         // bug being fixed is specifically the mesh worker/coordinator misfire above.
-                        this.pushEvent({
-                            event: 'agent:generating_completed',
+                        this.emitGeneratingCompleted({
                             chatTitle,
                             duration: 0,
                             timestamp: now,
@@ -2877,8 +2910,7 @@ export class CliProviderInstance implements ProviderInstance {
                 if (this.isMeshWorkerSession()) {
                     traceMeshEventStage('fired', this.meshTraceCtx(), 'no_progress_monitor_final_summary');
                 }
-                this.pushEvent({
-                    event: 'agent:generating_completed',
+                this.emitGeneratingCompleted({
                     chatTitle,
                     duration: this.generatingStartedAt ? Math.round((now - this.generatingStartedAt) / 1000) : undefined,
                     timestamp: me.timestamp,
