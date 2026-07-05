@@ -13,10 +13,12 @@
  */
 
 import { randomUUID } from 'crypto';
+import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getQueue } from './mesh-work-queue.js';
 import { computeMeshMissionStats, type MeshMissionStats } from './mesh-task-stats.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
+import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 
 /**
  * Max chars of mission goal text written into a ledger entry payload. Mission
@@ -56,6 +58,13 @@ export interface MeshMissionRecord {
      * missions are bounded out of the default list once completed.
      */
     source?: MeshMissionSource;
+    /**
+     * G3: idempotency marker for the mission_close_candidate nudge. ISO timestamp of
+     * the last emit; absent/undefined when the mission has not (or no longer) been in a
+     * fully-terminal state. Owned by maybeEmitMissionCloseCandidate — never set by a
+     * regular upsert. See summarizeMissionTasks / maybeEmitMissionCloseCandidate.
+     */
+    closeCandidateEmittedAt?: string;
     createdAt: string;
     updatedAt: string;
 }
@@ -267,6 +276,116 @@ export function summarizeMissionTasks(meshId: string, missionId: string): MeshMi
 
 export function summarizeMeshMission(meshId: string, mission: MeshMissionRecord): MeshMissionSummary {
     return { ...mission, tasks: summarizeMissionTasks(meshId, mission.id) };
+}
+
+/**
+ * G3 — all-tasks-terminal detection: true when a mission has at least one task and
+ * every task has reached a terminal status (no pending, no assigned). This is the
+ * derived signal (never a stored flag) that a mission has no more work in flight and
+ * is a candidate for the coordinator to close. A mission with zero tasks is NOT a
+ * candidate — an empty mission is a freshly-created plan, not a finished one.
+ */
+export function isMissionAllTasksTerminal(aggregate: MeshMissionTaskAggregate): boolean {
+    return aggregate.total > 0 && aggregate.pending === 0 && aggregate.assigned === 0;
+}
+
+/**
+ * G3 (step ①) — emit a `mission_close_candidate` coordinator nudge the first time an
+ * ACTIVE mission's tasks all become terminal, and reset the idempotency marker when a
+ * mission leaves the terminal state. Call this after any task-status mutation that can
+ * change a mission's aggregate (completion / failure / cancel / dependency-failure /
+ * new task). Fire-and-forget and fully best-effort — a throw here must never break the
+ * task mutation that triggered it.
+ *
+ * Design invariants (docs/MESH_PROMPT_ARCH_REVIEW_2026-07.md §9-1 G3):
+ *  - NEVER transitions the mission status. This only publishes a "consider closing"
+ *    hint; the coordinator/human decides via mesh_mission_upsert.
+ *  - Idempotent per all-terminal EDGE. The mission's close_candidate_emitted_at marker
+ *    guarantees exactly one emit per terminal transition; while the mission stays
+ *    all-terminal, subsequent calls no-op (no per-tick spam). When the mission returns
+ *    to non-terminal (a new/re-opened task), the marker is cleared so a later
+ *    re-completion nudges again.
+ *  - Only ACTIVE missions nudge. A paused/completed/abandoned mission is never a
+ *    close candidate (already decided, or intentionally on hold).
+ *
+ * Returns true iff an event was emitted on this call.
+ */
+export function maybeEmitMissionCloseCandidate(meshId: string, missionId: string): boolean {
+    try {
+        const mission = getMeshMission(meshId, missionId);
+        if (!mission) return false;
+        const store = MeshRuntimeStore.getInstance();
+        const aggregate = summarizeMissionTasks(meshId, missionId);
+        const allTerminal = isMissionAllTasksTerminal(aggregate);
+        const alreadyEmitted = typeof mission.closeCandidateEmittedAt === 'string' && mission.closeCandidateEmittedAt.length > 0;
+
+        // Reset edge: mission is no longer all-terminal (new/re-opened task) but still
+        // carries a stale marker → clear it so a future re-completion can nudge again.
+        // Applies regardless of mission status (a re-opened completed mission also resets).
+        if (!allTerminal) {
+            if (alreadyEmitted) store.setMissionCloseCandidateEmittedAt(meshId, missionId, null);
+            return false;
+        }
+
+        // All-terminal, but only an ACTIVE mission is a close candidate. A paused mission
+        // is intentionally on hold; a completed/abandoned one is already decided. We do
+        // NOT mark in these cases — if the mission is later reactivated while still
+        // all-terminal, it should nudge then.
+        if (mission.status !== 'active') return false;
+
+        // Idempotency: already nudged for this terminal edge → no-op (no per-tick spam).
+        if (alreadyEmitted) return false;
+
+        const emittedAt = new Date().toISOString();
+        emitMissionCloseCandidateEvent(meshId, mission, aggregate, emittedAt);
+        // Mark AFTER a successful emit path so a mid-emit throw leaves the marker unset
+        // and the next mutation retries rather than silently dropping the only nudge.
+        store.setMissionCloseCandidateEmittedAt(meshId, missionId, emittedAt);
+        return true;
+    } catch (e: any) {
+        LOG.warn('MeshMissions', `maybeEmitMissionCloseCandidate failed for mission ${missionId} on mesh ${meshId}: ${e?.message || e}`);
+        return false;
+    }
+}
+
+/**
+ * Build and queue the mission_close_candidate pending coordinator event. Broadcast
+ * scope (defaultScopeForEvent → 'broadcast' since it is neither a terminal-task nor a
+ * system event), so it reaches any coordinator on the mesh without needing an
+ * intendedFor identity — a mission-hygiene hint is not tied to a single dispatcher.
+ */
+function emitMissionCloseCandidateEvent(
+    meshId: string,
+    mission: MeshMissionRecord,
+    aggregate: MeshMissionTaskAggregate,
+    emittedAt: string,
+): void {
+    const coordinatorMessage =
+        `Mission "${mission.title}" (id: ${mission.id}) has no tasks left in flight — all ${aggregate.total} `
+        + `task(s) are terminal (${aggregate.completed} completed, ${aggregate.failed} failed, ${aggregate.cancelled} cancelled). `
+        + `It is a candidate to close. Review its outcome and, if done, set its status with `
+        + `mesh_mission_upsert(mission_id: "${mission.id}", status: "completed" | "abandoned"). `
+        + `This is only a hint — the mission stays 'active' until you decide.`;
+    queuePendingMeshCoordinatorEvent({
+        event: 'mission_close_candidate',
+        meshId,
+        nodeLabel: '',
+        metadataEvent: {
+            missionId: mission.id,
+            title: mission.title,
+            status: mission.status,
+            aggregate: {
+                total: aggregate.total,
+                completed: aggregate.completed,
+                failed: aggregate.failed,
+                cancelled: aggregate.cancelled,
+            },
+            lastActivityAt: aggregate.lastActivityAt,
+            emittedAt,
+        },
+        coordinatorMessage,
+        queuedAt: Date.parse(emittedAt) || 0,
+    });
 }
 
 /** Active mission summaries for mesh_status / coordinator prompt injection. */

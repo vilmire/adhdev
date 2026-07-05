@@ -346,6 +346,14 @@ export class MeshRuntimeStore {
                 goal TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active',
                 source TEXT,
+                -- G3: idempotency marker for the mission_close_candidate coordinator
+                -- event. Set to the emit timestamp when all of a mission's tasks first
+                -- become terminal (so the "consider closing this" nudge fires exactly
+                -- once per all-terminal edge), and cleared back to NULL when the mission
+                -- returns to a non-terminal state (new/re-opened task) so a later
+                -- re-completion can nudge again. Never drives a status transition — the
+                -- coordinator/human still decides via mesh_mission_upsert.
+                close_candidate_emitted_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -461,6 +469,13 @@ export class MeshRuntimeStore {
             const missionCols = this.tableColumns('mesh_missions');
             if (!missionCols.has('source')) {
                 this.db.exec(`ALTER TABLE mesh_missions ADD COLUMN source TEXT`);
+            }
+            // 3b. mesh_missions.close_candidate_emitted_at (G3): nullable idempotency
+            //     marker for the mission_close_candidate coordinator nudge. Pre-existing
+            //     rows keep it NULL — treated as "not yet emitted", so the first
+            //     all-terminal detection after this migration emits once, then marks it.
+            if (!missionCols.has('close_candidate_emitted_at')) {
+                this.db.exec(`ALTER TABLE mesh_missions ADD COLUMN close_candidate_emitted_at TEXT`);
             }
 
             // 4. mesh_pending_events v2 envelope columns (B2a). A pre-v2 DB has the
@@ -1988,6 +2003,9 @@ export class MeshRuntimeStore {
         // with a non-null incoming value (COALESCE(excluded, existing)), so a later
         // status/goal upsert that omits source never clears a previously-stamped
         // 'magi'/'coordinator' tag.
+        // close_candidate_emitted_at is deliberately NOT in the UPDATE set: the G3
+        // idempotency marker is owned solely by setMissionCloseCandidateEmittedAt, so a
+        // title/goal/status upsert here never clears or overwrites it.
         this.db.prepare(
             `INSERT INTO mesh_missions (id, mesh_id, title, goal, status, source, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -2010,15 +2028,15 @@ export class MeshRuntimeStore {
         this.maybeCheckpointWal();
     }
 
-    getMission(meshId: string, missionId: string): { id: string; meshId: string; title: string; goal: string; status: string; source?: string; createdAt: string; updatedAt: string } | null {
+    getMission(meshId: string, missionId: string): { id: string; meshId: string; title: string; goal: string; status: string; source?: string; closeCandidateEmittedAt?: string; createdAt: string; updatedAt: string } | null {
         const row = this.db.prepare(
             'SELECT * FROM mesh_missions WHERE mesh_id = ? AND id = ?'
         ).get(meshId, missionId) as Record<string, string> | undefined;
         if (!row) return null;
-        return { id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at };
+        return { id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? undefined, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at };
     }
 
-    getMissions(meshId: string, statuses?: string[]): Array<{ id: string; meshId: string; title: string; goal: string; status: string; source?: string; createdAt: string; updatedAt: string }> {
+    getMissions(meshId: string, statuses?: string[]): Array<{ id: string; meshId: string; title: string; goal: string; status: string; source?: string; closeCandidateEmittedAt?: string; createdAt: string; updatedAt: string }> {
         let rows: Array<Record<string, string>>;
         if (statuses?.length) {
             const placeholders = statuses.map(() => '?').join(', ');
@@ -2030,7 +2048,21 @@ export class MeshRuntimeStore {
                 'SELECT * FROM mesh_missions WHERE mesh_id = ? ORDER BY updated_at DESC'
             ).all(meshId) as Array<Record<string, string>>;
         }
-        return rows.map(row => ({ id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }));
+        return rows.map(row => ({ id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? undefined, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }));
+    }
+
+    /**
+     * G3: set/clear the mission_close_candidate idempotency marker. Passing an ISO
+     * timestamp records that the all-terminal nudge has been emitted for this mission;
+     * passing null clears it (mission returned to a non-terminal state, so a future
+     * re-completion may nudge again). Touches ONLY this column — never the mission's
+     * updated_at — so the marker write is invisible to updatedAt-ordered surfaces and
+     * does not masquerade as mission activity. Returns rows changed (0 if no such mission).
+     */
+    setMissionCloseCandidateEmittedAt(meshId: string, missionId: string, emittedAt: string | null): number {
+        return this.db.prepare(
+            'UPDATE mesh_missions SET close_candidate_emitted_at = ? WHERE mesh_id = ? AND id = ?'
+        ).run(emittedAt, meshId, missionId).changes;
     }
 
     /** Remove all missions for a mesh — mesh deletion / test cleanup. */

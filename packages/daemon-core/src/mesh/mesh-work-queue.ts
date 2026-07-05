@@ -881,7 +881,7 @@ export function enqueueTask(
     const maxRetries = typeof opts?.maxRetries === 'number' && Number.isFinite(opts.maxRetries) && opts.maxRetries >= 0
         ? Math.floor(opts.maxRetries)
         : undefined;
-    return withQueueLock(meshId, () => {
+    const result = withQueueLock(meshId, () => {
         if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, id)) {
             throw new Error(`duplicate_task_id: task '${id}' already exists in mesh '${meshId}'`);
         }
@@ -927,6 +927,10 @@ export function enqueueTask(
         MeshRuntimeStore.getInstance().insertQueueEntry(entry);
         return entry;
     });
+    // A fresh pending task returns its mission to a non-terminal state — reset any
+    // stale close-candidate marker so a later re-completion can nudge again.
+    scheduleMissionCloseCandidateCheck(meshId, [result]);
+    return result;
 }
 
 /**
@@ -1070,9 +1074,17 @@ function resolveDependencyFailurePolicy(meshId: string): DependencyFailurePolicy
  *
  * Must be called inside the queue lock of the triggering transition.
  */
-function propagateDependencyFailure(meshId: string, failedTaskId: string): void {
+/**
+ * Cascade a dependency failure. Returns the dependents whose status was flipped to
+ * `cancelled` (the 'cancel' policy) so the caller can trigger mission_close_candidate
+ * detection for their missions too — a cascade can be the very transition that leaves
+ * a *different* mission all-terminal. Under the 'block' policy nothing goes terminal
+ * (dependents are only marked blocked), so the returned list is empty.
+ */
+function propagateDependencyFailure(meshId: string, failedTaskId: string): MeshWorkQueueEntry[] {
     const policy = resolveDependencyFailurePolicy(meshId);
     const store = MeshRuntimeStore.getInstance();
+    const cancelled: MeshWorkQueueEntry[] = [];
     const frontier = [failedTaskId];
     const seen = new Set<string>(frontier);
     while (frontier.length > 0) {
@@ -1087,6 +1099,7 @@ function propagateDependencyFailure(meshId: string, failedTaskId: string): void 
                 dependent.cancelledAt = new Date().toISOString();
                 dependent.cancelReason = `dependency_failed:${currentId}`;
                 store.updateQueueEntry(dependent);
+                cancelled.push(dependent);
                 frontier.push(dependent.id); // cascade to transitive dependents
             } else {
                 dependent.blockedReason = `dependency_failed:${currentId}`;
@@ -1094,9 +1107,38 @@ function propagateDependencyFailure(meshId: string, failedTaskId: string): void 
             }
         }
     }
+    return cancelled;
 }
 
 const DEPENDENCY_FAILURE_TERMINALS = new Set<MeshTaskStatus>(['failed', 'cancelled']);
+
+/**
+ * G3 (step ①) — fire-and-forget mission_close_candidate detection for the missions of
+ * the given task ids. Called after any task-status mutation (completion / failure /
+ * cancel / dependency-cascade / new-task enqueue) so a mission whose tasks all just
+ * became terminal gets a one-shot "consider closing" nudge, and a mission that just
+ * gained a non-terminal task has its idempotency marker reset.
+ *
+ * Loaded via a lazy dynamic import to break the static queue↔missions import cycle
+ * (mesh-missions statically imports getQueue from here): the resolve happens off the
+ * mutation's critical path, and any failure is swallowed — this is a best-effort hint,
+ * never allowed to affect the task write that triggered it.
+ */
+function scheduleMissionCloseCandidateCheck(meshId: string, entries: Array<MeshWorkQueueEntry | null | undefined>): void {
+    const missionIds = new Set<string>();
+    for (const entry of entries) {
+        const missionId = entry?.missionId;
+        if (typeof missionId === 'string' && missionId.trim()) missionIds.add(missionId.trim());
+    }
+    if (missionIds.size === 0) return;
+    void import('./mesh-missions.js')
+        .then(({ maybeEmitMissionCloseCandidate }) => {
+            for (const missionId of missionIds) {
+                try { maybeEmitMissionCloseCandidate(meshId, missionId); } catch { /* best-effort per mission */ }
+            }
+        })
+        .catch(() => { /* best-effort: never break a task mutation on the hint path */ });
+}
 
 /**
  * Update the status of a specific task.
@@ -1109,7 +1151,7 @@ export function updateTaskStatus(
     opts?: MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
-    return withQueueLock(meshId, () => {
+    const result = withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         entry.status = status;
@@ -1117,9 +1159,11 @@ export function updateTaskStatus(
         // Any transition OFF `assigned` ends the single-flight dispatch window (terminal
         // completion/failure, or the dispatch-failure requeue to `pending`).
         if (status !== 'assigned') endTaskDispatchInFlight(meshId, taskId);
-        if (DEPENDENCY_FAILURE_TERMINALS.has(status)) propagateDependencyFailure(meshId, taskId);
-        return entry;
+        const cascaded = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, taskId) : [];
+        return { entry, cascaded };
     });
+    if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
+    return result ? result.entry : null;
 }
 
 export function recordTaskAutoLaunch(
@@ -1146,7 +1190,7 @@ export function cancelTask(
     opts?: { reason?: string } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
-    return withQueueLock(meshId, () => {
+    const result = withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         const now = new Date().toISOString();
@@ -1155,9 +1199,11 @@ export function cancelTask(
         if (opts?.reason) entry.cancelReason = opts.reason;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         endTaskDispatchInFlight(meshId, taskId);
-        propagateDependencyFailure(meshId, taskId);
-        return entry;
+        const cascaded = propagateDependencyFailure(meshId, taskId);
+        return { entry, cascaded };
     });
+    if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
+    return result ? result.entry : null;
 }
 
 /**
@@ -1188,7 +1234,7 @@ export function requeueTask(
     } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
-    return withQueueLock(meshId, () => {
+    const result = withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         // CANON-IDENTITY single-flight: refuse (no-op) to reopen a task whose dispatch
@@ -1203,7 +1249,8 @@ export function requeueTask(
         // from this single-flight guard; the exemption hook (group-id check) belongs here.
         if (!opts?.force && isTaskDispatchInFlight(meshId, taskId)) {
             LOG.warn('MeshQueue', `Refusing to requeue task ${taskId} on mesh ${meshId}: it is actively dispatched/generating (single-flight in-flight). Requeueing now would open a duplicate second dispatch into another session. Pass force to override.`);
-            return entry;
+            // No status change → no mission aggregate change; nothing to re-check.
+            return { entry, cascaded: [] as MeshWorkQueueEntry[], missionAffected: false };
         }
         // Proceeding to requeue (or force-override): the prior dispatch is being abandoned,
         // so end the single-flight window for this task id.
@@ -1216,8 +1263,9 @@ export function requeueTask(
             entry.cancelReason = `max_retries_exceeded: requeued ${currentCount} time(s), limit is ${maxRetries}`;
             entry.updatedAt = new Date().toISOString();
             MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-            propagateDependencyFailure(meshId, taskId);
-            return entry;
+            const cascaded = propagateDependencyFailure(meshId, taskId);
+            // Terminal (failed) → mission may now be all-terminal.
+            return { entry, cascaded, missionAffected: true };
         }
         entry.status = 'pending';
         // Operator requeue clears a dependency-failure block — the operator is
@@ -1235,8 +1283,13 @@ export function requeueTask(
         entry.requeueCount = currentCount + 1;
         if (opts?.reason) entry.requeueReason = opts.reason;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-        return entry;
+        // Non-terminal (back to pending) → mission left the all-terminal state; the
+        // close-candidate check resets any stale idempotency marker so a later
+        // re-completion can nudge again.
+        return { entry, cascaded: [] as MeshWorkQueueEntry[], missionAffected: true };
     });
+    if (result?.missionAffected) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
+    return result ? result.entry : null;
 }
 
 /**
@@ -1269,7 +1322,7 @@ export function reclaimStrandedAssignedTask(
     opts?: { reason?: string; ageMs?: number } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
-    return withQueueLock(meshId, () => {
+    const result = withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         // Only a still-assigned row is stranded. If a completion/cancel already moved it
@@ -1291,12 +1344,13 @@ export function reclaimStrandedAssignedTask(
         // The stranded assignment is being torn down (→ pending or failed); end its
         // single-flight window so a re-claim/requeue is not blocked.
         endTaskDispatchInFlight(meshId, taskId);
+        let cascaded: MeshWorkQueueEntry[] = [];
         if (reclaims > MAX_STRANDED_RECLAIMS) {
             // Repeatedly undeliverable — stop cycling and fail it so dependents unblock.
             entry.status = 'failed';
             entry.cancelReason = `stranded_dispatch_unrecovered: reclaimed ${reclaims - 1} time(s) without a confirmed dispatch`;
             MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-            propagateDependencyFailure(meshId, taskId);
+            cascaded = propagateDependencyFailure(meshId, taskId);
         } else {
             entry.status = 'pending';
             entry.requeuedAt = now;
@@ -1317,8 +1371,12 @@ export function reclaimStrandedAssignedTask(
                 },
             });
         } catch { /* ledger write is best-effort */ }
-        return entry;
+        return { entry, cascaded };
     });
+    // Reclaim toggles the mission aggregate either way: → failed may make it all-terminal;
+    // → pending resets any stale close-candidate marker. Re-check in both outcomes.
+    if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
+    return result ? result.entry : null;
 }
 
 /**
@@ -1330,7 +1388,7 @@ export function updateSessionTaskStatus(
     status: MeshTaskStatus,
     opts?: { occurredAt?: string; taskId?: string },
 ): MeshWorkQueueEntry | null {
-    return withQueueLock(meshId, () => {
+    const result = withQueueLock(meshId, () => {
         const store = MeshRuntimeStore.getInstance();
         const occurredAtIso = opts?.occurredAt ? new Date(opts.occurredAt).toISOString() : undefined;
         const entry = store.findAssignedBySession(meshId, sessionId, occurredAtIso, opts?.taskId);
@@ -1352,9 +1410,11 @@ export function updateSessionTaskStatus(
         // The worker reported a terminal/non-assigned outcome — the dispatch is over;
         // release the single-flight mark so the task id can be re-dispatched later.
         if (status !== 'assigned') endTaskDispatchInFlight(meshId, entry.id);
-        if (DEPENDENCY_FAILURE_TERMINALS.has(status)) propagateDependencyFailure(meshId, entry.id);
-        return entry;
+        const cascaded = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, entry.id) : [];
+        return { entry, cascaded };
     });
+    if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
+    return result ? result.entry : null;
 }
 
 /**

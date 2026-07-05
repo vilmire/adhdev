@@ -17,6 +17,7 @@ import {
     listMeshMissionSummaries,
     readLedgerEntries,
     readLedgerSlice,
+    getMeshMission,
     readLedgerSliceFromStore,
     readString,
     refreshMeshFromDaemon,
@@ -356,12 +357,29 @@ export async function meshRequeueHeldEvents(
 
 export async function meshMissionUpsert(
     ctx: MeshContext,
-    args: { mission_id?: string; missionId?: string; title: string; goal?: string; status?: string },
+    args: { mission_id?: string; missionId?: string; mission_ids?: unknown; missionIds?: unknown; title?: string; goal?: string; status?: string },
 ): Promise<string> {
+    // Bulk mode: mission_ids[] + status applies one status to many missions (stale
+    // cleanup). Takes precedence over the single mission_id path. title/goal are ignored;
+    // each mission keeps its own title (upsertMeshMission needs a non-empty title, so we
+    // re-supply the existing one per mission).
+    const bulkIds = normalizeMissionIdList(args.mission_ids ?? args.missionIds);
+    if (bulkIds.length > 0) {
+        return meshMissionUpsertBulk(ctx, bulkIds, readString(args.status));
+    }
+
     try {
+        const title = readString(args.title);
+        if (!title) {
+            return JSON.stringify({
+                success: false,
+                code: 'mission_title_required',
+                error: 'mission_title_required: single-mission upsert needs a non-empty title. For a bulk status transition pass mission_ids (array) + status instead.',
+            });
+        }
         const mission = upsertMeshMission(ctx.mesh.id, {
             id: readString(args.mission_id) || readString(args.missionId) || undefined,
-            title: args.title,
+            title,
             goal: typeof args.goal === 'string' ? args.goal : undefined,
             status: readString(args.status) || undefined,
         });
@@ -377,6 +395,68 @@ export async function meshMissionUpsert(
             : undefined;
         return JSON.stringify({ success: false, ...(code ? { code } : {}), error: message });
     }
+}
+
+/** Coerce a mission_ids input into a de-duplicated list of non-empty string ids. */
+function normalizeMissionIdList(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set<string>();
+    for (const raw of value) {
+        const id = typeof raw === 'string' ? raw.trim() : '';
+        if (id) seen.add(id);
+    }
+    return [...seen];
+}
+
+/**
+ * G3 (step ②) — bulk mission status transition. Applies `status` to every id in
+ * `missionIds`, returning a per-mission result so a partial failure (unknown id,
+ * invalid status) never silently drops the rest. Each mission keeps its own title —
+ * upsertMeshMission requires a non-empty title, so we look up the existing record and
+ * re-supply its title while changing only the status. Primary use: the one-time cleanup
+ * of accumulated stale missions.
+ */
+async function meshMissionUpsertBulk(
+    ctx: MeshContext,
+    missionIds: string[],
+    status: string | undefined,
+): Promise<string> {
+    if (!status) {
+        return JSON.stringify({
+            success: false,
+            code: 'bulk_status_required',
+            error: 'bulk mission upsert (mission_ids) requires a status to apply to every listed mission.',
+        });
+    }
+    const results = missionIds.map((id) => {
+        try {
+            const existing = getMeshMission(ctx.mesh.id, id);
+            if (!existing) return { id, ok: false, error: 'mission_not_found' };
+            const updated = upsertMeshMission(ctx.mesh.id, {
+                id,
+                title: existing.title,
+                status,
+            });
+            return { id, ok: true, status: updated.status };
+        } catch (e: any) {
+            const message = e?.message || String(e);
+            const code = message.includes('invalid_mission_status') ? 'invalid_mission_status' : undefined;
+            return { id, ok: false, error: message, ...(code ? { code } : {}) };
+        }
+    });
+    const applied = results.filter(r => r.ok).length;
+    const failed = results.length - applied;
+    return JSON.stringify({
+        success: failed === 0,
+        mode: 'bulk',
+        requestedStatus: status,
+        applied,
+        failed,
+        results,
+        nextAction: failed === 0
+            ? `Applied status '${status}' to ${applied} mission(s).`
+            : `${applied} applied, ${failed} failed — see results[] for per-mission errors.`,
+    });
 }
 
 export async function meshMissionList(

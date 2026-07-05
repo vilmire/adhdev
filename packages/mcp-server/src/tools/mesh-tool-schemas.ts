@@ -276,16 +276,27 @@ export const MESH_CHECKPOINT_TOOL = {
 
 export const MESH_MISSION_UPSERT_TOOL = {
     name: 'mesh_mission_upsert',
-    description: 'Create or update a persistent mission record so the plan survives coordinator restarts. Create a mission before enqueueing a multi-task batch, attach tasks via mesh_enqueue_task mission_id, and update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses — there is no separate progress field.',
+    description: 'Create or update a persistent mission record so the plan survives coordinator restarts. '
+        + 'Create a mission before enqueueing a multi-task batch, attach tasks via mesh_enqueue_task mission_id, and update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses — there is no separate progress field. '
+        + 'Single mission: pass title (and optionally mission_id to update an existing one). '
+        + 'Bulk status transition (e.g. one-time stale cleanup): pass mission_ids (array) + status to apply that status to many missions at once; title/goal are ignored and a per-mission result array is returned. mission_ids takes precedence over mission_id when both are given.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            mission_id: { type: 'string', description: 'Mission id to update. Omit to create a new mission.' },
-            title: { type: 'string', description: 'Short mission title.' },
-            goal: { type: 'string', description: 'Free-text mission goal/definition of done.' },
-            status: { type: 'string', enum: ['active', 'paused', 'completed', 'abandoned'], description: 'Mission lifecycle status. Defaults to active on create.' },
+            mission_id: { type: 'string', description: 'Mission id to update. Omit to create a new mission. Ignored when mission_ids is provided.' },
+            mission_ids: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Bulk mode: apply `status` to every listed mission id in one call (stale cleanup). Requires `status`. Returns a per-mission { id, ok, status?, error? } result array. Overrides mission_id/title/goal.',
+            },
+            title: { type: 'string', description: 'Short mission title. Required to create/update a single mission; ignored in bulk (mission_ids) mode.' },
+            goal: { type: 'string', description: 'Free-text mission goal/definition of done. Ignored in bulk (mission_ids) mode.' },
+            status: { type: 'string', enum: ['active', 'paused', 'completed', 'abandoned'], description: 'Mission lifecycle status. Defaults to active on create. Required in bulk (mission_ids) mode.' },
         },
-        required: ['title'],
+        // No hard-required field: the single path requires `title` and the bulk path
+        // requires `mission_ids` + `status`; the handler enforces the mode-specific rule
+        // and returns a clear error, rather than the schema forcing `title` on bulk calls.
+        required: [],
     },
 };
 

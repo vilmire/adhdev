@@ -16,6 +16,11 @@ const MESH_COORDINATOR_EVENTS = new Set([
     'refine:failed',
     'worktree_bootstrap_complete',
     'worktree_bootstrap_failed',
+    // G3: mission-hygiene nudge. Emitted once when all of a mission's tasks first
+    // become terminal — a "consider closing this mission" hint for the coordinator.
+    // Purely informational: NOT force-injected (no blocked coordinator waits on it)
+    // and NOT an approval; it never drives a mission status transition on its own.
+    'mission_close_candidate',
 ]);
 
 export const EVENT_TO_LEDGER_KIND: Record<string, MeshLedgerKind> = {
