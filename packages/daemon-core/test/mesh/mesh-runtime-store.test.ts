@@ -1746,4 +1746,100 @@ describe('mesh-runtime-store', () => {
             expect(store.getInflightHold('t-del')).toBeNull();
         });
     });
+
+    // ── MESH-COMPLEXITY-AUDIT Part 8-1: legacy mesh_direct_delivered_events DROP ──
+    // The retired R3 direct-delivered dedup marker left a dormant table behind. The
+    // migration drops it once; a fresh store never had it. Both cases must end with
+    // the table absent, and re-running the migration must stay a safe no-op.
+    describe('Part 8-1: mesh_direct_delivered_events drop migration', () => {
+        afterEach(() => {
+            __resetMeshRuntimeStoreForTests();
+        });
+
+        const tableExists = (db: any): boolean => {
+            // The better-sqlite3 handle is a private field; peek at it for the schema assertion.
+            const row = (db as any).db
+                .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='mesh_direct_delivered_events'`)
+                .get();
+            return row !== undefined;
+        };
+
+        it('drops a legacy mesh_direct_delivered_events table left in an existing store', () => {
+            const Database = runtimeRequire('better-sqlite3') as any;
+            const ledgerDir = join(testConfigDir, 'mesh-ledger');
+            mkdirSync(ledgerDir, { recursive: true });
+            const dbPath = join(ledgerDir, 'mesh-runtime.db');
+
+            // Simulate an old install: create the store file with the dormant table present.
+            const legacyDb = new Database(dbPath);
+            legacyDb.exec(`
+                CREATE TABLE mesh_direct_delivered_events (
+                    coordinator_daemon_id TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL
+                );
+            `);
+            legacyDb.prepare('INSERT INTO mesh_direct_delivered_events VALUES (?, ?, ?)')
+                .run('daemon-x', 'fp-1', Date.now() + 60_000);
+            legacyDb.close();
+
+            // Opening the store runs the migration, which drops the table.
+            const db = MeshRuntimeStore.getInstance();
+            expect(tableExists(db)).toBe(false);
+        });
+
+        it('is a no-op for a fresh store that never had the table', () => {
+            const db = MeshRuntimeStore.getInstance();
+            expect(tableExists(db)).toBe(false);
+        });
+
+        it('is idempotent: re-running the migration does not throw and keeps the table absent', () => {
+            const db = MeshRuntimeStore.getInstance();
+            // migrateMeshIsolationColumns is private but re-runnable; invoke via the same
+            // path a second boot would (safe because every step is IF-EXISTS guarded).
+            expect(() => (db as any).migrateMeshIsolationColumns()).not.toThrow();
+            expect(tableExists(db)).toBe(false);
+        });
+    });
+
+    // ── MESH-COMPLEXITY-AUDIT Part 8-1: stray root mesh-runtime.db hygiene ────────
+    // A 0-byte mesh-runtime.db under the config root (NOT the canonical mesh-ledger
+    // path) is a dead file an older build left behind. Store init removes it, but only
+    // when it is provably that stray: empty and off the canonical path.
+    describe('Part 8-1: stray root mesh-runtime.db cleanup', () => {
+        afterEach(() => {
+            __resetMeshRuntimeStoreForTests();
+        });
+
+        it('removes a 0-byte stray mesh-runtime.db at the config root on store init', () => {
+            const { writeFileSync } = runtimeRequire('fs');
+            const strayPath = join(testConfigDir, 'mesh-runtime.db');
+            writeFileSync(strayPath, ''); // 0 bytes
+            expect(existsSync(strayPath)).toBe(true);
+
+            MeshRuntimeStore.getInstance(); // init triggers cleanup
+            expect(existsSync(strayPath)).toBe(false);
+        });
+
+        it('leaves a NON-empty root mesh-runtime.db untouched (safety belt)', () => {
+            const { writeFileSync } = runtimeRequire('fs');
+            const strayPath = join(testConfigDir, 'mesh-runtime.db');
+            writeFileSync(strayPath, 'not empty'); // non-zero → must not be deleted
+            expect(existsSync(strayPath)).toBe(true);
+
+            MeshRuntimeStore.getInstance();
+            expect(existsSync(strayPath)).toBe(true);
+        });
+
+        it('never deletes the canonical mesh-ledger store file', () => {
+            const db = MeshRuntimeStore.getInstance();
+            db.recordCompletionFingerprint('mesh-canonical', `fp-${randomUUID()}`, 60_000);
+            const canonicalPath = join(testConfigDir, 'mesh-ledger', 'mesh-runtime.db');
+            expect(existsSync(canonicalPath)).toBe(true);
+            // Re-resolve the path (which runs cleanup) by re-opening a fresh instance.
+            __resetMeshRuntimeStoreForTests();
+            MeshRuntimeStore.getInstance();
+            expect(existsSync(canonicalPath)).toBe(true);
+        });
+    });
 });

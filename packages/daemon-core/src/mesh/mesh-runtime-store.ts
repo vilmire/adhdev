@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync } from 'fs';
 import { dirname, join } from 'path';
 import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
+import { getConfigDir } from '../config/config.js';
 import { getLedgerDir } from './mesh-ledger.js';
 import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied } from './mesh-work-queue.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
@@ -39,10 +40,43 @@ function legacyQueuePath(meshId: string): string {
 }
 
 let loggedMigrationFailure = false;
+let loggedStrayCleanup = false;
+
+/**
+ * MESH-COMPLEXITY-AUDIT Part 8-1: one-shot hygiene for a stray root mesh-runtime.db.
+ *
+ * The store lives at `~/.adhdev/mesh-ledger/mesh-runtime.db` (getLedgerDir()). An older
+ * build path could create a 0-byte `mesh-runtime.db` directly under `~/.adhdev/` — a
+ * dead file that is never opened or read (the canonical path is the only one used) but
+ * lingers. Remove it if and only if it is provably that stray: (a) exists, (b) is NOT the
+ * canonical store path, and (c) is empty (0 bytes). The size gate is the safety belt — we
+ * never unlink a non-empty file, so a real DB that somehow landed here is left untouched
+ * and surfaces as data rather than being silently deleted. Best-effort: any error is
+ * swallowed (with one diagnostic warn), never blocking store init.
+ */
+function cleanupStrayRootRuntimeDb(canonicalPath: string): void {
+    try {
+        const strayPath = join(getConfigDir(), 'mesh-runtime.db');
+        if (strayPath === canonicalPath) return; // canonical dir IS the config dir — never touch
+        if (!existsSync(strayPath)) return;
+        if (statSync(strayPath).size !== 0) return; // non-empty → not the known 0-byte stray; leave it
+        unlinkSync(strayPath);
+        if (!loggedStrayCleanup) {
+            loggedStrayCleanup = true;
+            LOG.info('MeshRuntimeStore', `Removed stray 0-byte root mesh-runtime.db at ${strayPath}`);
+        }
+    } catch (err: any) {
+        if (!loggedStrayCleanup) {
+            loggedStrayCleanup = true;
+            LOG.warn('MeshRuntimeStore', `Stray root mesh-runtime.db cleanup failed (ignored): ${err?.message || err}`);
+        }
+    }
+}
 
 function meshRuntimeStorePath(): string {
     const dir = getLedgerDir();
     const nextPath = join(dir, 'mesh-runtime.db');
+    cleanupStrayRootRuntimeDb(nextPath);
     if (existsSync(nextPath)) return nextPath;
 
     const legacyPath = join(dir, 'beads.db');
@@ -459,6 +493,17 @@ export class MeshRuntimeStore {
                     ON mesh_pending_events(mesh_id, event_id)
                     WHERE event_id IS NOT NULL
             `);
+
+            // 5. MESH-COMPLEXITY-AUDIT Part 8-1: drop the legacy mesh_direct_delivered_events
+            //    table. It backed the retired R3 "direct-delivered" dedup marker
+            //    (markMeshCoordinatorEventDirectDelivered / wasDirectDeliveredToCoordinator,
+            //    removed when spontaneous PTY direct-inject was retired — see the NOTE in
+            //    mesh-events-pending.ts). No live code CREATEs, reads, or writes it anymore,
+            //    so this is a pure runtime-residue cleanup with no behavior change: a store
+            //    that never had the table just no-ops (IF EXISTS), an old install carrying
+            //    the dormant table has it removed once. Idempotent — DROP TABLE IF EXISTS is
+            //    a no-op on every subsequent boot.
+            this.db.exec(`DROP TABLE IF EXISTS mesh_direct_delivered_events`);
         } catch (err: any) {
             // Best-effort: a failed isolation migration must not brick the store. The
             // CREATE-TABLE definitions above already carry the new schema for fresh DBs;

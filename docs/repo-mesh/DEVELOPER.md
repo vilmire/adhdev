@@ -171,8 +171,10 @@ Everything is rooted at the daemon config dir (`getConfigDir()`, default
   - `mesh_event_ledger` — runtime event ledger (G2: source of truth; JSONL is a
     legacy/export artifact)
   - `mesh_pending_events` — coordinator inbox drained via `get_pending_mesh_events`
-  - `mesh_direct_delivered_events` / `mesh_completion_fingerprints` — idempotency
-    (exactly-once-per-coordinator delivery, dedup of completion events)
+  - `mesh_completion_fingerprints` — idempotency (dedup of completion events).
+    The former `mesh_direct_delivered_events` table (retired R3 direct-delivered
+    marker) was dropped by a one-shot `DROP TABLE IF EXISTS` migration in
+    `MeshRuntimeStore.migrateMeshIsolationColumns` — no live code references it.
   - `mesh_completion_conflicts`, `mesh_tool_call_log`, `mesh_missions`,
     `remote_idle_sessions`
 - **JSONL ledger** — `~/.adhdev/mesh-ledger/<meshId>.jsonl` (+ rotated
