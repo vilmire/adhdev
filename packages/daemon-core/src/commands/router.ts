@@ -22,7 +22,7 @@ import { DaemonCliManager } from './cli-manager.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { killIdeProcess, isIdeRunning } from '../launch.js';
-import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 import { logCommand } from '../logging/command-log.js';
@@ -42,27 +42,16 @@ import { execFileSync } from 'node:child_process';
 
 // ─── Extracted-module imports (symbols the dispatch class consumes) ───
 import {
-    applyInlineMeshBranchConvergence,
-    buildInlineMeshTransitGitStatus,
-    buildLivePeerGitConnection,
-    collectMeshNodeHostedSessionIds,
-    deriveMeshNodeHealthFromGit,
     foldMeshNodeIdentityToCanonical,
     inlineMeshCarriesTransientNodeTruth,
-    isDeadLocalWorktreeNode,
     MESH_DIRECT_PROBE_REUSE_MS,
     MeshGitProbeCache,
     normalizeInlineMeshNodeIdentity,
-    readBooleanValue,
-    readCachedInlineMeshActiveSessions,
     readInlineMeshNodeId,
-    readMeshNodeDaemonId,
     readObjectRecord,
     readStringValue,
     reconcileInlineMeshCache,
     sanitizeInlineMesh,
-    shouldRefreshStalePendingAggregate,
-    summarizeInlineMeshBranchConvergence,
 } from '../mesh/mesh-node-identity.js';
 import {
     alignRefinerySubmodulesAfterMerge,
@@ -105,6 +94,14 @@ import {
     recordIntentionalMeshSessionStop,
     sessionMatchesMeshNode,
 } from './router-worktree-cleanup.js';
+// ─── Aggregate mesh-status cache (bodies extracted from this file) ───
+import {
+    getCachedAggregateMeshStatus,
+    hydrateCachedAggregateMeshStatusFromInline,
+    rememberAggregateMeshStatus,
+} from './router-aggregate-status.js';
+// ─── Remote mesh-session owner resolution (bodies extracted from this file) ───
+import { resolveRemoteMeshSessionOwnerDaemonId } from './router-mesh-session-owner.js';
 
 // ─── Barrel re-exports: node-identity / git-freshness, refine gates, coordinator config ───
 // These modules were split out of router.ts. Re-export their public surface so the
@@ -299,8 +296,9 @@ export class DaemonCommandRouter {
      *  on disk) clears the tombstone and merges normally, preserving clone
      *  worktree visibility and legitimate node re-creation. */
     private removedInlineMeshNodeIds = new Map<string, Set<string>>();
-    /** Coordinator-owned whole-mesh aggregate status snapshots. Browser callers read this by default. */
-    private aggregateMeshStatusCache = new Map<string, { builtAt: number; snapshot: any; queueRevision: string }>();
+    /** Coordinator-owned whole-mesh aggregate status snapshots. Browser callers read this by default.
+     *  Public (not private) so the extracted ./router-aggregate-status.ts orchestration can reach it via `self`. */
+    aggregateMeshStatusCache = new Map<string, { builtAt: number; snapshot: any; queueRevision: string }>();
     /** Shared per-peer git_status probe dedup + recently-probed reuse gate.
      *  Spans separate mesh_status/get_mesh calls so the dashboard auto-retry
      *  loop cannot storm a slow peer with back-to-back refreshUpstream probes. */
@@ -323,108 +321,14 @@ export class DaemonCommandRouter {
         this.deps = deps;
     }
 
-    private cloneJsonValue<T>(value: T): T {
-        if (typeof structuredClone === 'function') return structuredClone(value);
-        return JSON.parse(JSON.stringify(value)) as T;
-    }
+    // ─── Aggregate mesh-status cache ────────────────────────────────────
+    // Implementation lives in ./router-aggregate-status.ts (behavior-preserving
+    // code move). Kept here as thin delegators: getCachedAggregateMeshStatus /
+    // rememberAggregateMeshStatus are bound into HighFamilyContext, so callers
+    // reach these via `self.` for correct instance dispatch.
 
     private hydrateCachedAggregateMeshStatusFromInline(snapshot: any, mesh: any, options?: { requireDirectPeerTruth?: boolean }): any {
-        if (!mesh || typeof mesh !== 'object' || !Array.isArray(mesh.nodes) || !Array.isArray(snapshot?.nodes)) return snapshot;
-        const inlineNodesById = new Map<string, any>();
-        for (const node of mesh.nodes) {
-            const nodeId = readInlineMeshNodeId(node);
-            if (nodeId) inlineNodesById.set(nodeId, node);
-        }
-        if (!inlineNodesById.size) return snapshot;
-
-        let changed = false;
-        const unavailableNodeIds = new Set<string>();
-        const sourceOfTruth = readObjectRecord(snapshot.sourceOfTruth);
-        const directPeerTruth = readObjectRecord(sourceOfTruth.directPeerTruth);
-        // Dead local worktree nodes (isLocalWorktree, workspace deleted from disk)
-        // carry no live truth and must never gate the aggregate as unavailable.
-        // A cached snapshot built before the worktree was removed can still list
-        // such a node in unavailableNodeIds, which would wedge the graph in a
-        // permanent direct_peer_truth_unavailable; drop them here so the held
-        // standing-state truth for the surviving nodes satisfies the aggregate.
-        const deadNodeIds = new Set<string>();
-        for (const node of mesh.nodes) {
-            if (!isDeadLocalWorktreeNode(node)) continue;
-            const deadId = readInlineMeshNodeId(node);
-            if (deadId) deadNodeIds.add(deadId);
-        }
-        let droppedDeadUnavailable = false;
-        for (const entry of Array.isArray(directPeerTruth.unavailableNodeIds) ? directPeerTruth.unavailableNodeIds : []) {
-            const nodeId = readStringValue(entry);
-            if (!nodeId) continue;
-            if (deadNodeIds.has(nodeId)) {
-                droppedDeadUnavailable = true;
-                continue;
-            }
-            unavailableNodeIds.add(nodeId);
-        }
-        // Force a rewrite when a dead worktree was filtered out of a previously
-        // built unavailable set, even if no live git was re-hydrated this pass —
-        // otherwise the early-return below would hand back the stale snapshot that
-        // still says direct_peer_truth_unavailable.
-        if (droppedDeadUnavailable) changed = true;
-
-        const nodes = snapshot.nodes.map((statusNode: any) => {
-            const nodeId = normalizeMeshNodeId(statusNode);
-            const inlineNode = nodeId ? inlineNodesById.get(nodeId) : undefined;
-            if (!inlineNode) return statusNode;
-            const liveGit = buildInlineMeshTransitGitStatus(inlineNode);
-            if (!liveGit) return statusNode;
-            const nextStatus = { ...statusNode };
-            nextStatus.git = liveGit;
-            nextStatus.health = deriveMeshNodeHealthFromGit(liveGit);
-            applyInlineMeshBranchConvergence(mesh, inlineNode, nextStatus);
-            nextStatus.launchReady = readBooleanValue(nextStatus.launchReady) ?? true;
-            const connection = readObjectRecord(nextStatus.connection);
-            const connectionState = readStringValue(connection.state);
-            const connectionReported = readBooleanValue(connection.reported) ?? false;
-            if (!connectionReported || connectionState === 'unknown') {
-                nextStatus.connection = buildLivePeerGitConnection(connection);
-            }
-            delete nextStatus.gitProbePending;
-            const error = readStringValue(nextStatus.error);
-            if (error && /pending_git|git probe|live peer git snapshot|no peer git snapshot/i.test(error)) delete nextStatus.error;
-            if (!readStringValue(nextStatus.machineStatus)) nextStatus.machineStatus = 'online';
-            if (nodeId) unavailableNodeIds.delete(nodeId);
-            changed = true;
-            return nextStatus;
-        });
-
-        const aggregateDirectTruthSatisfied = sourceOfTruth.coordinatorOwnsLiveTruth === true
-            || directPeerTruth.satisfied === true;
-        if (!changed && !(options?.requireDirectPeerTruth && unavailableNodeIds.size > 0 && !aggregateDirectTruthSatisfied)) return snapshot;
-        const nextSourceOfTruth = {
-            ...sourceOfTruth,
-            ...(Object.keys(directPeerTruth).length ? {
-                directPeerTruth: {
-                    ...directPeerTruth,
-                    satisfied: options?.requireDirectPeerTruth === true
-                        ? aggregateDirectTruthSatisfied || unavailableNodeIds.size === 0
-                        : directPeerTruth.satisfied,
-                    unavailableNodeIds: [...unavailableNodeIds],
-                },
-                ...(options?.requireDirectPeerTruth === true ? {
-                    coordinatorOwnsLiveTruth: aggregateDirectTruthSatisfied || unavailableNodeIds.size === 0,
-                    currentStatus: aggregateDirectTruthSatisfied || unavailableNodeIds.size === 0 ? 'live_git_and_session_probes' : 'direct_peer_truth_unavailable',
-                } : {}),
-            } : {}),
-        };
-        return {
-            ...snapshot,
-            ...(options?.requireDirectPeerTruth === true && unavailableNodeIds.size > 0 && !aggregateDirectTruthSatisfied ? {
-                success: false,
-                code: 'mesh_direct_peer_truth_unavailable',
-                error: 'Selected coordinator could not confirm direct mesh truth for every remote node yet.',
-            } : {}),
-            sourceOfTruth: nextSourceOfTruth,
-            branchConvergenceSummary: summarizeInlineMeshBranchConvergence(nodes),
-            nodes,
-        };
+        return hydrateCachedAggregateMeshStatusFromInline(this, snapshot, mesh, options);
     }
 
     private getCachedAggregateMeshStatus(
@@ -432,63 +336,11 @@ export class DaemonCommandRouter {
         mesh?: any,
         options?: { requireDirectPeerTruth?: boolean; allowStalePending?: boolean },
     ): any | null {
-        const cached = this.aggregateMeshStatusCache.get(meshId);
-        if (!cached?.snapshot || cached.snapshot.success !== true || !Array.isArray(cached.snapshot.nodes)) return null;
-        // Genuine invalidation still forces truth: a queue mutation bumps the
-        // revision, so a stale-revision snapshot is never served (even under the
-        // SWR allowStalePending path below).
-        if (cached.queueRevision !== getMeshQueueRevision(meshId)) return null;
-        let snapshot = this.cloneJsonValue(cached.snapshot);
-        snapshot = this.hydrateCachedAggregateMeshStatusFromInline(snapshot, mesh, options);
-        // SWR: allowStalePending lets the interactive detail-open serve a snapshot
-        // that still has pending peer-git nodes (would otherwise miss here) so the
-        // graph paints instantly; the caller fires a background freshen. The
-        // queueRevision guard above is NOT relaxed — only the pending-git freshness
-        // gate is, so a genuine queue/identity mutation still forces a live rebuild.
-        if (!options?.allowStalePending && shouldRefreshStalePendingAggregate(snapshot, options)) return null;
-        const ageMs = Math.max(0, Date.now() - cached.builtAt);
-        const sourceOfTruth = snapshot.sourceOfTruth && typeof snapshot.sourceOfTruth === 'object'
-            ? snapshot.sourceOfTruth
-            : {};
-        snapshot.sourceOfTruth = {
-            ...sourceOfTruth,
-            aggregateSnapshot: {
-                ...(sourceOfTruth.aggregateSnapshot && typeof sourceOfTruth.aggregateSnapshot === 'object'
-                    ? sourceOfTruth.aggregateSnapshot
-                    : {}),
-                owner: 'coordinator_daemon_memory',
-                cached: true,
-                source: 'memory',
-                refreshReason: 'memory_cache_hit',
-                ageMs,
-                cachedAt: new Date(cached.builtAt).toISOString(),
-                returnedAt: new Date().toISOString(),
-            },
-        };
-        return snapshot;
+        return getCachedAggregateMeshStatus(this, meshId, mesh, options);
     }
 
     private rememberAggregateMeshStatus(meshId: string, snapshot: any, refreshReason: string): any {
-        if (!snapshot || typeof snapshot !== 'object' || snapshot.success !== true || !Array.isArray(snapshot.nodes)) return snapshot;
-        const builtAt = Date.now();
-        const next = this.cloneJsonValue(snapshot);
-        const sourceOfTruth = next.sourceOfTruth && typeof next.sourceOfTruth === 'object'
-            ? next.sourceOfTruth
-            : {};
-        next.sourceOfTruth = {
-            ...sourceOfTruth,
-            aggregateSnapshot: {
-                owner: 'coordinator_daemon_memory',
-                cached: false,
-                source: 'live_refresh',
-                refreshReason,
-                ageMs: 0,
-                cachedAt: new Date(builtAt).toISOString(),
-                returnedAt: new Date(builtAt).toISOString(),
-            },
-        };
-        this.aggregateMeshStatusCache.set(meshId, { builtAt, snapshot: this.cloneJsonValue(next), queueRevision: getMeshQueueRevision(meshId) });
-        return next;
+        return rememberAggregateMeshStatus(this, meshId, snapshot, refreshReason);
     }
 
     public getCachedInlineMeshNodes(): any[] {
@@ -501,94 +353,14 @@ export class DaemonCommandRouter {
         return nodes;
     }
 
-    /**
-     * Resolve the REMOTE worker daemonId that owns a given session, when the session
-     * belongs to a mesh node hosted on a DIFFERENT daemon than this coordinator.
-     *
-     * The coordinator does not host remote-worker session instances in its own
-     * instanceManager/sessionRegistry — only their cached mesh-node metadata. A
-     * dashboard-issued session-scoped command (invoke_provider_script / resolve_action /
-     * set_mode / …) lands on the coordinator with a targetSessionId the coordinator can't
-     * find locally, and without forwarding it dies as "Live session not found". send_chat
-     * happens to survive (its target resolves to the worker by another route), but the
-     * controlbar commands do not — so the controlbar buttons appear to do nothing.
-     *
-     * Mirror the existing node-level remote-forward pattern (fast_forward_mesh_node etc.):
-     * scan the candidate mesh nodes for the one hosting the targetSessionId, and return its
-     * daemonId when that daemonId is a remote daemon (i.e. not this coordinator's own
-     * statusInstanceId). Returns undefined for a locally-hosted session (no forward — execute
-     * locally as before) or when ownership can't be resolved.
-     *
-     * The candidate set spans BOTH the cached inline-mesh nodes and the live aggregate
-     * mesh-status snapshots. The inline cache reliably carries only each node's single primary
-     * session (cachedStatus.activeSession), so a worker hosting more than one session exposes its
-     * non-primary sessions only on the aggregate snapshot nodes (status.activeSessions /
-     * activeSessionDetails, built from live session records). collectMeshNodeHostedSessionIds does
-     * the wider plural-shape scan so a controlbar/modal command targeting a non-primary remote
-     * session still resolves its owner — the singular readCachedInlineMeshActiveSessions semantics
-     * other consumers depend on stay untouched.
-     *
-     * CANCEL-STOP-RELAY: the session-id cache scan above only matches when the coordinator's
-     * cached status snapshot already lists the worker's session id in a recognized active-sessions
-     * shape. A worktree-clone worker session whose id form/timing differs from the cached snapshot
-     * (or is simply not yet reflected) misses the scan, so a stop that carries the authoritative
-     * owning nodeId (mesh_queue_cancel knows assignedNodeId) used to silently fail to forward.
-     * `ownerNodeIdHint` adds a deterministic fallback: when the session-id scan misses, resolve the
-     * owner daemonId by matching the node by id (meshNodeIdMatches — same form-tolerant compare the
-     * rest of the router uses, no new raw compare). The same self-loopback guard applies to both
-     * paths, so a coordinator-hosted node is still never force-forwarded to a remote form of itself.
-     */
-    public resolveRemoteMeshSessionOwnerDaemonId(sessionId: string, ownerNodeIdHint?: string): string | undefined {
-        const trimmed = typeof sessionId === 'string' ? sessionId.trim() : '';
-        const nodeHint = typeof ownerNodeIdHint === 'string' ? ownerNodeIdHint.trim() : '';
-        if (!trimmed && !nodeHint) return undefined;
-        const selfDaemonId = this.deps.statusInstanceId;
-        const candidates = this.collectMeshSessionOwnerCandidateNodes();
-        if (trimmed) {
-            for (const node of candidates) {
-                if (!collectMeshNodeHostedSessionIds(node).has(trimmed)) continue;
-                const nodeDaemonId = readMeshNodeDaemonId(readObjectRecord(node));
-                // A matching node with no readable daemonId can't be attributed — keep scanning
-                // the remaining candidates (e.g. the same session on an aggregate node that does
-                // carry the daemonId) rather than bailing on the whole resolution.
-                if (!nodeDaemonId) continue;
-                // Only forward to a genuinely remote daemon. When the owning node is this
-                // coordinator itself (locally hosted worker), fall through to local handling.
-                // id-form robust: the node daemonId and selfDaemonId may be stored in different
-                // forms of the same machine — a strict `===` would miss the self-match and forward
-                // a local session to a remote form of THIS daemon (loopback).
-                if (selfDaemonId && daemonIdsEquivalent(nodeDaemonId, selfDaemonId)) return undefined;
-                return nodeDaemonId;
-            }
-        }
-        // Deterministic fallback: the session-id scan missed (cache lag / id-form mismatch on a
-        // worktree-clone worker), but the caller knows the authoritative owning nodeId. Resolve the
-        // owner daemonId straight off that node — never the fuzzy session cache.
-        if (nodeHint) {
-            for (const node of candidates) {
-                if (!meshNodeIdMatches(node, nodeHint)) continue;
-                const nodeDaemonId = readMeshNodeDaemonId(readObjectRecord(node));
-                if (!nodeDaemonId) continue;
-                if (selfDaemonId && daemonIdsEquivalent(nodeDaemonId, selfDaemonId)) return undefined;
-                return nodeDaemonId;
-            }
-        }
-        return undefined;
-    }
+    // ─── Remote mesh-session owner resolution ───────────────────────────
+    // Implementation lives in ./router-mesh-session-owner.ts (behavior-preserving
+    // code move). resolveRemoteMeshSessionOwnerDaemonId stays public (the [Z]
+    // session-scoped forward in executeDaemonCommand and a unit test call it), so
+    // it's kept here as a thin delegator.
 
-    /**
-     * Candidate nodes for remote-session owner resolution: the cached inline-mesh nodes (which
-     * carry each node's primary session) plus the nodes from every cached aggregate mesh-status
-     * snapshot (which carry each node's full live session list). getCachedInlineMeshNodes()
-     * returns a fresh array, so appending the aggregate nodes never mutates cached state.
-     */
-    private collectMeshSessionOwnerCandidateNodes(): any[] {
-        const nodes: any[] = this.getCachedInlineMeshNodes();
-        for (const cached of this.aggregateMeshStatusCache.values()) {
-            const snapshotNodes = cached?.snapshot?.nodes;
-            if (Array.isArray(snapshotNodes)) nodes.push(...snapshotNodes);
-        }
-        return nodes;
+    public resolveRemoteMeshSessionOwnerDaemonId(sessionId: string, ownerNodeIdHint?: string): string | undefined {
+        return resolveRemoteMeshSessionOwnerDaemonId(this, sessionId, ownerNodeIdHint);
     }
 
     public getCachedInlineMesh(meshId: string, inlineMesh?: unknown): any | undefined {
