@@ -66,6 +66,10 @@ ADHDev Self-Hosted is built around three local layers:
 
 Everything runs on your machine by default. There is no cloud account requirement for the standalone path.
 
+### Repo Mesh: parallel agents that actually land
+
+Repo Mesh coordinates agent sessions across worktrees and machines: enqueue tasks with dependencies, let a coordinator dispatch them to whichever node has capacity, and converge the results through the Refinery — per-repo validation gates, patch-equivalence checks, submodule-aware fast-forward merges, automatic worktree cleanup. Parallelism without the merge-day hangover.
+
 ## Quick Start
 
 Recommended path:
