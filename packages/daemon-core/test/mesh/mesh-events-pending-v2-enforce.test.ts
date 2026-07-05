@@ -26,6 +26,8 @@ vi.mock('../../src/config/config.js', () => ({
         if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });
         return testConfigDir;
     },
+    // The self-daemon fallback in stampPendingEventV2 reads loadConfig().machineId.
+    loadConfig: () => ({ machineId: 'mach_1b46842a15d3409d96ad33e767a916dd' }),
 }));
 
 import {
@@ -38,6 +40,7 @@ import {
     __resetMeshV2DrainCountersForTests,
     __resetMeshV2WarnDedupForTests,
     __clearMeshPendingEventsForTests,
+    __persistUnstampedPendingEventForTests,
     type PendingMeshCoordinatorEvent,
 } from '../../src/mesh/mesh-events-pending.js';
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
@@ -110,9 +113,12 @@ describe('mesh pending-event — v2 ENFORCE mode (T6/B3c)', () => {
         const meshId = `mesh-enf-v1-${randomUUID().slice(0, 8)}`;
         __clearMeshPendingEventsForTests(meshId);
 
+        // A genuinely-unversioned row (pre-v2 daemon / version-skewed relay). The local
+        // emit path no longer produces one — inject it directly to exercise the drain-side
+        // enforce quarantine.
         const v1 = makeTerminal(meshId, { coordinatorMessage: 'v1 held' });
         delete (v1 as any).targetCoordinatorDaemonId;
-        queuePendingMeshCoordinatorEvent(v1);
+        __persistUnstampedPendingEventForTests(v1);
 
         enforceOn();
         const drained = drainPendingMeshCoordinatorEvents(meshId, BARE, {
@@ -188,9 +194,9 @@ describe('mesh pending-event — v2 ENFORCE mode (T6/B3c)', () => {
 
         const v1 = makeTerminal(meshId, { coordinatorMessage: 'v1 accepted' });
         delete (v1 as any).targetCoordinatorDaemonId;
-        queuePendingMeshCoordinatorEvent(v1);
+        __persistUnstampedPendingEventForTests(v1);
 
-        // Flag OFF (default) → accept mode: the v1 event is broadcast (delivered).
+        // Flag OFF → accept mode: the v1 event is broadcast (delivered).
         enforceOff();
         const drained = drainPendingMeshCoordinatorEvents(meshId, BARE, {
             drainerIdentity: ident(BARE, { sessionId: 'any_session' }),
@@ -209,7 +215,7 @@ describe('mesh pending-event — v2 ENFORCE mode (T6/B3c)', () => {
 
         const v1 = makeTerminal(meshId, { coordinatorMessage: 'v1 peek' });
         delete (v1 as any).targetCoordinatorDaemonId;
-        queuePendingMeshCoordinatorEvent(v1);
+        __persistUnstampedPendingEventForTests(v1);
 
         enforceOn();
         const peeked = getPendingMeshCoordinatorEvents(meshId, BARE, {

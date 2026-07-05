@@ -24,6 +24,8 @@ vi.mock('../../src/config/config.js', () => ({
         if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });
         return testConfigDir;
     },
+    // The self-daemon fallback in stampPendingEventV2 reads loadConfig().machineId.
+    loadConfig: () => ({ machineId: 'mach_1b46842a15d3409d96ad33e767a916dd' }),
 }));
 
 import {
@@ -35,6 +37,7 @@ import {
     __resetMeshV2DrainCountersForTests,
     __resetMeshV2WarnDedupForTests,
     __clearMeshPendingEventsForTests,
+    __persistUnstampedPendingEventForTests,
     type PendingMeshCoordinatorEvent,
 } from '../../src/mesh/mesh-events-pending.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
@@ -70,9 +73,14 @@ describe('mesh pending-event — v2 drain routing (B3a accept-and-warn)', () => 
         if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });
         __resetMeshV2DrainCountersForTests();
         __resetMeshV2WarnDedupForTests();
+        // This suite exercises the ACCEPT-AND-WARN drain path (v1 broadcast fallback,
+        // malformed-v2 pass-through). Enforce now defaults ON, so pin it OFF here — the
+        // enforce/quarantine behaviour has its own dedicated suite.
+        process.env.MESH_PROTOCOL_V2_ENFORCE = '0';
     });
 
     afterEach(() => {
+        delete process.env.MESH_PROTOCOL_V2_ENFORCE;
         try { MeshRuntimeStore.resetForTests(); } catch { /* best-effort */ }
         try { rmSync(testTmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     });
@@ -108,10 +116,13 @@ describe('mesh pending-event — v2 drain routing (B3a accept-and-warn)', () => 
         const meshId = `mesh-v1b-${randomUUID().slice(0, 8)}`;
         __clearMeshPendingEventsForTests(meshId);
 
-        // No coordinator identity → the emit stamp leaves it a v1 event.
+        // A genuinely-unversioned (v1) row — the shape a pre-v2 daemon persisted or a
+        // version-skewed remote relay delivers. The local emit path no longer produces
+        // one (self-daemon fallback stamps every emit), so inject it directly to exercise
+        // the drain-side v1 broadcast handling.
         const v1 = makeTerminal(meshId, { coordinatorMessage: 'v1 broadcast' });
         delete (v1 as any).targetCoordinatorDaemonId;
-        queuePendingMeshCoordinatorEvent(v1);
+        __persistUnstampedPendingEventForTests(v1);
 
         const drained = drainPendingMeshCoordinatorEvents(meshId, BARE, {
             drainerIdentity: ident(BARE, { sessionId: 'any_session' }),

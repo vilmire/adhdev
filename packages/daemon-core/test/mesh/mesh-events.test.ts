@@ -420,7 +420,11 @@ describe('setupMeshEventForwarding', () => {
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
-      const { components, emit, coordinator } = createComponents(meshId)
+      // The coordinator is blocked-generating awaiting this very completion (see the force
+      // comment below). A generating coordinator is not an emit-time event-driven-drain
+      // target (that path delivers into IDLE coordinators only), so the event stays queued
+      // until the reconcile tick force-injects the terminal into the generating session.
+      const { components, emit, coordinator } = createComponents(meshId, undefined, { coordinatorStatus: 'generating' })
 
       setupMeshEventForwarding(components)
       emit({
@@ -437,7 +441,14 @@ describe('setupMeshEventForwarding', () => {
       // is visible to any consumer that peeks before the tick drains it.
       expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
 
-      // The reconcile tick drains the queue (scoped to this daemon) and injects.
+      // The coordinator's turn ends (generating → idle); the reconcile tick then drains the
+      // queue (scoped to this daemon) and force-injects the held terminal into it.
+      coordinator.getState.mockReturnValue({
+        instanceId: 'coordinator-session-1',
+        workspace: '/repo/main',
+        status: 'idle',
+        settings: { meshCoordinatorFor: meshId },
+      })
       await runMeshReconcileTick(components)
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       const [eventName, payload] = coordinator.onEvent.mock.calls[0]
@@ -644,7 +655,10 @@ describe('setupMeshEventForwarding', () => {
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
-      const { components, emit } = createComponents(meshId)
+      // Coordinator is generating (awaiting this completion) so the emit-time event-driven
+      // drain — which only delivers into an IDLE coordinator — leaves the event queued for
+      // the explicit drain below to consume exactly-once.
+      const { components, emit } = createComponents(meshId, undefined, { coordinatorStatus: 'generating' })
 
       setupMeshEventForwarding(components)
       emit({
@@ -724,7 +738,9 @@ describe('setupMeshEventForwarding', () => {
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
-      const { components, emit } = createComponents(meshId)
+      // Coordinator generating so the emit-time idle-only drain leaves the event queued for
+      // the other-daemon backfill drain below.
+      const { components, emit } = createComponents(meshId, undefined, { coordinatorStatus: 'generating' })
 
       setupMeshEventForwarding(components)
       emit({
@@ -813,7 +829,10 @@ describe('setupMeshEventForwarding', () => {
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
-      const { components, emit, coordinator } = createComponents(meshId)
+      // Generating coordinator: approval is a force-inject terminal, so the reconcile tick
+      // still delivers it, but the emit-time idle-only drain leaves it queued for the dedup
+      // assertions below.
+      const { components, emit, coordinator } = createComponents(meshId, undefined, { coordinatorStatus: 'generating' })
 
       setupMeshEventForwarding(components)
       const approvalEvent = {
@@ -1198,7 +1217,9 @@ describe('setupMeshEventForwarding', () => {
         },
       })
 
-      const { components, emit, coordinator } = createComponents(meshId)
+      // Generating coordinator awaiting the completion (force-inject terminal via the tick);
+      // the emit-time idle-only drain leaves it queued for the not-suppressed peek below.
+      const { components, emit, coordinator } = createComponents(meshId, undefined, { coordinatorStatus: 'generating' })
       setupMeshEventForwarding(components)
       emit({
         event: 'agent:generating_completed',
@@ -1217,8 +1238,15 @@ describe('setupMeshEventForwarding', () => {
       expect(pending[0].event).toBe('agent:generating_completed')
       expect(pending[0].metadataEvent.targetSessionId).toBe('runtime-session-1')
 
-      // The reconcile tick injects into the live CLI coordinator, force-injected so a
-      // generating coordinator awaiting this very completion is not deadlocked.
+      // The coordinator's turn ends (generating → idle); the reconcile tick then injects into
+      // the live CLI coordinator, force-injected so a coordinator awaiting this very completion
+      // is not deadlocked.
+      coordinator.getState.mockReturnValue({
+        instanceId: 'coordinator-session-1',
+        workspace: '/repo/main',
+        status: 'idle',
+        settings: { meshCoordinatorFor: meshId },
+      })
       await runMeshReconcileTick(components)
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       expect(coordinator.onEvent.mock.calls[0][0]).toBe('send_message')
@@ -1279,7 +1307,9 @@ describe('setupMeshEventForwarding', () => {
         dispatchedAt: new Date().toISOString(),
       })
 
-      const { components, emit } = createComponents(meshId)
+      // Generating coordinator so the emit-time idle-only drain leaves the completion queued
+      // for the not-suppressed peek below (this test is about the suppression dedup, not delivery).
+      const { components, emit } = createComponents(meshId, undefined, { coordinatorStatus: 'generating' })
       setupMeshEventForwarding(components)
 
       // The NEW task's genuine completion. It carries its own taskId (task_new) and the SAME
@@ -3782,6 +3812,12 @@ describe('daemon-scoped pending event drain', () => {
     const daemonA = `daemon_a_${randomUUID().slice(0, 8)}`
     const daemonB = `daemon_b_${randomUUID().slice(0, 8)}`
     const sharedPath = path.join(getLedgerDir(), `${safeId(meshId)}.pending-events.jsonl`)
+    // This pins the LEGACY unscoped-file accept-mode contract: a genuinely-unversioned
+    // (v1) row written straight to the shared JSONL still broadcasts to the polling
+    // coordinator. v2 enforce (default ON) would quarantine that unversioned row, so pin
+    // enforce OFF here — the enforce/quarantine behaviour has its own dedicated suite.
+    const prevEnforce = process.env.MESH_PROTOCOL_V2_ENFORCE
+    process.env.MESH_PROTOCOL_V2_ENFORCE = '0'
     try {
       const base = Date.now()
       // Write directly to the legacy shared file: one targeted at daemonB, one fully unscoped.
@@ -3801,6 +3837,8 @@ describe('daemon-scoped pending event drain', () => {
       const drainedByB = drainPendingMeshCoordinatorEvents(meshId, daemonB)
       expect(drainedByB).toHaveLength(0)
     } finally {
+      if (prevEnforce === undefined) delete process.env.MESH_PROTOCOL_V2_ENFORCE
+      else process.env.MESH_PROTOCOL_V2_ENFORCE = prevEnforce
       cleanupScoped(meshId, [daemonA, daemonB])
       cleanupMeshFiles(meshId)
     }
@@ -4161,7 +4199,9 @@ describe('EVT — re-dispatch 2nd-completion event recovery', () => {
         },
       })
 
-      const { components, emit } = createComponents(meshId)
+      // Generating coordinator so the emit-time idle-only drain leaves the completion queued
+      // for the not-suppressed peek below (this test pins the weak-terminal supersede dedup).
+      const { components, emit } = createComponents(meshId, undefined, { coordinatorStatus: 'generating' })
       setupMeshEventForwarding(components)
       // The genuine 2nd-turn completion (after a coordinator nudge) — SAME providerSessionId,
       // but real final-assistant evidence this time.
@@ -4210,7 +4250,9 @@ describe('EVT — re-dispatch 2nd-completion event recovery', () => {
         },
       })
 
-      const { components, emit } = createComponents(meshId)
+      // Generating coordinator so the emit-time idle-only drain leaves the completion queued
+      // for the not-suppressed peek below (this test pins the truncated-terminal supersede dedup).
+      const { components, emit } = createComponents(meshId, undefined, { coordinatorStatus: 'generating' })
       setupMeshEventForwarding(components)
       // The REAL final after the background child finished and the parent turn (commit) completed.
       // SAME task + SAME stable providerSessionId, but a fuller summary that extends the truncated one.

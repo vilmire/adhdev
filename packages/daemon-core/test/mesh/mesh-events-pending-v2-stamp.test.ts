@@ -17,11 +17,17 @@ const testTmpDir = join(tmpdir(), `adhdev-mesh-v2-stamp-${randomUUID().slice(0, 
 const testConfigDir = join(testTmpDir, '.adhdev');
 const runtimeRequire = createRequire(import.meta.url);
 
+const SELF_MACH = 'mach_self0000000000000000000000000000';
+
 vi.mock('../../src/config/config.js', () => ({
     getConfigDir: () => {
         if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });
         return testConfigDir;
     },
+    // The self-daemon fallback in stampPendingEventV2 reads loadConfig().machineId when
+    // an event carries no coordinator identity, so the emit path can still mint a v2
+    // broadcast envelope (instead of leaving the event unversioned → enforce-quarantined).
+    loadConfig: () => ({ machineId: SELF_MACH }),
 }));
 
 import {
@@ -112,19 +118,30 @@ describe('mesh pending-event — v2 emit stamping (B2a)', () => {
         expect(peeked.intendedFor).toBeUndefined();
     });
 
-    it('leaves an event with NO coordinator identity UNSTAMPED (stays v1)', () => {
+    it('stamps a v2 BROADCAST envelope via the self-daemon fallback when no coordinator identity is present', () => {
+        // A/C root fix: an event with no targetCoordinatorDaemonId (direct-dispatch /
+        // refine notification) used to stay UNVERSIONED (v1) and, under v2 enforce
+        // (default ON), get QUARANTINED — the completion/notification never reached the
+        // coordinator. It now falls back to THIS daemon's own id as the dispatcher and
+        // downgrades the (unicast-defaulting) terminal event to a BROADCAST so it is
+        // still deliverable to whatever coordinator drains on this machine.
         const meshId = `mesh-v2-${randomUUID().slice(0, 8)}`;
         __clearMeshPendingEventsForTests(meshId);
-        const v1 = makeTerminal(meshId);
-        delete (v1 as any).targetCoordinatorDaemonId; // no identity to stamp
-        queuePendingMeshCoordinatorEvent(v1);
+        const noIdentity = makeTerminal(meshId);
+        delete (noIdentity as any).targetCoordinatorDaemonId; // no coordinator identity to derive
+        queuePendingMeshCoordinatorEvent(noIdentity);
 
         const [peeked] = getPendingMeshCoordinatorEvents(meshId, MACH) as PendingMeshCoordinatorEvent[];
         expect(peeked).toBeTruthy();
-        expect(peeked.protocolVersion).toBeUndefined();
-        expect(peeked.eventId).toBeUndefined();
-        expect(peeked.scope).toBeUndefined();
-        expect(peeked.dispatchedBy).toBeUndefined();
+        // No longer v1: a v2 envelope is minted from the self-daemon id.
+        expect(peeked.protocolVersion).toBe('2.0');
+        expect(typeof peeked.eventId).toBe('string');
+        expect(peeked.eventId!.length).toBeGreaterThan(0);
+        // Broadcast (not self-unicast) so a sibling session's drainer never skips it.
+        expect(peeked.scope).toBe('broadcast');
+        expect(peeked.intendedFor).toBeUndefined();
+        // Dispatcher is this daemon's own id (loadConfig().machineId).
+        expect(peeked.dispatchedBy?.daemonId).toBe(SELF_MACH);
     });
 
     it('persists the v2 envelope into the SQLite columns (queryable idempotency key)', () => {

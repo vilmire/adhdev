@@ -15,11 +15,17 @@ import { randomUUID } from 'crypto';
 const testTmpDir = join(tmpdir(), `adhdev-mesh-daemonid-scope-${randomUUID().slice(0, 8)}`);
 const testConfigDir = join(testTmpDir, '.adhdev');
 
+const MACH = 'mach_1b46842a15d3409d96ad33e767a916dd';
+
 vi.mock('../../src/config/config.js', () => ({
     getConfigDir: () => {
         if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });
         return testConfigDir;
     },
+    // NULL-scoped (worktree) events carry no coordinator identity; the self-daemon
+    // fallback in stampPendingEventV2 reads loadConfig().machineId to mint a v2
+    // broadcast envelope so they still surface to any coordinator form on this machine.
+    loadConfig: () => ({ machineId: MACH }),
 }));
 
 import {
@@ -29,8 +35,6 @@ import {
     __clearMeshPendingEventsForTests,
 } from '../../src/mesh/mesh-events-pending.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
-
-const MACH = 'mach_1b46842a15d3409d96ad33e767a916dd';
 const FULL = `daemon_${MACH}`;
 const STANDALONE = `standalone_${MACH}`;
 

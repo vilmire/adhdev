@@ -18,6 +18,8 @@ vi.mock('../../src/config/config.js', () => ({
         if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });
         return testConfigDir;
     },
+    // The self-daemon fallback in stampPendingEventV2 reads loadConfig().machineId.
+    loadConfig: () => ({ machineId: 'mach_1b46842a15d3409d96ad33e767a916dd' }),
 }));
 
 // Mock only fs.appendFileSync to throw; everything else (mkdirSync/existsSync/statSync

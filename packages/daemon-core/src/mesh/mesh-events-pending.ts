@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, readFileSync, renameSync, statSync, unlinkS
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
+import { loadConfig } from '../config/config.js';
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId, readMeshCompletionSummary, isWeakCompletionMetadata } from './mesh-events-utils.js';
@@ -746,23 +747,51 @@ export function stampPendingEventV2(
         return event;
     }
 
-    const dispatchedBy = hint?.dispatchedBy ?? coordinatorIdentityFromEmitFields({
+    const coordinatorIdentity = hint?.dispatchedBy ?? coordinatorIdentityFromEmitFields({
         daemonId: event.targetCoordinatorDaemonId,
         coordinatorRunId: hint?.coordinatorRunId,
         sessionId: event.targetCoordinatorSessionId,
     });
+
+    // A/C ROOT FIX: an emit site with NO coordinator identity (direct-dispatch /
+    // refine notification / any path where the worker session never carried a
+    // meshCoordinatorDaemonId) used to leave the event UNVERSIONED (v1). Under v2
+    // enforce (default ON) routeV2EventsForDrainer QUARANTINES every unversioned
+    // event — so a summary-less completion (agent:generating_completed) and every
+    // refine terminal notification (refine:accepted/completed/failed) were held
+    // back and never reached the coordinator; only the backstop papered over it.
+    //
+    // Fall back to THIS daemon's own id as the dispatcher so a v2 envelope can
+    // still be minted. There is no addressable coordinator, so we intentionally
+    // leave intendedFor empty and let buildPendingEventEmitStamp downgrade the
+    // (unicast-defaulting) terminal event to a BROADCAST — deliverable to whatever
+    // coordinator drains on this machine, instead of an undeliverable v1 event.
+    // When a real coordinator identity DOES exist the unicast path below is
+    // unchanged (no regression). loadConfig().machineId is the same self-id source
+    // resolveCoordinatorDaemonIds / the local queue-assignment stamp use, so the
+    // broadcast dispatcher matches the drainer's own identity form.
+    const selfFallback = !coordinatorIdentity;
+    const dispatchedBy = coordinatorIdentity ?? coordinatorIdentityFromEmitFields({
+        daemonId: readNonEmptyString(loadConfig().machineId),
+    });
     // The unicast target is, by default, the same coordinator the event is already
-    // routed to (its originating coordinator). A hint may override it.
-    const intendedFor: CoordinatorIdentity | undefined = hint?.intendedFor ?? dispatchedBy;
+    // routed to (its originating coordinator). A hint may override it. In the
+    // self-fallback case there is no originating coordinator to address, so leave
+    // it empty → broadcast (never a self-unicast that a sibling session's drainer
+    // would skip).
+    const intendedFor: CoordinatorIdentity | undefined = hint?.intendedFor
+        ?? (selfFallback ? undefined : coordinatorIdentity);
 
     const stamp = buildPendingEventEmitStamp({
         eventName: event.event,
         eventId: randomUUID(),
         dispatchedBy,
         intendedFor,
-        scope: hint?.scope,
+        // Force broadcast for the self-fallback so a unicast-defaulting terminal
+        // event isn't addressed to this daemon alone; an explicit hint still wins.
+        scope: hint?.scope ?? (selfFallback ? 'broadcast' : undefined),
     });
-    if (!stamp) return event; // no coordinator identity → stays a v1 event
+    if (!stamp) return event; // no coordinator identity at all (no self id) → stays a v1 event
 
     return {
         ...event,
@@ -849,6 +878,17 @@ export function queuePendingMeshCoordinatorEvent(
     // B2a: stamp the v2 envelope before dedup/persist so the eventId/scope ride
     // into both stores and the fingerprint/dedup logic sees the final shape.
     const event = stampPendingEventV2(rawEvent, hint);
+    return persistPendingMeshCoordinatorEvent(event);
+}
+
+/**
+ * Persist an ALREADY-STAMPED pending event to both stores (dedup + SQLite + JSONL),
+ * without re-running the emit stamp. queuePendingMeshCoordinatorEvent stamps then
+ * calls this; the only other caller is the test helper below, which needs to inject
+ * a genuinely-unversioned (v1) row to exercise the drain-side v1 handling now that
+ * the emit path never produces one (self-daemon fallback stamps every local emit).
+ */
+function persistPendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEvent): boolean {
     try {
         if (hasPendingRefineTerminalEventDuplicate(event)) {
             LOG.info('MeshEvents', `Suppressed duplicate pending ${event.event} for refine job ${readRefineJobId(event)}`);
@@ -1210,6 +1250,19 @@ export function __clearMeshPendingEventsForTests(meshId: string): void {
         MeshRuntimeStore.getInstance().clearPendingEventsForMesh(meshId);
     } catch { /* store unavailable — nothing to clear */ }
     clearPendingMeshCoordinatorEvents(meshId);
+}
+
+/**
+ * Test helper: persist a pending event VERBATIM, skipping the emit-time v2 stamp.
+ * The local emit path (queuePendingMeshCoordinatorEvent → stampPendingEventV2) now
+ * always mints a v2 envelope (self-daemon broadcast fallback when no coordinator
+ * identity is present), so a genuinely-unversioned (v1) row can no longer be produced
+ * through the normal queue. The drain-side v1 handling (accept-broadcast / enforce-
+ * quarantine) still matters for durable v1 rows written by a pre-v2 daemon and for
+ * version-skewed remote relays, so tests inject those rows directly through this.
+ */
+export function __persistUnstampedPendingEventForTests(event: PendingMeshCoordinatorEvent): boolean {
+    return persistPendingMeshCoordinatorEvent(event);
 }
 
 /** Explicitly clear all pending coordinator events for a mesh (and coordinator if scoped). */
