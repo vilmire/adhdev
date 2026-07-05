@@ -1531,7 +1531,11 @@ async function pullRemoteNodeQueues(
         ? candidateDaemonIds.map(id => ({ meshId, coordinatorDaemonId: id }))
         : [{ meshId }];
 
-    for (const node of mesh.nodes) {
+    // Parallelize across nodes: a single connected-but-slow node must not serially
+    // block the other nodes for the rest of the tick. Each node callback is fully
+    // self-contained (local/candidate skip, peer-connected pre-check, per-candidate
+    // pulls, extract→re-inject) and best-effort — allSettled swallows per-node errors.
+    await Promise.allSettled(mesh.nodes.map(async (node) => {
         const nodeDaemonId = readNonEmptyString(node.daemonId);
         // Skip nodes without a daemon, and nodes on THIS daemon (their events are
         // already in the local queue drained in PHASE 2). "This daemon" is matched
@@ -1539,9 +1543,22 @@ async function pullRemoteNodeQueues(
         // localDaemonId — a self node can be registered under the config-form daemonId
         // (`daemon_<machineId>`) which would NOT equal bare localDaemonId, and pulling
         // from ourselves over P2P is both wasteful and a self-dispatch hazard.
-        if (!nodeDaemonId) continue;
-        if (daemonIdsEquivalent(nodeDaemonId, localDaemonId)) continue;
-        if (daemonIdListIncludes(candidateDaemonIds, nodeDaemonId)) continue;
+        if (!nodeDaemonId) return;
+        if (daemonIdsEquivalent(nodeDaemonId, localDaemonId)) return;
+        if (daemonIdListIncludes(candidateDaemonIds, nodeDaemonId)) return;
+
+        // Peer-connected pre-check (EVENT-DELIVERY-DELAY fix(a)): a degraded peer whose
+        // DataChannel is not open would sink this pull into peer.connectQueue and stall
+        // until CONNECT_TIMEOUT_MS (90s), formerly freezing the whole serial loop and
+        // delaying completion-event recovery from healthy nodes. Skip such a node THIS
+        // tick and retry next tick — LOSSLESS: an unconnected peer has not drained
+        // anything (drained=0 preserved), so its events are recovered whole on the next
+        // successful tick. Skip = delay, never loss.
+        //   • snapshot present and state !== 'connected' → skip (continue next tick).
+        //   • snapshot null/undefined (getter unwired, e.g. standalone) → DO NOT skip;
+        //     fall through to the legacy path so this stays regression-free.
+        const peerSnapshot = components.getMeshPeerConnectionStatus?.(nodeDaemonId);
+        if (peerSnapshot && String(peerSnapshot.state) !== 'connected') return;
 
         for (const pendingEventArgs of pulls) {
             let events: unknown;
@@ -1560,7 +1577,7 @@ async function pullRemoteNodeQueues(
                 } catch { /* best-effort re-inject */ }
             }
         }
-    }
+    }));
 }
 
 // Pull the read_chat payload out of whatever envelope the transport returned.
@@ -1989,6 +2006,16 @@ async function collectLiveNodesWithSessions(
         const isLocalNode = !nodeDaemonId
             || daemonIdListIncludes(selfIds, nodeDaemonId)
             || daemonIdsEquivalent(nodeDaemonId, localDaemonId);
+        // Peer-connected pre-check (EVENT-DELIVERY-DELAY fix(a)): mirror pullRemoteNodeQueues.
+        // Without this the 90s connect-deadline block re-enters via this Promise.all —
+        // a degraded remote's get_status_metadata sinks into peer.connectQueue and stalls
+        // the whole prune probe. Only call the remote when the peer is 'connected'; an
+        // unconnected peer is left undecorated (empty session list), same as unreachable.
+        // Getter unwired (null/undefined) → do NOT skip, fall through (regression-free).
+        if (!isLocalNode) {
+            const peerSnapshot = components.getMeshPeerConnectionStatus?.(nodeDaemonId);
+            if (peerSnapshot && String(peerSnapshot.state) !== 'connected') return node;
+        }
         let statusResult: unknown;
         try {
             if (isLocalNode) {

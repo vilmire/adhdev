@@ -89,13 +89,14 @@ function makeCoordinator(meshId: string, status: 'idle' | 'generating' | 'waitin
   }
 }
 
-function makeComponents(coordinators: any[], dispatchMeshCommand?: any, statusInstanceId?: string) {
+function makeComponents(coordinators: any[], dispatchMeshCommand?: any, statusInstanceId?: string, getMeshPeerConnectionStatus?: any) {
   return {
     instanceManager: {
       getByCategory: (category: string) => (category === 'cli' ? coordinators : []),
     },
     ...(dispatchMeshCommand ? { dispatchMeshCommand } : {}),
     ...(statusInstanceId ? { statusInstanceId } : {}),
+    ...(getMeshPeerConnectionStatus ? { getMeshPeerConnectionStatus } : {}),
   } as any
 }
 
@@ -1064,6 +1065,177 @@ describe('runMeshReconcileTick', () => {
     } finally {
       cleanup(meshId)
     }
+  })
+
+  describe('EVENT-DELIVERY-DELAY fix(a): peer-connected pre-check in PHASE 1 pull', () => {
+    // The pull loop must not sink into a degraded peer's 90s connect-timeout. When the
+    // mesh peer telemetry getter reports a non-'connected' state for a node, that node
+    // is skipped THIS tick (no dispatchMeshCommand) and retried next tick — lossless,
+    // since an unconnected peer has drained nothing.
+    it('skips a peer whose DataChannel is not connected (no dispatch this tick)', async () => {
+      const meshId = `mesh_reconcile_precheck_skip_${Date.now()}`
+      try {
+        const sink: any[] = []
+        const coordinator = makeCoordinator(meshId, 'idle', sink)
+        const dispatchMeshCommand = vi.fn(async () => ({ success: true, events: [] }))
+
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: 'node_remote', workspace: '/repo/remote', daemonId: 'remote-daemon' }] },
+        ])
+
+        // Peer telemetry: the remote peer is still connecting (not open).
+        const getMeshPeerConnectionStatus = vi.fn((daemonId: string) =>
+          daemonId === 'remote-daemon' ? { state: 'connecting', transport: 'p2p' } : null)
+
+        const components = makeComponents([coordinator], dispatchMeshCommand, undefined, getMeshPeerConnectionStatus)
+
+        await runMeshReconcileTick(components)
+
+        // Pre-check consulted the getter and skipped the pull — no get_pending_mesh_events.
+        expect(getMeshPeerConnectionStatus).toHaveBeenCalledWith('remote-daemon')
+        const pullCalls = dispatchMeshCommand.mock.calls.filter((c: any[]) => c[1] === 'get_pending_mesh_events')
+        expect(pullCalls).toHaveLength(0)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('retries the skipped peer on the next tick once it reports connected', async () => {
+      const meshId = `mesh_reconcile_precheck_retry_${Date.now()}`
+      try {
+        const sink: any[] = []
+        const coordinator = makeCoordinator(meshId, 'idle', sink)
+
+        const remoteEvent = {
+          event: 'agent:generating_completed',
+          meshId,
+          nodeLabel: "Node 'node_remote'",
+          nodeId: 'node_remote',
+          metadataEvent: { sessionId: 'sess-retry', providerType: 'claude-cli', timestamp: Date.now() },
+          coordinatorMessage: "Node 'node_remote' has completed its task (retry).",
+          queuedAt: Date.now(),
+        }
+        const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string) => {
+          if (command === 'get_pending_mesh_events' && daemonId === 'remote-daemon') {
+            return { success: true, events: [remoteEvent] }
+          }
+          return { success: true, events: [] }
+        })
+
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: 'node_remote', workspace: '/repo/remote', daemonId: 'remote-daemon' }] },
+        ])
+
+        // Tick 1: connecting → skip. Tick 2: connected → pull.
+        let state = 'connecting'
+        const getMeshPeerConnectionStatus = vi.fn((daemonId: string) =>
+          daemonId === 'remote-daemon' ? { state, transport: 'p2p' } : null)
+
+        const components = makeComponents([coordinator], dispatchMeshCommand, undefined, getMeshPeerConnectionStatus)
+
+        await runMeshReconcileTick(components)
+        expect(dispatchMeshCommand.mock.calls.filter((c: any[]) => c[1] === 'get_pending_mesh_events')).toHaveLength(0)
+
+        state = 'connected'
+        await runMeshReconcileTick(components)
+
+        expect(dispatchMeshCommand).toHaveBeenCalledWith(
+          'remote-daemon',
+          'get_pending_mesh_events',
+          expect.objectContaining({ meshId }),
+        )
+        expect(coordinator.onEvent).toHaveBeenCalled()
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('falls back to the legacy path when the getter is unwired (regression-free, e.g. standalone)', async () => {
+      const meshId = `mesh_reconcile_precheck_fallback_${Date.now()}`
+      try {
+        const sink: any[] = []
+        const coordinator = makeCoordinator(meshId, 'idle', sink)
+
+        const remoteEvent = {
+          event: 'agent:generating_completed',
+          meshId,
+          nodeLabel: "Node 'node_remote'",
+          nodeId: 'node_remote',
+          metadataEvent: { sessionId: 'sess-fallback', providerType: 'claude-cli', timestamp: Date.now() },
+          coordinatorMessage: "Node 'node_remote' has completed its task (fallback).",
+          queuedAt: Date.now(),
+        }
+        const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string) => {
+          if (command === 'get_pending_mesh_events' && daemonId === 'remote-daemon') {
+            return { success: true, events: [remoteEvent] }
+          }
+          return { success: true, events: [] }
+        })
+
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: 'node_remote', workspace: '/repo/remote', daemonId: 'remote-daemon' }] },
+        ])
+
+        // No getMeshPeerConnectionStatus wired — the pre-check must NOT skip.
+        const components = makeComponents([coordinator], dispatchMeshCommand)
+
+        await runMeshReconcileTick(components)
+
+        expect(dispatchMeshCommand).toHaveBeenCalledWith(
+          'remote-daemon',
+          'get_pending_mesh_events',
+          expect.objectContaining({ meshId }),
+        )
+        expect(coordinator.onEvent).toHaveBeenCalled()
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('pulls a connected peer normally (state === connected)', async () => {
+      const meshId = `mesh_reconcile_precheck_connected_${Date.now()}`
+      try {
+        const sink: any[] = []
+        const coordinator = makeCoordinator(meshId, 'idle', sink)
+
+        const remoteEvent = {
+          event: 'agent:generating_completed',
+          meshId,
+          nodeLabel: "Node 'node_remote'",
+          nodeId: 'node_remote',
+          metadataEvent: { sessionId: 'sess-connected', providerType: 'claude-cli', timestamp: Date.now() },
+          coordinatorMessage: "Node 'node_remote' has completed its task (connected).",
+          queuedAt: Date.now(),
+        }
+        const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string) => {
+          if (command === 'get_pending_mesh_events' && daemonId === 'remote-daemon') {
+            return { success: true, events: [remoteEvent] }
+          }
+          return { success: true, events: [] }
+        })
+
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: 'node_remote', workspace: '/repo/remote', daemonId: 'remote-daemon' }] },
+        ])
+
+        const getMeshPeerConnectionStatus = vi.fn((daemonId: string) =>
+          daemonId === 'remote-daemon' ? { state: 'connected', transport: 'p2p' } : null)
+
+        const components = makeComponents([coordinator], dispatchMeshCommand, undefined, getMeshPeerConnectionStatus)
+
+        await runMeshReconcileTick(components)
+
+        expect(getMeshPeerConnectionStatus).toHaveBeenCalledWith('remote-daemon')
+        expect(dispatchMeshCommand).toHaveBeenCalledWith(
+          'remote-daemon',
+          'get_pending_mesh_events',
+          expect.objectContaining({ meshId }),
+        )
+        expect(coordinator.onEvent).toHaveBeenCalled()
+      } finally {
+        cleanup(meshId)
+      }
+    })
   })
 
   // ── PHASE 3: pending-claim recovery ───────────────────────────────────────
