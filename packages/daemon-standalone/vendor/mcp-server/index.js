@@ -894,16 +894,24 @@ var MESH_CHECKPOINT_TOOL = {
 };
 var MESH_MISSION_UPSERT_TOOL = {
   name: "mesh_mission_upsert",
-  description: "Create or update a persistent mission record so the plan survives coordinator restarts. Create a mission before enqueueing a multi-task batch, attach tasks via mesh_enqueue_task mission_id, and update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses \u2014 there is no separate progress field.",
+  description: "Create or update a persistent mission record so the plan survives coordinator restarts. Create a mission before enqueueing a multi-task batch, attach tasks via mesh_enqueue_task mission_id, and update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses \u2014 there is no separate progress field. Single mission: pass title (and optionally mission_id to update an existing one). Bulk status transition (e.g. one-time stale cleanup): pass mission_ids (array) + status to apply that status to many missions at once; title/goal are ignored and a per-mission result array is returned. mission_ids takes precedence over mission_id when both are given.",
   inputSchema: {
     type: "object",
     properties: {
-      mission_id: { type: "string", description: "Mission id to update. Omit to create a new mission." },
-      title: { type: "string", description: "Short mission title." },
-      goal: { type: "string", description: "Free-text mission goal/definition of done." },
-      status: { type: "string", enum: ["active", "paused", "completed", "abandoned"], description: "Mission lifecycle status. Defaults to active on create." }
+      mission_id: { type: "string", description: "Mission id to update. Omit to create a new mission. Ignored when mission_ids is provided." },
+      mission_ids: {
+        type: "array",
+        items: { type: "string" },
+        description: "Bulk mode: apply `status` to every listed mission id in one call (stale cleanup). Requires `status`. Returns a per-mission { id, ok, status?, error? } result array. Overrides mission_id/title/goal."
+      },
+      title: { type: "string", description: "Short mission title. Required to create/update a single mission; ignored in bulk (mission_ids) mode." },
+      goal: { type: "string", description: "Free-text mission goal/definition of done. Ignored in bulk (mission_ids) mode." },
+      status: { type: "string", enum: ["active", "paused", "completed", "abandoned"], description: "Mission lifecycle status. Defaults to active on create. Required in bulk (mission_ids) mode." }
     },
-    required: ["title"]
+    // No hard-required field: the single path requires `title` and the bulk path
+    // requires `mission_ids` + `status`; the handler enforces the mode-specific rule
+    // and returns a clear error, rather than the schema forcing `title` on bulk calls.
+    required: []
   }
 };
 var MESH_MISSION_LIST_TOOL = {
@@ -933,6 +941,14 @@ var MESH_APPROVE_TOOL = {
       action: { type: "string", enum: ["approve", "reject"], description: "Action to take." }
     },
     required: ["node_id", "session_id", "action"]
+  }
+};
+var MESH_LIST_PENDING_APPROVALS_TOOL = {
+  name: "mesh_list_pending_approvals",
+  description: "List every session across the mesh that is currently awaiting an approval decision (status awaiting_approval) \u2014 the mesh-wide approval inbox. mesh_approve resolves ONE (node_id, session_id) at a time; this read-only tool enumerates the full pending set so you can see all blocked sessions at once and drive a mesh_approve for each. Each row carries nodeId, sessionId, providerType, taskTitle, and how long it has been waiting (waitingSince/waitingMs), longest-waiting first. Does not mutate anything.",
+  inputSchema: {
+    type: "object",
+    properties: {}
   }
 };
 var MESH_CLONE_NODE_TOOL = {
@@ -1000,6 +1016,19 @@ var MESH_TASK_HISTORY_TOOL = {
     }
   }
 };
+var MESH_LEDGER_QUERY_TOOL = {
+  name: "mesh_ledger_query",
+  description: 'Read-only ledger query along the kind / time / node axes \u2014 the complement to mesh_task_history (which is task-axis-centric). Use this to answer "what happened on node X", "what failed since <time>", or "show every checkpoint_created" without scanning transcripts. Filters compose (AND): kind narrows to one or more entry kinds, since bounds the time window, node restricts to one node (identity-form-agnostic), tail caps the returned count to the most recent N. Returns the filtered ledger entries (oldest\u2192newest) plus a small summary. Does not mutate anything.',
+  inputSchema: {
+    type: "object",
+    properties: {
+      kind: { type: "string", description: 'Filter by entry kind. Accepts one kind, or a comma-separated list (e.g. "task_failed,task_stalled"). Valid kinds include: task_dispatched, task_completed, task_failed, task_stalled, task_approval_needed, session_launched, session_stopped, checkpoint_created, node_cloned, node_joined, node_removed, direct_fast_forward, ledger_reconciled, event_held, mission_created, mission_status_changed, mission_goal_updated, magi_dispatched, magi_synthesis.' },
+      since: { type: "string", description: 'Only return entries at/after this time. ISO-8601 string (e.g. "2026-07-05T00:00:00Z") or epoch-milliseconds. Omit for no lower bound.' },
+      node: { type: "string", description: "Only return entries originating from this node (nodeId). Matched by daemon-id equivalence, so any identifier form (mach_X / daemon_mach_X) resolves." },
+      tail: { type: "number", description: "Return only the most recent N matching entries (default 50; clamped to 500)." }
+    }
+  }
+};
 var MESH_RECORD_NOTE_TOOL = {
   name: "mesh_record_note",
   description: "Record a durable operating note for this mesh \u2014 a runtime-accumulated lesson that future coordinators inherit. Unlike Claude-only memory/CLAUDE.md, this is provider-neutral: it persists in the mesh ledger and is injected into every coordinator's system prompt at launch (codex, hermes, antigravity, claude alike). Use it when you learn something durable: a provider quirk, a pattern to avoid, or a recovery lesson. Keep each note to one concrete, reusable fact. Not for transient task status \u2014 use missions/checkpoints for that.",
@@ -1059,6 +1088,16 @@ var MESH_REQUEUE_HELD_EVENTS_TOOL = {
           since: { type: "string", description: "Only requeue held entries recorded at/after this ISO timestamp." }
         }
       }
+    }
+  }
+};
+var MESH_WAIT_EVENTS_TOOL = {
+  name: "mesh_wait_events",
+  description: 'Long-poll blocking wait for coordinator events \u2014 the polling-killer for pure-MCP coordinators. A pure-MCP coordinator only drains pendingCoordinatorEvents (worker completions, approvals, stall nudges, dispatch outcomes) when it calls a mesh tool, so "waiting" degrades into busy-polling mesh_status/mesh_view_queue. Instead call this: if events are already pending it drains and returns them immediately; otherwise it blocks up to timeoutMs for events to arrive, returning as soon as any do. On timeout it returns an empty events array with timedOut:true. Scope is the FULL pendingCoordinatorEvents queue (identical to what the reconcile loop drains) \u2014 not filtered by kind. This is the force-inject symmetric for MCP coordinators: after dispatching or enqueueing work, call mesh_wait_events instead of polling; when it returns events, act on them. Read-only w.r.t. mesh state (it only drains the coordinator inbox, which is what any mesh tool call already does).',
+  inputSchema: {
+    type: "object",
+    properties: {
+      timeoutMs: { type: "number", description: "Maximum time to block waiting for events, in milliseconds. Default 30000; clamped to [1000, 60000]. Returns early the moment any event arrives." }
     }
   }
 };
@@ -1355,6 +1394,7 @@ var ALL_MESH_TOOLS = [
   MESH_RESTART_DAEMON_TOOL,
   MESH_CHECKPOINT_TOOL,
   MESH_APPROVE_TOOL,
+  MESH_LIST_PENDING_APPROVALS_TOOL,
   MESH_CLONE_NODE_TOOL,
   MESH_REMOVE_NODE_TOOL,
   MESH_REFINE_NODE_TOOL,
@@ -1368,10 +1408,12 @@ var ALL_MESH_TOOLS = [
   MESH_CLEANUP_SESSIONS_TOOL,
   MESH_PRUNE_STALE_DIRECT_TOOL,
   MESH_TASK_HISTORY_TOOL,
+  MESH_LEDGER_QUERY_TOOL,
   MESH_RECORD_NOTE_TOOL,
   MESH_FORGET_NOTE_TOOL,
   MESH_RECONCILE_LEDGER_TOOL,
   MESH_REQUEUE_HELD_EVENTS_TOOL,
+  MESH_WAIT_EVENTS_TOOL,
   MESH_MISSION_UPSERT_TOOL,
   MESH_MISSION_LIST_TOOL,
   MESH_REVIEW_INBOX_TOOL,
@@ -4133,6 +4175,58 @@ async function meshTaskHistory(ctx, args) {
     ...pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}
   }, null, 2);
 }
+var WAIT_EVENTS_DEFAULT_TIMEOUT_MS = 3e4;
+var WAIT_EVENTS_MIN_TIMEOUT_MS = 1e3;
+var WAIT_EVENTS_MAX_TIMEOUT_MS = 6e4;
+var WAIT_EVENTS_POLL_INTERVAL_MS = 1e3;
+async function meshWaitEvents(ctx, args) {
+  const { mesh } = ctx;
+  const sleep2 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const requested = typeof args.timeoutMs === "number" && args.timeoutMs > 0 ? Math.floor(args.timeoutMs) : WAIT_EVENTS_DEFAULT_TIMEOUT_MS;
+  const timeoutMs = Math.min(Math.max(requested, WAIT_EVENTS_MIN_TIMEOUT_MS), WAIT_EVENTS_MAX_TIMEOUT_MS);
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  let events = await drainCoordinatorPendingEvents(ctx);
+  while (events.length === 0 && Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await sleep2(Math.min(WAIT_EVENTS_POLL_INTERVAL_MS, remaining));
+    events = await drainCoordinatorPendingEvents(ctx);
+  }
+  const waitedMs = Date.now() - startedAt;
+  const timedOut = events.length === 0;
+  return JSON.stringify({
+    meshId: mesh.id,
+    timedOut,
+    waitedMs,
+    timeoutMs,
+    ...events.length > 0 ? { events, pendingCoordinatorEvents: events } : { events: [] }
+  }, null, 2);
+}
+async function meshLedgerQuery(ctx, args) {
+  const { mesh } = ctx;
+  const pendingEvents = await drainCoordinatorPendingEvents(ctx);
+  const kind = typeof args.kind === "string" && args.kind.trim() ? args.kind.split(",").map((k) => k.trim()).filter(Boolean) : void 0;
+  const since = typeof args.since === "string" && args.since.trim() ? args.since.trim() : typeof args.since === "number" ? String(args.since) : void 0;
+  const node = typeof args.node === "string" && args.node.trim() ? args.node.trim() : void 0;
+  const requestedTail = typeof args.tail === "number" && args.tail > 0 ? Math.floor(args.tail) : 50;
+  const tail = Math.min(requestedTail, 500);
+  const entries = (0, import_daemon_core4.readLedgerEntries)(mesh.id, { tail, kind, since, node });
+  const summary = (0, import_daemon_core4.getLedgerSummary)(mesh.id);
+  return JSON.stringify({
+    meshId: mesh.id,
+    query: {
+      ...kind ? { kind } : {},
+      ...since ? { since } : {},
+      ...node ? { node } : {},
+      tail
+    },
+    count: entries.length,
+    entries,
+    summary,
+    ...pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}
+  }, null, 2);
+}
 async function meshRecordNote(ctx, args) {
   const { mesh } = ctx;
   const text = typeof args.text === "string" ? args.text.trim() : "";
@@ -4277,10 +4371,22 @@ async function meshRequeueHeldEvents(ctx, args) {
   return JSON.stringify({ success: true, ...result, note }, null, 2);
 }
 async function meshMissionUpsert(ctx, args) {
+  const bulkIds = normalizeMissionIdList(args.mission_ids ?? args.missionIds);
+  if (bulkIds.length > 0) {
+    return meshMissionUpsertBulk(ctx, bulkIds, readString(args.status));
+  }
   try {
+    const title = readString(args.title);
+    if (!title) {
+      return JSON.stringify({
+        success: false,
+        code: "mission_title_required",
+        error: "mission_title_required: single-mission upsert needs a non-empty title. For a bulk status transition pass mission_ids (array) + status instead."
+      });
+    }
     const mission = (0, import_daemon_core4.upsertMeshMission)(ctx.mesh.id, {
       id: readString(args.mission_id) || readString(args.missionId) || void 0,
-      title: args.title,
+      title,
       goal: typeof args.goal === "string" ? args.goal : void 0,
       status: readString(args.status) || void 0
     });
@@ -4294,6 +4400,51 @@ async function meshMissionUpsert(ctx, args) {
     const code = message.includes("mission_title_required") ? "mission_title_required" : message.includes("invalid_mission_status") ? "invalid_mission_status" : void 0;
     return JSON.stringify({ success: false, ...code ? { code } : {}, error: message });
   }
+}
+function normalizeMissionIdList(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const raw of value) {
+    const id = typeof raw === "string" ? raw.trim() : "";
+    if (id) seen.add(id);
+  }
+  return [...seen];
+}
+async function meshMissionUpsertBulk(ctx, missionIds, status) {
+  if (!status) {
+    return JSON.stringify({
+      success: false,
+      code: "bulk_status_required",
+      error: "bulk mission upsert (mission_ids) requires a status to apply to every listed mission."
+    });
+  }
+  const results = missionIds.map((id) => {
+    try {
+      const existing = (0, import_daemon_core4.getMeshMission)(ctx.mesh.id, id);
+      if (!existing) return { id, ok: false, error: "mission_not_found" };
+      const updated = (0, import_daemon_core4.upsertMeshMission)(ctx.mesh.id, {
+        id,
+        title: existing.title,
+        status
+      });
+      return { id, ok: true, status: updated.status };
+    } catch (e) {
+      const message = e?.message || String(e);
+      const code = message.includes("invalid_mission_status") ? "invalid_mission_status" : void 0;
+      return { id, ok: false, error: message, ...code ? { code } : {} };
+    }
+  });
+  const applied = results.filter((r) => r.ok).length;
+  const failed = results.length - applied;
+  return JSON.stringify({
+    success: failed === 0,
+    mode: "bulk",
+    requestedStatus: status,
+    applied,
+    failed,
+    results,
+    nextAction: failed === 0 ? `Applied status '${status}' to ${applied} mission(s).` : `${applied} applied, ${failed} failed \u2014 see results[] for per-mission errors.`
+  });
 }
 async function meshMissionList(ctx, args = {}) {
   try {
@@ -6509,6 +6660,33 @@ async function meshApprove(ctx, args) {
   });
   return JSON.stringify(result, null, 2);
 }
+async function meshListPendingApprovals(ctx, _args = {}) {
+  (0, import_daemon_core4.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_list_pending_approvals" });
+  await refreshMeshFromDaemon(ctx);
+  const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
+  let ledgerEntries = (0, import_daemon_core4.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
+  let directDispatches = (0, import_daemon_core4.getActiveDirectDispatches)(ctx.mesh.id);
+  const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, directDispatches, ledgerEntries);
+  if (directReconciliation.reconciled > 0) {
+    ledgerEntries = (0, import_daemon_core4.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
+    directDispatches = (0, import_daemon_core4.getActiveDirectDispatches)(ctx.mesh.id);
+  }
+  (0, import_daemon_core4.markStaleDirectDispatches)(ctx.mesh.id);
+  directDispatches = (0, import_daemon_core4.getActiveDirectDispatches)(ctx.mesh.id);
+  const activeWorkEvidence = (0, import_daemon_core4.buildMeshActiveWork)({
+    meshId: ctx.mesh.id,
+    queue: (0, import_daemon_core4.getQueue)(ctx.mesh.id),
+    ledgerEntries,
+    directDispatches,
+    nodes: liveNodes
+  });
+  const approvals = (0, import_daemon_core4.collectPendingApprovals)(activeWorkEvidence.activeWork);
+  return JSON.stringify({
+    count: approvals.length,
+    approvals,
+    ...approvals.length === 0 ? { note: "No sessions are currently awaiting an approval decision." } : { nextStep: 'Resolve each with mesh_approve(node_id, session_id, action: "approve" | "reject").' }
+  }, null, 2);
+}
 async function meshCleanupSessions(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
   const result = await commandForNode(ctx, node, "cleanup_mesh_sessions", {
@@ -8092,6 +8270,9 @@ async function startMcpServer(opts) {
           case "mesh_approve":
             text = await meshApprove(meshCtx, a);
             break;
+          case "mesh_list_pending_approvals":
+            text = await meshListPendingApprovals(meshCtx, a);
+            break;
           case "mesh_clone_node":
             text = await meshCloneNode(meshCtx, a);
             break;
@@ -8157,6 +8338,9 @@ async function startMcpServer(opts) {
           case "mesh_task_history":
             text = await meshTaskHistory(meshCtx, a);
             break;
+          case "mesh_ledger_query":
+            text = await meshLedgerQuery(meshCtx, a);
+            break;
           case "mesh_record_note":
             text = await meshRecordNote(meshCtx, a);
             break;
@@ -8168,6 +8352,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_requeue_held_events":
             text = await meshRequeueHeldEvents(meshCtx, a);
+            break;
+          case "mesh_wait_events":
+            text = await meshWaitEvents(meshCtx, a);
             break;
           case "mesh_mission_upsert":
             text = await meshMissionUpsert(meshCtx, a);
