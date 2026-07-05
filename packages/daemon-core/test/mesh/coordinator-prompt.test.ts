@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT } from '@adhdev/mesh-shared'
 import { buildCoordinatorSystemPrompt } from '../../src/mesh/coordinator-prompt.js'
 
 describe('Repo Mesh coordinator prompt', () => {
@@ -509,6 +510,58 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('a small durable lesson')
     expect(prompt).not.toContain('soft cap')
     expect(prompt).not.toContain('omitted to fit')
+  })
+
+  // ── 6-6: schema ↔ coordinator-prompt ↔ barrel-comment tool-exposure consistency ──
+  //
+  // The coordinator-prompt "## Available Tools" table once drifted 14 tools behind the
+  // MCP schema (mesh_mission_list, mesh_reconcile_ledger, the refine/magi/change-impact
+  // families, …), silently hiding capabilities from the coordinator — including
+  // mesh_mission_list, which the "remaining work = enumerate missions" operating rule
+  // depends on. This regression gate pins the table to the canonical registry so any new
+  // tool added to the schema without exposing it in the prompt (or vice-versa) fails here.
+  //
+  // Extract the tool names the prompt actually renders from the "## Available Tools"
+  // table rows (`| \`mesh_x\` | … |`) and require SET-equality with CANONICAL_MESH_TOOL_NAMES.
+  const extractPromptToolTable = (prompt: string): string[] => {
+    const start = prompt.indexOf('## Available Tools')
+    expect(start).toBeGreaterThanOrEqual(0)
+    // The table runs until the next "## " section heading.
+    const rest = prompt.slice(start + '## Available Tools'.length)
+    const end = rest.indexOf('\n## ')
+    const table = end >= 0 ? rest.slice(0, end) : rest
+    const names = new Set<string>()
+    for (const m of table.matchAll(/^\|\s*`(mesh_[a-z0-9_]+)`\s*\|/gm)) {
+      names.add(m[1])
+    }
+    return [...names]
+  }
+
+  it('6-6: the coordinator-prompt tool table exposes exactly the canonical mesh tool registry', () => {
+    const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
+    const exposed = extractPromptToolTable(prompt).sort()
+    const canonical = [...CANONICAL_MESH_TOOL_NAMES].sort()
+
+    // Missing: a canonical (schema-published) tool the coordinator is never told about.
+    const missing = canonical.filter(name => !exposed.includes(name))
+    expect(missing, `tools published in the schema but missing from the coordinator-prompt table: ${missing.join(', ')}`).toEqual([])
+
+    // Ghost: a tool advertised in the prompt that has no schema entry.
+    const ghost = exposed.filter(name => !canonical.includes(name as any))
+    expect(ghost, `tools advertised in the coordinator-prompt table with no canonical schema entry: ${ghost.join(', ')}`).toEqual([])
+
+    // Full set-equality + count guard (== the barrel "NN tools" comment count).
+    expect(exposed).toEqual(canonical)
+    expect(exposed.length).toBe(CANONICAL_MESH_TOOL_COUNT)
+  })
+
+  it('6-6: mesh_mission_list and the G2 requeue tool are exposed (operating-rule + gap coverage)', () => {
+    const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
+    const exposed = extractPromptToolTable(prompt)
+    // mesh_mission_list underpins the "remaining work = enumerate every mission" rule.
+    expect(exposed).toContain('mesh_mission_list')
+    // mesh_requeue_held_events is the G2 event_held→pending recovery path.
+    expect(exposed).toContain('mesh_requeue_held_events')
   })
 })
 

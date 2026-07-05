@@ -20,6 +20,7 @@ import {
     readLedgerSliceFromStore,
     readString,
     refreshMeshFromDaemon,
+    requeueHeldMeshCoordinatorEvents,
     slimLedgerPayload,
     tombstoneOperatingNote,
     unwrapCommandPayload,
@@ -235,6 +236,35 @@ export async function meshReconcileLedger(
         },
     });
     return JSON.stringify({ success: true, evidence }, null, 2);
+}
+
+export async function meshRequeueHeldEvents(
+    ctx: MeshContext,
+    args: { filter?: { task_id?: string; taskId?: string; node_id?: string; nodeId?: string; event?: string; reason?: string; since?: string } },
+): Promise<string> {
+    const { mesh } = ctx;
+    const raw = args.filter && typeof args.filter === 'object' ? args.filter : undefined;
+    const filter = raw
+        ? {
+            ...(readString(raw.task_id) || readString(raw.taskId) ? { taskId: (readString(raw.task_id) || readString(raw.taskId)) } : {}),
+            ...(readString(raw.node_id) || readString(raw.nodeId) ? { nodeId: (readString(raw.node_id) || readString(raw.nodeId)) } : {}),
+            ...(readString(raw.event) ? { event: readString(raw.event) } : {}),
+            ...(readString(raw.reason) ? { reason: readString(raw.reason) } : {}),
+            ...(readString(raw.since) ? { since: readString(raw.since) } : {}),
+        }
+        : undefined;
+
+    const result = requeueHeldMeshCoordinatorEvents(mesh.id, filter && Object.keys(filter).length > 0 ? filter : undefined);
+
+    const note = result.matched === 0
+        ? 'No recoverable held events matched. Nothing to requeue.'
+        : `${result.requeued} held event(s) restored to the pending queue`
+            + (result.dedupSuppressed > 0 ? ` (${result.dedupSuppressed} collapsed onto still-live duplicates)` : '')
+            + (result.alreadyRequeued > 0 ? `; ${result.alreadyRequeued} already recovered by a prior pass` : '')
+            + (result.unrecoverable > 0 ? `; ${result.unrecoverable} had no restorable original event` : '')
+            + '. A coordinator will drain them on its next poll.';
+
+    return JSON.stringify({ success: true, ...result, note }, null, 2);
 }
 
 export async function meshMissionUpsert(

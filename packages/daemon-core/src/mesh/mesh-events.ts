@@ -5,12 +5,17 @@
 // New code should import directly from the relevant sub-module.
 // ---------------------------------------------------------------------------
 
-export type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+export type {
+    PendingMeshCoordinatorEvent,
+    MeshHeldEventRequeueFilter,
+    MeshHeldEventRequeueResult,
+} from './mesh-events-pending.js';
 export {
     queuePendingMeshCoordinatorEvent,
     drainPendingMeshCoordinatorEvents,
     getPendingMeshCoordinatorEvents,
     clearPendingMeshCoordinatorEvents,
+    requeueHeldMeshCoordinatorEvents,
     serializeV2EnvelopeToWire,
     readV2EnvelopeFromWire,
     getMeshV2DrainCounters,

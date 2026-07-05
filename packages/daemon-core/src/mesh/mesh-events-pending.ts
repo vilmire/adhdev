@@ -189,6 +189,10 @@ function ledgerRecordQuarantinedEvent(event: PendingMeshCoordinatorEvent, reason
                 ...(readNonEmptyString(event.eventId) ? { eventId: event.eventId } : {}),
                 queuedAt: event.queuedAt,
                 ...(finalSummary ? { finalSummary } : {}),
+                // Full original event so mesh_requeue_held_events can restore it
+                // losslessly (event_held→pending). The summary/label fields above stay
+                // for human-readable audit; `heldEvent` is the machine recovery copy.
+                heldEvent: event,
             },
         });
     } catch (e: any) {
@@ -746,8 +750,11 @@ function trimPendingEventsIfNeeded(path: string): void {
                         nodeLabel: event.nodeLabel,
                         ...(event.workspace ? { workspace: event.workspace } : {}),
                         targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
+                        ...(readNonEmptyString(event.eventId) ? { eventId: event.eventId } : {}),
                         queuedAt: event.queuedAt,
                         ...(finalSummary ? { finalSummary } : {}),
+                        // Full original event for lossless mesh_requeue_held_events restore.
+                        heldEvent: event,
                     },
                 });
                 LOG.warn('MeshEvents', `Pending-events trim dropping undelivered ${event.event} for mesh ${event.meshId} — recorded to ledger (recoverable)`);
@@ -1301,6 +1308,175 @@ export function __clearMeshPendingEventsForTests(meshId: string): void {
  */
 export function __persistUnstampedPendingEventForTests(event: PendingMeshCoordinatorEvent): boolean {
     return persistPendingMeshCoordinatorEvent(event);
+}
+
+// ---------------------------------------------------------------------------
+// event_held → pending requeue (T6 recovery path)
+// ---------------------------------------------------------------------------
+// T6 quarantine (v2 enforce) and the pending-events trim both mirror a
+// destructively-drained-but-undelivered event into the ledger as a recoverable
+// `event_held` entry. Until now that recovery channel was audit-only: the comment
+// said "an operator can requeue it" but no code path did. This restores those held
+// events to the pending queue so a coordinator drains them on its next poll.
+//
+// No-loss + no-double-requeue invariants:
+//   • The full original event rides on the held payload as `heldEvent`, so the
+//     restore is byte-for-byte (metadataEvent, coordinatorMessage, v2 envelope).
+//   • queuePendingMeshCoordinatorEvent runs the normal dedup (fingerprint / eventId),
+//     so an event still live in the queue is not duplicated.
+//   • Every held entry that has ALREADY been requeued is marked with an
+//     `event_held_requeued` ledger entry keyed by the source held-entry id; a later
+//     pass skips those ids, so calling the tool twice does not requeue the same held
+//     event twice.
+
+/** Narrowing filter for {@link requeueHeldMeshCoordinatorEvents}, scoped within one mesh. */
+export interface MeshHeldEventRequeueFilter {
+    /** Restore only held events whose worker task id matches (from the held event's metadata/taskId). */
+    taskId?: string;
+    /** Restore only held events originating from this node. */
+    nodeId?: string;
+    /** Restore only held events of this event name (e.g. 'session:completed'). */
+    event?: string;
+    /** Restore only held entries recorded at/after this ISO timestamp. */
+    since?: string;
+    /** Restore only held entries with this hold reason (e.g. 'pending_trim_dropped'). */
+    reason?: string;
+}
+
+export interface MeshHeldEventRequeueResult {
+    meshId: string;
+    /** event_held entries considered after the filter. */
+    matched: number;
+    /** entries skipped because a prior requeue already recovered them. */
+    alreadyRequeued: number;
+    /** entries skipped because they carried no restorable original event / were not recoverable. */
+    unrecoverable: number;
+    /** entries handed to the pending queue (some may have been dedup-suppressed downstream). */
+    requeued: number;
+    /** of `requeued`, how many the pending-queue dedup collapsed onto a live event. */
+    dedupSuppressed: number;
+    entries: Array<{
+        heldEntryId: string;
+        event: string;
+        nodeId?: string;
+        taskId?: string;
+        reason?: string;
+        outcome: 'requeued' | 'already_requeued' | 'unrecoverable';
+    }>;
+}
+
+/** Read the taskId a held event carried, checking the restored event then the audit payload. */
+function readHeldTaskId(restored: PendingMeshCoordinatorEvent | undefined, payload: Record<string, unknown>): string {
+    const fromMeta = restored?.metadataEvent && typeof restored.metadataEvent === 'object'
+        ? readNonEmptyString((restored.metadataEvent as Record<string, unknown>).taskId)
+        : '';
+    return fromMeta || readNonEmptyString(payload.taskId) || '';
+}
+
+/**
+ * Restore recoverable `event_held` ledger entries back to the pending coordinator
+ * queue for `meshId`. See the block comment above for the no-loss / no-double-requeue
+ * invariants. Returns per-entry outcomes for the caller to surface.
+ */
+export function requeueHeldMeshCoordinatorEvents(
+    meshId: string,
+    filter?: MeshHeldEventRequeueFilter,
+): MeshHeldEventRequeueResult {
+    const result: MeshHeldEventRequeueResult = {
+        meshId,
+        matched: 0,
+        alreadyRequeued: 0,
+        unrecoverable: 0,
+        requeued: 0,
+        dedupSuppressed: 0,
+        entries: [],
+    };
+
+    const all = readLedgerEntries(meshId);
+    // held-entry ids already recovered by a prior requeue pass (dedup key = source id).
+    const requeuedIds = new Set<string>();
+    for (const entry of all) {
+        if (entry.kind !== 'event_held_requeued') continue;
+        const id = readNonEmptyString(entry.payload?.heldEntryId);
+        if (id) requeuedIds.add(id);
+    }
+
+    const sinceMs = filter?.since ? new Date(filter.since).getTime() : NaN;
+    const wantEvent = readNonEmptyString(filter?.event);
+    const wantNode = readNonEmptyString(filter?.nodeId);
+    const wantTask = readNonEmptyString(filter?.taskId);
+    const wantReason = readNonEmptyString(filter?.reason);
+
+    for (const entry of all) {
+        if (entry.kind !== 'event_held') continue;
+        const payload = (entry.payload && typeof entry.payload === 'object') ? entry.payload : {};
+        if (payload.recoverable !== true) continue;
+
+        // Reconstruct the original event: prefer the full `heldEvent` copy; fall back to
+        // the flat audit fields for entries written before the copy was embedded.
+        const restored: PendingMeshCoordinatorEvent | undefined =
+            (payload.heldEvent && typeof payload.heldEvent === 'object')
+                ? { ...(payload.heldEvent as PendingMeshCoordinatorEvent) }
+                : undefined;
+
+        const eventName = restored?.event || readNonEmptyString(payload.event);
+        const nodeId = restored?.nodeId || entry.nodeId || readNonEmptyString((payload as any).nodeId) || undefined;
+        const taskId = readHeldTaskId(restored, payload as Record<string, unknown>);
+        const reason = readNonEmptyString(payload.reason) || undefined;
+
+        // Apply the caller filter within the mesh scope.
+        if (wantEvent && eventName !== wantEvent) continue;
+        if (wantNode && nodeId !== wantNode) continue;
+        if (wantTask && taskId !== wantTask) continue;
+        if (wantReason && reason !== wantReason) continue;
+        if (filter?.since && !Number.isNaN(sinceMs) && new Date(entry.timestamp).getTime() < sinceMs) continue;
+
+        result.matched++;
+
+        if (requeuedIds.has(entry.id)) {
+            result.alreadyRequeued++;
+            result.entries.push({ heldEntryId: entry.id, event: eventName, ...(nodeId ? { nodeId } : {}), ...(taskId ? { taskId } : {}), ...(reason ? { reason } : {}), outcome: 'already_requeued' });
+            continue;
+        }
+
+        if (!restored || !readNonEmptyString(restored.event) || !readNonEmptyString(restored.meshId)) {
+            result.unrecoverable++;
+            result.entries.push({ heldEntryId: entry.id, event: eventName, ...(nodeId ? { nodeId } : {}), ...(taskId ? { taskId } : {}), ...(reason ? { reason } : {}), outcome: 'unrecoverable' });
+            continue;
+        }
+
+        // Restore to pending. queuePendingMeshCoordinatorEvent re-stamps/dedups; a live
+        // duplicate is suppressed there (returns true) so we never double-deliver.
+        const beforeDup = hasPendingCoordinatorEventDuplicate(restored);
+        let ok = false;
+        try {
+            ok = queuePendingMeshCoordinatorEvent(restored);
+        } catch (e: any) {
+            LOG.warn('MeshEvents', `Requeue of held ${eventName} for mesh ${meshId} failed: ${e?.message || e}`);
+        }
+
+        // Mark the source held entry so a second pass skips it, regardless of whether the
+        // queue dedup collapsed it (the recovery attempt is what we dedup on, not delivery).
+        appendLedgerEntry(meshId, {
+            kind: 'event_held_requeued',
+            ...(nodeId ? { nodeId } : {}),
+            payload: {
+                heldEntryId: entry.id,
+                event: eventName,
+                requeued: ok,
+                ...(taskId ? { taskId } : {}),
+                ...(reason ? { reason } : {}),
+                ...(beforeDup ? { dedupSuppressed: true } : {}),
+            },
+        });
+        requeuedIds.add(entry.id);
+
+        result.requeued++;
+        if (beforeDup) result.dedupSuppressed++;
+        result.entries.push({ heldEntryId: entry.id, event: eventName, ...(nodeId ? { nodeId } : {}), ...(taskId ? { taskId } : {}), ...(reason ? { reason } : {}), outcome: 'requeued' });
+    }
+
+    return result;
 }
 
 /** Explicitly clear all pending coordinator events for a mesh (and coordinator if scoped). */

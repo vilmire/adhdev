@@ -5,15 +5,20 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 29 tools: mesh_status, mesh_mission_upsert, mesh_mission_list, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
- *           mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
- *           mesh_read_debug, mesh_launch_session, mesh_git_status,
- *           mesh_fast_forward_node, mesh_checkpoint, mesh_approve,
- *           mesh_clone_node, mesh_remove_node, mesh_refine_node,
- *           mesh_refine_config_schema, mesh_validate_refine_config,
- *           mesh_suggest_refine_config, mesh_refine_plan,
- *           mesh_cleanup_sessions, mesh_task_history, mesh_reconcile_ledger,
- *           mesh_review_inbox
+ * 42 tools (== ALL_MESH_TOOLS, kept in sync with the coordinator-prompt TOOLS table
+ * by the 6-6 consistency test in daemon-core coordinator-prompt.test.ts):
+ *   mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
+ *   mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
+ *   mesh_read_debug, mesh_launch_session, mesh_git_status, mesh_read_node_logs,
+ *   mesh_fast_forward_node, mesh_restart_daemon, mesh_checkpoint, mesh_approve,
+ *   mesh_clone_node, mesh_remove_node, mesh_refine_node, mesh_refine_batch,
+ *   mesh_refine_config, mesh_change_impact_config, mesh_init, mesh_reinit,
+ *   mesh_write_mesh_json_config, mesh_refine_plan, mesh_cleanup_sessions,
+ *   mesh_prune_stale_direct, mesh_task_history, mesh_record_note,
+ *   mesh_forget_note, mesh_reconcile_ledger, mesh_requeue_held_events,
+ *   mesh_mission_upsert, mesh_mission_list, mesh_review_inbox, mesh_magi_review,
+ *   mesh_magi_collect, mesh_magi_panel_set, mesh_magi_panel_list,
+ *   mesh_magi_kind_panel_set, mesh_magi_kind_panel_list
  */
 
 // ─── Internal module ───────────────────────────
@@ -78,6 +83,7 @@ import {
     reconcileDirectDispatchCompletionFromTranscript,
     recordMeshToolCall,
     requeueTask,
+    requeueHeldMeshCoordinatorEvents,
     resolveMeshSurfacedSessionPreview,
     resolveDelegatedWorkerAutoApprove,
     validateMeshTaskModeRequest,
@@ -167,6 +173,7 @@ export {
     MESH_RECORD_NOTE_TOOL,
     MESH_FORGET_NOTE_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
+    MESH_REQUEUE_HELD_EVENTS_TOOL,
     MESH_PRUNE_STALE_DIRECT_TOOL,
     MESH_REFINE_NODE_TOOL,
     MESH_REFINE_BATCH_TOOL,
@@ -310,6 +317,7 @@ export {
     recordDirectDispatchTask,
     recordMeshToolCall,
     requeueTask,
+    requeueHeldMeshCoordinatorEvents,
     resolveDelegatedWorkerAutoApprove,
     resolveMeshSurfacedSessionPreview,
     summarizeMeshAsyncRefineJobs,

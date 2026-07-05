@@ -219,6 +219,12 @@ export { MAGI_RAW_ANSWER_CAP } from '@adhdev/mesh-shared';
 //    @adhdev/mesh-shared dependency). ──
 export { expandDaemonIdForms, daemonIdsEquivalent, machineCoreFromDaemonId, canonicalDaemonId } from '@adhdev/mesh-shared';
 export { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
+// Canonical mesh tool-name registry (SSOT for the schema ↔ prompt ↔ barrel-comment
+// consistency the 6-6 test enforces). Re-exported so mcp-server (which depends on
+// daemon-core, not on mesh-shared directly) and the daemon-core prompt test both
+// reference one list.
+export { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT } from '@adhdev/mesh-shared';
+export type { CanonicalMeshToolName } from '@adhdev/mesh-shared';
 
 // ── Mesh Coordinator ──
 export { buildCoordinatorSystemPrompt } from './mesh/coordinator-prompt.js';
@@ -295,8 +301,8 @@ export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHost
 // export type { MeshGraph, MeshGraphNode, MeshGraphEdge, MeshGraphNodeType, MeshGraphEdgeType } from './mesh/mesh-visualization.js';
 
 // ── Mesh Events ──
-export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, clearPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, serializeV2EnvelopeToWire, readV2EnvelopeFromWire, reconcileDirectDispatchCompletionFromTranscript } from './mesh/mesh-events.js';
-export type { PendingMeshCoordinatorEvent } from './mesh/mesh-events.js';
+export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, clearPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, requeueHeldMeshCoordinatorEvents, serializeV2EnvelopeToWire, readV2EnvelopeFromWire, reconcileDirectDispatchCompletionFromTranscript } from './mesh/mesh-events.js';
+export type { PendingMeshCoordinatorEvent, MeshHeldEventRequeueFilter, MeshHeldEventRequeueResult } from './mesh/mesh-events.js';
 // The coordinator-side preview surfaced from a worker's completion/status event
 // (finalSummary / workerResult.summary / lastMessagePreview). Same data the mobile
 // inbox is fed; reused by mesh_read_chat's cache fallback when the live P2P read path

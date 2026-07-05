@@ -3867,8 +3867,10 @@ test('local direct mesh_send_task allows proper mesh delegate session with meshN
 });
 
 test('mesh tool registry documents the exposed mesh tools including queue cancel/requeue, read-debug, remote node log fetch, direct fast-forward, daemon restart, worktree clone/remove/refine, batch refine, unified refine config, unified change-impact config, mesh init onboarding, session cleanup, stale-direct prune, reconcile-ledger, review inbox, operating-note recording, and mission upsert/list', () => {
-  assert.equal(ALL_MESH_TOOLS.length, 41);
+  assert.equal(ALL_MESH_TOOLS.length, 42);
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_record_note'));
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_reconcile_ledger'));
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_requeue_held_events'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_init'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_restart_daemon'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_review_inbox'));

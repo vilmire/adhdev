@@ -1,7 +1,31 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ALL_MESH_TOOLS, MESH_CLEANUP_SESSIONS_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL, MESH_STATUS_TOOL, MESH_VIEW_QUEUE_TOOL } from '../src/tools/mesh-tools.js';
+import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT } from '@adhdev/daemon-core';
+import { ALL_MESH_TOOLS, MESH_CLEANUP_SESSIONS_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL, MESH_REQUEUE_HELD_EVENTS_TOOL, MESH_STATUS_TOOL, MESH_VIEW_QUEUE_TOOL } from '../src/tools/mesh-tools.js';
+
+test('ALL_MESH_TOOLS is exactly the canonical mesh tool registry (6-6 consistency)', () => {
+  const published = ALL_MESH_TOOLS.map(tool => tool.name).sort();
+  const canonical = [...CANONICAL_MESH_TOOL_NAMES].sort();
+  // Set-equality: every published tool is canonical, every canonical tool is published.
+  assert.deepEqual(published, canonical);
+  assert.equal(ALL_MESH_TOOLS.length, CANONICAL_MESH_TOOL_COUNT);
+  // No duplicate names in the published surface.
+  assert.equal(new Set(published).size, published.length);
+});
+
+test('mesh_requeue_held_events schema exposes the event_held requeue surface', () => {
+  assert.equal(MESH_REQUEUE_HELD_EVENTS_TOOL.name, 'mesh_requeue_held_events');
+  assert.equal(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_requeue_held_events'), true);
+  assert.equal(CANONICAL_MESH_TOOL_NAMES.includes('mesh_requeue_held_events' as any), true);
+  const filter = (MESH_REQUEUE_HELD_EVENTS_TOOL.inputSchema.properties as any).filter;
+  assert.equal(filter.type, 'object');
+  assert.equal(filter.properties.task_id.type, 'string');
+  assert.equal(filter.properties.node_id.type, 'string');
+  assert.equal(filter.properties.event.type, 'string');
+  assert.equal(filter.properties.reason.type, 'string');
+  assert.equal(filter.properties.since.type, 'string');
+});
 
 test('mesh_fast_forward_node schema registers the safe direct fast-forward surface', () => {
   assert.equal(MESH_FAST_FORWARD_NODE_TOOL.name, 'mesh_fast_forward_node');

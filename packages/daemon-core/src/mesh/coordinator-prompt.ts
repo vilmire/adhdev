@@ -615,24 +615,39 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_queue_cancel\` | Cancel a queue task without deleting audit history |
 | \`mesh_queue_requeue\` | Return a task to pending for retry; clears stale session targets |
 | \`mesh_send_task\` | Legacy push: enqueue a task targeted at a specific node |
+| \`mesh_mission_upsert\` | Create/update a persistent mission so a multi-task plan survives coordinator restarts; set status completed/abandoned when the outcome is decided |
+| \`mesh_mission_list\` | List every mission with goal, status, and live task progress — the authority for "what work remains" (never hidden by status) |
 | \`mesh_launch_session\` | Start a new agent session on a node |
 | \`mesh_read_chat\` | Read recent chat messages from a delegated agent session |
 | \`mesh_read_debug\` | Collect a daemon-side chat/parser debug bundle for a session |
 | \`mesh_task_history\` | Read the task ledger — dispatches, completions, failures. Use to understand what has been done before deciding next steps |
+| \`mesh_reconcile_ledger\` | Reconcile daemon-local ledgers over P2P — import missing entries from remote nodes into the coordinator local ledger |
+| \`mesh_requeue_held_events\` | Restore recoverable held coordinator events (T6 quarantine / pending-trim) back to the pending queue; lossless, no double-requeue |
+| \`mesh_review_inbox\` | List local worktree nodes needing human review — merge candidates and Refinery-blocked results with evidence/diff summaries |
 | \`mesh_record_note\` | Record a durable, provider-neutral operating note (provider quirk / pattern to avoid / recovery lesson). Future coordinators see it under "## Operating Notes" at launch |
 | \`mesh_forget_note\` | Retract a stale/wrong operating note by note_id or exact text so it stops riding into future coordinators' prompts (append-only tombstone; history preserved) |
 | \`mesh_git_status\` | Check git status on a specific node |
 | \`mesh_read_node_logs\` | Fetch a remote node's daemon log tail directly over P2P (grep/since/byte-bounded, secrets redacted) — no session/PowerShell needed to debug a node's daemon |
 | \`mesh_fast_forward_node\` | Safely dry-run or explicitly execute an obvious clean fast-forward without launching an agent session |
+| \`mesh_restart_daemon\` | Update a node's daemon to the latest published version on its channel and restart it (the dashboard "preview update" path, as a mesh command) |
 | \`mesh_checkpoint\` | Create a git checkpoint on a node |
 | \`mesh_approve\` | Approve/reject a pending agent action |
 | \`mesh_clone_node\` | Create a worktree node for isolated parallel branch work |
 | \`mesh_refine_node\` | Validate and merge a completed worktree node back into its base branch |
+| \`mesh_refine_batch\` | Batch Refinery: converge multiple sibling worktree nodes onto the base branch in one conflict-aware sequential pipeline |
+| \`mesh_refine_plan\` | Dry-run Refinery plan for a worktree node — config source, validation commands, merge/cleanup intent — without executing validation or git merge |
+| \`mesh_refine_config\` | Refinery config helper (read-only) — unified entry for schema/validate/suggest via a required \`mode\` |
+| \`mesh_change_impact_config\` | Change Impact config helper — unified entry for schema/validate/suggest via a required \`mode\` |
 | \`mesh_remove_node\` | Remove a node (cleans up worktree if applicable) |
 | \`mesh_cleanup_sessions\` | Manually clean up delegated session records for a node |
+| \`mesh_prune_stale_direct\` | Prune orphaned staleDirect dispatch records (dry-run by default); live/pending work and audit history preserved |
 | \`mesh_init\` | Guided onboarding for a fresh repo: dry-run scan → suggest \`.adhdev/*\` configs (refine/bootstrap/change-impact) + providerPriority + current-config echo; gated write on approval |
 | \`mesh_reinit\` | Re-onboard an already-configured repo: re-suggest with overwrite semantics + current-vs-suggested diff; dry-run preview first, per-section approval before write |
 | \`mesh_write_mesh_json_config\` | Gated write of \`.adhdev/mesh.json\` (repo coordinator-prompt config) from the mesh entry — dry-run/overwrite like mesh_init |
+| \`mesh_magi_review\` | Cross-verify a read-only investigation across a standing panel of independent mesh agents (different machines/providers) instead of a single worker |
+| \`mesh_magi_collect\` | Collect + synthesize a previously dispatched MAGI fan-out by its consensus group id (async companion to mesh_magi_review wait:false) |
+| \`mesh_magi_panel_set\` | Upsert a named MAGI panel (standing set of independent node×provider members) into machine-local config |
+| \`mesh_magi_panel_list\` | List configured MAGI panels and resolve each member's availability against the current mesh (read-only) |
 | \`mesh_magi_kind_panel_set\` | Bind a task_kind → MAGI kind-panel slots (machine-local, wholesale replacement — approve current-vs-new first) |
 | \`mesh_magi_kind_panel_list\` | List configured task_kind → MAGI kind-panel slot bindings (machine-local, read-only) |`;
 

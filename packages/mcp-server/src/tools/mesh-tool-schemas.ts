@@ -434,6 +434,27 @@ export const MESH_RECONCILE_LEDGER_TOOL = {
     },
 };
 
+export const MESH_REQUEUE_HELD_EVENTS_TOOL = {
+    name: 'mesh_requeue_held_events',
+    description: 'Restore recoverable held coordinator events back to the pending queue. T6 quarantine (v2 enforce) and the pending-events trim mirror a destructively-drained-but-undelivered event into the ledger as a recoverable `event_held` entry — this is the operator path that actually requeues them (event_held→pending), so a coordinator drains them on its next poll. Lossless: the full original event is restored, the pending-queue dedup suppresses any still-live duplicate, and each held entry is marked once so a second call does not requeue it again. Read-only by default? No — it mutates the pending queue; scope it with `filter` when you only want a subset.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            filter: {
+                type: 'object',
+                description: 'Optional narrowing filter within this mesh. Omit to requeue every not-yet-recovered held event.',
+                properties: {
+                    task_id: { type: 'string', description: 'Only requeue held events for this worker task id.' },
+                    node_id: { type: 'string', description: 'Only requeue held events originating from this node.' },
+                    event: { type: 'string', description: 'Only requeue held events of this event name (e.g. session:completed).' },
+                    reason: { type: 'string', description: 'Only requeue held entries with this hold reason (e.g. pending_trim_dropped, v2_enforce_validation_failed_quarantined).' },
+                    since: { type: 'string', description: 'Only requeue held entries recorded at/after this ISO timestamp.' },
+                },
+            },
+        },
+    },
+};
+
 export const MESH_PRUNE_STALE_DIRECT_TOOL = {
     name: 'mesh_prune_stale_direct',
     description: 'Prune orphaned staleDirect dispatch records — direct task dispatches whose original node/session is no longer present in the live mesh. dry_run (default) reports exactly which records would be pruned without mutating anything; pass execute=true to delete them. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved. The append-only mesh ledger audit history is left intact.',
@@ -790,6 +811,7 @@ export const ALL_MESH_TOOLS = [
     MESH_RECORD_NOTE_TOOL,
     MESH_FORGET_NOTE_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
+    MESH_REQUEUE_HELD_EVENTS_TOOL,
     MESH_MISSION_UPSERT_TOOL,
     MESH_MISSION_LIST_TOOL,
     MESH_REVIEW_INBOX_TOOL,

@@ -1033,6 +1033,26 @@ var MESH_RECONCILE_LEDGER_TOOL = {
     }
   }
 };
+var MESH_REQUEUE_HELD_EVENTS_TOOL = {
+  name: "mesh_requeue_held_events",
+  description: "Restore recoverable held coordinator events back to the pending queue. T6 quarantine (v2 enforce) and the pending-events trim mirror a destructively-drained-but-undelivered event into the ledger as a recoverable `event_held` entry \u2014 this is the operator path that actually requeues them (event_held\u2192pending), so a coordinator drains them on its next poll. Lossless: the full original event is restored, the pending-queue dedup suppresses any still-live duplicate, and each held entry is marked once so a second call does not requeue it again. Read-only by default? No \u2014 it mutates the pending queue; scope it with `filter` when you only want a subset.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      filter: {
+        type: "object",
+        description: "Optional narrowing filter within this mesh. Omit to requeue every not-yet-recovered held event.",
+        properties: {
+          task_id: { type: "string", description: "Only requeue held events for this worker task id." },
+          node_id: { type: "string", description: "Only requeue held events originating from this node." },
+          event: { type: "string", description: "Only requeue held events of this event name (e.g. session:completed)." },
+          reason: { type: "string", description: "Only requeue held entries with this hold reason (e.g. pending_trim_dropped, v2_enforce_validation_failed_quarantined)." },
+          since: { type: "string", description: "Only requeue held entries recorded at/after this ISO timestamp." }
+        }
+      }
+    }
+  }
+};
 var MESH_PRUNE_STALE_DIRECT_TOOL = {
   name: "mesh_prune_stale_direct",
   description: "Prune orphaned staleDirect dispatch records \u2014 direct task dispatches whose original node/session is no longer present in the live mesh. dry_run (default) reports exactly which records would be pruned without mutating anything; pass execute=true to delete them. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved. The append-only mesh ledger audit history is left intact.",
@@ -1342,6 +1362,7 @@ var ALL_MESH_TOOLS = [
   MESH_RECORD_NOTE_TOOL,
   MESH_FORGET_NOTE_TOOL,
   MESH_RECONCILE_LEDGER_TOOL,
+  MESH_REQUEUE_HELD_EVENTS_TOOL,
   MESH_MISSION_UPSERT_TOOL,
   MESH_MISSION_LIST_TOOL,
   MESH_REVIEW_INBOX_TOOL,
@@ -4177,6 +4198,20 @@ async function meshReconcileLedger(ctx, args) {
     }
   });
   return JSON.stringify({ success: true, evidence }, null, 2);
+}
+async function meshRequeueHeldEvents(ctx, args) {
+  const { mesh } = ctx;
+  const raw = args.filter && typeof args.filter === "object" ? args.filter : void 0;
+  const filter = raw ? {
+    ...readString(raw.task_id) || readString(raw.taskId) ? { taskId: readString(raw.task_id) || readString(raw.taskId) } : {},
+    ...readString(raw.node_id) || readString(raw.nodeId) ? { nodeId: readString(raw.node_id) || readString(raw.nodeId) } : {},
+    ...readString(raw.event) ? { event: readString(raw.event) } : {},
+    ...readString(raw.reason) ? { reason: readString(raw.reason) } : {},
+    ...readString(raw.since) ? { since: readString(raw.since) } : {}
+  } : void 0;
+  const result = (0, import_daemon_core4.requeueHeldMeshCoordinatorEvents)(mesh.id, filter && Object.keys(filter).length > 0 ? filter : void 0);
+  const note = result.matched === 0 ? "No recoverable held events matched. Nothing to requeue." : `${result.requeued} held event(s) restored to the pending queue` + (result.dedupSuppressed > 0 ? ` (${result.dedupSuppressed} collapsed onto still-live duplicates)` : "") + (result.alreadyRequeued > 0 ? `; ${result.alreadyRequeued} already recovered by a prior pass` : "") + (result.unrecoverable > 0 ? `; ${result.unrecoverable} had no restorable original event` : "") + ". A coordinator will drain them on its next poll.";
+  return JSON.stringify({ success: true, ...result, note }, null, 2);
 }
 async function meshMissionUpsert(ctx, args) {
   try {
@@ -8067,6 +8102,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_reconcile_ledger":
             text = await meshReconcileLedger(meshCtx, a);
+            break;
+          case "mesh_requeue_held_events":
+            text = await meshRequeueHeldEvents(meshCtx, a);
             break;
           case "mesh_mission_upsert":
             text = await meshMissionUpsert(meshCtx, a);

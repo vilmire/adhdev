@@ -49,6 +49,11 @@ export type MeshLedgerKind =
     | 'delivery_unroutable'
     | 'direct_dispatch_pruned'
     | 'event_held'
+    // Audit marker written by mesh_requeue_held_events when a recoverable `event_held`
+    // entry is restored to the pending queue (event_held→pending). Keyed by the source
+    // held-ledger-entry id so a second requeue pass skips already-recovered entries
+    // (no double-requeue). payload: { heldEntryId, event, requeued: boolean, reason?, dedupSuppressed?: boolean }
+    | 'event_held_requeued'
     | 'task_reclaimed'
     // Gap2-A: a coordinator-recorded operating note — a runtime-accumulated
     // lesson (provider quirk, pattern to avoid, recovery lesson) persisted in
