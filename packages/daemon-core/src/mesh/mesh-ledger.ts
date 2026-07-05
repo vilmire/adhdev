@@ -255,11 +255,21 @@ const RECENT_FAILURE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 
 // Kinds that accumulate indefinitely and are safe to archive after ARCHIVE_TERMINAL_OLDER_THAN_MS.
 // Non-terminal kinds (dispatched, sessions, nodes, checkpoints) are always kept in the active file.
+//
+// session_auto_launch is telemetry, NOT audit: it records the queue-assignment
+// decision on each tick (mostly phase:'skipped' — nothing was launched). No reader
+// consults it back from the ledger (unlike task_dispatched, which getSessionRecoveryContext
+// scans and which therefore MUST stay non-archivable). It is the single largest
+// avoidable ledger consumer after node/dispatch history, so archiving it after the
+// 7-day window is the volume fix — recent entries still surface for diagnosis (and the
+// per-tick dedup keeps live volume bounded), old ones move to the archive JSONL and out
+// of the runtime store. This preserves observability while removing the standing bulk.
 const ARCHIVABLE_KINDS: ReadonlySet<MeshLedgerKind> = new Set([
     'task_completed',
     'task_failed',
     'task_stalled',
     'recovery_attempted',
+    'session_auto_launch',
 ] as MeshLedgerKind[]);
 const DEFAULT_LEDGER_SLICE_LIMIT = 100;
 export const MAX_LEDGER_SLICE_LIMIT = 500;

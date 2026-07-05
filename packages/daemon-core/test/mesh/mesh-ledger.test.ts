@@ -532,6 +532,30 @@ describe('mesh-ledger', () => {
             expect(existsSync(archivePathFor(meshId))).toBe(false);
         });
 
+        it('archives old session_auto_launch telemetry (write-only, no ledger reader), keeps recent', () => {
+            const meshId = `compact-autolaunch-${randomUUID().slice(0, 8)}`;
+            const oldTs = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+            const recentTs = new Date().toISOString();
+
+            writeEntries(meshId, [
+                // Old auto-launch telemetry — should now be archived (it has no ledger reader).
+                { kind: 'session_auto_launch', timestamp: oldTs, payload: { phase: 'skipped', taskId: 't1', reason: 'remote_auto_launch_unsupported' } },
+                { kind: 'session_auto_launch', timestamp: oldTs, payload: { phase: 'started', taskId: 't2' } },
+                // Recent auto-launch — kept for diagnosis.
+                { kind: 'session_auto_launch', timestamp: recentTs, payload: { phase: 'skipped', taskId: 't3', reason: 'auto_launch_cooldown' } },
+                // task_dispatched stays non-archivable (getSessionRecoveryContext reads it).
+                { kind: 'task_dispatched', timestamp: oldTs, payload: { taskId: 't4' } },
+            ]);
+
+            const result = compactLedger(meshId);
+
+            expect(result.archivedCount).toBe(2); // the two OLD auto-launch entries
+            const activeKinds = readLedgerEntries(meshId).map(e => e.kind);
+            // The recent auto-launch and the old task_dispatched both remain active.
+            expect(activeKinds.filter(k => k === 'session_auto_launch')).toHaveLength(1);
+            expect(activeKinds).toContain('task_dispatched');
+        });
+
         it('updates archived-counts file', () => {
             const meshId = `compact-counts-${randomUUID().slice(0, 8)}`;
             const oldTs = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
