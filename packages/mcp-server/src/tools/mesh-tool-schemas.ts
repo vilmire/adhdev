@@ -395,6 +395,20 @@ export const MESH_TASK_HISTORY_TOOL = {
     },
 };
 
+export const MESH_LEDGER_QUERY_TOOL = {
+    name: 'mesh_ledger_query',
+    description: 'Read-only ledger query along the kind / time / node axes — the complement to mesh_task_history (which is task-axis-centric). Use this to answer "what happened on node X", "what failed since <time>", or "show every checkpoint_created" without scanning transcripts. Filters compose (AND): kind narrows to one or more entry kinds, since bounds the time window, node restricts to one node (identity-form-agnostic), tail caps the returned count to the most recent N. Returns the filtered ledger entries (oldest→newest) plus a small summary. Does not mutate anything.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            kind: { type: 'string', description: 'Filter by entry kind. Accepts one kind, or a comma-separated list (e.g. "task_failed,task_stalled"). Valid kinds include: task_dispatched, task_completed, task_failed, task_stalled, task_approval_needed, session_launched, session_stopped, checkpoint_created, node_cloned, node_joined, node_removed, direct_fast_forward, ledger_reconciled, event_held, mission_created, mission_status_changed, mission_goal_updated, magi_dispatched, magi_synthesis.' },
+            since: { type: 'string', description: 'Only return entries at/after this time. ISO-8601 string (e.g. "2026-07-05T00:00:00Z") or epoch-milliseconds. Omit for no lower bound.' },
+            node: { type: 'string', description: 'Only return entries originating from this node (nodeId). Matched by daemon-id equivalence, so any identifier form (mach_X / daemon_mach_X) resolves.' },
+            tail: { type: 'number', description: 'Return only the most recent N matching entries (default 50; clamped to 500).' },
+        },
+    },
+};
+
 export const MESH_RECORD_NOTE_TOOL = {
     name: 'mesh_record_note',
     description: 'Record a durable operating note for this mesh — a runtime-accumulated lesson that future coordinators inherit. '
@@ -462,6 +476,17 @@ export const MESH_REQUEUE_HELD_EVENTS_TOOL = {
                     since: { type: 'string', description: 'Only requeue held entries recorded at/after this ISO timestamp.' },
                 },
             },
+        },
+    },
+};
+
+export const MESH_WAIT_EVENTS_TOOL = {
+    name: 'mesh_wait_events',
+    description: 'Long-poll blocking wait for coordinator events — the polling-killer for pure-MCP coordinators. A pure-MCP coordinator only drains pendingCoordinatorEvents (worker completions, approvals, stall nudges, dispatch outcomes) when it calls a mesh tool, so "waiting" degrades into busy-polling mesh_status/mesh_view_queue. Instead call this: if events are already pending it drains and returns them immediately; otherwise it blocks up to timeoutMs for events to arrive, returning as soon as any do. On timeout it returns an empty events array with timedOut:true. Scope is the FULL pendingCoordinatorEvents queue (identical to what the reconcile loop drains) — not filtered by kind. This is the force-inject symmetric for MCP coordinators: after dispatching or enqueueing work, call mesh_wait_events instead of polling; when it returns events, act on them. Read-only w.r.t. mesh state (it only drains the coordinator inbox, which is what any mesh tool call already does).',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            timeoutMs: { type: 'number', description: 'Maximum time to block waiting for events, in milliseconds. Default 30000; clamped to [1000, 60000]. Returns early the moment any event arrives.' },
         },
     },
 };
@@ -819,10 +844,12 @@ export const ALL_MESH_TOOLS = [
     MESH_CLEANUP_SESSIONS_TOOL,
     MESH_PRUNE_STALE_DIRECT_TOOL,
     MESH_TASK_HISTORY_TOOL,
+    MESH_LEDGER_QUERY_TOOL,
     MESH_RECORD_NOTE_TOOL,
     MESH_FORGET_NOTE_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
     MESH_REQUEUE_HELD_EVENTS_TOOL,
+    MESH_WAIT_EVENTS_TOOL,
     MESH_MISSION_UPSERT_TOOL,
     MESH_MISSION_LIST_TOOL,
     MESH_REVIEW_INBOX_TOOL,

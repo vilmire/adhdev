@@ -5,7 +5,7 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 42 tools (== ALL_MESH_TOOLS, kept in sync with the coordinator-prompt TOOLS table
+ * 44 tools (== ALL_MESH_TOOLS, kept in sync with the coordinator-prompt TOOLS table
  * by the 6-6 consistency test in daemon-core coordinator-prompt.test.ts):
  *   mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
  *   mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
@@ -14,8 +14,9 @@
  *   mesh_clone_node, mesh_remove_node, mesh_refine_node, mesh_refine_batch,
  *   mesh_refine_config, mesh_change_impact_config, mesh_init, mesh_reinit,
  *   mesh_write_mesh_json_config, mesh_refine_plan, mesh_cleanup_sessions,
- *   mesh_prune_stale_direct, mesh_task_history, mesh_record_note,
- *   mesh_forget_note, mesh_reconcile_ledger, mesh_requeue_held_events,
+ *   mesh_prune_stale_direct, mesh_task_history, mesh_ledger_query,
+ *   mesh_record_note, mesh_forget_note, mesh_reconcile_ledger,
+ *   mesh_requeue_held_events, mesh_wait_events,
  *   mesh_mission_upsert, mesh_mission_list, mesh_review_inbox, mesh_magi_review,
  *   mesh_magi_collect, mesh_magi_panel_set, mesh_magi_panel_list,
  *   mesh_magi_kind_panel_set, mesh_magi_kind_panel_list
@@ -105,6 +106,8 @@ export {
     meshForgetNote,
     meshReviewInbox,
     meshTaskHistory,
+    meshLedgerQuery,
+    meshWaitEvents,
 } from './mesh-tools-mission.js';
 
 export {

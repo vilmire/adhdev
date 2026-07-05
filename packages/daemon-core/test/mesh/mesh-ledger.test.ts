@@ -239,6 +239,37 @@ describe('mesh-ledger', () => {
             expect(failures).toHaveLength(1);
         });
 
+        it('applies node filter by daemon-id equivalence', () => {
+            appendLedgerEntry(testMeshId, { kind: 'task_dispatched', nodeId: 'mach_alpha', payload: { i: 0 } });
+            appendLedgerEntry(testMeshId, { kind: 'task_dispatched', nodeId: 'mach_beta', payload: { i: 1 } });
+            appendLedgerEntry(testMeshId, { kind: 'task_completed', nodeId: 'mach_alpha', payload: { i: 2 } });
+            // Entry with no nodeId must never match a node filter.
+            appendLedgerEntry(testMeshId, { kind: 'coordinator_started', payload: { i: 3 } });
+
+            const alpha = readLedgerEntries(testMeshId, { node: 'mach_alpha' });
+            expect(alpha).toHaveLength(2);
+            expect(alpha.every(e => e.nodeId === 'mach_alpha')).toBe(true);
+
+            // Identity-form-agnostic: the daemon_mach_ prefix form resolves to the same node.
+            const alphaPrefixed = readLedgerEntries(testMeshId, { node: 'daemon_mach_alpha' });
+            expect(alphaPrefixed).toHaveLength(2);
+
+            const beta = readLedgerEntries(testMeshId, { node: 'mach_beta' });
+            expect(beta).toHaveLength(1);
+            expect(beta[0].payload.i).toBe(1);
+        });
+
+        it('composes node + kind filters (AND)', () => {
+            appendLedgerEntry(testMeshId, { kind: 'task_dispatched', nodeId: 'mach_alpha', payload: {} });
+            appendLedgerEntry(testMeshId, { kind: 'task_failed', nodeId: 'mach_alpha', payload: {} });
+            appendLedgerEntry(testMeshId, { kind: 'task_failed', nodeId: 'mach_beta', payload: {} });
+
+            const alphaFailures = readLedgerEntries(testMeshId, { node: 'mach_alpha', kind: ['task_failed'] });
+            expect(alphaFailures).toHaveLength(1);
+            expect(alphaFailures[0].nodeId).toBe('mach_alpha');
+            expect(alphaFailures[0].kind).toBe('task_failed');
+        });
+
         it('applies since filter', async () => {
             appendLedgerEntry(testMeshId, { kind: 'task_dispatched', payload: {} });
 

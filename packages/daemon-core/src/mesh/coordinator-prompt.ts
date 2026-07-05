@@ -621,8 +621,10 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_read_chat\` | Read recent chat messages from a delegated agent session |
 | \`mesh_read_debug\` | Collect a daemon-side chat/parser debug bundle for a session |
 | \`mesh_task_history\` | Read the task ledger — dispatches, completions, failures. Use to understand what has been done before deciding next steps |
+| \`mesh_ledger_query\` | Read-only ledger query along the kind/time/node axes (complement to task-axis mesh_task_history): filter by kind, since, node, tail — answer "what happened on node X / what failed since T" without scanning transcripts |
 | \`mesh_reconcile_ledger\` | Reconcile daemon-local ledgers over P2P — import missing entries from remote nodes into the coordinator local ledger |
 | \`mesh_requeue_held_events\` | Restore recoverable held coordinator events (T6 quarantine / pending-trim) back to the pending queue; lossless, no double-requeue |
+| \`mesh_wait_events\` | Long-poll blocking wait for coordinator events (worker completions/approvals/nudges) up to timeoutMs — drains immediately if any are pending, else blocks until they arrive. Use this instead of busy-polling mesh_status/mesh_view_queue after dispatching work |
 | \`mesh_review_inbox\` | List local worktree nodes needing human review — merge candidates and Refinery-blocked results with evidence/diff summaries |
 | \`mesh_record_note\` | Record a durable, provider-neutral operating note (provider quirk / pattern to avoid / recovery lesson). Future coordinators see it under "## Operating Notes" at launch |
 | \`mesh_forget_note\` | Retract a stale/wrong operating note by note_id or exact text so it stops riding into future coordinators' prompts (append-only tombstone; history preserved) |

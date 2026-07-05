@@ -209,6 +209,12 @@ export interface ReadLedgerOptions {
     tail?: number;
     since?: string;
     kind?: MeshLedgerKind[];
+    /**
+     * Filter to entries whose nodeId is equivalent to this daemon id. Matched via
+     * daemonIdsEquivalent (not raw ===) so caller-supplied identifiers in any form
+     * (mach_X vs daemon_mach_X) resolve correctly — see the canon-identity defect class.
+     */
+    node?: string;
 }
 
 export interface ReadLedgerSliceOptions {
@@ -1087,6 +1093,10 @@ export function readLedgerEntries(meshId: string, opts?: ReadLedgerOptions): Mes
     if (opts?.kind?.length) {
         const kindSet = new Set(opts.kind);
         entries = entries.filter(e => kindSet.has(e.kind));
+    }
+    if (opts?.node && opts.node.trim()) {
+        const node = opts.node.trim();
+        entries = entries.filter(e => e.nodeId && daemonIdsEquivalent(e.nodeId, node));
     }
     if (opts?.tail && opts.tail > 0 && entries.length > opts.tail) {
         entries = entries.slice(-opts.tail);

@@ -81,6 +81,93 @@ export async function meshTaskHistory(
     }, null, 2);
 }
 
+/** Clamp bounds for the mesh_wait_events long-poll window. */
+const WAIT_EVENTS_DEFAULT_TIMEOUT_MS = 30_000;
+const WAIT_EVENTS_MIN_TIMEOUT_MS = 1_000;
+const WAIT_EVENTS_MAX_TIMEOUT_MS = 60_000;
+/**
+ * Poll cadence for the wait loop. There is no in-process signal when a pending
+ * coordinator event is persisted (the whole path is SQLite/JSONL polled by the
+ * reconcile loop), so this tool polls the same drain the reconcile loop uses.
+ * 1s keeps it well under the 4s reconcile interval — responsive without turning
+ * the IPC drain (which also pulls remote nodes) into a hot spin.
+ */
+const WAIT_EVENTS_POLL_INTERVAL_MS = 1_000;
+
+export async function meshWaitEvents(
+    ctx: MeshContext,
+    args: { timeoutMs?: number },
+): Promise<string> {
+    const { mesh } = ctx;
+    const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+    const requested = typeof args.timeoutMs === 'number' && args.timeoutMs > 0
+        ? Math.floor(args.timeoutMs)
+        : WAIT_EVENTS_DEFAULT_TIMEOUT_MS;
+    const timeoutMs = Math.min(Math.max(requested, WAIT_EVENTS_MIN_TIMEOUT_MS), WAIT_EVENTS_MAX_TIMEOUT_MS);
+    const startedAt = Date.now();
+    const deadline = startedAt + timeoutMs;
+
+    // Long-poll: drain immediately; if anything is already pending, return it now.
+    // Otherwise sleep-poll the SAME drain path the reconcile loop uses until an
+    // event arrives or the deadline passes. Reusing drainCoordinatorPendingEvents
+    // guarantees identical drain/dedup/routing semantics — no divergent second
+    // drain that could lose or double-deliver events.
+    let events = await drainCoordinatorPendingEvents(ctx);
+    while (events.length === 0 && Date.now() < deadline) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        await sleep(Math.min(WAIT_EVENTS_POLL_INTERVAL_MS, remaining));
+        events = await drainCoordinatorPendingEvents(ctx);
+    }
+    const waitedMs = Date.now() - startedAt;
+    const timedOut = events.length === 0;
+    return JSON.stringify({
+        meshId: mesh.id,
+        timedOut,
+        waitedMs,
+        timeoutMs,
+        ...(events.length > 0 ? { events, pendingCoordinatorEvents: events } : { events: [] }),
+    }, null, 2);
+}
+
+export async function meshLedgerQuery(
+    ctx: MeshContext,
+    args: { kind?: string; since?: string; node?: string; tail?: number },
+): Promise<string> {
+    const { mesh } = ctx;
+    const pendingEvents = await drainCoordinatorPendingEvents(ctx);
+    // kind accepts one kind or a comma-separated list; normalize to the array the
+    // ledger reader expects. Empty tokens are dropped.
+    const kind = typeof args.kind === 'string' && args.kind.trim()
+        ? (args.kind.split(',').map(k => k.trim()).filter(Boolean) as any[])
+        : undefined;
+    // since accepts ISO-8601 or epoch-ms; readLedgerEntries parses via new Date(),
+    // which handles both an ISO string and a numeric ms value (as string or number).
+    const since = typeof args.since === 'string' && args.since.trim()
+        ? args.since.trim()
+        : (typeof args.since === 'number' ? String(args.since) : undefined);
+    const node = typeof args.node === 'string' && args.node.trim() ? args.node.trim() : undefined;
+    // tail default 50, clamped to 500 (read-only query axis — deeper than the
+    // compact task_history window since it isn't payload-heavy by default).
+    const requestedTail = typeof args.tail === 'number' && args.tail > 0 ? Math.floor(args.tail) : 50;
+    const tail = Math.min(requestedTail, 500);
+    const entries = readLedgerEntries(mesh.id, { tail, kind, since, node });
+    const summary = getLedgerSummary(mesh.id);
+    return JSON.stringify({
+        meshId: mesh.id,
+        query: {
+            ...(kind ? { kind } : {}),
+            ...(since ? { since } : {}),
+            ...(node ? { node } : {}),
+            tail,
+        },
+        count: entries.length,
+        entries,
+        summary,
+        ...(pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}),
+    }, null, 2);
+}
+
 export async function meshRecordNote(
     ctx: MeshContext,
     args: { text?: string; category?: string },
