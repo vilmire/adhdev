@@ -458,12 +458,12 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
             role="dialog"
             aria-modal="true"
             aria-label="Spec debug"
-            className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4"
+            className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center bg-black/60 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] px-0 sm:items-center sm:p-4"
             onClick={onClose}
             style={{ pointerEvents: 'auto' }}
         >
             <div
-                className="bg-bg-secondary text-text-primary border border-border-default rounded-t-xl sm:rounded-lg shadow-2xl max-w-2xl w-full max-h-[92vh] sm:max-h-[88vh] flex flex-col"
+                className="bg-bg-secondary text-text-primary border border-border-default rounded-t-xl sm:rounded-lg shadow-2xl max-w-2xl w-full max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[88vh] flex flex-col"
                 onClick={e => e.stopPropagation()}
             >
                 {/* Header */}
@@ -583,7 +583,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
 
                 {/* Body */}
                 {!editing && (
-                <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-[12px]">
+                <div className="flex-1 overflow-y-auto px-4 py-3 pb-[calc(12px+env(safe-area-inset-bottom,0px))] space-y-3 text-[12px]">
                     {error && (
                         <div className="text-status-error bg-status-error/20 border border-status-error/40 rounded p-2">{error}</div>
                     )}
