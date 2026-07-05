@@ -38,13 +38,13 @@ var import_crypto = require("crypto");
 var fs4 = __toESM(require("fs"));
 var os3 = __toESM(require("os"));
 var path2 = __toESM(require("path"));
-var import_session_host_core3 = require("@adhdev/session-host-core");
+var import_session_host_core5 = require("@adhdev/session-host-core");
 
 // src/server.ts
 var import_events = require("events");
 var fs3 = __toESM(require("fs"));
 var net = __toESM(require("net"));
-var import_session_host_core2 = require("@adhdev/session-host-core");
+var import_session_host_core4 = require("@adhdev/session-host-core");
 
 // src/runtime.ts
 var fs = __toESM(require("fs"));
@@ -438,11 +438,200 @@ var SessionHostStorage = class {
   }
 };
 
+// src/session-diagnostics.ts
+var import_session_host_core2 = require("@adhdev/session-host-core");
+var MAX_RECENT_DIAGNOSTICS = 200;
+function pushRecent(bucket, entry, max = MAX_RECENT_DIAGNOSTICS) {
+  bucket.push(entry);
+  if (bucket.length > max) {
+    bucket.splice(0, bucket.length - max);
+  }
+}
+function getSessionHostRecoveryLabel(record) {
+  const recoveryState = typeof record.meta?.runtimeRecoveryState === "string" ? String(record.meta.runtimeRecoveryState).trim() : "";
+  if (!recoveryState) return null;
+  if (recoveryState === "auto_resumed") return "restored after restart";
+  if (recoveryState === "resume_failed") return "restore failed";
+  if (recoveryState === "host_restart_interrupted") return "host restart interrupted";
+  if (recoveryState === "orphan_snapshot") return "snapshot recovered";
+  return recoveryState.replace(/_/g, " ");
+}
+function getSessionSurfaceKind(record) {
+  if (["starting", "running", "stopping", "interrupted"].includes(record.lifecycle)) {
+    return "live_runtime";
+  }
+  if ((record.lifecycle === "stopped" || record.lifecycle === "failed") && (record.meta?.restoredFromStorage === true || getSessionHostRecoveryLabel(record))) {
+    return "recovery_snapshot";
+  }
+  return "inactive_record";
+}
+function annotateSessionSurface(record) {
+  return {
+    ...record,
+    surfaceKind: getSessionSurfaceKind(record)
+  };
+}
+function sanitizeDiagnosticsRecord(record) {
+  return {
+    ...record,
+    launchCommand: {
+      command: record.launchCommand.command,
+      args: Array.isArray(record.launchCommand.args) ? [...record.launchCommand.args] : []
+    }
+  };
+}
+function buildHostDiagnostics(params) {
+  const limit = Math.max(1, Math.min(200, Number(params.payload?.limit) || 50));
+  const allSessions = params.payload?.includeSessions === false ? void 0 : params.sessions.map((record) => annotateSessionSurface(record)).map((record) => sanitizeDiagnosticsRecord(record));
+  const liveRuntimes = allSessions?.filter((record) => record.surfaceKind === "live_runtime");
+  const recoverySnapshots = allSessions?.filter((record) => record.surfaceKind === "recovery_snapshot").slice(0, limit);
+  const inactiveRecords = allSessions?.filter((record) => record.surfaceKind === "inactive_record").slice(0, limit);
+  const sessions = allSessions ? [
+    ...liveRuntimes || [],
+    ...recoverySnapshots || [],
+    ...inactiveRecords || []
+  ] : void 0;
+  return {
+    hostStartedAt: params.hostStartedAt,
+    endpoint: params.endpointPath,
+    runtimeCount: params.runtimeCount,
+    supportedRequestTypes: [...import_session_host_core2.SESSION_HOST_SUPPORTED_REQUEST_TYPES],
+    sessions,
+    liveRuntimes,
+    recoverySnapshots,
+    inactiveRecords,
+    recentLogs: params.recentLogs.slice(-limit),
+    recentRequests: params.recentRequests.slice(-limit),
+    recentTransitions: params.recentTransitions.slice(-limit)
+  };
+}
+
+// src/session-lifecycle.ts
+var import_session_host_core3 = require("@adhdev/session-host-core");
+function compareDuplicateCandidates(a, b) {
+  const score = (record) => {
+    const lifecycleScore = record.lifecycle === "running" ? 4 : record.lifecycle === "starting" ? 3 : record.lifecycle === "stopping" ? 2 : record.lifecycle === "interrupted" ? 1 : 0;
+    return [
+      lifecycleScore,
+      record.writeOwner ? 1 : 0,
+      Array.isArray(record.attachedClients) ? record.attachedClients.length : 0,
+      record.lastActivityAt || 0,
+      record.startedAt || 0,
+      record.createdAt || 0
+    ];
+  };
+  const aScore = score(a);
+  const bScore = score(b);
+  for (let i = 0; i < aScore.length; i += 1) {
+    if (aScore[i] === bScore[i]) continue;
+    return bScore[i] - aScore[i];
+  }
+  return 0;
+}
+function planDuplicatePrune(sessions, filters) {
+  const candidates = sessions.filter((record) => ["starting", "running", "stopping", "interrupted"].includes(record.lifecycle)).filter((record) => !filters.providerFilter || record.providerType === filters.providerFilter).filter((record) => !filters.workspaceFilter || record.workspace === filters.workspaceFilter);
+  const groups = /* @__PURE__ */ new Map();
+  for (const record of candidates) {
+    const providerSessionId = typeof record.meta?.providerSessionId === "string" ? String(record.meta.providerSessionId).trim() : "";
+    if (!providerSessionId) continue;
+    const bindingKey = `${record.providerType}::${record.workspace}::${providerSessionId}`;
+    const bucket = groups.get(bindingKey) || [];
+    bucket.push(record);
+    groups.set(bindingKey, bucket);
+  }
+  const duplicateGroups = [];
+  const keptSessionIds = [];
+  const duplicateRecords = [];
+  for (const [bindingKey, records] of groups.entries()) {
+    if (records.length < 2) continue;
+    const sorted = [...records].sort((a, b) => compareDuplicateCandidates(a, b));
+    const kept = sorted[0];
+    const duplicates = sorted.slice(1);
+    const providerSessionId = typeof kept.meta?.providerSessionId === "string" ? String(kept.meta.providerSessionId) : "";
+    duplicateGroups.push({
+      bindingKey,
+      providerType: kept.providerType,
+      workspace: kept.workspace,
+      providerSessionId,
+      keptSessionId: kept.sessionId,
+      prunedSessionIds: duplicates.map((record) => record.sessionId)
+    });
+    keptSessionIds.push(kept.sessionId);
+    for (const duplicate of duplicates) {
+      duplicateRecords.push(duplicate);
+    }
+  }
+  return { duplicateGroups, keptSessionIds, duplicateRecords };
+}
+function buildPayloadFromRecord(record) {
+  return {
+    sessionId: record.sessionId,
+    runtimeKey: record.runtimeKey,
+    displayName: record.displayName,
+    providerType: record.providerType,
+    category: record.category,
+    workspace: record.workspace,
+    launchCommand: record.launchCommand,
+    cols: (0, import_session_host_core3.resolveSessionHostCols)(typeof record.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : void 0),
+    rows: (0, import_session_host_core3.resolveSessionHostRows)(typeof record.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : void 0),
+    meta: record.meta
+  };
+}
+function buildRecoveredRecord(persisted) {
+  const wasLiveRuntime = !["stopped", "failed"].includes(persisted.record.lifecycle);
+  const hadAttachedClients = Array.isArray(persisted.record.attachedClients) && persisted.record.attachedClients.length > 0;
+  const hadWriteOwner = !!persisted.record.writeOwner;
+  const hadRecoveryInterest = hadAttachedClients || hadWriteOwner;
+  const recoveredRecord = {
+    ...persisted.record,
+    attachedClients: [],
+    writeOwner: null,
+    lifecycle: wasLiveRuntime ? "stopped" : persisted.record.lifecycle,
+    lastActivityAt: Date.now(),
+    meta: {
+      ...persisted.record.meta || {},
+      restoredFromStorage: true,
+      runtimeRecoveryState: wasLiveRuntime ? "orphan_snapshot" : "snapshot",
+      runtimeHadAttachedClientsAtCrash: hadAttachedClients,
+      runtimeHadWriteOwnerAtCrash: hadWriteOwner,
+      runtimeAutoResumeSkipped: wasLiveRuntime && hadRecoveryInterest
+    }
+  };
+  return { recoveredRecord, wasLiveRuntime, hadRecoveryInterest };
+}
+
+// src/session-protocol.ts
+function getRequestSessionId(request) {
+  const payload = request.payload;
+  return typeof payload?.sessionId === "string" ? payload.sessionId : void 0;
+}
+function getRequestClientId(request) {
+  const payload = request.payload;
+  return typeof payload?.clientId === "string" ? payload.clientId : void 0;
+}
+function mergeRuntimeSnapshot(base, record, opts) {
+  const cols = typeof record?.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : 80;
+  const rows = typeof record?.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : 24;
+  if (typeof opts.sinceSeq === "number" || !opts.runtimeText) {
+    return {
+      ...base,
+      cols,
+      rows
+    };
+  }
+  return {
+    ...base,
+    text: opts.runtimeText,
+    truncated: false,
+    cols,
+    rows
+  };
+}
+
 // src/server.ts
-var SessionHostServer = class _SessionHostServer extends import_events.EventEmitter {
-  static MAX_RECENT_DIAGNOSTICS = 200;
+var SessionHostServer = class extends import_events.EventEmitter {
   endpoint;
-  registry = new import_session_host_core2.SessionHostRegistry();
+  registry = new import_session_host_core4.SessionHostRegistry();
   runtimes = /* @__PURE__ */ new Map();
   storage;
   ipcServer = null;
@@ -459,7 +648,7 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
   lastNoOutputInputWarnAt = /* @__PURE__ */ new Map();
   constructor(options = {}) {
     super();
-    this.endpoint = options.endpoint || (0, import_session_host_core2.getDefaultSessionHostEndpoint)(options.appName || "adhdev");
+    this.endpoint = options.endpoint || (0, import_session_host_core4.getDefaultSessionHostEndpoint)(options.appName || "adhdev");
     this.storage = new SessionHostStorage({ appName: options.appName || "adhdev" });
   }
   async start() {
@@ -484,7 +673,7 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
         } catch {
         }
       });
-      socket.on("data", (0, import_session_host_core2.createLineParser)((envelope) => {
+      socket.on("data", (0, import_session_host_core4.createLineParser)((envelope) => {
         if (envelope.kind !== "request") return;
         void this.handleIncomingRequest(socket, envelope);
       }));
@@ -689,7 +878,7 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
           if (this.runtimes.has(request.payload.sessionId)) {
             return { success: true, result: existing };
           }
-          const resumed = this.startRuntime(existing, this.buildPayloadFromRecord(existing), "session_resumed");
+          const resumed = this.startRuntime(existing, buildPayloadFromRecord(existing), "session_resumed");
           this.recordRuntimeTransition(request.payload.sessionId, "resume_session", resumed.lifecycle, void 0, true);
           return { success: true, result: resumed };
         }
@@ -771,7 +960,7 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
     sessions.add(sessionId);
   }
   async handleIncomingRequest(socket, envelope) {
-    const sessionId = this.getRequestSessionId(envelope.request);
+    const sessionId = getRequestSessionId(envelope.request);
     if (sessionId && (envelope.request.type === "create_session" || envelope.request.type === "attach_session")) {
       this.subscribeSocketToSession(socket, sessionId);
     }
@@ -785,13 +974,13 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
       timestamp: startedAt,
       requestId: envelope.requestId,
       type: envelope.request.type,
-      sessionId: this.getRequestSessionId(envelope.request),
-      clientId: this.getRequestClientId(envelope.request),
+      sessionId: getRequestSessionId(envelope.request),
+      clientId: getRequestClientId(envelope.request),
       success: response.success,
       durationMs: Math.max(0, Date.now() - startedAt),
       error: response.success ? void 0 : response.error
     });
-    this.writeEnvelopeSafely(socket, (0, import_session_host_core2.createResponseEnvelope)(envelope.requestId, response));
+    this.writeEnvelopeSafely(socket, (0, import_session_host_core4.createResponseEnvelope)(envelope.requestId, response));
   }
   writeEnvelopeSafely(socket, envelope) {
     if (socket.destroyed || !socket.writable || socket.writableEnded) {
@@ -836,77 +1025,17 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
       console.error(`[session-host] Persist failed for ${sessionId}: ${code}: ${error?.message || error}`);
     }
   }
-  getSessionHostRecoveryLabel(record) {
-    const recoveryState = typeof record.meta?.runtimeRecoveryState === "string" ? String(record.meta.runtimeRecoveryState).trim() : "";
-    if (!recoveryState) return null;
-    if (recoveryState === "auto_resumed") return "restored after restart";
-    if (recoveryState === "resume_failed") return "restore failed";
-    if (recoveryState === "host_restart_interrupted") return "host restart interrupted";
-    if (recoveryState === "orphan_snapshot") return "snapshot recovered";
-    return recoveryState.replace(/_/g, " ");
-  }
-  getSessionSurfaceKind(record) {
-    if (["starting", "running", "stopping", "interrupted"].includes(record.lifecycle)) {
-      return "live_runtime";
-    }
-    if ((record.lifecycle === "stopped" || record.lifecycle === "failed") && (record.meta?.restoredFromStorage === true || this.getSessionHostRecoveryLabel(record))) {
-      return "recovery_snapshot";
-    }
-    return "inactive_record";
-  }
-  annotateSessionSurface(record) {
-    return {
-      ...record,
-      surfaceKind: this.getSessionSurfaceKind(record)
-    };
-  }
-  sanitizeDiagnosticsRecord(record) {
-    return {
-      ...record,
-      launchCommand: {
-        command: record.launchCommand.command,
-        args: Array.isArray(record.launchCommand.args) ? [...record.launchCommand.args] : []
-      }
-    };
-  }
   getHostDiagnostics(payload) {
-    const limit = Math.max(1, Math.min(200, Number(payload?.limit) || 50));
-    const allSessions = payload?.includeSessions === false ? void 0 : this.registry.listSessions().map((record) => this.annotateSessionSurface(record)).map((record) => this.sanitizeDiagnosticsRecord(record));
-    const liveRuntimes = allSessions?.filter((record) => record.surfaceKind === "live_runtime");
-    const recoverySnapshots = allSessions?.filter((record) => record.surfaceKind === "recovery_snapshot").slice(0, limit);
-    const inactiveRecords = allSessions?.filter((record) => record.surfaceKind === "inactive_record").slice(0, limit);
-    const sessions = allSessions ? [
-      ...liveRuntimes || [],
-      ...recoverySnapshots || [],
-      ...inactiveRecords || []
-    ] : void 0;
-    return {
+    return buildHostDiagnostics({
+      payload,
       hostStartedAt: this.startedAt,
-      endpoint: this.endpoint.path,
+      endpointPath: this.endpoint.path,
       runtimeCount: this.runtimes.size,
-      supportedRequestTypes: [...import_session_host_core2.SESSION_HOST_SUPPORTED_REQUEST_TYPES],
-      sessions,
-      liveRuntimes,
-      recoverySnapshots,
-      inactiveRecords,
-      recentLogs: this.recentLogs.slice(-limit),
-      recentRequests: this.recentRequests.slice(-limit),
-      recentTransitions: this.recentTransitions.slice(-limit)
-    };
-  }
-  getRequestSessionId(request) {
-    const payload = request.payload;
-    return typeof payload?.sessionId === "string" ? payload.sessionId : void 0;
-  }
-  getRequestClientId(request) {
-    const payload = request.payload;
-    return typeof payload?.clientId === "string" ? payload.clientId : void 0;
-  }
-  pushRecent(bucket, entry) {
-    bucket.push(entry);
-    if (bucket.length > _SessionHostServer.MAX_RECENT_DIAGNOSTICS) {
-      bucket.splice(0, bucket.length - _SessionHostServer.MAX_RECENT_DIAGNOSTICS);
-    }
+      sessions: this.registry.listSessions(),
+      recentLogs: this.recentLogs,
+      recentRequests: this.recentRequests,
+      recentTransitions: this.recentTransitions
+    });
   }
   recordHostLog(level, message, sessionId, data) {
     const entry = {
@@ -916,12 +1045,12 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
       sessionId,
       data
     };
-    this.pushRecent(this.recentLogs, entry);
+    pushRecent(this.recentLogs, entry);
     this.emitEvent({ type: "host_log", entry });
     this.emit("log", `[${level}] ${message}`);
   }
   recordRequestTrace(trace) {
-    this.pushRecent(this.recentRequests, trace);
+    pushRecent(this.recentRequests, trace);
     this.emitEvent({ type: "request_trace", trace });
     if (!trace.success) {
       this.recordHostLog(
@@ -991,7 +1120,7 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
       success,
       error
     };
-    this.pushRecent(this.recentTransitions, transition);
+    pushRecent(this.recentTransitions, transition);
     this.emitEvent({ type: "runtime_transition", transition });
   }
   waitForRuntimeExit(sessionId, timeoutMs = 5e3) {
@@ -1027,29 +1156,8 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
   getSnapshot(sessionId, sinceSeq) {
     const snapshot = this.registry.getSnapshot(sessionId, sinceSeq);
     const record = this.registry.getSession(sessionId);
-    if (typeof sinceSeq === "number") {
-      return {
-        ...snapshot,
-        cols: typeof record?.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : 80,
-        rows: typeof record?.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : 24
-      };
-    }
-    const runtime = this.runtimes.get(sessionId);
-    const runtimeText = runtime?.getSnapshotText?.() || "";
-    if (!runtimeText) {
-      return {
-        ...snapshot,
-        cols: typeof record?.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : 80,
-        rows: typeof record?.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : 24
-      };
-    }
-    return {
-      ...snapshot,
-      text: runtimeText,
-      truncated: false,
-      cols: typeof record?.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : 80,
-      rows: typeof record?.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : 24
-    };
+    const runtimeText = typeof sinceSeq === "number" ? "" : this.runtimes.get(sessionId)?.getSnapshotText?.() || "";
+    return mergeRuntimeSnapshot(snapshot, record, { sinceSeq, runtimeText });
   }
   flushAllPersistence() {
     for (const sessionId of this.runtimes.keys()) {
@@ -1072,7 +1180,7 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
       await this.waitForRuntimeExit(sessionId);
     }
     const latest = this.registry.getSession(sessionId) || existing;
-    const restarted = this.startRuntime(latest, this.buildPayloadFromRecord(latest), "session_resumed");
+    const restarted = this.startRuntime(latest, buildPayloadFromRecord(latest), "session_resumed");
     this.recordRuntimeTransition(sessionId, "restart_completed", restarted.lifecycle, void 0, true);
     return restarted;
   }
@@ -1080,36 +1188,13 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
     const providerFilter = typeof payload?.providerType === "string" ? payload.providerType.trim() : "";
     const workspaceFilter = typeof payload?.workspace === "string" ? payload.workspace.trim() : "";
     const dryRun = payload?.dryRun === true;
-    const sessions = this.registry.listSessions().filter((record) => ["starting", "running", "stopping", "interrupted"].includes(record.lifecycle)).filter((record) => !providerFilter || record.providerType === providerFilter).filter((record) => !workspaceFilter || record.workspace === workspaceFilter);
-    const groups = /* @__PURE__ */ new Map();
-    for (const record of sessions) {
-      const providerSessionId = typeof record.meta?.providerSessionId === "string" ? String(record.meta.providerSessionId).trim() : "";
-      if (!providerSessionId) continue;
-      const bindingKey = `${record.providerType}::${record.workspace}::${providerSessionId}`;
-      const bucket = groups.get(bindingKey) || [];
-      bucket.push(record);
-      groups.set(bindingKey, bucket);
-    }
-    const duplicateGroups = [];
-    const keptSessionIds = [];
+    const { duplicateGroups, keptSessionIds, duplicateRecords } = planDuplicatePrune(
+      this.registry.listSessions(),
+      { providerFilter, workspaceFilter }
+    );
     const prunedSessionIds = [];
-    for (const [bindingKey, records] of groups.entries()) {
-      if (records.length < 2) continue;
-      const sorted = [...records].sort((a, b) => this.compareDuplicateCandidates(a, b));
-      const kept = sorted[0];
-      const duplicates = sorted.slice(1);
-      const providerSessionId = typeof kept.meta?.providerSessionId === "string" ? String(kept.meta.providerSessionId) : "";
-      duplicateGroups.push({
-        bindingKey,
-        providerType: kept.providerType,
-        workspace: kept.workspace,
-        providerSessionId,
-        keptSessionId: kept.sessionId,
-        prunedSessionIds: duplicates.map((record) => record.sessionId)
-      });
-      keptSessionIds.push(kept.sessionId);
-      if (dryRun) continue;
-      for (const duplicate of duplicates) {
+    if (!dryRun) {
+      for (const duplicate of duplicateRecords) {
         await this.pruneDuplicateRuntime(duplicate);
         prunedSessionIds.push(duplicate.sessionId);
       }
@@ -1137,25 +1222,7 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
     const states = this.storage.loadAll();
     let skippedAutoResumeSessions = 0;
     for (const persisted of states) {
-      const wasLiveRuntime = !["stopped", "failed"].includes(persisted.record.lifecycle);
-      const hadAttachedClients = Array.isArray(persisted.record.attachedClients) && persisted.record.attachedClients.length > 0;
-      const hadWriteOwner = !!persisted.record.writeOwner;
-      const hadRecoveryInterest = hadAttachedClients || hadWriteOwner;
-      const recoveredRecord = {
-        ...persisted.record,
-        attachedClients: [],
-        writeOwner: null,
-        lifecycle: wasLiveRuntime ? "stopped" : persisted.record.lifecycle,
-        lastActivityAt: Date.now(),
-        meta: {
-          ...persisted.record.meta || {},
-          restoredFromStorage: true,
-          runtimeRecoveryState: wasLiveRuntime ? "orphan_snapshot" : "snapshot",
-          runtimeHadAttachedClientsAtCrash: hadAttachedClients,
-          runtimeHadWriteOwnerAtCrash: hadWriteOwner,
-          runtimeAutoResumeSkipped: wasLiveRuntime && hadRecoveryInterest
-        }
-      };
+      const { recoveredRecord, wasLiveRuntime, hadRecoveryInterest } = buildRecoveredRecord(persisted);
       this.registry.restoreSession(recoveredRecord, persisted.snapshot);
       this.storage.save(recoveredRecord, persisted.snapshot);
       if (wasLiveRuntime && hadRecoveryInterest) {
@@ -1165,26 +1232,6 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
     if (skippedAutoResumeSessions > 0) {
       this.recordHostLog("warn", `session host restored ${skippedAutoResumeSessions} live runtime snapshot(s) without auto-resume`);
     }
-  }
-  compareDuplicateCandidates(a, b) {
-    const score = (record) => {
-      const lifecycleScore = record.lifecycle === "running" ? 4 : record.lifecycle === "starting" ? 3 : record.lifecycle === "stopping" ? 2 : record.lifecycle === "interrupted" ? 1 : 0;
-      return [
-        lifecycleScore,
-        record.writeOwner ? 1 : 0,
-        Array.isArray(record.attachedClients) ? record.attachedClients.length : 0,
-        record.lastActivityAt || 0,
-        record.startedAt || 0,
-        record.createdAt || 0
-      ];
-    };
-    const aScore = score(a);
-    const bScore = score(b);
-    for (let i = 0; i < aScore.length; i += 1) {
-      if (aScore[i] === bScore[i]) continue;
-      return bScore[i] - aScore[i];
-    }
-    return 0;
   }
   async pruneDuplicateRuntime(record) {
     const providerSessionId = typeof record.meta?.providerSessionId === "string" ? String(record.meta.providerSessionId) : void 0;
@@ -1205,20 +1252,6 @@ var SessionHostServer = class _SessionHostServer extends import_events.EventEmit
     }
     this.registry.deleteSession(record.sessionId);
     this.storage.remove(record.sessionId);
-  }
-  buildPayloadFromRecord(record) {
-    return {
-      sessionId: record.sessionId,
-      runtimeKey: record.runtimeKey,
-      displayName: record.displayName,
-      providerType: record.providerType,
-      category: record.category,
-      workspace: record.workspace,
-      launchCommand: record.launchCommand,
-      cols: (0, import_session_host_core2.resolveSessionHostCols)(typeof record.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : void 0),
-      rows: (0, import_session_host_core2.resolveSessionHostRows)(typeof record.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : void 0),
-      meta: record.meta
-    };
   }
   startRuntime(record, payload, startEventType) {
     const runtime = new PtySessionRuntime({
@@ -1309,7 +1342,7 @@ async function runServer() {
   });
 }
 async function listRuntimes(showAll = false) {
-  const client = new import_session_host_core3.SessionHostClient({ endpoint: (0, import_session_host_core3.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME) });
+  const client = new import_session_host_core5.SessionHostClient({ endpoint: (0, import_session_host_core5.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME) });
   try {
     const response = await client.request({
       type: "list_sessions",
@@ -1328,7 +1361,7 @@ async function listRuntimes(showAll = false) {
       console.log([
         runtime.runtimeKey,
         runtime.lifecycle,
-        (0, import_session_host_core3.formatRuntimeOwner)(runtime),
+        (0, import_session_host_core5.formatRuntimeOwner)(runtime),
         runtime.workspaceLabel,
         runtime.sessionId,
         runtime.displayName
@@ -1340,7 +1373,7 @@ async function listRuntimes(showAll = false) {
   }
 }
 async function attachRuntime(target, readOnly = false, takeover = false) {
-  const client = new import_session_host_core3.SessionHostClient({ endpoint: (0, import_session_host_core3.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME) });
+  const client = new import_session_host_core5.SessionHostClient({ endpoint: (0, import_session_host_core5.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME) });
   const clientId = `local-terminal-${process.pid}-${(0, import_crypto.randomUUID)().slice(0, 8)}`;
   let lastSeq = 0;
   let restoredRawMode = false;
@@ -1435,7 +1468,7 @@ async function attachRuntime(target, readOnly = false, takeover = false) {
     if (!listResponse.success || !listResponse.result) {
       throw new Error(listResponse.error || "Failed to list runtimes");
     }
-    let runtimeRecord = (0, import_session_host_core3.resolveAttachableRuntimeRecord)(listResponse.result, target);
+    let runtimeRecord = (0, import_session_host_core5.resolveAttachableRuntimeRecord)(listResponse.result, target);
     runtimeId = runtimeRecord.sessionId;
     if (runtimeRecord.lifecycle === "interrupted" && !readOnly) {
       const resumeResponse = await client.request({
@@ -1578,13 +1611,13 @@ async function main() {
     if (!target) {
       throw new Error("runtime target is required: adhdev-sessiond resume <runtimeId|runtimeKey>");
     }
-    const client = new import_session_host_core3.SessionHostClient({ endpoint: (0, import_session_host_core3.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME) });
+    const client = new import_session_host_core5.SessionHostClient({ endpoint: (0, import_session_host_core5.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME) });
     try {
       const listResponse = await client.request({ type: "list_sessions", payload: {} });
       if (!listResponse.success || !listResponse.result) {
         throw new Error(listResponse.error || "Failed to list runtimes");
       }
-      const runtimeRecord = (0, import_session_host_core3.resolveRuntimeRecord)(listResponse.result, target);
+      const runtimeRecord = (0, import_session_host_core5.resolveRuntimeRecord)(listResponse.result, target);
       const resumeResponse = await client.request({
         type: "resume_session",
         payload: {

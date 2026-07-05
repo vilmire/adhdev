@@ -7,7 +7,6 @@ interface SessionHostServerOptions {
     appName?: string;
 }
 declare class SessionHostServer extends EventEmitter {
-    private static readonly MAX_RECENT_DIAGNOSTICS;
     readonly endpoint: SessionHostEndpoint;
     readonly registry: SessionHostRegistry;
     private runtimes;
@@ -34,14 +33,7 @@ declare class SessionHostServer extends EventEmitter {
     private writeEnvelopeSafely;
     private schedulePersist;
     private persistNow;
-    private getSessionHostRecoveryLabel;
-    private getSessionSurfaceKind;
-    private annotateSessionSurface;
-    private sanitizeDiagnosticsRecord;
     private getHostDiagnostics;
-    private getRequestSessionId;
-    private getRequestClientId;
-    private pushRecent;
     private recordHostLog;
     private recordRequestTrace;
     private scheduleNoOutputInputDiagnostic;
@@ -53,9 +45,7 @@ declare class SessionHostServer extends EventEmitter {
     private restartRuntime;
     private pruneDuplicateSessions;
     private restorePersistedRuntimes;
-    private compareDuplicateCandidates;
     private pruneDuplicateRuntime;
-    private buildPayloadFromRecord;
     private startRuntime;
 }
 
