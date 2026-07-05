@@ -78,6 +78,16 @@ export {
     waitForCliAdapterReady,
 } from './cli-provider-status-helpers.js';
 
+/**
+ * The auto-approve settle-gate identity signature: the modal's question line plus
+ * the NORMALIZED affirmative label, no volatile counters or raw button set. Shared
+ * by the fire path (maybeAutoApproveStatus) and the mask-stall nudge so both compare
+ * the SAME identity the settle clock tracks (AUTOAPPROVE-SETTLE-FLAP).
+ */
+function approvalModalSignature(message: unknown, affirmativeAnchor: string): string {
+    return [typeof message === 'string' ? message.trim() : '', affirmativeAnchor].join('::');
+}
+
 export class CliProviderInstance implements ProviderInstance {
     readonly type: string;
     readonly category = 'cli' as const;
@@ -1570,6 +1580,31 @@ export class CliProviderInstance implements ProviderInstance {
             : CliProviderInstance.AUTO_APPROVE_GATE_HYSTERESIS_MS;
     }
 
+    /**
+     * The settle-gate identity signature for a raw activeModal, or null when the
+     * modal is NOT a concrete auto-approvable consent prompt (no captured buttons,
+     * a picker/confirm kind, or no reliable affirmative+decline anchor). Mirrors the
+     * gates the auto-approve fire path applies before computing modalSignature, so
+     * the mask-stall nudge can ask the SAME question the settle gate is tracking —
+     * "is THIS frame's modal the identity the settle clock is accruing against?" —
+     * without duplicating the button-pick logic. The signature is message +
+     * normalized affirmative label only (no volatile counters/button set), matching
+     * the fire path exactly (AUTOAPPROVE-SETTLE-FLAP).
+     */
+    private approvableModalSignature(modal: any): string | null {
+        const buttons = Array.isArray(modal?.buttons)
+            ? modal.buttons.map((b: any) => String(b || '').trim()).filter(Boolean)
+            : [];
+        if (!modal || buttons.length === 0) return null;
+        const modalKind = typeof modal?.kind === 'string' ? modal.kind : 'approval';
+        if (modalKind !== 'approval') return null;
+        const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, this.provider);
+        const hasReliableConsentAnchor = hasNegativeApprovalOption(buttons)
+            || hasReliableApprovalAffirmative(buttons);
+        if (buttonIndex < 0 || !hasReliableConsentAnchor) return null;
+        return approvalModalSignature(modal?.message, normalizeApprovalLabel(buttonLabel));
+    }
+
     // FALSE-IDLE (self-coordinator settle): an autonomously-progressing mesh session
     // is either a delegated worker (isMeshWorkerSession) OR the coordinator's OWN
     // claude-cli session (meshCoordinatorFor). Both run auto-approved tool turns whose
@@ -2056,10 +2091,7 @@ export class CliProviderInstance implements ProviderInstance {
         // identifies the consent question without tracking the volatile button
         // positions.
         const affirmativeAnchor = normalizeApprovalLabel(buttonLabel);
-        const modalSignature = [
-            typeof modal?.message === 'string' ? modal.message.trim() : '',
-            affirmativeAnchor,
-        ].join('::');
+        const modalSignature = approvalModalSignature(modal?.message, affirmativeAnchor);
         // Busy-window re-entry guard still needs the seq: two DISTINCT
         // back-to-back approvals can carry identical message/buttons (common
         // with claude-cli). Without the seq their busy signatures collide and
@@ -3101,18 +3133,34 @@ export class CliProviderInstance implements ProviderInstance {
         if (!this.isMeshWorkerSession()) return;
         if (adapterStatus?.status !== 'waiting_approval') return;
         if (!this.autoApproveMaskStalled(now)) return;
-        // AUTOAPPROVE-FLAP-RECUR (Fix C): the mask-stall bound tripped, but if a
-        // concrete approvable modal is on screen RIGHT NOW and the settle gate is
-        // already in progress, auto-approve is about to fire on its own (the same
-        // call runs the settle evaluation just below this nudge). Defer to the fire
-        // rather than paging the coordinator — the nudge would race a resolveModal
-        // that lands milliseconds later, producing the coordinator flap this fix
-        // targets. A genuinely stuck episode (no captured modal, or settle never
-        // engaged) still has pendingAutoApprovalSince === 0 here and pages normally.
-        const modalButtons = Array.isArray(adapterStatus.activeModal?.buttons)
-            ? adapterStatus.activeModal.buttons.map((b: any) => String(b || '').trim()).filter(Boolean)
-            : [];
-        if (this.pendingAutoApprovalSince && modalButtons.length > 0) return;
+        // AUTOAPPROVE-FLAP-RECUR (Fix C, redesigned): the mask-stall bound tripped.
+        // If auto-approve is genuinely about to fire on its own, defer to that fire —
+        // the nudge would race a resolveModal landing milliseconds later, producing
+        // the coordinator flap this fix targets.
+        //
+        // The ORIGINAL guard deferred on `pendingAutoApprovalSince && buttons > 0`
+        // alone. That is FALSE-POSITIVE for a FLAPPING modal: a modal whose identity
+        // changes every frame (message streaming) keeps pendingAutoApprovalSince
+        // nonzero (it is re-stamped to `now` on every signature change) and keeps
+        // buttons present, yet its settle clock is wiped back to ~0 each frame and
+        // NEVER reaches SETTLE_MS — so auto-approve can never fire and this is exactly
+        // the stuck episode the coordinator MUST be paged about. The old guard
+        // silenced it permanently (the live rc.466 regression).
+        //
+        // Discriminator: a settle is genuinely PROGRESSING only if THIS frame's modal
+        // carries the SAME identity the settle clock is already accruing against
+        // (pendingAutoApprovalSignature). A stable modal keeps its signature across
+        // frames → the clock climbs → resolveModal is imminent → defer. A flapping
+        // modal presents a DIFFERENT signature this frame (or none — a non-concrete /
+        // picker / never-captured modal) → the clock is about to reset (or never
+        // engaged) → do NOT defer, page the coordinator. This is evaluated for the
+        // CURRENT frame (not a stale prior-frame value), so a stable modal polled only
+        // twice — start, then past the stall bound — is still correctly deferred.
+        const currentSignature = this.approvableModalSignature(adapterStatus.activeModal);
+        const settleProgressing = !!currentSignature
+            && this.pendingAutoApprovalSince > 0
+            && currentSignature === this.pendingAutoApprovalSignature;
+        if (settleProgressing) return;
         // Exactly once per stalled episode (autoApproveMaskSince uniquely identifies it).
         if (this.stalledApprovalNudgeEpisode === this.autoApproveMaskSince) return;
         this.stalledApprovalNudgeEpisode = this.autoApproveMaskSince;

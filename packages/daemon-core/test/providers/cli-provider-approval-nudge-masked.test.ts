@@ -21,6 +21,11 @@ import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.j
 // capture emissions.
 
 const MASK_STALL_MS = 4500
+// Worker flap-continuity window (AUTOAPPROVE-FLAP-RECUR Fix B): a delegated worker's
+// settle+mask episode survives a busy/generating blip for this long before a modal
+// that stays gone is treated as a genuine close. Kept in sync with
+// CliProviderInstance.AUTO_APPROVE_FLAP_CONTINUITY_MS.
+const FLAP_CONTINUITY_MS = 4000
 
 const liveInstances: any[] = []
 
@@ -141,9 +146,13 @@ describe('NOTIF-APPROVAL-MASKED: stalled auto-approve coordinator nudge', () => 
     h.call(UNSTABLE(2, 'b'), 1000 + MASK_STALL_MS + 1)
     expect(nudges(h.events).length).toBe(1)
 
-    // Modal genuinely goes away (past the hysteresis window) → episode ends, keys reset.
+    // Modal genuinely goes away and STAYS gone past the worker flap-continuity window
+    // (AUTO_APPROVE_FLAP_CONTINUITY_MS = 4000ms, measured from the first generating
+    // frame) → the settle+mask episode ends, keys reset. The first generating frame
+    // arms the continuity clock; the second, > 4000ms later, crosses it — this is a
+    // genuine close, not a transient busy blip (which the continuity window bridges).
     h.call(GENERATING(3), 1000 + MASK_STALL_MS + 300)
-    h.call(GENERATING(3), 1000 + MASK_STALL_MS + 3000)
+    h.call(GENERATING(3), 1000 + MASK_STALL_MS + 300 + FLAP_CONTINUITY_MS + 20)
     expect(h.instance.autoApproveMaskSince).toBe(0)
     expect(h.instance.stalledApprovalNudgeEpisode).toBe(0)
 
