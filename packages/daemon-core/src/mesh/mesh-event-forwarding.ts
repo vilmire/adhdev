@@ -7,7 +7,7 @@ import type { SessionRecoveryContext } from './mesh-ledger.js';
 import { updateSessionTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue } from './mesh-work-queue.js';
 import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus, recordCompletionConflict } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, readV2EnvelopeFromWire, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, prunePendingMeshCoordinatorEventsRetention, readV2EnvelopeFromWire, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { resolveMeshHostStatus } from './mesh-host-ownership.js';
@@ -178,10 +178,25 @@ export function __resetMeshWorkspaceCacheForTests(): void {
     meshByWorkspaceCache.clear();
 }
 
+// Throttle the pending-event retention DELETE so it runs at most hourly — the
+// remote-idle sweep below fires on every completion/idle transition, but a table
+// scan + DELETE should not. In-process timestamp; a restart re-arms it, which only
+// means one prune shortly after boot (harmless, idempotent).
+let lastPendingEventsPruneAt = 0;
+const PENDING_EVENTS_PRUNE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+
 function sweepExpiredRemoteIdleSessions(): void {
     try {
         MeshRuntimeStore.getInstance().pruneExpiredRemoteIdleSessions();
     } catch { /* best-effort */ }
+    // Piggyback the pending-event retention prune on the same periodic sweep, but
+    // hourly — this is the maintenance hook that keeps mesh_pending_events from
+    // accumulating stale drained/orphaned rows without bound.
+    const now = Date.now();
+    if (now - lastPendingEventsPruneAt >= PENDING_EVENTS_PRUNE_INTERVAL_MS) {
+        lastPendingEventsPruneAt = now;
+        prunePendingMeshCoordinatorEventsRetention();
+    }
 }
 
 const INTENTIONAL_CLEANUP_STOP_SUPPRESSION_MS = 30 * 60 * 1000;

@@ -1551,6 +1551,18 @@ export class MeshRuntimeStore {
         providerType?: string | null;
         payload?: unknown;
     }): void {
+        // Ledger `kind` is a mandatory schema invariant (mesh_event_ledger.kind is
+        // NOT NULL; every MeshLedgerKind is a non-empty tag). A blank kind would be a
+        // structurally-broken entry — reject it here rather than write an unqueryable
+        // row. NOTE: pending-event JSONL files (`*.pending-events.jsonl`) are a
+        // SEPARATE shape that intentionally has NO `kind` field (they key off `.event`);
+        // a generic audit that scans the whole ledger DIRECTORY and reads `.kind` off
+        // those rows sees "kind=None", which is an artifact of mixing the two files, not
+        // a ledger defect. This guard makes the ledger-side invariant explicit.
+        if (!entry.kind || !String(entry.kind).trim()) {
+            LOG.warn('MeshRuntimeStore', `Refusing to append ledger entry with empty kind for mesh ${entry.meshId} (id ${entry.id})`);
+            return;
+        }
         this.db.prepare(
             `INSERT OR IGNORE INTO mesh_event_ledger
              (id, mesh_id, timestamp, kind, node_id, session_id, provider_type, payload)
@@ -1693,6 +1705,11 @@ export class MeshRuntimeStore {
         );
         this.db.transaction(() => {
             for (const e of entries) {
+                // Skip structurally-broken entries with a blank kind (see appendLedgerEntry):
+                // mesh_event_ledger.kind is NOT NULL and every kind is a non-empty tag, so an
+                // empty-kind row is unqueryable noise. Mirrors readLedgerFile's `entry.id && entry.kind`
+                // JSONL guard, keeping the import path from re-introducing what the read path filters.
+                if (!e.kind || !String(e.kind).trim()) continue;
                 const result = stmt.run(
                     e.id, e.meshId, e.timestamp, e.kind,
                     e.nodeId ?? null, e.sessionId ?? null, e.providerType ?? null,
@@ -2052,5 +2069,41 @@ export class MeshRuntimeStore {
         return this.db.prepare(
             `DELETE FROM mesh_pending_events WHERE id IN (${idList.map(() => '?').join(',')})`
         ).run(...idList).changes;
+    }
+
+    /**
+     * Retention prune for mesh_pending_events. This table has no lifecycle GC of its
+     * own: a drained row is soft-marked (drained=1) and RETAINED — deliberately, so
+     * drainedEventIdsForMesh() has a durable v2-eventId dedup baseline — and an
+     * undrained row queued for a coordinator that never returned (a dead/evicted
+     * coordinator identity) stays drained=0 forever. Both accumulate without bound
+     * (observed: tens of thousands of rows, mostly stale). This is the missing
+     * retention step. Two independent windows:
+     *
+     *   - drained rows older than `drainedOlderThanMs`: the coordinator consumed them
+     *     long ago; the only thing they still back is the eventId re-delivery guard,
+     *     which is only meaningful for the recent past (a re-delivery of a week-old
+     *     event cannot occur — its producer session is long gone). Safe to delete.
+     *   - UNDRAINED rows older than `undrainedOlderThanMs` (a much wider window):
+     *     these are orphaned events for a coordinator identity that never drained
+     *     them. Kept wide so a genuinely-offline-but-returning coordinator still
+     *     receives its backlog; only genuinely unrecoverable orphans are swept.
+     *
+     * Both windows key off `queued_at` (always present) — `drained_at` can be NULL on
+     * legacy rows. Returns the number of rows deleted. Best-effort / idempotent:
+     * running it repeatedly with nothing to prune is a cheap no-op.
+     */
+    prunePendingEvents(opts: { drainedOlderThanMs: number; undrainedOlderThanMs: number }): number {
+        const now = Date.now();
+        const drainedCutoff = now - Math.max(0, opts.drainedOlderThanMs);
+        const undrainedCutoff = now - Math.max(0, opts.undrainedOlderThanMs);
+        let removed = 0;
+        removed += this.db.prepare(
+            'DELETE FROM mesh_pending_events WHERE drained = 1 AND queued_at < ?'
+        ).run(drainedCutoff).changes;
+        removed += this.db.prepare(
+            'DELETE FROM mesh_pending_events WHERE drained = 0 AND queued_at < ?'
+        ).run(undrainedCutoff).changes;
+        return removed;
     }
 }

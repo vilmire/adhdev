@@ -675,6 +675,42 @@ function reconcilePendingMeshCoordinatorEvents(meshId: string, events: PendingMe
 const MAX_PENDING_EVENTS_BYTES = 100 * 1024; // 100 KB — keep the pending file small
 const MAX_PENDING_EVENTS_KEEP = 50;           // keep the last 50 events when trimming
 
+// ─── SQLite pending-event retention ─────────────────────────────────────────
+// mesh_pending_events had no lifecycle GC: drained rows are retained forever (the
+// durable v2-eventId dedup baseline drainedEventIdsForMesh reads them), and an
+// undrained row for a coordinator identity that never returns stays queued forever.
+// Both accumulate without bound. These windows bound that growth while preserving
+// the two things the rows exist for — recent-re-delivery idempotency and delivery
+// to a returning coordinator. A drained event older than the drained window cannot
+// be re-delivered (its producer session is long gone), so keeping it buys nothing;
+// an undrained event is kept far longer so a genuinely-offline coordinator's backlog
+// survives, and only unrecoverable orphans are swept.
+const PENDING_EVENTS_DRAINED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;   // 7 days
+const PENDING_EVENTS_UNDRAINED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+/**
+ * Retention sweep for the SQLite mesh_pending_events inbox. Deletes long-drained
+ * rows (past the idempotency-useful window) and long-orphaned undrained rows (a
+ * coordinator identity that never returned). Best-effort and idempotent: a store
+ * failure or an empty table is a cheap no-op. Called from the periodic mesh-event
+ * maintenance sweep. Returns the number of rows pruned (0 when nothing to do).
+ */
+export function prunePendingMeshCoordinatorEventsRetention(): number {
+    try {
+        const removed = MeshRuntimeStore.getInstance().prunePendingEvents({
+            drainedOlderThanMs: PENDING_EVENTS_DRAINED_RETENTION_MS,
+            undrainedOlderThanMs: PENDING_EVENTS_UNDRAINED_RETENTION_MS,
+        });
+        if (removed > 0) {
+            LOG.info('MeshEvents', `Pruned ${removed} stale pending-event row(s) (drained >7d / undrained >30d)`);
+        }
+        return removed;
+    } catch (e: any) {
+        LOG.warn('MeshEvents', `Pending-event retention prune failed: ${e?.message || e}`);
+        return 0;
+    }
+}
+
 function trimPendingEventsIfNeeded(path: string): void {
     try {
         if (!existsSync(path)) return;

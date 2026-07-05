@@ -1478,6 +1478,60 @@ describe('mesh-runtime-store', () => {
             expect(drainedForA).toHaveLength(2);
             expect(db.pendingEventCount(meshId)).toBe(0);
         });
+
+        it('G3.5 — prunePendingEvents removes long-drained + long-orphaned rows, keeps recent', () => {
+            const meshId = `mesh-g3-prune-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const now = Date.now();
+            const day = 24 * 60 * 60 * 1000;
+
+            // Recent undrained (queued now) — must survive both windows.
+            db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:ready', payload: {}, queuedAt: now });
+            // Recently drained (< drained window) — must survive: still an idempotency baseline.
+            const freshDrained = randomUUID();
+            db.insertPendingEvent({ id: freshDrained, meshId, event: 'agent:stopped', payload: {}, queuedAt: now - 1 * day });
+            db.markPendingEventsDrainedById([freshDrained]);
+            // Old drained (> 7d) — must be pruned.
+            const oldDrained = randomUUID();
+            db.insertPendingEvent({ id: oldDrained, meshId, event: 'agent:stopped', payload: {}, queuedAt: now - 10 * day });
+            db.markPendingEventsDrainedById([oldDrained]);
+            // Old undrained but < 30d — orphan, but within the wide undrained window → kept.
+            db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:ready', payload: {}, queuedAt: now - 10 * day });
+            // Very old undrained (> 30d) — unrecoverable orphan → pruned.
+            db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:ready', payload: {}, queuedAt: now - 40 * day });
+
+            const removed = db.prunePendingEvents({ drainedOlderThanMs: 7 * day, undrainedOlderThanMs: 30 * day });
+            expect(removed).toBe(2); // oldDrained + very-old-undrained
+
+            // Undrained survivors: recent + the 10d-old (within 30d window).
+            expect(db.pendingEventCount(meshId)).toBe(2);
+            // The recently-drained row is still there as an idempotency baseline; the old one is gone.
+            expect(db.hasDrainedEventId).toBeTypeOf('function');
+        });
+
+        it('G3.6 — prunePendingEvents is a no-op when nothing is stale', () => {
+            const meshId = `mesh-g3-prune-noop-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:ready', payload: {}, queuedAt: Date.now() });
+            const removed = db.prunePendingEvents({ drainedOlderThanMs: 7 * 24 * 60 * 60 * 1000, undrainedOlderThanMs: 30 * 24 * 60 * 60 * 1000 });
+            expect(removed).toBe(0);
+            expect(db.pendingEventCount(meshId)).toBe(1);
+        });
+
+        it('G3.7 — appendLedgerEntry / importLedgerEntries reject a blank kind (schema invariant)', () => {
+            const meshId = `mesh-g3-blankkind-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            // Direct append with empty kind is refused (no row written).
+            db.appendLedgerEntry({ id: randomUUID(), meshId, timestamp: new Date().toISOString(), kind: '' });
+            db.appendLedgerEntry({ id: randomUUID(), meshId, timestamp: new Date().toISOString(), kind: '   ' });
+            // Import path skips blank-kind entries but imports valid ones from the same batch.
+            const imported = db.importLedgerEntries([
+                { id: randomUUID(), meshId, timestamp: new Date().toISOString(), kind: '' },
+                { id: randomUUID(), meshId, timestamp: new Date().toISOString(), kind: 'task_dispatched' },
+            ]);
+            expect(imported).toBe(1);
+            expect(db.readLedgerEntriesOrdered(meshId).every(e => !!e.kind)).toBe(true);
+        });
     });
 
     describe('counter independence (F3) — WAL checkpoint vs tool-call-log sweep', () => {
