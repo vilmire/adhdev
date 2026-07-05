@@ -514,32 +514,33 @@ export const MESH_REFINE_CONFIG_TOOL = {
     },
 };
 
-export const MESH_CHANGE_IMPACT_CONFIG_SCHEMA_TOOL = {
-    name: 'mesh_change_impact_config_schema',
-    description: 'Return the Change Impact config JSON schema and supported repo-local config locations. Change Impact config declaratively classifies which package/file changes between the live daemon build and workspace HEAD require a daemon rebuild/restart vs. a web-only redeploy vs. nothing. Declarative only — config is parsed, never executed.',
-    inputSchema: { type: 'object' as const, properties: {} },
-};
-
-export const MESH_VALIDATE_CHANGE_IMPACT_CONFIG_TOOL = {
-    name: 'mesh_validate_change_impact_config',
-    description: 'Validate a Change Impact config for a node/workspace and report valid/errors. Loads .adhdev/change-impact.{json,yaml,yml} (or repo-mesh-change-impact.* alias) from the repo unless an inline config is provided.',
+// Unified read-only Change Impact config helper. Consolidates the former
+// mesh_change_impact_config_schema / mesh_validate_change_impact_config /
+// mesh_suggest_change_impact_config tools into a single `mode`-dispatched tool
+// (MESH-COMPLEXITY-AUDIT, symmetric to the Part 8-4 refine-config consolidation). The old
+// three names remain dispatchable as 1-release hidden aliases (see server.ts), but only this
+// unified tool is published in ALL_MESH_TOOLS. These are read-only helpers — Change Impact
+// config is declarative and parsed, never executed.
+export const MESH_CHANGE_IMPACT_CONFIG_TOOL = {
+    name: 'mesh_change_impact_config',
+    description: 'Repo Mesh Change Impact config helper — unified read-only entry for the three change-impact config operations. '
+        + 'Change Impact config declaratively classifies which package/file changes between the live daemon build and workspace HEAD require a daemon rebuild/restart vs. a web-only redeploy vs. nothing (parsed, never executed). Select the operation with `mode` (REQUIRED). '
+        + 'mode=\'schema\': return the Change Impact config JSON schema and supported repo-local config locations — takes no other parameters. '
+        + 'mode=\'validate\': validate a Change Impact config for a node/workspace and report valid/errors — loads .adhdev/change-impact.{json,yaml,yml} (or repo-mesh-change-impact.* alias) unless an inline `config` object is provided; accepts optional `node_id` (defaults to the first mesh node). '
+        + 'mode=\'suggest\': suggest a Change Impact config scaffold from the repo package layout (web-* → web-only, others → daemon-runtime, plus docs/license markers as non-runtime) — the draft must be reviewed and saved before it takes effect; accepts optional `node_id`. '
+        + 'Declarative only — nothing is executed.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            node_id: { type: 'string', description: 'Optional node/workspace whose change-impact config should be loaded. Defaults to the first mesh node.' },
-            config: { type: 'object', description: 'Optional inline config object to validate instead of loading from the repo.' },
+            mode: {
+                type: 'string',
+                enum: ['schema', 'validate', 'suggest'],
+                description: 'Which config operation to run (required). schema: return the config JSON schema (no other params). validate: validate a node/workspace change-impact config (optional node_id, optional inline config). suggest: scaffold a config from the repo package layout (optional node_id).',
+            },
+            node_id: { type: 'string', description: 'Optional node/workspace. Used by mode=validate (config to load) and mode=suggest (context source); defaults to the first mesh node. Ignored by mode=schema.' },
+            config: { type: 'object', description: 'Optional inline config object to validate instead of loading from the repo. Only used by mode=validate.' },
         },
-    },
-};
-
-export const MESH_SUGGEST_CHANGE_IMPACT_CONFIG_TOOL = {
-    name: 'mesh_suggest_change_impact_config',
-    description: 'Suggest a Change Impact config scaffold from the repo package layout (web-* → web-only, others → daemon-runtime, plus docs/license markers as non-runtime). Heuristic scaffold only — the draft must be reviewed and saved before it takes effect; nothing is executed.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            node_id: { type: 'string', description: 'Optional node/workspace used for suggestions. Defaults to the first mesh node.' },
-        },
+        required: ['mode'],
     },
 };
 
@@ -778,9 +779,7 @@ export const ALL_MESH_TOOLS = [
     MESH_REFINE_NODE_TOOL,
     MESH_REFINE_BATCH_TOOL,
     MESH_REFINE_CONFIG_TOOL,
-    MESH_CHANGE_IMPACT_CONFIG_SCHEMA_TOOL,
-    MESH_VALIDATE_CHANGE_IMPACT_CONFIG_TOOL,
-    MESH_SUGGEST_CHANGE_IMPACT_CONFIG_TOOL,
+    MESH_CHANGE_IMPACT_CONFIG_TOOL,
     MESH_INIT_TOOL,
     MESH_REINIT_TOOL,
     MESH_WRITE_MESH_JSON_CONFIG_TOOL,

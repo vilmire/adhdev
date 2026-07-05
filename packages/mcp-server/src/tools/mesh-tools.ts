@@ -24,7 +24,7 @@
 export {
     ALL_MESH_TOOLS,
     MESH_APPROVE_TOOL,
-    MESH_CHANGE_IMPACT_CONFIG_SCHEMA_TOOL,
+    MESH_CHANGE_IMPACT_CONFIG_TOOL,
     MESH_CHECKPOINT_TOOL,
     MESH_CLEANUP_SESSIONS_TOOL,
     MESH_CLONE_NODE_TOOL,
@@ -58,9 +58,7 @@ export {
     MESH_REVIEW_INBOX_TOOL,
     MESH_SEND_TASK_TOOL,
     MESH_STATUS_TOOL,
-    MESH_SUGGEST_CHANGE_IMPACT_CONFIG_TOOL,
     MESH_TASK_HISTORY_TOOL,
-    MESH_VALIDATE_CHANGE_IMPACT_CONFIG_TOOL,
     MESH_VIEW_QUEUE_TOOL,
     chooseDispatchableSession,
     classifyRemoteDelegateRelaySafety,
@@ -153,6 +151,7 @@ export {
 } from './mesh-tools-git.js';
 
 export {
+    meshChangeImpactConfig,
     meshChangeImpactConfigSchema,
     meshInit,
     meshReinit,

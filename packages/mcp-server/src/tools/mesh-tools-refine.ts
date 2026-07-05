@@ -99,6 +99,32 @@ export async function meshSuggestChangeImpactConfig(
     return JSON.stringify(result, null, 2);
 }
 
+/**
+ * Unified read-only Change Impact config helper (MESH-COMPLEXITY-AUDIT, symmetric to Part 8-4).
+ * Dispatches on `mode` to the three underlying change-impact config operations, each a thin
+ * wrapper over its daemon-core low-family change-impact command — internal command API
+ * unchanged, zero behavior loss. The former standalone tools (mesh_change_impact_config_schema /
+ * mesh_validate_change_impact_config / mesh_suggest_change_impact_config) remain dispatchable as
+ * 1-release hidden aliases that forward here with the corresponding mode (see server.ts).
+ */
+export async function meshChangeImpactConfig(
+    ctx: MeshContext,
+    args: { mode?: string; node_id?: string; config?: Record<string, unknown> } = {},
+): Promise<string> {
+    switch (args.mode) {
+        case 'schema':
+            return meshChangeImpactConfigSchema(ctx);
+        case 'validate':
+            return meshValidateChangeImpactConfig(ctx, args);
+        case 'suggest':
+            return meshSuggestChangeImpactConfig(ctx, args);
+        default:
+            throw new Error(
+                `mesh_change_impact_config: invalid or missing 'mode' (${JSON.stringify(args.mode)}). Expected one of: 'schema' | 'validate' | 'suggest'.`,
+            );
+    }
+}
+
 export async function meshInit(
     ctx: MeshContext,
     args: { node_id?: string; write?: boolean; overwrite?: boolean },

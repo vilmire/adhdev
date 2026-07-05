@@ -42,7 +42,7 @@ import {
   meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon, meshCheckpoint, meshApprove,
   meshCloneNode, meshRemoveNode, meshRefineNode,
   meshRefineConfig, meshInit, meshReinit, meshRefinePlan, meshRefineBatch,
-  meshChangeImpactConfigSchema, meshValidateChangeImpactConfig, meshSuggestChangeImpactConfig,
+  meshChangeImpactConfig,
   meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshRecordNote, meshForgetNote, meshReconcileLedger, meshMissionUpsert,
   meshMissionList, meshReviewInbox,
   meshMagiReview, meshMagiCollect, meshMagiPanelSet, meshMagiPanelList,
@@ -227,9 +227,14 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_refine_config_schema': text = await meshRefineConfig(meshCtx, { ...(a as any), mode: 'schema' }); break;
           case 'mesh_validate_refine_config': text = await meshRefineConfig(meshCtx, { ...(a as any), mode: 'validate' }); break;
           case 'mesh_suggest_refine_config': text = await meshRefineConfig(meshCtx, { ...(a as any), mode: 'suggest' }); break;
-          case 'mesh_change_impact_config_schema': text = await meshChangeImpactConfigSchema(meshCtx); break;
-          case 'mesh_validate_change_impact_config': text = await meshValidateChangeImpactConfig(meshCtx, a as any); break;
-          case 'mesh_suggest_change_impact_config': text = await meshSuggestChangeImpactConfig(meshCtx, a as any); break;
+          case 'mesh_change_impact_config': text = await meshChangeImpactConfig(meshCtx, a as any); break;
+          // Hidden 1-release aliases (symmetric to Part 8-4): the former standalone change-impact
+          // config tools are no longer published in ALL_MESH_TOOLS but stay dispatchable, forwarding
+          // to the unified mesh_change_impact_config handler with the corresponding mode so
+          // pre-consolidation callers keep working.
+          case 'mesh_change_impact_config_schema': text = await meshChangeImpactConfig(meshCtx, { ...(a as any), mode: 'schema' }); break;
+          case 'mesh_validate_change_impact_config': text = await meshChangeImpactConfig(meshCtx, { ...(a as any), mode: 'validate' }); break;
+          case 'mesh_suggest_change_impact_config': text = await meshChangeImpactConfig(meshCtx, { ...(a as any), mode: 'suggest' }); break;
           case 'mesh_init': text = await meshInit(meshCtx, a as any); break;
           case 'mesh_reinit': text = await meshReinit(meshCtx, a as any); break;
           case 'mesh_write_mesh_json_config': text = await meshWriteMeshJsonConfig(meshCtx, a as any); break;

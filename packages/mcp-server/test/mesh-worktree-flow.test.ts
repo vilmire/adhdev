@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { writeFileSync, readFileSync, unlinkSync } from 'node:fs';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshApprove, meshCheckpoint, meshCloneNode, meshFastForwardNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshTaskHistory, meshRefineConfig, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { meshApprove, meshCheckpoint, meshCloneNode, meshFastForwardNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshTaskHistory, meshRefineConfig, meshChangeImpactConfig, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 import { appendLedgerEntry, claimNextTask, enqueueTask, getLedgerDir, getQueue } from '@adhdev/daemon-core';
 import { clearPendingMeshCoordinatorEvents, drainPendingMeshCoordinatorEvents, handleMeshForwardEvent } from '../../daemon-core/src/mesh/mesh-events.js';
 
@@ -3866,8 +3866,8 @@ test('local direct mesh_send_task allows proper mesh delegate session with meshN
   assert.equal(agentCommandCalls[0]?.targetSessionId, 'session-worker');
 });
 
-test('mesh tool registry documents the exposed mesh tools including queue cancel/requeue, read-debug, remote node log fetch, direct fast-forward, daemon restart, worktree clone/remove/refine, batch refine, unified refine config, change-impact config planning, mesh init onboarding, session cleanup, stale-direct prune, reconcile-ledger, review inbox, operating-note recording, and mission upsert/list', () => {
-  assert.equal(ALL_MESH_TOOLS.length, 43);
+test('mesh tool registry documents the exposed mesh tools including queue cancel/requeue, read-debug, remote node log fetch, direct fast-forward, daemon restart, worktree clone/remove/refine, batch refine, unified refine config, unified change-impact config, mesh init onboarding, session cleanup, stale-direct prune, reconcile-ledger, review inbox, operating-note recording, and mission upsert/list', () => {
+  assert.equal(ALL_MESH_TOOLS.length, 41);
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_record_note'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_init'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_restart_daemon'));
@@ -3891,9 +3891,17 @@ test('mesh tool registry documents the exposed mesh tools including queue cancel
   assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_config_schema'));
   assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_validate_refine_config'));
   assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_suggest_refine_config'));
-  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_change_impact_config_schema'));
-  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_validate_change_impact_config'));
-  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_suggest_change_impact_config'));
+  // Symmetric to Part 8-4: the three change-impact-config tools are consolidated into one
+  // mode-dispatched tool.
+  const changeImpactConfigTool = ALL_MESH_TOOLS.find(tool => tool.name === 'mesh_change_impact_config');
+  assert.ok(changeImpactConfigTool);
+  assert.deepEqual((changeImpactConfigTool!.inputSchema.properties as any).mode.enum, ['schema', 'validate', 'suggest']);
+  assert.deepEqual(changeImpactConfigTool!.inputSchema.required, ['mode']);
+  // The former standalone names are no longer published in the manifest (they survive only
+  // as hidden dispatch aliases).
+  assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_change_impact_config_schema'));
+  assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_validate_change_impact_config'));
+  assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_suggest_change_impact_config'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_plan'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_cleanup_sessions'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_prune_stale_direct'));
@@ -3995,6 +4003,104 @@ test('hidden refine-config aliases forward to the unified handler with the corre
     'get_mesh_refine_config_schema',
     'validate_mesh_refine_config',
     'suggest_mesh_refine_config',
+  ]);
+});
+
+test('mesh_change_impact_config dispatches each mode to the matching daemon-core change-impact command', async () => {
+  // Symmetric to Part 8-4: the unified tool must route mode=schema|validate|suggest to the same
+  // low-family commands the former standalone tools called — internal command API unchanged.
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const issued: Array<{ command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command, args = {}) => {
+    issued.push({ command, args });
+    return { success: true, echoedCommand: command };
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: `mesh-change-impact-config-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      name: 'Change Impact Config Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-local',
+        workspace: '/repo-local',
+        repoRoot: '/repo-local',
+        daemonId: 'daemon-coordinator',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+  };
+
+  await meshChangeImpactConfig(ctx as any, { mode: 'schema' });
+  await meshChangeImpactConfig(ctx as any, { mode: 'validate' });
+  await meshChangeImpactConfig(ctx as any, { mode: 'suggest' });
+
+  assert.deepEqual(issued.map(c => c.command), [
+    'get_mesh_change_impact_config_schema',
+    'validate_mesh_change_impact_config',
+    'suggest_mesh_change_impact_config',
+  ]);
+
+  // Missing/invalid mode is a hard error (mode is required on the manifest).
+  await assert.rejects(() => meshChangeImpactConfig(ctx as any, {} as any), /invalid or missing 'mode'/);
+  await assert.rejects(() => meshChangeImpactConfig(ctx as any, { mode: 'bogus' } as any), /invalid or missing 'mode'/);
+});
+
+test('hidden change-impact-config aliases forward to the unified handler with the correct mode', async () => {
+  // Symmetric to Part 8-4: mesh_change_impact_config_schema / _validate / _suggest are dropped
+  // from the manifest but remain dispatchable for one release, forwarding to
+  // mesh_change_impact_config with a fixed mode.
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const issued: string[] = [];
+  transport.command = async (command, args = {}) => {
+    issued.push(command);
+    return { success: true };
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: `mesh-change-impact-alias-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      name: 'Change Impact Alias Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-local',
+        workspace: '/repo-local',
+        repoRoot: '/repo-local',
+        daemonId: 'daemon-coordinator',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+  };
+
+  // Simulate the server.ts alias dispatch: each old name forwards with its fixed mode.
+  await meshChangeImpactConfig(ctx as any, { mode: 'schema' });
+  await meshChangeImpactConfig(ctx as any, { mode: 'validate', config: { rules: [] } });
+  await meshChangeImpactConfig(ctx as any, { mode: 'suggest' });
+
+  assert.deepEqual(issued, [
+    'get_mesh_change_impact_config_schema',
+    'validate_mesh_change_impact_config',
+    'suggest_mesh_change_impact_config',
   ]);
 });
 

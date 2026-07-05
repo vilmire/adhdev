@@ -1092,30 +1092,21 @@ var MESH_REFINE_CONFIG_TOOL = {
     required: ["mode"]
   }
 };
-var MESH_CHANGE_IMPACT_CONFIG_SCHEMA_TOOL = {
-  name: "mesh_change_impact_config_schema",
-  description: "Return the Change Impact config JSON schema and supported repo-local config locations. Change Impact config declaratively classifies which package/file changes between the live daemon build and workspace HEAD require a daemon rebuild/restart vs. a web-only redeploy vs. nothing. Declarative only \u2014 config is parsed, never executed.",
-  inputSchema: { type: "object", properties: {} }
-};
-var MESH_VALIDATE_CHANGE_IMPACT_CONFIG_TOOL = {
-  name: "mesh_validate_change_impact_config",
-  description: "Validate a Change Impact config for a node/workspace and report valid/errors. Loads .adhdev/change-impact.{json,yaml,yml} (or repo-mesh-change-impact.* alias) from the repo unless an inline config is provided.",
+var MESH_CHANGE_IMPACT_CONFIG_TOOL = {
+  name: "mesh_change_impact_config",
+  description: "Repo Mesh Change Impact config helper \u2014 unified read-only entry for the three change-impact config operations. Change Impact config declaratively classifies which package/file changes between the live daemon build and workspace HEAD require a daemon rebuild/restart vs. a web-only redeploy vs. nothing (parsed, never executed). Select the operation with `mode` (REQUIRED). mode='schema': return the Change Impact config JSON schema and supported repo-local config locations \u2014 takes no other parameters. mode='validate': validate a Change Impact config for a node/workspace and report valid/errors \u2014 loads .adhdev/change-impact.{json,yaml,yml} (or repo-mesh-change-impact.* alias) unless an inline `config` object is provided; accepts optional `node_id` (defaults to the first mesh node). mode='suggest': suggest a Change Impact config scaffold from the repo package layout (web-* \u2192 web-only, others \u2192 daemon-runtime, plus docs/license markers as non-runtime) \u2014 the draft must be reviewed and saved before it takes effect; accepts optional `node_id`. Declarative only \u2014 nothing is executed.",
   inputSchema: {
     type: "object",
     properties: {
-      node_id: { type: "string", description: "Optional node/workspace whose change-impact config should be loaded. Defaults to the first mesh node." },
-      config: { type: "object", description: "Optional inline config object to validate instead of loading from the repo." }
-    }
-  }
-};
-var MESH_SUGGEST_CHANGE_IMPACT_CONFIG_TOOL = {
-  name: "mesh_suggest_change_impact_config",
-  description: "Suggest a Change Impact config scaffold from the repo package layout (web-* \u2192 web-only, others \u2192 daemon-runtime, plus docs/license markers as non-runtime). Heuristic scaffold only \u2014 the draft must be reviewed and saved before it takes effect; nothing is executed.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      node_id: { type: "string", description: "Optional node/workspace used for suggestions. Defaults to the first mesh node." }
-    }
+      mode: {
+        type: "string",
+        enum: ["schema", "validate", "suggest"],
+        description: "Which config operation to run (required). schema: return the config JSON schema (no other params). validate: validate a node/workspace change-impact config (optional node_id, optional inline config). suggest: scaffold a config from the repo package layout (optional node_id)."
+      },
+      node_id: { type: "string", description: "Optional node/workspace. Used by mode=validate (config to load) and mode=suggest (context source); defaults to the first mesh node. Ignored by mode=schema." },
+      config: { type: "object", description: "Optional inline config object to validate instead of loading from the repo. Only used by mode=validate." }
+    },
+    required: ["mode"]
   }
 };
 var MESH_INIT_TOOL = {
@@ -1340,9 +1331,7 @@ var ALL_MESH_TOOLS = [
   MESH_REFINE_NODE_TOOL,
   MESH_REFINE_BATCH_TOOL,
   MESH_REFINE_CONFIG_TOOL,
-  MESH_CHANGE_IMPACT_CONFIG_SCHEMA_TOOL,
-  MESH_VALIDATE_CHANGE_IMPACT_CONFIG_TOOL,
-  MESH_SUGGEST_CHANGE_IMPACT_CONFIG_TOOL,
+  MESH_CHANGE_IMPACT_CONFIG_TOOL,
   MESH_INIT_TOOL,
   MESH_REINIT_TOOL,
   MESH_WRITE_MESH_JSON_CONFIG_TOOL,
@@ -6695,6 +6684,20 @@ async function meshSuggestChangeImpactConfig(ctx, args) {
   });
   return JSON.stringify(result, null, 2);
 }
+async function meshChangeImpactConfig(ctx, args = {}) {
+  switch (args.mode) {
+    case "schema":
+      return meshChangeImpactConfigSchema(ctx);
+    case "validate":
+      return meshValidateChangeImpactConfig(ctx, args);
+    case "suggest":
+      return meshSuggestChangeImpactConfig(ctx, args);
+    default:
+      throw new Error(
+        `mesh_change_impact_config: invalid or missing 'mode' (${JSON.stringify(args.mode)}). Expected one of: 'schema' | 'validate' | 'suggest'.`
+      );
+  }
+}
 async function meshInit(ctx, args) {
   const node = resolveRefineConfigNode(ctx, args.node_id);
   const result = await commandForNode(ctx, node, "mesh_init", {
@@ -8019,14 +8022,21 @@ async function startMcpServer(opts) {
           case "mesh_suggest_refine_config":
             text = await meshRefineConfig(meshCtx, { ...a, mode: "suggest" });
             break;
+          case "mesh_change_impact_config":
+            text = await meshChangeImpactConfig(meshCtx, a);
+            break;
+          // Hidden 1-release aliases (symmetric to Part 8-4): the former standalone change-impact
+          // config tools are no longer published in ALL_MESH_TOOLS but stay dispatchable, forwarding
+          // to the unified mesh_change_impact_config handler with the corresponding mode so
+          // pre-consolidation callers keep working.
           case "mesh_change_impact_config_schema":
-            text = await meshChangeImpactConfigSchema(meshCtx);
+            text = await meshChangeImpactConfig(meshCtx, { ...a, mode: "schema" });
             break;
           case "mesh_validate_change_impact_config":
-            text = await meshValidateChangeImpactConfig(meshCtx, a);
+            text = await meshChangeImpactConfig(meshCtx, { ...a, mode: "validate" });
             break;
           case "mesh_suggest_change_impact_config":
-            text = await meshSuggestChangeImpactConfig(meshCtx, a);
+            text = await meshChangeImpactConfig(meshCtx, { ...a, mode: "suggest" });
             break;
           case "mesh_init":
             text = await meshInit(meshCtx, a);
