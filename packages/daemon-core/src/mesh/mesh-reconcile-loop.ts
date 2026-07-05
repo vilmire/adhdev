@@ -294,12 +294,13 @@ export function __resetMeshV2BackstopCountersForTests(): void {
 
 /** Enforce switch mirror (see isMeshProtocolV2EnforceEnabled in mesh-events-pending);
  *  re-read here (not imported) to keep the reconcile loop free of a cross-file coupling
- *  and to read env at fire time. Same truthy vocabulary. */
+ *  and to read env at fire time. On by default; set MESH_PROTOCOL_V2_ENFORCE=0/false/
+ *  off/no to disable. Same vocabulary as the source of truth. */
 function meshProtocolV2EnforceOn(): boolean {
     const raw = process.env.MESH_PROTOCOL_V2_ENFORCE;
-    if (typeof raw !== 'string') return false;
+    if (typeof raw !== 'string' || !raw.trim()) return true;   // unset/blank = default ON
     const v = raw.trim().toLowerCase();
-    return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+    return !(v === '0' || v === 'false' || v === 'off' || v === 'no');
 }
 
 /** Bump a backstop counter and, under enforce, WARN that a last-resort net fired —

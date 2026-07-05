@@ -66,7 +66,9 @@ function ident(daemonId: string, over: Partial<CoordinatorIdentity> = {}): Coord
 }
 
 function enforceOn() { process.env.MESH_PROTOCOL_V2_ENFORCE = '1'; }
-function enforceOff() { delete process.env.MESH_PROTOCOL_V2_ENFORCE; }
+// Enforce now defaults ON when unset — so "accept mode" (enforce OFF) must be an
+// EXPLICIT off token, not a delete. All accept-mode cases below rely on this.
+function enforceOff() { process.env.MESH_PROTOCOL_V2_ENFORCE = '0'; }
 
 describe('mesh pending-event — v2 ENFORCE mode (T6/B3c)', () => {
     beforeEach(() => {
@@ -82,15 +84,22 @@ describe('mesh pending-event — v2 ENFORCE mode (T6/B3c)', () => {
         try { rmSync(testTmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     });
 
-    // ── flag parsing / default OFF ────────────────────────────────────────────────
-    it('defaults enforce OFF and parses the truthy env vocabulary', () => {
-        enforceOff();
-        expect(isMeshProtocolV2EnforceEnabled()).toBe(false);
+    // ── flag parsing / default ON ─────────────────────────────────────────────────
+    it('defaults enforce ON and parses the explicit-off env vocabulary', () => {
+        // Unset / blank = default ON (the new programmatic default).
+        delete process.env.MESH_PROTOCOL_V2_ENFORCE;
+        expect(isMeshProtocolV2EnforceEnabled()).toBe(true);
+        process.env.MESH_PROTOCOL_V2_ENFORCE = '';
+        expect(isMeshProtocolV2EnforceEnabled()).toBe(true);
+        process.env.MESH_PROTOCOL_V2_ENFORCE = '   ';
+        expect(isMeshProtocolV2EnforceEnabled()).toBe(true);
+        // Any non-off token stays ON.
         for (const v of ['1', 'true', 'on', 'yes', 'TRUE', ' On ']) {
             process.env.MESH_PROTOCOL_V2_ENFORCE = v;
             expect(isMeshProtocolV2EnforceEnabled()).toBe(true);
         }
-        for (const v of ['0', 'false', 'off', 'no', '']) {
+        // Only the explicit off vocabulary flips it OFF.
+        for (const v of ['0', 'false', 'off', 'no', 'OFF', ' No ']) {
             process.env.MESH_PROTOCOL_V2_ENFORCE = v;
             expect(isMeshProtocolV2EnforceEnabled()).toBe(false);
         }

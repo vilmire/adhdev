@@ -138,15 +138,16 @@ function normalizeCoordinatorDaemonIds(
  * T6 (B3c) enforce switch. When ON, the drain path stops passing an unversioned
  * (v1) or a validation-failing v2 event through to the coordinator — it QUARANTINES
  * it instead (excluded from the delivered batch + WARN + counter), and unicast
- * routing is the only delivery path (there is no v1 broadcast fallback). Off (the
- * default) preserves the accept-and-warn rollout behaviour exactly.
+ * routing is the only delivery path (there is no v1 broadcast fallback). On by
+ * default; set MESH_PROTOCOL_V2_ENFORCE=0/false/off/no to disable and restore the
+ * accept-and-warn rollout behaviour exactly.
  *
- * Per the rollout plan (§1 decision 4): enforce is `MESH_PROTOCOL_V2_ENFORCE` (env)
- * — its activation is a deliberate operational step taken ONLY after daemonBuilds
- * confirms every node emits v2 (§배포 게이트 1 / risk §4). So the code default is
- * OFF; flipping the env back to accept mode is a pure-env rollback (no code change,
- * no data migration — the schema is additive). Read at call time so a test /
- * operator can toggle it without a restart.
+ * Per the rollout plan (§1 decision 4): enforce is `MESH_PROTOCOL_V2_ENFORCE` (env).
+ * Now that every node emits v2 (§배포 게이트 1 / risk §4), the code default is ON —
+ * a manual env injection is no longer required to get enforce behaviour. Rollback to
+ * accept mode is a pure-env step: set `MESH_PROTOCOL_V2_ENFORCE=0` (or `false`/`off`/
+ * `no`) — no code change, no data migration (the schema is additive). Read at call
+ * time so a test / operator can toggle it without a restart.
  *
  * Quarantine (not drop) keeps the loss-free invariant. The DESTRUCTIVE drain has
  * already consumed the event from its store by the time routing runs, so "held
@@ -159,9 +160,9 @@ function normalizeCoordinatorDaemonIds(
  */
 export function isMeshProtocolV2EnforceEnabled(): boolean {
     const raw = readNonEmptyString(process.env.MESH_PROTOCOL_V2_ENFORCE);
-    if (!raw) return false;
+    if (!raw) return true;                      // unset/blank = default ON
     const v = raw.trim().toLowerCase();
-    return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+    return !(v === '0' || v === 'false' || v === 'off' || v === 'no');  // only explicit off = false
 }
 
 /**

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import { randomUUID } from 'crypto'
@@ -143,11 +143,17 @@ function queueProgress(meshId: string, jobSuffix: string) {
 }
 
 describe('runMeshReconcileTick', () => {
+  // These cases assert the accept-mode delivery/hold semantics (v1 broadcast fallback,
+  // unversioned events delivered) that predate v2 enforce. Enforce now defaults ON when
+  // the env is unset, which would quarantine those events — so pin it explicitly OFF for
+  // this block. The dedicated T6 backstop/enforce cases set the env themselves.
+  beforeEach(() => { process.env.MESH_PROTOCOL_V2_ENFORCE = '0' })
   // R4f acked-hold death-deadline knob is env-tunable and read at call time; always clear it
   // after each case so a test that sets it never leaks into the next.
   afterEach(() => {
     delete process.env.MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS
     delete process.env.MESH_INFLIGHT_ACKED_TRANSCRIPT_FASTTRACK_GRACE_MS
+    delete process.env.MESH_PROTOCOL_V2_ENFORCE
   })
 
   it('drains the queue and injects into an idle coordinator', async () => {
@@ -2682,6 +2688,12 @@ describe('APPROVAL-Q1-REALTIME: approval nudge is delivered to a busy coordinato
       ...(opts?.targetCoordinatorSessionId ? { targetCoordinatorSessionId: opts.targetCoordinatorSessionId } : {}),
     })
   }
+
+  // These approval-delivery cases assert accept-mode semantics that predate v2 enforce
+  // (unversioned/v1 approval events are delivered, not quarantined). Enforce now defaults
+  // ON when the env is unset, so pin it explicitly OFF for this block.
+  beforeEach(() => { process.env.MESH_PROTOCOL_V2_ENFORCE = '0' })
+  afterEach(() => { delete process.env.MESH_PROTOCOL_V2_ENFORCE })
 
   // (1) The headline fix: a GENERATING coordinator (no idle edge) still receives the
   // approval nudge within the reconcile tick — delivered NON-force (no PTY force-write),
