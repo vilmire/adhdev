@@ -345,6 +345,18 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
     // Absent on legacy rows → undefined → daemon-level routing (unchanged, no regression).
     const targetCoordinatorSessionId = readNonEmptyString(args.targetCoordinatorSessionId)
         || readNonEmptyString(dispatch?.payload?.coordinatorSessionId);
+    // COORD-EVENT-MISROUTE (anchor preservation): the DISPATCHING coordinator's daemon anchor.
+    // Prefer the DISPATCH LEDGER's `coordinatorDaemonId` (the daemon that ISSUED the task) over the
+    // caller-supplied arg — the synth caller (mesh-completion-synthesis) resolves the arg from its
+    // OWN selfIds, which on a remote worker's reconcile is the WORKER daemon, not the coordinator.
+    // Using the worker's self-daemon as the anchor makes coordinatorIdentityFromEmitFields treat
+    // the completion as addressed to the worker daemon; when the coordinator lives on a DIFFERENT
+    // machine that anchor never matches, selfFallback fires and stampPendingEventV2 broadcasts the
+    // completion to ANY coordinator (contracts.ts shouldDeliverPendingEventToCoordinator → true for
+    // broadcast), the cross-machine misroute. The ledger value is the authoritative issuing-daemon
+    // anchor. Absent on legacy rows → fall back to the arg → daemon-level routing (no regression).
+    const targetCoordinatorDaemonId = readNonEmptyString(dispatch?.payload?.coordinatorDaemonId)
+        || readNonEmptyString(args.targetCoordinatorDaemonId);
     queuePendingMeshCoordinatorEvent({
         event: eventName,
         meshId: args.meshId,
@@ -353,7 +365,7 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
         metadataEvent,
         coordinatorMessage: buildMeshSystemMessage({ event: eventName, nodeLabel, metadataEvent }),
         queuedAt: Date.now(),
-        ...(readNonEmptyString(args.targetCoordinatorDaemonId) ? { targetCoordinatorDaemonId: readNonEmptyString(args.targetCoordinatorDaemonId) } : {}),
+        ...(targetCoordinatorDaemonId ? { targetCoordinatorDaemonId } : {}),
         ...(targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}),
     });
 

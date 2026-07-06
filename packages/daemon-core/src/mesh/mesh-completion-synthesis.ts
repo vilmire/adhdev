@@ -327,7 +327,23 @@ export async function reconcileUnterminatedDirectDispatches(
         }
 
         const providerSessionId = readNonEmptyString(payload.providerSessionId);
-        const coordinatorDaemonId = selfIds.find(id => !!id);
+        // COORD-EVENT-MISROUTE (anchor preservation): the coordinator DAEMON anchor for the
+        // synthesized completion is the daemon that DISPATCHED the task, NOT this reconcile
+        // runner's own daemon. On a REMOTE worker the reconcile loop runs on the WORKER's daemon,
+        // so `selfIds` is the worker daemon — stamping it as targetCoordinatorDaemonId corrupts the
+        // anchor and (when the real coordinator is on another machine) downgrades the completion to
+        // a cross-machine broadcast deliverable to any coordinator. Recover the true anchor:
+        //   1. the live worker session's meshCoordinatorDaemonId relay stamp (set at dispatch,
+        //      the same anchor the worker's own real-emit path reads in mesh-event-forwarding); then
+        //   2. leave it to reconcileDirectDispatchCompletionFromTranscript, which recovers the
+        //      DISPATCHING coordinator daemon from the task_dispatched ledger (authoritative).
+        // Only when NEITHER is available do we fall back to selfIds — a genuinely local,
+        // single-daemon dispatch where self IS the coordinator daemon (unchanged behaviour).
+        const workerSession = components.instanceManager.getInstance(sessionId);
+        const workerCoordinatorDaemonId = readNonEmptyString(
+            (workerSession?.getState()?.settings as Record<string, unknown> | undefined)?.meshCoordinatorDaemonId,
+        );
+        const coordinatorDaemonId = workerCoordinatorDaemonId || selfIds.find(id => !!id);
         try {
             const result = reconcileDirectDispatchCompletionFromTranscript({
                 meshId: mesh.id,
@@ -338,6 +354,8 @@ export async function reconcileUnterminatedDirectDispatches(
                 taskId,
                 finalSummary: evidence.finalSummary,
                 ...(evidence.transcriptMessageAt ? { transcriptMessageAt: evidence.transcriptMessageAt } : {}),
+                // The ledger-recovered dispatching-coordinator daemon (inside the reconcile fn)
+                // takes PRIORITY over this arg; this remains the best-available fallback.
                 ...(coordinatorDaemonId ? { targetCoordinatorDaemonId: coordinatorDaemonId } : {}),
                 source: 'daemon_reconcile_transcript_completion',
             });

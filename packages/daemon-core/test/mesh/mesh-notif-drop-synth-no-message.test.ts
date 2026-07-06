@@ -82,7 +82,7 @@ function cleanupMeshFiles(meshId: string) {
 // originating coordinator session stamped on the task_dispatched payload (as the MCP dispatch
 // path does). The backdated ledger entry is written straight to the runtime store so the grace
 // gate (which reads findDirectDispatchLedgerEntry) sees the intended dispatch age.
-function seedDispatch(meshId: string, taskId: string, opts: { ageMs: number; coordinatorSessionId?: string }) {
+function seedDispatch(meshId: string, taskId: string, opts: { ageMs: number; coordinatorSessionId?: string; coordinatorDaemonId?: string }) {
   const dispatchedAt = new Date(Date.now() - opts.ageMs).toISOString()
   MeshRuntimeStore.getInstance().appendLedgerEntry({
     id: `dispatch-${taskId}`,
@@ -99,6 +99,7 @@ function seedDispatch(meshId: string, taskId: string, opts: { ageMs: number; coo
       targetSessionId: SESSION_ID,
       dispatchedToIdleSession: true,
       ...(opts.coordinatorSessionId ? { coordinatorSessionId: opts.coordinatorSessionId } : {}),
+      ...(opts.coordinatorDaemonId ? { coordinatorDaemonId: opts.coordinatorDaemonId } : {}),
     },
   })
   insertDirectDispatch(meshId, {
@@ -161,6 +162,81 @@ describe('NOTIF-DROP-SYNTH-NO-MESSAGE: reconcile-synthesized completion must car
       const drainedCompletion = drained.find(e => e.event === 'agent:generating_completed')
       expect(drainedCompletion).toBeTruthy()
       expect(drainedCompletion!.coordinatorMessage).toBeTruthy()
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('COORD-EVENT-MISROUTE: synth recovers the DISPATCHING coordinator daemon anchor from the ledger, overriding the caller self-id', () => {
+    const meshId = `mesh_synth_daemon_anchor_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: NODE_ID, workspace: WORKSPACE }], policy: {} })
+      const taskId = `task-${randomUUID().slice(0, 8)}`
+      const COORDINATOR_DAEMON_ID = 'daemon_mach_coordinatorAAAAAAAAAAAAAAAAAAAA'
+      // The WORKER's own daemon — this is what mesh-completion-synthesis passes as
+      // targetCoordinatorDaemonId (selfIds), the pre-fix anchor corruption on a remote worker.
+      const WORKER_SELF_DAEMON_ID = 'daemon_mach_workerselfBBBBBBBBBBBBBBBBBBBB'
+      // The dispatch ledger records BOTH the coordinator session AND daemon anchor.
+      seedDispatch(meshId, taskId, {
+        ageMs: 5 * 60_000,
+        coordinatorSessionId: COORDINATOR_SESSION_ID,
+        coordinatorDaemonId: COORDINATOR_DAEMON_ID,
+      })
+
+      const result = reconcileDirectDispatchCompletionFromTranscript({
+        meshId,
+        nodeId: NODE_ID,
+        sessionId: SESSION_ID,
+        providerType: 'claude-code',
+        providerSessionId: 'claude-history-daemon-anchor',
+        taskId,
+        finalSummary: 'the worker finished on a remote node',
+        transcriptMessageAt: new Date().toISOString(),
+        // The synth caller supplies the WORKER's self-daemon — the ledger recovery must WIN.
+        targetCoordinatorDaemonId: WORKER_SELF_DAEMON_ID,
+        source: 'daemon_reconcile_transcript_completion',
+      })
+      expect(result.reconciled).toBe(true)
+
+      // The completion is anchored to the DISPATCHING coordinator (ledger), NOT the worker self-id,
+      // so it stays unicast-addressed to that coordinator instead of broadcasting to any coordinator.
+      const synthEvent = getPendingMeshCoordinatorEvents(meshId).find(e => e.event === 'agent:generating_completed')
+      expect(synthEvent).toBeTruthy()
+      expect(synthEvent!.targetCoordinatorDaemonId).toBe(COORDINATOR_DAEMON_ID)
+      expect(synthEvent!.targetCoordinatorDaemonId).not.toBe(WORKER_SELF_DAEMON_ID)
+      expect(synthEvent!.targetCoordinatorSessionId).toBe(COORDINATOR_SESSION_ID)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('COORD-EVENT-MISROUTE: with no ledger daemon anchor, the caller-supplied daemon id is used (legacy fallback, no regression)', () => {
+    const meshId = `mesh_synth_daemon_fallback_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: NODE_ID, workspace: WORKSPACE }], policy: {} })
+      const taskId = `task-${randomUUID().slice(0, 8)}`
+      const CALLER_DAEMON_ID = 'daemon_mach_callerCCCCCCCCCCCCCCCCCCCCCCCC'
+      // Legacy ledger row: no coordinatorDaemonId stamped.
+      seedDispatch(meshId, taskId, { ageMs: 5 * 60_000, coordinatorSessionId: COORDINATOR_SESSION_ID })
+
+      const result = reconcileDirectDispatchCompletionFromTranscript({
+        meshId,
+        nodeId: NODE_ID,
+        sessionId: SESSION_ID,
+        providerType: 'claude-code',
+        providerSessionId: 'claude-history-fallback',
+        taskId,
+        finalSummary: 'legacy dispatch completed',
+        transcriptMessageAt: new Date().toISOString(),
+        targetCoordinatorDaemonId: CALLER_DAEMON_ID,
+        source: 'daemon_reconcile_transcript_completion',
+      })
+      expect(result.reconciled).toBe(true)
+
+      const synthEvent = getPendingMeshCoordinatorEvents(meshId).find(e => e.event === 'agent:generating_completed')
+      expect(synthEvent).toBeTruthy()
+      // Absent ledger anchor → the caller-supplied daemon id drives routing (unchanged behaviour).
+      expect(synthEvent!.targetCoordinatorDaemonId).toBe(CALLER_DAEMON_ID)
     } finally {
       cleanupMeshFiles(meshId)
     }

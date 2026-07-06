@@ -362,6 +362,10 @@ export async function meshSendTask(
                             providerType,
                             targetSessionId: dispatchedSessionId,
                             ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+                            // COORD-EVENT-MISROUTE: persist the dispatching coordinator daemon anchor
+                            // (same value stamped into meshContext above) so a transcript-reconcile
+                            // synth recovers it instead of the worker's own self-daemon.
+                            ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
                         }),
                     });
                     insertDirectDispatch(ctx.mesh.id, {
@@ -550,6 +554,10 @@ export async function meshSendTask(
                         targetSessionId: args.session_id,
                         dispatchedToIdleSession: sessionWasIdle,
                         ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+                        // COORD-EVENT-MISROUTE: persist the dispatching coordinator daemon anchor so a
+                        // transcript-reconcile synth recovers it from the ledger rather than stamping
+                        // the reconcile-runner's own self-daemon.
+                        ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
                     }),
                 });
             } catch { /* best-effort */ }
@@ -669,12 +677,19 @@ export async function meshSendTask(
         }
 
         // ── Untargeted local task: use queue pull ─────────────────────────────
+        // COORD-EVENT-MISROUTE (anchor preservation): stamp the originating coordinator
+        // SESSION anchor exactly as the sibling meshEnqueueTask does (mesh-tools-queue.ts).
+        // Without it the queued task carries no sourceCoordinatorSessionId, so at claim time
+        // targetCoordinatorSessionId is empty (mesh-queue-assignment.ts) and the completion
+        // loses its session anchor — falling back to daemon-level fan-out across every local
+        // coordinator instead of routing back to the coordinator session that issued the task.
         const task = enqueueTask(ctx.mesh.id, args.message, {
             targetNodeId: args.node_id,
             targetSessionId: args.session_id,
             taskMode,
             ...(readonly ? { readonly: true } : {}),
             ...(missionId ? { missionId } : {}),
+            ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
         });
 
         const queueTrigger = await triggerMeshQueueAndReport(ctx);

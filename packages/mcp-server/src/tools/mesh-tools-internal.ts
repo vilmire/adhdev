@@ -82,6 +82,7 @@ import {
     nodeSatisfiesRequiredTags,
     normalizeMeshCapabilityTags,
     readLedgerEntries,
+    coordinatorIdentityFromEmitFields,
     readLedgerSlice,
     readLedgerSliceFromStore,
     reconcileDirectDispatchCompletionFromTranscript,
@@ -472,6 +473,14 @@ export function buildDirectTaskPayload(
          *  session (not just the daemon). Mirrors the `coordinatorSessionId` already stamped into
          *  the worker's meshContext. */
         coordinatorSessionId?: string;
+        /** COORD-EVENT-MISROUTE (anchor preservation): the originating coordinator DAEMON that
+         *  dispatched this task. Persisted in the task_dispatched ledger so a later transcript-
+         *  reconcile synth recovers the DISPATCHING coordinator's daemon anchor from the ledger
+         *  instead of stamping the WORKER's own self-daemon (mesh-completion-synthesis selfIds) —
+         *  the anchor corruption that downgraded a cross-machine completion to a broadcast
+         *  deliverable to any coordinator. Mirrors the `coordinatorDaemonId` already stamped into
+         *  the worker's meshContext. Absent on legacy rows → daemon-level fallback (unchanged). */
+        coordinatorDaemonId?: string;
     },
 ): Record<string, unknown> {
     const descriptor = summarizeTaskMessage(message);
@@ -487,6 +496,7 @@ export function buildDirectTaskPayload(
         ...(opts.targetSessionId ? { targetSessionId: opts.targetSessionId } : {}),
         ...(opts.dispatchedToIdleSession !== undefined ? { dispatchedToIdleSession: opts.dispatchedToIdleSession } : {}),
         ...(opts.coordinatorSessionId ? { coordinatorSessionId: opts.coordinatorSessionId } : {}),
+        ...(opts.coordinatorDaemonId ? { coordinatorDaemonId: opts.coordinatorDaemonId } : {}),
     };
 }
 
@@ -2203,7 +2213,25 @@ export async function drainCoordinatorPendingEvents(
     // coordinators are skipped (and requeued) instead of being silently
     // consumed by this MCP. drainPendingMeshCoordinatorEvents already
     // accepts the second arg in the base; we were the missing wiring.
-    const events = (drainPendingMeshCoordinatorEvents(ctx.mesh.id, ctx.localDaemonId) as any[]).filter(matchesCurrentMesh);
+    //
+    // COORD-EVENT-MISROUTE (defense-in-depth, session filter): thread THIS coordinator's own
+    // sessionId into the drainer identity so identityDeliversTo can exclude a SIBLING coordinator
+    // session's unicast completion on the same daemon (contracts.ts identityDeliversTo compares
+    // sessions only when BOTH the event's intendedFor AND the drainer name one). Without a session
+    // in the drainer identity the filter is inert and a daemon-level drain sweeps every local
+    // coordinator's events. Regression-0: when coordinatorSessionId is empty (single-coordinator /
+    // legacy) the drainer stays session-less → daemon-level delivery is unchanged; and a broadcast
+    // event is delivered regardless (shouldDeliverPendingEventToCoordinator → true for broadcast),
+    // so this only narrows genuine per-session unicast, never suppresses a broadcast.
+    const drainerIdentity = coordinatorIdentityFromEmitFields({
+        daemonId: ctx.localDaemonId,
+        sessionId: ctx.coordinatorSessionId,
+    });
+    const events = (drainPendingMeshCoordinatorEvents(
+        ctx.mesh.id,
+        ctx.localDaemonId,
+        drainerIdentity ? { drainerIdentity } : undefined,
+    ) as any[]).filter(matchesCurrentMesh);
     events.forEach(rememberMeshSessionProviderMetadataFromEvent);
     return events;
 }

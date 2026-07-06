@@ -205,6 +205,127 @@ describe('mesh pending-event — v2 emit stamping (B2a)', () => {
     });
 });
 
+// COORD-EVENT-MISROUTE — anchor preservation (regression-0). The fix preserves the
+// DISPATCHING coordinator's daemon+session anchor end-to-end (enqueue-fallback session
+// stamp, task_dispatched ledger coordinatorDaemonId, synth ledger recovery, drainer
+// session identity) so a terminal completion routes back to the coordinator that issued
+// the task instead of broadcasting to any coordinator. These lock the two regression-0
+// invariants the fix must preserve:
+//   (a) a single-coordinator broadcast completion (no anchor to address) is STILL delivered;
+//   (b) with two coordinator SESSIONS on one daemon, a completion carrying the dispatching
+//       coordinator's session anchor routes ONLY to that session's drain — never the sibling.
+describe('mesh pending-event — COORD-EVENT-MISROUTE anchor preservation (regression-0)', () => {
+    const SESSION_A = `sess_${'a'.repeat(20)}`;
+    const SESSION_B = `sess_${'b'.repeat(20)}`;
+
+    beforeEach(() => {
+        if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });
+    });
+
+    afterEach(() => {
+        try { MeshRuntimeStore.resetForTests(); } catch { /* best-effort */ }
+        try { rmSync(testTmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    });
+
+    // (regression-0 a) A completion with NO addressable coordinator (the self-fallback
+    // broadcast path — emit-time anchor genuinely absent) must NOT be held/suppressed by the
+    // fix: broadcast is the only path that reaches a legitimate same-machine coordinator, and
+    // ★the RCA explicitly forbids turning selfFallback broadcast into a hold/expire. A single
+    // coordinator draining on this daemon still receives it, WITH or WITHOUT a session identity
+    // on its drain.
+    it('(a) a single-coordinator broadcast completion is still delivered — session-less AND session-scoped drain', () => {
+        const meshId = `mesh-coord-${randomUUID().slice(0, 8)}`;
+        __clearMeshPendingEventsForTests(meshId);
+        const noAnchor = makeTerminal(meshId);
+        delete (noAnchor as any).targetCoordinatorDaemonId; // emit-time: no coordinator to address
+        queuePendingMeshCoordinatorEvent(noAnchor);
+
+        // Peek confirms the self-fallback minted a BROADCAST (not a self-unicast that a
+        // session drain would skip).
+        const [peeked] = getPendingMeshCoordinatorEvents(meshId, SELF_MACH) as PendingMeshCoordinatorEvent[];
+        expect(peeked.scope).toBe('broadcast');
+
+        // A session-scoped drain (the fix threads the coordinator's own sessionId as
+        // drainerIdentity) still receives the broadcast — shouldDeliverPendingEventToCoordinator
+        // returns true for broadcast regardless of the drainer's session.
+        const drained = drainPendingMeshCoordinatorEvents(
+            meshId,
+            SELF_MACH,
+            { drainerIdentity: { daemonId: SELF_MACH, coordinatorRunId: SELF_MACH, sessionId: SESSION_A } },
+        ) as PendingMeshCoordinatorEvent[];
+        expect(drained).toHaveLength(1);
+        expect(drained[0].event).toBe('agent:generating_completed');
+    });
+
+    // (regression-0 b) With the dispatching coordinator's daemon+session anchor PRESERVED, the
+    // completion is stamped unicast/intendedFor=that session. A sibling coordinator SESSION on
+    // the SAME daemon, viewing its inbox with its OWN session identity, must NOT surface it; the
+    // dispatching session does. This is the multi-coordinator misroute the fix closes. Isolation
+    // is asserted at the NON-DESTRUCTIVE peek layer (routeV2EventsForDrainer applies the same
+    // identityDeliversTo filter there) — the destructive drain marks rows by DAEMON scope and
+    // defers per-session fan-out to the reconcile-loop inject (targetCoordinatorSessionId match +
+    // holdOrExpireStrictUnmatchedEvent), so a peek is the faithful single-module surface for the
+    // session filter without a store round-trip.
+    it('(b) two coordinator sessions on one daemon: a session-anchored completion surfaces only to the dispatching session', () => {
+        const meshId = `mesh-coord-${randomUUID().slice(0, 8)}`;
+        __clearMeshPendingEventsForTests(meshId);
+        // Anchor preserved: daemon = MACH (dispatching coordinator daemon), session = SESSION_A.
+        queuePendingMeshCoordinatorEvent(makeTerminal(meshId, {
+            targetCoordinatorDaemonId: MACH,
+            targetCoordinatorSessionId: SESSION_A,
+        }));
+
+        // Daemon-level peek: the preserved anchor keeps it UNICAST addressed to the dispatching
+        // session — the core RCA invariant (anchor present → unicast, not broadcast-to-any).
+        const [daemonPeek] = getPendingMeshCoordinatorEvents(meshId, MACH) as PendingMeshCoordinatorEvent[];
+        expect(daemonPeek.scope).toBe('unicast');
+        expect(daemonPeek.intendedFor?.daemonId).toBe(MACH);
+        expect(daemonPeek.intendedFor?.sessionId).toBe(SESSION_A);
+
+        // Sibling coordinator SESSION_B (same daemon) peeks with its own session identity →
+        // identityDeliversTo compares sessions (both sides session-specific) → excluded.
+        const siblingPeek = getPendingMeshCoordinatorEvents(
+            meshId,
+            MACH,
+            { drainerIdentity: { daemonId: MACH, coordinatorRunId: MACH, sessionId: SESSION_B } },
+        ) as PendingMeshCoordinatorEvent[];
+        expect(siblingPeek).toHaveLength(0);
+
+        // The dispatching coordinator SESSION_A peeks with its own identity → surfaced.
+        const ownerPeek = getPendingMeshCoordinatorEvents(
+            meshId,
+            MACH,
+            { drainerIdentity: { daemonId: MACH, coordinatorRunId: MACH, sessionId: SESSION_A } },
+        ) as PendingMeshCoordinatorEvent[];
+        expect(ownerPeek).toHaveLength(1);
+        expect(ownerPeek[0].event).toBe('agent:generating_completed');
+
+        // And the owner's destructive drain (its own identity) delivers it.
+        const ownerDrain = drainPendingMeshCoordinatorEvents(
+            meshId,
+            MACH,
+            { drainerIdentity: { daemonId: MACH, coordinatorRunId: MACH, sessionId: SESSION_A } },
+        ) as PendingMeshCoordinatorEvent[];
+        expect(ownerDrain).toHaveLength(1);
+    });
+
+    // Regression guard for the LOST-ANCHOR failure mode the fix repairs: had the synth stamped
+    // the WORKER's self-daemon (OTHER_MACH) instead of the dispatching coordinator (MACH), the
+    // event would be addressed to a daemon the coordinator's drain does not match → the drain
+    // scope filter drops it here (0), and cross-machine it would have selfFallback-broadcast to
+    // any coordinator. This asserts the daemon scope isolation the anchor recovery relies on.
+    it('(b-neg) a completion mis-anchored to the WORKER daemon is not drained by the coordinator daemon', () => {
+        const meshId = `mesh-coord-${randomUUID().slice(0, 8)}`;
+        __clearMeshPendingEventsForTests(meshId);
+        // Simulate the pre-fix corruption: anchor = OTHER_MACH (worker self-daemon), not MACH.
+        queuePendingMeshCoordinatorEvent(makeTerminal(meshId, { targetCoordinatorDaemonId: OTHER_MACH }));
+        // The coordinator daemon MACH does not drain it (daemon scope isolates). The fix's
+        // ledger-recovery ensures the anchor is MACH so the coordinator DOES drain it (covered by
+        // (b)); this locks that a mis-anchored event does not silently land on the wrong daemon.
+        expect(drainPendingMeshCoordinatorEvents(meshId, MACH).length).toBe(0);
+    });
+});
+
 describe('mesh pending-event — v2 column migration on a pre-v2 DB', () => {
     beforeEach(() => {
         if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });

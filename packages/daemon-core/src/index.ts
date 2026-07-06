@@ -303,6 +303,11 @@ export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHost
 // ── Mesh Events ──
 export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, clearPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, requeueHeldMeshCoordinatorEvents, serializeV2EnvelopeToWire, readV2EnvelopeFromWire, reconcileDirectDispatchCompletionFromTranscript } from './mesh/mesh-events.js';
 export type { PendingMeshCoordinatorEvent, MeshHeldEventRequeueFilter, MeshHeldEventRequeueResult } from './mesh/mesh-events.js';
+// COORD-EVENT-MISROUTE: coordinator-identity helper so the mcp-server drain path can build a
+// session-scoped drainer identity (identityDeliversTo sibling-session filter) with the same
+// canonical builder daemon-core uses internally, instead of hand-rolling the identity shape.
+export { coordinatorIdentityFromEmitFields } from './mesh/contracts.js';
+export type { CoordinatorIdentity } from './mesh/contracts.js';
 // The coordinator-side preview surfaced from a worker's completion/status event
 // (finalSummary / workerResult.summary / lastMessagePreview). Same data the mobile
 // inbox is fed; reused by mesh_read_chat's cache fallback when the live P2P read path

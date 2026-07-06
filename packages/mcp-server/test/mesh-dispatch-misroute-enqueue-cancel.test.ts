@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { existsSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
-import { meshEnqueueTask, meshQueueCancel } from '../src/tools/mesh-tools.js';
+import { meshEnqueueTask, meshQueueCancel, meshSendTask } from '../src/tools/mesh-tools.js';
 import { enqueueTask, getQueue, claimNextTask, getLedgerDir } from '@adhdev/daemon-core';
 
 // MESH-DISPATCH-MISROUTE — mcp-server tool-layer fixes.
@@ -89,6 +89,37 @@ test('fix1: no target stays unpinned (existing behavior unchanged)', async () =>
   const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'anyone' } as any));
   assert.equal(res.success, true);
   assert.equal(res.targetNodeId, undefined, 'no target → no pin');
+});
+
+test('COORD-EVENT-MISROUTE: untargeted meshSendTask enqueue-fallback stamps the coordinator session anchor', async () => {
+  const meshId = nextMeshId();
+  // A local node (recording transport → not IpcTransport) with NO session_id drives the
+  // untargeted queue-pull fallback. Without the fix the queued task carried no
+  // sourceCoordinatorSessionId → the completion later lost its session anchor and fanned out
+  // to every local coordinator (the misroute). The fix stamps ctx.coordinatorSessionId exactly
+  // as the sibling meshEnqueueTask does.
+  const COORDINATOR_SESSION = 'coordinator_sess_anchor';
+  const ctx = makeCtx(meshId, recordingTransport(), COORDINATOR_SESSION);
+  const res = JSON.parse(await meshSendTask(ctx, { node_id: NODE_MAC, message: 'untargeted work' } as any));
+  assert.equal(res.success, true);
+  assert.equal(res.source, 'queue', 'no session_id → untargeted queue-pull fallback');
+  const queued = getQueue(meshId).find(t => t.id === res.taskId);
+  assert.ok(queued, 'the fallback enqueued a task row');
+  assert.equal(
+    (queued as any).sourceCoordinatorSessionId,
+    COORDINATOR_SESSION,
+    'the queued task must carry the originating coordinator session anchor',
+  );
+});
+
+test('COORD-EVENT-MISROUTE: untargeted enqueue-fallback with no coordinator session stays unanchored (no fabrication)', async () => {
+  const meshId = nextMeshId();
+  const ctx = makeCtx(meshId, recordingTransport()); // no coordinatorSessionId
+  const res = JSON.parse(await meshSendTask(ctx, { node_id: NODE_WIN, message: 'anon work' } as any));
+  assert.equal(res.success, true);
+  const queued = getQueue(meshId).find(t => t.id === res.taskId);
+  assert.ok(queued, 'the fallback enqueued a task row');
+  assert.equal((queued as any).sourceCoordinatorSessionId, undefined, 'no coordinator session → no fabricated anchor');
 });
 
 test('fix2: cancelling an ASSIGNED task stops the assigned worker session', async () => {
