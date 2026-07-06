@@ -298,6 +298,18 @@ export interface DaemonMetadataUpdate {
     userName?: string;
     seq: number;
     timestamp: number;
+    /**
+     * Per-mesh state-change revision counters (meshId → monotonically increasing
+     * integer), bumped whenever the daemon's mesh graph/queue/mission state for that
+     * mesh changes (onMeshStateChange). Lets the dashboard replace its client-side
+     * mesh_status polling with an event-driven background refresh: when the revision
+     * for the mesh it is viewing advances, it re-fetches the aggregate mesh_status
+     * (SWR, keeping the current graph on screen). This is a lightweight nudge — the
+     * full aggregate snapshot is fetched on demand, not embedded here, so the
+     * daemon.metadata payload stays small. Optional/absent for daemons/builds that
+     * don't emit it (the client then keeps its polling fallback).
+     */
+    meshStateRevisions?: Record<string, number>;
 }
 
 export interface TopicUpdateEnvelopeMap {

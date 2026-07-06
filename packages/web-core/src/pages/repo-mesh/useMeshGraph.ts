@@ -29,6 +29,24 @@ function readBootstrapFallback(response: unknown): boolean {
     return (response as Record<string, unknown>)._bootstrapFallback === true
 }
 
+// Module-level last-good graph cache, keyed by meshId. Survives component
+// unmount/remount so re-entering the /mesh route (cloud) or switching back to a
+// previously-viewed mesh serves the last committed graph instantly and freshens
+// in the background — no cold 'loading' paint. Mirrors the dashboard dialog's
+// dashboardMeshGraphStatusCache. Cleared entries are simply overwritten on the
+// next commit; a small unbounded map is fine (meshes per user are few).
+const meshGraphStatusCache = new Map<string, RepoMeshStatus>()
+
+export function getCachedMeshGraphStatus(meshId: string | null): RepoMeshStatus | null {
+    if (!meshId) return null
+    return meshGraphStatusCache.get(meshId) ?? null
+}
+
+function rememberMeshGraphStatus(meshId: string | null, status: RepoMeshStatus | null): void {
+    if (!meshId || !status) return
+    meshGraphStatusCache.set(meshId, status)
+}
+
 export function useMeshGraph({
     selectedMeshId,
     loadMeshStatus,
@@ -36,7 +54,12 @@ export function useMeshGraph({
     normalizeNode,
     gateIncompleteGraph,
 }: UseMeshGraphOptions) {
-    const [meshGraphStatus, setMeshGraphStatus] = useState<RepoMeshStatus | null>(null)
+    // Seed from the module cache so a remount (route re-entry) paints the
+    // last-good graph immediately instead of a spinner; the load effect still
+    // fires a background refresh on top.
+    const [meshGraphStatus, setMeshGraphStatus] = useState<RepoMeshStatus | null>(
+        () => getCachedMeshGraphStatus(selectedMeshId),
+    )
     const [graphLoading, setGraphLoading] = useState(false)
     const [graphError, setGraphError] = useState<string | null>(null)
     const [graphProvenance, setGraphProvenance] = useState<'idle' | 'first_paint' | 'settling' | 'settled'>('idle')
@@ -94,6 +117,7 @@ export function useMeshGraph({
                     return
                 }
                 setMeshGraphStatus(status)
+                rememberMeshGraphStatus(meshId, status)
                 setGraphProvenance('settled')
             } else {
                 setMeshGraphStatus(null)

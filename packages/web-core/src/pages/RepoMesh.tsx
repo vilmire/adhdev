@@ -17,6 +17,7 @@ import {
     type AvailableCliProviderOption,
 } from '../utils/provider-priority'
 import { useMeshGraphMetadataSubscription } from '../hooks/useMeshGraphMetadataSubscription'
+import { useMeshStateRevisionRefresh } from '../hooks/useMeshStateRevisionRefresh'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import {
     useRepoMeshContext,
@@ -27,7 +28,7 @@ import { MeshDetailView } from './repo-mesh/MeshDetailView'
 import { useMeshList } from './repo-mesh/useMeshList'
 import { useMeshNodeActions } from './repo-mesh/useMeshNodeActions'
 import { useMeshQueue } from './repo-mesh/useMeshQueue'
-import { useMeshGraph } from './repo-mesh/useMeshGraph'
+import { useMeshGraph, getCachedMeshGraphStatus } from './repo-mesh/useMeshGraph'
 import { resolveFirstSetupSeedDaemonId } from './repo-mesh/host-seed'
 import type { MeshNode, MeshQueueEntry, AvailableCliAgent } from './repo-mesh/types'
 import { readMeshPolicy } from './repo-mesh/types'
@@ -44,6 +45,12 @@ export { getNodeActiveAssignments, describeNodeActiveAssignmentLabel } from './r
 // coordinator's own in-flight refresh. Polling only runs while the tab is
 // visible and the detail view is open.
 const GRAPH_AUTO_REVALIDATE_INTERVAL_MS = 7000
+
+// When the daemon pushes per-mesh revision counters (cloud), the graph refreshes
+// event-driven on push, so the interval poll is demoted to a slow safety net that
+// only catches a dropped/missed push. Kept well above the push cadence so it never
+// competes with the event-driven path.
+const GRAPH_PUSH_FALLBACK_INTERVAL_MS = 45000
 
 // ─── Main page ───────────────────────────────────────────────────
 
@@ -414,12 +421,32 @@ export default function RepoMesh() {
         }
     }, [newMeshDaemonId, newMeshWorkspace, createPickerWorkspaces, features.createDaemonPicker])
 
-    // Load graph on mesh or coordinator daemon selection
+    // Load graph on mesh or coordinator daemon selection.
+    //
+    // SWR: only a genuine MESH switch clears the held graph — that prior graph is a
+    // different mesh's topology and showing it would be wrong, so a first-paint
+    // (spinner) load is correct there. A same-mesh command-daemon change (host
+    // rebind while staying on this mesh) must NOT clear: the existing nodes are
+    // still valid, so we keep them on screen and freshen in the background
+    // (refresh=true → no spinner, no white flash). This is the flicker the operator
+    // saw when the coordinator's own activity nudged resolvedActiveDaemonId.
+    const graphLoadedForMeshRef = useRef<string | null>(null)
     useEffect(() => {
-        if (selectedMeshId) {
-            setMeshGraphStatus(null)
+        if (!selectedMeshId) return
+        const meshChanged = graphLoadedForMeshRef.current !== selectedMeshId
+        graphLoadedForMeshRef.current = selectedMeshId
+        if (meshChanged) {
+            // Seed from the last-good module cache for THIS mesh (if any) instead of
+            // blanking to null — a previously-viewed mesh paints instantly and
+            // freshens in the background (refresh=true). Only a never-seen mesh with
+            // no cache entry does a spinner first-paint.
+            const cached = getCachedMeshGraphStatus(selectedMeshId)
+            setMeshGraphStatus(cached)
             setGraphError(null)
-            void loadGraph(resolvedActiveDaemonId, selectedMeshId)
+            void loadGraph(resolvedActiveDaemonId, selectedMeshId, cached !== null)
+        } else {
+            setGraphError(null)
+            void loadGraph(resolvedActiveDaemonId, selectedMeshId, true)
         }
     }, [selectedMeshId, resolvedActiveDaemonId])
 
@@ -429,9 +456,48 @@ export default function RepoMesh() {
     // it would never fire). A guard ref drops a tick while a prior auto-reload is
     // still in flight, so a slow git probe cannot pile up overlapping refreshes.
     // The manual Refresh button (onRefreshGraph) remains the explicit path.
+    //
+    // When the daemon pushes mesh revision counters (features.meshStatePushRefresh,
+    // cloud), the revision hook below drives refreshes event-driven and this timer
+    // is demoted to a slow safety net (GRAPH_PUSH_FALLBACK_INTERVAL_MS). Standalone
+    // (no push) keeps the original fast poll.
     const loadGraphRef = useRef(loadGraph)
     loadGraphRef.current = loadGraph
     const autoRevalidateInFlight = useRef(false)
+    // Single SWR background-refresh entrypoint shared by the revision-push hook and
+    // the interval fallback. Held in a ref and reassigned each render so it always
+    // closes over the current mesh/daemon without resetting the interval timer.
+    const refreshGraphInBackground = useRef<() => void>(() => {})
+    refreshGraphInBackground.current = () => {
+        if (autoRevalidateInFlight.current) return
+        if (!selectedMeshId || !resolvedActiveDaemonId) return
+        autoRevalidateInFlight.current = true
+        // refresh=true → SWR semantics: keep the current graph on screen (no
+        // loading spinner) and commit the fresh snapshot when it arrives.
+        void Promise.resolve(loadGraphRef.current(resolvedActiveDaemonId, selectedMeshId, true))
+            .finally(() => { autoRevalidateInFlight.current = false })
+    }
+
+    // Event-driven refresh: re-fetch mesh_status the moment the daemon reports the
+    // viewed mesh's state advanced, instead of waiting out the poll interval. No-op
+    // on standalone (revision counters absent → hook never fires) and harmless when
+    // the tab is hidden (loadGraph is cheap and the git probe is peer-gated).
+    const pollIntervalMs = features.meshStatePushRefresh
+        ? GRAPH_PUSH_FALLBACK_INTERVAL_MS
+        : GRAPH_AUTO_REVALIDATE_INTERVAL_MS
+    useMeshStateRevisionRefresh({
+        daemonIds: useMemo(
+            () => [resolvedActiveDaemonId, ...meshNodeDaemonIds].filter(Boolean),
+            [resolvedActiveDaemonId, meshNodeDaemonIds],
+        ),
+        meshId: selectedMeshId,
+        sendData,
+        onRevisionAdvance: () => {
+            if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+            refreshGraphInBackground.current()
+        },
+    })
+
     useEffect(() => {
         if (!selectedMeshId || !resolvedActiveDaemonId) return
         if (typeof document === 'undefined') return
@@ -440,16 +506,11 @@ export default function RepoMesh() {
 
         const tick = () => {
             if (document.visibilityState !== 'visible') return
-            if (autoRevalidateInFlight.current) return
-            autoRevalidateInFlight.current = true
-            // refresh=true → SWR semantics: keep the current graph on screen (no
-            // loading spinner) and commit the fresh snapshot when it arrives.
-            void Promise.resolve(loadGraphRef.current(resolvedActiveDaemonId, selectedMeshId, true))
-                .finally(() => { autoRevalidateInFlight.current = false })
+            refreshGraphInBackground.current()
         }
 
         const start = () => {
-            if (timer === null) timer = setInterval(tick, GRAPH_AUTO_REVALIDATE_INTERVAL_MS)
+            if (timer === null) timer = setInterval(tick, pollIntervalMs)
         }
         const stop = () => {
             if (timer !== null) { clearInterval(timer); timer = null }
@@ -469,7 +530,7 @@ export default function RepoMesh() {
             stop()
             document.removeEventListener('visibilitychange', onVisibilityChange)
         }
-    }, [selectedMeshId, resolvedActiveDaemonId])
+    }, [selectedMeshId, resolvedActiveDaemonId, pollIntervalMs])
 
     // Standalone: auto-load queue on mesh selection. The dedicated Queue settings
     // section is gone, but meshQueue still feeds per-node assignment diagnostics and
@@ -479,8 +540,23 @@ export default function RepoMesh() {
         void loadQueue(selectedMeshId)
     }, [selectedMeshId, features.queueSection])
 
-    // Initial mesh load
-    useEffect(() => { void loadMeshes() }, [loadMeshes])
+    // Mesh list load. The first mount (no meshes held yet) does a plain load that
+    // shows the 'Loading meshes...' state; every subsequent re-fire — triggered
+    // only when the connected-daemon set actually changes — is a background SWR
+    // refresh (refresh=true) that keeps the current list on screen instead of
+    // clearing it to a spinner (the white-flash the operator complained about).
+    // Keyed on a stable sorted daemon-id string, NOT the unstable `loadMeshes`
+    // callback identity, so an unrelated parent re-render can't re-fire this.
+    const meshDaemonIdsKey = useMemo(
+        () => daemons.map(d => d.id).filter(Boolean).sort().join(','),
+        [daemons],
+    )
+    const didInitialMeshLoad = useRef(false)
+    useEffect(() => {
+        void loadMeshes(didInitialMeshLoad.current)
+        didInitialMeshLoad.current = true
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [meshDaemonIdsKey])
 
     // ─── Render ───────────────────────────────────────────────────
 
@@ -550,7 +626,7 @@ export default function RepoMesh() {
             hostLabel={persistedHostInfo.label}
             hostOnline={hostOnline}
             hostRebindDaemonId={hostRebindDaemonId}
-            onHostRebindDaemonIdChange={id => { setHostRebindDaemonId(id); setMeshGraphStatus(null) }}
+            onHostRebindDaemonIdChange={id => setHostRebindDaemonId(id)}
             onLaunchCoordinator={handleLaunchCoordinator}
             activeDaemon={activeDaemon}
             activeDaemonId={resolvedActiveDaemonId}
