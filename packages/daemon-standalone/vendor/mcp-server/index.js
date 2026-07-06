@@ -916,16 +916,21 @@ var MESH_MISSION_UPSERT_TOOL = {
 };
 var MESH_MISSION_LIST_TOOL = {
   name: "mesh_mission_list",
-  description: 'List missions with their goal, status, and live task progress (total/pending/assigned/completed/failed). Unlike mesh_status (which surfaces live + recent missions), this returns every mission regardless of status by default, so paused/abandoned/completed missions are never hidden. Filter with `status` to scope (e.g. ["paused"] to find paused missions). Completed MAGI cross-verification missions (one auto-created per mesh_magi_review) are hidden by default to keep the list coordinator-focused \u2014 in-progress MAGI missions still show; pass include_magi=true to list completed ones too. Compact (default) elides the full goal to a capped preview; pass verbose=true for full goal text. Read-only.',
+  description: 'List missions with their goal, status, and live task progress (total/pending/assigned/completed/failed). Default (no `status`): non-terminal missions (active/paused) return in detail, while completed/abandoned missions are folded into a `historyFold` summary (counts by status + newest-first `missionIds`) rather than listed one-by-one \u2014 this keeps the payload bounded as a mesh accumulates hundreds of finished missions. To read finished missions in full, pass `status` explicitly (e.g. ["completed"]); those are returned in detail but still capped by `limit` (default 50), with overflow reported as truncated=true + overflowIds. Completed MAGI cross-verification missions (one auto-created per mesh_magi_review) are hidden by default to keep the list coordinator-focused \u2014 in-progress MAGI missions still show; pass include_magi=true to list completed ones too. Per-mission stats (ledger-scanned durations/attempts) are OMITTED by default \u2014 the `tasks` aggregate carries progress; pass include_stats=true (or verbose=true) to attach them. Compact (default) elides the full goal to a capped preview; pass verbose=true for full goal text. Read-only.',
   inputSchema: {
     type: "object",
     properties: {
       status: {
         type: "array",
         items: { type: "string", enum: ["active", "paused", "completed", "abandoned"] },
-        description: "Optional status filter. Omit to return missions of every status."
+        description: 'Optional status filter. Omit for the default folded view (active/paused in detail, completed/abandoned summarized). Provide it (e.g. ["completed"]) to list those missions in detail \u2014 bounded by `limit`.'
       },
-      verbose: { type: "boolean", description: "Return full goal text instead of a capped preview. Defaults to false (compact)." },
+      limit: {
+        type: "number",
+        description: "Max missions returned in detail (default 50). Overflow beyond the cap is reported as truncated=true + overflowIds."
+      },
+      verbose: { type: "boolean", description: "Return full goal text instead of a capped preview (also attaches stats). Defaults to false (compact)." },
+      include_stats: { type: "boolean", description: "Attach per-mission ledger stats (durations/attempts). Off by default; tasks aggregate is usually enough." },
       include_magi: { type: "boolean", description: "Include completed MAGI cross-verification missions (hidden by default). Defaults to false." }
     }
   }
@@ -1896,7 +1901,8 @@ function buildDirectTaskPayload(message, via, opts) {
     ...opts.providerType ? { providerType: opts.providerType } : {},
     ...opts.targetSessionId ? { targetSessionId: opts.targetSessionId } : {},
     ...opts.dispatchedToIdleSession !== void 0 ? { dispatchedToIdleSession: opts.dispatchedToIdleSession } : {},
-    ...opts.coordinatorSessionId ? { coordinatorSessionId: opts.coordinatorSessionId } : {}
+    ...opts.coordinatorSessionId ? { coordinatorSessionId: opts.coordinatorSessionId } : {},
+    ...opts.coordinatorDaemonId ? { coordinatorDaemonId: opts.coordinatorDaemonId } : {}
   };
 }
 function findNode(mesh, nodeId) {
@@ -3089,7 +3095,15 @@ async function drainCoordinatorPendingEvents(ctx, opts) {
     }
     return surfacedEvents;
   }
-  const events = (0, import_daemon_core3.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId).filter(matchesCurrentMesh);
+  const drainerIdentity = (0, import_daemon_core3.coordinatorIdentityFromEmitFields)({
+    daemonId: ctx.localDaemonId,
+    sessionId: ctx.coordinatorSessionId
+  });
+  const events = (0, import_daemon_core3.drainPendingMeshCoordinatorEvents)(
+    ctx.mesh.id,
+    ctx.localDaemonId,
+    drainerIdentity ? { drainerIdentity } : void 0
+  ).filter(matchesCurrentMesh);
   events.forEach(rememberMeshSessionProviderMetadataFromEvent);
   return events;
 }
@@ -4459,23 +4473,26 @@ async function meshMissionList(ctx, args = {}) {
     }
     const statuses = rawStatuses.length > 0 ? rawStatuses : void 0;
     const includeMagi = (args.include_magi ?? args.includeMagi) === true;
-    const missions = (0, import_daemon_core4.listMeshMissionSummaries)(ctx.mesh.id, {
+    const verbose = args.verbose === true;
+    const withStats = verbose || (args.include_stats ?? args.includeStats) === true;
+    const limit = typeof args.limit === "number" && Number.isFinite(args.limit) && args.limit > 0 ? Math.floor(args.limit) : void 0;
+    const result = (0, import_daemon_core4.listMeshMissionsForTool)(ctx.mesh.id, {
       statuses,
-      verbose: args.verbose === true,
-      includeMagi
-    }).map((mission) => {
-      try {
-        return { ...mission, stats: (0, import_daemon_core4.computeMeshMissionStats)(ctx.mesh.id, mission.id) };
-      } catch {
-        return mission;
-      }
+      verbose,
+      includeMagi,
+      withStats,
+      limit
     });
     return JSON.stringify({
       success: true,
-      count: missions.length,
+      count: result.missions.length,
+      matched: result.matched,
+      ...result.truncated ? { truncated: true, overflowIds: result.overflowIds } : {},
       ...statuses ? { statusFilter: statuses } : {},
       ...includeMagi ? { includeMagi: true } : { magiCompletedHidden: true },
-      missions
+      ...withStats ? {} : { statsHidden: true },
+      missions: result.missions,
+      ...result.historyFold ? { historyFold: result.historyFold } : {}
     }, null, 2);
   } catch (e) {
     return JSON.stringify({ success: false, error: e?.message || String(e) });
@@ -6172,7 +6189,11 @@ async function meshSendTask(ctx, args) {
               taskMode,
               providerType,
               targetSessionId: dispatchedSessionId,
-              ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}
+              ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {},
+              // COORD-EVENT-MISROUTE: persist the dispatching coordinator daemon anchor
+              // (same value stamped into meshContext above) so a transcript-reconcile
+              // synth recovers it instead of the worker's own self-daemon.
+              ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
             })
           });
           (0, import_daemon_core4.insertDirectDispatch)(ctx.mesh.id, {
@@ -6330,7 +6351,11 @@ async function meshSendTask(ctx, args) {
             providerType: resolvedProviderType,
             targetSessionId: args.session_id,
             dispatchedToIdleSession: sessionWasIdle,
-            ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}
+            ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {},
+            // COORD-EVENT-MISROUTE: persist the dispatching coordinator daemon anchor so a
+            // transcript-reconcile synth recovers it from the ledger rather than stamping
+            // the reconcile-runner's own self-daemon.
+            ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
           })
         });
       } catch {
@@ -6435,7 +6460,8 @@ async function meshSendTask(ctx, args) {
       targetSessionId: args.session_id,
       taskMode,
       ...readonly ? { readonly: true } : {},
-      ...missionId ? { missionId } : {}
+      ...missionId ? { missionId } : {},
+      ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
     });
     const queueTrigger = await triggerMeshQueueAndReport(ctx);
     const pendingEvents = (0, import_daemon_core4.drainPendingMeshCoordinatorEvents)(ctx.mesh.id, ctx.localDaemonId);
