@@ -20,6 +20,7 @@ import { createCliAdapter } from './spec/route.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter, isNativeSourceCanonicalHistory, materializeProviderNativeHistory, readChatHistory, readProviderChatHistory } from '../config/chat-history.js';
+import { loadPersistedProviderSessionPins } from '../config/state-store.js';
 import { LOG } from '../logging/logger.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
 import { shouldCollectTraceCategory } from '../logging/debug-config.js';
@@ -1219,21 +1220,51 @@ export class CliProviderInstance implements ProviderInstance {
     private readExternalCompletionMessages(): unknown[] | null {
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
         if (!adapterOwnsMessagesElsewhere) return null;
-        if (!this.providerSessionId) return null;
         if (!isNativeSourceCanonicalHistory(this.provider.nativeHistory)) return null;
+
+        // Resolve the native-history handle. A provider that exposes its own
+        // session id on the CLI (codex/claude/hermes) sets this.providerSessionId
+        // and reads by it directly. antigravity takes no --session-id, so
+        // this.providerSessionId stays empty forever — the OLD `if
+        // (!this.providerSessionId) return null` guard therefore never let the
+        // completion gate read antigravity's transcript, so the final-assistant
+        // evidence was permanently 'unavailable': the completion never emitted
+        // (short-gen settle-arm's flush kept finding no evidence) and the mesh
+        // reconcile loop reclaimed the "delivered but no completion" task after
+        // ~15 min, re-dispatching the SAME MAGI prompt (the observed codex/agy
+        // re-run loop) — ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP, completion side.
+        //
+        // Recover the on-disk conversation id from the read pin persisted across
+        // restart (state.json sessionProviderSessionPins, keyed by this session's
+        // instanceId — the same map read_chat records the resolved uuid into).
+        // With no explicit id and no pin, fall through with an empty handle and
+        // let the dispatcher resolve antigravity's conversations/<uuid>.db by its
+        // spawn floor + workspace + instanceId claim (exactly the read_chat path),
+        // so the very first completion probe can find the assistant answer.
+        let resolvedHandle = this.providerSessionId || '';
+        if (!resolvedHandle) {
+            try {
+                const pinned = loadPersistedProviderSessionPins()[this.instanceId];
+                if (typeof pinned === 'string' && pinned.trim()) resolvedHandle = pinned.trim();
+            } catch { /* best-effort pin hydration */ }
+        }
 
         if (this.lastExternalCompletionProbe?.sourcePath) {
             try { fs.statSync(this.lastExternalCompletionProbe.sourcePath); } catch { /* best-effort metadata refresh */ }
         }
         const restoredHistory = readProviderChatHistory(this.type, {
             canonicalHistory: this.provider.nativeHistory,
-            historySessionId: this.providerSessionId,
+            historySessionId: resolvedHandle || undefined,
             workspace: this.workingDir,
             offset: 0,
             limit: Number.MAX_SAFE_INTEGER,
             historyBehavior: this.provider.historyBehavior,
             scripts: this.provider.scripts as any,
             sessionStartedAtMs: this.startedAt,
+            // Threaded so the native-history dispatcher can resolve antigravity's
+            // conversation by claim/floor when no explicit handle is available,
+            // and so its claim owner token matches read_chat's.
+            instanceId: this.instanceId,
             envOverrides: this.spawnedEnvOverrides(),
             forceRefresh: true,
         });
