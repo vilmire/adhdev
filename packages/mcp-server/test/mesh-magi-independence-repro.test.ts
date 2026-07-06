@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { synthesizeMagiResponses } from '../src/tools/mesh-tools.js';
+import { synthesizeMagiResponses, magiReadIndicatesApprovalWedge } from '../src/tools/mesh-tools.js';
 
 // Repro harness for the owner-reported MAGI symptom:
 //   "independence not achieved — answering replicas span 1 provider(s) and 1 machine(s)"
@@ -93,6 +93,37 @@ test('low-diversity (not loss): all replicas answered but panel mono-provider �
     assert.ok(out.independenceBanner);
     assert.match(out.independenceBanner!, /the answering replicas span 1 provider\(s\) and 2 machine\(s\)/);
     assert.doesNotMatch(out.independenceBanner!, /replica-loss/);
+});
+
+// ─── replica-loss recovery: approval-wedge detection ─────────────────────────
+// A readonly MAGI replica that blocks on a command-approval modal (e.g. the git read it
+// runs to gather evidence) must be auto-approved by collect, else it burns the deadline and
+// is lost as `replica_waiting_approval`. magiReadIndicatesApprovalWedge is the decision
+// predicate over the replica's read_chat payload.
+
+test('approval-wedge: waiting_approval status → detected as wedge', () => {
+    assert.equal(magiReadIndicatesApprovalWedge({ status: 'waiting_approval', activeModal: { message: 'Do you want to proceed?', buttons: ['Yes', 'No'] } }), true);
+});
+
+test('approval-wedge: waiting_choice status → detected', () => {
+    assert.equal(magiReadIndicatesApprovalWedge({ status: 'waiting_choice' }), true);
+});
+
+test('approval-wedge: active modal even without approval status → detected', () => {
+    assert.equal(magiReadIndicatesApprovalWedge({ status: 'generating', activeModal: { message: 'pick one', buttons: ['a', 'b'] } }), true);
+});
+
+test('approval-wedge: idle / generating with no modal → NOT a wedge (no spurious approve)', () => {
+    assert.equal(magiReadIndicatesApprovalWedge({ status: 'idle' }), false);
+    assert.equal(magiReadIndicatesApprovalWedge({ status: 'generating' }), false);
+    assert.equal(magiReadIndicatesApprovalWedge({ status: 'generating', activeModal: null }), false);
+});
+
+test('approval-wedge: malformed / empty payload → NOT a wedge', () => {
+    assert.equal(magiReadIndicatesApprovalWedge(null), false);
+    assert.equal(magiReadIndicatesApprovalWedge(undefined), false);
+    assert.equal(magiReadIndicatesApprovalWedge('nope'), false);
+    assert.equal(magiReadIndicatesApprovalWedge({}), false);
 });
 
 test('genuine independence: distinct providers AND distinct machines, all answering → agreed', () => {

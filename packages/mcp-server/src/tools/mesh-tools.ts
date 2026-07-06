@@ -124,6 +124,7 @@ export {
     detectQuestionOutputSchemaConflict,
     findMagiReplicaTasks,
     magiOutputContractFor,
+    magiReadIndicatesApprovalWedge,
     meshMagiCollect,
     resolveMagiAutoCleanupMode,
     meshMagiPanelList,

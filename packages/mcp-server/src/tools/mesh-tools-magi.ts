@@ -502,6 +502,21 @@ interface ClusterAccumulator {
     specificEvidence: Set<string>;
 }
 
+/**
+ * Decide, from a replica's `read_chat` payload, whether it is wedged on an approval
+ * prompt that MAGI collect should auto-approve. True when the live session reports an
+ * approval/choice status OR carries an active modal — the states in which a readonly
+ * MAGI replica sits blocked instead of producing its answer. Pure — unit-testable on
+ * synthetic read_chat payloads. See nudgeWedgedReplica for why approving is safe here.
+ */
+export function magiReadIndicatesApprovalWedge(payload: unknown): boolean {
+    const p = payload as { status?: unknown; activeModal?: unknown } | null | undefined;
+    if (!p || typeof p !== 'object') return false;
+    const status = String((p as any).status ?? '');
+    if (status === 'waiting_approval' || status === 'waiting_choice') return true;
+    return !!(p as any).activeModal;
+}
+
 function rankNeedsVerification(c: MagiClaimCluster): number {
     switch (c.category) {
         case 'contested': return 0;
@@ -2327,6 +2342,47 @@ async function collectMagiResponses(
         } catch { return false; }
     };
 
+    // Recover a replica wedged on an approval modal. A MAGI replica is dispatched
+    // readonly:true, so any command-approval prompt it raises (typically the git/read it runs
+    // to gather file:line evidence) is safe to approve — and MUST be, because dispatch-time
+    // auto-approve is not guaranteed (IDE providers with no resolveAction script no-op it;
+    // remote pre-existing sessions never get the autoApprove backfill). Left unresolved, the
+    // replica burns the whole collect deadline and is lost as `replica_waiting_approval`.
+    // Reads the live session; only approves when it is actually in an approval state. Idempotent
+    // — resolve_action reports already_resolved/stale_prompt within its cooldown, so re-calling
+    // on later poll ticks is a no-op. Fully best-effort: any failure just leaves the normal
+    // re-wait/deadline path intact. Emits one ledger breadcrumb per approval attempt.
+    const nudgeWedgedReplica = async (task: any): Promise<void> => {
+        const node = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, task.assignedNodeId));
+        if (!node || !task.assignedSessionId) return;
+        try {
+            const read = await commandForNode(ctx, node, 'read_chat', {
+                sessionId: task.assignedSessionId,
+                targetSessionId: task.assignedSessionId,
+                workspace: (node as any).workspace,
+                tailLimit: 1,
+            });
+            const payload = unwrapCommandPayload(read) as any;
+            if (!magiReadIndicatesApprovalWedge(payload)) return;
+            const status = String(payload?.status ?? '');
+            await commandForNode(ctx, node, 'resolve_action', {
+                sessionId: task.assignedSessionId,
+                targetSessionId: task.assignedSessionId,
+                workspace: (node as any).workspace,
+                providerType: task.assignedProviderType,
+                agentType: task.assignedProviderType,
+                cliType: task.assignedProviderType,
+                action: 'approve',
+            });
+            try {
+                appendLedgerEntry(ctx.mesh.id, {
+                    kind: 'magi_replica_auto_approved' as any,
+                    payload: { taskId: task.id, nodeId: task.assignedNodeId, status },
+                });
+            } catch { /* ledger write is best-effort */ }
+        } catch { /* nudge is best-effort — fall through to the normal re-wait */ }
+    };
+
     // Attempt to FINALIZE one replica from its current state. Returns true once a final
     // verdict is locked. `force` (deadline reached / tasks gone) converts any remaining
     // re-wait (weak/unparseable/still-running) into a terminal verdict.
@@ -2353,7 +2409,21 @@ async function collectMagiResponses(
                 finalized.set(taskId, { source, response: emptyResponse() });
                 return true;
             }
-            // Still running and not stale → only finalize at the deadline.
+            // Still running and not stale. A replica can WEDGE here forever on an approval
+            // modal: a MAGI task is dispatched read-only, but dispatch-time auto-approve is
+            // conditional (it no-ops for an IDE provider whose auto-approve script is absent,
+            // or a remote pre-existing session that never got the autoApprove backfill), so a
+            // command-approval prompt (e.g. the git-read the replica runs to gather evidence)
+            // is never clicked and the replica is silently lost at the 180s deadline as
+            // `replica_waiting_approval`. Because the MAGI task is readonly:true, approving is
+            // exactly the intended semantics — so before re-waiting, detect a bound-session
+            // approval wedge and drive resolve_action(approve) on it. Best-effort and idempotent
+            // (a stale/already-resolved prompt is a no-op); provider-agnostic (recovers both the
+            // IDE-provider and remote-adopt gaps). Skipped under `force` (the deadline pass just
+            // finalizes) and rate-limited to once per replica per poll tick.
+            if (task.assignedNodeId && task.assignedSessionId && !force) {
+                await nudgeWedgedReplica(task);
+            }
             if (force) {
                 source.error = `replica_${task.status || 'incomplete'}`;
                 finalized.set(taskId, { source, response: emptyResponse() });
