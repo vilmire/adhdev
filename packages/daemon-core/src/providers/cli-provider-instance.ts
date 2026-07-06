@@ -573,7 +573,7 @@ export class CliProviderInstance implements ProviderInstance {
         const canonicalBackedHistory = this.shouldHydrateExistingProviderHistory()
             ? this.syncCanonicalSavedHistoryIfNeeded()
             : false;
-        const statusMessages = canonicalBackedHistory && this.lastPersistedHistoryMessages.length > 0
+        const statusMessages: any[] = canonicalBackedHistory && this.lastPersistedHistoryMessages.length > 0
             ? this.lastPersistedHistoryMessages.map((message) => ({
                 role: message.role,
                 content: message.content,
@@ -582,6 +582,42 @@ export class CliProviderInstance implements ProviderInstance {
                 receivedAt: message.receivedAt,
             }))
             : mergedMessages;
+
+        // Dashboard-tail repair (native-source providers, e.g. antigravity): the
+        // assistant answer lives only in native-history, so the PTY-parsed
+        // statusMessages end on the user prompt / auto-approve system lines and the
+        // snapshot's preview / lastMessageRole / completionMarker never see the
+        // answer — the session looks stuck on the user turn. We already cached the
+        // real final assistant summary at completion time (lastCompletionSummary),
+        // so append it as the trailing assistant bubble when the current tail has no
+        // assistant message at/after it. Purely additive to the status view; no
+        // per-tick native read, no effect on providers whose PTY carries the
+        // assistant (they surface it themselves and the guard below is a no-op).
+        const adapterOwnsMessagesElsewhereForTail = (this.adapter as any)?.chatMessagesOwnedExternally === true;
+        if (adapterOwnsMessagesElsewhereForTail && this.lastCompletionSummary) {
+            const summary = this.lastCompletionSummary;
+            let hasTrailingAssistant = false;
+            for (let i = statusMessages.length - 1; i >= 0; i -= 1) {
+                const m = statusMessages[i] as { role?: string; kind?: string; receivedAt?: number };
+                const role = typeof m?.role === 'string' ? m.role : '';
+                if (role === 'system') continue;
+                if (typeof m?.kind === 'string' && m.kind === 'tool') continue;
+                // First non-system/non-tool message from the tail: if it's already an
+                // assistant reply not older than our cached summary, the tail is fine.
+                hasTrailingAssistant = role === 'assistant'
+                    && typeof m?.receivedAt === 'number'
+                    && m.receivedAt >= summary.receivedAt - 1000;
+                break;
+            }
+            if (!hasTrailingAssistant) {
+                statusMessages.push({
+                    role: 'assistant',
+                    content: summary.content,
+                    kind: 'standard',
+                    receivedAt: summary.receivedAt,
+                });
+            }
+        }
 
         const dirName = workingDirBasename(this.workingDir);
         const parsedChatStatus = typeof parsedStatus?.status === 'string' && parsedStatus.status.trim()
@@ -1133,6 +1169,18 @@ export class CliProviderInstance implements ProviderInstance {
     private completedDebounceTimer: NodeJS.Timeout | null = null;
     private completedDebouncePending: CompletedDebouncePending | null = null;
     private lastExternalCompletionProbe: ExternalTranscriptProbe | null = null;
+    /**
+     * The final assistant summary of the last completed turn, cached at
+     * completion-emit time. For a native-source provider (antigravity) whose
+     * assistant answer lives only in native-history — never in the PTY parse that
+     * feeds activeChat.messages — the dashboard's preview / lastMessageRole /
+     * completionMarker would otherwise never see the answer and show the session
+     * stuck on the user prompt. getState() appends this cached assistant bubble to
+     * the status messages when the PTY tail has none, so those fields reflect the
+     * real last answer with ZERO per-tick native reads (the native read already ran
+     * once at completion). Reset on the next turn's start.
+     */
+    private lastCompletionSummary: { content: string; receivedAt: number } | null = null;
 
     private async enforceFreshSessionLaunchIfNeeded(): Promise<void> {
         const scriptName = getForcedNewSessionScriptName(this.provider, this.launchMode);
@@ -1236,16 +1284,18 @@ export class CliProviderInstance implements ProviderInstance {
         // "delivered but no completion" task and re-dispatched the same MAGI prompt
         // (ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP, completion side).
         //
-        // Deliberately do NOT fall through to the dispatcher's spawn-floor
-        // pickUnbound heuristic when no handle is known: that path CLAIMS the db it
-        // resolves, and a frequently-running completion probe with an empty handle
-        // can grab a *sibling's* conversation (e.g. a MAGI coordinator's probe
-        // stealing a replica's .db), after which the replica's own read_chat /
-        // mesh_read_chat resolves native_history_empty and the coordinator wrongly
-        // concludes the replica produced no result. So: read by a concrete handle
-        // (own db, claim idempotent) or return null and let the completion emit via
-        // the pin once a real binding read has recorded it (or via the mesh
-        // completion timeout). Isolation is preserved; no cross-session theft.
+        // Prefer a concrete handle (providerSessionId, else the persisted pin). When
+        // neither exists yet — a fresh antigravity turn whose conversation has not
+        // been bound by any read_chat — fall through with an EMPTY handle and let the
+        // dispatcher resolve this session's own conversations/<uuid>.db by the
+        // spawn-floor + workspace + instanceId claim. This is safe now that the
+        // claim owner token is single-form iid:<instanceId> (never collapses to '')
+        // and pickUnboundConversationDb picks the oldest store born at/after THIS
+        // session's floor: the probe resolves the session's OWN db under its own
+        // owner token, so it can never steal a sibling's conversation (the earlier
+        // theft required a floor=0 / owner='' collapse that no longer happens). It
+        // means the completion summary is available on the FIRST completion — before
+        // any read_chat has recorded a pin — which the dashboard tail-repair needs.
         let resolvedHandle = this.providerSessionId || '';
         if (!resolvedHandle) {
             try {
@@ -1253,14 +1303,13 @@ export class CliProviderInstance implements ProviderInstance {
                 if (typeof pinned === 'string' && pinned.trim()) resolvedHandle = pinned.trim();
             } catch { /* best-effort pin hydration */ }
         }
-        if (!resolvedHandle) return null;
 
         if (this.lastExternalCompletionProbe?.sourcePath) {
             try { fs.statSync(this.lastExternalCompletionProbe.sourcePath); } catch { /* best-effort metadata refresh */ }
         }
         const restoredHistory = readProviderChatHistory(this.type, {
             canonicalHistory: this.provider.nativeHistory,
-            historySessionId: resolvedHandle,
+            historySessionId: resolvedHandle || undefined,
             workspace: this.workingDir,
             offset: 0,
             limit: Number.MAX_SAFE_INTEGER,
@@ -1268,7 +1317,9 @@ export class CliProviderInstance implements ProviderInstance {
             scripts: this.provider.scripts as any,
             sessionStartedAtMs: this.startedAt,
             // The claim owner token must match read_chat's so the exact-bind on our
-            // own conversation stays idempotent rather than looking foreign.
+            // own conversation stays idempotent rather than looking foreign, and so
+            // the floor-based resolution above claims THIS session's db under its
+            // own owner (never a sibling's).
             instanceId: this.instanceId,
             envOverrides: this.spawnedEnvOverrides(),
             forceRefresh: true,
@@ -1283,6 +1334,27 @@ export class CliProviderInstance implements ProviderInstance {
             restoredHistory.sourceMtimeMs,
         );
         return restoredHistory.messages;
+    }
+
+    /**
+     * The content of the LAST visible assistant bubble in a message list, or ''
+     * when the tail is not an assistant reply. Skips trailing system/tool/activity
+     * bubbles; stops (returns '') at the first user/human message. Used only for
+     * the dashboard tail-repair cache — a display value, not a completion decision.
+     */
+    private lastVisibleAssistantSummary(messages: unknown): string {
+        if (!Array.isArray(messages)) return '';
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+            const m = messages[i] as { role?: string; kind?: string; content?: unknown };
+            const role = typeof m?.role === 'string' ? m.role : '';
+            const kind = typeof m?.kind === 'string' ? m.kind : '';
+            if (role === 'system') continue;
+            if (kind === 'tool' || kind === 'activity') continue;
+            if (role === 'user' || role === 'human') return '';
+            if (role === 'assistant') return flattenContent(m.content as any).trim();
+            return '';
+        }
+        return '';
     }
 
     private completionFinalAssistantEvidence(parsedMessages: unknown, turnStartedAt?: number): CompletionFinalAssistantEvidence {
@@ -1310,8 +1382,22 @@ export class CliProviderInstance implements ProviderInstance {
 
         const externalMessages = this.readExternalCompletionMessages();
         if (externalMessages) {
+            const present = turnClosed && this.completionHasFinalAssistantMessage(externalMessages, turnStartedAt);
+            // Dashboard tail-repair cache: this runs on EVERY completion check
+            // (mesh AND non-mesh — the non-mesh path suppresses the
+            // generating_completed emit, so completionFinalSummary never runs there
+            // and cannot cache). Cache whenever the external transcript's LAST
+            // visible bubble is an assistant reply — this is a display value only, so
+            // it is intentionally looser than the strict `present` completion gate
+            // (which also requires turnClosed and turn-scoping): the dashboard should
+            // show the answer as soon as native-history has it, even if the FSM has
+            // not yet ratified the turn end. getState() replaces it on the next turn.
+            const lastVisibleAssistant = this.lastVisibleAssistantSummary(externalMessages);
+            if (lastVisibleAssistant) {
+                this.lastCompletionSummary = { content: lastVisibleAssistant, receivedAt: Date.now() };
+            }
             return {
-                present: turnClosed && this.completionHasFinalAssistantMessage(externalMessages, turnStartedAt),
+                present,
                 messages: externalMessages,
                 source: 'external-native',
             };
@@ -1364,7 +1450,15 @@ export class CliProviderInstance implements ProviderInstance {
             // The transcript is authoritative for native-source providers. Use it unless it is
             // empty (not yet written, or no in-turn bubble) — only then fall back to the screen
             // parse, which reflects the LIVE screen (this turn's output), not the stale tail.
-            if (externalSummary) return externalSummary;
+            if (externalSummary) {
+                // Cache the resolved final assistant for the dashboard tail-repair in
+                // getState(). This runs on EVERY completion attempt (including non-mesh
+                // sessions whose generating_completed is suppressed, and short-gen
+                // settle paths), so the dashboard sees the answer even when no
+                // agent:generating_completed is ever emitted. Native read already ran.
+                this.lastCompletionSummary = { content: externalSummary, receivedAt: Date.now() };
+                return externalSummary;
+            }
             return parsedSummary || undefined;
         }
         return parsedSummary || undefined;
@@ -1977,6 +2071,14 @@ export class CliProviderInstance implements ProviderInstance {
         evidenceLevel?: string;
         completionDiagnostic?: Record<string, unknown>;
     }): void {
+        // Cache the final assistant summary so the dashboard snapshot can surface it
+        // for native-source providers whose assistant answer is absent from the PTY
+        // parse (antigravity). completionFinalSummary already read native-history to
+        // produce this, so nothing extra is read here.
+        const summary = typeof opts.finalSummary === 'string' ? opts.finalSummary.trim() : '';
+        if (summary) {
+            this.lastCompletionSummary = { content: summary, receivedAt: opts.timestamp };
+        }
         this.pushEvent({
             event: 'agent:generating_completed',
             chatTitle: opts.chatTitle,
@@ -2501,6 +2603,11 @@ export class CliProviderInstance implements ProviderInstance {
                 }
 
                 if (!this.generatingStartedAt) this.generatingStartedAt = now;
+                // A genuinely new turn is underway — drop the previous turn's cached
+                // final-summary so the dashboard does not keep showing the old answer
+                // as "done" while the new turn generates. Re-populated when this turn
+                // completes.
+                this.lastCompletionSummary = null;
                 // FALSE-IDLE continuity: entering a busy phase invalidates any
                 // completedDebouncePending armed earlier in this settle window.
                 this.busyEpoch++;
