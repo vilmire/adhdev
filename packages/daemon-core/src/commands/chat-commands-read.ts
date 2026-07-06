@@ -1095,6 +1095,13 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     // the downstream hasSafeNativeHistoryMapping workspace-overlap gate. Only the
     // read_chat path opts in, and only with a concrete workspace.
     allowWorkspaceLatestFallback?: boolean;
+    // ADHDev session id of the reading session (== the session registry's
+    // sessionId == the provider instance's instanceId). Threaded to the
+    // native-history dispatcher so antigravity's conversation-claim owner token
+    // is keyed on this stable identity and matches the instance-side token —
+    // without it two concurrent antigravity sessions cross-bind each other's
+    // conversation .db.
+    instanceId?: string;
 }): ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' } {
     const canBindFromLiveSession = !args.historySessionId
         && typeof args.sessionStartedAtMs === 'number'
@@ -1146,6 +1153,7 @@ function readCliProviderNativeHistory(agentStr: string, args: {
         excludeInProgressTurn: args.excludeInProgressTurn,
         sessionStartedAtMs: args.sessionStartedAtMs,
         envOverrides: args.envOverrides,
+        instanceId: args.instanceId,
     });
     const boundProviderSessionId = typeof (sessionHistory as any)?.providerSessionId === 'string'
         ? (sessionHistory as any).providerSessionId.trim()
@@ -1541,6 +1549,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 scripts: provider?.scripts as any,
                 sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
                 envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
+                instanceId: typeof args?.targetSessionId === 'string' ? args.targetSessionId : undefined,
                 pinnedProviderSessionId: getBoundProviderSessionIdPin(args?.targetSessionId),
             })
             : readProviderChatHistory(agentStr, {
@@ -1772,6 +1781,9 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         excludeInProgressTurn: returnedStatus === 'waiting_approval',
                         sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
                         envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
+                        // Stable per-session identity for antigravity's conversation-claim
+                        // owner token (== session registry sessionId == instance instanceId).
+                        instanceId: typeof args?.targetSessionId === 'string' ? args.targetSessionId : undefined,
                         pinnedProviderSessionId: getBoundProviderSessionIdPin(targetSessionId),
                         // Last-resort only when no pin was ever recorded for this
                         // session; the downstream workspace-overlap safety gate
@@ -1847,6 +1859,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         excludeInProgressTurn: returnedStatus === 'waiting_approval',
                         sessionStartedAtMs,
                         envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
+                        instanceId: typeof args?.targetSessionId === 'string' ? args.targetSessionId : undefined,
                     });
                     nativeHistoryError = undefined;
                     nativeMessages = nativeHistory && Array.isArray(nativeHistory.messages)
@@ -2145,6 +2158,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     scripts: provider?.scripts as any,
                     sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
                     envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
+                    instanceId: typeof args?.targetSessionId === 'string' ? args.targetSessionId : undefined,
                     pinnedProviderSessionId: pinnedProviderSessionIdForHistory,
                     // Last-resort only when no pin was ever recorded AND the
                     // runtime fallback did not resolve a real provider session.

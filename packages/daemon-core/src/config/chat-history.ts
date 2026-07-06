@@ -1813,10 +1813,12 @@ function callProviderNativeHistoryRead(
     sessionStartedAtMs?: number,
     envOverrides?: Record<string, string>,
     forceRefresh?: boolean,
+    instanceId?: string,
 ): ProviderNativeHistoryReadResult | null {
     const fn = getProviderNativeHistoryScript(scripts, canonicalHistory, 'readSession');
     if (!fn) return null;
     const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || '');
+    const normalizedInstanceId = typeof instanceId === 'string' ? instanceId.trim() : '';
     const result = fn({
         agentType,
         sessionId: normalizedSessionId,
@@ -1831,6 +1833,12 @@ function callProviderNativeHistoryRead(
         // which leaves the guard disarmed so discovery still works.
         providerSessionId: normalizedSessionId,
         historySessionId: normalizedSessionId,
+        // Stable per-session owner key for the antigravity conversation-claim
+        // registry (see dispatcher.resolveAntigravityPath / antigravityOwnerToken).
+        // Equals the session registry's sessionId and the provider instance's
+        // instanceId, so read side and instance side derive the identical claim
+        // owner token and two concurrent antigravity sessions never cross-bind.
+        instanceId: normalizedInstanceId || undefined,
         workspace,
         format: canonicalHistory?.format,
         watchPath: canonicalHistory?.watchPath,
@@ -1838,7 +1846,7 @@ function callProviderNativeHistoryRead(
         sessionStartedAtMs,
         envOverrides,
         forceRefresh: forceRefresh === true,
-        args: { sessionId: normalizedSessionId, historySessionId: normalizedSessionId, workspace, excludeInProgressTurn: excludeInProgressTurn === true, sessionStartedAtMs, envOverrides, forceRefresh: forceRefresh === true },
+        args: { sessionId: normalizedSessionId, historySessionId: normalizedSessionId, instanceId: normalizedInstanceId || undefined, workspace, excludeInProgressTurn: excludeInProgressTurn === true, sessionStartedAtMs, envOverrides, forceRefresh: forceRefresh === true },
     });
     if (!result || typeof result !== 'object') return null;
     const records = normalizeProviderNativeHistoryRecords(agentType, normalizedSessionId, (result as any).messages || (result as any).records);
@@ -1865,11 +1873,12 @@ function buildNativeHistoryReadResult(
     sessionStartedAtMs?: number,
     envOverrides?: Record<string, string>,
     forceRefresh?: boolean,
+    instanceId?: string,
 ): ProviderNativeHistoryReadResult | null {
     const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || '');
     const normalizedWorkspace = typeof workspace === 'string' ? workspace.trim() : '';
     if (!canonicalHistory || (!normalizedSessionId && !normalizedWorkspace) || !isNativeSourceCanonicalHistory(canonicalHistory)) return null;
-    return callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace, excludeInProgressTurn, sessionStartedAtMs, envOverrides, forceRefresh);
+    return callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace, excludeInProgressTurn, sessionStartedAtMs, envOverrides, forceRefresh, instanceId);
 }
 
 function materializeNativeHistoryToMirror(
@@ -1929,6 +1938,13 @@ export function readProviderChatHistory(
         sessionStartedAtMs?: number;
         envOverrides?: Record<string, string>;
         forceRefresh?: boolean;
+        // Daemon instance id of the reading session (== the session registry's
+        // sessionId). Threaded to the native-history dispatcher so the
+        // antigravity conversation-claim owner token is keyed on this stable
+        // per-session identity — identical to the token the provider instance
+        // derives — instead of a spawn timestamp that differs across sample
+        // sites and silently breaks claim isolation.
+        instanceId?: string;
     } = {},
 ): {
     messages: HistoryMessage[];
@@ -1943,7 +1959,7 @@ export function readProviderChatHistory(
     unavailableReason?: string;
 } {
     if (isNativeSourceCanonicalHistory(options.canonicalHistory) && (options.historySessionId || options.workspace)) {
-        const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs, options.envOverrides, options.forceRefresh);
+        const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs, options.envOverrides, options.forceRefresh, options.instanceId);
         if (!nativeResult) return { messages: [], hasMore: false, source: 'native-unavailable' };
         return {
             ...pageHistoryRecords(agentType, nativeResult.records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior),

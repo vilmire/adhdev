@@ -1089,12 +1089,24 @@ export class CliProviderInstance implements ProviderInstance {
 
     /**
      * Owner token for this session in the antigravity conversation-claim
-     * registry. Derived identically to the dispatcher's read-side token
-     * (workspace + spawn time) so the claims the dispatcher records under this
-     * session are the ones dispose() releases.
+     * registry. Keyed on the daemon instance id — the SAME value the session
+     * registry stores as this session's `sessionId` (see cli-manager
+     * `sessionRegistry.register({ sessionId: cliInstance.instanceId })`) and the
+     * read side hands the dispatcher as `instanceId`. Both sides therefore
+     * derive the identical `iid:<instanceId>` token, so the claims the
+     * dispatcher records under this session are exactly the ones dispose()
+     * releases.
+     *
+     * This must NOT be derived from a spawn timestamp: the instance's
+     * `startedAt`, the adapter's `spawnedAtMs`, and the session registry's
+     * `spawnedAtMs` are three INDEPENDENT `Date.now()` samples for the one
+     * session, so a workspace+spawn-time token computed here would never equal
+     * the read side's — the claim isolation then silently collapses and two
+     * concurrent antigravity sessions cross-bind each other's conversation .db
+     * (coordinator+worker chat crosswire).
      */
     private antigravityClaimOwner(): string {
-        return antigravityOwnerToken(this.workingDir, this.startedAt);
+        return antigravityOwnerToken(this.workingDir, this.startedAt, this.instanceId);
     }
 
     dispose(): void {

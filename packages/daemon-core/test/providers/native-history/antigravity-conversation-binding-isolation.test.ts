@@ -263,4 +263,35 @@ describe('antigravity-claim-registry primitives', () => {
     expect(isAntigravityConversationClaimedByOther(SESSION_A, live, t0 + CLAIM_STALE_MS + 1)).toBe(false);
     expect(claimAntigravityConversation(SESSION_A, live, t0 + CLAIM_STALE_MS + 1)).toBe(true);
   });
+
+  it('instance-side and read-side owner tokens AGREE when keyed on the same instanceId (crosswire regression)', async () => {
+    const { antigravityOwnerToken } = await import('../../../src/providers/native-history/antigravity-claim-registry.js');
+
+    // The one session is observed at three sites, each sampling Date.now()
+    // independently: the provider instance's startedAt, the adapter's
+    // spawnedAtMs, and the session registry's spawnedAtMs. These never match.
+    const instanceStartedAt = 1000;      // cli-provider-instance this.startedAt
+    const registrySpawnedAtMs = 1042;    // sessions/registry spawnedAtMs (read side)
+
+    // Instance side (dispose/claim) derives its owner token; read side derives
+    // its token from the registry spawn time. Both now pass the SAME instanceId
+    // (== the session registry's sessionId), so both resolve to `iid:<id>` and
+    // the spawn-time divergence is irrelevant.
+    const instanceOwner = antigravityOwnerToken('/workspaces/agy', instanceStartedAt, SESSION_A);
+    const readOwner = antigravityOwnerToken('/workspaces/agy', registrySpawnedAtMs, SESSION_A);
+    expect(instanceOwner).toBe(`iid:${SESSION_A}`);
+    expect(readOwner).toBe(instanceOwner);
+
+    // Two distinct sessions still get distinct tokens (isolation preserved).
+    const otherOwner = antigravityOwnerToken('/workspaces/agy', registrySpawnedAtMs, SESSION_B);
+    expect(otherOwner).toBe(`iid:${SESSION_B}`);
+    expect(otherOwner).not.toBe(instanceOwner);
+
+    // Guard the original defect: WITHOUT the instanceId, the same session's
+    // instance-side and read-side tokens diverge because the spawn samples
+    // differ — the state that silently broke claim isolation.
+    const legacyInstance = antigravityOwnerToken('/workspaces/agy', instanceStartedAt);
+    const legacyRead = antigravityOwnerToken('/workspaces/agy', registrySpawnedAtMs);
+    expect(legacyInstance).not.toBe(legacyRead);
+  });
 });
