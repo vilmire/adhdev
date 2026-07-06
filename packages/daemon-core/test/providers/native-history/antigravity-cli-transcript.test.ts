@@ -781,6 +781,129 @@ describe('antigravity-cli-transcript — readSession (.db SQLite)', () => {
   });
 });
 
+// ─── ANTIGRAVITY-COMPLETION-DASHBOARD-GAP ────────────────────────────────────
+// The dispatcher binds straight to conversations/<uuid>.db once the session id
+// is known and never re-resolves to a sibling source. When that bound .db read
+// comes back empty (transient WAL lock / assistant step not yet flushed / decode
+// miss), the whole read used to collapse to native-unavailable even though the
+// SAME session's assistant answer was still recoverable from the legacy brain
+// transcript / .pb / history.jsonl. readSession now falls back across those
+// siblings for the same session id before giving up.
+describe('antigravity-cli-transcript — readSession (.db empty → sibling fallback)', () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-agy-dbfallback-'));
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = '';
+  });
+
+  /** Write an empty (no steps) .db for a session so parseConversationDb yields null. */
+  async function makeEmptyConversationDb(sessionId: string): Promise<string> {
+    return makeConversationDb(sessionId, []);
+  }
+
+  it('recovers the assistant answer from the brain transcript when the .db is empty', async () => {
+    const dbPath = await makeEmptyConversationDb(SESSION_D);
+    makeBrainTranscript(SESSION_D, [
+      brainRow('USER_EXPLICIT', 'USER_INPUT', '<USER_REQUEST>Help me debug this</USER_REQUEST>', 'DONE', 1_800_000_001_000),
+      brainRow('MODEL', 'PLANNER_RESPONSE', 'The bug is in the loop.', 'DONE', 1_800_000_002_000),
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_D, '/workspaces/agy');
+
+    expect(result).not.toBeNull();
+    expect(result!.nativeHistoryCoverage).toBe('full');
+    expect(result!.providerSessionId).toBe(SESSION_D);
+    expect(result!.sourcePath).toContain('transcript.jsonl');
+    const assistant = result!.messages.filter((m) => m.role === 'assistant');
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0].content).toBe('The bug is in the loop.');
+  });
+
+  it('falls back to the sibling .pb (best-effort) when the .db is empty and no brain transcript exists', async () => {
+    const dbPath = await makeEmptyConversationDb(SESSION_D);
+    makePbFile(SESSION_D, 'The answer lives in the protobuf payload.');
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_D);
+
+    expect(result).not.toBeNull();
+    expect(result!.nativeHistoryCoverage).toBe('best-effort');
+    expect(result!.partialReason).toBe('antigravity_cli_pb_raw_text_extraction');
+    expect(result!.messages.some((m) => m.role === 'assistant' && m.content.includes('protobuf payload'))).toBe(true);
+  });
+
+  it('falls back to history.jsonl (partial, user prompts) when the .db is empty and no brain/.pb exists', async () => {
+    const dbPath = await makeEmptyConversationDb(SESSION_D);
+    makeHistoryJsonl([
+      { conversationId: SESSION_D, display: 'What is the status?', workspace: '/workspaces/agy', ts: 1_800_000_001_000 },
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_D, '/workspaces/agy');
+
+    expect(result).not.toBeNull();
+    expect(result!.nativeHistoryCoverage).toBe('partial');
+    expect(result!.partialReason).toBe('antigravity_cli_history_jsonl_contains_user_prompts_only');
+    expect(result!.messages.some((m) => m.role === 'user' && m.content === 'What is the status?')).toBe(true);
+  });
+
+  it('prefers the brain transcript over .pb/history.jsonl when several siblings exist', async () => {
+    const dbPath = await makeEmptyConversationDb(SESSION_D);
+    makeBrainTranscript(SESSION_D, [
+      brainRow('MODEL', 'PLANNER_RESPONSE', 'Brain answer wins.', 'DONE', 1_800_000_002_000),
+    ]);
+    makePbFile(SESSION_D, 'Pb answer should be ignored.');
+    makeHistoryJsonl([
+      { conversationId: SESSION_D, display: 'jsonl prompt', workspace: '/workspaces/agy', ts: 1_800_000_001_000 },
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_D);
+
+    expect(result).not.toBeNull();
+    expect(result!.nativeHistoryCoverage).toBe('full');
+    expect(result!.messages.some((m) => m.content === 'Brain answer wins.')).toBe(true);
+    expect(result!.messages.some((m) => m.content.includes('Pb answer'))).toBe(false);
+  });
+
+  it('does NOT consult siblings when the .db read succeeds (no double-source)', async () => {
+    // Non-empty .db AND a brain transcript for the same uuid both exist. The .db
+    // is authoritative and must win outright — the fallback must never run, so
+    // the brain content cannot leak in alongside the .db content.
+    const dbPath = await makeConversationDb(SESSION_D, [
+      { step_type: 14, payload: encodeUserStep('db prompt') },
+      { step_type: 15, payload: encodeModelStep({ answer: 'db answer.' }) },
+    ]);
+    makeBrainTranscript(SESSION_D, [
+      brainRow('MODEL', 'PLANNER_RESPONSE', 'brain answer that must not appear.', 'DONE', 1_800_000_002_000),
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_D);
+
+    expect(result).not.toBeNull();
+    expect(result!.nativeHistoryCoverage).toBe('full');
+    expect(result!.sourcePath).toContain(`${SESSION_D}.db`);
+    expect(result!.messages.some((m) => m.content === 'db answer.')).toBe(true);
+    expect(result!.messages.some((m) => m.content.includes('brain answer'))).toBe(false);
+  });
+
+  it('returns null when the .db is empty and no sibling source exists', async () => {
+    const dbPath = await makeEmptyConversationDb(SESSION_D);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_D);
+
+    expect(result).toBeNull();
+  });
+});
+
 describe('antigravity-cli-transcript — listSessions (.db discovery + priority)', () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-agy-dblist-'));

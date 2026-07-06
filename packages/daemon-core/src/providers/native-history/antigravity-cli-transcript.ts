@@ -861,6 +861,119 @@ function parseConversationDb(
   return messages.length > 0 ? messages : null;
 }
 
+/**
+ * Assemble the history.jsonl user-prompt index for a single session id into a
+ * partial NativeHistorySession (user prompts only — history.jsonl never carries
+ * assistant answers). Returns null when the index has no rows for this session.
+ * Shared by the history.jsonl read case and the .db sibling fallback.
+ */
+function readHistoryJsonlSession(
+  resolvedSessionId: string,
+  workspace?: string,
+): NativeHistorySession | null {
+  if (!isUuidLike(resolvedSessionId)) return null;
+  const rows = readHistoryRows().filter((r) => r.conversationId === resolvedSessionId);
+  if (rows.length === 0) return null;
+
+  rows.sort((a, b) => a.receivedAt - b.receivedAt);
+  const firstWorkspace = workspace || rows.find((r) => r.workspace)?.workspace || '';
+
+  const messages: NativeHistoryMessage[] = [];
+  if (firstWorkspace) {
+    messages.push({
+      ts: new Date(rows[0].receivedAt).toISOString(),
+      receivedAt: rows[0].receivedAt,
+      role: 'system',
+      content: firstWorkspace,
+      kind: 'session_start',
+      agent: 'antigravity-cli',
+      historySessionId: resolvedSessionId,
+      workspace: firstWorkspace,
+    });
+  }
+
+  for (const row of rows) {
+    const msg: NativeHistoryMessage = {
+      ts: new Date(row.receivedAt).toISOString(),
+      receivedAt: row.receivedAt,
+      role: 'user',
+      content: row.display,
+      kind: 'standard',
+      agent: 'antigravity-cli',
+      historySessionId: resolvedSessionId,
+    };
+    if (row.workspace) msg.workspace = row.workspace;
+    messages.push(msg);
+  }
+
+  return {
+    messages,
+    providerSessionId: resolvedSessionId,
+    source: 'provider-native',
+    sourcePath: historyJsonlPath(),
+    sourceMtimeMs: statMtimeMs(historyJsonlPath()),
+    nativeHistoryCoverage: 'partial',
+    partialReason: 'antigravity_cli_history_jsonl_contains_user_prompts_only',
+  };
+}
+
+/**
+ * ANTIGRAVITY-COMPLETION-DASHBOARD-GAP: recover a bound session's transcript
+ * from the legacy sibling sources when its per-session .db read came back empty
+ * (transient WAL lock, assistant step not yet flushed, or a decode miss on a
+ * future step_payload schema). Tried in descending fidelity for the SAME
+ * session id — never cross-binds to another conversation:
+ *   1. brain transcript (full coverage, authoritative when present),
+ *   2. sibling conversations/<uuid>.pb (best-effort raw text),
+ *   3. history.jsonl (partial — user prompts only).
+ * Returns null when no sibling yields any message.
+ */
+function readAntigravitySiblingFallback(
+  sessionId: string,
+  workspace?: string,
+): NativeHistorySession | null {
+  if (!isUuidLike(sessionId)) return null;
+
+  // (1) brain transcript — full coverage when antigravity actually wrote it.
+  const brainPath = findBrainTranscriptPath(sessionId);
+  if (brainPath && statMtimeMs(brainPath) > 0) {
+    const brainMessages = parseBrainTranscript(brainPath, sessionId, workspace);
+    if (brainMessages && brainMessages.length > 0) {
+      return {
+        messages: brainMessages,
+        providerSessionId: sessionId,
+        source: 'provider-native',
+        sourcePath: brainPath,
+        sourceMtimeMs: statMtimeMs(brainPath),
+        nativeHistoryCoverage: 'full',
+        workspace,
+      };
+    }
+  }
+
+  // (2) sibling .pb — best-effort raw text extraction.
+  const pbPath = resolvePathInside(conversationsRoot(), `${sessionId}.pb`);
+  if (pbPath && fs.existsSync(pbPath)) {
+    const pbMessages = parsePbFile(pbPath, sessionId);
+    if (pbMessages && pbMessages.length > 0) {
+      return {
+        messages: pbMessages,
+        providerSessionId: sessionId,
+        source: 'provider-native',
+        sourcePath: pbPath,
+        sourceMtimeMs: statMtimeMs(pbPath),
+        nativeHistoryCoverage: 'best-effort',
+        partialReason: 'antigravity_cli_pb_raw_text_extraction',
+        workspace,
+      };
+    }
+  }
+
+  // (3) history.jsonl — partial (user prompts only). Last resort so the
+  //     dashboard at least shows the prompt when no answer source is readable.
+  return readHistoryJsonlSession(sessionId, workspace);
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /**
@@ -916,17 +1029,31 @@ export function readSession(
     if (!isUuidLike(dbSessionId)) return null;
 
     const messages = parseConversationDb(sessionPath, dbSessionId, workspace);
-    if (!messages || messages.length === 0) return null;
+    if (messages && messages.length > 0) {
+      return {
+        messages,
+        providerSessionId: dbSessionId,
+        source: 'provider-native',
+        sourcePath: sessionPath,
+        sourceMtimeMs,
+        nativeHistoryCoverage: 'full',
+        workspace,
+      };
+    }
 
-    return {
-      messages,
-      providerSessionId: dbSessionId,
-      source: 'provider-native',
-      sourcePath: sessionPath,
-      sourceMtimeMs,
-      nativeHistoryCoverage: 'full',
-      workspace,
-    };
+    // ANTIGRAVITY-COMPLETION-DASHBOARD-GAP: the bound .db yielded nothing this
+    // read — transient (WAL lock / assistant step not yet flushed) or a decode
+    // miss on a future schema. The dispatcher binds STRAIGHT to <uuid>.db once
+    // the session id is known and never re-resolves to a sibling source, so a
+    // null here previously collapsed the whole read to native-unavailable even
+    // when the SAME session's assistant answer was recoverable from the legacy
+    // brain transcript / .pb / history.jsonl. Fall back across those sibling
+    // sources for the same session id before giving up. This is read-only,
+    // scoped to the bound session, and cannot cross-bind to another conversation.
+    const siblingFallback = readAntigravitySiblingFallback(dbSessionId, workspace);
+    if (siblingFallback) return siblingFallback;
+
+    return null;
   }
 
   // ── Case 2b: .pb conversation file (legacy protobuf) ─────────────────────
@@ -950,52 +1077,7 @@ export function readSession(
 
   // ── Case 3: history.jsonl (user prompts index) ──────────────────────────
   if (path.basename(sessionPath) === 'history.jsonl') {
-    const resolvedSessionId = sessionId || '';
-    if (!resolvedSessionId || !isUuidLike(resolvedSessionId)) return null;
-
-    const rows = readHistoryRows().filter((r) => r.conversationId === resolvedSessionId);
-    if (rows.length === 0) return null;
-
-    rows.sort((a, b) => a.receivedAt - b.receivedAt);
-    const firstWorkspace = workspace || rows.find((r) => r.workspace)?.workspace || '';
-
-    const messages: NativeHistoryMessage[] = [];
-    if (firstWorkspace) {
-      messages.push({
-        ts: new Date(rows[0].receivedAt).toISOString(),
-        receivedAt: rows[0].receivedAt,
-        role: 'system',
-        content: firstWorkspace,
-        kind: 'session_start',
-        agent: 'antigravity-cli',
-        historySessionId: resolvedSessionId,
-        workspace: firstWorkspace,
-      });
-    }
-
-    for (const row of rows) {
-      const msg: NativeHistoryMessage = {
-        ts: new Date(row.receivedAt).toISOString(),
-        receivedAt: row.receivedAt,
-        role: 'user',
-        content: row.display,
-        kind: 'standard',
-        agent: 'antigravity-cli',
-        historySessionId: resolvedSessionId,
-      };
-      if (row.workspace) msg.workspace = row.workspace;
-      messages.push(msg);
-    }
-
-    return {
-      messages,
-      providerSessionId: resolvedSessionId,
-      source: 'provider-native',
-      sourcePath: sessionPath,
-      sourceMtimeMs,
-      nativeHistoryCoverage: 'partial',
-      partialReason: 'antigravity_cli_history_jsonl_contains_user_prompts_only',
-    };
+    return readHistoryJsonlSession(sessionId || '', workspace);
   }
 
   return null;
