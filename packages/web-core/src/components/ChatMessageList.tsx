@@ -44,7 +44,7 @@ import {
     ActionLogRow,
     ChatMessageRow,
 } from './ChatMessageList/chatMessageBubbles';
-import { classifyChatMessageForDisplay, filterChatMessagesForDefaultTranscript, filterChatActivityMessages, mergeChatAndActivityMessages } from './dashboard/chat-activity-visibility';
+import { classifyChatMessageForDisplay, filterChatMessagesForDefaultTranscript, filterChatActivityMessages, mergeChatAndActivityMessages, collapseAdjacentDuplicateChatMessages } from './dashboard/chat-activity-visibility';
 
 // ─── Types ────────────────────────────────────
 
@@ -187,7 +187,13 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     const visibleMessages = useMemo(() => {
         const chatMessages = filterChatMessagesForDefaultTranscript(messages);
         const activityMessages = filterChatActivityMessages(messages);
-        return mergeChatAndActivityMessages(chatMessages, activityMessages, showActivityMessages);
+        // Collapse back-to-back identical bubbles (history↔live seam duplicate, or a
+        // native transcript replaying a finalized turn) before rendering — this is
+        // adjacent-only, so the intentional non-adjacent history/live overlap is
+        // preserved. (ANTIGRAVITY-REPLICA-DUP)
+        return collapseAdjacentDuplicateChatMessages(
+            mergeChatAndActivityMessages(chatMessages, activityMessages, showActivityMessages),
+        );
     }, [messages, showActivityMessages]);
 
     const visibleLastMessageHash = visibleMessages.length === messages.length ? lastMessageHash : undefined;

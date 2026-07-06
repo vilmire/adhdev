@@ -3,6 +3,7 @@ import type { ChatMessage } from '@adhdev/daemon-core'
 import {
   CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY,
   classifyChatMessageForDisplay,
+  collapseAdjacentDuplicateChatMessages,
   filterChatActivityMessages,
   filterChatMessagesForDefaultTranscript,
   mergeChatAndActivityMessages,
@@ -73,5 +74,46 @@ describe('chat activity visibility presenter', () => {
 
     expect(mergeChatAndActivityMessages(chat, activity, false)).toEqual(chat)
     expect(mergeChatAndActivityMessages(chat, activity, true).map((item) => item.content)).toEqual(['tool', 'answer'])
+  })
+
+  it('collapses back-to-back identical bubbles at the history↔live seam (ANTIGRAVITY-REPLICA-DUP)', () => {
+    // A replica pane concatenates paged history + live tail; both carry the same
+    // finalized assistant answers (no stable id to dedup on), so the seam renders
+    // each answer twice in a row. Collapse only the adjacent duplicate.
+    const messages = [
+      message({ role: 'user', content: 'You are one independent member of a mesh' }),
+      message({ role: 'assistant', content: "I'll investigate the git status." }),
+      message({ role: 'assistant', content: "I'll investigate the git status." }),
+      message({ role: 'assistant', content: 'The picture is clear.' }),
+      message({ role: 'assistant', content: 'The picture is clear.' }),
+    ]
+    expect(collapseAdjacentDuplicateChatMessages(messages).map((m) => m.content)).toEqual([
+      'You are one independent member of a mesh',
+      "I'll investigate the git status.",
+      'The picture is clear.',
+    ])
+  })
+
+  it('preserves NON-adjacent identical bubbles (does not global-dedup)', () => {
+    // The same content recurring later in the conversation is a legitimate repeat,
+    // not a seam duplicate — only immediate back-to-back repeats collapse.
+    const messages = [
+      message({ role: 'assistant', content: 'running command' }),
+      message({ role: 'user', content: 'again please' }),
+      message({ role: 'assistant', content: 'running command' }),
+    ]
+    expect(collapseAdjacentDuplicateChatMessages(messages).map((m) => m.content)).toEqual([
+      'running command',
+      'again please',
+      'running command',
+    ])
+  })
+
+  it('never collapses empty-content activity placeholders into each other', () => {
+    const messages = [
+      message({ role: 'assistant', content: '' }),
+      message({ role: 'assistant', content: '' }),
+    ]
+    expect(collapseAdjacentDuplicateChatMessages(messages)).toHaveLength(2)
   })
 })

@@ -117,6 +117,42 @@ export function filterChatActivityMessages<T extends ChatMessage>(messages: T[] 
     return (Array.isArray(messages) ? messages : []).filter((message) => classifyChatMessageForDisplay(message).isActivityFacing)
 }
 
+function chatBubbleText(message: ChatMessage): string {
+    const content = (message as { content?: unknown }).content
+    return typeof content === 'string' ? content : (() => { try { return JSON.stringify(content ?? '') } catch { return String(content ?? '') } })()
+}
+
+function chatBubbleContentSignature(message: ChatMessage): string {
+    const role = String((message as { role?: unknown }).role || '')
+    return `${role}::${chatBubbleText(message)}`
+}
+
+/**
+ * Collapse ADJACENT bubbles that carry the identical role+content. This is NOT a
+ * global transcript dedup (the history↔live seam intentionally preserves
+ * non-adjacent overlap — see chat-pane-history-dedupe-truncation.test.ts): it only
+ * removes back-to-back visual duplicates that appear when the paged history tail
+ * and the live tail carry the same finalized assistant bubble at the seam, or when
+ * a native transcript replays the same finalized turn. Mirrors the daemon's
+ * isAdjacentHistoryDuplicate so the rendered transcript never shows a bubble twice
+ * in a row. (ANTIGRAVITY-REPLICA-DUP)
+ */
+export function collapseAdjacentDuplicateChatMessages<T extends ChatMessage>(messages: T[]): T[] {
+    if (messages.length < 2) return messages
+    const out: T[] = []
+    let prevSig = ''
+    for (const message of messages) {
+        const sig = chatBubbleContentSignature(message)
+        // Never collapse empty-content bubbles into each other (distinct activity
+        // placeholders can legitimately repeat); only collapse substantive dupes.
+        const hasBody = chatBubbleText(message).trim().length > 0
+        if (hasBody && sig === prevSig) continue
+        out.push(message)
+        prevSig = sig
+    }
+    return out
+}
+
 export function mergeChatAndActivityMessages<T extends ChatMessage>(messages: T[], activityMessages: T[], showActivity: boolean): T[] {
     if (!showActivity || activityMessages.length === 0) return messages
     return [...messages, ...activityMessages].sort((left, right) => {
