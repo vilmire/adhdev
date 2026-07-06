@@ -628,7 +628,19 @@ export function synthesizeMagiResponses(
 
     let independenceBanner: string | null = null;
     if (replicasAnswered >= 1 && (distinctProviders < 2 || distinctNodes < 2)) {
-        independenceBanner = `independence not achieved — the answering replicas span ${distinctProviders} provider(s) and ${distinctNodes} machine(s); their agreements are source-coupled and routed to needs_verification.`;
+        // The provider/machine spans are computed over the ANSWERING replicas only, so a
+        // diverse fan-out whose replicas were mostly DROPPED during collection collapses to
+        // "1 provider / 1 machine" — a collection-reliability failure, not a low-diversity
+        // panel. Distinguish the two so the reader is pointed at the right cause: when replica
+        // loss dominates (missing ≥ answered and something was actually lost), name the loss
+        // and the dropped count instead of implying the panel itself was mono-source.
+        const replicasMissing = Math.max(0, replicasExpected - replicasAnswered);
+        const lossDominated = replicasMissing > 0 && replicasMissing >= replicasAnswered;
+        if (lossDominated) {
+            independenceBanner = `independence not achieved — only ${replicasAnswered} of ${replicasExpected} replica(s) answered (${replicasMissing} missing/dropped), collapsing the answering set to ${distinctProviders} provider(s) and ${distinctNodes} machine(s). This is a replica-loss/collection failure, not a low-diversity panel — inspect the dropped replicas (stale/unparseable/no-session) before re-reading the diversity spans. Agreements are routed to needs_verification.`;
+        } else {
+            independenceBanner = `independence not achieved — the answering replicas span ${distinctProviders} provider(s) and ${distinctNodes} machine(s); their agreements are source-coupled and routed to needs_verification.`;
+        }
     }
 
     const openQuestions = [...new Set(answered.flatMap(r => r.response.open_questions))];
