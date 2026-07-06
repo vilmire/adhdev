@@ -688,6 +688,31 @@ function evaluateMeshEventSuppression(
     return null;
 }
 
+/**
+ * True when the worker session that emitted this event has auto-approve enabled
+ * (a MAGI/delegated worker is launched with autoApprove:true). Such a worker
+ * resolves its own approval modals locally, so an agent:waiting_approval event
+ * from it is transient noise for the coordinator: forwarding it injects a
+ * "[System] … is waiting for approval, use mesh_approve" turn that the
+ * coordinator cannot usefully act on (the modal is already auto-resolving) and,
+ * mid-MAGI-collect, HIJACKS the coordinator's synthesis turn — the observed
+ * failure where a replica's repeated auto-approvals drowned out the completion
+ * events and the coordinator answered about approvals instead of the RCA. Only
+ * suppress when we can positively confirm the source worker auto-approves; a
+ * worker that genuinely needs a human/coordinator approval (autoApprove off)
+ * still forwards so the coordinator is told.
+ */
+function sourceWorkerAutoApproves(components: DaemonComponents, sessionId: string): boolean {
+    if (!sessionId) return false;
+    try {
+        const state = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
+        const settings = (state?.settings as Record<string, unknown>) || {};
+        return settings.autoApprove === true;
+    } catch {
+        return false;
+    }
+}
+
 function injectMeshSystemMessage(components: DaemonComponents, args: {
     meshId: string;
     sourceInstanceId?: string;
@@ -805,6 +830,19 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     }
 
     const eventTimestamp = readEventTimestamp(args.metadataEvent.timestamp);
+
+    // Auto-approving worker: never forward its approval prompts to the coordinator.
+    // The daemon resolves the modal locally, so the "[System] … waiting for
+    // approval" injection is pure noise that hijacks the coordinator's turn — the
+    // observed MAGI failure where a replica's repeated auto-approvals flooded the
+    // coordinator and derailed its final synthesis. A worker without auto-approve
+    // (genuinely blocked on a human/coordinator decision) still forwards.
+    if (args.event === 'agent:waiting_approval' && sourceWorkerAutoApproves(components, eventSessionId)) {
+        LOG.info('MeshEvents', `Suppressed agent:waiting_approval for auto-approving worker session ${eventSessionId || '(unknown)'} (mesh ${args.meshId}) — modal is resolved locally, coordinator not notified`);
+        traceMeshEventDrop('waiting_approval_auto_approving_worker', traceCtx);
+        return { success: true, forwarded: 0, suppressed: true, autoApprovingWorkerApproval: true };
+    }
+
     // Coordinator-side dedup/suppression gate (extracted, behavior-preserving). A non-null
     // outcome either short-circuits with a forwarded result or signals a no-progress→completion
     // reconciliation that we re-inject; null lets the event fall through to the ledger machinery.
