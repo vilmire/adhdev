@@ -111,10 +111,11 @@ describe('antigravity conversation-binding isolation', () => {
   });
 
   it('(a) two concurrent unbound sessions never resolve to the same conversation uuid', async () => {
-    // Two conversations exist on disk; both sessions read UNBOUND (no sessionId
-    // yet) in the same workspace, started ~94ms apart. Without the claim registry
-    // both would grab the newest .db; with it, the second must be excluded from
-    // the conversation the first already claimed.
+    // Two conversations exist on disk; both sessions read UNBOUND (no provider
+    // conv id yet) in the same workspace, started ~94ms apart. Each carries its
+    // own stable instanceId (== its ADHDev sessionId — what every real read
+    // passes), which is the SOLE isolation key: the claim registry excludes the
+    // second from the conversation the first already claimed under its iid token.
     await makeConversationDb(SESSION_A, turn('prompt A', 'answer A'));
     await makeConversationDb(SESSION_B, turn('prompt B', 'answer B'));
 
@@ -124,10 +125,10 @@ describe('antigravity conversation-binding isolation', () => {
     const dispatch = createNativeHistoryDispatcher('antigravity-cli');
 
     const startedA = Date.now() - 1000;
-    const startedB = startedA + 94; // sibling spawned 94ms later — distinct owner
+    const startedB = startedA + 94; // sibling spawned 94ms later
 
-    const a = dispatch({ agentType: 'antigravity-cli', sessionId: '', workspace: '/workspaces/agy', sessionStartedAtMs: startedA });
-    const b = dispatch({ agentType: 'antigravity-cli', sessionId: '', workspace: '/workspaces/agy', sessionStartedAtMs: startedB });
+    const a = dispatch({ agentType: 'antigravity-cli', sessionId: '', instanceId: 'agy-session-a', workspace: '/workspaces/agy', sessionStartedAtMs: startedA });
+    const b = dispatch({ agentType: 'antigravity-cli', sessionId: '', instanceId: 'agy-session-b', workspace: '/workspaces/agy', sessionStartedAtMs: startedB });
 
     expect(a).not.toBeNull();
     expect(b).not.toBeNull();
@@ -257,8 +258,8 @@ describe('antigravity-claim-registry primitives', () => {
     } = await import('../../../src/providers/native-history/antigravity-claim-registry.js');
     __resetAntigravityClaimRegistry();
 
-    const ownerA = antigravityOwnerToken('/ws', 1000);
-    const ownerB = antigravityOwnerToken('/ws', 1094);
+    const ownerA = antigravityOwnerToken('/ws', 1000, 'session-A-iid');
+    const ownerB = antigravityOwnerToken('/ws', 1094, 'session-B-iid');
     expect(ownerA).not.toBe(ownerB);
 
     // First claim wins.
@@ -287,8 +288,8 @@ describe('antigravity-claim-registry primitives', () => {
     } = await import('../../../src/providers/native-history/antigravity-claim-registry.js');
     __resetAntigravityClaimRegistry();
 
-    const dead = antigravityOwnerToken('/ws', 1000);
-    const live = antigravityOwnerToken('/ws', 2000);
+    const dead = antigravityOwnerToken('/ws', 1000, 'dead-session-iid');
+    const live = antigravityOwnerToken('/ws', 2000, 'live-session-iid');
     const t0 = 1_000_000;
     expect(claimAntigravityConversation(SESSION_A, dead, t0)).toBe(true);
     // Just before the stale window: still owned.
@@ -321,11 +322,15 @@ describe('antigravity-claim-registry primitives', () => {
     expect(otherOwner).toBe(`iid:${SESSION_B}`);
     expect(otherOwner).not.toBe(instanceOwner);
 
-    // Guard the original defect: WITHOUT the instanceId, the same session's
-    // instance-side and read-side tokens diverge because the spawn samples
-    // differ — the state that silently broke claim isolation.
-    const legacyInstance = antigravityOwnerToken('/workspaces/agy', instanceStartedAt);
-    const legacyRead = antigravityOwnerToken('/workspaces/agy', registrySpawnedAtMs);
-    expect(legacyInstance).not.toBe(legacyRead);
+    // SSOT invariant: the token is keyed ONLY on the instanceId. Without one it
+    // is EMPTY (skip-claim), never a spawn-timestamp token — so the same
+    // session's instance-side and read-side reads can no longer produce two
+    // DIFFERENT non-empty tokens the way the removed spawn: fallback did (the
+    // state that silently broke claim isolation). An empty token means "don't
+    // claim", which is strictly safer than a mismatched claim.
+    const noIidInstance = antigravityOwnerToken('/workspaces/agy', instanceStartedAt);
+    const noIidRead = antigravityOwnerToken('/workspaces/agy', registrySpawnedAtMs);
+    expect(noIidInstance).toBe('');
+    expect(noIidRead).toBe('');
   });
 });

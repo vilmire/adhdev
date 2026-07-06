@@ -51,25 +51,32 @@ function normalizeUuid(uuid: string): string {
 }
 
 /**
- * Derive the per-session owner token. Both the dispatcher (from the read input:
- * workspace + sessionStartedAtMs) and the provider instance (from its
- * workingDir + startedAt, or its instanceId) call this with the same inputs so
- * claims and releases line up. Returns '' when there is no stable identity to
- * key on (e.g. a workspace-less discovery with no spawn time) — the caller then
- * skips claiming but the exclusion checks still run against existing claims.
+ * Derive the per-session owner token, keyed ONLY on the stable instanceId
+ * (== the session registry sessionId == the read path's targetSessionId). Both
+ * the dispatcher (read side) and the provider instance (claim/release side) pass
+ * this same id, so their tokens always agree and the claim isolation holds.
+ *
+ * Returns '' when no instanceId is available — the caller then skips claiming
+ * (the exclusion checks still run against existing claims). This is the SSOT
+ * rule: there is exactly ONE token form. The removed legacy fallback derived a
+ * `spawn:<workspace>:<sessionStartedAtMs>` token from the spawn timestamp when
+ * the instanceId was missing; because one session's spawn time is sampled
+ * independently at three sites (instance startedAt, adapter spawnedAtMs, registry
+ * spawnedAtMs) those never matched, so the SAME session's instance-side and
+ * read-side tokens silently diverged and the claim mutual-exclusion collapsed
+ * (the antigravity conversation crosswire). An empty token (skip-claim) is
+ * strictly safer than a token that disagrees with the same session's other
+ * token. workspace/sessionStartedAtMs are kept in the signature for call-site
+ * compatibility but no longer affect the token.
  */
 export function antigravityOwnerToken(
   workspace: string,
   sessionStartedAtMs: number,
   instanceId?: string,
 ): string {
+  void workspace; void sessionStartedAtMs;
   const iid = typeof instanceId === 'string' ? instanceId.trim() : '';
-  if (iid) return `iid:${iid}`;
-  if (typeof sessionStartedAtMs === 'number' && sessionStartedAtMs > 0) {
-    const ws = String(workspace || '').trim().toLowerCase();
-    return `spawn:${ws}:${sessionStartedAtMs}`;
-  }
-  return '';
+  return iid ? `iid:${iid}` : '';
 }
 
 /**

@@ -1222,25 +1222,30 @@ export class CliProviderInstance implements ProviderInstance {
         if (!adapterOwnsMessagesElsewhere) return null;
         if (!isNativeSourceCanonicalHistory(this.provider.nativeHistory)) return null;
 
-        // Resolve the native-history handle. A provider that exposes its own
-        // session id on the CLI (codex/claude/hermes) sets this.providerSessionId
-        // and reads by it directly. antigravity takes no --session-id, so
-        // this.providerSessionId stays empty forever — the OLD `if
-        // (!this.providerSessionId) return null` guard therefore never let the
-        // completion gate read antigravity's transcript, so the final-assistant
-        // evidence was permanently 'unavailable': the completion never emitted
-        // (short-gen settle-arm's flush kept finding no evidence) and the mesh
-        // reconcile loop reclaimed the "delivered but no completion" task after
-        // ~15 min, re-dispatching the SAME MAGI prompt (the observed codex/agy
-        // re-run loop) — ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP, completion side.
+        // Resolve a CONCRETE native-history handle for this session's OWN
+        // conversation. A provider that exposes its session id on the CLI
+        // (codex/claude/hermes) sets this.providerSessionId. antigravity takes no
+        // --session-id, so this.providerSessionId stays empty — recover the real
+        // on-disk conversation id from the read pin persisted across restart
+        // (state.json sessionProviderSessionPins, keyed by this session's
+        // instanceId — the same map a binding read_chat / mesh_read_chat records
+        // the resolved uuid into). The OLD `if (!this.providerSessionId) return
+        // null` guard blocked antigravity's completion transcript entirely, so its
+        // final-assistant evidence was permanently 'unavailable' and the turn
+        // completion never emitted → the mesh reconcile loop reclaimed the
+        // "delivered but no completion" task and re-dispatched the same MAGI prompt
+        // (ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP, completion side).
         //
-        // Recover the on-disk conversation id from the read pin persisted across
-        // restart (state.json sessionProviderSessionPins, keyed by this session's
-        // instanceId — the same map read_chat records the resolved uuid into).
-        // With no explicit id and no pin, fall through with an empty handle and
-        // let the dispatcher resolve antigravity's conversations/<uuid>.db by its
-        // spawn floor + workspace + instanceId claim (exactly the read_chat path),
-        // so the very first completion probe can find the assistant answer.
+        // Deliberately do NOT fall through to the dispatcher's spawn-floor
+        // pickUnbound heuristic when no handle is known: that path CLAIMS the db it
+        // resolves, and a frequently-running completion probe with an empty handle
+        // can grab a *sibling's* conversation (e.g. a MAGI coordinator's probe
+        // stealing a replica's .db), after which the replica's own read_chat /
+        // mesh_read_chat resolves native_history_empty and the coordinator wrongly
+        // concludes the replica produced no result. So: read by a concrete handle
+        // (own db, claim idempotent) or return null and let the completion emit via
+        // the pin once a real binding read has recorded it (or via the mesh
+        // completion timeout). Isolation is preserved; no cross-session theft.
         let resolvedHandle = this.providerSessionId || '';
         if (!resolvedHandle) {
             try {
@@ -1248,22 +1253,22 @@ export class CliProviderInstance implements ProviderInstance {
                 if (typeof pinned === 'string' && pinned.trim()) resolvedHandle = pinned.trim();
             } catch { /* best-effort pin hydration */ }
         }
+        if (!resolvedHandle) return null;
 
         if (this.lastExternalCompletionProbe?.sourcePath) {
             try { fs.statSync(this.lastExternalCompletionProbe.sourcePath); } catch { /* best-effort metadata refresh */ }
         }
         const restoredHistory = readProviderChatHistory(this.type, {
             canonicalHistory: this.provider.nativeHistory,
-            historySessionId: resolvedHandle || undefined,
+            historySessionId: resolvedHandle,
             workspace: this.workingDir,
             offset: 0,
             limit: Number.MAX_SAFE_INTEGER,
             historyBehavior: this.provider.historyBehavior,
             scripts: this.provider.scripts as any,
             sessionStartedAtMs: this.startedAt,
-            // Threaded so the native-history dispatcher can resolve antigravity's
-            // conversation by claim/floor when no explicit handle is available,
-            // and so its claim owner token matches read_chat's.
+            // The claim owner token must match read_chat's so the exact-bind on our
+            // own conversation stays idempotent rather than looking foreign.
             instanceId: this.instanceId,
             envOverrides: this.spawnedEnvOverrides(),
             forceRefresh: true,

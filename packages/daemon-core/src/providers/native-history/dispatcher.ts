@@ -314,24 +314,51 @@ function resolveAntigravityPath(
     }
 
     // (2) brain/<uuid>/.system_generated/logs/transcript.jsonl (legacy full source).
-    //     Only bind to a brain transcript that is NON-EMPTY: current antigravity
-    //     writes this file but leaves it 0 bytes (all real conversation data now
-    //     lives in the per-session .db), so an empty transcript here would
-    //     otherwise shadow the .db fallback below and return no messages. Skip
-    //     empty transcripts so an unbound read still reaches the .db. Exclude any
+    //     Only bind to a brain transcript that is NON-EMPTY (antigravity may leave
+    //     it 0 bytes when the real data lives in the per-session .db). Exclude any
     //     brain conversation already claimed by a DIFFERENT live session.
+    //
+    //     Selection MUST mirror pickUnboundConversationDb (step 3): when a spawn
+    //     floor is known, a brain dir born at/after the floor is THIS session's own,
+    //     and among those the OLDEST-created wins (the store created first after the
+    //     session started). The previous newest-by-mtime sort silently mis-bound: in
+    //     a MAGI panel every co-located antigravity session (coordinator + replicas)
+    //     has a non-empty brain transcript, and the replica that finished its turn
+    //     last has the newest mtime — so a coordinator's read grabbed the replica's
+    //     transcript here, BEFORE step 3's floor-aware pick could run. That is the
+    //     antigravity coordinator↔replica crosswire, and it lives in THIS step, not
+    //     step 3. Keep newest-by-mtime only in the floor-less legacy path.
     const brainRoot = path.join(agyRoot, 'brain');
     if (fs.existsSync(brainRoot)) {
         const cutoff = spawnAwareCutoff(sessionStartedAtMs);
-        const entries = fs.readdirSync(brainRoot, { withFileTypes: true })
+        const nonEmptyBrain = (uuid: string, p: string): string | null => {
+            const t = path.join(p, '.system_generated', 'logs', 'transcript.jsonl');
+            return (fs.existsSync(t) && safeSize(t) > 0) ? t : null;
+        };
+        const all = fs.readdirSync(brainRoot, { withFileTypes: true })
             .filter(e => e.isDirectory() && isUuidLikeSessionId(e.name))
             .filter(e => !isAntigravityConversationClaimedByOther(e.name, owner))
-            .map(e => ({ uuid: e.name, p: path.join(brainRoot, e.name), mtime: safeMtime(path.join(brainRoot, e.name)) }))
-            .filter(e => e.mtime >= cutoff)
-            .sort((a, b) => b.mtime - a.mtime);
-        for (const e of entries) {
-            const t = path.join(e.p, '.system_generated', 'logs', 'transcript.jsonl');
-            if (fs.existsSync(t) && safeSize(t) > 0) {
+            .map(e => {
+                const p = path.join(brainRoot, e.name);
+                return { uuid: e.name, p, mtime: safeMtime(p), birth: safeBirthtime(p) };
+            })
+            .filter(e => e.mtime >= cutoff);
+        let ordered: Array<{ uuid: string; p: string }> = [];
+        if (sessionStartedAtMs > 0) {
+            // Floor branch: this session's own = born at/after (floor - grace),
+            // oldest-birth first. Mirrors pickUnboundConversationDb exactly so the
+            // two steps can never resolve DIFFERENT conversations for one session.
+            const floor = sessionStartedAtMs - AGY_SPAWN_CLAIM_GRACE_MS;
+            ordered = all
+                .filter(e => (e.birth > 0 ? e.birth : e.mtime) >= floor)
+                .sort((a, b) => (a.birth || a.mtime) - (b.birth || b.mtime));
+        } else {
+            // Floor-less legacy/unpinned discovery: newest-by-mtime (single-session).
+            ordered = [...all].sort((a, b) => b.mtime - a.mtime);
+        }
+        for (const e of ordered) {
+            const t = nonEmptyBrain(e.uuid, e.p);
+            if (t) {
                 if (owner) claimAntigravityConversation(e.uuid, owner);
                 return t;
             }

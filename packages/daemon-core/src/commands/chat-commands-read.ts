@@ -91,10 +91,18 @@ function hydratePersistedProviderSessionPinsOnce(): void {
     }
 }
 
-function recordBoundProviderSessionId(meshSessionId: string | undefined, providerSessionId: string | undefined): void {
+function recordBoundProviderSessionId(h: CommandHelpers, meshSessionId: string | undefined, providerSessionId: string | undefined): void {
     const key = typeof meshSessionId === 'string' ? meshSessionId.trim() : '';
     const value = typeof providerSessionId === 'string' ? providerSessionId.trim() : '';
     if (!key || !value) return;
+    // SSOT: the session registry entry (keyed by sessionId == instanceId) is the
+    // authoritative sessionId → conversation-uuid record. Writing it here — the
+    // moment a native read resolves the real conversation id — makes
+    // getHistorySessionId return it directly on every subsequent read, so the
+    // conversation is exact-bound instead of re-resolved by the spawn-floor/mtime
+    // heuristic (the crosswire/theft source). The pin below stays as the durable
+    // cross-restart mirror (the registry is in-memory and cleared on restart).
+    try { h.ctx?.sessionRegistry?.setProviderSessionId?.(key, value); } catch { /* best-effort SSOT write-back */ }
     lastBoundProviderSessionIdByMeshSession.set(key, value);
     // Always attempt the disk mirror — recordPersistedProviderSessionPin is itself a
     // no-op when the ON-DISK value already matches, so it does not rewrite state.json
@@ -1085,16 +1093,40 @@ function hasSafeNativeHistoryMapping(args: {
 // establish ownership. hasSafeNativeHistoryMapping() enforces the same
 // invariant after the read; both guards must hold for native history to be used.
 /**
+ * The session id a native-history read should be scoped to: the explicit
+ * targetSessionId when the caller named one (reading a specific/worker
+ * session), otherwise the current live session (a self / dashboard read where
+ * the current session IS the one being read). getTargetedCliAdapter already
+ * uses this same fallback to resolve the adapter; the native-history floor and
+ * claim-owner token must use it too. Without the fallback, a self-read arrives
+ * with no targetSessionId → the floor collapses to undefined (→0) and the
+ * antigravity claim-owner token collapses to '' → pickUnboundConversationDb
+ * drops out of its spawn-floor branch into newest-by-mtime and binds whichever
+ * conversation .db was written most recently. For an antigravity MAGI
+ * coordinator that is exactly a co-located replica's .db (the replica finished
+ * its turn last), so the coordinator's read cross-wires onto the replica's
+ * conversation instead of its own (ANTIGRAVITY coordinator↔replica crosswire).
+ */
+function effectiveReadSessionId(h: CommandHelpers, targetSessionId: string | undefined): string {
+    const explicit = typeof targetSessionId === 'string' ? targetSessionId.trim() : '';
+    if (explicit) return explicit;
+    const current = (h.currentSession as any)?.sessionId;
+    return typeof current === 'string' ? current.trim() : '';
+}
+
+/**
  * Pull the session's spawnedAtMs out of the registry. Native-history
  * file pickers use it as a "files older than this can't be from this
  * session" floor; without it a fresh dashboard view would inherit the
  * previous session's transcript whenever its file happened to be the
  * newest match. Returns undefined when the session isn't registered
  * (e.g. read_chat before the live session was wired up) — the executor
- * treats undefined as "no floor".
+ * treats undefined as "no floor". Resolves the effective session id
+ * (targetSessionId or the current live session) so a self-read still gets its
+ * real spawn floor rather than 0.
  */
 function sessionStartedAtMsFromRegistry(h: CommandHelpers, targetSessionId: string | undefined): number | undefined {
-    const sid = typeof targetSessionId === 'string' ? targetSessionId.trim() : '';
+    const sid = effectiveReadSessionId(h, targetSessionId);
     if (!sid) return undefined;
     const target = h.ctx?.sessionRegistry?.get?.(sid);
     return typeof target?.spawnedAtMs === 'number' ? target.spawnedAtMs : undefined;
@@ -1597,7 +1629,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 scripts: provider?.scripts as any,
                 sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
                 envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
-                instanceId: typeof args?.targetSessionId === 'string' ? args.targetSessionId : undefined,
+                instanceId: effectiveReadSessionId(h, args?.targetSessionId) || undefined,
                 pinnedProviderSessionId: getBoundProviderSessionIdPin(args?.targetSessionId),
             })
             : readProviderChatHistory(agentStr, {
@@ -1619,7 +1651,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 ? (result as any).providerSessionId
                 : readHistorySessionIdFromMessages(messages) || historySessionId;
             if (typeof (result as any)?.providerSessionId === 'string' && (result as any).providerSessionId.trim()) {
-                recordBoundProviderSessionId(args?.targetSessionId, (result as any).providerSessionId.trim());
+                recordBoundProviderSessionId(h, effectiveReadSessionId(h, args?.targetSessionId), (result as any).providerSessionId.trim());
             }
             const safeMapping = hasSafeNativeHistoryMapping({
                 historySessionId: lookup === 'workspace' ? undefined : historySessionId,
@@ -1852,7 +1884,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
                         // Stable per-session identity for antigravity's conversation-claim
                         // owner token (== session registry sessionId == instance instanceId).
-                        instanceId: typeof args?.targetSessionId === 'string' ? args.targetSessionId : undefined,
+                        instanceId: effectiveReadSessionId(h, args?.targetSessionId) || undefined,
                         pinnedProviderSessionId: pinnedProviderSessionIdForRead,
                         // Last-resort only when no pin was ever recorded for this
                         // session; the downstream workspace-overlap safety gate
@@ -1868,7 +1900,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         ? nativeHistory.providerSessionId.trim()
                         : '';
                     if (resolvedProviderSessionId) {
-                        recordBoundProviderSessionId(targetSessionId, resolvedProviderSessionId);
+                        recordBoundProviderSessionId(h, effectiveReadSessionId(h, targetSessionId), resolvedProviderSessionId);
                     }
                 } catch (error: any) {
                     nativeHistoryError = error;
@@ -1928,7 +1960,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         excludeInProgressTurn: returnedStatus === 'waiting_approval',
                         sessionStartedAtMs,
                         envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
-                        instanceId: typeof args?.targetSessionId === 'string' ? args.targetSessionId : undefined,
+                        instanceId: effectiveReadSessionId(h, args?.targetSessionId) || undefined,
                     });
                     nativeHistoryError = undefined;
                     nativeMessages = nativeHistory && Array.isArray(nativeHistory.messages)
@@ -2227,7 +2259,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     scripts: provider?.scripts as any,
                     sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
                     envOverrides: sessionSpawnEnvFromAdapter(h, args?.targetSessionId),
-                    instanceId: typeof args?.targetSessionId === 'string' ? args.targetSessionId : undefined,
+                    instanceId: effectiveReadSessionId(h, args?.targetSessionId) || undefined,
                     pinnedProviderSessionId: pinnedProviderSessionIdForHistory,
                     // Last-resort only when no pin was ever recorded AND the
                     // runtime fallback did not resolve a real provider session.
@@ -2252,7 +2284,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 : readHistorySessionIdFromMessages(historyMessages) || effectiveHistorySessionIdForRead;
             // Refresh the pin whenever this path resolves a real provider id.
             if (typeof (history as any)?.providerSessionId === 'string' && (history as any).providerSessionId.trim()) {
-                recordBoundProviderSessionId(targetSid, (history as any).providerSessionId.trim());
+                recordBoundProviderSessionId(h, effectiveReadSessionId(h, targetSid), (history as any).providerSessionId.trim());
             }
             // Use the id we actually read with (pin / real provider id), NOT the
             // raw runtime-fallback historySessionId — otherwise the mapping guard
