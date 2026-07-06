@@ -9,12 +9,11 @@ import {
     buildMeshLedgerReconciliationEvidence,
     buildMeshLedgerReplicaEvidence,
     commandForNode,
-    computeMeshMissionStats,
     computeMeshTaskStats,
     drainCoordinatorPendingEvents,
     getLedgerSummary,
     isLocalControlPlaneNode,
-    listMeshMissionSummaries,
+    listMeshMissionsForTool,
     readLedgerEntries,
     readLedgerSlice,
     getMeshMission,
@@ -461,7 +460,15 @@ async function meshMissionUpsertBulk(
 
 export async function meshMissionList(
     ctx: MeshContext,
-    args: { status?: string | string[]; verbose?: boolean; include_magi?: boolean; includeMagi?: boolean } = {},
+    args: {
+        status?: string | string[];
+        verbose?: boolean;
+        include_magi?: boolean;
+        includeMagi?: boolean;
+        include_stats?: boolean;
+        includeStats?: boolean;
+        limit?: number;
+    } = {},
 ): Promise<string> {
     try {
         const rawStatuses = Array.isArray(args.status)
@@ -479,23 +486,31 @@ export async function meshMissionList(
         }
         const statuses = rawStatuses.length > 0 ? (rawStatuses as any[]) : undefined;
         const includeMagi = (args.include_magi ?? args.includeMagi) === true;
-        const missions = listMeshMissionSummaries(ctx.mesh.id, {
+        const verbose = args.verbose === true;
+        // stats are ledger-scanned per mission — off by default so a list view stays
+        // bounded. verbose or explicit include_stats opts in. The `tasks` aggregate on
+        // each mission already carries progress for the common list case.
+        const withStats = verbose || (args.include_stats ?? args.includeStats) === true;
+        const limit = typeof args.limit === 'number' && Number.isFinite(args.limit) && args.limit > 0
+            ? Math.floor(args.limit)
+            : undefined;
+        const result = listMeshMissionsForTool(ctx.mesh.id, {
             statuses,
-            verbose: args.verbose === true,
+            verbose,
             includeMagi,
-        }).map(mission => {
-            try {
-                return { ...mission, stats: computeMeshMissionStats(ctx.mesh.id, mission.id) };
-            } catch {
-                return mission;
-            }
+            withStats,
+            limit,
         });
         return JSON.stringify({
             success: true,
-            count: missions.length,
+            count: result.missions.length,
+            matched: result.matched,
+            ...(result.truncated ? { truncated: true, overflowIds: result.overflowIds } : {}),
             ...(statuses ? { statusFilter: statuses } : {}),
             ...(includeMagi ? { includeMagi: true } : { magiCompletedHidden: true }),
-            missions,
+            ...(withStats ? {} : { statsHidden: true }),
+            missions: result.missions,
+            ...(result.historyFold ? { historyFold: result.historyFold } : {}),
         }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e?.message || String(e) });

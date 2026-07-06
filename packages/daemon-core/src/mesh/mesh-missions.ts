@@ -120,6 +120,19 @@ export const GOAL_PREVIEW_MAX = 120;
  */
 export const COMPACT_STATUS_GOAL_PREVIEW_MAX = 80;
 
+/**
+ * mesh_mission_list default fold sizes. Without an explicit `statuses` filter the
+ * tool returns non-terminal (active/paused) missions in full detail but folds the
+ * completed/abandoned history into counts + a capped newest-first id list — a mesh
+ * can accumulate hundreds of terminal missions and returning them all (each with a
+ * ledger-scanned stats rollup) blew past the tool payload / token budget and spilled
+ * to a file. When an explicit `statuses` filter IS given, the matching missions are
+ * returned in detail but still bounded by MESH_MISSION_LIST_STATUS_LIMIT so a
+ * status:["completed"] call on a huge history stays bounded (overflow → truncated).
+ */
+export const MESH_MISSION_LIST_HISTORY_ID_LIMIT = 30;
+export const MESH_MISSION_LIST_STATUS_LIMIT = 50;
+
 function normalizeMissionStatus(value: unknown): MeshMissionStatus {
     return MESH_MISSION_STATUSES.includes(value as MeshMissionStatus)
         ? value as MeshMissionStatus
@@ -540,6 +553,120 @@ export function listMeshMissionSummaries(
         .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
     const full = missions.map(mission => summarizeMeshMission(meshId, mission));
     return options?.verbose ? full : full.map(summary => slimMissionSummary(summary));
+}
+
+/** Shaped mesh_mission_list result: bounded detail list + optional folded history. */
+export interface MeshMissionListResult {
+    /** Detailed (slim or verbose) mission summaries — bounded, newest-first. */
+    missions: MeshMissionSummary[] | MeshMissionSlimSummary[];
+    /**
+     * Completed/abandoned missions folded to counts + ids. Present (default path)
+     * when no explicit status filter is given and terminal missions exist. Null when
+     * an explicit status filter is active (those missions go into `missions`).
+     */
+    historyFold: MeshStatusMissionsHistoryFold | null;
+    /** True when an explicit status filter matched more than `limit` missions. */
+    truncated: boolean;
+    /** Total missions matching the query BEFORE the detail-list cap was applied. */
+    matched: number;
+    /** Newest-first ids of missions dropped by the detail-list cap (truncated path). */
+    overflowIds?: string[];
+}
+
+/**
+ * mesh_mission_list projection: payload-bounded regardless of mesh mission count.
+ *
+ * Default (no explicit `statuses`): non-terminal missions (active/paused) return in
+ * detail; completed/abandoned missions are folded to counts + a capped id list
+ * (historyFold), NOT emitted one-by-one. This is what keeps the tool from returning
+ * hundreds of terminal missions (each with a ledger stats rollup) and overflowing the
+ * token budget.
+ *
+ * Explicit `statuses` (e.g. ["completed"]): the coordinator asked to see those
+ * missions, so they ARE returned in detail — but still bounded by `limit` (default
+ * MESH_MISSION_LIST_STATUS_LIMIT). Overflow beyond `limit` is reported via
+ * truncated:true + overflowIds rather than silently dropped.
+ *
+ * MAGI + verbose semantics match listMeshMissionSummaries. `withStats` opts each
+ * detailed mission into the ledger-scanned stats rollup (off by default — the tasks
+ * aggregate is enough for a list view).
+ */
+export function listMeshMissionsForTool(
+    meshId: string,
+    options?: {
+        statuses?: MeshMissionStatus[];
+        verbose?: boolean;
+        includeMagi?: boolean;
+        withStats?: boolean;
+        limit?: number;
+        historyIdLimit?: number;
+    },
+): MeshMissionListResult {
+    const explicitStatuses = options?.statuses && options.statuses.length > 0 ? options.statuses : undefined;
+    const includeMagi = options?.includeMagi === true;
+    const verbose = options?.verbose === true;
+    const withStats = options?.withStats === true;
+    const limit = Math.max(1, options?.limit ?? MESH_MISSION_LIST_STATUS_LIMIT);
+    const historyIdLimit = Math.max(0, options?.historyIdLimit ?? MESH_MISSION_LIST_HISTORY_ID_LIMIT);
+
+    const passesMagi = (m: MeshMissionRecord) => includeMagi || !(m.source === 'magi' && m.status === 'completed');
+    const byUpdatedDesc = (a: MeshMissionRecord, b: MeshMissionRecord) => (b.updatedAt || '').localeCompare(a.updatedAt || '');
+
+    const project = (mission: MeshMissionRecord): MeshMissionSummary | MeshMissionSlimSummary => {
+        let summary = summarizeMeshMission(meshId, mission);
+        if (withStats) {
+            try {
+                summary = { ...summary, stats: computeMeshMissionStats(meshId, mission.id) };
+            } catch { /* stats optional — omit on failure */ }
+        }
+        return verbose ? summary : slimMissionSummary(summary);
+    };
+
+    const foldHistory = (history: MeshMissionRecord[]): MeshStatusMissionsHistoryFold | null => {
+        if (history.length === 0) return null;
+        const byStatus: Record<string, number> = {};
+        for (const m of history) byStatus[m.status] = (byStatus[m.status] ?? 0) + 1;
+        return {
+            count: history.length,
+            byStatus,
+            missionIds: history.slice(0, historyIdLimit).map(m => m.id),
+            note: 'Completed/abandoned missions are folded to counts + ids. Pass status (e.g. status:["completed"]) to list them in detail.',
+        };
+    };
+
+    if (explicitStatuses) {
+        // Explicit filter: return matching missions in detail, capped at `limit`.
+        const matched = getMeshMissions(meshId, explicitStatuses)
+            .filter(passesMagi)
+            .sort(byUpdatedDesc);
+        const shown = matched.slice(0, limit);
+        const overflow = matched.slice(limit);
+        return {
+            missions: shown.map(project) as MeshMissionSummary[] | MeshMissionSlimSummary[],
+            historyFold: null,
+            truncated: overflow.length > 0,
+            matched: matched.length,
+            ...(overflow.length > 0 ? { overflowIds: overflow.map(m => m.id) } : {}),
+        };
+    }
+
+    // Default: detail for non-terminal missions, fold terminal history.
+    const all = getMeshMissions(meshId).filter(passesMagi);
+    const live = all
+        .filter(m => m.status === 'active' || m.status === 'paused')
+        .sort(byUpdatedDesc);
+    const history = all
+        .filter(m => m.status === 'completed' || m.status === 'abandoned')
+        .sort(byUpdatedDesc);
+    const shown = live.slice(0, limit);
+    const overflow = live.slice(limit);
+    return {
+        missions: shown.map(project) as MeshMissionSummary[] | MeshMissionSlimSummary[],
+        historyFold: foldHistory(history),
+        truncated: overflow.length > 0,
+        matched: live.length,
+        ...(overflow.length > 0 ? { overflowIds: overflow.map(m => m.id) } : {}),
+    };
 }
 
 /**

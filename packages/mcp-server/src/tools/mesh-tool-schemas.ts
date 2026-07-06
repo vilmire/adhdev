@@ -303,10 +303,15 @@ export const MESH_MISSION_UPSERT_TOOL = {
 export const MESH_MISSION_LIST_TOOL = {
     name: 'mesh_mission_list',
     description: 'List missions with their goal, status, and live task progress (total/pending/assigned/completed/failed). '
-        + 'Unlike mesh_status (which surfaces live + recent missions), this returns every mission regardless of status by default, '
-        + 'so paused/abandoned/completed missions are never hidden. Filter with `status` to scope (e.g. ["paused"] to find paused missions). '
+        + 'Default (no `status`): non-terminal missions (active/paused) return in detail, while completed/abandoned missions are '
+        + 'folded into a `historyFold` summary (counts by status + newest-first `missionIds`) rather than listed one-by-one — this '
+        + 'keeps the payload bounded as a mesh accumulates hundreds of finished missions. To read finished missions in full, pass '
+        + '`status` explicitly (e.g. ["completed"]); those are returned in detail but still capped by `limit` (default 50), with '
+        + 'overflow reported as truncated=true + overflowIds. '
         + 'Completed MAGI cross-verification missions (one auto-created per mesh_magi_review) are hidden by default to keep the list '
         + 'coordinator-focused — in-progress MAGI missions still show; pass include_magi=true to list completed ones too. '
+        + 'Per-mission stats (ledger-scanned durations/attempts) are OMITTED by default — the `tasks` aggregate carries progress; '
+        + 'pass include_stats=true (or verbose=true) to attach them. '
         + 'Compact (default) elides the full goal to a capped preview; pass verbose=true for full goal text. Read-only.',
     inputSchema: {
         type: 'object' as const,
@@ -314,9 +319,15 @@ export const MESH_MISSION_LIST_TOOL = {
             status: {
                 type: 'array',
                 items: { type: 'string', enum: ['active', 'paused', 'completed', 'abandoned'] },
-                description: 'Optional status filter. Omit to return missions of every status.',
+                description: 'Optional status filter. Omit for the default folded view (active/paused in detail, completed/abandoned summarized). '
+                    + 'Provide it (e.g. ["completed"]) to list those missions in detail — bounded by `limit`.',
             },
-            verbose: { type: 'boolean', description: 'Return full goal text instead of a capped preview. Defaults to false (compact).' },
+            limit: {
+                type: 'number',
+                description: 'Max missions returned in detail (default 50). Overflow beyond the cap is reported as truncated=true + overflowIds.',
+            },
+            verbose: { type: 'boolean', description: 'Return full goal text instead of a capped preview (also attaches stats). Defaults to false (compact).' },
+            include_stats: { type: 'boolean', description: 'Attach per-mission ledger stats (durations/attempts). Off by default; tasks aggregate is usually enough.' },
             include_magi: { type: 'boolean', description: 'Include completed MAGI cross-verification missions (hidden by default). Defaults to false.' },
         },
     },
