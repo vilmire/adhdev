@@ -1447,6 +1447,68 @@ describe('SessionChatTailController registry', () => {
     ])
   })
 
+  it('applies a SHORTER idle tail that finally carries the assistant answer when the on-screen tail is stuck on the user prompt (ANTIGRAVITY-TAIL-USER-ONLY)', () => {
+    // Regression: an antigravity/MAGI coordinator whose native-history tail, on the
+    // generating→idle transition, is SHORTER than the busy-phase tail (chrome/partial
+    // bubbles collapse on finalization) but finally ends on the assistant answer.
+    // The transition-window shrink-defense used to defer it on the length heuristic,
+    // stranding the session showing only the user prompt until a full-page reload.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      fallbackRecentCount: 4,
+    })
+
+    controller.retain()
+    // Hydrate a busy-phase tail that ends on the USER prompt (assistant not yet
+    // in native-history) — longer because it carries partial/chrome bubbles.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'MAGI 테스트', id: 'msg-user', timestamp: 1 } as any,
+        { role: 'assistant', content: '─── working ───', id: 'msg-chrome-1', kind: 'tool', timestamp: 2 } as any,
+        { role: 'assistant', content: '─── still working ───', id: 'msg-chrome-2', kind: 'tool', timestamp: 3 } as any,
+        { role: 'user', content: '[System] node dispatched', id: 'msg-sys', kind: 'system', timestamp: 4 } as any,
+      ],
+      status: 'generating',
+      totalMessages: 4,
+      lastMessageSignature: 'sig-busy-userend',
+      messageSource: { selected: 'native-history' } as any,
+    }))
+
+    // On-screen tail's last substantive bubble is the user/system prompt (chrome
+    // bubbles are tool-kind and don't count as the answer).
+    const beforeContents = controller.getSnapshot().liveMessages.map(message => (message as any).content)
+    expect(beforeContents).toContain('MAGI 테스트')
+
+    // generating→idle: finalized tail is SHORTER (2 rows) but ends on the real
+    // assistant answer. antigravity has fallen back off native-history for this
+    // read (idle >window → native_history_empty → PTY), so the source-trust
+    // early-return does NOT fire and the count heuristic would otherwise defer
+    // this shorter tail. The new-assistant guard must force it through anyway.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'MAGI 테스트', id: 'msg-user', timestamp: 1 } as any,
+        { role: 'assistant', content: '현재 git 상태 RCA 결과입니다', id: 'msg-final', timestamp: 5 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-final-answer',
+      messageSource: { selected: 'pty', fallbackReason: 'native_history_empty' } as any,
+    }))
+
+    expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
+      'MAGI 테스트',
+      '현재 git 상태 RCA 결과입니다',
+    ])
+  })
+
   it('applies the immediately-following full tail normally after a deferred waiting_approval partial', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()

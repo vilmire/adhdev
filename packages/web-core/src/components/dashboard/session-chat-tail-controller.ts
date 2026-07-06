@@ -155,6 +155,44 @@ function isTransientNonSubstantiveTail(messages: DashboardMessage[]): boolean {
   return messages.length === 0 || messages.every(isNonSubstantiveChatMessage)
 }
 
+/**
+ * The role of the LAST substantive (non-empty, non-chrome) message in a tail, or
+ * '' when the tail has no substantive message. System/tool bubbles do not gate a
+ * turn — walk past them — so this reports whether the human-visible tail ends on
+ * an assistant answer or is still sitting on the user prompt.
+ */
+function lastSubstantiveRole(messages: DashboardMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i] as { role?: unknown; kind?: unknown }
+    const role = typeof message?.role === 'string' ? message.role : ''
+    const kind = typeof message?.kind === 'string' ? message.kind : ''
+    if (role === 'system' || kind === 'system') continue
+    if (kind === 'tool' || kind === 'thought' || kind === 'terminal' || kind === 'activity') continue
+    if (isNonSubstantiveChatMessage(messages[i])) continue
+    return role
+  }
+  return ''
+}
+
+/**
+ * True when the incoming tail delivers an assistant answer that the current
+ * snapshot does not yet show — i.e. its last substantive bubble is `assistant`
+ * while the snapshot's is not. Such a tail is real forward progress even when it
+ * is SHORTER than the on-screen tail (the daemon's finalized native-history tail
+ * is routinely shorter than the busy-phase PTY/partial tail it replaces, because
+ * chrome/duplicate bubbles collapse). The shrink-defense must never defer it:
+ * deferring here is exactly what strands an antigravity/MAGI session showing only
+ * the user prompt until a full-page reload rebuilds the snapshot from scratch.
+ */
+function tailDeliversNewAssistantAnswer(
+  snapshot: SessionChatTailSnapshot,
+  nextMessages: DashboardMessage[],
+): boolean {
+  if (lastSubstantiveRole(nextMessages) !== 'assistant') return false
+  const existing = Array.isArray(snapshot.liveMessages) ? snapshot.liveMessages : []
+  return lastSubstantiveRole(existing) !== 'assistant'
+}
+
 function isBusyChatTailStatus(status: unknown): boolean {
   const value = typeof status === 'string' ? status.toLowerCase() : ''
   return value === 'generating' || value === 'no_progress' || value === 'long_generating' || value === 'streaming' || value === 'working' || value === 'starting'
@@ -228,6 +266,21 @@ function shouldDeferBusyTailUpdate(
   if (existingCount <= 0) return false
 
   if (isTransientNonSubstantiveTail(nextMessages)) return true
+
+  // (ANTIGRAVITY-TAIL-USER-ONLY) On the generating→idle TRANSITION of an already
+  // HYDRATED snapshot, an incoming tail that finally carries the assistant answer
+  // — while the on-screen tail still ends on the user prompt — is forward
+  // progress, not a shrink to defend against. The daemon's finalized
+  // native-history tail is often SHORTER than the busy-phase tail it replaces
+  // (chrome/partial/duplicate bubbles collapse on finalization), so the length
+  // heuristic below would wrongly defer it and strand the session showing only
+  // the user prompt until a full-page reload. Restricted to the transition window
+  // (not the warm/busy path) so a not-yet-hydrated short busy tail is still
+  // deferred against the fallback baseline — only a real, already-shown user turn
+  // getting its answer is force-applied.
+  if (transitionWindowEngaged && !statusIsActive && tailDeliversNewAssistantAnswer(snapshot, nextMessages)) {
+    return false
+  }
 
   // (A3) When the daemon ships a ChatSourceMachine decision, trust it.
   // The machine already knows whether the incoming tail is the locked
