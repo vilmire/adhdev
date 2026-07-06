@@ -1002,7 +1002,15 @@ function resolveAutoLaunchTarget(components: DaemonComponents, node: any): {
     // Remote node. Forwarding the launch is possible only with a dispatch transport
     // (cloud mode) plus a coordinator daemonId to stamp into the worker so completion
     // events route back here. Without either, fall back to a graceful skip.
-    const daemonId = readNonEmptyString(node?.daemonId);
+    //
+    // CANON-IDENTITY: read the daemonId through the normalizing helper (same defect class
+    // as the dispatch guard above). A raw `node.daemonId` read misses non-top-level-camelCase
+    // serialization forms (daemon_id / machine.daemonId / lastProbe.machine.daemon_id / …),
+    // so a genuinely-remote node arriving in one of those forms read empty here and was
+    // wrongly skipped as `remote_auto_launch_unsupported`. readMeshNodeDaemonId returns
+    // undefined (falsy) when absent — equivalent to the old readNonEmptyString + !daemonId
+    // guard, so local/self auto-launch is unchanged.
+    const daemonId = readMeshNodeDaemonId(node ?? {});
     if (!daemonId) return { mode: 'skip', reason: 'remote_auto_launch_unsupported' };
     if (!components.dispatchMeshCommand) return { mode: 'skip', reason: 'remote_auto_launch_unsupported' };
     // CANON: stamp the canonical `daemon_mach_` coordinator anchor onto the remote

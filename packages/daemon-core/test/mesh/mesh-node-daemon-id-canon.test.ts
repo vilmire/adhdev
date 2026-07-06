@@ -29,4 +29,18 @@ describe('readMeshNodeDaemonId — serialization-form absorption', () => {
   it('returns undefined when no daemon id is present in any form', () => {
     expect(readMeshNodeDaemonId({ nodeId: 'node_x', workspace: '/tmp/x' })).toBeUndefined()
   })
+
+  // resolveAutoLaunchTarget in mesh-queue-assignment.ts guards remote auto-launch on
+  // `if (!daemonId) return skip('remote_auto_launch_unsupported')`. The helper must return a
+  // falsy value ONLY when the node truly has no daemon id, and a truthy value for any
+  // serialization form — otherwise a remote node in a non-camelCase form is wrongly skipped.
+  it('resolves a truthy daemonId for a remote node in a nested-only form (auto-launch guard)', () => {
+    const remoteNode = { machine: { daemon_id: 'daemon_mach_remote' }, workspace: 'D:/gh/x' }
+    expect(readMeshNodeDaemonId(remoteNode)).toBeTruthy()
+    expect(readMeshNodeDaemonId(remoteNode)).toBe('daemon_mach_remote')
+  })
+
+  it('returns falsy (undefined) for a node with no daemon id — auto-launch skip stays correct', () => {
+    expect(readMeshNodeDaemonId({ workspace: '/tmp/x' })).toBeFalsy()
+  })
 })
