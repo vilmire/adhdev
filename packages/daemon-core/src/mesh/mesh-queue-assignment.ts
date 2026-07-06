@@ -18,6 +18,7 @@ import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
+import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 import { queuePendingMeshCoordinatorEvent, retractPendingDispatchBlockedEvent } from './mesh-events-pending.js';
 import { isWorktreeBootstrapStaleRunning, shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
@@ -469,7 +470,15 @@ export function tryAssignQueueTask(
     // failure / cancel / reclaim).
     beginTaskDispatchInFlight(meshId, task.id);
 
-    if (node?.daemonId && components.dispatchMeshCommand) {
+    // CANON-IDENTITY: read the remote daemon id through the normalizing helper so a node
+    // whose daemonId arrives in a non-top-level-camelCase serialization form (daemon_id /
+    // machine.daemonId / lastProbe.machine.daemon_id / …) is still recognized as remote.
+    // Reading raw `node.daemonId` here made the guard false for those forms, so the remote
+    // block was skipped and execution fell through to the LOCAL cliManager.handleCliCommand
+    // path — which has no adapter for the remote sessionId and threw
+    // 'Cannot read properties of undefined (reading handleCliCommand)'.
+    const remoteDaemonId = readMeshNodeDaemonId(node ?? {});
+    if (remoteDaemonId && components.dispatchMeshCommand) {
         const isLocalNode = components.cliManager.adapters.has(sessionId);
         if (!isLocalNode) {
             const localDaemonIdForDispatch = localCoordinatorDaemonId();
@@ -478,7 +487,6 @@ export function tryAssignQueueTask(
             // to the remote worker, which echoes it on its completion event.
             const sourceCoordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId) || undefined;
             const dispatchMeshCommand = components.dispatchMeshCommand;
-            const remoteDaemonId = node.daemonId;
             // CONS3: only the transport call differs — everything else (delivery record,
             // status transitions, requeue-on-failure, ledger, Bug B hang timeout) is in
             // the shared deliverTaskToSession helper.
