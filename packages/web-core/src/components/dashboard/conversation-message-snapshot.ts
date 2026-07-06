@@ -30,24 +30,75 @@ function isConversationAnchorMessage(message: DashboardMessage): boolean {
     return kind === '' || kind === 'standard'
 }
 
+function conversationAnchorRole(message: DashboardMessage): 'user' | 'assistant' | '' {
+    if (!isConversationAnchorMessage(message)) return ''
+    return String(message.role || '').toLowerCase() as 'user' | 'assistant'
+}
+
+/**
+ * (ANTIGRAVITY-TAIL-USER-ONLY) Pull the latest assistant answer back into the
+ * initial live window when the raw tail slice buried it.
+ *
+ * The visible window is `liveMessages.slice(-visibleLiveCount)` — a RAW count that
+ * spends its budget on EVERY bubble, including non-substantive tool/thought/system
+ * activity rows that `ChatMessageList` later hides. A MAGI coordinator emits dozens
+ * of such activity bubbles per turn, so the last-N window can be almost entirely
+ * activity + a trailing `user` dispatch echo, with the actual `assistant` answer
+ * pushed just above the window into `hiddenLiveMessages`. The user then sees ONLY
+ * their prompt until they click "Load older".
+ *
+ * The old guard bailed the moment the visible window contained ANY anchor — and a
+ * trailing `user` bubble IS an anchor — so it never rescued the stranded assistant.
+ * We instead rescue specifically when the visible window shows NO substantive
+ * ASSISTANT answer while the hidden tail does: walk the hidden tail newest→oldest
+ * to the most recent assistant answer and pull it (plus the user turn that prompted
+ * it, when that user isn't already visible) forward, in order. This is deliberately
+ * asymmetric — a window that already shows the assistant answer but hides an OLDER
+ * user prompt is a legitimately-scrolled-back state, not the reported bug, and is
+ * left untouched (the user recovers it via "Load older"). Bounded to a few
+ * substantive bubbles so it can never unbound-grow the initial render.
+ */
+const MAX_RESCUED_ANCHOR_MESSAGES = 4
+
 function getConversationAnchorMessages(
     hiddenLiveMessages: DashboardMessage[],
     visibleLiveMessages: DashboardMessage[],
 ): DashboardMessage[] {
     if (hiddenLiveMessages.length === 0) return []
-    if (visibleLiveMessages.some(isConversationAnchorMessage)) return []
 
-    const anchors: DashboardMessage[] = []
-    const seenRoles = new Set<string>()
-    for (let i = hiddenLiveMessages.length - 1; i >= 0 && anchors.length < 2; i -= 1) {
-        const message = hiddenLiveMessages[i]
-        if (!message || !isConversationAnchorMessage(message)) continue
-        const role = String(message.role || '').toLowerCase()
-        if (seenRoles.has(role)) continue
-        seenRoles.add(role)
-        anchors.unshift(message)
+    const visibleRoles = new Set<string>()
+    for (const message of visibleLiveMessages) {
+        const role = conversationAnchorRole(message)
+        if (role) visibleRoles.add(role)
     }
-    return anchors
+    // Only rescue the user-only failure mode: the visible window is missing the
+    // substantive assistant ANSWER. If the assistant answer is already on screen,
+    // leave the window as-is (a hidden older user prompt is normal back-scroll).
+    if (visibleRoles.has('assistant')) return []
+
+    // Walk the hidden tail newest→oldest to the most recent assistant answer,
+    // pulling it — and the user turn that prompted it, unless that user is already
+    // visible — forward in order. Bounded by the cap so the initial render stays
+    // small even on a pathological hidden tail.
+    const rescued: DashboardMessage[] = []
+    let capturedAssistant = false
+    for (let i = hiddenLiveMessages.length - 1; i >= 0 && rescued.length < MAX_RESCUED_ANCHOR_MESSAGES; i -= 1) {
+        const message = hiddenLiveMessages[i]
+        const role = conversationAnchorRole(message)
+        if (!role) continue
+        if (!capturedAssistant && role === 'assistant') {
+            rescued.unshift(message)
+            capturedAssistant = true
+            continue
+        }
+        if (capturedAssistant && role === 'user') {
+            // Preceding user prompt for the rescued answer — include it for pairing
+            // unless the visible window already shows a user bubble.
+            if (!visibleRoles.has('user')) rescued.unshift(message)
+            break
+        }
+    }
+    return rescued
 }
 
 export function buildVisibleConversationMessages(options: {

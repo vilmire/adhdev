@@ -3,6 +3,7 @@ import {
     buildVisibleConversationMessages,
     getConversationLiveMessages,
 } from '../../../src/components/dashboard/conversation-message-snapshot'
+import { filterChatMessagesForDefaultTranscript } from '../../../src/components/dashboard/chat-activity-visibility'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
 import type { SessionChatTailSnapshot } from '../../../src/components/dashboard/session-chat-tail-controller'
 
@@ -165,6 +166,39 @@ describe('conversation message authority snapshot', () => {
         expect(visibleMessages.slice(2).map(message => message.content)).toEqual(
             liveMessages.slice(-50).map(message => message.content),
         )
+    })
+
+    it('rescues the latest assistant answer when an activity flood + trailing user prompt bury it (ANTIGRAVITY-TAIL-USER-ONLY)', () => {
+        // A MAGI/antigravity coordinator turn: user prompt, the assistant ANSWER,
+        // then >50 non-substantive activity bubbles, then a trailing user dispatch
+        // echo. The raw slice(-50) fills the window with activity + the trailing
+        // user and pushes the answer into the hidden tail, so the pane would open
+        // showing ONLY the user prompt until "Load older" is clicked.
+        const liveMessages = [
+            { role: 'user' as const, content: 'MAGI 테스트. RCA로 현재 깃 상태 확인', id: 'user-prompt', kind: 'standard', receivedAt: 1000 },
+            { role: 'assistant' as const, content: 'MAGI RCA 완료 요약 (THE ANSWER)', id: 'assistant-answer', kind: 'standard', receivedAt: 2000 },
+            ...Array.from({ length: 55 }, (_, index) => ({
+                role: (index % 3 === 2 ? 'system' : 'assistant') as 'system' | 'assistant',
+                content: `activity ${index}`,
+                id: `activity-${index}`,
+                kind: ['tool', 'thought', 'system'][index % 3],
+                receivedAt: 3000 + index,
+            })),
+            { role: 'user' as const, content: 'Mission "MAGI: git status" dispatched', id: 'user-trailing', kind: 'standard', receivedAt: 4000 },
+        ]
+
+        const visibleMessages = buildVisibleConversationMessages({
+            historyMessages: [],
+            liveMessages,
+            visibleLiveCount: 50,
+        })
+
+        const rendered = filterChatMessagesForDefaultTranscript(visibleMessages)
+        const renderedRoles = rendered.map(message => message.role)
+        // The buried answer is rescued to the front; the trailing user stays.
+        expect(renderedRoles).toContain('assistant')
+        expect(renderedRoles).toContain('user')
+        expect(rendered[0]?.content).toBe('MAGI RCA 완료 요약 (THE ANSWER)')
     })
 
     it('does not add conversational anchors when the visible live window already contains one', () => {
