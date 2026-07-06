@@ -4778,6 +4778,13 @@ function canonicalizeSpecificEvidence(ev) {
 function normalizeEvidence(ev) {
   return isSpecificEvidence(ev) ? canonicalizeSpecificEvidence(ev) : ev.toLowerCase().replace(/\s+/g, " ").trim();
 }
+function magiReadIndicatesApprovalWedge(payload) {
+  const p = payload;
+  if (!p || typeof p !== "object") return false;
+  const status = String(p.status ?? "");
+  if (status === "waiting_approval" || status === "waiting_choice") return true;
+  return !!p.activeModal;
+}
 function rankNeedsVerification(c) {
   switch (c.category) {
     case "contested":
@@ -4886,7 +4893,13 @@ function synthesizeMagiResponses(responses, opts = {}) {
   const replicasAnswered = answered.length;
   let independenceBanner = null;
   if (replicasAnswered >= 1 && (distinctProviders < 2 || distinctNodes < 2)) {
-    independenceBanner = `independence not achieved \u2014 the answering replicas span ${distinctProviders} provider(s) and ${distinctNodes} machine(s); their agreements are source-coupled and routed to needs_verification.`;
+    const replicasMissing = Math.max(0, replicasExpected - replicasAnswered);
+    const lossDominated = replicasMissing > 0 && replicasMissing >= replicasAnswered;
+    if (lossDominated) {
+      independenceBanner = `independence not achieved \u2014 only ${replicasAnswered} of ${replicasExpected} replica(s) answered (${replicasMissing} missing/dropped), collapsing the answering set to ${distinctProviders} provider(s) and ${distinctNodes} machine(s). This is a replica-loss/collection failure, not a low-diversity panel \u2014 inspect the dropped replicas (stale/unparseable/no-session) before re-reading the diversity spans. Agreements are routed to needs_verification.`;
+    } else {
+      independenceBanner = `independence not achieved \u2014 the answering replicas span ${distinctProviders} provider(s) and ${distinctNodes} machine(s); their agreements are source-coupled and routed to needs_verification.`;
+    }
   }
   const openQuestions = [...new Set(answered.flatMap((r) => r.response.open_questions))];
   const gitSkew = computeMagiGitSkew(answered);
@@ -5889,6 +5902,38 @@ ${magiOutputContractFor(kind)}`;
       return false;
     }
   };
+  const nudgeWedgedReplica = async (task) => {
+    const node = ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, task.assignedNodeId));
+    if (!node || !task.assignedSessionId) return;
+    try {
+      const read = await commandForNode(ctx, node, "read_chat", {
+        sessionId: task.assignedSessionId,
+        targetSessionId: task.assignedSessionId,
+        workspace: node.workspace,
+        tailLimit: 1
+      });
+      const payload = unwrapCommandPayload(read);
+      if (!magiReadIndicatesApprovalWedge(payload)) return;
+      const status = String(payload?.status ?? "");
+      await commandForNode(ctx, node, "resolve_action", {
+        sessionId: task.assignedSessionId,
+        targetSessionId: task.assignedSessionId,
+        workspace: node.workspace,
+        providerType: task.assignedProviderType,
+        agentType: task.assignedProviderType,
+        cliType: task.assignedProviderType,
+        action: "approve"
+      });
+      try {
+        (0, import_daemon_core4.appendLedgerEntry)(ctx.mesh.id, {
+          kind: "magi_replica_auto_approved",
+          payload: { taskId: task.id, nodeId: task.assignedNodeId, status }
+        });
+      } catch {
+      }
+    } catch {
+    }
+  };
   const tryResolveReplica = async (task, staleTaskIds2, staleReasons2, force, liveTasks) => {
     const taskId = task.id;
     const source = buildSource(task);
@@ -5903,6 +5948,9 @@ ${magiOutputContractFor(kind)}`;
         source.error = task.status === "completed" ? "no_session_to_read" : `replica_${task.status || "incomplete"}`;
         finalized.set(taskId, { source, response: emptyResponse() });
         return true;
+      }
+      if (task.assignedNodeId && task.assignedSessionId && !force) {
+        await nudgeWedgedReplica(task);
       }
       if (force) {
         source.error = `replica_${task.status || "incomplete"}`;
