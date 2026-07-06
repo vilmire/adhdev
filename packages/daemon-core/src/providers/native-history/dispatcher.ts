@@ -87,6 +87,23 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
             return null;
         }
 
+        // For antigravity, the authoritative conversation id is the on-disk uuid
+        // embedded in the resolved path (conversations/<uuid>.db or
+        // brain/<uuid>/…/transcript.jsonl), NOT the ADHDev session id the caller
+        // threaded in. Surface that uuid as providerSessionId whenever the reader
+        // did not already return a distinct one, so the read_chat layer can pin
+        // the real conversation and (post-restart) exact-bind straight to it
+        // instead of re-running the mtime/recency heuristic that drops an idle
+        // store (ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP). Other providers keep the
+        // reader's value verbatim.
+        let resolvedProviderSessionId = session.providerSessionId;
+        if (reader === 'antigravity-cli') {
+            const onDiskUuid = extractAntigravityConversationUuid(session.sourcePath || sourcePath);
+            if (onDiskUuid && (!resolvedProviderSessionId || resolvedProviderSessionId === sessionId)) {
+                resolvedProviderSessionId = onDiskUuid;
+            }
+        }
+
         return {
             messages: session.messages.map((m: any) => ({
                 role: normalizeRole(m.role),
@@ -95,7 +112,7 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
                 kind: typeof m.kind === 'string' ? m.kind : 'standard',
                 workspace: typeof m.workspace === 'string' ? m.workspace : workspace || undefined,
             })),
-            providerSessionId: session.providerSessionId,
+            providerSessionId: resolvedProviderSessionId,
             sourcePath: session.sourcePath,
             sourceMtimeMs: session.sourceMtimeMs,
             nativeHistoryCoverage: (session as any).nativeHistoryCoverage || 'full',
@@ -240,6 +257,27 @@ function resolveRealPath(value: string): string {
 }
 
 /**
+ * Pull the antigravity conversation uuid out of a resolved source path. Both
+ * on-disk layouts embed it: conversations/<uuid>.db and
+ * brain/<uuid>/.system_generated/logs/transcript*.jsonl (and the legacy
+ * conversations/<uuid>.pb). Returns the uuid when a segment matches the
+ * canonical form, else ''.
+ */
+function extractAntigravityConversationUuid(sourcePath: string): string {
+    if (!sourcePath) return '';
+    const segments = sourcePath.split(/[\\/]/);
+    // conversations/<uuid>.db|.pb — the basename minus extension.
+    const base = segments[segments.length - 1] || '';
+    const baseMatch = /^([0-9a-f-]+)\.(?:db|pb)$/i.exec(base);
+    if (baseMatch && isUuidLikeSessionId(baseMatch[1])) return baseMatch[1];
+    // brain/<uuid>/… — the first uuid-like path segment.
+    for (const seg of segments) {
+        if (isUuidLikeSessionId(seg)) return seg;
+    }
+    return '';
+}
+
+/**
  * The daemon may stamp a session's spawn time a hair before the CLI child
  * actually creates its conversation .db, so treat a store born within this
  * grace of the spawn floor as still belonging to this session. Kept small
@@ -341,6 +379,19 @@ function pickUnboundConversationDb(
     let entries: fs.Dirent[] = [];
     try { entries = fs.readdirSync(convRoot, { withFileTypes: true }); } catch { return null; }
 
+    // A known spawn floor already pins a candidate to THIS session by birth time
+    // (a store created at/after the session spawned is its own). Once that floor
+    // is available, the recency window is not just unnecessary but harmful: an
+    // antigravity session that has sat idle longer than RECENT_WINDOW_MS still
+    // owns its conversation .db, but the recency cutoff would drop it from the
+    // candidate set, collapsing the read to native_history_empty and forcing the
+    // dashboard onto the PTY parse (user echo only, assistant tail lost —
+    // ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP, most visible right after a daemon
+    // restart clears the in-memory read pin). So only apply the recency cutoff in
+    // the floor-less (legacy/unpinned) discovery path, where it is the sole guard
+    // against binding an unrelated old store. When a floor is known the birth-time
+    // filter below is the authoritative, idle-agnostic owner check.
+    const applyRecencyCutoff = !(sessionFloorMs > 0);
     const recencyCutoff = Date.now() - RECENT_WINDOW_MS;
     const candidates: Array<{ path: string; uuid: string; mtime: number; birth: number }> = [];
     for (const entry of entries) {
@@ -352,7 +403,7 @@ function pickUnboundConversationDb(
         if (isAntigravityConversationClaimedByOther(uuid, owner)) continue;
         const p = path.join(convRoot, entry.name);
         const mtime = safeMtime(p);
-        if (mtime < recencyCutoff) continue;
+        if (applyRecencyCutoff && mtime < recencyCutoff) continue;
         candidates.push({ path: p, uuid, mtime, birth: safeBirthtime(p) });
     }
     if (candidates.length === 0) return null;

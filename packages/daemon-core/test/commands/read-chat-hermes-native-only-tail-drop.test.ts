@@ -15,7 +15,7 @@ vi.mock('../../src/config/chat-history.js', () => ({
   },
 }))
 
-import { handleReadChat } from '../../src/commands/chat-commands.js'
+import { __resetProviderSessionPinsForTest, handleReadChat } from '../../src/commands/chat-commands.js'
 
 // hermes-cli is a native-only provider: it declares a canonical native history
 // source AND suppresses PTY bodies (transcriptAuthority: 'provider'). The
@@ -67,6 +67,7 @@ function createHelpers(sessionRegistryGet: (id: string) => any = () => undefined
 describe('read_chat hermes-cli native-only tail-drop guard (post-turn)', () => {
   beforeEach(() => {
     mocks.readProviderChatHistory.mockReset()
+    __resetProviderSessionPinsForTest()
   })
 
   it('returns the safely-mapped assistant answer even when native coverage is partial (FSM would pick pty-parser)', async () => {

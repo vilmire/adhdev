@@ -9,7 +9,13 @@ vi.mock('../../src/config/config.js', () => ({
   getConfigDir: () => configDir,
 }));
 
-import { loadState, resetState, saveState } from '../../src/config/state-store.js';
+import {
+  loadPersistedProviderSessionPins,
+  loadState,
+  recordPersistedProviderSessionPin,
+  resetState,
+  saveState,
+} from '../../src/config/state-store.js';
 
 describe('state-store', () => {
   beforeEach(() => {
@@ -31,6 +37,7 @@ describe('state-store', () => {
       sessionReadMarkers: {},
       sessionNotificationDismissals: {},
       sessionNotificationUnreadOverrides: {},
+      sessionProviderSessionPins: {},
     });
   });
 
@@ -53,6 +60,7 @@ describe('state-store', () => {
       sessionReadMarkers: { ok: 'done' },
       sessionNotificationDismissals: {},
       sessionNotificationUnreadOverrides: {},
+      sessionProviderSessionPins: {},
     });
   });
 
@@ -70,6 +78,7 @@ describe('state-store', () => {
       },
       sessionNotificationDismissals: {},
       sessionNotificationUnreadOverrides: {},
+      sessionProviderSessionPins: {},
     });
 
     const raw = JSON.parse(readFileSync(join(configDir, 'state.json'), 'utf-8'));
@@ -80,6 +89,7 @@ describe('state-store', () => {
       sessionReadMarkers: { done: 'marker' },
       sessionNotificationDismissals: {},
       sessionNotificationUnreadOverrides: {},
+      sessionProviderSessionPins: {},
     });
   });
 
@@ -144,6 +154,7 @@ describe('state-store', () => {
       },
       sessionNotificationDismissals: {},
       sessionNotificationUnreadOverrides: {},
+      sessionProviderSessionPins: {},
     });
   });
 
@@ -159,6 +170,52 @@ describe('state-store', () => {
       sessionReadMarkers: {},
       sessionNotificationDismissals: {},
       sessionNotificationUnreadOverrides: {},
+      sessionProviderSessionPins: {},
+    });
+  });
+
+  describe('provider-session pin persistence (ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP)', () => {
+    it('records a pin and reloads it across a fresh loadState (survives restart)', () => {
+      recordPersistedProviderSessionPin('agy-session-1', '65c1fff8-conv-uuid');
+      // A brand-new load (simulating a daemon restart reading state.json) sees it.
+      expect(loadState().sessionProviderSessionPins).toEqual({ 'agy-session-1': '65c1fff8-conv-uuid' });
+      expect(loadPersistedProviderSessionPins()).toEqual({ 'agy-session-1': '65c1fff8-conv-uuid' });
+    });
+
+    it('is a no-op write when the pin is unchanged (does not rewrite identical state)', () => {
+      recordPersistedProviderSessionPin('agy-session-2', 'conv-a');
+      const before = readFileSync(join(configDir, 'state.json'), 'utf-8');
+      recordPersistedProviderSessionPin('agy-session-2', 'conv-a');
+      const after = readFileSync(join(configDir, 'state.json'), 'utf-8');
+      expect(after).toBe(before);
+    });
+
+    it('updates the pin when the conversation id changes (resume/new-session)', () => {
+      recordPersistedProviderSessionPin('agy-session-3', 'conv-old');
+      recordPersistedProviderSessionPin('agy-session-3', 'conv-new');
+      expect(loadState().sessionProviderSessionPins).toEqual({ 'agy-session-3': 'conv-new' });
+    });
+
+    it('ignores empty session id or empty conversation id', () => {
+      recordPersistedProviderSessionPin('', 'conv-x');
+      recordPersistedProviderSessionPin('agy-session-4', '');
+      expect(loadState().sessionProviderSessionPins).toEqual({});
+    });
+
+    it('keeps multiple sessions distinct and drops malformed entries on load', () => {
+      recordPersistedProviderSessionPin('s1', 'c1');
+      recordPersistedProviderSessionPin('s2', 'c2');
+      // Corrupt the file with a malformed entry alongside good ones.
+      const state = loadState();
+      writeFileSync(
+        join(configDir, 'state.json'),
+        JSON.stringify({
+          ...state,
+          sessionProviderSessionPins: { s1: 'c1', s2: 'c2', bad: 42, '': 'nope', s3: '' },
+        }),
+        'utf-8',
+      );
+      expect(loadState().sessionProviderSessionPins).toEqual({ s1: 'c1', s2: 'c2' });
     });
   });
 });

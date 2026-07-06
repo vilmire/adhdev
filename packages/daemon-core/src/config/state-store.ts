@@ -26,6 +26,17 @@ export interface DaemonState {
     sessionNotificationDismissals: Record<string, string>;
     /** Current notification unread override ids keyed by stable session target */
     sessionNotificationUnreadOverrides: Record<string, string>;
+    /**
+     * Resolved provider-native conversation id for a live session, keyed by the
+     * ADHDev/mesh session id. Persisted so it survives a daemon restart: a
+     * provider whose on-disk store is keyed by an internally-generated id it
+     * never exposes on the CLI (antigravity — no --session-id) can then exact-bind
+     * its conversation .db after restart instead of re-running the mtime/recency
+     * heuristic, which drops the store once idle and collapses read_chat to the
+     * PTY parse (user echo only, assistant tail lost). Mirrors the in-memory read
+     * pin (chat-commands-read lastBoundProviderSessionIdByMeshSession).
+     */
+    sessionProviderSessionPins: Record<string, string>;
 }
 
 const DEFAULT_STATE: DaemonState = {
@@ -35,6 +46,7 @@ const DEFAULT_STATE: DaemonState = {
     sessionReadMarkers: {},
     sessionNotificationDismissals: {},
     sessionNotificationUnreadOverrides: {},
+    sessionProviderSessionPins: {},
 };
 
 function isPlainObject(value: unknown): value is Record<string, any> {
@@ -77,6 +89,10 @@ function normalizeState(raw: unknown): DaemonState {
         Object.entries(isPlainObject(parsed.sessionNotificationUnreadOverrides) ? parsed.sessionNotificationUnreadOverrides : {})
             .filter(([, value]) => typeof value === 'string' && value.length > 0)
     );
+    const sessionProviderSessionPins = Object.fromEntries(
+        Object.entries(isPlainObject(parsed.sessionProviderSessionPins) ? parsed.sessionProviderSessionPins : {})
+            .filter(([key, value]) => typeof key === 'string' && key.length > 0 && typeof value === 'string' && value.length > 0)
+    );
 
     return {
         recentActivity,
@@ -85,6 +101,7 @@ function normalizeState(raw: unknown): DaemonState {
         sessionReadMarkers,
         sessionNotificationDismissals,
         sessionNotificationUnreadOverrides,
+        sessionProviderSessionPins,
     };
 }
 
@@ -120,4 +137,42 @@ export function saveState(state: DaemonState): void {
  */
 export function resetState(): void {
     saveState({ ...DEFAULT_STATE });
+}
+
+/**
+ * Load the full persisted session→provider-conversation pin map (sessionId →
+ * provider-native conversation id). Survives daemon restart. Empty object when
+ * none recorded or the state file is unreadable.
+ */
+export function loadPersistedProviderSessionPins(): Record<string, string> {
+    return { ...loadState().sessionProviderSessionPins };
+}
+
+/**
+ * Persist one session→provider-conversation pin. Load-mutate-save against the
+ * on-disk state so it survives a daemon restart; a no-op when the value already
+ * matches (avoids rewriting state.json on every read). Never clears a pin with an
+ * empty value.
+ */
+export function recordPersistedProviderSessionPin(sessionId: string, providerSessionId: string): void {
+    const key = typeof sessionId === 'string' ? sessionId.trim() : '';
+    const value = typeof providerSessionId === 'string' ? providerSessionId.trim() : '';
+    if (!key || !value) return;
+    const state = loadState();
+    if (state.sessionProviderSessionPins[key] === value) return;
+    saveState({
+        ...state,
+        sessionProviderSessionPins: { ...state.sessionProviderSessionPins, [key]: value },
+    });
+}
+
+/**
+ * Test-only: drop all persisted session→provider-conversation pins from disk.
+ * Used by tests that assert a clean "no pin" state so a sibling test's write to
+ * the shared per-process ADHDEV_CONFIG_DIR does not leak in.
+ */
+export function clearPersistedProviderSessionPins(): void {
+    const state = loadState();
+    if (Object.keys(state.sessionProviderSessionPins).length === 0) return;
+    saveState({ ...state, sessionProviderSessionPins: {} });
 }

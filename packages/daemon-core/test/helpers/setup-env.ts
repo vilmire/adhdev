@@ -24,3 +24,18 @@ for (const key of [
 ]) {
   if (!process.env[key]) process.env[key] = TEST_PROBE_WINDOW_MS
 }
+
+// Isolate the daemon config/state directory to a throwaway temp dir for the test
+// process. getConfigDir() honours ADHDEV_CONFIG_DIR (config.ts), so pointing it at
+// a per-run tmp dir keeps any test that reads or writes ~/.adhdev/state.json —
+// e.g. the read_chat provider-session pin persistence
+// (ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP) — from touching the developer's real state
+// or cross-polluting sibling tests through the shared on-disk file. Only a default;
+// a test that sets its own ADHDEV_CONFIG_DIR (or mocks getConfigDir) still wins.
+if (!process.env.ADHDEV_CONFIG_DIR) {
+  const os = require('node:os') as typeof import('node:os')
+  const path = require('node:path') as typeof import('node:path')
+  const fs = require('node:fs') as typeof import('node:fs')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-daemon-core-test-config-'))
+  process.env.ADHDEV_CONFIG_DIR = dir
+}

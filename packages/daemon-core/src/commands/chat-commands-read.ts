@@ -9,6 +9,7 @@ import type { CliAdapter } from '../cli-adapter-types.js';
 import { flattenContent, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
 import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
 import { isNativeSourceCanonicalHistory, readChatHistory, readProviderChatHistory } from '../config/chat-history.js';
+import { clearPersistedProviderSessionPins, loadPersistedProviderSessionPins, recordPersistedProviderSessionPin } from '../config/state-store.js';
 import { getCoordinatorForSession } from '../mesh/coordinator-registry.js';
 import { LOG } from '../logging/logger.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
@@ -62,20 +63,67 @@ const CLI_NATIVE_TRANSCRIPT_PROVIDERS = new Set(['codex-cli', 'claude-cli', 'her
 // and run the native query normally instead of fail-closing. Refreshed on every
 // successful bind; never lets an empty id clear a known pin. Keyed by mesh
 // session id so pins never alias across distinct sessions sharing a workspace.
+//
+// The map is ALSO mirrored to disk (state.json sessionProviderSessionPins) so a
+// pin survives a daemon restart. Without that, an attach-restored antigravity
+// session (spawnedAtMs=0, so no live spawn floor) that has sat idle past the
+// native reader's recency window can no longer resolve its own conversation .db
+// after the daemon comes back — read_chat falls to the PTY parse and the
+// dashboard shows the user prompt with the assistant tail missing
+// (ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP). The in-memory map stays the hot path;
+// disk is the cold-start hydration source, read lazily on the first miss.
 const lastBoundProviderSessionIdByMeshSession = new Map<string, string>();
+let persistedProviderSessionPinsHydrated = false;
+
+function hydratePersistedProviderSessionPinsOnce(): void {
+    if (persistedProviderSessionPinsHydrated) return;
+    persistedProviderSessionPinsHydrated = true;
+    try {
+        for (const [key, value] of Object.entries(loadPersistedProviderSessionPins())) {
+            // Never let a stale persisted value clobber a fresher in-memory bind
+            // recorded earlier this process lifetime.
+            if (!lastBoundProviderSessionIdByMeshSession.has(key)) {
+                lastBoundProviderSessionIdByMeshSession.set(key, value);
+            }
+        }
+    } catch {
+        // Best-effort: a missing/corrupt state file just means no cold-start pins.
+    }
+}
 
 function recordBoundProviderSessionId(meshSessionId: string | undefined, providerSessionId: string | undefined): void {
     const key = typeof meshSessionId === 'string' ? meshSessionId.trim() : '';
     const value = typeof providerSessionId === 'string' ? providerSessionId.trim() : '';
     if (!key || !value) return;
     lastBoundProviderSessionIdByMeshSession.set(key, value);
+    // Always attempt the disk mirror — recordPersistedProviderSessionPin is itself a
+    // no-op when the ON-DISK value already matches, so it does not rewrite state.json
+    // on steady re-reads, yet it still lands a pin the in-memory map already holds but
+    // disk lost (a prior write clobbered by another state-store writer, or a restart
+    // whose hydration ran before this bind). Gating on the in-memory previous value
+    // let the in-memory and on-disk pin diverge permanently, defeating the persistence.
+    try { recordPersistedProviderSessionPin(key, value); } catch { /* best-effort disk mirror */ }
 }
 
 function getBoundProviderSessionIdPin(meshSessionId: string | undefined): string | undefined {
     const key = typeof meshSessionId === 'string' ? meshSessionId.trim() : '';
     if (!key) return undefined;
+    hydratePersistedProviderSessionPinsOnce();
     const pinned = lastBoundProviderSessionIdByMeshSession.get(key);
     return pinned && pinned.trim() ? pinned.trim() : undefined;
+}
+
+/**
+ * Test-only: clear the in-memory read-pin map and re-arm cold-start hydration so
+ * each test starts from a clean pin state. The on-disk mirror is isolated per
+ * test process via ADHDEV_CONFIG_DIR (test/helpers/setup-env.ts); this resets the
+ * module-level cache that would otherwise leak a pin across tests sharing the
+ * worker. Not part of the runtime contract.
+ */
+export function __resetProviderSessionPinsForTest(): void {
+    lastBoundProviderSessionIdByMeshSession.clear();
+    persistedProviderSessionPinsHydrated = false;
+    try { clearPersistedProviderSessionPins(); } catch { /* best-effort */ }
 }
 
 const warnedLegacyNativeAllowlistHits = new Set<string>();
@@ -1768,10 +1816,31 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             let nativeHistory: any | null = null;
             let nativeHistoryError: unknown | undefined;
             if (supportsNative) {
+                // Runtime-fallback → pin substitution: nativeHistoryReadSessionId is
+                // the bare runtime/session id when no explicit provider handle was
+                // supplied and none was parsed (antigravity takes no --session-id, so
+                // its this.providerSessionId stays empty and getHistorySessionId falls
+                // back to targetSessionId). That runtime id is not the on-disk
+                // conversations/<uuid>.db name, so a native read keyed on it can never
+                // exact-bind and falls to the recency heuristic — which drops an idle
+                // (or restored, spawnedAtMs=0) session's own store. Prefer a pin (a
+                // real conversation id a prior read resolved for THIS session, now also
+                // persisted across restart) over the runtime id, else drop the runtime
+                // id so readCliProviderNativeHistory's pin / workspace-latest paths can
+                // engage. Mirrors the handleChatHistory path's established handling.
+                const pinnedProviderSessionIdForRead = getBoundProviderSessionIdPin(targetSessionId);
+                const nativeReadSessionIdIsRuntimeFallback = Boolean(
+                    targetSessionId
+                    && nativeHistoryReadSessionId === targetSessionId
+                    && !getExplicitHistorySessionId(args),
+                );
+                const effectiveNativeReadSessionId = nativeReadSessionIdIsRuntimeFallback
+                    ? (pinnedProviderSessionIdForRead || undefined)
+                    : nativeHistoryReadSessionId;
                 try {
                     nativeHistory = readCliProviderNativeHistory(agentStr, {
                         canonicalHistory: provider?.nativeHistory,
-                        historySessionId: nativeHistoryReadSessionId,
+                        historySessionId: effectiveNativeReadSessionId,
                         workspace,
                         offset: 0,
                         limit: nativeHistoryLimit,
@@ -1784,11 +1853,11 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         // Stable per-session identity for antigravity's conversation-claim
                         // owner token (== session registry sessionId == instance instanceId).
                         instanceId: typeof args?.targetSessionId === 'string' ? args.targetSessionId : undefined,
-                        pinnedProviderSessionId: getBoundProviderSessionIdPin(targetSessionId),
+                        pinnedProviderSessionId: pinnedProviderSessionIdForRead,
                         // Last-resort only when no pin was ever recorded for this
                         // session; the downstream workspace-overlap safety gate
                         // still filters an aliased session out.
-                        allowWorkspaceLatestFallback: !getBoundProviderSessionIdPin(targetSessionId),
+                        allowWorkspaceLatestFallback: !pinnedProviderSessionIdForRead,
                     });
                     // Refresh the per-mesh-session pin whenever a native read
                     // resolves a concrete provider-native session id. A later

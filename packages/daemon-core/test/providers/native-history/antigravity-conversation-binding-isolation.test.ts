@@ -207,6 +207,40 @@ describe('antigravity conversation-binding isolation', () => {
 
     expect(result).toBeNull();
   });
+
+  it('(e) idle store past the recency window still binds when a spawn floor owns it (ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP)', async () => {
+    // The session's own conversation .db has sat idle far longer than
+    // RECENT_WINDOW_MS (5 min) — e.g. right after a daemon restart cleared the
+    // in-memory read pin, so the read cannot exact-bind and falls to
+    // pickUnboundConversationDb. The store is still THIS session's (birth after
+    // its spawn), so a floor-aware read must return it (assistant tail intact)
+    // rather than recency-exclude it into native_history_empty.
+    const dbPath = await makeConversationDb(SESSION_A, turn('idle prompt', 'idle answer'));
+
+    // Backdate the store ~30 min so it is well past the 5-min recency window,
+    // while its birth time still sits after the (older) spawn floor below.
+    const idleMs = Date.now() - 30 * 60 * 1000;
+    const idleSec = idleMs / 1000;
+    fs.utimesSync(dbPath, idleSec, idleSec);
+
+    const { createNativeHistoryDispatcher } = await import(
+      '../../../src/providers/native-history/dispatcher.js'
+    );
+    const dispatch = createNativeHistoryDispatcher('antigravity-cli');
+
+    // Spawn floor is OLDER than the store (session started before it wrote its
+    // .db), so the birth-time owner check accepts it. Idle age is irrelevant.
+    const result = dispatch({
+      agentType: 'antigravity-cli',
+      sessionId: '',
+      workspace: '/workspaces/agy',
+      sessionStartedAtMs: idleMs - 60_000,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.sourcePath.endsWith(`${SESSION_A}.db`)).toBe(true);
+    expect(result!.messages.some(m => m.role === 'assistant' && m.content === 'idle answer')).toBe(true);
+  });
 });
 
 describe('antigravity-claim-registry primitives', () => {

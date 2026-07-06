@@ -15,7 +15,7 @@ vi.mock('../../src/config/chat-history.js', () => ({
   },
 }))
 
-import { handleReadChat } from '../../src/commands/chat-commands.js'
+import { __resetProviderSessionPinsForTest, handleReadChat } from '../../src/commands/chat-commands.js'
 
 // hermes-cli declares a native (canonical) history source so the read path
 // exercises readCliProviderNativeHistory + its fail-closed guard.
@@ -52,6 +52,7 @@ function createHelpers(sessionRegistryGet: (id: string) => any = () => undefined
 describe('read_chat hermes-cli native-history pin reuse (post-turn)', () => {
   beforeEach(() => {
     mocks.readProviderChatHistory.mockReset()
+    __resetProviderSessionPinsForTest()
   })
 
   it('reuses the last bound provider session id on a post-turn read and does NOT fail closed', async () => {

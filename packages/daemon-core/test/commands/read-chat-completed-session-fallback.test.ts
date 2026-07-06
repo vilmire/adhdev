@@ -15,8 +15,9 @@ vi.mock('../../src/config/chat-history.js', () => ({
   },
 }))
 
-import { handleReadChat } from '../../src/commands/chat-commands.js'
+import { __resetProviderSessionPinsForTest, handleReadChat } from '../../src/commands/chat-commands.js'
 import { DaemonCommandHandler } from '../../src/commands/handler.js'
+import { recordPersistedProviderSessionPin } from '../../src/config/state-store.js'
 
 function createHelpers() {
   return {
@@ -52,6 +53,86 @@ function createHelpers() {
 describe('read_chat completed runtime provider fallback', () => {
   beforeEach(() => {
     mocks.readProviderChatHistory.mockReset()
+    __resetProviderSessionPinsForTest()
+  })
+
+  it('a restored antigravity session (spawnedAtMs=0, no adapter provider id) reads via the PERSISTED pin after a daemon restart (ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP)', async () => {
+    const runtimeSessionId = 'agy-restored-after-restart'
+    const convUuid = '65c1fff8-543b-4f40-a8c4-49678a032dc9'
+
+    // Simulate the pre-restart bind having been persisted to disk: on the fresh
+    // (post-restart) process the pin is hydrated lazily from state.json. The
+    // restored session itself carries NO provider session id (antigravity never
+    // exposes one) and spawnedAtMs=0, so without the pin the read would key on the
+    // bare runtime id, miss the exact-bind, and fall to the recency heuristic that
+    // drops the idle store — returning the user prompt with no assistant tail.
+    // The pre-restart bind is on disk. beforeEach already re-armed hydration and
+    // emptied the in-memory map, so the first read below hydrates this pin straight
+    // from state.json — exactly the cold-start restore path. (Disk→memory hydration
+    // in isolation is covered by state-store.test.ts.)
+    recordPersistedProviderSessionPin(runtimeSessionId, convUuid)
+
+    mocks.readProviderChatHistory.mockImplementation((_agent: string, options: any) => {
+      if (options?.historySessionId === convUuid) {
+        return {
+          messages: [
+            { role: 'user', content: 'restored agy prompt', receivedAt: 1100, historySessionId: convUuid },
+            { role: 'assistant', content: 'restored agy answer', receivedAt: 1200, historySessionId: convUuid },
+          ],
+          hasMore: false,
+          source: 'provider-native',
+          providerSessionId: convUuid,
+          nativeHistoryCoverage: 'full',
+        }
+      }
+      // Runtime-id keyed / unbound read → nothing (recency-excluded idle store).
+      return { messages: [], hasMore: false, source: 'native-unavailable', unavailableReason: 'native_history_workspace_only_lookup_unsafe' }
+    })
+
+    const adapter = {
+      cliType: 'antigravity-cli',
+      cliName: 'Antigravity CLI',
+      workingDir: '/tmp/adhdev-agy',
+      getStatus: () => ({ status: 'idle' }),
+      // No provider session id on screen — antigravity never prints it.
+      getScriptParsedStatus: () => ({ status: 'idle', messages: [] }),
+      getRuntimeMetadata: () => ({ runtimeId: runtimeSessionId, runtimeKey: runtimeSessionId, spawnedAtMs: 0, spawnedEnv: {} }),
+      getPartialResponse: () => '',
+      isProcessing: () => false,
+      isReady: () => true,
+    }
+    const helpers = {
+      ...createHelpers(),
+      getCliAdapter: () => adapter,
+      currentSession: {
+        sessionId: runtimeSessionId,
+        providerType: 'antigravity-cli',
+        transport: 'pty',
+        workspace: '/tmp/adhdev-agy',
+      },
+      ctx: {
+        instanceManager: { getInstance: () => null },
+        sessionRegistry: {
+          get: (sessionId: string) => sessionId === runtimeSessionId
+            ? { sessionId: runtimeSessionId, providerType: 'antigravity-cli', transport: 'pty', spawnedAtMs: 0 }
+            : undefined,
+        },
+      },
+    }
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'antigravity-cli',
+      targetSessionId: runtimeSessionId,
+      workspace: '/tmp/adhdev-agy',
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect((result.messages as any[]).map(m => m.content)).toEqual(['restored agy prompt', 'restored agy answer'])
+    // The read keyed on the PERSISTED conv uuid, never the bare runtime id.
+    const keyedIds = mocks.readProviderChatHistory.mock.calls.map(c => (c[1] as any)?.historySessionId)
+    expect(keyedIds).toContain(convUuid)
+    expect(keyedIds).not.toContain(runtimeSessionId)
   })
 
   it('uses explicit providerType and providerSessionId when target runtime session is gone', async () => {
