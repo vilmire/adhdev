@@ -368,25 +368,31 @@ const TERMINAL_TASK_EVENTS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Infrastructure/system events that no coordinator should surface — ledger
- * consistency and dispatch-plane signals. Delivered to the daemon-level handler
- * only (scope 'system').
+ * Coordinator-addressed dispatch-plane alerts. `mesh:dispatch_blocked` is the
+ * Fix (1) actionable dispatch-skip notification: it exists precisely to page the
+ * ORIGINATING coordinator (it carries a why+how coordinatorMessage and is
+ * targetCoordinator*-addressed by its producer), so it routes unicast exactly
+ * like a terminal task event. B2a originally classed it 'system' — that made it
+ * a dead letter: no daemon-level system drain exists, so the blocker never
+ * reached any coordinator and the task sat silently undispatched.
  */
-const SYSTEM_EVENTS: ReadonlySet<string> = new Set([
+const COORDINATOR_ALERT_EVENTS: ReadonlySet<string> = new Set([
   'mesh:dispatch_blocked',
 ]);
 
 /**
  * Default the v2 scope for an event by its producer event name (design decision
- * §3). Terminal task events → unicast (routed to the originating coordinator).
- * Ledger-consistency / dispatch-plane events → system. Everything else — node
- * lifecycle and progress signals — → broadcast, which also matches v1's
- * implicit "deliver to any coordinator" behaviour, so an unstamped v1 event and
- * a v2-stamped-as-broadcast event route identically during rollout.
+ * §3). Terminal task events and coordinator-addressed alerts → unicast (routed
+ * to the originating coordinator). Everything else — node lifecycle and
+ * progress signals — → broadcast, which also matches v1's implicit "deliver to
+ * any coordinator" behaviour, so an unstamped v1 event and a v2-stamped-as-
+ * broadcast event route identically during rollout. No event currently defaults
+ * to 'system'; the scope remains in MESH_EVENT_SCOPES for wire compatibility
+ * (an already-queued or version-skewed 'system' event still routes away from
+ * coordinators).
  */
 export function defaultScopeForEvent(eventName: string): MeshEventScope {
-  if (SYSTEM_EVENTS.has(eventName)) return 'system';
-  if (TERMINAL_TASK_EVENTS.has(eventName)) return 'unicast';
+  if (TERMINAL_TASK_EVENTS.has(eventName) || COORDINATOR_ALERT_EVENTS.has(eventName)) return 'unicast';
   return 'broadcast';
 }
 
