@@ -20,6 +20,7 @@ import { isLaunchableMachineProvider } from '../../utils/provider-activation'
 import type { LaunchResult, MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
 import MeshCoordinatorManualSetupPanel from '../MeshCoordinatorManualSetupPanel'
 import { buildManualCoordinatorSetup, type MeshCoordinatorManualSetup } from '../../utils/mesh-coordinator-setup'
+import { LAUNCH_CATEGORY_LABELS } from './launch-category-labels'
 
 type LaunchKind = 'ide' | 'cli' | 'acp'
 type WorkspaceLaunchMode = 'workspace' | 'mesh'
@@ -90,9 +91,9 @@ export function LaunchCategorySelector({
             <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-2">Category</div>
             <div className="flex flex-wrap gap-2">
                 {([
-                    { id: 'cli', label: 'CLI', enabled: cliEnabled },
-                    { id: 'ide', label: 'Workspace', enabled: ideEnabled },
-                    { id: 'acp', label: 'ACP', enabled: acpEnabled },
+                    { id: 'cli', label: LAUNCH_CATEGORY_LABELS.cli, enabled: cliEnabled },
+                    { id: 'ide', label: LAUNCH_CATEGORY_LABELS.ide, enabled: ideEnabled },
+                    { id: 'acp', label: LAUNCH_CATEGORY_LABELS.acp, enabled: acpEnabled },
                 ] as const).map(kind => (
                     <button
                         key={kind.id}
