@@ -120,6 +120,61 @@ describe('SessionChatTailController registry', () => {
     ])
   })
 
+  it('warm descriptor OMITS historySessionId for an agy coordinator (no surfaced providerSessionId) but SENDS a distinct provider id', () => {
+    const now = 2_000_000
+    const state = buildWarmSessionChatTailDescriptorState([
+      // Agy coordinator: no providerSessionId surfaced → historySessionId would
+      // fall back to the runtime sessionId (the poison). The descriptor must NOT
+      // carry it (undefined → subscribe omits the arg → daemon self-resolves).
+      createConversation({
+        sessionId: 'agy-coordinator-session',
+        providerSessionId: undefined,
+        tabKey: 'daemon-1:session:agy-coordinator-session',
+        status: 'idle',
+        messages: [{ role: 'user', content: 'coordinator prompt' }],
+        lastMessageAt: now - 5_000,
+        lastUpdated: now - 5_000,
+      }),
+      // Normal session with a distinct provider id → sent as-is (exact-bind).
+      createConversation({
+        routeId: 'route-provider',
+        sessionId: 'runtime-session',
+        providerSessionId: 'real-conv-uuid',
+        daemonId: 'daemon-2',
+        tabKey: 'daemon-2:session:runtime-session',
+        status: 'idle',
+        messages: [{ role: 'assistant', content: 'answer' }],
+        lastMessageAt: now - 5_000,
+        lastUpdated: now - 5_000,
+      }),
+    ], { now })
+
+    const coordinator = state.descriptors.find((d) => d.sessionId === 'agy-coordinator-session')
+    const normal = state.descriptors.find((d) => d.sessionId === 'runtime-session')
+    expect(coordinator?.historySessionId).toBeUndefined()
+    expect(normal?.historySessionId).toBe('real-conv-uuid')
+  })
+
+  it('subscribe request OMITS historySessionId when the controller has none (coordinator poison avoided)', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const sendData = vi.fn().mockReturnValue(true)
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData,
+      daemonId: 'daemon-1',
+      sessionId: 'agy-coordinator-session',
+      // No historySessionId — the read-safe value for a coordinator.
+      subscriptionKey: 'daemon:daemon-1:session:agy-coordinator-session',
+      tailLimit: 60,
+    })
+    controller.retain()
+
+    const request = sendData.mock.calls[0]?.[1]
+    expect(request.params).toMatchObject({ targetSessionId: 'agy-coordinator-session', tailLimit: 60 })
+    expect(request.params).not.toHaveProperty('historySessionId')
+  })
+
   it('can disable recent-idle warming while still keeping generating and modal sessions warm', () => {
     const now = 2_000_000
     const state = buildWarmSessionChatTailDescriptorState([

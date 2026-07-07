@@ -4,7 +4,7 @@ import type { SessionChatTailUpdate, SubscribeRequest } from '@adhdev/daemon-cor
 import type { ActiveConversation, DashboardMessage } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
-import { getConversationHistorySessionId } from './conversation-identity'
+import { getConversationHistorySessionIdForRead } from './conversation-identity'
 import { getConversationDaemonRouteId } from './conversation-selectors'
 
 
@@ -59,7 +59,11 @@ export interface SessionChatTailControllerHandle extends SessionChatTailSnapshot
 export interface WarmSessionChatTailDescriptor {
   daemonId: string
   sessionId: string
-  historySessionId: string
+  // Read-safe: a REAL distinct provider conv id, or undefined for a coordinator
+  // whose providerSessionId isn't surfaced (never the runtime sessionId — that
+  // is the read poison). Undefined → the subscribe request omits historySessionId
+  // and the daemon runs its owner-confirmed native resolution.
+  historySessionId?: string
   subscriptionKey: string
 }
 
@@ -841,7 +845,7 @@ function compareWarmSessionChatTailDescriptors(
   return left.subscriptionKey.localeCompare(right.subscriptionKey)
     || left.daemonId.localeCompare(right.daemonId)
     || left.sessionId.localeCompare(right.sessionId)
-    || left.historySessionId.localeCompare(right.historySessionId)
+    || (left.historySessionId || '').localeCompare(right.historySessionId || '')
 }
 
 function shouldWarmSessionChatTailConversation(
@@ -881,14 +885,19 @@ export function buildWarmSessionChatTailDescriptorState(
     const daemonId = getConversationDaemonRouteId(conversation)
     const sessionId = conversation.sessionId || ''
     if (!daemonId || !sessionId) continue
-    const historySessionId = getConversationHistorySessionId(conversation)
-    const key = getControllerKey(daemonId, sessionId, historySessionId || sessionId)
+    // Read-safe id (undefined for an agy coordinator) is what gets SENT to the
+    // daemon; the controller/dedup key still uses the sessionId fallback so
+    // warm descriptors stay stable and de-duplicated.
+    const historySessionIdForRead = getConversationHistorySessionIdForRead(conversation)
+    const key = getControllerKey(daemonId, sessionId, historySessionIdForRead || sessionId)
     if (seen.has(key)) continue
     seen.add(key)
     descriptors.push({
       daemonId,
       sessionId,
-      historySessionId: historySessionId || sessionId,
+      // Outgoing (subscribe) id only — undefined for a coordinator so the arg is
+      // omitted; the dedup key above still uses the sessionId fallback.
+      historySessionId: historySessionIdForRead,
       subscriptionKey: `daemon:${daemonId}:session:${sessionId}`,
     })
   }
@@ -909,7 +918,13 @@ export function useSessionChatTailController(
   const enabled = options?.enabled !== false
   const daemonId = getConversationDaemonRouteId(activeConv)
   const sessionId = activeConv.sessionId || ''
-  const historySessionId = getConversationHistorySessionId(activeConv) || sessionId
+  // Only a REAL, DISTINCT provider conv id is sent to the daemon as
+  // historySessionId; for an agy coordinator (no surfaced providerSessionId)
+  // this is undefined so every native read (subscribe / read_chat / chat_history)
+  // OMITS the arg and the daemon runs its owner-confirmed native resolution
+  // instead of fail-closing on the runtime session id. Never fall back to
+  // sessionId here — that fallback is the read poison.
+  const historySessionId = getConversationHistorySessionIdForRead(activeConv)
   const subscriptionKey = `daemon:${daemonId}:session:${sessionId}`
   const tailLimit = Math.max(0, options?.tailLimit ?? DEFAULT_TAIL_LIMIT)
 

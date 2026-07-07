@@ -5,6 +5,7 @@ import {
   buildConversationTargetKey,
   conversationMatchesTarget,
   getConversationHistorySessionId,
+  getConversationHistorySessionIdForRead,
   getConversationHistoryLookupIds,
   getDaemonEntrySessionSuffix,
   isMeshOwnedSessionCopy,
@@ -80,6 +81,28 @@ describe('conversation identity contract sketch', () => {
   it('reuses the same history session rule directly', () => {
     expect(getConversationHistorySessionId(createConversation())).toBe('provider-1')
     expect(getConversationHistorySessionId(createConversation({ providerSessionId: undefined }))).toBe('runtime-1')
+  })
+
+  it('read-safe history id SENDS a real distinct provider id but OMITS the runtime sessionId fallback (agy-coordinator poison)', () => {
+    // A real, distinct provider conv id is sent as-is (legitimate exact-bind).
+    expect(getConversationHistorySessionIdForRead(createConversation())).toBe('provider-1')
+    // An explicit historySessionId distinct from the sessionId is sent as-is.
+    expect(getConversationHistorySessionIdForRead(createConversation({
+      providerSessionId: undefined,
+      historySessionId: 'conv-uuid-xyz',
+    }))).toBe('conv-uuid-xyz')
+    // Agy coordinator: no providerSessionId surfaced → the ONLY candidate is the
+    // runtime sessionId. getConversationHistorySessionId falls back to it (the
+    // poison the browser used to send); the read-safe variant OMITS it (undefined)
+    // so the daemon read runs its owner-confirmed native resolution instead.
+    expect(getConversationHistorySessionId(createConversation({ providerSessionId: undefined }))).toBe('runtime-1')
+    expect(getConversationHistorySessionIdForRead(createConversation({ providerSessionId: undefined }))).toBeUndefined()
+    // Explicit historySessionId that merely echoes the runtime sessionId is also
+    // the poison → omitted.
+    expect(getConversationHistorySessionIdForRead(createConversation({
+      providerSessionId: undefined,
+      historySessionId: 'runtime-1',
+    }))).toBeUndefined()
   })
 
   it('builds raw and prefixed lookup aliases for conversation targeting', () => {

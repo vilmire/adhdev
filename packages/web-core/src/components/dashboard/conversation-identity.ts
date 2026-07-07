@@ -113,6 +113,31 @@ export function getConversationHistorySessionId(
   return getConversationHistoryLookupIds(conversation)[0]
 }
 
+/**
+ * The historySessionId to actually SEND to the daemon on a native-history read
+ * (subscribe / read_chat / chat_history). Unlike getConversationHistorySessionId
+ * (whose sessionId fallback is fine for local LOOKUP keys), this MUST NOT fall
+ * back to the ADHDev runtime sessionId: for an antigravity coordinator whose
+ * providerSessionId is never surfaced to the web, that fallback sends the
+ * runtime session id back as historySessionId, which the daemon cannot match to
+ * the native rows' stamped conv uuid — it fail-closes the read to pty-parser
+ * (user-echo only) and bypasses the daemon's owner-confirmed native resolution
+ * (which only runs when historySessionId is EMPTY). Return a real, DISTINCT
+ * provider/history id (≠ sessionId) or undefined, so the read OMITS the arg and
+ * the daemon resolves native history itself. A real distinct provider conv id is
+ * still returned unchanged so legitimate exact-binds keep working.
+ */
+export function getConversationHistorySessionIdForRead(
+  conversation: Pick<ConversationTarget, 'historySessionId' | 'providerSessionId' | 'sessionId'>,
+): string | undefined {
+  const sessionId = normalizeKeyPart(conversation.sessionId)
+  const historySessionId = getConversationHistorySessionId(conversation)
+  if (!historySessionId) return undefined
+  // Omit when the resolved id is just the runtime sessionId (the poison).
+  if (sessionId && historySessionId === sessionId) return undefined
+  return historySessionId
+}
+
 export function buildConversationIdentity(
   conversation: ConversationTarget,
 ): ConversationIdentity {
