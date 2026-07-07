@@ -5,8 +5,26 @@ import { writeFileSync, readFileSync, unlinkSync } from 'node:fs';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshApprove, meshCheckpoint, meshCloneNode, meshFastForwardNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshTaskHistory, meshRefineConfig, meshChangeImpactConfig, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
-import { appendLedgerEntry, claimNextTask, enqueueTask, getLedgerDir, getQueue } from '@adhdev/daemon-core';
+import { CANONICAL_MESH_TOOL_COUNT, appendLedgerEntry, claimNextTask, enqueueTask, getLedgerDir, getQueue, requeueTask } from '@adhdev/daemon-core';
 import { clearPendingMeshCoordinatorEvents, drainPendingMeshCoordinatorEvents, handleMeshForwardEvent } from '../../daemon-core/src/mesh/mesh-events.js';
+
+// meshQueueRequeue delegates the requeue to the mesh-host daemon in IpcTransport mode so
+// the single-flight guard is co-located with dispatch (requeue_mesh_queue_task). This stub
+// emulates the daemon handler's contract with the same requeueTask call the real handler
+// runs (daemon-core mesh-queue.ts), against the same shared queue store.
+function handleRequeueMeshQueueTask(args: Record<string, unknown>): { success: boolean; task?: unknown; error?: string } {
+  const taskId = String(args.taskId ?? '');
+  const task = requeueTask(String(args.meshId ?? ''), taskId, {
+    reason: typeof args.reason === 'string' ? args.reason : undefined,
+    targetNodeId: typeof args.targetNodeId === 'string' ? args.targetNodeId : undefined,
+    targetSessionId: typeof args.targetSessionId === 'string' ? args.targetSessionId : undefined,
+    clearTargetNode: args.clearTargetNode === true,
+    clearTargetSession: args.clearTargetSession !== false,
+    force: args.force === true,
+  });
+  if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
+  return { success: true, task };
+}
 
 test('mesh worktree tools route clone/remove to the source node daemon and refresh MCP mesh context', async () => {
   const transport = new IpcTransport() as IpcTransport & {
@@ -3626,8 +3644,9 @@ test('mesh queue management tools cancel and requeue stale assignments without d
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async (command) => {
+  transport.command = async (command, args = {}) => {
     if (command === 'trigger_mesh_queue') return { success: true };
+    if (command === 'requeue_mesh_queue_task') return handleRequeueMeshQueueTask(args);
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async () => {
@@ -3867,7 +3886,10 @@ test('local direct mesh_send_task allows proper mesh delegate session with meshN
 });
 
 test('mesh tool registry documents the exposed mesh tools including queue cancel/requeue, read-debug, remote node log fetch, direct fast-forward, daemon restart, worktree clone/remove/refine, batch refine, unified refine config, unified change-impact config, mesh init onboarding, session cleanup, stale-direct prune, reconcile-ledger, review inbox, operating-note recording, and mission upsert/list', () => {
-  assert.equal(ALL_MESH_TOOLS.length, 42);
+  // Count binds to the mesh-shared canonical registry (the SSOT the 6-6 consistency
+  // test in mesh-tools-schema.test.ts set-compares against) instead of a hardcoded
+  // number, so tool additions/removals can no longer silently drift this assertion.
+  assert.equal(ALL_MESH_TOOLS.length, CANONICAL_MESH_TOOL_COUNT);
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_record_note'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_reconcile_ledger'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_requeue_held_events'));
@@ -4389,6 +4411,7 @@ test('mesh_queue_requeue passes the task target node as preferredNodeId to trigg
       triggerCalls.push({ command, args });
       return { success: true, trigger: { success: true, claimed: false } };
     }
+    if (command === 'requeue_mesh_queue_task') return handleRequeueMeshQueueTask(args);
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async () => {
@@ -4440,6 +4463,7 @@ test('mesh_queue_requeue omits preferredNodeId when the task has no target node'
       triggerCalls.push({ command, args });
       return { success: true, trigger: { success: true, claimed: false } };
     }
+    if (command === 'requeue_mesh_queue_task') return handleRequeueMeshQueueTask(args);
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async () => {
