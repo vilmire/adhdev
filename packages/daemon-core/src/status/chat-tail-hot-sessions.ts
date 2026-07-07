@@ -69,6 +69,24 @@ export function classifyHotChatSessionsForSubscriptionFlush(
      * A newer `lastMessageAt` (fresh turn) re-arms delivery.
      */
     deliveredCompletionTailAt?: ReadonlyMap<string, number>;
+    /**
+     * (D8) PER-SUBSCRIPTION ACK gate — the authoritative guaranteed-delivery
+     * signal. Session ids for which at least one currently-subscribed ws has
+     * NOT yet been sent the session's finalized tail (its per-ws
+     * `lastDeliveredSignature` is empty / does not match the session's current
+     * tail). The daemon computes this from its live ws-subscription map; the
+     * classifier keeps every such session hot-for-delivery INDEPENDENT of the
+     * seen/unread badge, so a session whose unread badge cleared (or a fresh
+     * browser that re-subscribed after the single completion flush already
+     * fired) still gets its assistant-final tail delivered. Bounded because a
+     * subscriber's `lastDeliveredSignature` converges to the current tail the
+     * moment it is actually sent, dropping the session out of this set. When
+     * provided, this set is the guaranteed-delivery driver and the
+     * `deliveredCompletionTailAt` recency-watermark path is bypassed for these
+     * sessions (it stays only as the legacy opt-in for callers that don't pass
+     * a per-subscription set).
+     */
+    underDeliveredSessionIds?: ReadonlySet<string>;
   } = {},
 ): { active: Set<string>; finalizing: Set<string>; guaranteedDelivery: Set<string> } {
   const now = options.now ?? Date.now();
@@ -86,6 +104,7 @@ export function classifyHotChatSessionsForSubscriptionFlush(
   // the completed-but-unseen keep-hot branch (which would otherwise thrash by
   // re-pushing every tick with no delivered record to stop it).
   const deliveredCompletionTailAt = options.deliveredCompletionTailAt ?? null;
+  const underDeliveredSessionIds = options.underDeliveredSessionIds ?? null;
   const active = new Set<string>();
   const excluded = new Set<string>();
   // Sessions kept hot purely because they finalized late (outside the 8s
@@ -126,13 +145,37 @@ export function classifyHotChatSessionsForSubscriptionFlush(
       continue;
     }
 
-    // Guaranteed-delivery path: a completed-but-unseen session whose native
+    // (D8) PER-SUBSCRIPTION ACK-BASED guaranteed delivery — the authoritative
+    // path. If ANY currently-subscribed ws for this session still lacks the
+    // finalized tail (empty / mismatched per-ws lastDeliveredSignature), keep
+    // the session hot-for-delivery REGARDLESS of the seen/unread badge. This is
+    // the fix for the agy coordinator stranded user-only: the single completion
+    // flush was marked "delivered" on FLUSH-FIRE (not browser-APPLIED), and
+    // re-delivery was gated on completedUnseen — so once the unread badge
+    // cleared, a subscriber that never actually applied the assistant tail (D6
+    // shrink-defer drop, or a fresh browser that re-subscribed after the flush
+    // instant) was permanently dropped and stayed user-only forever. Gating on
+    // "does a live subscriber still lack the tail" instead of the badge makes it
+    // re-arm for exactly those subscribers, and it self-bounds: the moment a
+    // subscriber is actually sent the tail its signature matches and it leaves
+    // this set (a same-tail re-flush is a cheap no-op via prepareSessionChatTailUpdate).
+    if (underDeliveredSessionIds && underDeliveredSessionIds.has(sessionId)) {
+      active.add(sessionId);
+      guaranteedDelivery.add(sessionId);
+      continue;
+    }
+
+    // Legacy recency-watermark guaranteed-delivery path (opt-in via
+    // deliveredCompletionTailAt): a completed-but-unseen session whose native
     // tail finalized AFTER the 8s window (common for multi-turn MAGI
-    // coordinators — the native-history tail lags the last PTY echo). Keep it
-    // hot until its finalized [.,assistant] tail has been flushed once, so the
-    // corrective snapshot always reaches the browser even minutes later.
+    // coordinators — the native-history tail lags the last PTY echo). Kept for
+    // callers that do not supply a per-subscription ACK set. When the
+    // per-subscription set is provided it is authoritative and this path is not
+    // consulted (the `continue` above already handled under-delivered sessions;
+    // a session NOT in the set is genuinely delivered, so it must not be revived
+    // here on the stale badge alone).
     const completedUnseen = unread || inboxBucket === 'task_complete';
-    if (deliveredCompletionTailAt && completedUnseen) {
+    if (!underDeliveredSessionIds && deliveredCompletionTailAt && completedUnseen) {
       const delivered = deliveredCompletionTailAt.get(sessionId) ?? 0;
       // Not yet delivered for this turn (no record, or a newer tail arrived
       // since the last delivery). lastMessageAt===0 (unknown ts) still counts

@@ -296,6 +296,89 @@ describe('classifyHotChatSessionsForSubscriptionFlush', () => {
       expect(result.guaranteedDelivery.has('session-in-window')).toBe(false)
     })
 
+    describe('(D8) per-subscription ACK gate — independent of the seen badge', () => {
+      it('keeps a completed session hot-for-delivery when a subscriber lacks the tail even though it is SEEN (unread:false, inboxBucket:idle)', () => {
+        const now = 3_000_000
+        const result = classifyHotChatSessionsForSubscriptionFlush([
+          {
+            id: 'session-seen-but-undelivered',
+            status: 'idle',
+            // Badge is fully cleared — the OLD completedUnseen gate would drop it.
+            unread: false,
+            inboxBucket: 'idle',
+            lastMessageAt: now - 46 * 60_000,
+          },
+        ], new Set(), {
+          now,
+          underDeliveredSessionIds: new Set(['session-seen-but-undelivered']),
+        })
+
+        expect(result.active.has('session-seen-but-undelivered')).toBe(true)
+        expect(result.guaranteedDelivery.has('session-seen-but-undelivered')).toBe(true)
+      })
+
+      it('stops keeping it hot once the subscriber has the tail (not in the under-delivered set) — bounded, no thrash', () => {
+        const now = 3_000_000
+        const result = classifyHotChatSessionsForSubscriptionFlush([
+          {
+            id: 'session-now-delivered',
+            status: 'idle',
+            unread: false,
+            inboxBucket: 'idle',
+            lastMessageAt: now - 46 * 60_000,
+          },
+        ], new Set(), {
+          now,
+          // Empty set → every subscriber already has the assistant-final tail.
+          underDeliveredSessionIds: new Set<string>(),
+        })
+
+        expect(result.active.has('session-now-delivered')).toBe(false)
+        expect(Array.from(result.guaranteedDelivery)).toEqual([])
+      })
+
+      it('does not revive a completed SEEN session that is NOT under-delivered even if the legacy recency watermark says unseen', () => {
+        // Per-subscription set is authoritative: a session not in it is delivered,
+        // so the legacy deliveredCompletionTailAt path must NOT revive it.
+        const now = 3_000_000
+        const result = classifyHotChatSessionsForSubscriptionFlush([
+          {
+            id: 'session-delivered-but-unread',
+            status: 'idle',
+            unread: true,
+            inboxBucket: 'task_complete',
+            lastMessageAt: now - 46 * 60_000,
+          },
+        ], new Set(), {
+          now,
+          deliveredCompletionTailAt: new Map(),
+          underDeliveredSessionIds: new Set<string>(),
+        })
+
+        expect(result.active.has('session-delivered-but-unread')).toBe(false)
+        expect(Array.from(result.guaranteedDelivery)).toEqual([])
+      })
+
+      it('re-arms delivery for a fresh subscriber (present in the under-delivered set) regardless of the badge', () => {
+        const now = 3_000_000
+        const result = classifyHotChatSessionsForSubscriptionFlush([
+          {
+            id: 'session-fresh-sub',
+            status: 'idle',
+            unread: false,
+            inboxBucket: 'idle',
+            lastMessageAt: now - 60_000,
+          },
+        ], new Set(), {
+          now,
+          underDeliveredSessionIds: new Set(['session-fresh-sub']),
+        })
+
+        expect(result.active.has('session-fresh-sub')).toBe(true)
+        expect(result.guaranteedDelivery.has('session-fresh-sub')).toBe(true)
+      })
+    })
+
     it('does not revive a stale idle SEEN session via the guaranteed-delivery path', () => {
       const now = 3_000_000
       const result = classifyHotChatSessionsForSubscriptionFlush([

@@ -2111,3 +2111,106 @@ describe('SessionChatTailController registry', () => {
     ])
   })
 })
+
+describe('SessionChatTailController.refreshAuthoritativeTail (D8 web self-heal)', () => {
+  function makeController(nowRef: { value: number }) {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const sendData = vi.fn().mockReturnValue(true)
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData,
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      now: () => nowRef.value,
+    })
+    controller.retain()
+    return { controller, manager }
+  }
+
+  const userOnlyUpdate = () => createUpdate({
+    messages: [{ role: 'user', content: 'q', id: 'u1', timestamp: 1 } as any],
+    status: 'idle',
+    totalMessages: 1,
+    lastMessageSignature: 'sig-user-only',
+    messageSource: { selected: 'native-history' } as any,
+  })
+
+  const userAssistantUpdate = () => createUpdate({
+    messages: [
+      { role: 'user', content: 'q', id: 'u1', timestamp: 1 } as any,
+      { role: 'assistant', content: 'answer', id: 'a1', timestamp: 2 } as any,
+    ],
+    status: 'idle',
+    totalMessages: 2,
+    lastMessageSignature: 'sig-answer',
+    messageSource: { selected: 'native-history' } as any,
+  })
+
+  it('replaces a stale user-only liveMessages with the re-pulled [user, assistant] tail', async () => {
+    const nowRef = { value: 1_000 }
+    const { controller, manager } = makeController(nowRef)
+    // Browser is stranded on a user-only snapshot (the completion push never applied).
+    manager.publish(userOnlyUpdate())
+    expect(controller.getSnapshot().liveMessages.map(m => (m as any).role)).toEqual(['user'])
+
+    // One-shot re-pull returns the daemon's authoritative [user, assistant] tail.
+    const fetcher = vi.fn().mockResolvedValue(userAssistantUpdate())
+    await controller.refreshAuthoritativeTail(fetcher, { force: true })
+
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(controller.getSnapshot().liveMessages.map(m => (m as any).role)).toEqual(['user', 'assistant'])
+    // No duplicate assistant bubble.
+    expect(controller.getSnapshot().liveMessages.map(m => (m as any).content)).toEqual(['q', 'answer'])
+  })
+
+  it('debounces near-simultaneous refreshes into a single read_chat (mount+reconnect+focus burst)', async () => {
+    const nowRef = { value: 5_000 }
+    const { controller, manager } = makeController(nowRef)
+    manager.publish(userOnlyUpdate())
+
+    const fetcher = vi.fn().mockResolvedValue(userAssistantUpdate())
+    // First (forced, e.g. mount) fires. The next two land within the debounce
+    // window (no time advance) and are suppressed.
+    await controller.refreshAuthoritativeTail(fetcher, { force: true })
+    await controller.refreshAuthoritativeTail(fetcher)
+    await controller.refreshAuthoritativeTail(fetcher)
+
+    expect(fetcher).toHaveBeenCalledTimes(1)
+
+    // After the debounce window elapses, a later focus/reconnect re-pull fires again.
+    nowRef.value += 1_000
+    await controller.refreshAuthoritativeTail(fetcher)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not add a duplicate assistant bubble when the re-pull matches the already-applied tail', async () => {
+    const nowRef = { value: 9_000 }
+    const { controller, manager } = makeController(nowRef)
+    manager.publish(userAssistantUpdate())
+    const listener = vi.fn()
+    controller.subscribe(listener)
+    listener.mockClear()
+
+    const fetcher = vi.fn().mockResolvedValue(userAssistantUpdate())
+    await controller.refreshAuthoritativeTail(fetcher, { force: true })
+
+    // Identical tail → no-op, no re-emit, no duplicate bubble.
+    expect(listener).not.toHaveBeenCalled()
+    expect(controller.getSnapshot().liveMessages.map(m => (m as any).content)).toEqual(['q', 'answer'])
+  })
+
+  it('leaves the snapshot untouched when the re-pull fails', async () => {
+    const nowRef = { value: 12_000 }
+    const { controller, manager } = makeController(nowRef)
+    manager.publish(userOnlyUpdate())
+
+    const fetcher = vi.fn().mockRejectedValue(new Error('transport down'))
+    await controller.refreshAuthoritativeTail(fetcher, { force: true })
+
+    expect(controller.getSnapshot().liveMessages.map(m => (m as any).role)).toEqual(['user'])
+  })
+})

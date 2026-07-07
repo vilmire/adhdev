@@ -66,6 +66,13 @@ export interface WarmSessionChatTailDescriptor {
 const DEFAULT_TAIL_LIMIT = 60
 const CHAT_TAIL_SUBSCRIBE_RETRY_MS = 1_000
 /**
+ * (D8) Minimum spacing between one-shot authoritative tail re-pulls. Mount,
+ * WS-reconnect and tab-focus can all fire near-simultaneously (e.g. a
+ * background→foreground flip that also reconnects the socket); this collapses
+ * that burst into a single read_chat instead of a small storm.
+ */
+const AUTHORITATIVE_TAIL_REFRESH_DEBOUNCE_MS = 750
+/**
  * Upper bound on retained history messages from "Load older" paging.
  *
  * Each "Load older" page prepends into `historyMessages` with no prior cap, so a
@@ -464,6 +471,12 @@ export class SessionChatTailController {
   private retainCount = 0
   private loadHistoryPromise: Promise<void> | null = null
   private pendingDisconnectTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * (D8) In-flight one-shot authoritative tail re-pull, and the wall-clock of
+   * the last one, so mount/reconnect/focus collapse into a single read_chat.
+   */
+  private authoritativeRefreshPromise: Promise<void> | null = null
+  private lastAuthoritativeRefreshAt = 0
   private now: () => number
   /**
    * Wall-clock time (ms) of the last update whose status was warm/active or busy.
@@ -614,6 +627,54 @@ export class SessionChatTailController {
       this.loadHistoryPromise = null
     })
     this.loadHistoryPromise = run
+    return run
+  }
+
+  /**
+   * (D8 — web self-heal) One-shot authoritative tail re-pull. On chat-panel
+   * MOUNT, WS RECONNECT, and tab focus (visibilitychange→visible) the owning
+   * hook calls this so a browser holding a stale user-only `liveMessages`
+   * re-pulls the daemon's authoritative [user, assistant] tail and applies it —
+   * regardless of push timing. This is the direct fix for "hard refresh / Load
+   * older doesn't help": the completion tail was marked delivered on the
+   * daemon's FLUSH-FIRE (not browser-APPLIED), so a browser that dropped the one
+   * push (D6 shrink-defer) or subscribed just after it fired stayed user-only
+   * forever. Re-pulling on focus/reconnect recovers it.
+   *
+   * The fetched tail is fed through the SAME `applyIncomingUpdate` path the
+   * subscription uses, so D2 sort/dedup and the D6 force-apply / shrink-defense
+   * still compose — the re-pulled [user, assistant] replaces the stale [user]
+   * with NO duplicate assistant bubble (identical bubble identity is a no-op).
+   *
+   * Debounced/guarded to ONE request per burst (mount+reconnect+focus can fire
+   * together) and coalesced with any in-flight refresh — never a per-render loop.
+   */
+  refreshAuthoritativeTail(
+    fetcher: () => Promise<SessionChatTailUpdate | null>,
+    options: { force?: boolean } = {},
+  ): Promise<void> {
+    if (this.authoritativeRefreshPromise) return this.authoritativeRefreshPromise
+    const nowMs = this.now()
+    if (
+      !options.force
+      && this.lastAuthoritativeRefreshAt > 0
+      && (nowMs - this.lastAuthoritativeRefreshAt) < AUTHORITATIVE_TAIL_REFRESH_DEBOUNCE_MS
+    ) {
+      return Promise.resolve()
+    }
+    this.lastAuthoritativeRefreshAt = nowMs
+    const run = (async () => {
+      try {
+        const update = await fetcher()
+        if (update) this.handleUpdate(update)
+      } catch {
+        // Best-effort self-heal — a failed re-pull just leaves the existing
+        // snapshot untouched; the next focus/reconnect retries.
+      }
+    })().finally(() => {
+      this.authoritativeRefreshPromise = null
+    })
+    this.authoritativeRefreshPromise = run
     return run
   }
 
@@ -844,7 +905,7 @@ export function useSessionChatTailController(
   activeConv: ActiveConversation,
   options?: { enabled?: boolean; tailLimit?: number },
 ): SessionChatTailControllerHandle {
-  const { sendData, sendCommand } = useTransport()
+  const { sendData, sendCommand, isConnected } = useTransport()
   const enabled = options?.enabled !== false
   const daemonId = getConversationDaemonRouteId(activeConv)
   const sessionId = activeConv.sessionId || ''
@@ -922,6 +983,92 @@ export function useSessionChatTailController(
       }
     })
   }, [activeConv.agentType, controller, daemonId, historySessionId, sendCommand, sessionId])
+
+  // (D8 — web self-heal) One-shot authoritative tail re-pull via read_chat. Fed
+  // through the controller's SAME apply path as the subscription, so a stale
+  // user-only liveMessages is replaced by the daemon's [user, assistant] tail
+  // (D2/D6 compose; no duplicate assistant bubble). Fires on mount, on tab focus
+  // (visibilitychange→visible), and on WS reconnect — debounced to one request
+  // per burst inside the controller.
+  const refreshAuthoritativeTail = useCallback((force = false): Promise<void> => {
+    if (!controller || !daemonId || !sessionId) return Promise.resolve()
+    return controller.refreshAuthoritativeTail(async () => {
+      const raw = await sendCommand(daemonId, 'read_chat', {
+        agentType: activeConv.agentType,
+        targetSessionId: sessionId,
+        historySessionId,
+        ...(tailLimit > 0 ? { tailLimit } : {}),
+      })
+      // Response shape differs by transport (see TransportContext note): unwrap
+      // the Cloud `result` wrapper, then read the daemon's raw read_chat body.
+      const body = (raw && typeof raw === 'object' && 'result' in (raw as Record<string, unknown>)
+        ? (raw as { result?: unknown }).result
+        : raw) as Record<string, unknown> | undefined
+      if (!body || typeof body !== 'object') return null
+      if (body.success === false) return null
+      const messages = Array.isArray(body.messages)
+        ? body.messages as DashboardMessage[]
+        : (Array.isArray(body.messagesTail) ? body.messagesTail as DashboardMessage[] : [])
+      // Map the read_chat body into the same SessionChatTailUpdate shape the
+      // subscription delivers, so handleUpdate applies it identically.
+      return {
+        topic: 'session.chat_tail',
+        key: subscriptionKey,
+        sessionId,
+        historySessionId,
+        seq: 0,
+        timestamp: 0,
+        messages,
+        status: typeof body.status === 'string' ? body.status : 'idle',
+        ...(body.messageSource && typeof body.messageSource === 'object'
+          ? { messageSource: body.messageSource as Record<string, unknown> }
+          : {}),
+      } as unknown as SessionChatTailUpdate
+    }, { force })
+  }, [activeConv.agentType, controller, daemonId, historySessionId, sendCommand, sessionId, subscriptionKey, tailLimit])
+
+  // Mount + tab-focus + reconnect self-heal. Mount fire happens once per active
+  // session (deps are the stable identity fields). Focus and reconnect re-pull
+  // the authoritative tail so a browser stranded on a stale user-only snapshot
+  // recovers without a hard refresh.
+  useEffect(() => {
+    if (!controller || !enabled || !daemonId || !sessionId) return
+    // Initial mount pull.
+    void refreshAuthoritativeTail(true)
+
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        void refreshAuthoritativeTail()
+      }
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisible)
+    }
+
+    // Poll the transport connection state (edge-detect disconnect→connect) to
+    // re-pull after a WS reconnect. Cheap: a boolean read on a short interval,
+    // and the re-pull itself is debounced.
+    let lastConnected = isConnected ? isConnected(daemonId) : true
+    const reconnectTimer = setInterval(() => {
+      if (!isConnected) return
+      const connectedNow = isConnected(daemonId)
+      if (connectedNow && !lastConnected) {
+        void refreshAuthoritativeTail()
+      }
+      lastConnected = connectedNow
+    }, 2_000)
+
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisible)
+      }
+      clearInterval(reconnectTimer)
+    }
+    // refreshAuthoritativeTail is stable across renders for a given session
+    // identity; excluded to keep this a mount/session-scoped effect rather than
+    // re-running on every meta append.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controller, daemonId, enabled, sessionId, historySessionId])
 
   return useMemo(
     () => buildControllerHandle(snapshot, loadHistoryPage),

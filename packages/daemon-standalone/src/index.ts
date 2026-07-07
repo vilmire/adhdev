@@ -447,6 +447,14 @@ class StandaloneServer {
   // the guaranteed-delivery path so a slow-finalizing completed session is
   // pushed once, not re-pushed every tick forever. Keyed by session id.
   private deliveredCompletionTailAt = new Map<string, number>();
+  // (D8) Per-session signature of the most recent NON-EMPTY chat tail the daemon
+  // has BUILT (i.e. actually shipped to at least one subscriber) for that
+  // session. Paired with each subscription's per-ws lastDeliveredSignature to
+  // decide, independent of the seen/unread badge, whether a live subscriber
+  // still lacks the finalized tail (empty or mismatched signature) — the
+  // per-subscription ACK gate that keeps a completed session hot-for-delivery
+  // until every current subscriber has it. Keyed by session id.
+  private lastFlushedTailSignatureBySession = new Map<string, string>();
   // Last observed `status` per session, used to detect the generating→settled
   // transition so we can guarantee a targeted completion-tail flush for the
   // just-finalized session even when its tail lands outside the hot set.
@@ -1807,12 +1815,73 @@ class StandaloneServer {
     state.cursor = prepared.cursor;
     state.seq = prepared.seq;
     state.lastDeliveredSignature = prepared.lastDeliveredSignature;
+    // (D8) Record the session's current authoritative tail signature so the
+    // per-subscription ACK gate can tell whether OTHER subscribers to the same
+    // session still lack it. Only record a signature that corresponds to a
+    // real (non-empty) tail, so an empty transient read_chat does not become the
+    // "delivered" target and suppress a later real tail.
+    if (prepared.lastDeliveredSignature && this.chatTailUpdateHasMessages(prepared.update, result)) {
+      this.lastFlushedTailSignatureBySession.set(request.targetSessionId, prepared.lastDeliveredSignature);
+    }
     return prepared.update;
+  }
+
+  /**
+   * (D8) True when the tail the daemon just built carries at least one message
+   * — either on the emitted update or (when the update was a no-op because the
+   * signature was unchanged) on the underlying read_chat result. Used to avoid
+   * recording an empty transient tail as the delivered target signature.
+   */
+  private chatTailUpdateHasMessages(
+    update: SessionChatTailUpdate | null,
+    result: unknown,
+  ): boolean {
+    if (update && Array.isArray(update.messages) && update.messages.length > 0) return true;
+    const r = result as { messages?: unknown; messagesTail?: unknown } | null | undefined;
+    if (r && Array.isArray(r.messages) && r.messages.length > 0) return true;
+    if (r && Array.isArray(r.messagesTail) && r.messagesTail.length > 0) return true;
+    return false;
+  }
+
+  /**
+   * (D8) Session ids that still have at least one OPEN subscriber whose per-ws
+   * `lastDeliveredSignature` does not match the session's current authoritative
+   * tail signature (`lastFlushedTailSignatureBySession`) — i.e. a live
+   * subscriber that has NOT yet been sent the finalized tail. A subscriber with
+   * an empty signature (never delivered this episode — e.g. a fresh browser that
+   * re-subscribed after the single completion flush already fired) counts as
+   * under-delivered. This is the per-subscription ACK gate that drives
+   * guaranteed delivery independent of the seen/unread badge; it self-empties as
+   * each subscriber's signature converges to the target on actual delivery.
+   */
+  private getUnderDeliveredChatSessionIds(): Set<string> {
+    const underDelivered = new Set<string>();
+    for (const ws of this.clients) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      const subs = this.wsSubscriptions.get(ws);
+      if (!subs || subs.size === 0) continue;
+      for (const sub of subs.values()) {
+        const sessionId = sub.request.params.targetSessionId;
+        if (!sessionId) continue;
+        const target = this.lastFlushedTailSignatureBySession.get(sessionId);
+        // No known tail signature yet (nothing shipped for this session) → the
+        // normal subscribe/flush path handles first delivery; don't force-hot.
+        if (!target) continue;
+        if (sub.lastDeliveredSignature !== target) {
+          underDelivered.add(sessionId);
+        }
+      }
+    }
+    return underDelivered;
   }
 
   private getHotChatSessionIdsForWsFlush(): { active: Set<string>; finalizing: Set<string> } {
     const now = Date.now();
     const snapshot = this.buildSharedSnapshot('live');
+    // (D8) Per-subscription ACK gate: sessions with a live subscriber that still
+    // lacks the finalized tail. Authoritative guaranteed-delivery driver,
+    // independent of the seen/unread badge.
+    const underDeliveredSessionIds = this.getUnderDeliveredChatSessionIds();
     const hotSessions = classifyHotChatSessionsForSubscriptionFlush(
       snapshot.sessions,
       this.hotWsChatSessionIds,
@@ -1820,6 +1889,7 @@ class StandaloneServer {
         now,
         activeSessionIds: this.getRecentlyOutputActiveChatSessionIds(now),
         deliveredCompletionTailAt: this.deliveredCompletionTailAt,
+        underDeliveredSessionIds,
       },
     );
     this.hotWsChatSessionIds = hotSessions.active;
@@ -1853,6 +1923,16 @@ class StandaloneServer {
       }
       for (const id of this.deliveredCompletionTailAt.keys()) {
         if (!liveIds.has(id)) this.deliveredCompletionTailAt.delete(id);
+      }
+    }
+    // (D8) Same bound for the per-session tail-signature map.
+    if (this.lastFlushedTailSignatureBySession.size > 0) {
+      const liveIds = new Set<string>();
+      for (const session of snapshot.sessions as Array<{ id?: unknown }>) {
+        if (typeof session?.id === 'string') liveIds.add(session.id);
+      }
+      for (const id of this.lastFlushedTailSignatureBySession.keys()) {
+        if (!liveIds.has(id)) this.lastFlushedTailSignatureBySession.delete(id);
       }
     }
     return hotSessions;
