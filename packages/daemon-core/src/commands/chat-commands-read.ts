@@ -195,6 +195,57 @@ function isRuntimeFallbackHistorySessionId(
     const candidate = typeof candidateHistorySessionId === 'string' ? candidateHistorySessionId.trim() : '';
     return candidate === target;
 }
+
+interface ResolvedNativeHistoryReadSession {
+    /**
+     * True when the candidate history id is the daemon runtime session id (==
+     * targetSessionId) standing in for a real provider-native conv uuid — reached
+     * either via getHistorySessionId's internal fallback (empty args) or because
+     * the browser explicitly echoed targetSessionId back as historySessionId (the
+     * poisoned agy-coordinator read). See isRuntimeFallbackHistorySessionId.
+     */
+    isRuntimeFallback: boolean;
+    /** Owner-confirmed pin recorded by a prior bound read for this mesh session, if any. */
+    pinnedProviderSessionId: string | undefined;
+    /**
+     * The id to key the native read on: the pin (or undefined) when the candidate
+     * is a runtime fallback so pin / workspace-latest resolution engages, else the
+     * candidate unchanged (a real DISTINCT provider uuid still exact-binds).
+     */
+    effectiveHistorySessionId: string | undefined;
+}
+
+/**
+ * Resolve the runtime-fallback → pin substitution shared by every native-history
+ * read path (handleChatHistory, the CLI-adapter main read, and the history-only
+ * read). Each site previously inlined this same four-step computation verbatim:
+ * detect the runtime fallback (candidate === targetSessionId AND no distinct
+ * explicit id), look up the owner-confirmed pin, and drop the runtime id in favor
+ * of the pin (or undefined) so readCliProviderNativeHistory's pin / workspace-
+ * latest paths can engage instead of fail-closing to pty-parser. Extracted to a
+ * single helper so the D9 historySessionId-poison guard has one definition.
+ * Behavior is identical to the inlined blocks — same target (args.targetSessionId),
+ * same explicit-id source, same pin key (getBoundProviderSessionIdPin trims).
+ */
+function resolveNativeHistoryReadSession(
+    args: any,
+    candidateHistorySessionId: string | undefined,
+): ResolvedNativeHistoryReadSession {
+    const targetSid = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+    const explicitHistorySessionId = getExplicitHistorySessionId(args);
+    const isRuntimeFallback = Boolean(
+        targetSid
+        && isRuntimeFallbackHistorySessionId(candidateHistorySessionId, targetSid)
+        && (!explicitHistorySessionId
+            || isRuntimeFallbackHistorySessionId(explicitHistorySessionId, targetSid)),
+    );
+    const pinnedProviderSessionId = getBoundProviderSessionIdPin(args?.targetSessionId);
+    const effectiveHistorySessionId = isRuntimeFallback
+        ? (pinnedProviderSessionId || undefined)
+        : candidateHistorySessionId;
+    return { isRuntimeFallback, pinnedProviderSessionId, effectiveHistorySessionId };
+}
+
 function getHistorySessionId(h: CommandHelpers, args: any): string | undefined {
     const explicit = getExplicitHistorySessionId(args);
     if (explicit) return explicit;
@@ -1653,24 +1704,18 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 ? (h.currentSession as any).workspace
                 : undefined;
         // Same runtime-fallback poison guard as the subscribe / history-only
-        // paths: getHistorySessionId falls back to targetSessionId (the ADHDev
-        // id) for an agy coordinator, and the browser may also send that id back
-        // explicitly. Reading native history keyed on it can never exact-bind
-        // (it is not the on-disk conv uuid). Drop it here too so the pin /
-        // workspace-latest / owner-confirmed resolution engages instead of
-        // fail-closing to pty-parser. A real DISTINCT provider uuid is preserved.
-        const targetSidForHistory = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
-        const explicitHistorySessionIdForHistory = getExplicitHistorySessionId(args);
-        const historySessionIdIsRuntimeFallback = Boolean(
-            targetSidForHistory
-            && isRuntimeFallbackHistorySessionId(historySessionId, targetSidForHistory)
-            && (!explicitHistorySessionIdForHistory
-                || isRuntimeFallbackHistorySessionId(explicitHistorySessionIdForHistory, targetSidForHistory)),
-        );
-        const pinnedProviderSessionIdForHistory = getBoundProviderSessionIdPin(args?.targetSessionId);
-        const effectiveHistorySessionId = historySessionIdIsRuntimeFallback
-            ? (pinnedProviderSessionIdForHistory || undefined)
-            : historySessionId;
+        // paths (see resolveNativeHistoryReadSession): getHistorySessionId falls
+        // back to targetSessionId (the ADHDev id) for an agy coordinator, and the
+        // browser may also send that id back explicitly. Reading native history
+        // keyed on it can never exact-bind (it is not the on-disk conv uuid). Drop
+        // it here too so the pin / workspace-latest / owner-confirmed resolution
+        // engages instead of fail-closing to pty-parser. A real DISTINCT provider
+        // uuid is preserved.
+        const {
+            isRuntimeFallback: historySessionIdIsRuntimeFallback,
+            pinnedProviderSessionId: pinnedProviderSessionIdForHistory,
+            effectiveHistorySessionId,
+        } = resolveNativeHistoryReadSession(args, historySessionId);
         const exactNativeHistoryScope = Boolean(
             (typeof args?.targetSessionId === 'string' && args.targetSessionId.trim())
             || (typeof args?.historySessionId === 'string' && args.historySessionId.trim() && !historySessionIdIsRuntimeFallback)
@@ -1921,7 +1966,8 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             let nativeHistory: any | null = null;
             let nativeHistoryError: unknown | undefined;
             if (supportsNative) {
-                // Runtime-fallback → pin substitution: nativeHistoryReadSessionId is
+                // Runtime-fallback → pin substitution (see
+                // resolveNativeHistoryReadSession): nativeHistoryReadSessionId is
                 // the bare runtime/session id when no explicit provider handle was
                 // supplied and none was parsed (antigravity takes no --session-id, so
                 // its this.providerSessionId stays empty and getHistorySessionId falls
@@ -1933,23 +1979,10 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 // persisted across restart) over the runtime id, else drop the runtime
                 // id so readCliProviderNativeHistory's pin / workspace-latest paths can
                 // engage. Mirrors the handleChatHistory path's established handling.
-                const pinnedProviderSessionIdForRead = getBoundProviderSessionIdPin(targetSessionId);
-                // Runtime fallback whether the runtime id was reached via
-                // getHistorySessionId's internal fallback (empty args) OR the
-                // browser explicitly sent historySessionId === targetSessionId
-                // (the poisoned agy-coordinator read). Both must drop the
-                // runtime id so pin / live-bind resolution engages; only a real
-                // DISTINCT provider uuid stays as an exact-bind id.
-                const explicitHistorySessionIdForRead = getExplicitHistorySessionId(args);
-                const nativeReadSessionIdIsRuntimeFallback = Boolean(
-                    targetSessionId
-                    && isRuntimeFallbackHistorySessionId(nativeHistoryReadSessionId, targetSessionId)
-                    && (!explicitHistorySessionIdForRead
-                        || isRuntimeFallbackHistorySessionId(explicitHistorySessionIdForRead, targetSessionId)),
-                );
-                const effectiveNativeReadSessionId = nativeReadSessionIdIsRuntimeFallback
-                    ? (pinnedProviderSessionIdForRead || undefined)
-                    : nativeHistoryReadSessionId;
+                const {
+                    pinnedProviderSessionId: pinnedProviderSessionIdForRead,
+                    effectiveHistorySessionId: effectiveNativeReadSessionId,
+                } = resolveNativeHistoryReadSession(args, nativeHistoryReadSessionId);
                 try {
                     nativeHistory = readCliProviderNativeHistory(agentStr, {
                         canonicalHistory: provider?.nativeHistory,
@@ -2353,30 +2386,18 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             // zero rows) even though the transcript is present in state.db. When
             // this is that runtime fallback (historySessionId === targetSid and no
             // explicit id was passed) and we hold a pin from an earlier bound
-            // read, prefer the pin so the query hits the real session.
-            const pinnedProviderSessionIdForHistory = getBoundProviderSessionIdPin(targetSid);
-            // Runtime fallback whether historySessionId reached targetSid via
-            // getHistorySessionId's internal fallback (empty args) OR the browser
-            // explicitly sent historySessionId === targetSid (the poisoned
-            // agy-coordinator subscription / D8 refreshAuthoritativeTail read).
-            // In both cases the runtime id is NOT a real provider conv uuid, so
-            // drop it and let pin / workspace-latest / owner-confirmed resolution
-            // run. A real DISTINCT provider uuid still exact-binds unchanged.
-            const explicitHistorySessionId = getExplicitHistorySessionId(args);
-            const historySessionIdIsRuntimeFallback = Boolean(
-                targetSid
-                && isRuntimeFallbackHistorySessionId(historySessionId, targetSid)
-                && (!explicitHistorySessionId
-                    || isRuntimeFallbackHistorySessionId(explicitHistorySessionId, targetSid)),
-            );
-            // When this is the runtime fallback (not a real provider id): prefer
-            // the pin if we have one, else drop the runtime id entirely so the
-            // pin-reuse / workspace-latest logic inside readCliProviderNativeHistory
-            // can engage (passing the runtime id as historySessionId would pin the
-            // query to a non-existent session and never reach those paths).
-            const effectiveHistorySessionIdForRead = historySessionIdIsRuntimeFallback
-                ? (pinnedProviderSessionIdForHistory || undefined)
-                : historySessionId;
+            // read, prefer the pin so the query hits the real session. Detects the
+            // fallback whether historySessionId reached targetSid via
+            // getHistorySessionId's internal fallback (empty args) or the browser
+            // explicitly echoed targetSid back (poisoned agy-coordinator
+            // subscription / D8 refreshAuthoritativeTail read); a real DISTINCT
+            // provider uuid still exact-binds unchanged. See
+            // resolveNativeHistoryReadSession.
+            const {
+                isRuntimeFallback: historySessionIdIsRuntimeFallback,
+                pinnedProviderSessionId: pinnedProviderSessionIdForHistory,
+                effectiveHistorySessionId: effectiveHistorySessionIdForRead,
+            } = resolveNativeHistoryReadSession(args, historySessionId);
             const history = supportsNative
                 ? readCliProviderNativeHistory(agentStr, {
                     canonicalHistory: provider?.nativeHistory,

@@ -5,7 +5,13 @@
  * When modifying this file, also update interface contracts in AGENT_PROTOCOL.md.
  */
 import type { StatusReportPayload, AvailableProviderInfo } from './shared-types.js';
-import type { ChatMessageKind } from './providers/chat-message-normalization.js';
+import type {
+  ChatMessageKind,
+  ChatMessageVisibility,
+  ChatMessageTranscriptVisibility,
+  ChatMessageAudience,
+  ChatMessageSource,
+} from './providers/chat-message-normalization.js';
 
 // ── Daemon Status ──
 
@@ -54,11 +60,20 @@ export interface ChatMessage {
   /** Optional: fiber metadata */
   _type?: string;
   _sub?: string;
-  /** Transcript visibility/audience contract for separating chat-visible content from internal/debug runtime rows. */
-  visibility?: 'visible' | 'user' | 'chat' | 'hidden' | 'debug' | 'internal' | (string & {});
-  transcriptVisibility?: 'visible' | 'user' | 'chat' | 'hidden' | 'debug' | 'internal' | (string & {});
-  audience?: 'chat' | 'debug' | 'trace' | 'internal' | (string & {});
-  source?: 'assistant_text' | 'tool_call' | 'terminal_command' | 'runtime_activity' | 'runtime_status' | 'provider_chrome' | 'control' | (string & {});
+  /**
+   * Transcript visibility/audience contract for separating chat-visible content
+   * from internal/debug runtime rows. These reference the canonical named unions
+   * declared alongside the classifier (chat-message-normalization.ts) so the known
+   * values have one source of truth instead of a hand-inlined copy that drifts.
+   * Each alias keeps the `| (string & {})` escape hatch: the read-chat contract
+   * (read-chat-contract.ts) preserves ANY producer-supplied string verbatim, so
+   * the type must stay open — it documents the known values without forbidding
+   * provider-specific extensions.
+   */
+  visibility?: ChatMessageVisibility;
+  transcriptVisibility?: ChatMessageTranscriptVisibility;
+  audience?: ChatMessageAudience;
+  source?: ChatMessageSource;
   userFacing?: boolean;
   internal?: boolean;
   isInternal?: boolean;
