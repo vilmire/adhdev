@@ -50,6 +50,19 @@ export interface NativeHistoryResult {
     sourcePath: string;
     sourceMtimeMs: number;
     nativeHistoryCoverage?: 'full' | 'partial' | 'best-effort';
+    /**
+     * True only when the resolved conversation is confirmed to belong to THIS
+     * reading session by the owner-token identity (an exact uuid bind, or a
+     * spawn-floor/birth-time pick born after this session started). False for a
+     * bare recency/newest-by-mtime pick made with no spawn floor — that pick may
+     * alias a co-located concurrent session (the antigravity coordinator↔replica
+     * crosswire), so its uuid must NEVER be recorded as a pin nor trusted to
+     * satisfy the same-pass safe-mapping identity check. Read-path callers gate
+     * the workspace-latest pin + first-read trust on this flag. Non-antigravity
+     * readers leave it undefined (their existing exact-file resolution is
+     * unaffected by this signal).
+     */
+    ownerConfirmed?: boolean;
 }
 
 export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeHistoryInput) => NativeHistoryResult | null {
@@ -74,8 +87,13 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
             : typeof input.args?.instanceId === 'string'
                 ? (input.args.instanceId as string)
                 : '';
-        const sourcePath = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId);
+        const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId);
+        const sourcePath = resolved?.path || null;
         if (!sourcePath) return null;
+        // Owner-confirmation only meaningful for antigravity (see resolveAntigravityPath).
+        // For other readers the file was resolved by exact per-session key already;
+        // leave the flag undefined so the read-path callers treat them as before.
+        const ownerConfirmed = reader === 'antigravity-cli' ? resolved?.ownerConfirmed === true : undefined;
         if (input.forceRefresh === true || input.args?.forceRefresh === true) {
             try { fs.statSync(sourcePath); } catch { /* best-effort metadata refresh */ }
         }
@@ -116,6 +134,7 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
             sourcePath: session.sourcePath,
             sourceMtimeMs: session.sourceMtimeMs,
             nativeHistoryCoverage: (session as any).nativeHistoryCoverage || 'full',
+            ownerConfirmed,
         };
     };
 }
@@ -124,12 +143,19 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
 // Per-provider path resolution
 // ────────────────────────────────────────────────────────────────────────────
 
-function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: string, sessionStartedAtMs: number, instanceId: string): string | null {
+interface ResolvedSource {
+    path: string;
+    /** Antigravity only: whether the resolution was owner-token-confirmed (see
+     *  NativeHistoryResult.ownerConfirmed / resolveAntigravityPath). */
+    ownerConfirmed?: boolean;
+}
+
+function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: string, sessionStartedAtMs: number, instanceId: string): ResolvedSource | null {
     switch (reader) {
-        case 'claude-cli':   return resolveClaudePath(workspace, sessionId);
-        case 'codex-cli':    return resolveCodexPath(workspace, sessionId, sessionStartedAtMs);
+        case 'claude-cli':   { const p = resolveClaudePath(workspace, sessionId); return p ? { path: p } : null; }
+        case 'codex-cli':    { const p = resolveCodexPath(workspace, sessionId, sessionStartedAtMs); return p ? { path: p } : null; }
         case 'antigravity-cli': return resolveAntigravityPath(workspace, sessionId, sessionStartedAtMs, instanceId);
-        case 'hermes-cli':   return resolveHermesPath(workspace, sessionId);
+        case 'hermes-cli':   { const p = resolveHermesPath(workspace, sessionId); return p ? { path: p } : null; }
     }
 }
 
@@ -291,7 +317,7 @@ function resolveAntigravityPath(
     sessionId: string,
     sessionStartedAtMs: number,
     instanceId: string,
-): string | null {
+): ResolvedSource | null {
     const agyRoot = path.join(os.homedir(), '.gemini', 'antigravity-cli');
     // Owner token identifies THIS reading session. The provider instance derives
     // the identical token (workspace + startedAt, or instanceId) so it can
@@ -309,7 +335,9 @@ function resolveAntigravityPath(
         const dbPath = path.join(agyRoot, 'conversations', `${sessionId}.db`);
         if (fs.existsSync(dbPath)) {
             if (owner) claimAntigravityConversation(sessionId, owner);
-            return dbPath;
+            // Exact uuid bind — the caller named this conversation, so it is
+            // authoritatively this session's own. Owner-confirmed.
+            return { path: dbPath, ownerConfirmed: true };
         }
     }
 
@@ -344,6 +372,10 @@ function resolveAntigravityPath(
             })
             .filter(e => e.mtime >= cutoff);
         let ordered: Array<{ uuid: string; p: string }> = [];
+        // Floor branch (sessionStartedAtMs > 0) is birth-confirmed as this
+        // session's own store → owner-confirmed. Floor-less newest-by-mtime is a
+        // bare recency pick that can alias a co-located session → NOT confirmed.
+        const brainOwnerConfirmed = sessionStartedAtMs > 0;
         if (sessionStartedAtMs > 0) {
             // Floor branch: this session's own = born at/after (floor - grace),
             // oldest-birth first. Mirrors pickUnboundConversationDb exactly so the
@@ -360,7 +392,7 @@ function resolveAntigravityPath(
             const t = nonEmptyBrain(e.uuid, e.p);
             if (t) {
                 if (owner) claimAntigravityConversation(e.uuid, owner);
-                return t;
+                return { path: t, ownerConfirmed: brainOwnerConfirmed };
             }
         }
     }
@@ -372,7 +404,7 @@ function resolveAntigravityPath(
     const picked = pickUnboundConversationDb(convRoot, sessionStartedAtMs, owner);
     if (picked) {
         if (owner) claimAntigravityConversation(picked.uuid, owner);
-        return picked.path;
+        return { path: picked.path, ownerConfirmed: picked.ownerConfirmed };
     }
 
     return null;
@@ -402,7 +434,7 @@ function pickUnboundConversationDb(
     convRoot: string,
     sessionFloorMs: number,
     owner: string,
-): { path: string; uuid: string } | null {
+): { path: string; uuid: string; ownerConfirmed: boolean } | null {
     let entries: fs.Dirent[] = [];
     try { entries = fs.readdirSync(convRoot, { withFileTypes: true }); } catch { return null; }
 
@@ -442,11 +474,15 @@ function pickUnboundConversationDb(
         // session — do NOT bind to it. Wait for our own store on the next read.
         if (own.length === 0) return null;
         own.sort((a, b) => (a.birth || a.mtime) - (b.birth || b.mtime));
-        return { path: own[0].path, uuid: own[0].uuid };
+        // Birth-time confirmed as this session's own store → owner-confirmed.
+        return { path: own[0].path, uuid: own[0].uuid, ownerConfirmed: true };
     }
 
+    // Floor-less newest-by-mtime: a bare recency pick with no per-session
+    // guarantee — it can alias a co-located concurrent session, so it is NOT
+    // owner-confirmed and must not be pinned/trusted by the read-path callers.
     candidates.sort((a, b) => b.mtime - a.mtime);
-    return { path: candidates[0].path, uuid: candidates[0].uuid };
+    return { path: candidates[0].path, uuid: candidates[0].uuid, ownerConfirmed: false };
 }
 
 /**

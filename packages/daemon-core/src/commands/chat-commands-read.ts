@@ -134,6 +134,17 @@ export function __resetProviderSessionPinsForTest(): void {
     try { clearPersistedProviderSessionPins(); } catch { /* best-effort */ }
 }
 
+/**
+ * Test-only: read the in-memory read-pin (the mesh-session → conversation-uuid
+ * bind recorded by recordBoundProviderSessionId and mirrored to state.json
+ * sessionProviderSessionPins). Lets the antigravity-coordinator-pin tests assert
+ * that an owner-confirmed workspace-latest read recorded the pin — and that a
+ * non-owner-confirmed read did NOT. Not part of the runtime contract.
+ */
+export function __getProviderSessionPinForTest(meshSessionId: string): string | undefined {
+    return getBoundProviderSessionIdPin(meshSessionId);
+}
+
 const warnedLegacyNativeAllowlistHits = new Set<string>();
 function warnLegacyNativeAllowlistHit(providerType: string): void {
     if (warnedLegacyNativeAllowlistHits.has(providerType)) return;
@@ -1650,12 +1661,25 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
             const historyProviderSessionId = typeof (result as any)?.providerSessionId === 'string'
                 ? (result as any).providerSessionId
                 : readHistorySessionIdFromMessages(messages) || historySessionId;
-            if (typeof (result as any)?.providerSessionId === 'string' && (result as any).providerSessionId.trim()) {
-                recordBoundProviderSessionId(h, effectiveReadSessionId(h, args?.targetSessionId), (result as any).providerSessionId.trim());
+            // Mirror of the subscribe path (see handleReadChat): an antigravity
+            // workspace-latest read still surfaces the on-disk uuid, but that uuid is
+            // only safe to persist / trust when it was OWNER-token-confirmed as this
+            // session's own — a bare recency pick could be a co-located replica's
+            // conversation. Gate the pin and the same-pass identity on ownerConfirmed.
+            const resolvedProviderSessionId = typeof (result as any)?.providerSessionId === 'string'
+                ? (result as any).providerSessionId.trim()
+                : '';
+            const resultLookupIsWorkspace = lookup === 'workspace';
+            const resultOwnerConfirmed = (result as any)?.ownerConfirmed === true;
+            const ownerConfirmedUuid = resultOwnerConfirmed && typeof historyProviderSessionId === 'string' && historyProviderSessionId.trim()
+                ? historyProviderSessionId.trim()
+                : '';
+            if (resolvedProviderSessionId && (!resultLookupIsWorkspace || resultOwnerConfirmed)) {
+                recordBoundProviderSessionId(h, effectiveReadSessionId(h, args?.targetSessionId), resolvedProviderSessionId);
             }
             const safeMapping = hasSafeNativeHistoryMapping({
-                historySessionId: lookup === 'workspace' ? undefined : historySessionId,
-                providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId,
+                historySessionId: ownerConfirmedUuid || (lookup === 'workspace' ? undefined : historySessionId),
+                providerSessionId: ownerConfirmedUuid || (lookup === 'workspace' ? undefined : historyProviderSessionId),
                 workspace,
                 nativeMessages: messages,
             });
@@ -1899,7 +1923,23 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     const resolvedProviderSessionId = typeof nativeHistory?.providerSessionId === 'string'
                         ? nativeHistory.providerSessionId.trim()
                         : '';
-                    if (resolvedProviderSessionId) {
+                    // Pin gating for the antigravity workspace-latest branch: a
+                    // coordinator session has no pin (agy takes no --session-id) and
+                    // spawnedAtMs=0 after attach-restore, so the read resolves via the
+                    // workspace-latest fallback (lookup === 'workspace') rather than an
+                    // exact bind. The dispatcher STILL surfaces the on-disk conversation
+                    // uuid there — but that uuid is only safe to persist as a pin when it
+                    // was OWNER-token-confirmed (exact uuid bind, or a spawn-floor/birth
+                    // pick). A bare recency/newest-by-mtime pick (ownerConfirmed=false)
+                    // could be a co-located replica's conversation, so recording it would
+                    // hard-wire the coordinator↔replica crosswire permanently — never pin
+                    // that. Exact-bind / session-scoped reads (lookup === 'session') are
+                    // already owner-scoped by construction, so keep pinning them as before.
+                    const resolvedLookupIsWorkspace = (nativeHistory as any)?.lookup === 'workspace';
+                    const nativeOwnerConfirmed = (nativeHistory as any)?.ownerConfirmed === true;
+                    const mayPinResolvedProviderSessionId = resolvedProviderSessionId
+                        && (!resolvedLookupIsWorkspace || nativeOwnerConfirmed);
+                    if (mayPinResolvedProviderSessionId) {
                         recordBoundProviderSessionId(h, effectiveReadSessionId(h, targetSessionId), resolvedProviderSessionId);
                     }
                 } catch (error: any) {
@@ -1918,20 +1958,44 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ? nativeHistory.providerSessionId
                 : readHistorySessionIdFromMessages(nativeMessages) || nativeHistoryReadSessionId || historySessionId;
             let lookup = nativeHistory?.lookup === 'workspace' ? 'workspace' : 'session';
-            let nativeHistorySessionForMapping = adapter.cliType === 'antigravity-cli'
-                && historyProviderSessionId
-                && nativeHistoryReadSessionId
-                && historyProviderSessionId !== nativeHistoryReadSessionId
-                ? undefined
-                : nativeHistoryReadSessionId;
+            // Owner-confirmed uuid for THIS read (antigravity): the dispatcher
+            // resolved a conversation and confirmed it is this session's own via the
+            // owner token (exact uuid bind, or a spawn-floor/birth pick) — NOT a bare
+            // recency pick. When present it is the authoritative conversation
+            // identity for the same-pass safe-mapping check below, even on a
+            // workspace-latest (lookup === 'workspace') read where the coordinator
+            // has no pin. A coordinator session hits this path (agy takes no
+            // --session-id, spawnedAtMs=0 after attach-restore); without it the
+            // safe-mapping check saw undefined identity → workspace-overlap branch →
+            // the PTY snapshot has only the user echo → fail-closed → regress to
+            // pty-parser (user-echo only). Trusting the owner-confirmed uuid lets the
+            // assistant answer reach the dashboard on the FIRST read.
+            const ownerConfirmedUuid = adapter.cliType === 'antigravity-cli'
+                && (nativeHistory as any)?.ownerConfirmed === true
+                && typeof historyProviderSessionId === 'string'
+                && historyProviderSessionId.trim()
+                ? historyProviderSessionId.trim()
+                : '';
+            let nativeHistorySessionForMapping = ownerConfirmedUuid
+                ? ownerConfirmedUuid
+                : adapter.cliType === 'antigravity-cli'
+                    && historyProviderSessionId
+                    && nativeHistoryReadSessionId
+                    && historyProviderSessionId !== nativeHistoryReadSessionId
+                    ? undefined
+                    : nativeHistoryReadSessionId;
+            // For an owner-confirmed uuid, feed the uuid as the explicit session
+            // identity to the safe-mapping check even on a workspace-latest read so
+            // the session-branch identity test runs uuid-to-uuid (messages carry the
+            // uuid as historySessionId) and trusts the assistant in this same pass.
             let safeMapping = supportsNative && nativeHistory
                 ? hasSafeNativeHistoryMapping({
-                    historySessionId: lookup === 'workspace' ? undefined : nativeHistorySessionForMapping,
-                    providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId || providerSessionId,
+                    historySessionId: ownerConfirmedUuid || (lookup === 'workspace' ? undefined : nativeHistorySessionForMapping),
+                    providerSessionId: ownerConfirmedUuid || (lookup === 'workspace' ? undefined : historyProviderSessionId || providerSessionId),
                     workspace,
                     nativeMessages,
                     ptyMessages: returnedMessages,
-                    requireWorkspaceContentOverlap: lookup === 'workspace' && !exactNativeHistoryScope,
+                    requireWorkspaceContentOverlap: lookup === 'workspace' && !exactNativeHistoryScope && !ownerConfirmedUuid,
                 })
                 : false;
             if (skipLiveNativeHistoryWithoutProviderSession && (!safeMapping || returnedMessages.length === 0)) {
@@ -2282,24 +2346,58 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const historyProviderSessionId = typeof (history as any)?.providerSessionId === 'string'
                 ? (history as any).providerSessionId
                 : readHistorySessionIdFromMessages(historyMessages) || effectiveHistorySessionIdForRead;
-            // Refresh the pin whenever this path resolves a real provider id.
-            if (typeof (history as any)?.providerSessionId === 'string' && (history as any).providerSessionId.trim()) {
+            // Antigravity coordinator root fix (history-only path — the post-turn
+            // read a coordinator actually hits: no live adapter, no pin, agy takes no
+            // --session-id so spawnedAtMs is 0 after attach-restore → the read resolves
+            // via the workspace-latest fallback, lookup === 'workspace'). The dispatcher
+            // STILL surfaces the on-disk conversation uuid there, and flags whether it
+            // was OWNER-token-confirmed as this session's own (an exact/birth pick) vs a
+            // bare recency pick that could be a co-located replica's conversation.
+            //   • Pin the uuid on a workspace-latest read ONLY when owner-confirmed —
+            //     recording a replica's uuid would hard-wire the coordinator↔replica
+            //     crosswire permanently. Exact/session-scoped reads pin as before.
+            //   • Feed the owner-confirmed uuid as the explicit identity to the
+            //     safe-mapping check even on a workspace-latest read so the identity
+            //     test runs uuid-to-uuid and trusts the assistant on this FIRST read
+            //     (else it saw undefined identity → workspace-overlap branch → the PTY
+            //     snapshot has only the user echo → fail-closed → regress to pty-parser).
+            const historyLookupIsWorkspace = lookup === 'workspace';
+            const historyOwnerConfirmed = agentStr === 'antigravity-cli' && (history as any)?.ownerConfirmed === true;
+            const historyOwnerConfirmedUuid = historyOwnerConfirmed
+                && typeof historyProviderSessionId === 'string' && historyProviderSessionId.trim()
+                ? historyProviderSessionId.trim()
+                : '';
+            // Refresh the pin whenever this path resolves a real provider id — but for
+            // a workspace-latest antigravity read, only when the uuid is owner-confirmed.
+            if (typeof (history as any)?.providerSessionId === 'string'
+                && (history as any).providerSessionId.trim()
+                && (!historyLookupIsWorkspace || !agentStr || agentStr !== 'antigravity-cli' || historyOwnerConfirmed)) {
                 recordBoundProviderSessionId(h, effectiveReadSessionId(h, targetSid), (history as any).providerSessionId.trim());
             }
             // Use the id we actually read with (pin / real provider id), NOT the
             // raw runtime-fallback historySessionId — otherwise the mapping guard
             // compares the stamped messages' real id against the runtime id and
             // fails closed, undoing the pin reuse.
-            const mappingSessionId = effectiveHistorySessionIdForRead;
-            const safeMapping = supportsNative
+            const mappingSessionId = historyOwnerConfirmedUuid || effectiveHistorySessionIdForRead;
+            // Fail closed for an antigravity workspace-latest read whose uuid was NOT
+            // owner-confirmed: it is a bare recency/newest-by-mtime pick that could be
+            // a co-located concurrent session's (replica's) conversation. Without an
+            // owner-token confirmation we cannot prove ownership, so refuse it rather
+            // than surface a sibling's transcript (the coordinator↔replica crosswire
+            // guard). This is the same fail-closed default the design study protects —
+            // only an owner-confirmed uuid escapes it above.
+            const antigravityWorkspaceLatestUnconfirmed = agentStr === 'antigravity-cli'
+                && historyLookupIsWorkspace
+                && !historyOwnerConfirmedUuid;
+            const safeMapping = supportsNative && !antigravityWorkspaceLatestUnconfirmed
                 ? hasSafeNativeHistoryMapping({
-                    historySessionId: lookup === 'workspace' ? undefined : mappingSessionId,
-                    providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId,
+                    historySessionId: historyOwnerConfirmedUuid || (lookup === 'workspace' ? undefined : mappingSessionId),
+                    providerSessionId: historyOwnerConfirmedUuid || (lookup === 'workspace' ? undefined : historyProviderSessionId),
                     workspace,
                     nativeMessages: historyMessages,
                 })
                 : false;
-            const trustedExactNativeIdentity = lookup !== 'workspace'
+            const trustedExactNativeIdentity = (lookup !== 'workspace' || Boolean(historyOwnerConfirmedUuid))
                 && Boolean(mappingSessionId)
                 && Boolean(historyProviderSessionId)
                 && mappingSessionId === historyProviderSessionId;

@@ -1742,6 +1742,11 @@ type ProviderNativeHistoryReadResult = {
     nativeHistoryCoverage?: string;
     partialReason?: string;
     unavailableReason?: string;
+    // Antigravity: whether the resolved conversation was owner-token-confirmed as
+    // this session's own (vs a bare recency pick). Threaded to the read-path so
+    // the workspace-latest pin + first-read safe-mapping trust only fire for a
+    // confirmed uuid. See dispatcher NativeHistoryResult.ownerConfirmed.
+    ownerConfirmed?: boolean;
 };
 
 function getNativeHistoryScriptName(canonicalHistory: ProviderCanonicalHistoryConfig | undefined, key: 'readSession' | 'listSessions'): string {
@@ -1860,6 +1865,7 @@ function callProviderNativeHistoryRead(
         nativeHistoryCoverage: typeof (result as any).nativeHistoryCoverage === 'string' ? (result as any).nativeHistoryCoverage.trim() : undefined,
         partialReason: typeof (result as any).partialReason === 'string' ? (result as any).partialReason.trim() : undefined,
         unavailableReason: typeof (result as any).unavailableReason === 'string' ? (result as any).unavailableReason.trim() : undefined,
+        ownerConfirmed: typeof (result as any).ownerConfirmed === 'boolean' ? (result as any).ownerConfirmed : undefined,
     };
 }
 
@@ -1957,6 +1963,7 @@ export function readProviderChatHistory(
     nativeHistoryCoverage?: string;
     partialReason?: string;
     unavailableReason?: string;
+    ownerConfirmed?: boolean;
 } {
     if (isNativeSourceCanonicalHistory(options.canonicalHistory) && (options.historySessionId || options.workspace)) {
         const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs, options.envOverrides, options.forceRefresh, options.instanceId);
@@ -1971,6 +1978,7 @@ export function readProviderChatHistory(
             nativeHistoryCoverage: nativeResult.nativeHistoryCoverage,
             partialReason: nativeResult.partialReason,
             unavailableReason: nativeResult.unavailableReason,
+            ownerConfirmed: nativeResult.ownerConfirmed,
         };
     }
     return {

@@ -11,7 +11,7 @@
 export { READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS, buildSendInputSignature } from './chat-commands-shared.js';
 export { evaluateReadChatNodeWorkspaceScope } from './chat-commands-scope.js';
 export { sanitizeDebugBundleValue, handleGetChatDebugBundle } from './chat-commands-debug-bundle.js';
-export { handleChatHistory, handleReadChat, __resetProviderSessionPinsForTest } from './chat-commands-read.js';
+export { handleChatHistory, handleReadChat, __resetProviderSessionPinsForTest, __getProviderSessionPinForTest } from './chat-commands-read.js';
 export {
     handleSendChat,
     handleListChats,
