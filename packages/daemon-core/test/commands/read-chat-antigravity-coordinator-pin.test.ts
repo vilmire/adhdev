@@ -186,6 +186,33 @@ describe('read_chat antigravity coordinator pin + owner-confirmed safe-mapping (
     expect(__getProviderSessionPinForTest(COORDINATOR_SESSION)).toBeUndefined()
   })
 
+  it('(a2) D3: a coordinator carrying a REAL session-host floor (registry spawnedAtMs > 0) resolves ownerConfirmed and records the pin', async () => {
+    // The D3 fix threads the runtime's real (PAST) startedAt into the session
+    // registry's spawnedAtMs on attach, so the coordinator's read now carries a
+    // POSITIVE floor (instead of the old attach-collapsed 0). With a valid floor
+    // the dispatcher's birth-branch confirms the coordinator's OWN conv
+    // (ownerConfirmed:true) — modeled here by the owner-confirmed read — and the
+    // pin gets recorded, breaking the self-perpetuating user-only trap.
+    mocks.readProviderChatHistory.mockImplementation((_agent: string, _options: any) => ownerConversationRead(true))
+
+    const realFloorMs = 1_900_000_000_000 // a PAST timestamp — the runtime's true birth
+    const helpers = createHelpers((id: string) => id === COORDINATOR_SESSION
+      ? { sessionId: COORDINATOR_SESSION, providerType: 'antigravity-cli', transport: 'pty', workspace: WORKSPACE, spawnedAtMs: realFloorMs }
+      : undefined)
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'antigravity-cli',
+      targetSessionId: COORDINATOR_SESSION,
+      workspace: WORKSPACE,
+      tailLimit: 20,
+    })
+
+    expect(result.success).toBe(true)
+    expect((result.messages as any[]).map((m) => m.content)).toContain('coordinator answer: dispatched 3 tasks')
+    // The D3 outcome: the coordinator's own conv is pinned.
+    expect(__getProviderSessionPinForTest(COORDINATOR_SESSION)).toBe(OWNER_UUID)
+  })
+
   it('(c) once the owner-confirmed pin is recorded, the next read exact-binds via the pin (no more workspace-latest)', async () => {
     // First read: owner-confirmed workspace-latest → records the pin.
     mocks.readProviderChatHistory.mockImplementation((_agent: string, options: any) => {

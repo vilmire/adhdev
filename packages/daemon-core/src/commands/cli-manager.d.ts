@@ -49,6 +49,8 @@ export interface HostedCliRuntimeDescriptor {
     workspace: string;
     cliArgs?: string[];
     providerSessionId?: string;
+    managedBy?: string;
+    startedAtMs?: number;
 }
 export declare function supportsExplicitSessionResume(resume?: ProviderResumeCapability): boolean;
 export declare class DaemonCliManager {

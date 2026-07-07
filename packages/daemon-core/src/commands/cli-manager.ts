@@ -233,6 +233,14 @@ export interface HostedCliRuntimeDescriptor {
     cliArgs?: string[];
     providerSessionId?: string;
     managedBy?: string;
+    /**
+     * Real spawn time (ms epoch) of the underlying session-host runtime — a PAST
+     * timestamp recorded when the runtime first started. Threaded through so an
+     * attach can restore the native-history session-floor to the runtime's actual
+     * birth instead of collapsing spawnedAtMs to 0. Undefined when unrecoverable
+     * (genuine post-restart-unknown), in which case the caller keeps the 0 fallback.
+     */
+    startedAtMs?: number;
 }
 
 type CliPresentationInstance = ProviderInstance & {
@@ -292,6 +300,33 @@ export interface CoordinatorDelegatedCliLaunchOptions {
 
 function hasCliArg(args: string[], flag: string): boolean {
     return args.some((arg) => arg === flag || arg.startsWith(`${flag}=`));
+}
+
+/**
+ * Decide the session-registry spawnedAtMs (the native-history session-floor) for a
+ * newly registered CLI instance.
+ *
+ * - Fresh launch (attachExisting=false): now (nowMs). A real live spawn floor
+ *   isolates a fresh session's own store and holds prior-session leak protection.
+ * - Attach WITH a recoverable record startedAt (a PAST timestamp): that startedAt.
+ *   Restoring a hosted runtime (coordinator / MAGI replica / hermes / claude /
+ *   codex) after a daemon restart, the real spawn time is in the past. Using it
+ *   restores each session's per-session birth-floor so co-located antigravity
+ *   runtimes resolve their OWN conversation (ownerConfirmed) instead of the
+ *   floor-less newest-by-mtime path that let a replica claim the coordinator's conv.
+ * - Attach with NO recoverable startedAt: 0 — disables the floor for this session
+ *   (recent_window_ms still bounds the look-back). NEVER use nowMs here: nowMs is in
+ *   the FUTURE relative to existing transcripts and would push the floor past every
+ *   transcript file, losing them (the ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP regression).
+ */
+export function resolveHostedSpawnedAtMs(
+    attachExisting: boolean,
+    attachStartedAtMs: number | undefined,
+    nowMs: number,
+): number {
+    if (!attachExisting) return nowMs;
+    if (typeof attachStartedAtMs === 'number' && attachStartedAtMs > 0) return attachStartedAtMs;
+    return 0;
 }
 
 function hasConfigOverride(args: string[], key: string): boolean {
@@ -673,6 +708,13 @@ export class DaemonCliManager {
             providerSessionId?: string;
             launchMode?: CliLaunchMode;
             extraEnv?: Record<string, string>;
+            /**
+             * On an attach (attachExisting=true), the real spawn time (ms epoch) of the
+             * session-host runtime being restored — a PAST timestamp. Used to restore the
+             * native-history session-floor to the runtime's actual birth instead of 0.
+             * See the spawnedAtMs computation below. Ignored for fresh launches.
+             */
+            attachStartedAtMs?: number;
             onProviderSessionResolved?: (info: {
                 instanceId: string;
                 providerType: string;
@@ -734,15 +776,30 @@ export class DaemonCliManager {
                 workspace: resolvedDir,
                 // attachExisting === true means we're restoring an already-spawned
                 // hosted runtime after a daemon restart, not starting a fresh PTY.
-                // The real spawn time is in the past and we don't have it on the
-                // restored descriptor; pinning spawnedAtMs to Date.now() in that
-                // case would push the native-history session-floor cutoff past
-                // every existing transcript file, so the agy/hermes/claude reader
-                // would return null even though the transcript on disk is fresh.
-                // 0 disables the floor for this session — recent_window_ms in the
-                // spec still bounds how far back we look. Fresh launches still
-                // get a proper floor so prior-session leak protection holds.
-                spawnedAtMs: attachExisting ? 0 : Date.now(),
+                //
+                // NEVER use Date.now() for the attach case: the real spawn time is in
+                // the PAST, and pinning the floor to now would push the native-history
+                // session-floor cutoff past every existing transcript file, so the
+                // agy/hermes/claude reader would return null even though the transcript
+                // on disk is fresh (the ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP regression).
+                //
+                // But collapsing to 0 for EVERY attach is also wrong: with the mesh
+                // coordinator + MAGI replicas all running as hosted runtimes sharing one
+                // workspace and attached with attachExisting=true, spawnedAtMs=0 disables
+                // the per-session native-history birth-floor for all of them. Without a
+                // floor, resolveAntigravityPath takes the floor-less newest-by-mtime
+                // branch (ownerConfirmed:false) and a replica's read can claim the
+                // coordinator's OWN conversation, which then reads as claimedByOther —
+                // regressing the coordinator chat to the pty-parser (user-only) path.
+                //
+                // So when the session-host record's REAL startedAt (a PAST timestamp) is
+                // recoverable, use it: the floor lands at the runtime's actual birth, the
+                // transcript is still found, AND each session's floor isolates its own
+                // conversation. Fall back to 0 ONLY when startedAt is unrecoverable (the
+                // genuine post-restart-unknown case) — that preserves the tail-gap
+                // protection. Fresh launches still get Date.now() so prior-session leak
+                // protection holds.
+                spawnedAtMs: resolveHostedSpawnedAtMs(attachExisting, options?.attachStartedAtMs, Date.now()),
             });
         } catch (spawnErr: any) {
             LOG.error('CLI', `[${cliType}] Spawn failed: ${spawnErr?.message}`);
@@ -1241,6 +1298,12 @@ export class DaemonCliManager {
                     {
                         providerSessionId: sessionBinding.providerSessionId,
                         launchMode: 'manual',
+                        // Thread the runtime's REAL past spawn time so the attach restores
+                        // the per-session native-history birth-floor instead of collapsing
+                        // to spawnedAtMs:0 (which disabled the antigravity per-session floor
+                        // and let MAGI replicas claim the coordinator's own conversation).
+                        // Undefined → registerCliInstance keeps the 0 fallback.
+                        attachStartedAtMs: record.startedAtMs,
                     },
                 );
                 restoredBindings.add(bindingKey);

@@ -33,6 +33,14 @@ function toHostedCliRuntimeDescriptor(record: any): HostedCliRuntimeDescriptor |
         providerSessionId: typeof record.meta?.providerSessionId === 'string'
             ? String(record.meta.providerSessionId)
             : undefined,
+        // Real spawn time (PAST timestamp) of the underlying runtime — startedAt is
+        // stamped on markStarted; fall back to createdAt (record creation). Threaded
+        // through so an attach restores the native-history session-floor to the
+        // runtime's actual birth instead of collapsing spawnedAtMs to 0 (which broke
+        // the antigravity per-session birth-floor for co-located MAGI runtimes).
+        startedAtMs: typeof record.startedAt === 'number' && record.startedAt > 0
+            ? record.startedAt
+            : (typeof record.createdAt === 'number' && record.createdAt > 0 ? record.createdAt : undefined),
     };
 }
 
