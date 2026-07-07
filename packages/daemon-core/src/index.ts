@@ -344,6 +344,7 @@ export { getHostMemorySnapshot } from './system/host-memory.js';
 export type { HostMemorySnapshot } from './system/host-memory.js';
 export {
   classifyHotChatSessionsForSubscriptionFlush,
+  detectNewlySettledCompletedSessions,
   DEFAULT_ACTIVE_CHAT_POLL_STATUSES,
   DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS,
 } from './status/chat-tail-hot-sessions.js';

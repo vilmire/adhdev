@@ -94,6 +94,7 @@ import {
 } from '@adhdev/terminal-mux-control/api';
 import {
   classifyHotChatSessionsForSubscriptionFlush,
+  detectNewlySettledCompletedSessions,
   DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS,
 } from '@adhdev/daemon-core';
 import {
@@ -440,8 +441,16 @@ class StandaloneServer {
   private statusBroadcastPending = false;
   private lastWsStatusSignature: string | null = null;
   private wsChatFlushInFlight = false;
-  private pendingWsChatFlush: { targetWs?: WebSocket; onlyActive: boolean } | null = null;
+  private pendingWsChatFlush: { targetWs?: WebSocket; onlyActive: boolean; forceSessionIds?: ReadonlySet<string> } | null = null;
   private hotWsChatSessionIds = new Set<string>();
+  // Per-session `lastMessageAt` of the completion tail we last flushed. Bounds
+  // the guaranteed-delivery path so a slow-finalizing completed session is
+  // pushed once, not re-pushed every tick forever. Keyed by session id.
+  private deliveredCompletionTailAt = new Map<string, number>();
+  // Last observed `status` per session, used to detect the generating→settled
+  // transition so we can guarantee a targeted completion-tail flush for the
+  // just-finalized session even when its tail lands outside the hot set.
+  private lastObservedSessionStatus = new Map<string, string>();
   private wsChatOutputActiveAt = new Map<string, number>();
   private wsChatOutputFlushTimer: NodeJS.Timeout | null = null;
   private running = false;
@@ -740,6 +749,7 @@ class StandaloneServer {
         onStatusChange: () => {
           this.scheduleBroadcastStatus();
           void this.flushWsChatSubscriptions(undefined, { onlyActive: true });
+          this.flushCompletedChatTailsOnStatusChange();
           void this.flushWsSessionModalSubscriptions();
         },
         removeAgentTracking: () => {},
@@ -775,6 +785,9 @@ class StandaloneServer {
         // Flush recently active/finalizing chat sessions immediately on status change so completed
         // messages reach the dashboard without forcing cold background subscriptions to poll.
         void this.flushWsChatSubscriptions(undefined, { onlyActive: true });
+        // Guarantee the just-finalized session's completion tail reaches the
+        // browser once, even if its native tail lands outside the 8s hot window.
+        this.flushCompletedChatTailsOnStatusChange();
         void this.flushWsSessionModalSubscriptions();
       },
       sessionHostControl,
@@ -1803,22 +1816,105 @@ class StandaloneServer {
     const hotSessions = classifyHotChatSessionsForSubscriptionFlush(
       snapshot.sessions,
       this.hotWsChatSessionIds,
-      { now, activeSessionIds: this.getRecentlyOutputActiveChatSessionIds(now) },
+      {
+        now,
+        activeSessionIds: this.getRecentlyOutputActiveChatSessionIds(now),
+        deliveredCompletionTailAt: this.deliveredCompletionTailAt,
+      },
     );
     this.hotWsChatSessionIds = hotSessions.active;
+    // Record the finalized tail we are about to flush for each guaranteed-
+    // delivery session, so the next classification treats it as delivered and
+    // stops re-pushing (bounded to one delivery per completion tail). A newer
+    // lastMessageAt on a later turn re-arms delivery automatically.
+    if (hotSessions.guaranteedDelivery.size > 0) {
+      const lastMessageAtBySession = new Map<string, number>();
+      for (const session of snapshot.sessions as Array<{ id?: unknown; lastMessageAt?: unknown }>) {
+        const id = typeof session?.id === 'string' ? session.id : '';
+        if (!id) continue;
+        const ts = typeof session.lastMessageAt === 'number' && Number.isFinite(session.lastMessageAt)
+          ? session.lastMessageAt
+          : (typeof session.lastMessageAt === 'string' ? Date.parse(session.lastMessageAt) : 0);
+        lastMessageAtBySession.set(id, Number.isFinite(ts) ? ts : 0);
+      }
+      for (const sessionId of hotSessions.guaranteedDelivery) {
+        const ts = lastMessageAtBySession.get(sessionId) ?? 0;
+        // Use `now` as the delivered watermark when the tail timestamp is
+        // unknown (0), so we don't re-deliver the same unknown-ts tail forever.
+        this.deliveredCompletionTailAt.set(sessionId, ts > 0 ? ts : now);
+      }
+    }
+    // Bound map growth: drop delivered records for sessions that no longer
+    // appear in the live snapshot.
+    if (this.deliveredCompletionTailAt.size > 0) {
+      const liveIds = new Set<string>();
+      for (const session of snapshot.sessions as Array<{ id?: unknown }>) {
+        if (typeof session?.id === 'string') liveIds.add(session.id);
+      }
+      for (const id of this.deliveredCompletionTailAt.keys()) {
+        if (!liveIds.has(id)) this.deliveredCompletionTailAt.delete(id);
+      }
+    }
     return hotSessions;
+  }
+
+  /**
+   * Detect sessions that just transitioned from a generating/active state into
+   * a settled/completed state (idle with a completion inbox bucket / unread).
+   * These are the sessions whose finalized [.,assistant] tail must be
+   * guaranteed to reach the browser exactly once — the native-history tail can
+   * finalize AFTER the 8s hot-session window, so relying on the recency timer
+   * alone drops it for multi-turn MAGI coordinators. Returns the just-settled
+   * session ids and updates the observed-status map for the next tick.
+   */
+  private detectNewlySettledChatSessions(): Set<string> {
+    let snapshot: ReturnType<typeof this.buildSharedSnapshot>;
+    try {
+      snapshot = this.buildSharedSnapshot('live');
+    } catch {
+      return new Set<string>();
+    }
+    const { settled, nextStatus } = detectNewlySettledCompletedSessions(
+      snapshot.sessions,
+      this.lastObservedSessionStatus,
+    );
+    // Replace the observed-status map with the fresh snapshot (also drops
+    // records for sessions that are no longer live).
+    this.lastObservedSessionStatus = nextStatus;
+    return settled;
+  }
+
+  /**
+   * Post-completion guaranteed flush: when a session settles into a completed
+   * state, push its finalized chat_tail exactly once even if it falls outside
+   * the onlyActive hot set. Scoped to just the finalized sessions — this does
+   * NOT convert periodic flushes to non-onlyActive (which would push every
+   * session every tick).
+   */
+  private flushCompletedChatTailsOnStatusChange(): void {
+    const settled = this.detectNewlySettledChatSessions();
+    if (settled.size === 0) return;
+    void this.flushWsChatSubscriptions(undefined, { forceSessionIds: settled });
   }
 
   private async flushWsChatSubscriptions(
     targetWs?: WebSocket,
-    options: { onlyActive?: boolean } = {},
+    options: { onlyActive?: boolean; forceSessionIds?: ReadonlySet<string> } = {},
   ): Promise<void> {
     if (this.wsChatFlushInFlight) {
       const nextOnlyActive = options.onlyActive === true;
       const pending = this.pendingWsChatFlush;
+      // Preserve any forced session ids across coalesced flushes — a targeted
+      // completion delivery must not be swallowed by an in-flight periodic
+      // onlyActive flush.
+      const mergedForce = new Set<string>([
+        ...(pending?.forceSessionIds ?? []),
+        ...(options.forceSessionIds ?? []),
+      ]);
       this.pendingWsChatFlush = {
         targetWs: pending?.targetWs === undefined || targetWs === undefined ? undefined : targetWs,
         onlyActive: pending ? (pending.onlyActive && nextOnlyActive) : nextOnlyActive,
+        forceSessionIds: mergedForce.size > 0 ? mergedForce : undefined,
       };
       return;
     }
@@ -1827,6 +1923,7 @@ class StandaloneServer {
     try {
       const targets = targetWs ? [targetWs] : Array.from(this.clients);
       const hotSessionIds = options.onlyActive ? this.getHotChatSessionIdsForWsFlush() : null;
+      const forceSessionIds = options.forceSessionIds ?? null;
       const tasks: Array<{ ws: WebSocket; key: string; sub: ChatTailSubscriptionState }> = [];
       for (const ws of targets) {
         if (ws.readyState !== WebSocket.OPEN) continue;
@@ -1834,8 +1931,10 @@ class StandaloneServer {
         if (!subs || subs.size === 0) continue;
         for (const [key, sub] of subs.entries()) {
           const targetSessionId = sub.request.params.targetSessionId;
+          const isForced = forceSessionIds?.has(targetSessionId) === true;
           if (
-            hotSessionIds
+            !isForced
+            && hotSessionIds
             && !hotSessionIds.active.has(targetSessionId)
             && !hotSessionIds.finalizing.has(targetSessionId)
           ) {
@@ -1859,7 +1958,10 @@ class StandaloneServer {
       if (this.pendingWsChatFlush) {
         const pending = this.pendingWsChatFlush;
         this.pendingWsChatFlush = null;
-        void this.flushWsChatSubscriptions(pending.targetWs, { onlyActive: pending.onlyActive });
+        void this.flushWsChatSubscriptions(pending.targetWs, {
+          onlyActive: pending.onlyActive,
+          ...(pending.forceSessionIds ? { forceSessionIds: pending.forceSessionIds } : {}),
+        });
       }
     }
   }

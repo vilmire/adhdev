@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   classifyHotChatSessionsForSubscriptionFlush,
+  detectNewlySettledCompletedSessions,
   DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS,
 } from '../../src/status/chat-tail-hot-sessions.js'
 
@@ -192,6 +193,126 @@ describe('classifyHotChatSessionsForSubscriptionFlush', () => {
     expect(Array.from(result.finalizing)).toEqual([])
   })
 
+  describe('guaranteed delivery of a slow-finalizing completion tail', () => {
+    it('keeps a task_complete session hot for delivery even when its tail finalized long after the 8s window', () => {
+      const now = 3_000_000
+      const result = classifyHotChatSessionsForSubscriptionFlush([
+        {
+          id: 'session-late-complete',
+          status: 'idle',
+          unread: true,
+          inboxBucket: 'task_complete',
+          // 46 minutes ago — far outside DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS.
+          lastMessageAt: now - 46 * 60_000,
+        },
+      ], new Set(), { now, deliveredCompletionTailAt: new Map() })
+
+      expect(Array.from(result.active)).toEqual(['session-late-complete'])
+      expect(Array.from(result.guaranteedDelivery)).toEqual(['session-late-complete'])
+    })
+
+    it('keeps a stale unread session hot for delivery via the guaranteed-delivery path', () => {
+      const now = 100_000
+      const result = classifyHotChatSessionsForSubscriptionFlush([
+        {
+          id: 'session-unread-late',
+          status: 'idle',
+          unread: true,
+          inboxBucket: 'idle',
+          lastMessageAt: now - 60_000,
+        },
+      ], new Set(), { now, deliveredCompletionTailAt: new Map() })
+
+      expect(result.active.has('session-unread-late')).toBe(true)
+      expect(result.guaranteedDelivery.has('session-unread-late')).toBe(true)
+    })
+
+    it('does NOT re-push a completion tail that has already been delivered (bounded, no thrash)', () => {
+      const now = 3_000_000
+      const lastMessageAt = now - 46 * 60_000
+      const delivered = new Map<string, number>([['session-delivered', lastMessageAt]])
+      const result = classifyHotChatSessionsForSubscriptionFlush([
+        {
+          id: 'session-delivered',
+          status: 'idle',
+          unread: true,
+          inboxBucket: 'task_complete',
+          lastMessageAt,
+        },
+      ], new Set(), { now, deliveredCompletionTailAt: delivered })
+
+      expect(result.active.has('session-delivered')).toBe(false)
+      expect(Array.from(result.guaranteedDelivery)).toEqual([])
+    })
+
+    it('re-arms delivery when a newer turn produces a newer tail than the delivered watermark', () => {
+      const now = 3_000_000
+      const delivered = new Map<string, number>([['session-newturn', now - 200_000]])
+      const result = classifyHotChatSessionsForSubscriptionFlush([
+        {
+          id: 'session-newturn',
+          status: 'idle',
+          unread: true,
+          inboxBucket: 'task_complete',
+          // Newer than the delivered watermark → a fresh completion to deliver.
+          lastMessageAt: now - 60_000,
+        },
+      ], new Set(), { now, deliveredCompletionTailAt: delivered })
+
+      expect(result.active.has('session-newturn')).toBe(true)
+      expect(result.guaranteedDelivery.has('session-newturn')).toBe(true)
+    })
+
+    it('does not enter the guaranteed-delivery path at all when no delivered map is provided (preserves recency-only callers)', () => {
+      const now = 3_000_000
+      const result = classifyHotChatSessionsForSubscriptionFlush([
+        {
+          id: 'session-no-optin',
+          status: 'idle',
+          unread: true,
+          inboxBucket: 'task_complete',
+          lastMessageAt: now - 46 * 60_000,
+        },
+      ], new Set(), { now })
+
+      expect(result.active.has('session-no-optin')).toBe(false)
+      expect(Array.from(result.guaranteedDelivery)).toEqual([])
+    })
+
+    it('does not treat an active in-window session as guaranteed-delivery (it stays hot the normal way)', () => {
+      const now = 10_000
+      const result = classifyHotChatSessionsForSubscriptionFlush([
+        {
+          id: 'session-in-window',
+          status: 'idle',
+          unread: true,
+          inboxBucket: 'task_complete',
+          lastMessageAt: now - (DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS - 500),
+        },
+      ], new Set(), { now, deliveredCompletionTailAt: new Map() })
+
+      expect(result.active.has('session-in-window')).toBe(true)
+      // In-window sessions are handled by the recency path, not guaranteed-delivery.
+      expect(result.guaranteedDelivery.has('session-in-window')).toBe(false)
+    })
+
+    it('does not revive a stale idle SEEN session via the guaranteed-delivery path', () => {
+      const now = 3_000_000
+      const result = classifyHotChatSessionsForSubscriptionFlush([
+        {
+          id: 'session-seen-stale',
+          status: 'idle',
+          unread: false,
+          inboxBucket: 'idle',
+          lastMessageAt: now - 46 * 60_000,
+        },
+      ], new Set(), { now, deliveredCompletionTailAt: new Map() })
+
+      expect(result.active.has('session-seen-stale')).toBe(false)
+      expect(Array.from(result.guaranteedDelivery)).toEqual([])
+    })
+  })
+
   it('excludes restored stopped sessions even when surface kind is missing', () => {
     const now = 80_000
     const result = classifyHotChatSessionsForSubscriptionFlush([
@@ -214,5 +335,63 @@ describe('classifyHotChatSessionsForSubscriptionFlush', () => {
 
     expect(Array.from(result.active)).toEqual([])
     expect(Array.from(result.finalizing)).toEqual([])
+  })
+})
+
+describe('detectNewlySettledCompletedSessions', () => {
+  it('flags a session that flipped generating→idle with a completion bucket', () => {
+    const prev = new Map<string, string>([['s1', 'generating']])
+    const { settled, nextStatus } = detectNewlySettledCompletedSessions([
+      { id: 's1', status: 'idle', unread: true, inboxBucket: 'task_complete' },
+    ], prev)
+
+    expect(Array.from(settled)).toEqual(['s1'])
+    expect(nextStatus.get('s1')).toBe('idle')
+  })
+
+  it('does not flag a session that was already idle (no active→settled transition)', () => {
+    const prev = new Map<string, string>([['s1', 'idle']])
+    const { settled } = detectNewlySettledCompletedSessions([
+      { id: 's1', status: 'idle', unread: true, inboxBucket: 'task_complete' },
+    ], prev)
+
+    expect(Array.from(settled)).toEqual([])
+  })
+
+  it('does not flag a session that settled but is not completed-unseen', () => {
+    const prev = new Map<string, string>([['s1', 'generating']])
+    const { settled } = detectNewlySettledCompletedSessions([
+      { id: 's1', status: 'idle', unread: false, inboxBucket: 'idle' },
+    ], prev)
+
+    expect(Array.from(settled)).toEqual([])
+  })
+
+  it('does not flag a session that is still generating', () => {
+    const prev = new Map<string, string>([['s1', 'generating']])
+    const { settled } = detectNewlySettledCompletedSessions([
+      { id: 's1', status: 'generating', unread: true, inboxBucket: 'working' },
+    ], prev)
+
+    expect(Array.from(settled)).toEqual([])
+  })
+
+  it('drops status records for sessions no longer present in the snapshot', () => {
+    const prev = new Map<string, string>([['gone', 'generating'], ['s1', 'generating']])
+    const { nextStatus } = detectNewlySettledCompletedSessions([
+      { id: 's1', status: 'idle', unread: true, inboxBucket: 'task_complete' },
+    ], prev)
+
+    expect(nextStatus.has('gone')).toBe(false)
+    expect(nextStatus.has('s1')).toBe(true)
+  })
+
+  it('flags via unread even when inboxBucket is not task_complete', () => {
+    const prev = new Map<string, string>([['s1', 'waiting_approval']])
+    const { settled } = detectNewlySettledCompletedSessions([
+      { id: 's1', status: 'idle', unread: true, inboxBucket: 'idle' },
+    ], prev)
+
+    expect(Array.from(settled)).toEqual(['s1'])
   })
 })
