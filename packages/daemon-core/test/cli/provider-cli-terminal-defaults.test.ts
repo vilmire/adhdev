@@ -84,13 +84,22 @@ describe('CLI PTY default terminal sizing', () => {
     const sessionRegistry = fs.readFileSync(path.join(import.meta.dirname, '../../../session-host-core/src/registry.ts'), 'utf8')
     const sessionRuntime = fs.readFileSync(path.join(import.meta.dirname, '../../../session-host-daemon/src/runtime.ts'), 'utf8')
     const sessionServer = fs.readFileSync(path.join(import.meta.dirname, '../../../session-host-daemon/src/server.ts'), 'utf8')
+    // The SessionHostServer split (session-host-daemon 7e638469) moved the persisted-snapshot
+    // recovery payload rebuild — server.ts's only default-resolution site — into
+    // session-lifecycle.ts (buildPayloadFromRecord); server.ts no longer touches PTY defaults.
+    const sessionLifecycle = fs.readFileSync(path.join(import.meta.dirname, '../../../session-host-daemon/src/session-lifecycle.ts'), 'utf8')
 
     expect(providerRuntime.includes('DEFAULT_SESSION_HOST_COLS')).toBe(true)
     expect(providerRuntime.includes('DEFAULT_SESSION_HOST_ROWS')).toBe(true)
 
-    for (const source of [sessionRegistry, sessionRuntime, sessionServer]) {
+    // Files that own a PTY default-resolution path must use the shared helpers.
+    for (const source of [sessionRegistry, sessionRuntime, sessionLifecycle]) {
       expect(source.includes('resolveSessionHostCols')).toBe(true)
       expect(source.includes('resolveSessionHostRows')).toBe(true)
+    }
+
+    // No scanned runtime entrypoint may re-introduce literal PTY defaults.
+    for (const source of [sessionRegistry, sessionRuntime, sessionServer, sessionLifecycle]) {
       expect(source.includes('rows || 24')).toBe(false)
       expect(source.includes('rows: 24')).toBe(false)
       expect(source.includes('cols || 80')).toBe(false)

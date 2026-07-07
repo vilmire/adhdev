@@ -63,6 +63,9 @@ function createRouter(overrides: Record<string, unknown> = {}) {
       collectAllStates: () => [],
       listInstanceIds: () => [],
       getInstance: () => null,
+      // get_pending_mesh_events → resolveCoordinatorDrainDeliverability →
+      // findLiveCoordinators iterates the live CLI instances; no coordinator here.
+      getByCategory: () => [],
     } as any,
     detectedIdes: { value: [] },
     sessionRegistry: {} as any,

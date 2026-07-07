@@ -1147,6 +1147,13 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       activeModal = approval
       instance.detectStatusTransition()
 
+      // (FALSEIDLE-a FixA/FixB) The adapter pending-turn markers now gate completion
+      // UNCONDITIONALLY — an approval-resolved idle whose adapter still reports
+      // isWaitingForResponse/currentTurnScope is held as a still-running turn. Model the
+      // turn GENUINELY ending: the adapter closes its turn scope before the final idle.
+      // (The first idle valley above keeps its markers set — still mid-turn by design.)
+      adapter.currentTurnScope = null
+      adapter.isWaitingForResponse = false
       status = 'idle'
       parsedStatus = 'idle'
       activeModal = null
