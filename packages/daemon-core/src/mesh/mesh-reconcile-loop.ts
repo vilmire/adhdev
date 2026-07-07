@@ -54,10 +54,11 @@ import {
     peekUnresolvedDelegateForwards,
     ackUnresolvedDelegateForward,
     expireStaleUnresolvedDelegateForwards,
+    registerUnresolvedForwardRetryNudge,
 } from './mesh-unresolved-forward-outbox.js';
 import { readNonEmptyString, readMeshCompletionSummary, buildMeshSystemMessage } from './mesh-events-utils.js';
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
-import { expandDaemonIdForms, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { expandDaemonIdForms, daemonIdsEquivalent, sessionIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-work-queue.js';
 import { resolveSessionBusyVerdict } from './mesh-queue-assignment.js';
 import { readLedgerEntries } from './mesh-ledger.js';
@@ -841,6 +842,107 @@ function recoverStrandedAssignedDispatches(components: DaemonComponents, meshId:
     }
 }
 
+// ── PHASE 2.6: assigned-zombie sweep (runtime-store GC, SoT 1-11 (a)) ─────────
+// recoverStrandedAssignedDispatches (PHASE 2.5) can only age a row by its
+// dispatchTimestamp — a row that never got one (a legacy claim, a crashed claim
+// path, a row whose payload drifted) is invisible to it FOREVER: it contributes 0
+// pending (PHASE 3 skips), holds the node-busy gate (hasActiveNodeAssignment), and
+// nothing ever transitions it. This sweep is that missing terminal net, scoped
+// PRECISELY to the rows PHASE 2.5 can never touch (no parseable dispatchTimestamp)
+// so the two nets never race each other over the same row.
+//
+// Conservative by construction:
+//   - age-gated on updatedAt/createdAt (>= ZOMBIE_ASSIGNED_MIN_AGE_MS) so a freshly
+//     claimed row mid-launch is never touched;
+//   - terminal ledger evidence wins first (row flips to the evidenced terminal,
+//     mirroring PHASE 2.5's terminal branch);
+//   - only fails a row whose assigned session is POSITIVELY absent on the daemon
+//     that owns the assigned node — a locally-present session (idle or generating)
+//     is skipped, and a REMOTE node's session (not locally observable) is skipped
+//     entirely rather than guessed dead;
+//   - the failure reason is explicit in both the queue mutation trace and a
+//     task_failed ledger entry, so the transition is auditable, never silent.
+const ZOMBIE_ASSIGNED_MIN_AGE_MS = 30 * 60 * 1000; // 30 min — generous vs. session launch/restart races
+
+export function reconcileZombieAssignedTasks(
+    components: DaemonComponents,
+    mesh: { id: string; nodes?: unknown[] },
+    selfIds: string[],
+): void {
+    const meshId = mesh.id;
+    const assigned = getQueue(meshId, { status: ['assigned'] });
+    if (!assigned.length) return;
+    const nowMs = Date.now();
+
+    // True when THIS daemon is authoritative for the row's assigned node — the only
+    // case where "no local instance" positively means "session no longer exists".
+    // Accepts a daemon-id form match against selfIds, or a mesh-node whose daemonId
+    // resolves to this daemon. Absent assignedNodeId → local (nothing remote to defer to).
+    const assignedNodeIsLocal = (assignedNodeId?: string): boolean => {
+        if (!assignedNodeId) return true;
+        if (selfIds.some(id => daemonIdsEquivalent(id, assignedNodeId))) return true;
+        const nodes = Array.isArray(mesh.nodes) ? mesh.nodes : [];
+        const node = nodes.find(n => meshNodeIdMatches(n as never, assignedNodeId)) as { daemonId?: unknown } | undefined;
+        const nodeDaemonId = readNonEmptyString(node?.daemonId);
+        return !!nodeDaemonId && selfIds.some(id => daemonIdsEquivalent(id, nodeDaemonId));
+    };
+
+    for (const row of assigned) {
+        // Rows WITH a parseable dispatchTimestamp belong to PHASE 2.5 — never double-handle.
+        if (Number.isFinite(Date.parse(row.dispatchTimestamp ?? ''))) continue;
+        const updatedMs = Date.parse(row.updatedAt ?? '');
+        const createdMs = Date.parse(row.createdAt ?? '');
+        const anchorMs = Number.isFinite(updatedMs) ? updatedMs : createdMs;
+        if (!Number.isFinite(anchorMs)) continue;              // cannot age it → leave untouched
+        if (nowMs - anchorMs < ZOMBIE_ASSIGNED_MIN_AGE_MS) continue;
+
+        // A terminal already evidenced in the ledger → flip the row to that terminal
+        // (the completion arrived but the queue flip was lost), same as PHASE 2.5.
+        const terminal = findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id });
+        if (terminal) {
+            const status = terminal.kind === 'task_completed' ? 'completed' : 'failed';
+            updateTaskStatus(meshId, row.id, status);
+            LOG.warn('MeshReconcile', `Zombie assigned task ${row.id} on mesh ${meshId} had ${terminal.kind} ledger evidence — flipped to ${status}`);
+            continue;
+        }
+
+        if (!assignedNodeIsLocal(row.assignedNodeId)) continue; // remote session not locally observable — never guess
+        if (row.assignedSessionId) {
+            const verdict = resolveSessionBusyVerdict(components, row.assignedSessionId);
+            if (verdict !== 'UNKNOWN') continue; // session exists locally (idle or busy) → not a zombie
+        }
+
+        const reason = row.assignedSessionId
+            ? 'assigned_zombie_session_missing'
+            : 'assigned_zombie_no_session_bound';
+        const failed = updateTaskStatus(meshId, row.id, 'failed');
+        if (!failed) continue;
+        try {
+            appendLedgerEntry(meshId, {
+                kind: 'task_failed',
+                nodeId: row.assignedNodeId,
+                sessionId: row.assignedSessionId,
+                payload: {
+                    taskId: row.id,
+                    reason,
+                    source: 'reconcile_zombie_assigned_sweep',
+                    ageMs: nowMs - anchorMs,
+                },
+            });
+        } catch { /* ledger write is best-effort */ }
+        LOG.warn('MeshReconcile', `Failed zombie assigned task ${row.id} on mesh ${meshId} `
+            + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}, no dispatchTimestamp, `
+            + `stale ${Math.round((nowMs - anchorMs) / 60000)}m, ${reason})`);
+        traceMeshEventDrop('assigned_zombie_failed', {
+            taskId: row.id,
+            sessionId: row.assignedSessionId,
+            nodeId: row.assignedNodeId,
+            meshId,
+            event: 'agent:generating_completed',
+        }, `${reason} stale=${Math.round((nowMs - anchorMs) / 60000)}m`);
+    }
+}
+
 export async function runMeshReconcileTick(components: DaemonComponents): Promise<void> {
     const localDaemonId = readNonEmptyString(loadConfig().machineId) || undefined;
     // The id-set used to scope the local queue drain (status id + machineId). See
@@ -857,7 +959,11 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // coordinator's mesh cannot be reached by the coordinator's PHASE 1 pull (it is
     // in no mesh.node), so its completion must be PUSHED to the coordinator. This
     // drains the durable outbox enqueued by forwardUnresolvedDelegateEvent and retries
-    // any push that has not yet been acked. See mesh-unresolved-forward-outbox.ts.
+    // any push that has not yet been acked. Since the spontaneous immediate push was
+    // removed (polling single-model §2.1), this PHASE 0 retry is the ONLY delivery
+    // path for unresolved-delegate events; the enqueue site nudges an early run of it
+    // (scheduleUnresolvedForwardNudge) so happy-path latency stays sub-interval.
+    // See mesh-unresolved-forward-outbox.ts.
     if (dispatchMeshCommand) {
         try {
             await retryUnresolvedDelegateForwards(components);
@@ -896,6 +1002,13 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                 recoverStrandedAssignedDispatches(components, mesh.id, store);
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Assigned-stranded watchdog failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
+            // PHASE 2.6 — assigned-zombie sweep: terminal-fails the rows PHASE 2.5
+            // can never age (no dispatchTimestamp) whose session is positively gone.
+            try {
+                reconcileZombieAssignedTasks(components, mesh, selfIds);
+            } catch (e: any) {
+                LOG.warn('MeshReconcile', `Assigned-zombie sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
         }
     }
@@ -1328,6 +1441,42 @@ export function __resetUnresolvedForwardRejectionCountsForTests(): void {
     unresolvedForwardRejectionCounts.clear();
 }
 
+// ── Unresolved-forward reconcile nudge (polling single-model §2.1 (B)) ────────
+// forwardUnresolvedDelegateEvent no longer pushes the event itself — it only
+// persists to the durable outbox and fires a data-free nudge asking THIS loop to
+// run the PHASE 0 retry soon. The nudge is:
+//   - coalesced: one pending timer at a time, so a completion burst schedules a
+//     single early retry pass instead of one per event;
+//   - non-overlapping: skipped while a nudged pass is still in flight (the
+//     periodic tick remains the backstop);
+//   - loss-tolerant: an unregistered/cleared/failed nudge merely means delivery
+//     waits for the next periodic tick (≤ one reconcile interval) — never a loss.
+const UNRESOLVED_FORWARD_NUDGE_DELAY_MS = 250;
+let unresolvedForwardNudgeTimer: NodeJS.Timeout | undefined;
+let unresolvedForwardNudgeRunning = false;
+
+function scheduleUnresolvedForwardNudge(components: DaemonComponents): void {
+    if (!components.dispatchMeshCommand) return; // no transport → periodic tick handles/no-ops
+    if (unresolvedForwardNudgeTimer) return;     // coalesce a burst into one early pass
+    unresolvedForwardNudgeTimer = setTimeout(() => {
+        unresolvedForwardNudgeTimer = undefined;
+        if (unresolvedForwardNudgeRunning) return; // an earlier pass is in flight — tick covers
+        unresolvedForwardNudgeRunning = true;
+        void retryUnresolvedDelegateForwards(components)
+            .catch((e: any) => LOG.warn('MeshReconcile', `Nudged unresolved-forward retry failed: ${e?.message || e}`))
+            .finally(() => { unresolvedForwardNudgeRunning = false; });
+    }, UNRESOLVED_FORWARD_NUDGE_DELAY_MS);
+    // Never keep the process alive solely for a pending nudge.
+    if (typeof unresolvedForwardNudgeTimer.unref === 'function') unresolvedForwardNudgeTimer.unref();
+}
+
+function clearUnresolvedForwardNudge(): void {
+    if (unresolvedForwardNudgeTimer) {
+        clearTimeout(unresolvedForwardNudgeTimer);
+        unresolvedForwardNudgeTimer = undefined;
+    }
+}
+
 async function retryUnresolvedDelegateForwards(components: DaemonComponents): Promise<void> {
     const dispatchMeshCommand = components.dispatchMeshCommand;
     if (!dispatchMeshCommand) return;
@@ -1463,10 +1612,16 @@ export function setupMeshReconcileLoop(components: DaemonComponents): ReconcileL
     }, intervalMs);
     // Don't keep the process alive solely for this timer.
     if (typeof timer.unref === 'function') timer.unref();
+    // Register the unresolved-forward nudge handler: the enqueue site
+    // (forwardUnresolvedDelegateEvent) fires it after persisting an outbox row so
+    // the PHASE 0 retry runs early instead of waiting for the next periodic tick.
+    registerUnresolvedForwardRetryNudge(() => scheduleUnresolvedForwardNudge(components));
     LOG.info('MeshReconcile', `Mesh reconcile loop started (interval ${intervalMs}ms)`);
     return {
         stop() {
             clearInterval(timer);
+            registerUnresolvedForwardRetryNudge(undefined);
+            clearUnresolvedForwardNudge();
             LOG.info('MeshReconcile', 'Mesh reconcile loop stopped');
         },
     };

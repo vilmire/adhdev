@@ -65,6 +65,36 @@ function getStore(): MeshRuntimeStore | undefined {
     try { return MeshRuntimeStore.getInstance(); } catch { return undefined; }
 }
 
+// ---------------------------------------------------------------------------
+// Reconcile-nudge registry (polling-single-model §2.1 (B)).
+//
+// The spontaneous best-effort immediate push that used to run inline in
+// forwardUnresolvedDelegateEvent was removed: the durable outbox row + the
+// reconcile loop's PHASE 0 retry (acked, retry-capped) is now the ONLY delivery
+// path for an unresolved-delegate event. To keep the happy-path latency low
+// without re-introducing a spontaneous data push, the enqueue site emits a
+// data-free NUDGE: "outbox has work — run the PHASE 0 retry soon". The reconcile
+// loop registers the handler at setup; a lost/unregistered nudge is harmless —
+// the next periodic tick (default 4s) covers it, so nudge loss = bounded delay,
+// never event loss.
+//
+// A registry (rather than a direct import of the reconcile loop) keeps the
+// module graph acyclic: mesh-reconcile-loop already imports from
+// mesh-event-forwarding (via the mesh-events-coordinator barrel), so the
+// forwarding side must not import the loop back.
+// ---------------------------------------------------------------------------
+let retryNudgeHandler: (() => void) | undefined;
+
+/** Register (or clear, with undefined) the PHASE 0 retry nudge handler. */
+export function registerUnresolvedForwardRetryNudge(handler?: () => void): void {
+    retryNudgeHandler = handler;
+}
+
+/** Fire-and-forget nudge: ask the reconcile loop to run the outbox retry soon. */
+export function nudgeUnresolvedForwardRetry(): void {
+    try { retryNudgeHandler?.(); } catch { /* nudge is best-effort; the periodic tick covers */ }
+}
+
 /**
  * Durably enqueue an unresolved-delegate forward for a coordinator daemon. The
  * `forwardPayload` is the flat shape handleMeshForwardEvent reads on the coordinator.

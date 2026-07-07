@@ -56,6 +56,7 @@ import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { computeMeshTaskStats } from '../../src/mesh/mesh-task-stats.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 import { UNROUTABLE_DIAGNOSTIC_STREAM, __resetUnroutableDiagnosticsForTests } from '../../src/mesh/mesh-routing.js'
+import { peekUnresolvedDelegateForwards } from '../../src/mesh/mesh-unresolved-forward-outbox.js'
 
 function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<string, unknown>, opts?: { coordinatorStatus?: 'idle' | 'generating'; statusInstanceId?: string }) {
   let listener: ((event: any) => void) | undefined
@@ -351,8 +352,11 @@ describe('setupMeshEventForwarding', () => {
     // coordinator's mesh: meshNodeFor is absent and the workspace lookup resolves no mesh,
     // so routing returns mesh_unresolved. But the worker carries the coordinator daemon
     // anchor (meshCoordinatorDaemonId). Instead of dropping the event (delivery_unroutable),
-    // the forwarder must dispatch it straight to that coordinator daemon via P2P, which
-    // hosts the mesh and recovers the id by workspace.
+    // the forwarder must persist it to the durable outbox addressed to that coordinator
+    // daemon; the reconcile loop's PHASE 0 pushes it via P2P (acked), and the coordinator
+    // hosts the mesh and recovers the id by workspace. Polling single-model: NOTHING is
+    // dispatched spontaneously at emit time (docs/refactoring/2026-06-16-mesh-completion-
+    // polling-single-model.md §2.1).
     const meshId = `mesh_fallback_fwd_${Date.now()}`
     __resetUnroutableDiagnosticsForTests()
     __resetMeshWorkspaceCacheForTests()
@@ -389,7 +393,14 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 7777,
       })
 
-      // The event was forwarded to the coordinator daemon via P2P mesh_forward_event …
+      // No spontaneous push at emit — the event is only persisted to the outbox.
+      expect(dispatchMeshCommand).not.toHaveBeenCalled()
+      const queued = peekUnresolvedDelegateForwards()
+      expect(queued).toHaveLength(1)
+      expect(queued[0].coordinatorDaemonId).toBe('daemon_remote_coordinator')
+
+      // The reconcile tick (PHASE 0) forwards it to the coordinator daemon via P2P …
+      await runMeshReconcileTick(components)
       expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
       const [targetDaemonId, command, payload] = dispatchMeshCommand.mock.calls[0]
       expect(targetDaemonId).toBe('daemon_remote_coordinator')

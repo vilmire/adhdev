@@ -1557,10 +1557,82 @@ export class MeshRuntimeStore {
 
     /**
      * Prune tool call log entries older than the given age in ms.
-     * Exposed for testing.
+     * Returns the number of rows deleted. Also used by the periodic retention
+     * sweep (pruneMeshRuntimeRetention) — the in-write sweep in recordMeshToolCall
+     * only fires every 200 calls and only covers the rate-limit window, so a
+     * quiet mesh otherwise accumulates rows indefinitely.
      */
-    pruneToolCallLog(olderThanMs: number): void {
-        this.db.prepare('DELETE FROM mesh_tool_call_log WHERE called_at < ?').run(Date.now() - olderThanMs);
+    pruneToolCallLog(olderThanMs: number): number {
+        return this.db.prepare('DELETE FROM mesh_tool_call_log WHERE called_at < ?').run(Date.now() - olderThanMs).changes;
+    }
+
+    /**
+     * Retention prune for mesh_event_ledger (SoT 1-11 (b)). The ledger is append-only
+     * with NO lifecycle GC of its own, so lifecycle events accumulate without bound
+     * (the dominant mesh-runtime.db growth). Every production reader is bounded to a
+     * recent window (readLedgerEntries tail/limit ≤ a few hundred; task-stats /
+     * terminal-evidence scans look at recent tasks), so rows past a generous age only
+     * cost space. Excluded from deletion — retained forever:
+     *   - coordinator_operating_note / _tombstone: runtime-accumulated lessons whose
+     *     whole point is surviving restarts; a tombstone must also outlive the notes
+     *     it retracts.
+     * Timestamps are ISO-8601 TEXT, so the lexicographic `<` cutoff is a correct time
+     * comparison; a malformed timestamp compares greater than any ISO date and is
+     * conservatively retained. Returns rows deleted.
+     */
+    pruneEventLedger(olderThanMs: number): number {
+        const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
+        return this.db.prepare(
+            `DELETE FROM mesh_event_ledger
+             WHERE timestamp < ?
+               AND kind NOT IN ('coordinator_operating_note', 'coordinator_operating_note_tombstone')`
+        ).run(cutoffIso).changes;
+    }
+
+    /**
+     * Retention prune for TERMINAL (completed/cancelled/failed) mesh_queue rows
+     * (SoT 1-11 (b)). Terminal rows are kept as recent history (mesh_task_history,
+     * completion-dedup taskId lookups) but nothing ever deletes them, so the queue
+     * table grows monotonically. Rows past the retention window serve no reader —
+     * every dedup/attribution path operates on recent tasks — EXCEPT as a dependency
+     * anchor: taskDependenciesSatisfied resolves dependsOn by id and treats a MISSING
+     * row as not-completed, so deleting a completed row that a still-live
+     * (pending/assigned) row depends on would permanently strand the dependent.
+     * Those ids are collected first and excluded. Returns rows deleted.
+     */
+    pruneTerminalQueueEntries(olderThanMs: number): number {
+        const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
+        return this.transaction(() => {
+            // Dependency guard: protect every id a live row still depends on.
+            const liveRows = this.db.prepare(
+                `SELECT payload FROM mesh_queue WHERE status IN ('pending', 'assigned')`
+            ).all() as Array<{ payload: string }>;
+            const protectedIds = new Set<string>();
+            for (const row of liveRows) {
+                try {
+                    const entry = JSON.parse(row.payload) as MeshWorkQueueEntry;
+                    if (Array.isArray(entry.dependsOn)) {
+                        for (const dep of entry.dependsOn) {
+                            if (typeof dep === 'string' && dep) protectedIds.add(dep);
+                        }
+                    }
+                } catch { /* unparsable payload → nothing to protect */ }
+            }
+            const candidates = this.db.prepare(
+                `SELECT id FROM mesh_queue
+                 WHERE status IN ('completed', 'cancelled', 'failed') AND updated_at < ?`
+            ).all(cutoffIso) as Array<{ id: string }>;
+            const deletable = candidates.map(r => r.id).filter(id => !protectedIds.has(id));
+            let removed = 0;
+            // Chunk the DELETE to stay well under SQLite's bind-parameter limit.
+            for (let i = 0; i < deletable.length; i += 500) {
+                const chunk = deletable.slice(i, i + 500);
+                removed += this.db.prepare(
+                    `DELETE FROM mesh_queue WHERE id IN (${chunk.map(() => '?').join(',')})`
+                ).run(...chunk).changes;
+            }
+            return removed;
+        });
     }
 
     // ── G2: Event Ledger ────────────────────────────────────────────────────
@@ -2146,5 +2218,48 @@ export class MeshRuntimeStore {
             'DELETE FROM mesh_pending_events WHERE drained = 0 AND queued_at < ?'
         ).run(undrainedCutoff).changes;
         return removed;
+    }
+}
+
+// ─── Mesh runtime retention windows (SoT 1-11 (b) / gap I-10) ────────────────
+// mesh-runtime.db had lifecycle GC only for mesh_pending_events (prunePendingEvents,
+// hourly via the mesh-event maintenance sweep) and fingerprints/tool-call windows;
+// mesh_event_ledger and terminal mesh_queue rows grew without bound. These windows
+// are deliberately CONSERVATIVE — every production reader operates on a recent
+// window far narrower than these, so the deletes trade only dead space:
+//   - Event ledger 30 days: readers are tail/limit-bounded (≤ a few hundred rows) or
+//     recent-task scoped; 30d comfortably exceeds any reconcile/stat/audit horizon.
+//     Operating notes are exempted inside pruneEventLedger (retained forever).
+//   - Tool-call log 14 days: it backs a seconds-scale rate-limit window; 14d keeps a
+//     generous debugging horizon at trivial cost.
+//   - Terminal queue rows 30 days: mesh_task_history / completion-dedup lookups are
+//     recent-task scoped; live dependsOn anchors are exempted inside
+//     pruneTerminalQueueEntries.
+// No VACUUM here by design: reclaiming file pages is not worth stalling the daemon's
+// single writer; freed pages are reused by future inserts.
+export const MESH_EVENT_LEDGER_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;   // 30 days
+export const MESH_TOOL_CALL_LOG_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;  // 14 days
+export const MESH_TERMINAL_QUEUE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+/**
+ * Periodic retention sweep for the mesh-runtime.db tables that previously had no
+ * lifecycle GC (event ledger, tool-call log, terminal queue rows). Runs on the SAME
+ * cadence as the pending-events retention prune (the hourly mesh-event maintenance
+ * sweep in mesh-event-forwarding.ts). Best-effort and idempotent: a store failure
+ * degrades to a no-op with one warn; an empty table costs three cheap DELETEs.
+ */
+export function pruneMeshRuntimeRetention(): { ledger: number; toolCalls: number; terminalQueue: number } {
+    try {
+        const store = MeshRuntimeStore.getInstance();
+        const ledger = store.pruneEventLedger(MESH_EVENT_LEDGER_RETENTION_MS);
+        const toolCalls = store.pruneToolCallLog(MESH_TOOL_CALL_LOG_RETENTION_MS);
+        const terminalQueue = store.pruneTerminalQueueEntries(MESH_TERMINAL_QUEUE_RETENTION_MS);
+        if (ledger + toolCalls + terminalQueue > 0) {
+            LOG.info('MeshRuntimeStore', `Retention prune removed ${ledger} ledger / ${toolCalls} tool-call / ${terminalQueue} terminal-queue row(s)`);
+        }
+        return { ledger, toolCalls, terminalQueue };
+    } catch (e: any) {
+        LOG.warn('MeshRuntimeStore', `Runtime retention prune failed: ${e?.message || e}`);
+        return { ledger: 0, toolCalls: 0, terminalQueue: 0 };
     }
 }

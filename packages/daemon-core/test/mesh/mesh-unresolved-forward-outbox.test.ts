@@ -29,10 +29,11 @@ import { __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.
 import {
   peekUnresolvedDelegateForwards,
   enqueueUnresolvedDelegateForward,
+  registerUnresolvedForwardRetryNudge,
   __clearUnresolvedDelegateForwardOutboxForTests,
 } from '../../src/mesh/mesh-unresolved-forward-outbox.js'
 import { __resetMeshWorkspaceCacheForTests } from '../../src/mesh/mesh-events.js'
-import { __resetUnresolvedForwardRejectionCountsForTests } from '../../src/mesh/mesh-reconcile-loop.js'
+import { __resetUnresolvedForwardRejectionCountsForTests, setupMeshReconcileLoop } from '../../src/mesh/mesh-reconcile-loop.js'
 import { listMeshes } from '../../src/config/mesh-config.js'
 
 // A worker that is NOT a member of the coordinator's mesh: meshNodeFor absent, no
@@ -79,66 +80,70 @@ beforeEach(() => {
   __resetMeshWorkspaceCacheForTests()
   __clearUnresolvedDelegateForwardOutboxForTests()
   __resetUnresolvedForwardRejectionCountsForTests()
+  registerUnresolvedForwardRetryNudge(undefined)
   vi.mocked(listMeshes).mockReturnValue([])
 })
 
-describe('unresolved-delegate durable forward', () => {
-  it('(a) keeps the event queued for retry when the immediate push fails', async () => {
-    const { components, emit } = createUnresolvedWorker()
-    // Immediate push rejects (coordinator momentarily unreachable).
-    const dispatchMeshCommand = vi.fn(async () => { throw new Error('p2p unreachable') })
-    components.dispatchMeshCommand = dispatchMeshCommand
-
-    setupMeshEventForwarding(components)
-    emit(COMPLETION)
-
-    // The immediate push was attempted once …
-    expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
-    // … and because it failed, the durable copy is still in the outbox (not acked).
-    await Promise.resolve() // let the immediate-push .catch settle
-    const queued = peekUnresolvedDelegateForwards()
-    expect(queued).toHaveLength(1)
-    expect(queued[0].coordinatorDaemonId).toBe('daemon_remote_coordinator')
-    expect(queued[0].payload.event).toBe('agent:generating_completed')
-
-    // Next reconcile tick retries the push. This time it succeeds.
-    dispatchMeshCommand.mockReset()
-    dispatchMeshCommand.mockImplementation(async () => ({ success: true }))
-    await runMeshReconcileTick(components)
-
-    // Retried exactly the queued entry, then acked it (drained) so it won't resend.
-    expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
-    const [target, command, payload] = dispatchMeshCommand.mock.calls[0]
-    expect(target).toBe('daemon_remote_coordinator')
-    expect(command).toBe('mesh_forward_event')
-    expect(payload.event).toBe('agent:generating_completed')
-    expect(peekUnresolvedDelegateForwards()).toHaveLength(0)
-  })
-
-  it('(b) acks on a successful immediate push so the retry loop does not resend', async () => {
+// Polling single-model (docs/refactoring/2026-06-16-mesh-completion-polling-single-model.md
+// §2.1): the spontaneous best-effort immediate push was removed. An unresolved-delegate
+// event is ONLY persisted to the durable outbox at emit time; delivery happens solely on
+// the reconcile loop's PHASE 0 retry (acked), with a data-free nudge for early scheduling.
+describe('unresolved-delegate durable forward (queue-only, PHASE 0 delivery)', () => {
+  it('(a) emit persists to the outbox and NEVER pushes inline; the reconcile tick delivers with ack', async () => {
     const { components, emit } = createUnresolvedWorker()
     const dispatchMeshCommand = vi.fn(async () => ({ success: true }))
     components.dispatchMeshCommand = dispatchMeshCommand
 
     setupMeshEventForwarding(components)
     emit(COMPLETION)
+    await Promise.resolve()
 
+    // No spontaneous push at emit time — the queue is the only thing written.
+    expect(dispatchMeshCommand).not.toHaveBeenCalled()
+    const queued = peekUnresolvedDelegateForwards()
+    expect(queued).toHaveLength(1)
+    expect(queued[0].coordinatorDaemonId).toBe('daemon_remote_coordinator')
+    expect(queued[0].payload.event).toBe('agent:generating_completed')
+
+    // The reconcile tick (PHASE 0) delivers the queued entry and acks it.
+    await runMeshReconcileTick(components)
     expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
-    // Let the .then(ack) settle, then the outbox is empty (delivered).
-    await Promise.resolve()
-    await Promise.resolve()
+    const [target, command, payload] = dispatchMeshCommand.mock.calls[0]
+    expect(target).toBe('daemon_remote_coordinator')
+    expect(command).toBe('mesh_forward_event')
+    expect(payload.event).toBe('agent:generating_completed')
     expect(peekUnresolvedDelegateForwards()).toHaveLength(0)
 
-    // A reconcile tick has nothing to retry — no further push.
+    // Delivered → nothing left for a later tick.
     dispatchMeshCommand.mockClear()
     await runMeshReconcileTick(components)
     expect(dispatchMeshCommand).not.toHaveBeenCalled()
   })
 
+  it('(b) keeps the event queued when the PHASE 0 push fails, and retries on the next tick', async () => {
+    const { components, emit } = createUnresolvedWorker()
+    const dispatchMeshCommand = vi.fn(async () => { throw new Error('p2p unreachable') })
+    components.dispatchMeshCommand = dispatchMeshCommand
+
+    setupMeshEventForwarding(components)
+    emit(COMPLETION)
+
+    // First tick: push fails (transport threw) → entry stays queued (not acked).
+    await runMeshReconcileTick(components)
+    expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
+    expect(peekUnresolvedDelegateForwards()).toHaveLength(1)
+
+    // Next tick: coordinator reachable again → delivered and acked.
+    dispatchMeshCommand.mockReset()
+    dispatchMeshCommand.mockImplementation(async () => ({ success: true }))
+    await runMeshReconcileTick(components)
+    expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
+    expect(peekUnresolvedDelegateForwards()).toHaveLength(0)
+  })
+
   it('(c) enqueue is idempotent on the event fingerprint (a re-fired completion queues once)', async () => {
     const { components, emit } = createUnresolvedWorker()
-    // Push always fails so the entry stays in the outbox and we can count rows.
-    const dispatchMeshCommand = vi.fn(async () => { throw new Error('still unreachable') })
+    const dispatchMeshCommand = vi.fn(async () => ({ success: true }))
     components.dispatchMeshCommand = dispatchMeshCommand
 
     setupMeshEventForwarding(components)
@@ -147,7 +152,9 @@ describe('unresolved-delegate durable forward', () => {
     emit(COMPLETION) // identical completion fires again
     await Promise.resolve()
 
-    // Idempotent: the unique (mesh_id, fingerprint) index collapses both to one row.
+    // Idempotent: the unique (mesh_id, fingerprint) index collapses both to one row,
+    // and neither emit pushed anything inline.
+    expect(dispatchMeshCommand).not.toHaveBeenCalled()
     expect(peekUnresolvedDelegateForwards()).toHaveLength(1)
   })
 
@@ -158,11 +165,55 @@ describe('unresolved-delegate durable forward', () => {
 
     setupMeshEventForwarding(components)
     emit(COMPLETION)
-    await Promise.resolve()
-    await Promise.resolve()
+    await runMeshReconcileTick(components)
 
     // A rejected push must NOT ack — the completion stays durable for the next tick.
     expect(peekUnresolvedDelegateForwards()).toHaveLength(1)
+  })
+
+  it('(d) emit fires the registered reconcile nudge (data-free, coalesced at the receiver)', async () => {
+    const { components, emit } = createUnresolvedWorker()
+    const dispatchMeshCommand = vi.fn(async () => ({ success: true }))
+    components.dispatchMeshCommand = dispatchMeshCommand
+    const nudge = vi.fn()
+    registerUnresolvedForwardRetryNudge(nudge)
+
+    setupMeshEventForwarding(components)
+    emit(COMPLETION)
+
+    // The nudge fired, but no data was pushed — delivery stays on PHASE 0.
+    expect(nudge).toHaveBeenCalledTimes(1)
+    expect(dispatchMeshCommand).not.toHaveBeenCalled()
+    expect(peekUnresolvedDelegateForwards()).toHaveLength(1)
+  })
+
+  it('(e) the reconcile loop nudge schedules an early PHASE 0 retry (sub-interval delivery)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { components, emit } = createUnresolvedWorker()
+      const dispatchMeshCommand = vi.fn(async () => ({ success: true }))
+      components.dispatchMeshCommand = dispatchMeshCommand
+
+      // setupMeshReconcileLoop registers the real nudge handler (interval 4s default).
+      const loop = setupMeshReconcileLoop(components)
+      try {
+        setupMeshEventForwarding(components)
+        emit(COMPLETION)
+        expect(dispatchMeshCommand).not.toHaveBeenCalled() // nothing inline
+        expect(peekUnresolvedDelegateForwards()).toHaveLength(1)
+
+        // Advance well past the nudge delay but well short of the 4s tick: the nudged
+        // early PHASE 0 pass delivers and acks without waiting for the interval.
+        await vi.advanceTimersByTimeAsync(500)
+        expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
+        expect(dispatchMeshCommand.mock.calls[0][1]).toBe('mesh_forward_event')
+        expect(peekUnresolvedDelegateForwards()).toHaveLength(0)
+      } finally {
+        loop.stop()
+      }
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

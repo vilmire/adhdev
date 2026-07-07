@@ -6,12 +6,12 @@ import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryConte
 import type { SessionRecoveryContext } from './mesh-ledger.js';
 import { updateSessionTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue } from './mesh-work-queue.js';
 import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus } from './mesh-delivery-policy.js';
-import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { MeshRuntimeStore, pruneMeshRuntimeRetention } from './mesh-runtime-store.js';
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, prunePendingMeshCoordinatorEventsRetention, readV2EnvelopeFromWire, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { resolveMeshHostStatus } from './mesh-host-ownership.js';
-import { enqueueUnresolvedDelegateForward, peekUnresolvedDelegateForwards, ackUnresolvedDelegateForward } from './mesh-unresolved-forward-outbox.js';
+import { enqueueUnresolvedDelegateForward, nudgeUnresolvedForwardRetry } from './mesh-unresolved-forward-outbox.js';
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { resolveDelegatedWorkerAutoApprove } from '../repo-mesh-types.js';
@@ -189,13 +189,16 @@ function sweepExpiredRemoteIdleSessions(): void {
     try {
         MeshRuntimeStore.getInstance().pruneExpiredRemoteIdleSessions();
     } catch { /* best-effort */ }
-    // Piggyback the pending-event retention prune on the same periodic sweep, but
-    // hourly — this is the maintenance hook that keeps mesh_pending_events from
-    // accumulating stale drained/orphaned rows without bound.
+    // Piggyback the retention prunes on the same periodic sweep, but hourly — this
+    // is the maintenance hook that keeps mesh-runtime.db from accumulating stale
+    // rows without bound: mesh_pending_events (drained/orphaned rows) plus, on the
+    // SAME cadence (SoT 1-11 (b)), the event ledger / tool-call log / terminal
+    // queue retention in pruneMeshRuntimeRetention.
     const now = Date.now();
     if (now - lastPendingEventsPruneAt >= PENDING_EVENTS_PRUNE_INTERVAL_MS) {
         lastPendingEventsPruneAt = now;
         prunePendingMeshCoordinatorEventsRetention();
+        pruneMeshRuntimeRetention();
     }
 }
 
@@ -1592,43 +1595,6 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
 }
 
 // ---------------------------------------------------------------------------
-// Per-coordinator forward serialization (P2P send-backpressure relief).
-//
-// When several workers finish at once, each completion runs forwardUnresolvedDelegate
-// Event and fires its own `mesh_forward_event` push. Firing the whole burst
-// concurrently dumps it into the single per-peer P2P DataChannel buffer in one tick,
-// which starves the rpc_ack/rpc_res replies the same channel must carry — a
-// coordinator's inbound `git_status` then times out even though the worker's own
-// forward acks return in ~1s. To cap the concurrent burst we serialize the immediate
-// pushes per coordinator: at most one push is in flight to a given coordinator at a
-// time, the rest run in arrival order behind it. A lone event (idle lane) still
-// dispatches immediately — only a genuine burst is paced. Durability is unchanged:
-// every event is already persisted to the outbox before the push runs, so serializing
-// only delays the best-effort fast path; PHASE 0 retry still covers any gap. This pairs
-// with the DataChannel send-buffer gate in daemon-cloud's mesh manager (writeRequest),
-// which is the hard guarantee; this throttle keeps the burst from piling up there.
-interface CoordinatorForwardLane { tail: Promise<unknown>; depth: number; }
-const coordinatorForwardLanes = new Map<string, CoordinatorForwardLane>();
-function enqueueCoordinatorForwardPush(coordinatorDaemonId: string, run: () => Promise<unknown>): void {
-    let lane = coordinatorForwardLanes.get(coordinatorDaemonId);
-    if (!lane) { lane = { tail: Promise.resolve(), depth: 0 }; coordinatorForwardLanes.set(coordinatorDaemonId, lane); }
-    const wasIdle = lane.depth === 0;
-    lane.depth += 1;
-    const dec = (): void => { lane!.depth -= 1; };
-    if (wasIdle) {
-        // Idle lane → dispatch synchronously, so a lone completion (the common case) has
-        // ZERO added latency and the push call happens in-line. Only a genuine burst —
-        // events arriving while a push is still in flight — is paced (else branch).
-        lane.tail = Promise.resolve(run()).catch(() => {}).then(dec, dec);
-    } else {
-        // Burst: queue behind the in-flight push(es) in arrival order so the whole burst
-        // is not dumped into the shared DataChannel buffer at once. The tail is guarded
-        // so one rejecting push never wedges the lane for the next.
-        lane.tail = lane.tail.then(() => run()).catch(() => {}).then(dec, dec);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Worker-side fallback forward for unresolved-mesh delegates.
 //
 // A REMOTE worker daemon that is being P2P-remote-controlled by a coordinator is
@@ -1641,8 +1607,9 @@ function enqueueCoordinatorForwardPush(coordinatorDaemonId: string, run: () => P
 // the worker's queue — which it can't, because the worker never queued an unroutable
 // event. Live symptom: `WARN [MeshEvents] delivery_unroutable: ... mesh unresolved`.
 //
-// The fix: the routing object still carries coordinatorDaemonId. Forward the raw event
-// straight to that coordinator daemon over P2P (mesh_forward_event). The coordinator
+// The fix: the routing object still carries coordinatorDaemonId. Persist the raw event
+// to the durable worker-side outbox addressed to that coordinator daemon; the reconcile
+// loop's PHASE 0 delivers it (mesh_forward_event, acked, retry-capped). The coordinator
 // hosts the mesh, so it recovers the mesh id by workspace in handleMeshForwardEvent and
 // injects/queues it normally. meshId is intentionally omitted from the payload (the
 // worker has none); workspace is the routing anchor the coordinator resolves from.
@@ -1656,14 +1623,17 @@ function enqueueCoordinatorForwardPush(coordinatorDaemonId: string, run: () => P
 //
 // Returns true when the event was durably accepted for delivery to the coordinator
 // daemon (so the caller skips the delivery_unroutable diagnostic); false when no
-// fallback was possible (no coordinator anchor / no dispatch transport).
+// fallback was possible (no coordinator anchor / no dispatch transport) OR the durable
+// enqueue itself failed — the delivery_unroutable diagnostic is thereby narrowed to
+// "could not even persist to the queue" (a real potential loss), per the polling-
+// single-model design (docs/refactoring/2026-06-16-mesh-completion-polling-single-model.md §2.1/§2.6).
 //
-// Durability: the directed push to the coordinator is the ONLY delivery route for an
-// unresolved-mesh worker (it is in no mesh.node the coordinator can pull). So instead
-// of a fire-and-forget push that drops on one transient P2P failure, the event is
-// persisted to the worker-side outbox FIRST and only acked after a successful push.
-// A best-effort immediate push keeps latency low on the happy path; a failed or
-// un-acked push leaves the durable row for setupMeshReconcileLoop's PHASE 0 to retry.
+// Single delivery path (polling single-model): the spontaneous best-effort immediate
+// push that used to run here was REMOVED. Every unresolved-delegate event is persisted
+// to the outbox and delivered ONLY by setupMeshReconcileLoop's PHASE 0 retry (acked;
+// a failed push leaves the row queued). For happy-path latency the enqueue emits a
+// data-free reconcile NUDGE (nudgeUnresolvedForwardRetry) asking the loop to run the
+// retry soon; a lost nudge costs at most one reconcile interval, never the event.
 function forwardUnresolvedDelegateEvent(
     components: DaemonComponents,
     routing: ReturnType<typeof resolveWorkerDelegateRouting>,
@@ -1718,10 +1688,11 @@ function forwardUnresolvedDelegateEvent(
         return true;
     }
 
-    // 1) Persist durably FIRST. Idempotent on fingerprint, so a re-fired completion
-    //    does not duplicate the outbox row. If persistence fails we still attempt the
-    //    push below (degrades to the old at-most-once behaviour rather than dropping
-    //    the chance entirely).
+    // Persist durably. Idempotent on fingerprint, so a re-fired completion does not
+    // duplicate the outbox row. The outbox is the ONLY delivery route now (no
+    // spontaneous push), so a hard persistence failure means the event has nowhere to
+    // live — return false so the caller records the delivery_unroutable diagnostic,
+    // which is thereby narrowed to exactly this "could not even enqueue" real-loss case.
     const persisted = enqueueUnresolvedDelegateForward(coordinatorDaemonId, eventName, payload);
     // EVTTRACE: unresolved-mesh worker persisted its completion to the outbox (no meshId
     // available locally; coordinator will recover it on receive).
@@ -1731,54 +1702,19 @@ function forwardUnresolvedDelegateEvent(
         nodeId: readNonEmptyString(routing.nodeId) || readNonEmptyString(event.meshNodeId),
         event: eventName,
     };
-    traceMeshEventStage('outbox_enqueue', fwdTraceCtx, `coordinatorDaemon=${coordinatorDaemonId} meshId=absent`);
+    if (!persisted) {
+        traceMeshEventDrop('outbox_enqueue_failed', fwdTraceCtx, `coordinatorDaemon=${coordinatorDaemonId}`);
+        return false;
+    }
+    traceMeshEventStage('outbox_enqueue', fwdTraceCtx, `coordinatorDaemon=${coordinatorDaemonId} meshId=${readNonEmptyString(payload.meshId) || 'absent'}`);
 
-    // 2) Best-effort immediate push for low latency. On success, ack the outbox row so
-    //    the retry loop won't re-send it. On failure, leave it queued — PHASE 0 retries.
-    traceMeshEventStage('forward_send', fwdTraceCtx, 'immediate push');
-    // Serialize per coordinator so a multi-worker completion burst is paced rather than
-    // dumped concurrently into the shared P2P DataChannel buffer (see coordinator
-    // ForwardLanes). dispatchMeshCommand was null-checked above; capture it for the
-    // deferred closure.
-    const dispatchMeshCommand = components.dispatchMeshCommand;
-    enqueueCoordinatorForwardPush(coordinatorDaemonId, () =>
-        Promise.resolve(dispatchMeshCommand(coordinatorDaemonId, 'mesh_forward_event', payload))
-            .then((result: any) => {
-                if (result && result.success === false) {
-                    LOG.warn('MeshEvents', `Immediate forward of ${eventName} to coordinator ${coordinatorDaemonId} rejected (${readNonEmptyString(result.error) || 'no reason'}) — left queued for retry`);
-                    traceMeshEventDrop('immediate_forward_rejected', fwdTraceCtx, readNonEmptyString(result.error) || 'no reason');
-                    return;
-                }
-                // Acked. Mark the durable copy delivered so the retry loop skips it.
-                if (persisted) ackUnresolvedDelegateForwardByFingerprint(coordinatorDaemonId, eventName, payload);
-            })
-            .catch((e: any) => {
-                // Coordinator momentarily unreachable; the durable row stays queued and the
-                // reconcile loop retries it. Trace so the relay attempt is visible.
-                LOG.warn('MeshEvents', `Immediate forward of ${eventName} to coordinator ${coordinatorDaemonId} failed: ${e?.message || e} — left queued for retry`);
-            }));
-    LOG.info('MeshEvents', `Durably forwarded ${eventName} for unresolved-mesh worker at ${routing.workspace || '(no workspace)'} to coordinator daemon ${coordinatorDaemonId}`);
+    // Data-free reconcile nudge (polling single-model §2.1 (B)): ask the reconcile
+    // loop to run its PHASE 0 outbox retry soon instead of pushing the payload here.
+    // Delivery itself stays on the single acked PHASE 0 path; losing the nudge costs
+    // at most one reconcile interval of latency, never the event.
+    nudgeUnresolvedForwardRetry();
+    LOG.info('MeshEvents', `Durably queued ${eventName} for unresolved-mesh worker at ${routing.workspace || '(no workspace)'} to coordinator daemon ${coordinatorDaemonId} (reconcile PHASE 0 delivers)`);
     return true;
-}
-
-// Ack a just-pushed outbox entry by re-deriving its row from the same coordinator +
-// event + payload. We don't thread the row id back from enqueue (the immediate push is
-// fire-then-ack), so locate it among the undrained entries by matching coordinator and
-// the flat payload's forward identity. A miss is harmless — the retry loop's own
-// receiver-side dedup suppresses a duplicate delivery.
-function ackUnresolvedDelegateForwardByFingerprint(
-    coordinatorDaemonId: string,
-    eventName: string,
-    payload: Record<string, unknown>,
-): void {
-    const match = peekUnresolvedDelegateForwards().find(entry =>
-        daemonIdsEquivalent(entry.coordinatorDaemonId, coordinatorDaemonId)
-        && readNonEmptyString(entry.payload.event) === eventName
-        && readNonEmptyString(entry.payload.targetSessionId || entry.payload.sessionId || entry.payload.instanceId)
-            === readNonEmptyString(payload.targetSessionId || payload.sessionId || payload.instanceId)
-        && readNonEmptyString(entry.payload.workspace) === readNonEmptyString(payload.workspace),
-    );
-    if (match) ackUnresolvedDelegateForward(match.id);
 }
 
 /**
