@@ -13,6 +13,7 @@ import {
     DEFAULT_MAX_CLI_TERMINAL_SCALE,
     DEFAULT_MIN_CLI_TERMINAL_SCALE,
 } from '../../utils/cli-terminal-scale';
+import { encodeTerminalKey } from '../../utils/terminal-key-encoding';
 import type { ActiveConversation } from './types';
 import { getConversationTitle } from './conversation-presenters';
 import SpecDebugPanel from './SpecDebugPanel';
@@ -49,6 +50,9 @@ export default function CliTerminalPane({
     const [hasLoadedOlderRuntimeScrollback, setHasLoadedOlderRuntimeScrollback] = useState(false);
     const [terminalScale, setTerminalScale] = useState(1);
     const [terminalControlsOpen, setTerminalControlsOpen] = useState(false);
+    const [stickyCtrl, setStickyCtrl] = useState(false);
+    const [stickyAlt, setStickyAlt] = useState(false);
+    const [stickyShift, setStickyShift] = useState(false);
     const [showSpecDebug, setShowSpecDebug] = useState(false);
     const [terminalViewport, setTerminalViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const [terminalIntrinsicViewport, setTerminalIntrinsicViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -422,6 +426,15 @@ export default function CliTerminalPane({
         }
     };
 
+    // Encode a logical key with the currently-active sticky modifiers, send it,
+    // then clear the modifiers (one-shot: the toggle resets after each keypress).
+    const sendEncodedKey = (key: string) => {
+        sendTerminalControlInput(encodeTerminalKey({ ctrl: stickyCtrl, alt: stickyAlt, shift: stickyShift }, key));
+        setStickyCtrl(false);
+        setStickyAlt(false);
+        setStickyShift(false);
+    };
+
     const loadOlderRuntimeScrollback = async () => {
         if (isLoadingScrollback) return;
         setIsLoadingScrollback(true);
@@ -642,7 +655,7 @@ export default function CliTerminalPane({
                                 id="terminal-control-keys-popover"
                                 role="dialog"
                                 aria-label="Terminal control keys"
-                                className="absolute right-0 top-10 w-56 rounded-2xl border border-white/10 bg-[#0b0d12]/95 p-3 text-white/85 shadow-2xl shadow-black/40 backdrop-blur-md"
+                                className="absolute right-0 top-10 w-72 rounded-2xl border border-white/10 bg-[#0b0d12]/95 p-3 text-white/85 shadow-2xl shadow-black/40 backdrop-blur-md"
                             >
                                 <div className="mb-2 flex items-center justify-between gap-2">
                                     <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/45">Terminal keys</span>
@@ -655,19 +668,56 @@ export default function CliTerminalPane({
                                         ×
                                     </button>
                                 </div>
+                                {/* Sticky modifiers — toggle on, apply to the next key press, then auto-clear (one-shot). */}
+                                <div className="mb-2 grid grid-cols-3 gap-1.5">
+                                    {([
+                                        ['Ctrl', stickyCtrl, setStickyCtrl],
+                                        ['Alt', stickyAlt, setStickyAlt],
+                                        ['Shift', stickyShift, setStickyShift],
+                                    ] as const).map(([label, active, setActive]) => (
+                                        <button
+                                            key={label}
+                                            type="button"
+                                            aria-pressed={active}
+                                            className={`h-9 rounded-lg border text-[12px] font-semibold transition-colors ${
+                                                active
+                                                    ? 'border-sky-400/50 bg-sky-400/25 text-white'
+                                                    : 'border-white/10 bg-white/[0.06] hover:bg-white/[0.12]'
+                                            }`}
+                                            onClick={() => setActive((on) => !on)}
+                                        >
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                                {/* Letter + digit grid — sends the active modifier combo, then clears it. */}
+                                <div className="grid grid-cols-6 gap-1">
+                                    {'abcdefghijklmnopqrstuvwxyz0123456789'.split('').map((key) => (
+                                        <button
+                                            key={key}
+                                            type="button"
+                                            className="h-8 rounded-md border border-white/10 bg-white/[0.06] text-[12px] font-semibold uppercase hover:bg-white/[0.12]"
+                                            onClick={() => sendEncodedKey(key)}
+                                        >
+                                            {key}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="my-2 h-px bg-white/10" />
+                                {/* Function keys — also modifier-aware (e.g. Ctrl+Arrow, Shift+Tab). */}
                                 <div className="grid grid-cols-3 gap-1.5">
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u001b')}>Esc</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\t')}>Tab</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\r')}>Enter</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Escape')}>Esc</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Tab')}>Tab</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Enter')}>Enter</button>
                                     <span aria-hidden="true" />
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u001b[A')} aria-label="Arrow up">↑</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowUp')} aria-label="Arrow up">↑</button>
                                     <span aria-hidden="true" />
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u001b[D')} aria-label="Arrow left">←</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u001b[B')} aria-label="Arrow down">↓</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u001b[C')} aria-label="Arrow right">→</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u0003')}>Ctrl-C</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u0004')}>Ctrl-D</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u007f')}>Bksp</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowLeft')} aria-label="Arrow left">←</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowDown')} aria-label="Arrow down">↓</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowRight')} aria-label="Arrow right">→</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u0003')} title="Send SIGINT (Ctrl-C)">Ctrl-C</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Space')}>Space</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Backspace')}>Bksp</button>
                                 </div>
                             </div>
                         )}
