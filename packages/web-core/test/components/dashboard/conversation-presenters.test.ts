@@ -126,6 +126,32 @@ describe('conversation presenters', () => {
         expect(getConversationPreviewText(conversation)).toBe('Latest transcript bubble')
     })
 
+    it('(B2) derives the preview from the live chat_tail snapshot when one is provided', () => {
+        // The conversation.messages tail still ends on the user dispatch echo (the
+        // inbox status snapshot), but the warm chat_tail snapshot already holds the
+        // assistant answer ChatPane renders. Passing the snapshot must surface that
+        // answer so the inbox row and the opened chat body agree.
+        const conversation = createConversation({
+            messages: [
+                { role: 'user', content: 'Dispatch: verify the mission.' },
+            ],
+        })
+        const snapshot = {
+            hasLiveSnapshot: true,
+            liveMessages: [
+                { role: 'user', content: 'Dispatch: verify the mission.' },
+                { role: 'assistant', content: 'Mission verified — all nodes green.' },
+            ],
+        }
+
+        expect(getConversationPreviewText(conversation, snapshot))
+            .toBe('Mission verified — all nodes green.')
+        expect(getConversationMachineCardPreview(conversation, snapshot))
+            .toBe('repo · Mission verified — all nodes green.')
+        // Without a live snapshot the selectors fall back to conversation.messages.
+        expect(getConversationPreviewText(conversation)).toBe('Dispatch: verify the mission.')
+    })
+
     it('keeps inbox/card preview aligned with the rendered chat transcript even when compact preview is newer', () => {
         const conversation = createConversation({
             lastMessagePreview: 'Newest compact preview',
@@ -138,10 +164,10 @@ describe('conversation presenters', () => {
         expect(getConversationPreviewText(conversation)).toBe('Older transcript bubble')
     })
 
-    it('shows a generating placeholder instead of echoing the user prompt while the agent is mid-turn', () => {
-        // Inbox snapshot transcript still ends at the user prompt (the streamed reply
-        // only reaches the open chat via the live agent-stream channel), and the
-        // daemon-derived role tracks that same user message — the stale-inbox bug.
+    it('surfaces the final answer (not a generating placeholder) while the agent is mid-turn', () => {
+        // (B3) The generating state is conveyed by the inbox 'Live' badge, so the
+        // preview never shows an "Agent is generating…" placeholder. When only the
+        // user prompt is visible the preview echoes it; the badge marks it live.
         const generatingFromUser = createConversation({
             status: 'generating',
             messages: [
@@ -151,10 +177,10 @@ describe('conversation presenters', () => {
             lastMessagePreview: 'Update and restart done. Verify the mission.',
         })
 
-        expect(getConversationPreviewText(generatingFromUser)).toBe('Agent is generating…')
+        expect(getConversationPreviewText(generatingFromUser)).toBe('Update and restart done. Verify the mission.')
     })
 
-    it('prefers a visible assistant reply over the generating placeholder', () => {
+    it('prefers a visible assistant reply while generating', () => {
         // Once any assistant text is visible (transcript tail or daemon summary) the
         // real reply must win even while the status is still generating.
         const generatingWithReply = createConversation({

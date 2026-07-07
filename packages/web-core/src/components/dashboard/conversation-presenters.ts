@@ -2,14 +2,13 @@ import { formatIdeType } from '../../utils/daemon-utils'
 import type { ActiveConversation } from './types'
 import { getConversationViewStates } from './DashboardMobileChatShared'
 import {
-    AGENT_GENERATING_PREVIEW_TEXT,
     getConversationDisplayLabel,
     getConversationHostIdeType,
     getConversationLastMessagePreview,
     getConversationMetaParts,
     getConversationNotificationLabel as getConversationNotificationDisplayLabel,
     getConversationProviderLabel,
-    isConversationAwaitingAssistantReply,
+    type ConversationPreviewSnapshot,
 } from './conversation-selectors'
 
 export function getConversationTitle(conversation: ActiveConversation): string {
@@ -55,16 +54,16 @@ export function getConversationMeshRoleTitle(conversation: ActiveConversation): 
     return details.join(' · ')
 }
 
-export function getConversationPreviewText(conversation: ActiveConversation): string {
-    // While the agent is mid-turn the inbox snapshot transcript can still end at the
-    // user's prompt (the streamed reply only reaches the open chat via the live
-    // agent-stream channel). Surface a generating placeholder instead of echoing the
-    // user's own message back — but only until a real assistant reply becomes visible.
-    const { isGenerating } = getConversationViewStates(conversation)
-    if (isGenerating && isConversationAwaitingAssistantReply(conversation)) {
-        return AGENT_GENERATING_PREVIEW_TEXT
-    }
-    const preview = getConversationLastMessagePreview(conversation)
+export function getConversationPreviewText(
+    conversation: ActiveConversation,
+    snapshot?: ConversationPreviewSnapshot | null,
+): string {
+    // (B3) The preview always surfaces the actual final answer (last assistant
+    // message) rather than an "Agent is generating…" placeholder — the generating
+    // state is conveyed by the inbox 'Live' badge instead. (B2) When the warm
+    // chat_tail snapshot is passed, the last message is derived from the same
+    // transcript authority ChatPane renders, keeping inbox and chat in sync.
+    const preview = getConversationLastMessagePreview(conversation, snapshot)
     if (preview) return preview
     if (conversation.title) return conversation.title
     return getConversationMetaText(conversation) || 'No messages yet'
@@ -94,8 +93,11 @@ export function getConversationTabMetaText(conversation: ActiveConversation): st
     return getConversationStatusHint(conversation) || getConversationMetaText(conversation)
 }
 
-export function getConversationMachineCardPreview(conversation: ActiveConversation): string {
-    return `${getConversationTitle(conversation)} · ${getConversationPreviewText(conversation)}`
+export function getConversationMachineCardPreview(
+    conversation: ActiveConversation,
+    snapshot?: ConversationPreviewSnapshot | null,
+): string {
+    return `${getConversationTitle(conversation)} · ${getConversationPreviewText(conversation, snapshot)}`
 }
 
 export function getConversationHistorySubtitle(conversation: ActiveConversation): string {

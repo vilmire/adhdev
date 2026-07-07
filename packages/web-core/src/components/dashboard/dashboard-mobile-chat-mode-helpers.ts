@@ -4,6 +4,7 @@ import { getDaemonEntryActivityAt, getMachineDisplayName, getProviderSummaryLine
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
 import { getConversationMachineId } from './conversation-selectors'
 import { getConversationMachineCardPreview } from './conversation-presenters'
+import { getSessionChatTailSnapshotForConversation } from './session-chat-tail-controller'
 
 export function sortMobileInboxItems(items: MobileConversationListItem[]) {
     return [...items].sort((left, right) => {
@@ -118,7 +119,12 @@ export function buildMobileMachineCards(
             latestTimestamp: latestItem?.timestamp || 0,
             fallbackActivityAt,
             preview: latestConversation
-                ? getConversationMachineCardPreview(latestConversation)
+                // (B2) Same chat_tail snapshot authority as the inbox rows so the
+                // machine card preview stays consistent with the opened chat body.
+                ? getConversationMachineCardPreview(
+                    latestConversation,
+                    getSessionChatTailSnapshotForConversation(latestConversation),
+                )
                 : 'No active conversations yet. Open the machine, choose a workspace, then launch an IDE, CLI, or ACP session.',
         }
     }).sort((a, b) => {

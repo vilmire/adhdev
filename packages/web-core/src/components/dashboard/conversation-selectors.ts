@@ -1,7 +1,18 @@
 import type { DaemonData, SessionEntry } from '../../types'
 import { formatIdeType } from '../../utils/daemon-utils'
 import { normalizeTextContent } from '../../utils/text'
+import { getConversationLiveMessages } from './conversation-message-snapshot'
+import type { SessionChatTailSnapshot } from './session-chat-tail-controller'
 import { isAcpConv, isCliConv, isCliTerminalConv, type ActiveConversation, type DashboardMessage } from './types'
+
+/**
+ * (B2) The live chat_tail snapshot the warm controller already holds for a
+ * conversation, passed through the preview selectors so the inbox/card previews
+ * derive their last message from the SAME transcript authority ChatPane renders
+ * (getConversationLiveMessages). Optional everywhere — omitted (or without a live
+ * snapshot) the selectors fall back to conversation.messages exactly as before.
+ */
+export type ConversationPreviewSnapshot = Pick<SessionChatTailSnapshot, 'liveMessages' | 'hasLiveSnapshot'>
 
 export const DASHBOARD_NOTIFICATION_PREVIEW_MAX_CHARS = 180
 
@@ -50,13 +61,24 @@ export function getConversationNotificationLabel(conversation: ActiveConversatio
         || 'Session'
 }
 
-function getConversationLastMessage(conversation: ActiveConversation): DashboardMessage | undefined {
-    return [...conversation.messages].reverse().find((message) => !message?._localId)
-        || conversation.messages[conversation.messages.length - 1]
+function getConversationLastMessage(
+    conversation: ActiveConversation,
+    snapshot?: ConversationPreviewSnapshot | null,
+): DashboardMessage | undefined {
+    // (B2) When the warm chat_tail snapshot is available, derive the last message
+    // from the SAME authority ChatPane uses (getConversationLiveMessages), so the
+    // inbox/card preview and the opened chat body agree on the latest bubble. Falls
+    // back to conversation.messages when no live snapshot has arrived yet.
+    const messages = getConversationLiveMessages(conversation, snapshot)
+    return [...messages].reverse().find((message) => !message?._localId)
+        || messages[messages.length - 1]
 }
 
-export function getConversationLastMessagePreview(conversation: ActiveConversation): string {
-    const lastMessage = getConversationLastMessage(conversation)
+export function getConversationLastMessagePreview(
+    conversation: ActiveConversation,
+    snapshot?: ConversationPreviewSnapshot | null,
+): string {
+    const lastMessage = getConversationLastMessage(conversation, snapshot)
     const messagePreview = normalizeTextContent(lastMessage?.content)
     const summaryPreview = normalizeTextContent(conversation.lastMessagePreview)
 
@@ -79,29 +101,6 @@ export function getConversationLastMessagePreview(conversation: ActiveConversati
     if (messagePreview) return messagePreview
     if (summaryPreview) return summaryPreview
     return ''
-}
-
-/** Inbox/card placeholder shown while the agent is mid-turn with no visible reply yet. */
-export const AGENT_GENERATING_PREVIEW_TEXT = 'Agent is generating…'
-
-/**
- * True when the latest message we can surface for this conversation is still the
- * user's own prompt — i.e. the agent has not produced a visible reply yet.
- *
- * During generation the assistant's streamed reply only reaches the open ChatPane
- * through the live agent-stream channel; the inbox status snapshot's transcript
- * (and the daemon-derived lastMessageRole computed from it) can still end at the
- * user message. Echoing that user message back as the conversation "preview" is
- * the stale-inbox bug, so callers pair this with the generating status to swap in
- * AGENT_GENERATING_PREVIEW_TEXT. Returns false the moment an assistant reply is
- * visible (transcript tail or daemon summary), so a real reply always wins.
- */
-export function isConversationAwaitingAssistantReply(conversation: ActiveConversation): boolean {
-    if (normalizeTextContent(conversation.lastMessagePreview) && conversation.lastMessageRole === 'assistant') {
-        return false
-    }
-    const lastMessage = getConversationLastMessage(conversation)
-    return lastMessage?.role !== 'assistant'
 }
 
 export function compactConversationNotificationPreview(

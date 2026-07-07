@@ -821,6 +821,33 @@ export function clearSessionChatTailControllerSnapshot(
   }
 }
 
+/**
+ * (B2) Read the live chat_tail snapshot the warm controller ALREADY holds for a
+ * conversation, if any. The mobile inbox uses this to build its list-item preview
+ * from the same transcript authority ChatPane renders — keeping the inbox preview
+ * and the opened chat body in sync — WITHOUT opening a second subscription. It
+ * resolves the exact same registry key the warm/hook paths use
+ * (getControllerKey with the read-safe historySessionId, falling back to the
+ * sessionId), so it observes the warmed controller instead of creating one.
+ *
+ * Returns undefined when no controller is warm for this conversation (e.g. an
+ * idle session outside the warm window); callers then fall back to
+ * conversation.messages exactly as before.
+ */
+export function getSessionChatTailSnapshotForConversation(
+  conversation: ActiveConversation,
+): SessionChatTailSnapshot | undefined {
+  const daemonId = getConversationDaemonRouteId(conversation)
+  const sessionId = conversation.sessionId || ''
+  if (!daemonId || !sessionId) return undefined
+  const historySessionIdForRead = getConversationHistorySessionIdForRead(conversation)
+  const key = getControllerKey(daemonId, sessionId, historySessionIdForRead || sessionId)
+  const controller = controllerRegistry.get(key)
+  if (!controller) return undefined
+  const snapshot = controller.getSnapshot()
+  return snapshot.hasLiveSnapshot ? snapshot : undefined
+}
+
 export function resetSessionChatTailControllersForTest(): void {
   for (const controller of controllerRegistry.values()) {
     controller.dispose()

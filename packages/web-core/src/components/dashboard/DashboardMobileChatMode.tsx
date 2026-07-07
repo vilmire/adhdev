@@ -16,6 +16,7 @@ import type { LiveSessionInboxState, MobileConversationListItem, MobileMachineCa
 import { getConversationInboxSurfaceState } from './DashboardMobileChatShared'
 import { getConversationMachineId } from './conversation-selectors'
 import { getConversationPreviewText } from './conversation-presenters'
+import { getSessionChatTailSnapshotForConversation } from './session-chat-tail-controller'
 import { compareMachineEntries } from '../../utils/daemon-utils'
 import {
     buildMobileMachineCards,
@@ -143,7 +144,11 @@ export default function DashboardMobileChatMode({
             isOpenConversation,
         })
         const timestamp = getConversationTimestamp(conversation)
-        const preview = getConversationPreviewText(conversation)
+        // (B2) Feed the warm chat_tail snapshot into the preview so the inbox row
+        // shows the same last message ChatPane renders (falls back to
+        // conversation.messages when no warm snapshot exists for this session).
+        const chatTailSnapshot = getSessionChatTailSnapshotForConversation(conversation)
+        const preview = getConversationPreviewText(conversation, chatTailSnapshot)
 
         return {
             conversation,
