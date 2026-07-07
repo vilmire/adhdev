@@ -57,7 +57,15 @@ export default function ProviderPriorityEditor({
       <div className="flex flex-col gap-2">
         {visibleValue.length === 0 ? (
           <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-300">
-            No provider priority configured. Launches without an explicit CLI provider will fail closed.
+            {value.length > 0 ? (
+              <>
+                Saved provider order (<span className="font-mono">{value.join(' → ')}</span>) has no providers
+                detected on this machine right now. Launches without an explicit CLI provider will fail closed
+                until one of them is detected.
+              </>
+            ) : (
+              'No provider priority configured. Launches without an explicit CLI provider will fail closed.'
+            )}
           </div>
         ) : visibleValue.map((type, index) => {
           const provider = availableByType.get(type)

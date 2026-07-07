@@ -598,6 +598,7 @@ export default function Dashboard() {
                 }}
                 onboarding={{
                     open: showOnboarding,
+                    standalone: isStandalone,
                     onClose: () => {
                         try { localStorage.setItem('adhdev_onboarding_v1', 'done') } catch {}
                         setShowOnboarding(false)

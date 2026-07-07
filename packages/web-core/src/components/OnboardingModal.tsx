@@ -3,9 +3,20 @@ import { IconX } from './Icons'
 
 interface OnboardingModalProps {
   onClose: () => void
+  /** Standalone dashboard: the daemon is already running and connected, so the
+   *  closing step must not tell the user to install it. */
+  standalone?: boolean
 }
 
-const STEPS = [
+interface OnboardingStep {
+  icon: string
+  title: string
+  desc: string
+  visual?: string
+  code?: string
+}
+
+const SHARED_STEPS: OnboardingStep[] = [
   {
     icon: '🦦',
     title: 'Welcome to ADHDev',
@@ -27,21 +38,30 @@ const STEPS = [
   {
     icon: '🕸️',
     title: 'Orchestrate a fleet',
-    desc: 'With Repo Mesh (cloud), one coordinator hands work to agents across many machines — parallel git worktrees, automatic branch convergence, and cross-checking the same repo from several angles.',
+    desc: 'With Repo Mesh, one coordinator hands work to agents across many machines — parallel git worktrees, automatic branch convergence, and cross-checking the same repo from several angles.',
     visual: '🕸️',
-  },
-  {
-    icon: '🚀',
-    title: 'Get started',
-    desc: 'Install the daemon and link it to your dashboard. It connects automatically.',
-    code: 'npm install -g @adhdev/daemon-standalone && adhdev-standalone',
   },
 ]
 
-export default function OnboardingModal({ onClose }: OnboardingModalProps) {
+const CLOUD_FINAL_STEP: OnboardingStep = {
+  icon: '🚀',
+  title: 'Get started',
+  desc: 'Install the daemon and link it to your dashboard. It connects automatically.',
+  code: 'npm install -g @adhdev/daemon-standalone && adhdev-standalone',
+}
+
+const STANDALONE_FINAL_STEP: OnboardingStep = {
+  icon: '🚀',
+  title: "You're all set",
+  desc: 'This dashboard is already connected to your local daemon. Start a session from the Dashboard tab, or add more providers under Burrow → Providers.',
+  visual: '✅',
+}
+
+export default function OnboardingModal({ onClose, standalone = false }: OnboardingModalProps) {
   const [step, setStep] = useState(0)
-  const current = STEPS[step]
-  const isLast = step === STEPS.length - 1
+  const steps = [...SHARED_STEPS, standalone ? STANDALONE_FINAL_STEP : CLOUD_FINAL_STEP]
+  const current = steps[step]
+  const isLast = step === steps.length - 1
 
   return (
     <div
@@ -73,7 +93,7 @@ export default function OnboardingModal({ onClose }: OnboardingModalProps) {
 
         {/* Step indicator */}
         <div style={{ display: 'flex', justifyContent: 'center', gap: 6, marginBottom: '1.5rem' }}>
-          {STEPS.map((_, i) => (
+          {steps.map((_, i) => (
             <div
               key={i}
               style={{

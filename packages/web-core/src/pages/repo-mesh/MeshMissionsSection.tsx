@@ -52,6 +52,16 @@ function goalPreviewOf(m: MissionLike): { text: string; truncated: boolean } {
     return { text: m.goalPreview ?? '', truncated: m.goalTruncated === true }
 }
 
+const STATUS_FILTERS = ['active', 'paused', 'completed', 'abandoned'] as const
+type StatusFilter = (typeof STATUS_FILTERS)[number] | 'all'
+
+/** Missions without a status are treated as active (the ledger default). */
+function missionStatusOf(m: MissionLike): string {
+    return (m.status || 'active').toLowerCase()
+}
+
+const COLLAPSED_LIMIT = 8
+
 export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: MeshMissionsSectionProps) {
     const missions = useMemo(() => readMissions(status), [status])
     // Full goal text fetched on demand, keyed by mission id.
@@ -59,6 +69,24 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
     const [expanded, setExpanded] = useState<Record<string, boolean>>({})
     const [fetching, setFetching] = useState(false)
     const [fetchError, setFetchError] = useState<string | null>(null)
+    const [statusFilter, setStatusFilter] = useState<StatusFilter>('active')
+    const [showAll, setShowAll] = useState(false)
+
+    const statusCounts = useMemo(() => {
+        const counts: Record<string, number> = {}
+        for (const m of missions) {
+            const s = missionStatusOf(m)
+            counts[s] = (counts[s] || 0) + 1
+        }
+        return counts
+    }, [missions])
+
+    const filtered = useMemo(
+        () => (statusFilter === 'all' ? missions : missions.filter(m => missionStatusOf(m) === statusFilter)),
+        [missions, statusFilter],
+    )
+    const visible = showAll ? filtered : filtered.slice(0, COLLAPSED_LIMIT)
+    const hiddenCount = filtered.length - visible.length
 
     const canCommand = !!daemonId && missions.length > 0
 
@@ -93,8 +121,38 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
     return (
         <Section title="Missions" description="Active and historical missions reported by the coordinator. Expand a goal to fetch its full text on demand.">
             {fetchError && <div className="mb-3 text-[12px] text-amber-400">{fetchError}</div>}
+            <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                {STATUS_FILTERS.filter(s => (statusCounts[s] || 0) > 0).map(s => (
+                    <button
+                        key={s}
+                        type="button"
+                        onClick={() => { setStatusFilter(s); setShowAll(false) }}
+                        className={`rounded-full border px-2.5 py-0.5 text-[11px] capitalize transition-colors ${
+                            statusFilter === s
+                                ? 'border-accent-primary text-accent-primary'
+                                : 'border-border-subtle text-text-muted hover:text-text-secondary'
+                        }`}
+                    >
+                        {s} {statusCounts[s]}
+                    </button>
+                ))}
+                <button
+                    type="button"
+                    onClick={() => { setStatusFilter('all'); setShowAll(false) }}
+                    className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${
+                        statusFilter === 'all'
+                            ? 'border-accent-primary text-accent-primary'
+                            : 'border-border-subtle text-text-muted hover:text-text-secondary'
+                    }`}
+                >
+                    All {missions.length}
+                </button>
+            </div>
+            {filtered.length === 0 && (
+                <div className="text-[12px] text-text-muted">No {statusFilter} missions.</div>
+            )}
             <div className="flex flex-col gap-2">
-                {missions.map(mission => {
+                {visible.map(mission => {
                     const isOpen = expanded[mission.id] === true
                     const full = fullGoals[mission.id]
                     const preview = goalPreviewOf(mission)
@@ -136,6 +194,15 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                     )
                 })}
             </div>
+            {hiddenCount > 0 && (
+                <button
+                    type="button"
+                    className="mt-2 text-[12px] text-accent-primary hover:underline"
+                    onClick={() => setShowAll(true)}
+                >
+                    Show {hiddenCount} more
+                </button>
+            )}
         </Section>
     )
 }

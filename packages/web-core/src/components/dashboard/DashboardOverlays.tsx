@@ -66,6 +66,7 @@ interface DashboardOverlaysProps {
     }
     onboarding: {
         open: boolean
+        standalone?: boolean
         onClose: () => void
     }
     interactivePrompt?: UseInteractivePromptResult
@@ -150,7 +151,7 @@ export default function DashboardOverlays({
                 onCancel={interactivePrompt?.cancel ?? (() => {})}
             />
 
-            {onboarding.open && <OnboardingModal onClose={onboarding.onClose} />}
+            {onboarding.open && <OnboardingModal onClose={onboarding.onClose} standalone={onboarding.standalone} />}
         </>
     )
 }

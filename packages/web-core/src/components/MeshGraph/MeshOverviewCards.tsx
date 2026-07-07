@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { describeQueueTaskMessage } from '../../utils/queue-task-label'
 import type {
     MeshMissionStatus,
     MeshMissionSummary,
@@ -901,7 +902,7 @@ function QueueCard({ meshTheme, queueSummary, tasks, onSelect }: {
                         {list.visible.map(task => (
                             <ListRow key={task.id} meshTheme={meshTheme} onClick={() => onSelect(task)}>
                                 <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
-                                <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`}>{task.message || task.id}</span>
+                                <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={task.message || undefined}>{describeQueueTaskMessage(task.message) || task.id}</span>
                                 <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{relativeTime(task.updatedAt) ?? ''}</span>
                             </ListRow>
                         ))}

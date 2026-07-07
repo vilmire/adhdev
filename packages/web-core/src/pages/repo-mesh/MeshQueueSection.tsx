@@ -1,4 +1,5 @@
 import { Section } from '../../components/ui/Section'
+import { describeQueueTaskMessage } from '../../utils/queue-task-label'
 import { IconRefresh, NodeHealthBadge } from './icons'
 import type { MeshQueueEntry, MeshQueueSummary } from './types'
 
@@ -81,7 +82,7 @@ export function MeshQueueSection({ queueSummary, queueLoading, queueError, activ
                                             </span>
                                         )}
                                     </div>
-                                    {item.message && <div className="text-[12px] text-text-primary truncate">{item.message}</div>}
+                                    {item.message && <div className="text-[12px] text-text-primary truncate" title={item.message}>{describeQueueTaskMessage(item.message)}</div>}
                                 </div>
                                 <div className="text-right text-[10px] text-text-muted shrink-0">
                                     {item.nodeId && <div>node {item.nodeId.slice(0, 10)}</div>}
