@@ -458,6 +458,42 @@ export class CliStateEngine {
         this.idleFinishCandidate = null;
     }
 
+    /**
+     * Poll-driven static-idle confirm (D4). A hosted CLI session (e.g. a fresh
+     * antigravity coordinator) whose boot banner drove the FSM into 'generating'
+     * can then sit at a STATIC ready prompt emitting no further PTY output. Every
+     * output-driven busy→idle re-eval (handleOutput/resolveStartupState/settle)
+     * is starved because there is no new output, and the startup-settle loop has
+     * hard-stopped past spawnAt+10s — so currentStatus stays frozen at generating
+     * and the dashboard disables Send. This is the ONE path that can release that
+     * wedge from the read-only status poll.
+     *
+     * Safety: this must NEVER flip a real generating turn to idle. The gate is
+     * done by the caller (getStatus) reusing resolveStartupState's proven
+     * predicates: no recent PTY output for a grace window, runDetectStatus of the
+     * current screen === 'idle', and no active/parsed modal. Here we add the
+     * final structural guard: there must be NO active turn scope. A live user
+     * turn always carries a currentTurnScope (set in onTurnStarted), so this only
+     * releases the boot-banner wedge and the post-turn static-idle case, both of
+     * which have already had their scope nulled. Returns true when it transitioned.
+     */
+    confirmPollStaticIdle(reason: string): boolean {
+        if (this.currentStatus !== 'generating') return false;
+        if (this.currentTurnScope || this.activeModal) return false;
+        this.clearAllTimers();
+        this.clearIdleFinishCandidate(reason);
+        this.isWaitingForResponse = false;
+        this.responseSettleIgnoreUntil = 0;
+        this.submitRetryUsed = false;
+        this.submitRetryPromptSnippet = '';
+        this.finishRetryCount = 0;
+        this.currentTurnScope = null;
+        this.activeModal = null;
+        this.setStatus('idle', reason);
+        this.recordTrace('poll_static_idle_confirmed', { reason });
+        return true;
+    }
+
     hasActionableApproval(startupModal?: { message: string; buttons: string[] } | null): boolean {
         return !!(startupModal ?? this.activeModal);
     }

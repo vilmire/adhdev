@@ -926,6 +926,46 @@ export class ProviderCliAdapter implements CliAdapter {
         const startupDetectedStatus = allowParse && this.startupParseGate && !startupModal
             ? this.runDetectStatus(this.recentOutputBuffer || this.terminalScreen.getText())
             : null;
+        // (D4) Poll-driven static-idle confirm. A hosted CLI session whose boot
+        // banner drove the FSM to 'generating' can then sit at a STATIC ready
+        // prompt emitting NO further PTY output — every output-driven busy→idle
+        // re-eval is starved and the startup-settle loop has hard-stopped past
+        // spawnAt+10s, so currentStatus stays frozen at generating and the
+        // dashboard disables Send. This read-path poll is the only place that can
+        // release the wedge. Gate PRECISELY (reuse resolveStartupState's proven
+        // predicates so a real generating turn is NEVER mis-flipped):
+        //   (a) no recent output for >= statusActivityHold (the 2000ms stable
+        //       window resolveStartupState uses),
+        //   (b) runDetectStatus(current screen) === 'idle' (same detector),
+        //   (c) no active/parsed modal — an approval/choice screen is never
+        //       flipped to idle.
+        // A real generating turn keeps producing output (fresh
+        // lastNonEmptyOutputAt) and/or shows 'esc to cancel' (detects busy) → it
+        // fails (a) or (b). confirmPollStaticIdle adds the final structural guard
+        // (currentStatus==='generating' AND no currentTurnScope/activeModal), so
+        // this only releases the boot-banner wedge and the post-turn static-idle
+        // case. Direct-spawn sessions already settle idle in the startup window
+        // → this is a no-op for them.
+        if (
+            allowParse
+            && this.engine.currentStatus === 'generating'
+            && !this.engine.currentTurnScope
+            && !this.engine.activeModal
+        ) {
+            const now = Date.now();
+            const quietForMs = this.lastNonEmptyOutputAt
+                ? (now - this.lastNonEmptyOutputAt)
+                : Number.MAX_SAFE_INTEGER;
+            if (quietForMs >= this.getStatusActivityHoldMs()) {
+                const screenText = this.terminalScreen.getText();
+                const pollDetect = this.runDetectStatus(screenText || this.recentOutputBuffer);
+                const pollModal = this.runParseApproval(screenText)
+                    || this.runParseApproval(this.recentOutputBuffer);
+                if (pollDetect === 'idle' && !pollModal) {
+                    this.engine.confirmPollStaticIdle('poll_static_idle');
+                }
+            }
+        }
         let effectiveStatus = this.projectEffectiveStatus(startupModal);
         let effectiveModal = startupModal || this.engine.activeModal;
         // (fix) When we have no captured modal yet, take one more live attempt

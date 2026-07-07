@@ -650,4 +650,65 @@ describe('CliStateEngine', () => {
             expect(engine.activeModal).toBe(null)
         })
     })
+
+    // ── confirmPollStaticIdle (D4 static-idle wedge release) ─────────────────
+    //
+    // A hosted CLI whose boot banner drove the FSM to 'generating' (applyGenerating
+    // sets currentStatus='generating' + isWaitingForResponse=true with NO
+    // currentTurnScope) then sits at a static ready prompt. The caller (getStatus)
+    // gates on no-recent-output / screen-detects-idle / no-modal; the engine adds
+    // the structural guard here and performs the state transition.
+    describe('confirmPollStaticIdle', () => {
+        it('releases the boot-banner wedge: generating + no turn scope + no modal → idle', () => {
+            const { engine } = buildEngine()
+            // Exactly the wedge state applyGenerating leaves on a fresh hosted session.
+            engine.setStatus('generating')
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = null
+            engine.activeModal = null
+
+            const flipped = engine.confirmPollStaticIdle('poll_static_idle')
+
+            expect(flipped).toBe(true)
+            expect(engine.currentStatus).toBe('idle')
+            expect(engine.isWaitingForResponse).toBe(false)
+        })
+
+        it('is a no-op when a real turn is in flight (currentTurnScope set)', () => {
+            const { engine } = buildEngine()
+            engine.setStatus('generating')
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = { prompt: 'do work', startedAt: Date.now(), bufferStart: 0, rawBufferStart: 0 }
+
+            const flipped = engine.confirmPollStaticIdle('poll_static_idle')
+
+            expect(flipped).toBe(false)
+            expect(engine.currentStatus).toBe('generating')
+            expect(engine.currentTurnScope).not.toBe(null)
+        })
+
+        it('is a no-op when an approval modal is active', () => {
+            const { engine } = buildEngine()
+            engine.setStatus('generating')
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = null
+            engine.activeModal = { message: 'Proceed?', buttons: ['Yes', 'No'] }
+
+            const flipped = engine.confirmPollStaticIdle('poll_static_idle')
+
+            expect(flipped).toBe(false)
+            expect(engine.currentStatus).toBe('generating')
+            expect(engine.activeModal).not.toBe(null)
+        })
+
+        it('is a no-op when not currently generating', () => {
+            const { engine } = buildEngine()
+            engine.setStatus('idle')
+
+            const flipped = engine.confirmPollStaticIdle('poll_static_idle')
+
+            expect(flipped).toBe(false)
+            expect(engine.currentStatus).toBe('idle')
+        })
+    })
 })
