@@ -20,7 +20,6 @@ import {
     compactChatPayload,
     enqueueTask,
     findOptionalNodeWithRefresh,
-    getMagiPanel,
     getMeshMission,
     getQueue,
     isWeakCompletionEvidence,
@@ -28,11 +27,9 @@ import {
     listMagiKindPanels,
     setMagiKindPanel,
     normalizeMagiSlots,
-    listMagiPanels,
     MAGI_RAW_ANSWER_CAP,
     meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
-    normalizeMagiPanel,
     normalizeMeshCapabilityTags,
     randomUUID,
     readProviderPriority,
@@ -42,7 +39,6 @@ import {
     resolveCoordinatorNode,
     triggerMeshQueueAndReport,
     unwrapCommandPayload,
-    upsertMagiPanel,
     upsertMeshMission,
 } from './mesh-tools-internal.js';
 import { resolveMagiSessionCleanupMode, type RepoMeshMagiSessionCleanupMode } from '@adhdev/daemon-core';
@@ -56,8 +52,6 @@ import type {
     MagiGitSkew,
     MagiMode,
     MagiTaskKind,
-    MagiPanel,
-    MagiPanelMember,
     MagiSlot,
     MagiReplicaGitRef,
     MagiResponseSource,
@@ -102,7 +96,7 @@ const MAGI_POLL_INTERVAL_MS = 5_000;
 // re-export (mesh-tools-internal) — same indirection as the other Magi* types, so this
 // module takes no direct @adhdev/mesh-shared dependency. Re-exported for existing
 // callers that import MagiTaskKind from this module.
-export type { MagiTaskKind, MagiPanelDefaultKind } from './mesh-tools-internal.js';
+export type { MagiTaskKind } from './mesh-tools-internal.js';
 
 const VALID_TASK_KINDS: readonly MagiTaskKind[] = ['claim_audit', 'rca', 'design', 'freeform'];
 const DEFAULT_TASK_KIND: MagiTaskKind = 'claim_audit';
@@ -713,9 +707,9 @@ export function computeMagiGitSkew(answered: MagiSynthesizedResponse[]): MagiGit
 // ─── Fan-out planning (pure) ────────────────────
 
 export interface MagiReplicaPlan {
-    memberIndex: number;
+    slotIndex: number;
     provider: string;
-    /** Resolved concrete node id (pinned member), else undefined (tag-routed). */
+    /** Resolved concrete node id (pinned slot), else undefined (tag-routed). */
     targetNodeId?: string;
     capabilityTags: string[];
     /** Tags the enqueued task hard-filters on: ['provider=<p>', ...capabilityTags]. */
@@ -724,17 +718,17 @@ export interface MagiReplicaPlan {
     model?: string;
 }
 
-export interface MagiUnavailableMember {
-    memberIndex: number;
+export interface MagiUnavailableSlot {
+    slotIndex: number;
     provider: string;
     nodeId?: string;
     capabilityTags: string[];
     reason: string;
 }
 
-/** Per-member resolution detail (for mesh_magi_panel_list + the git-stale exclusion). */
-export interface MagiMemberResolution {
-    memberIndex: number;
+/** Per-slot resolution detail (for the git-stale exclusion + the review response surface). */
+export interface MagiSlotResolution {
+    slotIndex: number;
     provider: string;
     nodeId?: string;
     capabilityTags: string[];
@@ -759,19 +753,19 @@ export interface MagiFanoutPlan {
     distinctNodeTargets: number;
     enoughTargets: boolean;
     coupled: boolean;
-    unavailableMembers: MagiUnavailableMember[];
+    unavailableSlots: MagiUnavailableSlot[];
     /** The commit the panel is being resolved against (coordinator HEAD); undefined when unknown. */
     referenceCommit?: string;
-    /** Per-member resolution detail, aligned to panel.members order. */
-    memberResolutions: MagiMemberResolution[];
-    /** Members excluded because they are git-stale (different HEAD) and include_stale was not set. */
-    staleMembers: MagiMemberResolution[];
-    /** Git-stale members that were nonetheless INCLUDED because include_stale=true (warning surface). */
-    includedStaleMembers: MagiMemberResolution[];
+    /** Per-slot resolution detail, aligned to the kind-panel slot order. */
+    slotResolutions: MagiSlotResolution[];
+    /** Slots excluded because they are git-stale (different HEAD) and include_stale was not set. */
+    staleSlots: MagiSlotResolution[];
+    /** Git-stale slots that were nonetheless INCLUDED because include_stale=true (warning surface). */
+    includedStaleSlots: MagiSlotResolution[];
 }
 
-function replicaCountFor(member: MagiPanelMember, panel: MagiPanel, globalN?: number): number {
-    const n = member.n ?? panel.defaultN ?? globalN ?? 1;
+function replicaCountFor(slot: MagiSlot, defaultN: number | undefined, globalN?: number): number {
+    const n = slot.n ?? defaultN ?? globalN ?? 1;
     return Math.max(1, Math.floor(n));
 }
 
@@ -801,41 +795,42 @@ function nodeHasGitDrift(node: any): boolean {
 }
 
 /**
- * Resolve a panel against the live mesh nodes into a concrete fan-out plan:
- * expand each available member to its replica count, clamp the total to the guard
+ * Resolve a kind-panel's slots against the live mesh nodes into a concrete fan-out
+ * plan: expand each available slot to its replica count, clamp the total to the guard
  * cap (drop logged, never silent), assess (node, provider) target diversity, and
  * flag a panel that collapses to a single provider/machine. Pure.
  */
 export function buildMagiFanoutPlan(
-    panel: MagiPanel,
+    slots: MagiSlot[],
     nodes: LocalMeshNodeEntry[],
-    opts: { n?: number; maxReplicas?: number; referenceCommit?: string; includeStale?: boolean } = {},
+    opts: { n?: number; defaultN?: number; maxReplicas?: number; referenceCommit?: string; includeStale?: boolean } = {},
 ): MagiFanoutPlan {
     const cap = Math.max(1, Math.floor(opts.maxReplicas ?? MAGI_MAX_REPLICAS));
-    const members = Array.isArray(panel.members) ? panel.members : [];
+    const slotList = Array.isArray(slots) ? slots : [];
+    const defaultN = opts.defaultN;
     const referenceCommit = typeof opts.referenceCommit === 'string' && opts.referenceCommit.trim() ? opts.referenceCommit.trim() : undefined;
     const includeStale = opts.includeStale === true;
     const replicas: MagiReplicaPlan[] = [];
-    const unavailableMembers: MagiUnavailableMember[] = [];
-    const memberResolutions: MagiMemberResolution[] = [];
+    const unavailableSlots: MagiUnavailableSlot[] = [];
+    const slotResolutions: MagiSlotResolution[] = [];
     const targetKeys = new Set<string>();
     const providerSet = new Set<string>();
     const nodeTargetSet = new Set<string>();
     let totalRequested = 0;
 
-    members.forEach((member, memberIndex) => {
-        const provider = member.provider;
-        const model = typeof member.model === 'string' && member.model.trim() ? member.model.trim() : undefined;
-        const capabilityTags = normalizeMeshCapabilityTags(member.capabilityTags);
+    slotList.forEach((slot, slotIndex) => {
+        const provider = slot.provider;
+        const model = typeof slot.model === 'string' && slot.model.trim() ? slot.model.trim() : undefined;
+        const capabilityTags = normalizeMeshCapabilityTags(slot.capabilityTags);
         const requiredTags = normalizeMeshCapabilityTags([`provider=${provider}`, ...capabilityTags]);
-        const count = replicaCountFor(member, panel, opts.n);
+        const count = replicaCountFor(slot, defaultN, opts.n);
 
         // Resolve availability against the mesh, and gather the candidate node(s) so we
         // can assess git staleness against the reference commit.
         let targetNodeId: string | undefined;
         let candidateNodes: any[] = [];
-        if (member.nodeId) {
-            const node = nodes.find(n => meshNodeIdMatches(n as any, member.nodeId!));
+        if (slot.nodeId) {
+            const node = nodes.find(n => meshNodeIdMatches(n as any, slot.nodeId!));
             if (node) { targetNodeId = (node as any).id; candidateNodes = [node]; }
         } else {
             // Match against each node's OWN advertised tags (provider derived from its
@@ -847,20 +842,20 @@ export function buildMagiFanoutPlan(
         const available = candidateNodes.length > 0;
 
         if (!available) {
-            unavailableMembers.push({
-                memberIndex,
+            unavailableSlots.push({
+                slotIndex,
                 provider,
-                nodeId: member.nodeId,
+                nodeId: slot.nodeId,
                 capabilityTags,
-                reason: member.nodeId
-                    ? `pinned node '${member.nodeId}' is not a member of this mesh`
+                reason: slot.nodeId
+                    ? `pinned node '${slot.nodeId}' is not a member of this mesh`
                     : `no mesh node satisfies required tags [${requiredTags.join(', ')}]`,
             });
-            memberResolutions.push({ memberIndex, provider, nodeId: member.nodeId, capabilityTags, available: false, gitStale: false, excluded: true, reason: 'unavailable' });
+            slotResolutions.push({ slotIndex, provider, nodeId: slot.nodeId, capabilityTags, available: false, gitStale: false, excluded: true, reason: 'unavailable' });
             return;
         }
 
-        // Git staleness vs the reference commit. A member is git-stale only when a
+        // Git staleness vs the reference commit. A slot is git-stale only when a
         // reference commit is known AND every candidate node with a known HEAD differs
         // from it (a node with no known HEAD can't be proven stale → treated as fresh,
         // so we never silently exclude on missing telemetry). Prefer routing to a fresh
@@ -874,7 +869,7 @@ export function buildMagiFanoutPlan(
             });
             if (freshCandidate) {
                 headCommit = nodeHeadCommit(freshCandidate);
-                if (member.nodeId) targetNodeId = (freshCandidate as any).id;
+                if (slot.nodeId) targetNodeId = (freshCandidate as any).id;
                 gitStale = false;
             } else {
                 headCommit = nodeHeadCommit(candidateNodes[0]);
@@ -886,14 +881,14 @@ export function buildMagiFanoutPlan(
             // candidate as fresh (gitStale stays false), so a node sitting behind/ahead of its
             // own upstream silently joined the panel on different code. When drift counters ARE
             // present, use them: prefer a candidate with zero drift; if none is clean but some
-            // candidate reports drift, mark the member git-stale (default-excluded like the
+            // candidate reports drift, mark the slot git-stale (default-excluded like the
             // HEAD-diff path). A candidate with no drift telemetry at all is still treated as
             // fresh — we never exclude on missing data.
             const freshCandidate = candidateNodes.find(n => !nodeHasGitDrift(n));
             if (freshCandidate && candidateNodes.some(nodeHasGitDrift)) {
-                // Mixed pool: route to the clean candidate, leave the member fresh.
+                // Mixed pool: route to the clean candidate, leave the slot fresh.
                 headCommit = nodeHeadCommit(freshCandidate);
-                if (member.nodeId) targetNodeId = (freshCandidate as any).id;
+                if (slot.nodeId) targetNodeId = (freshCandidate as any).id;
                 gitStale = false;
             } else if (!freshCandidate && candidateNodes.some(nodeHasGitDrift)) {
                 // Every candidate reports drift → provably stale relative to its upstream.
@@ -905,10 +900,10 @@ export function buildMagiFanoutPlan(
             }
         }
 
-        const resolution: MagiMemberResolution = {
-            memberIndex,
+        const resolution: MagiSlotResolution = {
+            slotIndex,
             provider,
-            nodeId: targetNodeId ?? member.nodeId,
+            nodeId: targetNodeId ?? slot.nodeId,
             capabilityTags,
             available: true,
             ...(headCommit ? { headCommit } : {}),
@@ -916,14 +911,14 @@ export function buildMagiFanoutPlan(
             excluded: false,
         };
 
-        // Default-exclude a git-stale member (it would investigate different code than
+        // Default-exclude a git-stale slot (it would investigate different code than
         // the reference); include_stale=true overrides but the caller surfaces a warning.
         if (gitStale && !includeStale) {
             resolution.excluded = true;
             resolution.reason = referenceCommit
                 ? `git-stale: node HEAD ${headCommit ?? '(unknown)'} differs from reference ${referenceCommit}`
                 : `git-stale: node reports drift from its upstream (behind/ahead) and no coordinator reference commit is known`;
-            memberResolutions.push(resolution);
+            slotResolutions.push(resolution);
             return;
         }
 
@@ -932,9 +927,9 @@ export function buildMagiFanoutPlan(
         targetKeys.add(`${targetKey}|${provider}`);
         providerSet.add(provider);
         nodeTargetSet.add(targetKey);
-        memberResolutions.push(resolution);
+        slotResolutions.push(resolution);
         for (let i = 0; i < count; i++) {
-            replicas.push({ memberIndex, provider, targetNodeId, capabilityTags, requiredTags, ...(model ? { model } : {}) });
+            replicas.push({ slotIndex, provider, targetNodeId, capabilityTags, requiredTags, ...(model ? { model } : {}) });
         }
     });
 
@@ -947,8 +942,8 @@ export function buildMagiFanoutPlan(
     // enoughTargets / coupled are computed over INCLUDED targets only — i.e. AFTER the
     // git-stale exclusion — so the ≥2-independent-target guard re-checks post-exclusion
     // and never silently degrades to N=1.
-    const staleMembers = memberResolutions.filter(m => m.gitStale && m.excluded);
-    const includedStaleMembers = memberResolutions.filter(m => m.gitStale && !m.excluded);
+    const staleSlots = slotResolutions.filter(m => m.gitStale && m.excluded);
+    const includedStaleSlots = slotResolutions.filter(m => m.gitStale && !m.excluded);
     return {
         replicas: capped,
         totalRequested,
@@ -959,11 +954,11 @@ export function buildMagiFanoutPlan(
         distinctNodeTargets,
         enoughTargets: targetKeys.size >= MAGI_MIN_TARGETS,
         coupled: distinctProviders < 2 || distinctNodeTargets < 2,
-        unavailableMembers,
+        unavailableSlots,
         ...(referenceCommit ? { referenceCommit } : {}),
-        memberResolutions,
-        staleMembers,
-        includedStaleMembers,
+        slotResolutions,
+        staleSlots,
+        includedStaleSlots,
     };
 }
 
@@ -1215,54 +1210,6 @@ function replicaCompletionIsWeak(meshId: string, taskId: string): boolean {
 
 // ─── Handlers ───────────────────────────────────
 
-export async function meshMagiPanelSet(
-    ctx: MeshContext,
-    args: { panel_name?: string; panelName?: string; config?: unknown; write?: boolean; overwrite?: boolean },
-): Promise<string> {
-    const panelName = readString(args.panel_name) || readString(args.panelName);
-    if (!panelName) return JSON.stringify({ success: false, error: 'panel_name required' });
-    const write = args.write === true;
-    try {
-        if (!write) {
-            // Dry-run: normalize + validate via a throwaway upsert path WITHOUT persisting.
-            // We re-use the same validation by constructing the normalized panel through
-            // the accessor only on write; for dry-run we validate shape inline here.
-            const preview = previewMagiPanel(args.config);
-            return JSON.stringify({
-                success: true,
-                dryRun: true,
-                panelName,
-                panel: preview,
-                note: 'Dry-run only — no file written. Re-run with write=true to persist to ~/.adhdev/meshes.json.',
-            }, null, 2);
-        }
-        const panel = upsertMagiPanel(panelName, args.config, { overwrite: args.overwrite === true });
-        return JSON.stringify({
-            success: true,
-            written: true,
-            panelName,
-            panel,
-            nextAction: 'Verify resolution with mesh_magi_panel_list, then invoke mesh_magi_review({ panel, question, target }).',
-        }, null, 2);
-    } catch (e: any) {
-        const message = e?.message || String(e);
-        const code = message.includes('magi_panel_exists') ? 'magi_panel_exists'
-            : message.includes('invalid_magi_panel') ? 'invalid_magi_panel'
-            : undefined;
-        return JSON.stringify({ success: false, ...(code ? { code } : {}), error: message });
-    }
-}
-
-/**
- * Validate + normalize a panel config for dry-run preview. Delegates to the single
- * source-of-truth normalizer (daemon-core normalizeMagiPanel) so dry-run preview,
- * persisted upsert, and the inline-member ad-hoc path all share identical validation
- * (provider required, tag dedup, replica clamp, member cap) — no duplicated rules.
- */
-function previewMagiPanel(config: unknown): MagiPanel {
-    return normalizeMagiPanel(config);
-}
-
 /**
  * Set the MAGI kind→panel slot binding for one task_kind (machine-local
  * ~/.adhdev/meshes.json `magiKindPanels`). This is the MCP surface for the daemon
@@ -1347,74 +1294,11 @@ export async function meshMagiKindPanelList(
 }
 
 
-/**
- * Build a one-off ad-hoc MAGI panel from inline `members` (mesh_magi_review members
- * override) WITHOUT persisting anything to meshes.json. Same member shape and same
- * normalizer as a named panel, so an inline panel resolves through the identical
- * fan-out / synthesis pipeline. Pure. Throws invalid_magi_panel on a malformed list.
- */
-export function buildInlineMagiPanel(members: unknown, opts: { defaultN?: number; description?: string } = {}): MagiPanel {
-    return normalizeMagiPanel({
-        members,
-        ...(opts.defaultN !== undefined ? { defaultN: opts.defaultN } : {}),
-        description: opts.description ?? 'inline ad-hoc panel',
-    });
-}
-
-// MAGI-KIND-PANEL: the former preset auto-synthesis (enumerateLivePresetCandidates /
-// selectDiversePresetPairs / buildPresetMagiPanelForKind) has been REMOVED. A bare
-// `task_kind` no longer synthesizes a diverse cross-provider panel from the live mesh;
-// it resolves the user's explicitly configured kind-panel binding (magiKindPanels) or
-// errors magi_kind_not_configured. See the useKindPanelPath branch in meshMagiReview.
-
-export async function meshMagiPanelList(
-    ctx: MeshContext,
-    args: { panel?: string } = {},
-): Promise<string> {
-    await refreshMeshFromDaemon(ctx);
-    const all = listMagiPanels();
-    const only = readString(args.panel);
-    const names = only ? (all[only] ? [only] : []) : Object.keys(all);
-    if (only && names.length === 0) {
-        return JSON.stringify({ success: false, code: 'magi_panel_not_found', error: `panel '${only}' is not configured`, configuredPanels: Object.keys(all) });
-    }
-    const referenceCommit = resolveMagiReferenceCommit(ctx);
-    const panels = names.map(name => {
-        const panel = all[name];
-        // Resolve with the reference commit so the listing reflects which members are
-        // git-stale and would be excluded by default (panel_list itself never dispatches).
-        const plan = buildMagiFanoutPlan(panel, ctx.mesh.nodes, { referenceCommit });
-        return {
-            name,
-            description: panel.description,
-            // Per-member gitStale boolean alongside the raw member definition.
-            members: panel.members.map((m, i) => {
-                const res = plan.memberResolutions.find(r => r.memberIndex === i);
-                return {
-                    ...m,
-                    gitStale: res?.gitStale === true,
-                    ...(res?.headCommit ? { headCommit: res.headCommit } : {}),
-                };
-            }),
-            defaultN: panel.defaultN ?? 1,
-            resolution: {
-                referenceCommit: referenceCommit ?? null,
-                totalReplicas: plan.totalAfterCap,
-                distinctTargets: plan.distinctTargets,
-                distinctProviders: plan.distinctProviders,
-                distinctMachines: plan.distinctNodeTargets,
-                enoughTargets: plan.enoughTargets,
-                coupled: plan.coupled,
-                unavailableMembers: plan.unavailableMembers,
-                staleMembers: plan.staleMembers,
-            },
-            ...(plan.staleMembers.length > 0 ? { gitStaleWarning: `${plan.staleMembers.length} member(s) are git-stale (HEAD differs from reference ${referenceCommit ?? '(unknown)'}) and are excluded by default; pass include_stale=true to mesh_magi_review to include them.` } : {}),
-            ...(plan.coupled ? { warning: 'This panel collapses to a single provider or single machine — its agreements would be flagged source-coupled.' } : {}),
-            ...(!plan.enoughTargets ? { error: `Resolves to ${plan.distinctTargets} distinct (node, provider) target(s) after git-stale exclusion; MAGI requires ≥${MAGI_MIN_TARGETS}.` } : {}),
-        };
-    });
-    return JSON.stringify({ success: true, count: panels.length, ...(referenceCommit ? { referenceCommit } : {}), panels }, null, 2);
-}
+// MAGI-KIND-PANEL: the panel a mesh_magi_review fans out to is resolved SOLELY from the
+// user's explicitly configured kind-panel binding (magiKindPanels: task_kind → slots).
+// The former named-panel / inline-members / preset-auto-synthesis paths were REMOVED —
+// an unconfigured task_kind is a hard error (magi_kind_not_configured). See the panel
+// resolution block in meshMagiReview.
 
 export async function meshMagiReview(
     ctx: MeshContext,
@@ -1422,8 +1306,6 @@ export async function meshMagiReview(
         question?: string;
         target?: string;
         artifacts?: string[];
-        panel?: string;
-        members?: unknown;
         n?: number;
         mode?: string;
         require_independent_evidence?: boolean;
@@ -1444,12 +1326,20 @@ export async function meshMagiReview(
     const question = readString(args.question);
     if (!question) return JSON.stringify({ success: false, error: 'question required' });
 
-    // MAGI-REDESIGN: capture the EXPLICIT output kind (if any) here; the final taskKind
-    // is resolved AFTER the panel is loaded so a named panel's optional defaultKind can
-    // fill in. Strict priority: args.task_kind > panel.defaultKind > claim_audit. We must
-    // not normalize-to-default yet — that would erase the "no explicit kind" signal and
-    // make panel.defaultKind unreachable.
+    // task_kind is REQUIRED — it is BOTH the output-schema selector AND the sole panel
+    // resolution key (magiKindPanels: task_kind → slots). There is no named-panel /
+    // inline-members / preset fallback, so an omitted or unrecognized task_kind is a hard
+    // error rather than a normalize-to-default.
     const explicitTaskKind = args.task_kind ?? args.taskKind;
+    if (typeof explicitTaskKind !== 'string' || !(VALID_TASK_KINDS as readonly string[]).includes(explicitTaskKind.trim().toLowerCase())) {
+        return JSON.stringify({
+            success: false,
+            code: 'task_kind_required',
+            error: 'task_kind is required and selects both the output schema and the configured kind-panel slots. Pass one of: claim_audit / rca / design / freeform.',
+            validTaskKinds: VALID_TASK_KINDS,
+            hint: 'Configure the kind-panel slots for this task_kind in mesh settings (magiKindPanels) or via mesh_magi_kind_panel_set, then call mesh_magi_review({ question, task_kind }).',
+        }, null, 2);
+    }
     // B: warn (do NOT block) if the coordinator embedded an output schema in the question —
     // it collides with the single kind contract MAGI injects and causes fusion/unparseable.
     const questionSchemaWarning = detectQuestionOutputSchemaConflict(question);
@@ -1463,117 +1353,63 @@ export async function meshMagiReview(
     await refreshMeshFromDaemon(ctx);
 
     // Reference commit (coordinator HEAD) is read here, immediately after the mesh
-    // refresh, so the preset resolver below pins fresh live nodes against the SAME
-    // baseline buildMagiFanoutPlan uses for git-staleness. read-only — safe to hoist.
+    // refresh, so slot resolution pins fresh live nodes against the SAME baseline
+    // buildMagiFanoutPlan uses for git-staleness. read-only — safe to hoist.
     const referenceCommit = resolveMagiReferenceCommit(ctx);
 
-    // 1. Resolve the panel. Inline `members` take precedence (ad-hoc panel, not
-    // persisted); next, a bare `task_kind` with no panel name resolves the panel from
-    // the user's CONFIGURED kind-panel binding (magiKindPanels) — an unconfigured kind
-    // is a hard error, NEVER a synthesized fallback; otherwise look up the named panel
-    // (falling back to "default").
-    const hasInlineMembers = Array.isArray(args.members) && args.members.length > 0;
-    const explicitPanelName = readString(args.panel);
-    // The kind-panel path fires ONLY when the caller passed an explicit task_kind, named
-    // no panel, and gave no inline members — i.e. `mesh_magi_review({question, task_kind})`.
-    // A named/default panel or inline members always take their existing path unchanged.
-    const useKindPanelPath = !hasInlineMembers
-        && !explicitPanelName
-        && typeof explicitTaskKind === 'string'
-        && (VALID_TASK_KINDS as readonly string[]).includes(explicitTaskKind.trim().toLowerCase());
-    let panel: MagiPanel | undefined;
-    let panelName: string;
-    let presetKind: MagiTaskKind | undefined;
-    if (hasInlineMembers) {
-        panelName = '(inline)';
-        try {
-            panel = buildInlineMagiPanel(args.members, { defaultN: args.n });
-        } catch (e: any) {
-            return JSON.stringify({
-                success: false,
-                code: 'invalid_magi_panel',
-                error: e?.message || String(e),
-                hint: 'Inline members use the same shape as a configured panel: [{ provider (REQUIRED), nodeId?, model?, capabilityTags?, n? }].',
-            });
-        }
-    } else if (useKindPanelPath) {
-        // MAGI-KIND-PANEL: resolve the panel from the user's configured kind→slots
-        // binding. There is NO hardcoded preset auto-synthesis fallback — an unconfigured
-        // kind is a hard error so the user must explicitly bind (machine + provider + model)
-        // slots in mesh settings. Slots that fail to resolve live (offline node / provider
-        // unavailable) are NOT downgraded to a synthetic panel: the plan's ≥2-target guard
-        // below produces a clear magi_insufficient_targets error instead.
-        presetKind = normalizeMagiTaskKind(explicitTaskKind);
-        panelName = `(kind:${presetKind})`;
-        const slots = getMagiKindPanel(presetKind);
-        if (!slots || slots.length === 0) {
-            return JSON.stringify({
-                success: false,
-                code: 'magi_kind_not_configured',
-                error: `No panel slots are configured for this task_kind in mesh settings. Add at least one (machine + provider + model) slot in settings — task_kind '${presetKind}' has no configured kind-panel.`,
-                taskKind: presetKind,
-                configuredKinds: Object.keys(listMagiKindPanels()),
-                hint: 'Configure this kind in mesh settings (MagiKindPanelEditor), or set it programmatically with the magi_kind_panel_set daemon command, then retry. Alternatively pass explicit inline members or a named panel to mesh_magi_review.',
-            }, null, 2);
-        }
-        // The slots are already normalized at write time (setMagiKindPanel → normalizeMagiSlots),
-        // but re-normalize through the shared inline-panel builder so model/nodeId/n are validated
-        // identically to every other panel path and a bad stored slot surfaces a clear error.
-        try {
-            panel = buildInlineMagiPanel(slots, { defaultN: args.n, description: `kind:${presetKind}` });
-        } catch (e: any) {
-            return JSON.stringify({
-                success: false,
-                code: 'invalid_magi_kind_panel',
-                error: `configured kind-panel for '${presetKind}' is invalid: ${e?.message || String(e)}`,
-                taskKind: presetKind,
-                hint: 'Re-save the kind-panel slots in mesh settings — each slot needs a provider; nodeId / model are optional.',
-            }, null, 2);
-        }
-    } else {
-        panelName = explicitPanelName || 'default';
-        panel = getMagiPanel(panelName);
-    }
-    if (!panel) {
+    // 1. Resolve the panel SOLELY from the user's configured kind→slots binding
+    // (magiKindPanels). There is NO named-panel, inline-members, or preset auto-synthesis
+    // path — an unconfigured kind is a hard error so the user must explicitly bind
+    // (machine + provider + model) slots in mesh settings. The final output kind is the
+    // task_kind itself (validated above); there is no panel-level defaultKind to fill in.
+    const taskKind = normalizeMagiTaskKind(explicitTaskKind);
+    const panelName = `(kind:${taskKind})`;
+    const slots = getMagiKindPanel(taskKind);
+    if (!slots || slots.length === 0) {
         return JSON.stringify({
             success: false,
-            code: 'magi_panel_missing',
-            error: `MAGI panel '${panelName}' is not configured. Define it first with mesh_magi_panel_set, pass inline members, and inspect resolution with mesh_magi_panel_list.`,
-            configuredPanels: Object.keys(listMagiPanels()),
-        });
+            code: 'magi_kind_not_configured',
+            error: `No panel slots are configured for this task_kind in mesh settings. Add at least one (machine + provider + model) slot in settings — task_kind '${taskKind}' has no configured kind-panel.`,
+            taskKind,
+            configuredKinds: Object.keys(listMagiKindPanels()),
+            hint: 'Configure this kind in mesh settings (MagiKindPanelEditor), or set it with mesh_magi_kind_panel_set, then retry.',
+        }, null, 2);
+    }
+    // Slots are already normalized at write time (setMagiKindPanel → normalizeMagiSlots),
+    // but re-normalize here so a bad stored slot surfaces a clear error before dispatch.
+    let planSlots: MagiSlot[];
+    try {
+        planSlots = normalizeMagiSlots(slots);
+    } catch (e: any) {
+        return JSON.stringify({
+            success: false,
+            code: 'invalid_magi_kind_panel',
+            error: `configured kind-panel for '${taskKind}' is invalid: ${e?.message || String(e)}`,
+            taskKind,
+            hint: 'Re-save the kind-panel slots in mesh settings — each slot needs a provider; nodeId / model are optional.',
+        }, null, 2);
     }
 
-    // Resolve the final output kind now that the panel is loaded. Strict priority:
-    // explicit args.task_kind > panel.defaultKind > claim_audit (the DEFAULT_TASK_KIND
-    // fallback inside normalizeMagiTaskKind). An explicit kind always wins, so an
-    // automation already passing task_kind keeps its exact schema (backward-compatible).
-    // INLINE-MEMBER ASYMMETRY (intentional): buildInlineMagiPanel never sets defaultKind,
-    // so the inline path naturally falls through to claim_audit — there is no panel
-    // identity to carry a default. normalizeMagiTaskKind also drops a panel-stored
-    // 'freeform' defensively (it should already be rejected at write time). The preset
-    // path already resolved presetKind from the explicit kind, so this is idempotent.
-    const taskKind = normalizeMagiTaskKind(explicitTaskKind ?? panel.defaultKind);
-
-    // 2. Plan the fan-out. Git-stale members (node HEAD differs from the coordinator's
+    // 2. Plan the fan-out. Git-stale slots (node HEAD differs from the coordinator's
     // reference commit) are EXCLUDED by default — they would investigate different code;
     // include_stale=true keeps them (with a warning). The ≥2-target guard below is
     // re-checked AFTER this exclusion, so it never silently degrades to N=1.
     const includeStale = (args.include_stale ?? args.includeStale) === true;
-    const plan = buildMagiFanoutPlan(panel, ctx.mesh.nodes, { n: args.n, referenceCommit, includeStale });
+    const plan = buildMagiFanoutPlan(planSlots, ctx.mesh.nodes, { n: args.n, referenceCommit, includeStale });
     if (!plan.enoughTargets) {
-        const droppedByStale = plan.staleMembers.length > 0;
+        const droppedByStale = plan.staleSlots.length > 0;
         return JSON.stringify({
             success: false,
             code: droppedByStale ? 'magi_insufficient_targets_after_stale_exclusion' : 'magi_insufficient_targets',
             error: droppedByStale
-                ? `Panel '${panelName}' resolves to only ${plan.distinctTargets} independent (node, provider) target(s) AFTER excluding ${plan.staleMembers.length} git-stale member(s) (HEAD differs from reference ${referenceCommit ?? '(unknown)'}); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`
-                : `Panel '${panelName}' resolves to ${plan.distinctTargets} available (node, provider) target(s); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`,
+                ? `Kind-panel '${panelName}' resolves to only ${plan.distinctTargets} independent (node, provider) target(s) AFTER excluding ${plan.staleSlots.length} git-stale slot(s) (HEAD differs from reference ${referenceCommit ?? '(unknown)'}); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`
+                : `Kind-panel '${panelName}' resolves to ${plan.distinctTargets} available (node, provider) target(s); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`,
             ...(referenceCommit ? { referenceCommit } : {}),
-            unavailableMembers: plan.unavailableMembers,
-            ...(droppedByStale ? { staleMembers: plan.staleMembers } : {}),
+            unavailableSlots: plan.unavailableSlots,
+            ...(droppedByStale ? { staleSlots: plan.staleSlots } : {}),
             hint: droppedByStale
-                ? 'Bring the stale node(s) to the reference commit, or pass include_stale=true to mesh_magi_review to fan out to them anyway (results will be git-skewed). Use mesh_magi_panel_list to inspect resolution.'
-                : 'Use mesh_magi_panel_list to see resolution, mesh_magi_panel_set to fix members, mesh_status to confirm nodes/providers are online.',
+                ? 'Bring the stale node(s) to the reference commit, or pass include_stale=true to mesh_magi_review to fan out to them anyway (results will be git-skewed).'
+                : 'Fix the kind-panel slots with mesh_magi_kind_panel_set (or in mesh settings), and use mesh_status to confirm nodes/providers are online.',
         }, null, 2);
     }
 
@@ -1651,7 +1487,6 @@ export async function meshMagiReview(
         consensusGroupId,
         missionId: mission.id,
         panel: panelName,
-        ...(hasInlineMembers ? { inline: true } : {}),
         taskKind,
         ...(questionSchemaWarning ? { questionSchemaWarning } : {}),
         ...(judgeWarning ? { judgeWarning } : {}),
@@ -1665,15 +1500,15 @@ export async function meshMagiReview(
             ...(plan.coupled ? { banner: 'Panel collapsed to a single provider or machine — agreements will be flagged source-coupled.' } : {}),
         },
         ...(plan.referenceCommit ? { referenceCommit: plan.referenceCommit } : {}),
-        // Surface git-stale handling: which members were excluded (default), or included
+        // Surface git-stale handling: which slots were excluded (default), or included
         // despite being stale (include_stale=true) — the latter makes results git-skewed.
-        ...(plan.staleMembers.length > 0 ? {
-            gitStaleExcluded: plan.staleMembers,
-            gitStaleWarning: `${plan.staleMembers.length} git-stale member(s) (HEAD ≠ reference ${plan.referenceCommit ?? '(unknown)'}) were excluded from this fan-out; pass include_stale=true to include them.`,
+        ...(plan.staleSlots.length > 0 ? {
+            gitStaleExcluded: plan.staleSlots,
+            gitStaleWarning: `${plan.staleSlots.length} git-stale slot(s) (HEAD ≠ reference ${plan.referenceCommit ?? '(unknown)'}) were excluded from this fan-out; pass include_stale=true to include them.`,
         } : {}),
-        ...(plan.includedStaleMembers.length > 0 ? {
-            gitStaleIncluded: plan.includedStaleMembers,
-            gitStaleWarning: `include_stale=true: ${plan.includedStaleMembers.length} git-stale member(s) (HEAD ≠ reference ${plan.referenceCommit ?? '(unknown)'}) were INCLUDED — their evidence compares different code, so synthesis will be git-skewed.`,
+        ...(plan.includedStaleSlots.length > 0 ? {
+            gitStaleIncluded: plan.includedStaleSlots,
+            gitStaleWarning: `include_stale=true: ${plan.includedStaleSlots.length} git-stale slot(s) (HEAD ≠ reference ${plan.referenceCommit ?? '(unknown)'}) were INCLUDED — their evidence compares different code, so synthesis will be git-skewed.`,
         } : {}),
         ...(plan.droppedReplicas > 0 ? {
             cappedReplicas: plan.droppedReplicas,

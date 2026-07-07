@@ -169,17 +169,14 @@ function node(id: string, provider: string, platform = 'linux') {
     } as any;
 }
 
-test('buildMagiFanoutPlan expands members to replicas and assesses diversity', () => {
-    const panel = {
-        members: [
-            { nodeId: 'win32-main', provider: 'claude-cli' },
-            { nodeId: 'mac-coord', provider: 'codex-cli' },
-            { nodeId: 'moltbot', provider: 'hermes-cli' },
-        ],
-        defaultN: 1,
-    };
+test('buildMagiFanoutPlan expands slots to replicas and assesses diversity', () => {
+    const slots = [
+        { nodeId: 'win32-main', provider: 'claude-cli' },
+        { nodeId: 'mac-coord', provider: 'codex-cli' },
+        { nodeId: 'moltbot', provider: 'hermes-cli' },
+    ];
     const nodes = [node('win32-main', 'claude-cli', 'win32'), node('mac-coord', 'codex-cli', 'darwin'), node('moltbot', 'hermes-cli', 'linux')];
-    const plan = buildMagiFanoutPlan(panel as any, nodes, {});
+    const plan = buildMagiFanoutPlan(slots as any, nodes, { defaultN: 1 });
     assert.equal(plan.replicas.length, 3);
     assert.equal(plan.distinctProviders, 3);
     assert.equal(plan.distinctNodeTargets, 3);
@@ -190,51 +187,47 @@ test('buildMagiFanoutPlan expands members to replicas and assesses diversity', (
 });
 
 test('buildMagiFanoutPlan flags a single-provider/single-node panel as coupled', () => {
-    const panel = { members: [{ nodeId: 'a', provider: 'claude-cli', n: 2 }], defaultN: 1 };
-    const plan = buildMagiFanoutPlan(panel as any, [node('a', 'claude-cli')], {});
+    const slots = [{ nodeId: 'a', provider: 'claude-cli', n: 2 }];
+    const plan = buildMagiFanoutPlan(slots as any, [node('a', 'claude-cli')], { defaultN: 1 });
     assert.equal(plan.replicas.length, 2);
     assert.equal(plan.coupled, true);
     // One node × one provider → one distinct target → insufficient.
     assert.equal(plan.enoughTargets, false);
 });
 
-test('buildMagiFanoutPlan marks unavailable members and excludes them', () => {
-    const panel = {
-        members: [
-            { nodeId: 'present', provider: 'claude-cli' },
-            { nodeId: 'ghost', provider: 'codex-cli' },
-        ],
-    };
-    const plan = buildMagiFanoutPlan(panel as any, [node('present', 'claude-cli')], {});
+test('buildMagiFanoutPlan marks unavailable slots and excludes them', () => {
+    const slots = [
+        { nodeId: 'present', provider: 'claude-cli' },
+        { nodeId: 'ghost', provider: 'codex-cli' },
+    ];
+    const plan = buildMagiFanoutPlan(slots as any, [node('present', 'claude-cli')], {});
     assert.equal(plan.replicas.length, 1);
-    assert.equal(plan.unavailableMembers.length, 1);
-    assert.equal(plan.unavailableMembers[0].nodeId, 'ghost');
+    assert.equal(plan.unavailableSlots.length, 1);
+    assert.equal(plan.unavailableSlots[0].nodeId, 'ghost');
     assert.equal(plan.enoughTargets, false);
 });
 
 test('buildMagiFanoutPlan clamps total replicas to the guard cap and reports the drop', () => {
-    const panel = {
-        members: [
-            { nodeId: 'a', provider: 'claude-cli', n: 10 },
-            { nodeId: 'b', provider: 'codex-cli', n: 10 },
-        ],
-    };
-    const plan = buildMagiFanoutPlan(panel as any, [node('a', 'claude-cli'), node('b', 'codex-cli')], {});
+    const slots = [
+        { nodeId: 'a', provider: 'claude-cli', n: 10 },
+        { nodeId: 'b', provider: 'codex-cli', n: 10 },
+    ];
+    const plan = buildMagiFanoutPlan(slots as any, [node('a', 'claude-cli'), node('b', 'codex-cli')], {});
     assert.equal(plan.totalRequested, 20);
     assert.equal(plan.totalAfterCap, MAGI_MAX_REPLICAS);
     assert.equal(plan.droppedReplicas, 20 - MAGI_MAX_REPLICAS);
 });
 
-test('buildMagiFanoutPlan global n override applies when member.n / defaultN absent', () => {
-    const panel = { members: [{ nodeId: 'a', provider: 'claude-cli' }, { nodeId: 'b', provider: 'codex-cli' }] };
-    const plan = buildMagiFanoutPlan(panel as any, [node('a', 'claude-cli'), node('b', 'codex-cli')], { n: 2 });
+test('buildMagiFanoutPlan global n override applies when slot.n / defaultN absent', () => {
+    const slots = [{ nodeId: 'a', provider: 'claude-cli' }, { nodeId: 'b', provider: 'codex-cli' }];
+    const plan = buildMagiFanoutPlan(slots as any, [node('a', 'claude-cli'), node('b', 'codex-cli')], { n: 2 });
     assert.equal(plan.replicas.length, 4);
 });
 
-test('buildMagiFanoutPlan resolves a tag-routed member against node capability tags', () => {
-    const panel = { members: [{ capabilityTags: ['os=darwin'], provider: 'codex-cli' }, { nodeId: 'w', provider: 'claude-cli' }] };
+test('buildMagiFanoutPlan resolves a tag-routed slot against node capability tags', () => {
+    const slots = [{ capabilityTags: ['os=darwin'], provider: 'codex-cli' }, { nodeId: 'w', provider: 'claude-cli' }];
     const nodes = [node('mac', 'codex-cli', 'darwin'), node('w', 'claude-cli', 'win32')];
-    const plan = buildMagiFanoutPlan(panel as any, nodes, {});
+    const plan = buildMagiFanoutPlan(slots as any, nodes, {});
     assert.equal(plan.enoughTargets, true);
-    assert.equal(plan.unavailableMembers.length, 0);
+    assert.equal(plan.unavailableSlots.length, 0);
 });

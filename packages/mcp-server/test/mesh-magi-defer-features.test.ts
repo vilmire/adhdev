@@ -2,32 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-    buildInlineMagiPanel,
     classifyStaleReplicas,
     findMagiReplicaTasks,
 } from '../src/tools/mesh-tools.js';
-
-// ─── featureB: inline ad-hoc panels ─────────────
-
-test('buildInlineMagiPanel normalizes inline members like a named panel', () => {
-    const panel = buildInlineMagiPanel([
-        { nodeId: 'win32-main', provider: '  claude-cli  ' },
-        { provider: 'codex-cli', capabilityTags: ['os=darwin', 'os=darwin'], n: 2 },
-    ], { defaultN: 1 });
-    assert.equal(panel.members.length, 2);
-    // provider trimmed, duplicate tags deduped, dedupExempt defaulted true.
-    assert.equal(panel.members[0].provider, 'claude-cli');
-    assert.equal(panel.members[0].nodeId, 'win32-main');
-    assert.deepEqual(panel.members[1].capabilityTags, ['os=darwin']);
-    assert.equal(panel.members[1].n, 2);
-    assert.equal(panel.defaultN, 1);
-    assert.equal(panel.dedupExempt, true);
-});
-
-test('buildInlineMagiPanel rejects an empty list and a member missing provider', () => {
-    assert.throws(() => buildInlineMagiPanel([]), /invalid_magi_panel/);
-    assert.throws(() => buildInlineMagiPanel([{}]), /provider is required/);
-});
 
 // ─── featureC: poll-by-group discovery ──────────
 

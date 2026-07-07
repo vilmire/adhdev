@@ -45,7 +45,7 @@ import {
   meshChangeImpactConfig,
   meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshLedgerQuery, meshWaitEvents, meshRecordNote, meshForgetNote, meshReconcileLedger, meshRequeueHeldEvents, meshMissionUpsert,
   meshMissionList, meshReviewInbox,
-  meshMagiReview, meshMagiCollect, meshMagiPanelSet, meshMagiPanelList,
+  meshMagiReview, meshMagiCollect,
   meshMagiKindPanelSet, meshMagiKindPanelList, meshWriteMeshJsonConfig
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
@@ -254,8 +254,6 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_review_inbox': text = await meshReviewInbox(meshCtx, a as any); break;
           case 'mesh_magi_review': text = await meshMagiReview(meshCtx, a as any); break;
           case 'mesh_magi_collect': text = await meshMagiCollect(meshCtx, a as any); break;
-          case 'mesh_magi_panel_set': text = await meshMagiPanelSet(meshCtx, a as any); break;
-          case 'mesh_magi_panel_list': text = await meshMagiPanelList(meshCtx, a as any); break;
           case 'mesh_magi_kind_panel_set': text = await meshMagiKindPanelSet(meshCtx, a as any); break;
           case 'mesh_magi_kind_panel_list': text = await meshMagiKindPanelList(meshCtx, a as any); break;
           default: return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };

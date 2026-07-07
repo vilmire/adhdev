@@ -688,40 +688,24 @@ export const MESH_REVIEW_INBOX_TOOL = {
 
 export const MESH_MAGI_REVIEW_TOOL = {
     name: 'mesh_magi_review',
-    description: 'Cross-verify a read-only investigation across a standing panel of independent mesh agents (different machines/providers), instead of sending a SINGLE read-only worker. Drop-in for any read-only investigation — bug RCA, defect/regression measurement, "why does this code do X?", or doc/design/API review. Fans the SAME question out to N independent (node × provider) replicas, then synthesizes consensus/disagreement/unique evidence into a needs_verification list — NOT a majority vote (high agreement among coupled agents ≠ correct). Read-only is FORCED (no execute/write flag exists). COST: multiplies token spend by the total replica count (the call is the opt-in). PANEL RESOLUTION: pass explicit inline `members`, OR a named `panel`, OR just a `task_kind` (with no panel/members) to resolve the USER-CONFIGURED kind-panel binding for that kind (mesh settings → magiKindPanels: task_kind → (node × provider × model) slots). There is NO automatic preset synthesis — a task_kind with no configured kind-panel errors `magi_kind_not_configured` (configure slots in mesh settings first). Every path still resolves to ≥2 (node, provider) targets; never silently degrades to N=1 (errors magi_insufficient_targets if the live mesh cannot supply the configured slots).',
+    description: 'Cross-verify a read-only investigation across a standing panel of independent mesh agents (different machines/providers), instead of sending a SINGLE read-only worker. Drop-in for any read-only investigation — bug RCA, defect/regression measurement, "why does this code do X?", or doc/design/API review. Fans the SAME question out to N independent (node × provider) replicas, then synthesizes consensus/disagreement/unique evidence into a needs_verification list — NOT a majority vote (high agreement among coupled agents ≠ correct). Read-only is FORCED (no execute/write flag exists). COST: multiplies token spend by the total replica count (the call is the opt-in). PANEL RESOLUTION: the panel is resolved SOLELY from the USER-CONFIGURED kind-panel binding for the given `task_kind` (mesh settings → magiKindPanels: task_kind → (node × provider × model) slots). `task_kind` is REQUIRED — there is NO named-panel, inline-members, or automatic-preset path. A task_kind with no configured kind-panel errors `magi_kind_not_configured` (configure slots in mesh settings first). The binding must resolve to ≥2 (node, provider) targets; never silently degrades to N=1 (errors magi_insufficient_targets if the live mesh cannot supply the configured slots).',
     inputSchema: {
         type: 'object' as const,
         properties: {
             question: { type: 'string', description: 'The single investigation question every agent answers — e.g. "What is the root cause of this defect?", "Refute this RCA.", "Why does this code do X?". Not only "review this".' },
             target: { type: 'string', description: 'What to investigate — file path(s), a bug symptom / error / stack trace, a code area / symbol, or omitted when the question is self-contained.' },
             artifacts: { type: 'array', items: { type: 'string' }, description: 'Inline content when not file-backed: a doc/diff, a log/error dump, or a prior single-worker RCA to refute.' },
-            panel: { type: 'string', description: 'Named panel from meshes.json (mesh_magi_panel_set). When omitted: if task_kind is given (and no inline members), the USER-CONFIGURED kind-panel binding for that task_kind is used (mesh settings → magiKindPanels; errors magi_kind_not_configured if unset — NO preset synthesis); otherwise falls back to a panel named "default" and errors clearly if none exists. Ignored when inline members are provided.' },
-            members: {
-                type: 'array',
-                description: 'Inline ad-hoc panel override (NOT persisted): same member shape as a configured panel. When present, the named panel is ignored. Maximize distinct providers AND machines for real independence.',
-                items: {
-                    type: 'object',
-                    properties: {
-                        nodeId: { type: 'string', description: 'Optional — pin to a specific mesh node id.' },
-                        capabilityTags: { type: 'array', items: { type: 'string' }, description: 'Optional routing tags (ANDed with the provider tag) when nodeId is absent.' },
-                        provider: { type: 'string', description: 'REQUIRED — provider type, e.g. claude-cli / codex-cli / hermes-cli / gemini-cli.' },
-                        model: { type: 'string', description: 'Optional model override applied at replica launch (e.g. opus / sonnet for claude-cli). For CLI providers it is expanded via the provider manifest modelLaunchArgs template; for ACP providers it sets the model via setConfigOption. Best-effort — a provider that cannot honor it still runs.' },
-                        n: { type: 'number', description: 'Optional per-member replica count (default 1).' },
-                    },
-                    required: ['provider'],
-                },
-            },
-            n: { type: 'number', description: 'Global replica override per member (clamped by the total-replica guard cap, default 12).' },
-            task_kind: { type: 'string', enum: ['claim_audit', 'rca', 'design', 'freeform'], description: 'Selects the SINGLE output schema injected into each replica prompt and the strict parser used at collection (no schema-on-schema conflict). claim_audit (DEFAULT, backward-compatible): {claims[],top_findings[],open_questions[]}. rca: {rootCause,failsAt,mechanism,evidence[],fixDirection,confidence}. design: {recommendation,rationale,alternatives[],tradeoffs[],risks[],evidence[],confidence}. freeform: no schema — natural-language answer, parsing/evidence checks waived, cross-verification is weak. When `panel` and `members` are both omitted, task_kind ALSO selects the user-configured kind-panel binding for that kind (mesh settings → magiKindPanels; errors magi_kind_not_configured if that kind has no configured slots — no automatic preset synthesis). Every kind except freeform requires non-empty evidence[]; an empty-evidence or schema-invalid answer triggers ONE delta re-request before being dropped as unparseable. Do NOT also embed an output-format schema in the question — it collides with this contract (a warning is surfaced if detected).' },
+            n: { type: 'number', description: 'Global replica override per slot (clamped by the total-replica guard cap, default 12).' },
+            task_kind: { type: 'string', enum: ['claim_audit', 'rca', 'design', 'freeform'], description: 'REQUIRED. Selects (1) the SINGLE output schema injected into each replica prompt and the strict parser used at collection (no schema-on-schema conflict), AND (2) the user-configured kind-panel binding that supplies the fan-out slots (mesh settings → magiKindPanels; errors magi_kind_not_configured if that kind has no configured slots — no named-panel/inline/preset fallback). claim_audit: {claims[],top_findings[],open_questions[]}. rca: {rootCause,failsAt,mechanism,evidence[],fixDirection,confidence}. design: {recommendation,rationale,alternatives[],tradeoffs[],risks[],evidence[],confidence}. freeform: no schema — natural-language answer, parsing/evidence checks waived, cross-verification is weak. Every kind except freeform requires non-empty evidence[]; an empty-evidence or schema-invalid answer triggers ONE delta re-request before being dropped as unparseable. Do NOT also embed an output-format schema in the question — it collides with this contract (a warning is surfaced if detected).' },
             mode: { type: 'string', enum: ['rca', 'investigation', 'claim_audit', 'design_review', 'code_audit'], description: 'Synthesis emphasis hint — affects labels only, never the agent count or schema. Distinct from task_kind (which selects the output schema).' },
             use_judge: { type: 'boolean', description: 'Default false (clustering synthesis). STUB: judge synthesis is not yet implemented — passing true currently falls back to clustering with a warning. Reserved interface only.' },
             require_independent_evidence: { type: 'boolean', description: 'Default true — high-impact claims with no file:line/source evidence are routed to needs_verification.' },
-            include_stale: { type: 'boolean', description: 'Default false. By default, panel members whose node HEAD commit differs from the coordinator reference commit are EXCLUDED (they would investigate different code). Set true to fan out to them anyway — results will be git-skewed and a warning is surfaced. If exclusion drops the panel below 2 independent targets the call errors rather than degrading to N=1; include_stale=true is one way to recover.' },
+            include_stale: { type: 'boolean', description: 'Default false. By default, panel slots whose node HEAD commit differs from the coordinator reference commit are EXCLUDED (they would investigate different code). Set true to fan out to them anyway — results will be git-skewed and a warning is surfaced. If exclusion drops the panel below 2 independent targets the call errors rather than degrading to N=1; include_stale=true is one way to recover.' },
             wait: { type: 'boolean', description: 'Default true — collect replica outputs and return the synthesis. Set false to dispatch async and return a consensusGroupId handle; collect later with mesh_magi_collect.' },
             wait_timeout_ms: { type: 'number', description: 'Max time to wait for replica completion before returning a partial "missing K of N" synthesis. Default ~4 min.' },
             auto_cleanup: { type: 'boolean', description: 'Default = mesh policy magiSessionCleanup (ON / stop_and_delete unless overridden). Once all replicas are terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified) so repeated reviews don\'t accumulate idle worker sessions. Reused/coordinator/other sessions are never touched. Set false to preserve auto-launched worker sessions for inspection. No effect on a partial (non-terminal) collection.' },
         },
-        required: ['question'],
+        required: ['question', 'task_kind'],
     },
 };
 
@@ -743,61 +727,9 @@ export const MESH_MAGI_COLLECT_TOOL = {
     },
 };
 
-export const MESH_MAGI_PANEL_SET_TOOL = {
-    name: 'mesh_magi_panel_set',
-    description: 'Upsert a named MAGI panel into machine-local ~/.adhdev/meshes.json. A panel is a standing set of independent (node × provider) members that a future mesh_magi_review fans the same question out to. Maximize DISTINCT providers AND distinct machines — that diversity is exactly what synthesis rewards; a single-provider/single-machine panel still runs but its agreements are flagged source-coupled. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false) and never clobbers an existing panel unless overwrite=true.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            panel_name: { type: 'string', description: 'Panel name key, e.g. "design-review".' },
-            config: {
-                type: 'object',
-                description: 'Panel config: { description?, members:[{ provider (REQUIRED), nodeId?, capabilityTags?, n? }], defaultN?, defaultKind? }.',
-                properties: {
-                    description: { type: 'string' },
-                    defaultKind: {
-                        type: 'string',
-                        enum: ['claim_audit', 'rca', 'design'],
-                        description: 'Optional NON-binding default output kind applied when a mesh_magi_review on this panel omits task_kind. Priority is always task_kind > defaultKind > claim_audit, so it never overrides an explicit per-run kind. "freeform" is NOT allowed (it contributes no structured claims to cross-verification) and is dropped with a warning.',
-                    },
-                    members: {
-                        type: 'array',
-                        items: {
-                            type: 'object',
-                            properties: {
-                                nodeId: { type: 'string', description: 'Optional — pin to a specific mesh node id.' },
-                                capabilityTags: { type: 'array', items: { type: 'string' }, description: 'Optional routing tags (ANDed with the provider tag) when nodeId is absent.' },
-                                provider: { type: 'string', description: 'REQUIRED — provider type, e.g. claude-cli / codex-cli / hermes-cli / gemini-cli.' },
-                                n: { type: 'number', description: 'Optional per-member replica count (default 1).' },
-                            },
-                            required: ['provider'],
-                        },
-                    },
-                    defaultN: { type: 'number', description: 'Replicas per member when member.n is absent (default 1).' },
-                },
-                required: ['members'],
-            },
-            write: { type: 'boolean', description: 'When true, persist to meshes.json. Defaults false (dry-run preview of the normalized panel).' },
-            overwrite: { type: 'boolean', description: 'When true, replace an existing panel of the same name. Defaults false.' },
-        },
-        required: ['panel_name', 'config'],
-    },
-};
-
-export const MESH_MAGI_PANEL_LIST_TOOL = {
-    name: 'mesh_magi_panel_list',
-    description: 'List configured MAGI panels and resolve each member\'s (node, provider) availability against the current mesh. Read-only. Use to confirm a panel resolves to ≥2 independent targets before mesh_magi_review, and to see whether a panel would collapse to a single provider/machine (source-coupled).',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            panel: { type: 'string', description: 'Optional — list only this panel. Omit to list all configured panels.' },
-        },
-    },
-};
-
 export const MESH_MAGI_KIND_PANEL_SET_TOOL = {
     name: 'mesh_magi_kind_panel_set',
-    description: 'Bind a task_kind to its MAGI kind-panel slot list (machine-local ~/.adhdev/meshes.json `magiKindPanels`). This binding is what a bare `mesh_magi_review({ task_kind })` (no panel/members) resolves to. IMPORTANT — WHOLESALE REPLACEMENT: a task_kind has exactly one binding, so the `slots` you pass become the COMPLETE new slot set and any prior slots for that kind are dropped (not merged). Because it silently replaces the current binding, get EXPLICIT user approval before writing and present the current-vs-new slot lists (the dry-run returns `currentSlots`). Follows the mesh_magi_panel_set write/dry-run precedent: defaults to dry-run (write=false). Machine-local scope (NOT a repo-committed file).',
+    description: 'Bind a task_kind to its MAGI kind-panel slot list (machine-local ~/.adhdev/meshes.json `magiKindPanels`). This binding is what a `mesh_magi_review({ task_kind })` resolves to — it is the SOLE panel-resolution path (there is no named-panel or inline-members alternative). IMPORTANT — WHOLESALE REPLACEMENT: a task_kind has exactly one binding, so the `slots` you pass become the COMPLETE new slot set and any prior slots for that kind are dropped (not merged). Because it silently replaces the current binding, get EXPLICIT user approval before writing and present the current-vs-new slot lists (the dry-run returns `currentSlots`). Defaults to dry-run (write=false). Machine-local scope (NOT a repo-committed file).',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -825,7 +757,7 @@ export const MESH_MAGI_KIND_PANEL_SET_TOOL = {
 
 export const MESH_MAGI_KIND_PANEL_LIST_TOOL = {
     name: 'mesh_magi_kind_panel_list',
-    description: 'List the configured MAGI kind→panel slot bindings (machine-local). Read-only sibling of mesh_magi_panel_list for kind-slot bindings. Use to confirm what a `task_kind` resolves to before mesh_magi_review, and to diff current-vs-new before an overwrite via mesh_magi_kind_panel_set.',
+    description: 'List the configured MAGI kind→panel slot bindings (machine-local). Read-only. Use to confirm what a `task_kind` resolves to before mesh_magi_review, and to diff current-vs-new before an overwrite via mesh_magi_kind_panel_set.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -836,7 +768,7 @@ export const MESH_MAGI_KIND_PANEL_LIST_TOOL = {
 
 export const MESH_WRITE_MESH_JSON_CONFIG_TOOL = {
     name: 'mesh_write_mesh_json_config',
-    description: 'Write `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Gated WRITE sibling of the draft-only export_mesh_json_config. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false), never clobbers an existing repo mesh.json unless overwrite=true, and validates before writing. Overwrite silently replaces the file, so present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope (commit target) — distinct from the machine-local MAGI/panel writes.',
+    description: 'Write `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Gated WRITE sibling of the draft-only export_mesh_json_config. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false), never clobbers an existing repo mesh.json unless overwrite=true, and validates before writing. Overwrite silently replaces the file, so present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope (commit target) — distinct from the machine-local MAGI kind-panel writes.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -889,8 +821,6 @@ export const ALL_MESH_TOOLS = [
     MESH_REVIEW_INBOX_TOOL,
     MESH_MAGI_REVIEW_TOOL,
     MESH_MAGI_COLLECT_TOOL,
-    MESH_MAGI_PANEL_SET_TOOL,
-    MESH_MAGI_PANEL_LIST_TOOL,
     MESH_MAGI_KIND_PANEL_SET_TOOL,
     MESH_MAGI_KIND_PANEL_LIST_TOOL,
 ];

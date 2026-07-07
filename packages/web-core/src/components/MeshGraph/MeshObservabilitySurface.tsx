@@ -37,7 +37,6 @@ import {
     type GitHistoryState,
     type HealPreviewState,
 } from './MeshObservabilitySurface/meshSurfaceHelpers'
-// MagiPanelOverview mount removed 2026-07-01 — deprecated named-panels surface hidden (component retained in-tree).
 
 // Re-export the pure helpers consumed by tests / external callers from their new
 // home so `import { … } from './MeshObservabilitySurface'` keeps resolving after
@@ -446,15 +445,8 @@ export default function MeshObservabilitySurface({
                         sendDaemonCommand={sendDaemonCommand}
                     />
                 )}
-                {/* MAGI panels overview hidden per product decision 2026-07-01 — the named-panels
-                    surface (magi_panel_list) is deprecated and was removed from the /mesh settings
-                    page; this read-only glance mount is retired to match. MagiPanelOverview.tsx is
-                    kept in-tree (unmounted) and the task_kind / magi_kind_panel_* surface is
-                    untouched. To restore, re-add:
-                      {activeTab === 'overview' && (
-                        <MagiPanelOverview status={canonicalStatus} daemonId={daemonId} sendDaemonCommand={sendDaemonCommand} />
-                      )}
-                    and its import. */}
+                {/* MAGI named-panels overview removed — the named-panel surface (magi_panel_*)
+                    was deleted; only the task_kind / magi_kind_panel_* surface remains. */}
             </div>
 
             {/* ── Status / Runtime tab: scheduling + per-node runtime (own scroll region) ── */}

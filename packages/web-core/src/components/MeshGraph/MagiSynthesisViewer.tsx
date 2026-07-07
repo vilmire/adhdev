@@ -20,8 +20,8 @@
  * it returns no raw text (default-stripped, aged out, or no live session) the viewer
  * says so rather than implying the data was lost.
  *
- * Talks to the daemon through the SAME `sendDaemonCommand` seam MagiPanelManager
- * uses. Pure-render otherwise — the synthesis summary comes straight off the already
+ * Talks to the daemon through the SAME `sendDaemonCommand` seam the rest of the mesh
+ * surface uses. Pure-render otherwise — the synthesis summary comes straight off the already
  * loaded `status`.
  */
 import { useCallback, useMemo, useState } from 'react'

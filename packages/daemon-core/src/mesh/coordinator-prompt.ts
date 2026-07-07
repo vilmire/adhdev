@@ -649,9 +649,7 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_write_mesh_json_config\` | Gated write of \`.adhdev/mesh.json\` (repo coordinator-prompt config) from the mesh entry — dry-run/overwrite like mesh_init |
 | \`mesh_magi_review\` | Cross-verify a read-only investigation across a standing panel of independent mesh agents (different machines/providers) instead of a single worker |
 | \`mesh_magi_collect\` | Collect + synthesize a previously dispatched MAGI fan-out by its consensus group id (async companion to mesh_magi_review wait:false) |
-| \`mesh_magi_panel_set\` | Upsert a named MAGI panel (standing set of independent node×provider members) into machine-local config |
-| \`mesh_magi_panel_list\` | List configured MAGI panels and resolve each member's availability against the current mesh (read-only) |
-| \`mesh_magi_kind_panel_set\` | Bind a task_kind → MAGI kind-panel slots (machine-local, wholesale replacement — approve current-vs-new first) |
+| \`mesh_magi_kind_panel_set\` | Bind a task_kind → MAGI kind-panel slots (the SOLE MAGI panel-resolution surface; machine-local, wholesale replacement — approve current-vs-new first) |
 | \`mesh_magi_kind_panel_list\` | List configured task_kind → MAGI kind-panel slot bindings (machine-local, read-only) |`;
 
 const TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
@@ -694,7 +692,7 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
 
 **Save scopes — label every draft with its scope before asking for approval:**
 - **repo-file (commit target)** — \`.adhdev/refine.json\`, \`.adhdev/worktree_bootstrap.json\`, \`.adhdev/change-impact.json\`, \`.adhdev/mesh.json\`. These are committed to the repository and shared with every machine/contributor.
-- **machine-local** — MAGI kind→panel bindings and named MAGI panels, node providerPriority (\`~/.adhdev/meshes.json\`). These stay on this machine and are NOT committed.
+- **machine-local** — MAGI kind→panel bindings, node providerPriority (\`~/.adhdev/meshes.json\`). These stay on this machine and are NOT committed.
 
 **Guided sequence:**
 1. **Scan (dry-run)** — Call \`mesh_init\` (write=false, the default). It returns per-domain suggested configs for refine / worktree_bootstrap / change-impact, a recommended providerPriority, AND \`currentConfig\` — the currently-saved config per domain (repo files + machine-local \`magiKindPanels\`). Nothing is written.
@@ -702,8 +700,7 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
 3. **Approve → gated write** — Only after the user approves, call the matching gated-write tool:
    - repo \`.adhdev/*\` config files → \`mesh_init\` with \`write=true\` (and \`overwrite=true\` ONLY for domains the user approved replacing).
    - \`.adhdev/mesh.json\` (coordinator prompt / operating notes) → \`mesh_write_mesh_json_config\` (write=true, overwrite only if approved).
-   - machine-local MAGI kind→panel slots → \`mesh_magi_kind_panel_set\` (write=true). NOTE: a kind binding is a **wholesale replacement** of that kind's slot list — present the current-vs-new slots first.
-   - machine-local named MAGI panels → \`mesh_magi_panel_set\`. providerPriority → apply via node policy update.
+   - machine-local MAGI kind→panel slots → \`mesh_magi_kind_panel_set\` (write=true). NOTE: a kind binding is a **wholesale replacement** of that kind's slot list — present the current-vs-new slots first. providerPriority → apply via node policy update.
 
 **init vs reinit:**
 - **\`mesh_init\`** — for a fresh, never-onboarded repo. Existing config files are kept (existing-wins) unless the user explicitly approves overwrite. Use for first-time setup.

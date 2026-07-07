@@ -5,7 +5,7 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 45 tools (== ALL_MESH_TOOLS, kept in sync with the coordinator-prompt TOOLS table
+ * 43 tools (== ALL_MESH_TOOLS, kept in sync with the coordinator-prompt TOOLS table
  * by the 6-6 consistency test in daemon-core coordinator-prompt.test.ts):
  *   mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
  *   mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
@@ -19,7 +19,7 @@
  *   mesh_record_note, mesh_forget_note, mesh_reconcile_ledger,
  *   mesh_requeue_held_events, mesh_wait_events,
  *   mesh_mission_upsert, mesh_mission_list, mesh_review_inbox, mesh_magi_review,
- *   mesh_magi_collect, mesh_magi_panel_set, mesh_magi_panel_list,
+ *   mesh_magi_collect,
  *   mesh_magi_kind_panel_set, mesh_magi_kind_panel_list
  */
 
@@ -295,7 +295,6 @@ export {
     getActiveDirectDispatches,
     getActiveMeshMissionSummaries,
     getLedgerSummary,
-    getMagiPanel,
     getMagiKindPanel,
     listMagiKindPanels,
     setMagiKindPanel,
@@ -305,7 +304,6 @@ export {
     getMeshStatusMissionSummaries,
     getMeshStatusMissionsCompact,
     getQueue,
-    listMagiPanels,
     getSessionRecoveryContext,
     insertDirectDispatch,
     isP2pRelayTransportFailure,
@@ -315,7 +313,6 @@ export {
     markStaleDirectDispatches,
     meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
-    normalizeMagiPanel,
     normalizeMeshCapabilityTags,
     normalizeMeshTaskPriority,
     resolveNotBefore,
@@ -333,7 +330,6 @@ export {
     resolveMeshSurfacedSessionPreview,
     summarizeMeshAsyncRefineJobs,
     tombstoneOperatingNote,
-    upsertMagiPanel,
     upsertMeshMission,
     validateMeshTaskModeRequest,
 } from '@adhdev/daemon-core';
@@ -347,9 +343,6 @@ export type {
     MagiGitSkew,
     MagiMode,
     MagiTaskKind,
-    MagiPanelDefaultKind,
-    MagiPanel,
-    MagiPanelMember,
     MagiReplicaGitRef,
     MagiResponseSource,
     MagiSlot,

@@ -26,9 +26,9 @@
  * detail still lives only in the coordinator's mesh_magi_collect response; what
  * `mesh_status` carries is the bounded synthesis SUMMARY.
  *
- * STILL UNREACHABLE — MAGI panel definitions (`~/.adhdev/meshes.json` `magiPanels`)
- * are machine-local config and are absent from `mesh_status`; `panelsReachable` stays
- * false.
+ * STILL UNREACHABLE — MAGI kind-panel bindings (`~/.adhdev/meshes.json`
+ * `magiKindPanels`) are machine-local config and are absent from `mesh_status`;
+ * `panelsReachable` stays false.
  */
 import { readRecord, readString, type JsonRecord } from '@adhdev/mesh-shared'
 

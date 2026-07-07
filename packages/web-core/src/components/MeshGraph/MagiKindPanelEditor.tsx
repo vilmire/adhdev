@@ -8,8 +8,8 @@
  * (`magi_kind_not_configured`), never a silent synthetic panel, so every kind the
  * operator wants to reach via task_kind must have ≥1 slot configured here.
  *
- * It talks to the daemon through the SAME `sendDaemonCommand` seam MagiPanelManager
- * and the rest of MeshObservabilitySurface use — `magi_kind_panel_list` /
+ * It talks to the daemon through the SAME `sendDaemonCommand` seam the rest of
+ * MeshObservabilitySurface uses — `magi_kind_panel_list` /
  * `magi_kind_panel_set` / `magi_kind_panel_remove`, the daemon-core handlers. Cloud
  * routes these P2P-only (web-cloud api.ts); standalone routes them to the same
  * daemon-core router over localhost:3847. One handler set, both transports.

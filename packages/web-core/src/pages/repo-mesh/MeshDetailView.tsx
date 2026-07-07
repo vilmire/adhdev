@@ -5,8 +5,8 @@ import { Section } from '../../components/ui/Section'
 import { AlertBanner } from '../../components/ui/AlertBanner'
 import { FormField } from '../../components/ui/FormField'
 import { IconMesh } from '../../components/Icons'
-// MAGI named-panel CRUD (MagiPanelManager) UI stays hidden per product decision 2026-07-01;
-// the task_kind → panel binding editor (MagiKindPanelEditor) is restored below.
+// The task_kind → panel binding editor (MagiKindPanelEditor) is the sole MAGI panel
+// surface — the named-panel CRUD (MagiPanelManager) was removed.
 import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
 import type { ActiveConversation } from '../../components/dashboard/types'
@@ -293,9 +293,8 @@ export function MeshDetailView({
             </Section>
 
             {/* ── MAGI task_kind → panel binding editor ──
-                 The named-panel CRUD (MagiPanelManager) Section stays hidden per the
-                 2026-07-01 product decision; only the task_kind binding editor below is
-                 mounted. Underlying magi_panel_* / magi_kind_panel_* commands are untouched. */}
+                 The sole MAGI panel surface. The named-panel CRUD (MagiPanelManager) and its
+                 magi_panel_* daemon commands were removed; only magi_kind_panel_* remains. */}
             {displayedMeshStatus && (
                 <Section title="MAGI" description="task_kind → panel slot bindings">
                     <MagiKindPanelEditor

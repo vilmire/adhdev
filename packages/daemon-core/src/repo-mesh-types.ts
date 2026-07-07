@@ -14,7 +14,7 @@
 import type { GitRepoStatus, GitCompactSummary } from './git/git-types.js';
 import type { MeshMissionSummary, MeshMissionSlimSummary } from './mesh/mesh-missions.js';
 import type { MeshMagiActivitySummary } from './mesh/mesh-magi-status.js';
-import type { MagiPanelMap, MagiKindPanelMap } from '@adhdev/mesh-shared';
+import type { MagiKindPanelMap } from '@adhdev/mesh-shared';
 
 // ─── Core Mesh Types ────────────────────────────
 
@@ -814,18 +814,12 @@ export interface RepoMeshCoordinatorConfig {
 export interface LocalMeshConfig {
     meshes: LocalMeshEntry[];
     /**
-     * MAGI cross-verification panels (machine-local). Keyed by panel name; each
-     * binds concrete `(node × provider)` members — machine-dependent facts — so
-     * panels live here in meshes.json, never in the repo-shared .adhdev/mesh.json.
-     * Optional: absent on configs written before MAGI existed.
-     */
-    magiPanels?: MagiPanelMap;
-    /**
-     * MAGI-KIND-PANEL: per-task_kind panel bindings (machine-local). Keyed by
-     * task_kind (rca / design / claim_audit / freeform); each maps to ≥1
-     * `(node × provider × model?)` slot. A `mesh_magi_review` invoked with a bare
-     * `task_kind` resolves its panel from here — an unconfigured kind is a hard
-     * error, never a synthesized fallback. Optional; absent on pre-feature configs.
+     * MAGI-KIND-PANEL: per-task_kind panel bindings (machine-local), the SOLE MAGI
+     * panel-resolution surface (the former named-panel `magiPanels` map was removed).
+     * Keyed by task_kind (rca / design / claim_audit / freeform); each maps to ≥1
+     * `(node × provider × model?)` slot. A `mesh_magi_review` resolves its panel from
+     * here — an unconfigured kind is a hard error, never a synthesized fallback.
+     * Optional; absent on pre-feature configs.
      */
     magiKindPanels?: MagiKindPanelMap;
 }

@@ -1,46 +1,23 @@
 /**
  * MAGI — Multi-Agent Ground-truth Insight.
  *
- * Pure shared types for the mesh cross-verification quorum: panel definitions
- * (machine-local config, stored in ~/.adhdev/meshes.json `magiPanels`), the
- * agent-agnostic common output schema every dispatched replica answers with,
- * and the synthesis result shapes. These cross the daemon-core (storage /
- * accessors) ↔ mcp-server (fan-out / synthesis) boundary, so they live in the
- * dependency-free mesh-shared leaf — no runtime, no Node/DOM APIs.
+ * Pure shared types for the mesh cross-verification quorum: the per-task_kind
+ * panel binding (machine-local config, stored in ~/.adhdev/meshes.json
+ * `magiKindPanels`), the agent-agnostic common output schema every dispatched
+ * replica answers with, and the synthesis result shapes. These cross the
+ * daemon-core (storage / accessors) ↔ mcp-server (fan-out / synthesis) boundary,
+ * so they live in the dependency-free mesh-shared leaf — no runtime, no Node/DOM APIs.
  *
  * Design: docs/design/2026-06-28-mesh-magi-review.md. Core stance: no personas,
- * no named lenses — a panel member is just one `(node × provider)` target that
+ * no named lenses — a panel slot is just one `(node × provider)` target that
  * answers the SAME question. The value is the friction (contested / singleton /
  * source-coupled findings), NOT a majority vote.
+ *
+ * NOTE: the former named-panel model (MagiPanel / MagiPanelMember / MagiPanelMap
+ * and inline `members`) was REMOVED. A MAGI review resolves its fan-out slots
+ * EXCLUSIVELY from the `magiKindPanels` binding for the review's `task_kind`; an
+ * unconfigured kind is a hard error, never a synthesized or named-panel fallback.
  */
-
-// ─── Panel model (machine-local config) ─────────
-
-/**
- * One panel member: a `(node × provider)` target that answers the shared
- * question. `provider` is required; `nodeId` pins a concrete mesh node (forbidden
- * in the repo-portable abstract form), `capabilityTags` route by tag when no
- * nodeId is given. `n` is an optional per-member replica count.
- */
-export interface MagiPanelMember {
-    /** Optional — pin to a specific mesh node id. Absent → route by capabilityTags + provider. */
-    nodeId?: string
-    /** Optional routing tags (e.g. 'os=darwin'), ANDed with the provider tag when nodeId is absent. */
-    capabilityTags?: string[]
-    /** REQUIRED — provider type, e.g. 'claude-cli' | 'codex-cli' | 'hermes-cli' | 'gemini-cli'. */
-    provider: string
-    /**
-     * Optional model override applied at replica launch (e.g. 'opus' | 'sonnet' for
-     * claude-cli). Threaded through enqueueTask → the auto-launched session's
-     * `launch_cli` payload as `initialModel`. For ACP providers it drives
-     * setConfigOption('model', …); for CLI providers it is expanded via the
-     * provider manifest's `modelLaunchArgs` template into launch args (a provider
-     * with no template silently ignores it — model is best-effort, never fatal).
-     */
-    model?: string
-    /** Optional per-member replica count; defaults to the panel.defaultN / global n / 1. */
-    n?: number
-}
 
 // ─── Kind → panel binding (machine-local config) ─────────
 //
@@ -51,82 +28,54 @@ export interface MagiPanelMember {
 // kind is a hard error (magi_kind_not_configured), never a silent synthetic panel.
 
 /**
- * One kind-panel slot: a `(node × provider [× model])` target, structurally the same
- * shape as a {@link MagiPanelMember}. `provider` required; `nodeId` pins a concrete
- * mesh node; `model` optionally selects the agent model at launch; `n` is an optional
- * per-slot replica count.
+ * One kind-panel slot: a `(node × provider [× model])` target. `provider` required;
+ * `nodeId` pins a concrete mesh node; `model` optionally selects the agent model at
+ * launch; `capabilityTags` route by tag when no nodeId is given; `n` is an optional
+ * per-slot replica count. This is the SOLE panel-member shape — the fan-out planner
+ * (buildMagiFanoutPlan) resolves a `MagiSlot[]` directly.
  */
 export interface MagiSlot {
-    /** Optional — pin to a specific mesh node id. */
+    /** Optional — pin to a specific mesh node id. Absent → route by capabilityTags + provider. */
     nodeId?: string
     /** REQUIRED — provider type, e.g. 'claude-cli' | 'codex-cli' | 'gemini-cli'. */
     provider: string
-    /** Optional model override applied at replica launch (see MagiPanelMember.model). */
+    /**
+     * Optional model override applied at replica launch (e.g. 'opus' | 'sonnet' for
+     * claude-cli). Threaded through enqueueTask → the auto-launched session's
+     * `launch_cli` payload as `initialModel`. For ACP providers it drives
+     * setConfigOption('model', …); for CLI providers it is expanded via the provider
+     * manifest's `modelLaunchArgs` template into launch args (a provider with no
+     * template silently ignores it — model is best-effort, never fatal).
+     */
     model?: string
     /** Optional routing tags, ANDed with the provider tag when nodeId is absent. */
     capabilityTags?: string[]
-    /** Optional per-slot replica count; defaults to 1. */
+    /** Optional per-slot replica count; defaults to the kind-panel defaultN / global n / 1. */
     n?: number
 }
 
 /**
  * Per-task_kind panel binding, stored machine-local in `~/.adhdev/meshes.json`
- * under the top-level `magiKindPanels` map (sibling to `magiPanels`). A kind absent
- * from the map has NO configured panel → `mesh_magi_review({task_kind})` errors
- * with `magi_kind_not_configured` rather than synthesizing one. `freeform` MAY be
- * bound like any other kind (unlike a named panel's `defaultKind`, this is a direct
- * kind→slots binding, not a panel-level default).
+ * under the top-level `magiKindPanels` map. A kind absent from the map has NO
+ * configured panel → `mesh_magi_review({task_kind})` errors with
+ * `magi_kind_not_configured` rather than synthesizing one. `freeform` MAY be bound
+ * like any other kind (a direct kind→slots binding).
  */
 export type MagiKindPanelMap = Partial<Record<MagiTaskKind, MagiSlot[]>>
 
 /**
  * The output-schema selector a MAGI fan-out injects into every replica prompt and
- * the strict parser used at collection. Code-orthogonal to the panel's member set
+ * the strict parser used at collection. Code-orthogonal to the panel's slot set
  * (the fan-out planner never reads it) — it ONLY shapes the per-replica prompt /
- * parse contract. SSOT lives here (mesh-shared leaf) so both daemon-core (panel
+ * parse contract. SSOT lives here (mesh-shared leaf) so both daemon-core (slot
  * normalization) and mcp-server (resolution / prompt assembly) consume one union.
  *
  * - claim_audit (default, backward-compatible), rca, design → require evidence[].
  * - freeform → no schema, no evidence; contributes NO structured claims to
- *   synthesis, so it is NOT a valid panel `defaultKind` (a panel is a
- *   cross-verification tool; a default that zeroes out cross-verification is
- *   self-contradictory). Normalization drops/rejects defaultKind === 'freeform'.
+ *   synthesis. It MAY still be bound as a kind-panel key (a direct kind→slots
+ *   binding), unlike the removed named-panel `defaultKind`.
  */
 export type MagiTaskKind = 'claim_audit' | 'rca' | 'design' | 'freeform'
-
-/**
- * The kinds valid as a panel `defaultKind` — every MagiTaskKind EXCEPT 'freeform'
- * (which contributes no structured claims, so it must not be a panel-level default).
- */
-export type MagiPanelDefaultKind = Exclude<MagiTaskKind, 'freeform'>
-
-/**
- * A named MAGI panel. Stored machine-local in `~/.adhdev/meshes.json` under the
- * top-level `magiPanels` map (sibling to `meshes`), because a member binds
- * concrete node identity + provider availability — both machine-dependent facts.
- */
-export interface MagiPanel {
-    /** Optional human label, e.g. 'design-review'. */
-    description?: string
-    members: MagiPanelMember[]
-    /** Replicas per member when member.n is absent; default 1. */
-    defaultN?: number
-    /** Marks the panel's fan-out as intentional same-prompt duplication (always true in practice). */
-    dedupExempt?: boolean
-    /**
-     * Optional, NON-binding default output kind for fan-outs invoked through this
-     * panel. NOT a first-class panel axis (task_kind is code-orthogonal to the
-     * member set) — just a fallback applied when a review omits an explicit
-     * task_kind. Resolution priority is strictly
-     * `args.task_kind > panel.defaultKind > 'claim_audit'`, so it never changes the
-     * schema of an automation that already passes task_kind. 'freeform' is rejected
-     * at normalization (see MagiPanelDefaultKind).
-     */
-    defaultKind?: MagiPanelDefaultKind
-}
-
-/** Top-level `magiPanels` map in meshes.json, keyed by panel name. */
-export type MagiPanelMap = Record<string, MagiPanel>
 
 /**
  * Synthesis emphasis hint. Affects weighting / labels only — NEVER the agent

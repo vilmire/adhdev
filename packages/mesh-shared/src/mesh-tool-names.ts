@@ -60,8 +60,6 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_review_inbox',
     'mesh_magi_review',
     'mesh_magi_collect',
-    'mesh_magi_panel_set',
-    'mesh_magi_panel_list',
     'mesh_magi_kind_panel_set',
     'mesh_magi_kind_panel_list',
 ] as const;
