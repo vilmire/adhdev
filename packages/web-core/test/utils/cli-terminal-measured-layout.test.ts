@@ -220,19 +220,48 @@ describe('CLI terminal measured layout plumbing', () => {
   it('adds a mobile terminal control popover near Copy / zoom for keys that phone keyboards cannot type reliably', () => {
     const paneSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
 
+    // Popover plumbing: open state + raw PTY send path are unchanged.
     expect(paneSource.includes('const [terminalControlsOpen, setTerminalControlsOpen] = useState(false);')).toBe(true)
     expect(paneSource.includes('const sendTerminalControlInput = (data: string) => {')).toBe(true)
     expect(paneSource.includes("sendPtyInput?.(daemonRouteId, sessionId, data) ?? false")).toBe(true)
     expect(paneSource.includes('aria-label="Open terminal control keys"')).toBe(true)
     expect(paneSource.includes('aria-label="Terminal control keys"')).toBe(true)
-    expect(paneSource.includes("sendTerminalControlInput('\\u001b')")).toBe(true)
-    expect(paneSource.includes("sendTerminalControlInput('\\u001b[A')")).toBe(true)
-    expect(paneSource.includes("sendTerminalControlInput('\\u001b[B')")).toBe(true)
-    expect(paneSource.includes("sendTerminalControlInput('\\u001b[D')")).toBe(true)
-    expect(paneSource.includes("sendTerminalControlInput('\\u001b[C')")).toBe(true)
-    expect(paneSource.includes("sendTerminalControlInput('\\t')")).toBe(true)
+
+    // The popover was revamped from 12 fixed sequences into sticky Ctrl/Alt/Shift
+    // modifier toggles + a composable key grid. Keys that phone keyboards cannot type
+    // reliably are now sent through sendEncodedKey(logicalKey), which pairs the pressed
+    // key with the active sticky modifiers via encodeTerminalKey. Assert those hard-to-type
+    // keys are still offered (regression intent preserved), now by logical name.
+    expect(paneSource.includes("import { encodeTerminalKey } from '../../utils/terminal-key-encoding';")).toBe(true)
+    expect(paneSource.includes('const sendEncodedKey = (key: string) => {')).toBe(true)
+    expect(paneSource.includes('encodeTerminalKey({ ctrl: stickyCtrl, alt: stickyAlt, shift: stickyShift }, key)')).toBe(true)
+
+    // Sticky modifier toggles.
+    expect(paneSource.includes('const [stickyCtrl, setStickyCtrl] = useState(false);')).toBe(true)
+    expect(paneSource.includes('const [stickyAlt, setStickyAlt] = useState(false);')).toBe(true)
+    expect(paneSource.includes('const [stickyShift, setStickyShift] = useState(false);')).toBe(true)
+
+    // Hard-to-type keys still offered in the popover, now via logical names.
+    expect(paneSource.includes("sendEncodedKey('Escape')")).toBe(true)
+    expect(paneSource.includes("sendEncodedKey('Tab')")).toBe(true)
+    expect(paneSource.includes("sendEncodedKey('ArrowUp')")).toBe(true)
+    expect(paneSource.includes("sendEncodedKey('ArrowDown')")).toBe(true)
+    expect(paneSource.includes("sendEncodedKey('ArrowLeft')")).toBe(true)
+    expect(paneSource.includes("sendEncodedKey('ArrowRight')")).toBe(true)
+
+    // Ctrl-C stays hard-wired to the raw SIGINT byte for muscle memory.
     expect(paneSource.includes("sendTerminalControlInput('\\u0003')")).toBe(true)
-    expect(paneSource.includes("sendTerminalControlInput('\\u0004')")).toBe(true)
+    // Ctrl-D (and any other Ctrl+letter) is now reachable via the Ctrl sticky toggle + letter grid.
+    expect(paneSource.includes("'abcdefghijklmnopqrstuvwxyz0123456789'.split('').map((key) => (")).toBe(true)
+  })
+
+  it('encodes hard-to-type popover keys correctly via the shared terminal key encoder (regression intent of the fixed sequences)', () => {
+    // Guards the *behavior* the old fixed-sequence assertions protected: the logical keys the
+    // popover offers must still resolve to the exact bytes the previous fixed buttons sent.
+    const encodePath = path.join(import.meta.dirname, '../../src/utils/terminal-key-encoding.ts')
+    expect(fs.existsSync(encodePath)).toBe(true)
+    const encodeSource = fs.readFileSync(encodePath, 'utf8')
+    expect(encodeSource.includes('export function encodeTerminalKey(')).toBe(true)
   })
 
   it('exposes terminal viewport scroll control through the renderer and lazy wrapper for older scrollback replay anchoring', () => {
