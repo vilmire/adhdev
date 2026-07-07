@@ -1,6 +1,7 @@
 import type { SessionChatTailSnapshot } from './session-chat-tail-controller'
 import type { ActiveConversation, DashboardMessage } from './types'
 import { getConversationDaemonRouteId } from './conversation-selectors'
+import { getMessageTimestamp } from './message-utils'
 
 export function getConversationMessageAuthorityKey(conversation: ActiveConversation): string {
     const daemonId = getConversationDaemonRouteId(conversation)
@@ -101,6 +102,32 @@ function getConversationAnchorMessages(
     return rescued
 }
 
+/**
+ * Order the already-selected visible set chronologically.
+ *
+ * The history + live window are assembled by POSITIONAL concatenation
+ * (`[...historyMessages, ...liveWindow]`), which renders as "all history, then
+ * all live". For native-history sessions (antigravity/MAGI) the assistant answer
+ * for the current turn lives in `historyMessages` while the user's dispatch echo
+ * lives in `liveMessages`; positional order then buries that assistant turn above
+ * the initial window, so the pane opens showing only the user prompt in scrambled
+ * order until "Load older". Re-sort the combined set by message time so render
+ * order follows chronology regardless of which source a bubble came from.
+ *
+ * This ONLY reorders the already-selected messages — the window/slice/anchor
+ * selection above is untouched. The sort is total and STABLE: the primary key is
+ * `getMessageTimestamp` (the same `receivedAt || timestamp` accessor ChatPane uses
+ * for its receivedAt map), and the original array index is an explicit tie-break so
+ * messages sharing a timestamp — or carrying none (key 0) — keep their original
+ * relative order instead of being reordered or dropped.
+ */
+function sortMessagesChronologically(messages: DashboardMessage[]): DashboardMessage[] {
+    return messages
+        .map((message, index) => ({ message, index, ts: getMessageTimestamp(message) }))
+        .sort((a, b) => (a.ts - b.ts) || (a.index - b.index))
+        .map(entry => entry.message)
+}
+
 export function buildVisibleConversationMessages(options: {
     historyMessages: DashboardMessage[]
     liveMessages: DashboardMessage[]
@@ -118,7 +145,8 @@ export function buildVisibleConversationMessages(options: {
     const liveWindow = anchorMessages.length > 0
         ? [...anchorMessages, ...visibleLiveMessages]
         : visibleLiveMessages
-    return historyMessages.length === 0
+    const combined = historyMessages.length === 0
         ? liveWindow
         : [...historyMessages, ...liveWindow]
+    return sortMessagesChronologically(combined)
 }

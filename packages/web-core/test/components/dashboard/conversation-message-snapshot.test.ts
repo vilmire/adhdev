@@ -201,6 +201,116 @@ describe('conversation message authority snapshot', () => {
         expect(rendered[0]?.content).toBe('MAGI RCA 완료 요약 (THE ANSWER)')
     })
 
+    it('sorts a native-history assistant turn chronologically instead of clumping it after all live rows (CHAT-VISIBLE-CHRONO-ORDER)', () => {
+        // Antigravity/MAGI failure mode: the current turn's assistant answer lands
+        // in historyMessages (native history) while the user's dispatch echo is a
+        // live row. Positional concat renders [history..., live...], burying the
+        // assistant answer above the initial window even though it is chronologically
+        // BEFORE the live user echo. The chrono sort must interleave them by time.
+        const visibleMessages = buildVisibleConversationMessages({
+            historyMessages: [
+                { role: 'user', content: 'user prompt', id: 'h-user', receivedAt: 1000 },
+                { role: 'assistant', content: 'assistant answer (native history)', id: 'h-assistant', receivedAt: 2000 },
+            ],
+            liveMessages: [
+                { role: 'user', content: 'live user echo', id: 'l-user', receivedAt: 3000 },
+            ],
+            visibleLiveCount: 5,
+        })
+
+        expect(visibleMessages.map(message => message.content)).toEqual([
+            'user prompt',
+            'assistant answer (native history)',
+            'live user echo',
+        ])
+    })
+
+    it('interleaves history and live rows by timestamp so an early live row is not clumped behind later history', () => {
+        // Naive positional concat would render [history@t1, history@t4, live@t2, live@t3];
+        // the chronological sort must produce t1,t2,t3,t4.
+        const visibleMessages = buildVisibleConversationMessages({
+            historyMessages: [
+                { role: 'user', content: 't1 history', id: 'h1', receivedAt: 1000 },
+                { role: 'assistant', content: 't4 history', id: 'h2', receivedAt: 4000 },
+            ],
+            liveMessages: [
+                { role: 'user', content: 't2 live', id: 'l1', receivedAt: 2000 },
+                { role: 'assistant', content: 't3 live', id: 'l2', receivedAt: 3000 },
+            ],
+            visibleLiveCount: 5,
+        })
+
+        expect(visibleMessages.map(message => message.content)).toEqual([
+            't1 history',
+            't2 live',
+            't3 live',
+            't4 history',
+        ])
+    })
+
+    it('preserves original relative order for messages that share a timestamp or carry none (stable sort)', () => {
+        // Two rows share receivedAt=1000 and two more carry no chronological key at
+        // all (getMessageTimestamp -> 0). The sort must be total and stable: equal
+        // keys keep their original relative order, and keyless rows are neither
+        // dropped nor floated to the top.
+        const visibleMessages = buildVisibleConversationMessages({
+            historyMessages: [
+                { role: 'user', content: 'tie A', id: 'a', receivedAt: 1000 },
+                { role: 'assistant', content: 'tie B', id: 'b', receivedAt: 1000 },
+                { role: 'system', content: 'no-ts C', id: 'c' },
+            ],
+            liveMessages: [
+                { role: 'system', content: 'no-ts D', id: 'd' },
+                { role: 'assistant', content: 'later E', id: 'e', receivedAt: 2000 },
+            ],
+            visibleLiveCount: 5,
+        })
+
+        // keyless rows (ts=0) sort first but keep their relative order (C before D),
+        // then the tie pair in original order (A before B), then the later row.
+        expect(visibleMessages.map(message => message.content)).toEqual([
+            'no-ts C',
+            'no-ts D',
+            'tie A',
+            'tie B',
+            'later E',
+        ])
+    })
+
+    it('places a rescued assistant answer in its correct chronological slot after the anchor-rescue fires', () => {
+        // Compose the ANTIGRAVITY-TAIL-USER-ONLY rescue with the chrono sort: the
+        // rescued answer (t2000) must land before the later activity/user rows, not
+        // merely prepended, so the rescue path stays regression-safe under sorting.
+        const liveMessages = [
+            { role: 'user' as const, content: 'prompt', id: 'user-prompt', kind: 'standard', receivedAt: 1000 },
+            { role: 'assistant' as const, content: 'THE ANSWER', id: 'assistant-answer', kind: 'standard', receivedAt: 2000 },
+            ...Array.from({ length: 55 }, (_, index) => ({
+                role: 'assistant' as const,
+                content: `activity ${index}`,
+                id: `activity-${index}`,
+                kind: 'tool',
+                receivedAt: 3000 + index,
+            })),
+            { role: 'user' as const, content: 'trailing echo', id: 'user-trailing', kind: 'standard', receivedAt: 4000 },
+        ]
+
+        const visibleMessages = buildVisibleConversationMessages({
+            historyMessages: [],
+            liveMessages,
+            visibleLiveCount: 50,
+        })
+
+        // Rescued answer sits at its true time (2000) — before every t3000+ activity
+        // row and before the t4000 trailing user echo.
+        expect(visibleMessages[0]?.content).toBe('THE ANSWER')
+        const answerIndex = visibleMessages.findIndex(m => m.content === 'THE ANSWER')
+        const trailingIndex = visibleMessages.findIndex(m => m.content === 'trailing echo')
+        expect(answerIndex).toBeLessThan(trailingIndex)
+        const timestamps = visibleMessages.map(m => Number(m.receivedAt) || 0)
+        const sorted = [...timestamps].sort((x, y) => x - y)
+        expect(timestamps).toEqual(sorted)
+    })
+
     it('does not add conversational anchors when the visible live window already contains one', () => {
         const liveMessages = [
             { role: 'user' as const, content: 'older prompt', id: 'user-older', kind: 'standard', receivedAt: 1000 },
