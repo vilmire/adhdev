@@ -175,6 +175,35 @@ function lastSubstantiveRole(messages: DashboardMessage[]): string {
 }
 
 /**
+ * Stable identity of the LAST substantive assistant bubble in a tail, or '' when
+ * the tail has no substantive assistant. Keyed on the bubble's durable identity
+ * (bubbleId / providerUnitKey / id) plus a flattened content hash — deliberately
+ * NOT on volatile per-tick fields (timestamps of unchanged bubbles), so it stays
+ * stable across identical repeat snapshots and only changes when the substantive
+ * assistant answer itself is added or replaced.
+ *
+ * Folded into the unchanged-signature short-circuit so a user-only → [user,
+ * assistant] transition (which buildChatSnapshotSignature can miss when the two
+ * tails happen to share a last message / length) always has a DISTINCT signature
+ * and is never suppressed as a no-op (D6 transition-window race, cause (a)).
+ */
+function lastSubstantiveAssistantIdentity(messages: DashboardMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i] as { role?: unknown; kind?: unknown }
+    const role = typeof message?.role === 'string' ? message.role : ''
+    const kind = typeof message?.kind === 'string' ? message.kind : ''
+    if (role === 'system' || kind === 'system') continue
+    if (kind === 'tool' || kind === 'thought' || kind === 'terminal' || kind === 'activity') continue
+    if (isNonSubstantiveChatMessage(messages[i])) continue
+    if (role !== 'assistant') return ''
+    const record = messages[i] as unknown as Record<string, unknown>
+    const identity = String(record.bubbleId ?? record.providerUnitKey ?? record.id ?? '')
+    return `${identity}#${flattenMessageContent(record.content).length}`
+  }
+  return ''
+}
+
+/**
  * True when the incoming tail delivers an assistant answer that the current
  * snapshot does not yet show — i.e. its last substantive bubble is `assistant`
  * while the snapshot's is not. Such a tail is real forward progress even when it
@@ -191,6 +220,44 @@ function tailDeliversNewAssistantAnswer(
   if (lastSubstantiveRole(nextMessages) !== 'assistant') return false
   const existing = Array.isArray(snapshot.liveMessages) ? snapshot.liveMessages : []
   return lastSubstantiveRole(existing) !== 'assistant'
+}
+
+/**
+ * True when `messageSource.selected` is the daemon's locked native transcript.
+ * Native-history is authoritative; a native tail that adds an assistant answer the
+ * current view lacks is real forward progress even after the shrink-defense
+ * transition window has lapsed.
+ */
+function isNativeHistorySource(messageSource: Record<string, unknown> | undefined): boolean {
+  return !!messageSource
+    && typeof messageSource === 'object'
+    && (messageSource as { selected?: unknown }).selected === 'native-history'
+}
+
+/**
+ * (D6 — generating→idle transition-window race) Force-apply gate.
+ *
+ * The transition-window shrink-defense already lets a NEW-assistant tail through
+ * WHILE the window is engaged (tailDeliversNewAssistantAnswer inside
+ * shouldDeferBusyTailUpdate). But the same corrective native-history
+ * [user, assistant] snapshot can also arrive AFTER the window has lapsed, or be
+ * suppressed by the unchanged-signature short-circuit — either way stranding the
+ * rendered tail at a user-only intermediate until a full-page reload.
+ *
+ * This gate force-applies such a snapshot independent of BOTH the transition-window
+ * timer AND the unchanged-signature short-circuit, strictly when: the incoming tail
+ * is the daemon's locked native transcript (`selected === 'native-history'`) AND it
+ * adds a substantive assistant answer the current rendered `liveMessages` lacks. A
+ * busy PTY tail (selected !== 'native-history') is never force-applied, so the
+ * shrink-defense against a short/stale PTY substitute stays intact.
+ */
+function shouldForceApplyNativeAssistantTail(
+  snapshot: SessionChatTailSnapshot,
+  nextMessages: DashboardMessage[],
+  messageSource: Record<string, unknown> | undefined,
+): boolean {
+  if (!isNativeHistorySource(messageSource)) return false
+  return tailDeliversNewAssistantAnswer(snapshot, nextMessages)
 }
 
 function isBusyChatTailStatus(status: unknown): boolean {
@@ -620,12 +687,33 @@ export class SessionChatTailController {
       this.lastActiveStatusAt = updateTime
     }
 
-    if (decideChatTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status, incomingMessageSource, withinRecentActiveWindow) !== 'apply') {
+    // (D6) A native-history tail that adds a substantive assistant answer the
+    // current view lacks is force-applied: it overrides BOTH the shrink-defense /
+    // transition-window decision below AND the unchanged-signature short-circuit,
+    // so the corrective [user, assistant] snapshot can never be stranded behind a
+    // lapsed transition-window timer or an unchanged deliverySignature. Strictly
+    // gated on selected === 'native-history', so a busy PTY tail is untouched.
+    const forceApplyNativeAssistant = shouldForceApplyNativeAssistantTail(
+      this.snapshot,
+      nextMessages,
+      incomingMessageSource,
+    )
+
+    if (
+      !forceApplyNativeAssistant
+      && decideChatTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status, incomingMessageSource, withinRecentActiveWindow) !== 'apply'
+    ) {
       return
     }
     const nextCursor: SessionChatTailCursor = { tailLimit: this.snapshot.cursor.tailLimit }
-    const unchanged = buildChatSnapshotSignature(this.snapshot.liveMessages)
-      === buildChatSnapshotSignature(nextMessages)
+    // Fold the last-substantive-assistant identity into the no-op check so a
+    // user-only → [user, assistant] transition always registers as a change even
+    // when the coarse last-message/length signature happens to match (D6 cause (a)).
+    const unchanged = !forceApplyNativeAssistant
+      && buildChatSnapshotSignature(this.snapshot.liveMessages)
+        === buildChatSnapshotSignature(nextMessages)
+      && lastSubstantiveAssistantIdentity(this.snapshot.liveMessages)
+        === lastSubstantiveAssistantIdentity(nextMessages)
       && this.snapshot.cursor.tailLimit === nextCursor.tailLimit
     if (unchanged) return
     this.snapshot = {

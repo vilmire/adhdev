@@ -1872,4 +1872,242 @@ describe('SessionChatTailController registry', () => {
     expect(snapshot.historyOffset).toBe(30)
     expect(snapshot.hasLiveSnapshot).toBe(true)
   })
+
+  it('force-applies a native-history [user, assistant] tail that adds a missing assistant EVEN AFTER the transition window has lapsed (D6)', () => {
+    // D6 (generating→idle transition-window race): the view is stranded at a
+    // user-only intermediate. A corrective native-history [user, assistant]
+    // snapshot arrives, but the transition-window timer has already lapsed
+    // (>DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS). Because it is the
+    // daemon's locked native transcript adding an assistant the view lacks, it
+    // must force-apply anyway — no full-page reload should be needed.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    let nowMs = 1_000_000
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      fallbackRecentCount: 4,
+      now: () => nowMs,
+    })
+
+    controller.retain()
+    // Generating stamps the transition-window clock and hydrates a user-only tail.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: '코디 채팅에 무엇이 보이나', id: 'msg-user', timestamp: 1 } as any,
+      ],
+      status: 'generating',
+      totalMessages: 1,
+      lastMessageSignature: 'sig-user-only',
+      messageSource: { selected: 'native-history' } as any,
+    }))
+    expect(controller.getSnapshot().liveMessages.map(m => (m as any).content)).toEqual([
+      '코디 채팅에 무엇이 보이나',
+    ])
+
+    // Well past the recent-activity window (120_000ms): the transition-window
+    // protection is OFF, so the ONLY thing that carries the corrective tail
+    // through is the native-assistant force-apply.
+    nowMs += 5 * 60_000
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: '코디 채팅에 무엇이 보이나', id: 'msg-user', timestamp: 1 } as any,
+        { role: 'assistant', content: 'RCA 결과 정리했습니다', id: 'msg-assistant', timestamp: 2 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-user-assistant',
+      messageSource: { selected: 'native-history' } as any,
+    }))
+
+    expect(controller.getSnapshot().liveMessages.map(m => (m as any).content)).toEqual([
+      '코디 채팅에 무엇이 보이나',
+      'RCA 결과 정리했습니다',
+    ])
+  })
+
+  it('force-applies a native-history assistant tail even when the coarse last-message signature would match the stranded tail (D6 cause a)', () => {
+    // D6 cause (a): the unchanged-signature short-circuit must not suppress a
+    // user-only → [user, assistant] transition. Here both tails share the SAME
+    // trailing chrome/activity bubble (so buildChatSnapshotSignature — which keys
+    // on the last message — collides) but the incoming tail inserts the real
+    // assistant answer the view lacks. The last-substantive-assistant identity in
+    // the no-op check (plus the force-apply) must let it through.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      fallbackRecentCount: 4,
+    })
+    const trailingActivity = { role: 'assistant', kind: 'terminal', content: '$ git status', id: 'msg-activity', timestamp: 9 } as any
+
+    controller.retain()
+    // Stranded: user prompt + a trailing (non-substantive) activity bubble. The
+    // last substantive role is the user prompt.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: '무엇이 보이나', id: 'msg-user', timestamp: 1 } as any,
+        trailingActivity,
+      ],
+      status: 'idle',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-same-trailing',
+      messageSource: { selected: 'native-history' } as any,
+    }))
+    expect(controller.getSnapshot().liveMessages.map(m => (m as any).content)).toEqual([
+      '무엇이 보이나',
+      '$ git status',
+    ])
+
+    // Corrective native tail: SAME last message (the activity bubble → same coarse
+    // last-message signature and same length=... ) but inserts the assistant answer.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: '무엇이 보이나', id: 'msg-user', timestamp: 1 } as any,
+        { role: 'assistant', content: '어시스턴트 최종 답변', id: 'msg-assistant', timestamp: 5 } as any,
+        trailingActivity,
+      ],
+      status: 'idle',
+      totalMessages: 3,
+      lastMessageSignature: 'sig-same-trailing',
+      messageSource: { selected: 'native-history' } as any,
+    }))
+
+    expect(controller.getSnapshot().liveMessages.map(m => (m as any).content)).toEqual([
+      '무엇이 보이나',
+      '어시스턴트 최종 답변',
+      '$ git status',
+    ])
+  })
+
+  it('does NOT force-apply a short/stale busy PTY tail (selected !== native-history) — shrink-defense intact (D6 negative)', () => {
+    // D6 negative: the force-apply is strictly gated on selected === 'native-history'.
+    // A short PTY tail during generation that would end on an assistant bubble must
+    // still be deferred by the shrink-defense; force-apply must NOT fire for it.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    let nowMs = 1_000_000
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      fallbackRecentCount: 4,
+      now: () => nowMs,
+    })
+
+    controller.retain()
+    // Hydrate a full tail ending on the user prompt via idle (applies immediately;
+    // the on-screen tail lacks an assistant answer), then a generating re-emit to
+    // stamp the transition-window clock.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'q1', id: 'u1', timestamp: 1 } as any,
+        { role: 'assistant', content: '─── working ───', id: 'chrome-1', kind: 'tool', timestamp: 2 } as any,
+        { role: 'user', content: 'q2 follow-up longer prompt', id: 'u2', timestamp: 3 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 3,
+      lastMessageSignature: 'sig-busy-long',
+      messageSource: { selected: 'native-history' } as any,
+    }))
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'q1', id: 'u1', timestamp: 1 } as any,
+        { role: 'assistant', content: '─── working ───', id: 'chrome-1', kind: 'tool', timestamp: 2 } as any,
+        { role: 'user', content: 'q2 follow-up longer prompt', id: 'u2', timestamp: 3 } as any,
+      ],
+      status: 'generating',
+      totalMessages: 3,
+      lastMessageSignature: 'sig-busy-long',
+      messageSource: { selected: 'pty-parser' } as any,
+    }))
+
+    // A SHORTER PTY tail arrives during generation ending on an assistant bubble.
+    // selected is pty-parser, NOT native-history → force-apply must NOT fire and the
+    // busy shrink-defense must defer it (on-screen longer tail preserved).
+    nowMs += 1_000
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'assistant', content: 'partial pty answer', id: 'a1', timestamp: 4 } as any,
+      ],
+      status: 'generating',
+      totalMessages: 1,
+      lastMessageSignature: 'sig-pty-short',
+      messageSource: { selected: 'pty-parser', fallbackReason: 'native_history_empty' } as any,
+    }))
+
+    expect(controller.getSnapshot().liveMessages.map(m => (m as any).content)).toEqual([
+      'q1',
+      '─── working ───',
+      'q2 follow-up longer prompt',
+    ])
+  })
+
+  it('still short-circuits an identical repeat native-history snapshot (no thrash) (D6 no-op)', () => {
+    // D6 no-thrash: the force-apply / identity signature must only fire when the
+    // assistant is ADDED. An identical repeat native-history [user, assistant]
+    // snapshot (no new assistant, already on screen) must still be a no-op — the
+    // listener must not be re-emitted.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+      fallbackRecentCount: 4,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'q', id: 'u1', timestamp: 1 } as any,
+        { role: 'assistant', content: 'answer', id: 'a1', timestamp: 2 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-answer',
+      messageSource: { selected: 'native-history' } as any,
+    }))
+
+    const listener = vi.fn()
+    controller.subscribe(listener)
+    listener.mockClear()
+
+    // Identical repeat — same [user, assistant], assistant already present.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'q', id: 'u1', timestamp: 1 } as any,
+        { role: 'assistant', content: 'answer', id: 'a1', timestamp: 2 } as any,
+      ],
+      status: 'idle',
+      totalMessages: 2,
+      lastMessageSignature: 'sig-answer',
+      messageSource: { selected: 'native-history' } as any,
+    }))
+
+    expect(listener).not.toHaveBeenCalled()
+    expect(controller.getSnapshot().liveMessages.map(m => (m as any).content)).toEqual([
+      'q',
+      'answer',
+    ])
+  })
 })
