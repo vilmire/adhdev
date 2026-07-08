@@ -35,6 +35,7 @@ interface LaunchProviderOptions {
   resumeSessionId?: string | null
   cliArgs?: string[]
   initialModel?: string | null
+  initialThinkingLevel?: string | null
 }
 
 export interface MeshLaunchOption {
@@ -119,6 +120,7 @@ export function useDashboardCommandActions({
       if (opts?.resumeSessionId?.trim()) payload.resumeSessionId = opts.resumeSessionId.trim()
       if (Array.isArray(opts?.cliArgs) && opts.cliArgs.length > 0) payload.cliArgs = opts.cliArgs
       if (opts?.initialModel?.trim()) payload.initialModel = opts.initialModel.trim()
+      if (opts?.initialThinkingLevel?.trim()) payload.initialThinkingLevel = opts.initialThinkingLevel.trim()
       const res: any = await launchCli(machineId, payload)
       const result = res?.result || res
       const launchedSessionId = result?.sessionId || result?.id

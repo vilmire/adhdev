@@ -58,6 +58,7 @@ interface DashboardNewSessionDialogProps {
             resumeSessionId?: string | null
             cliArgs?: string[]
             initialModel?: string | null
+            initialThinkingLevel?: string | null
         },
     ) => Promise<{ ok: boolean; error?: string }>
     onListMeshes: (machineId: string) => Promise<MeshLaunchOption[]>
@@ -166,6 +167,9 @@ export default function DashboardNewSessionDialog({
     const [activeKind, setActiveKind] = useState<LaunchKind | null>(getDefaultLaunchKind(sortedMachines[0]))
     const [selectedTarget, setSelectedTarget] = useState('')
     const [launchArgs, setLaunchArgs] = useState('')
+    // Brain-routing overrides for this session: model + thinking level, best-effort.
+    const [initialModel, setInitialModel] = useState('')
+    const [initialThinkingLevel, setInitialThinkingLevel] = useState('')
     const [recentArgsOptions, setRecentArgsOptions] = useState<string[]>([])
     const [selectedResumeSessionId, setSelectedResumeSessionId] = useState('')
     const [savedSessions, setSavedSessions] = useState<SavedSessionOption[]>([])
@@ -296,6 +300,8 @@ export default function DashboardNewSessionDialog({
             setActiveKind(getDefaultLaunchKind(selectedMachine))
             setSelectedTarget('')
             setLaunchArgs('')
+            setInitialModel('')
+            setInitialThinkingLevel('')
             setSelectedResumeSessionId('')
             setSavedSessions([])
             setSavedSessionsLoaded(false)
@@ -577,6 +583,8 @@ export default function DashboardNewSessionDialog({
                 workspacePath: workspaceChoice === '__custom__' ? resolvedWorkspacePath || null : null,
                 resumeSessionId: activeKind === 'cli' && selectedResumeSessionId ? selectedResumeSessionId : null,
                 cliArgs: parsedArgs,
+                initialModel: initialModel.trim() ? initialModel.trim() : null,
+                initialThinkingLevel: initialThinkingLevel.trim() ? initialThinkingLevel.trim() : null,
             })
         setBusy(false)
         if (!result.ok) {
@@ -591,6 +599,8 @@ export default function DashboardNewSessionDialog({
     }, [
         activeKind,
         launchArgs,
+        initialModel,
+        initialThinkingLevel,
         loadRecentArgs,
         onClose,
         onLaunchIde,
@@ -902,6 +912,39 @@ export default function DashboardNewSessionDialog({
                                         ))}
                                     </div>
                                 )}
+                            </LaunchSectionCard>
+                        )}
+
+                        {workspaceMode !== 'mesh' && activeKind !== 'ide' && (
+                            <LaunchSectionCard title="Model & thinking (optional)">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                    <label className="flex flex-col gap-1">
+                                        <span className="text-[11px] text-text-muted">Model</span>
+                                        <input
+                                            type="text"
+                                            value={initialModel}
+                                            onChange={(event) => setInitialModel(event.target.value)}
+                                            placeholder="e.g. opus, sonnet, haiku"
+                                            className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
+                                            disabled={busy}
+                                        />
+                                    </label>
+                                    <label className="flex flex-col gap-1">
+                                        <span className="text-[11px] text-text-muted">Thinking level</span>
+                                        <select
+                                            value={initialThinkingLevel}
+                                            onChange={(event) => setInitialThinkingLevel(event.target.value)}
+                                            className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
+                                            disabled={busy}
+                                        >
+                                            <option value="">(default)</option>
+                                            <option value="low">low</option>
+                                            <option value="medium">medium</option>
+                                            <option value="high">high</option>
+                                        </select>
+                                    </label>
+                                </div>
+                                <p className="mt-1.5 text-[11px] text-text-muted">Best-effort: applied at launch by providers that support it (e.g. claude, codex). Blank = provider default.</p>
                             </LaunchSectionCard>
                         )}
 
