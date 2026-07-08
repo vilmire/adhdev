@@ -10,6 +10,7 @@ import { IconMesh } from '../../components/Icons'
 import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
 import CoordinatorPromptDefaultPreview from './CoordinatorPromptDefaultPreview'
 import MeshSchedulingNodes from './MeshSchedulingNodes'
+import MeshRoutingPreview from './MeshRoutingPreview'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
@@ -433,6 +434,14 @@ export function MeshDetailView({
                         onUpdateNodeScheduling={onUpdateNodeScheduling}
                     />
                 </fieldset>
+
+                {/* Rule-based projection of where the next untargeted task would go,
+                    so the distribution strategy's effect is visible without reading code. */}
+                <MeshRoutingPreview
+                    nodes={nodes}
+                    meshQueue={meshQueue}
+                    schedulingStrategy={schedulingStrategy}
+                />
             </Section>
 
             {/* ── Coordinator prompt (advanced) ──
