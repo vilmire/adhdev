@@ -6,7 +6,6 @@ import { useState, useMemo } from 'react'
 import {
     normalizeAvailableCliProviders,
     normalizeProviderPriority,
-    normalizeProviderPriorityForInventory,
     type AvailableCliProviderOption,
 } from '../../utils/provider-priority'
 import type { RepoMeshContextValue, RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
@@ -40,7 +39,6 @@ export function useMeshNodeActions({
     primaryDaemonId,
     activeDaemonId,
     daemons,
-    availableCliProviders,
     sendCommand,
     unwrapResult,
     loadLiveMesh,
@@ -104,13 +102,13 @@ export function useMeshNodeActions({
         if (!ws) return
         try {
             const payload: any = { meshId: selectedMeshId, workspace: ws }
+            // Persist the full chosen order (dedup only), same rationale as the
+            // per-node save path — don't strip providers not detected right now.
             if (features.addNodeDaemonPicker && nodeDaemonId) {
                 payload.daemonId = nodeDaemonId
                 payload.machineId = selectedNodeDaemon?.machineId
-                payload.providerPriority = normalizeProviderPriorityForInventory(nodeProviderPriority, nodePickerProviders)
-            } else {
-                payload.providerPriority = normalizeProviderPriorityForInventory(nodeProviderPriority, availableCliProviders)
             }
+            payload.providerPriority = normalizeProviderPriority(nodeProviderPriority)
             const raw = await sendCommand(targetDaemonId, 'add_mesh_node', payload)
             const result = unwrapResult(raw)
             if (result?.success === false) throw new Error(result.error || 'Add node failed')
@@ -165,11 +163,13 @@ export function useMeshNodeActions({
     async function handleUpdateNodeProviderPriority(node: MeshNode) {
         if (!selectedMeshId) return
         const targetDaemonId = (selectedMesh as any)?.__sourceDaemonId || primaryDaemonId
-        const providers = features.addNodeDaemonPicker ? nodePickerProviders : availableCliProviders
         const requested = nodeProviderPriorityDrafts[node.id] || readNodeProviderPriority(node)
-        const providerPriority = providers.length > 0
-            ? normalizeProviderPriorityForInventory(requested, providers)
-            : normalizeProviderPriority(requested)
+        // Persist the FULL requested order (dedup only) — do NOT filter to the
+        // inventory detected on this machine. Filtering on save was destructive:
+        // opening the editor where a provider isn't detected and saving would
+        // silently drop it from the policy. The daemon already skips undetected
+        // providers at launch, so keeping them in the saved order is safe.
+        const providerPriority = normalizeProviderPriority(requested)
         const nextPolicy = { ...(node.policy || {}) }
         delete (nextPolicy as any).provider_priority
         if (providerPriority.length) nextPolicy.providerPriority = providerPriority

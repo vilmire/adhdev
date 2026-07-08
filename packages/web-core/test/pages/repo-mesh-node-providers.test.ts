@@ -49,10 +49,21 @@ describe('repo-mesh node provider resolution (per-daemon)', () => {
         expect(resolveNodeAvailableProviders(node, map).map(p => p.type)).toEqual(['claude-cli', 'codex-cli'])
     })
 
-    it('returns an empty list (never another machine) when the node has no daemon_id', () => {
+    it('returns an empty list (never another machine) when an unbound node sees MULTIPLE daemons', () => {
+        // With >1 daemon we cannot guess which machine an unbound node belongs to,
+        // so we must fail closed rather than leak an arbitrary machine's providers.
         const map = buildProvidersByDaemonId(DAEMONS)
         const node = { id: 'n4', workspace: '/orphan' } as any
         expect(resolveNodeAvailableProviders(node, map)).toEqual([])
+    })
+
+    it('falls back to the sole daemon for an unbound node in a single-daemon (standalone) mesh', () => {
+        // Standalone nodes carry no daemon_id and there is exactly one local
+        // daemon. Failing closed here made every detected provider render as
+        // "not on this machine". With one unambiguous daemon we use its providers.
+        const map = buildProvidersByDaemonId([LOCAL_DAEMON])
+        const node = { id: 'n_standalone', workspace: '/Users/dev/app' } as any
+        expect(resolveNodeAvailableProviders(node, map).map(p => p.type)).toEqual(['claude-cli', 'codex-cli'])
     })
 
     it('returns an empty list when the node references a disconnected daemon', () => {

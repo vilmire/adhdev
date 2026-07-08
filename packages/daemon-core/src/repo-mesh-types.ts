@@ -527,7 +527,7 @@ const DIRTY_WORKSPACE_BEHAVIORS = new Set<RepoMeshPolicy['dirtyWorkspaceBehavior
 
 /** Min/max bounds for the global write-task parallel cap. */
 export const MESH_MAX_PARALLEL_TASKS_MIN = 1;
-export const MESH_MAX_PARALLEL_TASKS_MAX = 8;
+export const MESH_MAX_PARALLEL_TASKS_MAX = 64;
 
 /**
  * Default multiplier applied to the write cap to derive the read-only diagnosis

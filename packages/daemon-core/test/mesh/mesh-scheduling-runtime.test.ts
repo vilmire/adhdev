@@ -28,8 +28,8 @@ describe('buildMeshSchedulingRuntime', () => {
             [],
         );
         expect(rt.strategy).toBe('least_loaded');
-        expect(rt.maxParallelTasks).toBe(8); // clamp to MAX
-        expect(rt.maxReadonlyParallelTasks).toBe(16);
+        expect(rt.maxParallelTasks).toBe(64); // clamp to MESH_MAX_PARALLEL_TASKS_MAX
+        expect(rt.maxReadonlyParallelTasks).toBe(128); // 2× the write cap
     });
 
     it('counts global write vs readonly load and flags global cap exhaustion', () => {

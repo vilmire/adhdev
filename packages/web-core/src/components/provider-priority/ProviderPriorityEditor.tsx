@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react'
 import {
   addProviderPriorityItem,
   moveProviderPriorityItem,
-  normalizeProviderPriorityForInventory,
+  normalizeProviderPriority,
   removeProviderPriorityItem,
   type AvailableCliProviderOption,
 } from '../../utils/provider-priority'
@@ -42,44 +42,44 @@ export default function ProviderPriorityEditor({
 }: ProviderPriorityEditorProps) {
   const [addType, setAddType] = useState('')
   const availableByType = useMemo(() => new Map(availableProviders.map(provider => [provider.type, provider])), [availableProviders])
-  const visibleValue = useMemo(() => normalizeProviderPriorityForInventory(value, availableProviders), [value, availableProviders])
-  const omittedCount = value.length - visibleValue.length
-  const addableProviders = availableProviders.filter(provider => !visibleValue.includes(provider.type))
+  // Show the FULL saved order (not just detected providers) so the operator can
+  // always see and reorder what they configured — undetected entries render greyed
+  // out with an "unavailable" tag instead of vanishing behind a warning banner.
+  const orderedValue = useMemo(() => normalizeProviderPriority(value), [value])
+  const undetectedCount = orderedValue.filter(type => !availableByType.has(type)).length
+  const addableProviders = availableProviders.filter(provider => !orderedValue.includes(provider.type))
 
   const handleAdd = () => {
     if (!addType) return
-    onChange(addProviderPriorityItem(visibleValue, addType))
+    onChange(addProviderPriorityItem(orderedValue, addType))
     setAddType('')
   }
 
   return (
     <div className="rounded-lg border border-border-subtle bg-bg-secondary/60 p-3">
       <div className="flex flex-col gap-2">
-        {visibleValue.length === 0 ? (
+        {orderedValue.length === 0 ? (
           <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-300">
-            {value.length > 0 ? (
-              <>
-                Saved provider order (<span className="font-mono">{value.join(' → ')}</span>) has no providers
-                detected on this machine right now. Launches without an explicit CLI provider will fail closed
-                until one of them is detected.
-              </>
-            ) : (
-              'No provider priority configured. Launches without an explicit CLI provider will fail closed.'
-            )}
+            No provider priority configured. Launches without an explicit CLI provider will fail closed.
           </div>
-        ) : visibleValue.map((type, index) => {
+        ) : orderedValue.map((type, index) => {
           const provider = availableByType.get(type)
+          const detected = !!provider
           return (
-            <div key={type} className="flex flex-col gap-2 rounded-md border border-border-subtle bg-bg-primary px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+            <div key={type} className={`flex flex-col gap-2 rounded-md border border-border-subtle px-3 py-2 sm:flex-row sm:items-center sm:justify-between ${detected ? 'bg-bg-primary' : 'bg-bg-primary/40'}`}>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[10px] font-semibold text-text-muted">#{index + 1}</span>
                   {provider?.icon && <span aria-hidden="true">{provider.icon}</span>}
-                  <span className="font-mono text-[12px] text-text-primary">{type}</span>
-                  <span className="rounded border border-green-500/20 bg-green-500/10 px-1.5 py-px text-[9px] font-semibold text-green-400">available</span>
+                  <span className={`font-mono text-[12px] ${detected ? 'text-text-primary' : 'text-text-muted'}`}>{type}</span>
+                  {detected ? (
+                    <span className="rounded border border-green-500/20 bg-green-500/10 px-1.5 py-px text-[9px] font-semibold text-green-400">available</span>
+                  ) : (
+                    <span className="rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-px text-[9px] font-semibold text-amber-400">not on this machine</span>
+                  )}
                 </div>
                 <div className="mt-1 text-[10px] text-text-muted">
-                  {provider ? `${provider.label} · ${provider.statusLabel}` : type}
+                  {provider ? `${provider.label} · ${provider.statusLabel}` : 'Kept in order; skipped at launch until detected here.'}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-1">
@@ -89,7 +89,7 @@ export default function ProviderPriorityEditor({
                   aria-label="Move up"
                   disabled={disabled || index === 0}
                   title="Move up"
-                  onClick={() => onChange(moveProviderPriorityItem(visibleValue, type, 'up'))}
+                  onClick={() => onChange(moveProviderPriorityItem(orderedValue, type, 'up'))}
                 >
                   <IconChevron direction="up" />
                 </button>
@@ -97,13 +97,13 @@ export default function ProviderPriorityEditor({
                   type="button"
                   className="btn btn-secondary btn-sm inline-flex h-8 w-8 items-center justify-center p-0"
                   aria-label="Move down"
-                  disabled={disabled || index === visibleValue.length - 1}
+                  disabled={disabled || index === orderedValue.length - 1}
                   title="Move down"
-                  onClick={() => onChange(moveProviderPriorityItem(visibleValue, type, 'down'))}
+                  onClick={() => onChange(moveProviderPriorityItem(orderedValue, type, 'down'))}
                 >
                   <IconChevron direction="down" />
                 </button>
-                <button type="button" className="btn btn-secondary btn-sm text-red-400" disabled={disabled} onClick={() => onChange(removeProviderPriorityItem(visibleValue, type))}>Remove</button>
+                <button type="button" className="btn btn-secondary btn-sm text-red-400" disabled={disabled} onClick={() => onChange(removeProviderPriorityItem(orderedValue, type))}>Remove</button>
               </div>
             </div>
           )
@@ -128,8 +128,8 @@ export default function ProviderPriorityEditor({
         {saveButton}
       </div>
       <div className="mt-2 text-[11px] text-text-muted">
-        Inventory is filtered to CLI providers detected on this machine. New launches use this order; existing running sessions may need restart.
-        {omittedCount > 0 ? ` ${omittedCount} provider${omittedCount === 1 ? '' : 's'} from the saved policy are not detected now and will be omitted when saved.` : ''}
+        Launches use this order, top to bottom.
+        {undetectedCount > 0 ? ` ${undetectedCount} provider${undetectedCount === 1 ? '' : 's'} not detected here — kept in order, skipped until available.` : ''}
       </div>
     </div>
   )

@@ -43,4 +43,39 @@ describe('ProviderPriorityEditor reorder controls', () => {
     expect(html).toContain('aria-label="Move up" disabled=""')
     expect(html).toContain('aria-label="Move down" disabled=""')
   })
+
+  it('renders providers in the saved order even when none are detected on this machine, tagged as unavailable', () => {
+    // Saved order references providers that are NOT in availableProviders (e.g.
+    // this machine detects nothing). The full order must still render as
+    // reorderable rows — not collapse into a warning banner — so the operator
+    // can see and keep their configured order.
+    const html = renderToStaticMarkup(
+      React.createElement(ProviderPriorityEditor, {
+        value: ['claude-cli', 'antigravity-cli'],
+        availableProviders: [],
+        onChange: () => {},
+      }),
+    )
+
+    expect(html).toContain('claude-cli')
+    expect(html).toContain('antigravity-cli')
+    // Each undetected row is tagged, not hidden.
+    expect(html).toContain('not on this machine')
+    // Reorder controls still render for the undetected rows.
+    expect(html).toContain('aria-label="Move up"')
+    expect(html).toContain('aria-label="Move down"')
+    // The old "no providers detected" warning banner is gone.
+    expect(html).not.toContain('has no providers')
+  })
+
+  it('shows the empty-config warning only when the saved order is genuinely empty', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ProviderPriorityEditor, {
+        value: [],
+        availableProviders: [],
+        onChange: () => {},
+      }),
+    )
+    expect(html).toContain('No provider priority configured')
+  })
 })

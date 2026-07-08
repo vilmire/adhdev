@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 
 import { Section } from '../../components/ui/Section'
 import { EmptyState } from '../../components/ui/EmptyState'
@@ -13,7 +13,7 @@ import {
 } from '../../utils/provider-priority'
 import { IconTrash, IconPlus, NodeHealthBadge } from './icons'
 import { buildProvidersByDaemonId, resolveNodeAvailableProviders } from './node-providers'
-import type { MeshNode, MeshProviderRole, MeshNodeListFeatures, MeshQueueEntry, MeshSchedulingStrategy, ProviderPriorityDrafts } from './types'
+import type { MeshNode, MeshNodeListFeatures, MeshQueueEntry, ProviderPriorityDrafts } from './types'
 
 export function getNodeActiveAssignments(node: MeshNode, queue: MeshQueueEntry[]): MeshQueueEntry[] {
     return queue.filter(task => {
@@ -51,22 +51,6 @@ function isWorktreeNode(node: MeshNode): boolean {
     return node.isLocalWorktree === true
 }
 
-function readNodeSchedulingPriority(node: MeshNode): number {
-    const raw = Number(node.policy?.schedulingPriority)
-    return Number.isFinite(raw) ? raw : 0
-}
-
-function readNodeProviderRoles(node: MeshNode): MeshProviderRole[] {
-    const roles = node.policy?.providerRoles
-    if (!Array.isArray(roles)) return []
-    return roles
-        .filter((r): r is MeshProviderRole => !!r && typeof r === 'object' && typeof r.providerType === 'string' && r.providerType.trim().length > 0)
-        .map(r => ({
-            providerType: r.providerType.trim(),
-            maxParallel: Number.isFinite(Number(r.maxParallel)) && Number(r.maxParallel) >= 0 ? Math.floor(Number(r.maxParallel)) : undefined,
-        }))
-}
-
 function getNodeActiveSessions(node: MeshNode, daemon: RepoMeshDaemonEntry | undefined): Array<{ id: string; provider: string; status: string }> {
     const d = daemon as any
     const buckets = [
@@ -101,8 +85,6 @@ interface Props {
     userName?: string
     features: MeshNodeListFeatures
     coordinatorDaemonId: string
-    /** Mesh-wide distribution strategy — drives per-node scheduling-priority emphasis. */
-    schedulingStrategy: MeshSchedulingStrategy
 
     // Provider priority drafts
     nodeProviderPriorityDrafts: ProviderPriorityDrafts
@@ -110,10 +92,6 @@ interface Props {
     availableCliProviders: AvailableCliProviderOption[]
     savingNodePolicyId: string | null
     onUpdateNodeProviderPriority: (node: MeshNode) => void
-
-    // Per-node scheduling (priority / provider roles)
-    savingNodeSchedulingId: string | null
-    onUpdateNodeScheduling: (node: MeshNode, patch: { schedulingPriority?: number; providerRoles?: MeshProviderRole[] }) => void
 
     // Node instruction
     nodeSystemPromptDrafts: Record<string, string>
@@ -154,14 +132,11 @@ export function MeshNodeList({
     userName,
     features,
     coordinatorDaemonId,
-    schedulingStrategy,
     nodeProviderPriorityDrafts,
     onNodeProviderPriorityDraftChange,
     availableCliProviders,
     savingNodePolicyId,
     onUpdateNodeProviderPriority,
-    savingNodeSchedulingId,
-    onUpdateNodeScheduling,
     nodeSystemPromptDrafts,
     onNodeSystemPromptDraftChange,
     savingNodeSystemPromptId,
@@ -243,7 +218,7 @@ export function MeshNodeList({
             {/* Add node button */}
             {!showAddNode && (
                 <button className="btn btn-primary btn-sm mb-4 inline-flex items-center gap-1.5" onClick={onShowAddNode}>
-                    <IconPlus size={13} /> {features.addNodeDaemonPicker ? 'Attach Machine Daemon' : '+ Add Node'}
+                    <IconPlus size={13} /> {features.addNodeDaemonPicker ? 'Attach machine' : 'Add node'}
                 </button>
             )}
 
@@ -443,13 +418,8 @@ export function MeshNodeList({
                                                 </FormField>
                                             )}
 
-                                            {/* Per-node Advanced: scheduling priority + provider roles */}
-                                            <NodeAdvancedPanel
-                                                node={node}
-                                                schedulingStrategy={schedulingStrategy}
-                                                saving={savingNodeSchedulingId === node.id}
-                                                onSave={patch => onUpdateNodeScheduling(node, patch)}
-                                            />
+                                            {/* Per-node scheduling (priority + provider caps) moved to the
+                                                Scheduling section so all scheduling knobs live in one place. */}
                                         </div>
                                     </div>
 
@@ -496,118 +466,5 @@ export function MeshNodeList({
                 </div>
             )}
         </Section>
-    )
-}
-
-// ─── Per-node Advanced panel (scheduling priority + per-provider max-parallel caps) ─────
-
-function NodeAdvancedPanel({
-    node,
-    schedulingStrategy,
-    saving,
-    onSave,
-}: {
-    node: MeshNode
-    schedulingStrategy: MeshSchedulingStrategy
-    saving: boolean
-    onSave: (patch: { schedulingPriority?: number; providerRoles?: MeshProviderRole[] }) => void
-}) {
-    const savedPriority = readNodeSchedulingPriority(node)
-    const savedRoles = useMemo(() => readNodeProviderRoles(node), [node])
-    const [priority, setPriority] = useState<string>(String(savedPriority))
-    const [roles, setRoles] = useState<MeshProviderRole[]>(savedRoles)
-
-    // Priority only matters when the mesh distributes work (Spread mode); it has no
-    // effect under In order (first_eligible).
-    const priorityRelevant = schedulingStrategy !== 'first_eligible'
-
-    function addRole() {
-        setRoles(prev => [...prev, { providerType: '' }])
-    }
-    function updateRole(i: number, patch: Partial<MeshProviderRole>) {
-        setRoles(prev => prev.map((r, idx) => idx === i ? { ...r, ...patch } : r))
-    }
-    function removeRole(i: number) {
-        setRoles(prev => prev.filter((_, idx) => idx !== i))
-    }
-
-    function save() {
-        const cleanedRoles: MeshProviderRole[] = roles
-            .map(r => ({
-                providerType: r.providerType.trim(),
-                maxParallel: Number.isFinite(Number(r.maxParallel)) && Number(r.maxParallel) >= 0 ? Math.floor(Number(r.maxParallel)) : undefined,
-            }))
-            .filter(r => r.providerType.length > 0)
-        const parsedPriority = Number(priority)
-        onSave({
-            schedulingPriority: Number.isFinite(parsedPriority) ? parsedPriority : 0,
-            providerRoles: cleanedRoles,
-        })
-    }
-
-    return (
-        <details className="mt-3 group" onClick={e => e.stopPropagation()}>
-            <summary className="cursor-pointer select-none text-[12px] text-text-muted hover:text-text-secondary inline-flex items-center gap-1">
-                <span className="transition-transform group-open:rotate-90" aria-hidden>▸</span> Advanced
-                {(savedPriority !== 0 || savedRoles.length > 0) && (
-                    <span className="ml-1 rounded-full border border-border-subtle bg-bg-secondary px-1.5 py-0.5 text-[10px] text-text-muted">
-                        {savedPriority !== 0 ? `priority ${savedPriority}` : ''}{savedPriority !== 0 && savedRoles.length > 0 ? ' · ' : ''}{savedRoles.length > 0 ? `${savedRoles.length} cap${savedRoles.length === 1 ? '' : 's'}` : ''}
-                    </span>
-                )}
-            </summary>
-            <div className="mt-2 rounded-lg border border-border-subtle bg-bg-secondary/60 p-3">
-                <FormField label="Scheduling priority"
-                    hint={priorityRelevant
-                        ? 'Higher = preferred when the mesh distributes work. Not an eligibility gate.'
-                        : 'Used only when Distribution is set to Spread (currently In order — no effect).'}>
-                    <input type="number" step={1}
-                        className="w-32 px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                        value={priority}
-                        onChange={e => setPriority(e.target.value)}
-                        onClick={e => e.stopPropagation()}
-                        disabled={saving} />
-                </FormField>
-
-                <FormField label="Per-provider max parallel (optional)"
-                    hint="Cap concurrent active tasks for a tool on this node. Routing is governed by task required_tags, not by this entry.">
-                    <div className="flex flex-col gap-2">
-                        {roles.length === 0 && (
-                            <div className="text-[12px] text-text-muted">No per-provider caps. This node uses global caps only.</div>
-                        )}
-                        {roles.map((r, i) => (
-                            <div key={i} className="flex flex-wrap items-center gap-2">
-                                <input type="text" placeholder="provider type (e.g. claude-cli)"
-                                    className="flex-1 min-w-[10rem] px-2 py-1.5 rounded-lg bg-bg-secondary border border-border-subtle text-[12px] text-text-primary"
-                                    value={r.providerType}
-                                    onChange={e => updateRole(i, { providerType: e.target.value })}
-                                    onClick={e => e.stopPropagation()}
-                                    disabled={saving} />
-                                <input type="number" min={0} step={1} placeholder="max ∥"
-                                    className="w-20 px-2 py-1.5 rounded-lg bg-bg-secondary border border-border-subtle text-[12px] text-text-primary"
-                                    value={r.maxParallel ?? ''}
-                                    onChange={e => updateRole(i, { maxParallel: e.target.value === '' ? undefined : Number(e.target.value) })}
-                                    onClick={e => e.stopPropagation()}
-                                    disabled={saving} />
-                                <button type="button" className="text-text-muted hover:text-red-400 bg-transparent border-none cursor-pointer"
-                                    onClick={e => { e.stopPropagation(); removeRole(i) }} title="Remove cap" disabled={saving}>
-                                    <IconX size={13} />
-                                </button>
-                            </div>
-                        ))}
-                        <button type="button" className="self-start text-[12px] text-accent-primary bg-transparent border-none cursor-pointer p-0 inline-flex items-center gap-1"
-                            onClick={e => { e.stopPropagation(); addRole() }} disabled={saving}>
-                            <IconPlus size={12} /> Add cap
-                        </button>
-                    </div>
-                </FormField>
-
-                <div className="mt-2 flex items-center gap-2">
-                    <button type="button" className="btn btn-secondary btn-sm"
-                        onClick={e => { e.stopPropagation(); save() }} disabled={saving}>
-                        {saving ? 'Saving…' : 'Save advanced'}
-                    </button>
-                </div>
-            </div>
-        </details>
     )
 }

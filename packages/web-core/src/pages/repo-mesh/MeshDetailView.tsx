@@ -8,6 +8,8 @@ import { IconMesh } from '../../components/Icons'
 // The task_kind → panel binding editor (MagiKindPanelEditor) is the sole MAGI panel
 // surface — the named-panel CRUD (MagiPanelManager) was removed.
 import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
+import CoordinatorPromptDefaultPreview from './CoordinatorPromptDefaultPreview'
+import MeshSchedulingNodes from './MeshSchedulingNodes'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
@@ -296,7 +298,7 @@ export function MeshDetailView({
                  The sole MAGI panel surface. The named-panel CRUD (MagiPanelManager) and its
                  magi_panel_* daemon commands were removed; only magi_kind_panel_* remains. */}
             {displayedMeshStatus && (
-                <Section title="MAGI" description="task_kind → panel slot bindings">
+                <Section title="MAGI review panels" description="MAGI (Multi-Agent Ground-truth Insight) runs a panel of AI agents that cross-check each other's work to surface the ground truth. Choose which agents handle each review type.">
                     <MagiKindPanelEditor
                         status={displayedMeshStatus}
                         daemonId={activeDaemonId}
@@ -328,14 +330,11 @@ export function MeshDetailView({
                 userName={userName}
                 features={{ addNodeDaemonPicker: features.addNodeDaemonPicker, nodeInstruction: features.nodeInstruction }}
                 coordinatorDaemonId={coordinatorDaemonId}
-                schedulingStrategy={schedulingStrategy}
                 nodeProviderPriorityDrafts={nodeProviderPriorityDrafts}
                 onNodeProviderPriorityDraftChange={onNodeProviderPriorityDraftChange}
                 availableCliProviders={availableCliProviders}
                 savingNodePolicyId={savingNodePolicyId}
                 onUpdateNodeProviderPriority={onUpdateNodeProviderPriority}
-                savingNodeSchedulingId={savingNodeSchedulingId}
-                onUpdateNodeScheduling={onUpdateNodeScheduling}
                 nodeSystemPromptDrafts={nodeSystemPromptDrafts}
                 onNodeSystemPromptDraftChange={onNodeSystemPromptDraftChange}
                 savingNodeSystemPromptId={savingNodeSystemPromptId}
@@ -392,6 +391,20 @@ export function MeshDetailView({
                     </div>
                 </fieldset>
                 {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">Saving…</div>}
+
+                {/* Per-node scheduling — moved here from the Nodes & Providers cards so
+                    every scheduling knob (mesh-wide cap, distribution, per-node priority
+                    and per-provider caps) lives in one section. */}
+                <fieldset className="mt-5 border-none p-0 m-0">
+                    <legend className="text-[13px] font-medium text-text-secondary mb-2">Per-node</legend>
+                    <MeshSchedulingNodes
+                        nodes={nodes}
+                        daemons={daemons}
+                        schedulingStrategy={schedulingStrategy}
+                        savingNodeSchedulingId={savingNodeSchedulingId}
+                        onUpdateNodeScheduling={onUpdateNodeScheduling}
+                    />
+                </fieldset>
             </Section>
 
             {/* ── Coordinator prompt (advanced) ──
@@ -417,6 +430,12 @@ export function MeshDetailView({
                                 rows={6} value={coordinatorPromptDraft.override}
                                 onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, override: e.target.value })}
                                 disabled={savingCoordinatorPrompt} placeholder="(empty — daemon default applies)" />
+                            <CoordinatorPromptDefaultPreview
+                                daemonId={activeDaemonId}
+                                meshId={selectedMesh.id}
+                                cliType={coordinatorCliType}
+                                sendCommand={sendCommand}
+                            />
                         </FormField>
                         <FormField label="Append (added after the base)" hint="Always added after whichever base prompt wins.">
                             <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"

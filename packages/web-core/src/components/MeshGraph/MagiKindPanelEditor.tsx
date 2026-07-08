@@ -33,10 +33,10 @@ const FALLBACK_PROVIDERS = ['claude-cli', 'codex-cli', 'gemini-cli', 'hermes-cli
 
 /** The four task_kinds surfaced by the editor, in a stable display order. */
 const TASK_KINDS: { kind: MagiTaskKind; label: string; hint: string }[] = [
-    { kind: 'rca', label: 'rca', hint: 'root-cause analysis' },
-    { kind: 'design', label: 'design', hint: 'design / approach review' },
-    { kind: 'claim_audit', label: 'claim_audit', hint: 'verify specific claims' },
-    { kind: 'freeform', label: 'freeform', hint: 'no structured schema' },
+    { kind: 'rca', label: 'Root-cause analysis', hint: 'rca' },
+    { kind: 'design', label: 'Design / approach review', hint: 'design' },
+    { kind: 'claim_audit', label: 'Verify specific claims', hint: 'claim_audit' },
+    { kind: 'freeform', label: 'Freeform review', hint: 'freeform' },
 ]
 
 /** Common model suggestions offered via the datalist (free text still allowed). */
@@ -234,14 +234,17 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
     }, [daemonId, sendDaemonCommand, loadKindPanels])
 
     const inputClass = `w-full rounded-lg border px-2.5 py-1.5 text-xs ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40 text-slate-100 placeholder:text-slate-500' : 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400'}`
-    const btnPrimary = 'rounded-lg px-3 py-1.5 text-xs font-semibold bg-sky-500/90 text-white hover:bg-sky-500 disabled:opacity-50'
-    const btnGhost = `rounded-lg px-3 py-1.5 text-xs font-medium ${meshTheme.textSecondary} border ${meshTheme.isDark ? 'border-white/10 hover:bg-white/[0.05]' : 'border-slate-300 hover:bg-slate-50'} disabled:opacity-50`
-    const helperClass = `text-[10px] leading-4 ${meshTheme.textMuted}`
+    // Use the app design-system buttons so MAGI matches the rest of the mesh UI
+    // (the old ad-hoc bg-sky-500 primary was the lone off-theme blue button).
+    const btnPrimary = 'btn btn-primary btn-sm'
+    const btnGhost = 'btn btn-secondary btn-sm'
 
     return (
         <div className="flex flex-col gap-3 p-1">
             <div className="flex flex-wrap items-center gap-2">
-                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>MAGI kind → panel bindings</span>
+                <p className={`text-[12px] ${meshTheme.textSecondary}`}>
+                    Pick which agents review each task type. Add one row per agent.
+                </p>
                 <div className="ml-auto flex items-center gap-2">
                     <button type="button" className={btnGhost} onClick={() => void loadKindPanels()} disabled={loading || !canCommand}>
                         {loading ? 'Loading…' : 'Refresh'}
@@ -268,19 +271,19 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                     return (
                         <div key={kind} className={`${meshTheme.cardClass} rounded-2xl p-4 flex flex-col gap-3`}>
                             <div className="flex flex-wrap items-center gap-2">
-                                <span className={`font-mono text-[12px] font-semibold ${meshTheme.textPrimary}`}>{label}</span>
-                                <span className={`text-[11px] ${meshTheme.textSecondary}`}>{hint}</span>
+                                <span className={`text-[13px] font-semibold ${meshTheme.textPrimary}`}>{label}</span>
+                                <span className={`font-mono text-[10px] ${meshTheme.textMuted}`}>{hint}</span>
                                 <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${isBound
                                     ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300'
                                     : 'border-slate-400/20 bg-slate-500/10 text-slate-300'}`}>
-                                    {isBound ? `${kindPanels[kind]!.length} slot${kindPanels[kind]!.length === 1 ? '' : 's'}` : 'unconfigured'}
+                                    {isBound ? `${kindPanels[kind]!.length} agent${kindPanels[kind]!.length === 1 ? '' : 's'}` : 'off'}
                                 </span>
                             </div>
 
                             <div className="flex flex-col gap-2">
                                 {slots.length === 0 && (
                                     <div className={`rounded-xl border p-2.5 text-[11px] ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
-                                        No slots yet — add one to bind this kind. Until then, <span className="font-mono">mesh_magi_review(&#123;task_kind:&apos;{kind}&apos;&#125;)</span> errors.
+                                        No agents yet — add one to enable this review type.
                                     </div>
                                 )}
                                 {slots.map((s, idx) => {
@@ -291,45 +294,43 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                                         ? (nodeProviders.length ? nodeProviders : allProviderCandidates)
                                         : allProviderCandidates
                                     return (
-                                        <div key={idx} className={`rounded-xl border p-2.5 grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_auto_auto] gap-2 items-end ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
+                                        <div key={idx} className={`rounded-xl border p-2.5 grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_auto_auto] gap-x-2 gap-y-1 items-start ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
                                             <label className="flex flex-col gap-1">
                                                 <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>Machine</span>
-                                                <select className={inputClass} value={s.nodeId} onChange={e => updateSlot(kind, idx, { nodeId: e.target.value })}>
-                                                    <option value="">(any node by tags)</option>
+                                                <select className={inputClass} value={s.nodeId} onChange={e => updateSlot(kind, idx, { nodeId: e.target.value })} title="Which machine runs this agent. Leave on “any” to let the coordinator route by tags.">
+                                                    <option value="">Any machine</option>
                                                     {knownNodeIds.map(id => <option key={id} value={id}>{nodeLabelById[id] ?? id}</option>)}
-                                                    {s.nodeId && !knownNodeIds.includes(s.nodeId) && <option value={s.nodeId}>{(nodeLabelById[s.nodeId] ?? s.nodeId)} (not in live mesh)</option>}
+                                                    {s.nodeId && !knownNodeIds.includes(s.nodeId) && <option value={s.nodeId}>{(nodeLabelById[s.nodeId] ?? s.nodeId)} (offline)</option>}
                                                 </select>
-                                                <span className={helperClass}>The machine this slot runs on. Leave on &quot;(any node by tags)&quot; to let the coordinator route by tags.</span>
                                             </label>
                                             <label className="flex flex-col gap-1">
                                                 <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>Provider *</span>
-                                                <select className={inputClass} value={s.provider} onChange={e => updateSlot(kind, idx, { provider: e.target.value })}>
+                                                <select className={inputClass} value={s.provider} onChange={e => updateSlot(kind, idx, { provider: e.target.value })} title="The AI agent this slot runs.">
                                                     <option value="">Select provider…</option>
                                                     {providerOptions.map(p => <option key={p} value={p}>{p}</option>)}
                                                     {s.provider && !providerOptions.includes(s.provider) && <option value={s.provider}>{s.provider}</option>}
                                                 </select>
-                                                <span className={helperClass}>The AI this slot runs. {s.nodeId ? 'Filtered to the selected machine.' : 'All live providers + fallback.'}</span>
                                             </label>
                                             <label className="flex flex-col gap-1">
                                                 <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>Model</span>
-                                                <input className={inputClass} value={s.model} placeholder="e.g. opus, sonnet (optional)"
+                                                <input className={inputClass} value={s.model} placeholder="default"
                                                     list="magi-kind-model-options"
+                                                    title="Optional model override (best-effort). Blank uses the provider default."
                                                     onChange={e => updateSlot(kind, idx, { model: e.target.value })} />
-                                                <span className={helperClass}>Optional model override (best-effort). Blank = provider default.</span>
                                             </label>
                                             <label className="flex flex-col gap-1">
-                                                <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>n</span>
-                                                <input className={`${inputClass} sm:w-16`} value={s.n} placeholder="—" inputMode="numeric"
+                                                <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>Copies</span>
+                                                <input className={`${inputClass} sm:w-16`} value={s.n} placeholder="1" inputMode="numeric"
+                                                    title="How many parallel copies of this agent to run. Blank = 1."
                                                     onChange={e => updateSlot(kind, idx, { n: e.target.value })} />
-                                                <span className={helperClass}>Replicas (optional, blank = 1).</span>
                                             </label>
-                                            <button type="button" className={btnGhost} onClick={() => removeSlot(kind, idx)} title="Remove slot">✕</button>
+                                            <button type="button" className={`${btnGhost} sm:mt-[18px] inline-flex h-8 w-8 items-center justify-center p-0`} onClick={() => removeSlot(kind, idx)} aria-label="Remove agent" title="Remove agent">✕</button>
                                         </div>
                                     )
                                 })}
                                 <div>
                                     <button type="button" className={btnGhost} onClick={() => addSlot(kind)} disabled={!canCommand}>
-                                        + Add slot
+                                        + Add agent
                                     </button>
                                 </div>
                             </div>
