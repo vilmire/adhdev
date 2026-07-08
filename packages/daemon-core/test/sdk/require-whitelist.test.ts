@@ -204,10 +204,15 @@ describe('require whitelist — relative paths', () => {
     });
 
     it('blocks relative paths that escape the registered root', () => {
-        // PROVIDER_DIR is .../scratch/cli/fake-cli — going ../../.. lands
-        // outside SCRATCH which is the registered root.
-        const escaper = path.join(path.dirname(path.dirname(SCRATCH)), 'escape-target.js');
-        try { fs.writeFileSync(escaper, `module.exports = { tag: 'ESCAPED' };`); } catch { /* ok */ }
+        // The guard resolves the request via require.resolve() BEFORE denying,
+        // so the escape target must actually EXIST — otherwise Node throws
+        // MODULE_NOT_FOUND and the deny path is never reached. Place it one level
+        // above SCRATCH (a sibling in os.tmpdir(), which is writable) rather than
+        // two levels up: two-up from a shallow `/tmp/x` SCRATCH lands at `/`,
+        // which is unwritable on CI runners — the write silently failed there and
+        // the assertion saw MODULE_NOT_FOUND instead of PROVIDER_REQUIRE_DENIED.
+        const escaper = path.join(path.dirname(SCRATCH), `adhdev-require-escape-${path.basename(SCRATCH)}.js`);
+        fs.writeFileSync(escaper, `module.exports = { tag: 'ESCAPED' };`);
         const rel = path.relative(PROVIDER_DIR, escaper);
         const file = writeScript('escapes.js', `module.exports = require(${JSON.stringify(rel)});`);
         let err: any;

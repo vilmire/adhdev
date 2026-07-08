@@ -46,6 +46,21 @@ function samePlatformArchTriplets(triplet) {
     );
 }
 
+// Last-resort: every other installed prebuilt, regardless of platform/arch.
+// Requiring a foreign-OS `.node` throws a load error (ELF/PE mismatch,
+// "invalid ELF header", "not a valid Win32 application"), which loadBinding()
+// simply skips — so this tier is inert on a correctly-addressed runtime. Its
+// sole purpose is test isolation: suites that mock `process.platform` (e.g.
+// win32 PTY-write / submit driver coverage) corrupt getTriplet() into an
+// address for which no loadable binary exists on the CI runner; walking the
+// remaining triplets lets the real host binary (the one that actually loads)
+// still resolve, instead of the whole ProviderCliAdapter construction throwing.
+function otherInstalledTriplets(triplet, alreadyTried) {
+    return listAvailablePrebuiltTriplets().filter(
+        (name) => name !== triplet && !alreadyTried.has(name),
+    );
+}
+
 function loadBinding() {
     const triplet = getTriplet();
     const explicitPrebuiltDir = process.env.ADHDEV_GHOSTTY_VT_PREBUILT_DIR
@@ -65,6 +80,14 @@ function loadBinding() {
         ...samePlatformArchTriplets(triplet).map((name) =>
             path.join(PREBUILT_ROOT, name, ADDON_FILE),
         ),
+        // 5. test-isolation fallback: any remaining installed triplet (see
+        //    otherInstalledTriplets). Foreign-OS binaries throw on require and
+        //    are skipped; the real host binary still resolves under a mocked
+        //    process.platform.
+        ...otherInstalledTriplets(
+            triplet,
+            new Set([triplet, ...samePlatformArchTriplets(triplet)]),
+        ).map((name) => path.join(PREBUILT_ROOT, name, ADDON_FILE)),
     ].filter(Boolean);
 
     const errors = [];
