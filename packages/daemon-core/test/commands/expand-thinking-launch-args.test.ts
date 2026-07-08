@@ -1,5 +1,31 @@
 import { describe, it, expect } from 'vitest';
-import { expandThinkingLaunchArgs } from '../../src/commands/cli-manager.js';
+import { expandThinkingLaunchArgs, expandModelLaunchArgs } from '../../src/commands/cli-manager.js';
+
+describe('expandModelLaunchArgs (brain-routing model axis)', () => {
+    it('substitutes {{model}} as a standalone token (claude form)', () => {
+        expect(expandModelLaunchArgs(['--model', '{{model}}'], 'haiku'))
+            .toEqual(['--model', 'haiku']);
+    });
+
+    it('substitutes {{model}} INSIDE a token (codex -c model= form) — the regression', () => {
+        // This is the bug fixed: the old `part === "{{model}}"` exact-match left
+        // codex's `model={{model}}` unexpanded.
+        expect(expandModelLaunchArgs(['-c', 'model={{model}}'], 'gpt-5-codex'))
+            .toEqual(['-c', 'model=gpt-5-codex']);
+    });
+
+    it('returns undefined for no template or no model (no-op)', () => {
+        expect(expandModelLaunchArgs(undefined, 'haiku')).toBeUndefined();
+        expect(expandModelLaunchArgs([], 'haiku')).toBeUndefined();
+        expect(expandModelLaunchArgs(['--model', '{{model}}'], undefined)).toBeUndefined();
+        expect(expandModelLaunchArgs(['--model', '{{model}}'], '  ')).toBeUndefined();
+    });
+
+    it('trims the model', () => {
+        expect(expandModelLaunchArgs(['--model', '{{model}}'], '  opus  '))
+            .toEqual(['--model', 'opus']);
+    });
+});
 
 describe('expandThinkingLaunchArgs (brain-routing thinking axis)', () => {
     it('substitutes {{level}} in every template token', () => {

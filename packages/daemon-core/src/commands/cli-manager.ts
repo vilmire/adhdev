@@ -424,10 +424,13 @@ function expandResumeArgs(template: string[] | undefined, sessionId: string): st
  * there is no template or no model (a model request without a template is a no-op —
  * see startSession, where the caller logs the skip). MAGI kind-panel model axis.
  */
-function expandModelLaunchArgs(template: string[] | undefined, model: string | undefined): string[] | undefined {
+export function expandModelLaunchArgs(template: string[] | undefined, model: string | undefined): string[] | undefined {
     const m = typeof model === 'string' ? model.trim() : '';
     if (!m || !Array.isArray(template) || template.length === 0) return undefined;
-    return template.map((part) => part === '{{model}}' ? m : part);
+    // Substitute {{model}} anywhere in a token, not only when it is the whole token,
+    // so templates like ['-c', 'model={{model}}'] (codex) expand as well as the
+    // standalone ['--model', '{{model}}'] (claude) form.
+    return template.map((part) => part.includes('{{model}}') ? part.split('{{model}}').join(m) : part);
 }
 
 /**
@@ -731,6 +734,9 @@ export class DaemonCliManager {
             providerSessionId?: string;
             launchMode?: CliLaunchMode;
             extraEnv?: Record<string, string>;
+            /** BRAIN-ROUTING: post-launch thinking level for runtime-control providers
+             *  (e.g. hermes reasoning). Passed through to the instance. */
+            initialThinkingLevel?: string;
             /**
              * On an attach (attachExisting=true), the real spawn time (ms epoch) of the
              * session-host runtime being restored — a PAST timestamp. Used to restore the
@@ -1074,6 +1080,10 @@ export class DaemonCliManager {
                     providerSessionId: sessionBinding.providerSessionId,
                     launchMode: sessionBinding.launchMode,
                     extraEnv: options?.extraEnv,
+                    // BRAIN-ROUTING: for a provider with no thinkingLaunchArgs but a
+                    // runtime reasoning control (hermes), apply the level post-launch.
+                    // The launch-arg providers (claude/codex) already consumed it at spawn.
+                    ...(options?.initialThinkingLevel && !provider?.thinkingLaunchArgs ? { initialThinkingLevel: options.initialThinkingLevel } : {}),
                     onProviderSessionResolved: ({ providerSessionId, providerName, providerType, workspace }) => {
                         this.persistRecentActivity({
                             kind: 'cli',

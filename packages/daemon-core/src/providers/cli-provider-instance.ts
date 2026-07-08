@@ -312,6 +312,7 @@ export class CliProviderInstance implements ProviderInstance {
     private presentationMode: 'terminal' | 'chat';
     private providerSessionId?: string;
     private launchMode: 'new' | 'resume' | 'manual';
+    private initialThinkingLevel?: string;
     private readonly startedAt = Date.now();
     private onProviderSessionResolved?: (info: {
         instanceId: string;
@@ -332,6 +333,10 @@ export class CliProviderInstance implements ProviderInstance {
             providerSessionId?: string;
             launchMode?: 'new' | 'resume' | 'manual';
             extraEnv?: Record<string, string>;
+            /** BRAIN-ROUTING: standard thinking level to apply post-launch via the
+             *  provider's thinkingControlId (runtime-control providers like hermes).
+             *  Providers using thinkingLaunchArgs get it at spawn instead and ignore this. */
+            initialThinkingLevel?: string;
             onProviderSessionResolved?: (info: {
                 instanceId: string;
                 providerType: string;
@@ -347,6 +352,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.presentationMode = 'chat';
         this.providerSessionId = options?.providerSessionId;
         this.launchMode = options?.launchMode || 'new';
+        this.initialThinkingLevel = options?.initialThinkingLevel;
         this.onProviderSessionResolved = options?.onProviderSessionResolved;
         this.adapter = createCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory) as ProviderCliAdapter;
         if (this.providerSessionId) {
@@ -392,6 +398,7 @@ export class CliProviderInstance implements ProviderInstance {
  // PTY spawn
         await this.adapter.spawn();
         await this.enforceFreshSessionLaunchIfNeeded();
+        await this.applyInitialThinkingLevelViaControl();
         this.maybeAppendRuntimeRecoveryMessage(this.adapter.getRuntimeMetadata());
         if (this.providerSessionId && this.shouldHydrateExistingProviderHistory()) {
             this.restorePersistedHistoryFromCurrentSession();
@@ -1207,6 +1214,45 @@ export class CliProviderInstance implements ProviderInstance {
         }
 
         this.applyProviderResponse(parsed.payload, { phase: 'immediate' });
+    }
+
+    /**
+     * BRAIN-ROUTING (runtime-control thinking axis): for a provider that selects
+     * reasoning effort via a runtime control instead of a launch arg (e.g. hermes
+     * `reasoning`), apply the requested initialThinkingLevel after spawn by invoking
+     * that control's setScript. The provider names the control via thinkingControlId.
+     * The standard level is mapped through thinkingLevelMap first (same as the
+     * launch-arg path). Best-effort: any failure logs and never blocks launch.
+     */
+    private async applyInitialThinkingLevelViaControl(): Promise<void> {
+        const level = typeof this.initialThinkingLevel === 'string' ? this.initialThinkingLevel.trim() : '';
+        if (!level) return;
+        const controlId = (this.provider as any).thinkingControlId;
+        if (!controlId) return; // provider uses thinkingLaunchArgs (or has no support)
+        const controls: any[] = Array.isArray((this.provider as any).controls) ? (this.provider as any).controls : [];
+        const control = controls.find(c => c && c.id === controlId);
+        if (!control || !control.setScript) return;
+        // Map the standard level to the provider's own vocabulary (unchanged if absent).
+        const map = (this.provider as any).thinkingLevelMap as Record<string, string> | undefined;
+        const mapped = (map && typeof map[level] === 'string' && map[level].trim()) ? map[level].trim() : level;
+        try {
+            await waitForCliAdapterReady(this.adapter);
+            const raw = await this.adapter.invokeScript(control.setScript, { value: mapped });
+            const parsed = parseCliScriptResult(raw);
+            if (!parsed.success) {
+                LOG.warn('CLI', `[${this.type}] thinking control '${controlId}' set to '${mapped}' failed: ${parsed.payload?.error || 'unknown'}`);
+                return;
+            }
+            const cliCommand = getCliScriptCommand(parsed.payload);
+            if (cliCommand?.type === 'send_message' && cliCommand.text) {
+                await this.adapter.sendMessage(cliCommand.text);
+            } else if (cliCommand?.type === 'pty_write' && cliCommand.text) {
+                await this.adapter.writeRaw(cliCommand.text + '\r');
+            }
+            LOG.info('CLI', `[${this.type}] applied thinking level '${mapped}' via control '${controlId}'`);
+        } catch (e: any) {
+            LOG.warn('CLI', `[${this.type}] thinking control apply threw: ${e?.message || e}`);
+        }
     }
 
     private completionHasFinalAssistantMessage(messages: unknown, turnStartedAt?: number): boolean {

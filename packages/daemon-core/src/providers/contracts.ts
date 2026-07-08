@@ -624,6 +624,16 @@ export interface ProviderModule {
    * passes through unchanged (so `medium` → `medium` by default).
    */
   thinkingLevelMap?: Partial<Record<'low' | 'medium' | 'high', string>>;
+  /**
+   * BRAIN-ROUTING (thinking axis, runtime-control providers): the `controls[].id`
+   * of a runtime reasoning-effort control to drive for the thinking level when the
+   * provider has no `thinkingLaunchArgs` (e.g. hermes-cli's `reasoning` select,
+   * which types `/reasoning <level>` into the PTY via its setScript). At launch,
+   * initialThinkingLevel (after thinkingLevelMap) is applied by invoking that
+   * control's setScript with `{ value: <level> }`. Ignored if the id doesn't match a
+   * control. Providers that use thinkingLaunchArgs don't need this.
+   */
+  thinkingControlId?: string;
   /** Delay before submitting typed CLI input (provider-specific TUI tuning) */
   sendDelayMs?: number;
   /** Submit key used after typing into CLI PTY (default: carriage return) */
