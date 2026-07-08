@@ -555,6 +555,8 @@ export interface AvailableProviderInfo {
     lastVerification?: MachineProviderCheckResult;
     /** Provider-declared Repo Mesh coordinator/MCP behavior. */
     meshCoordinator?: ProviderMeshCoordinatorConfig;
+    /** BRAIN-ROUTING: suggested model values for the new-session model dropdown. */
+    modelOptions?: string[];
     /**
      * Provider trust classification — derived from the on-disk layer the
      * manifest came from and the shape of the manifest. Dashboards use

@@ -605,6 +605,13 @@ export interface ProviderModule {
    */
   modelLaunchArgs?: string[];
   /**
+   * BRAIN-ROUTING (model axis): suggested model values for this provider, surfaced
+   * as dropdown options in the new-session dialog (e.g. claude ['opus','sonnet',
+   * 'haiku']; codex ['gpt-5.5','gpt-5-codex']). Advisory only — the UI allows free
+   * text too, so the list going stale never blocks a model the provider accepts.
+   */
+  modelOptions?: string[];
+  /**
    * BRAIN-ROUTING (thinking axis): template for expanding an `initialThinkingLevel`
    * selection into launch args for a CLI provider, parallel to modelLaunchArgs.
    * `{{level}}` is substituted with the provider-appropriate reasoning-effort value

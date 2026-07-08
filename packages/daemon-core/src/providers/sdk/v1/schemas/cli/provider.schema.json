@@ -129,6 +129,11 @@
       "items": { "type": "string" },
       "description": "Template for expanding an initialModel selection into launch args. '{{model}}' is substituted with the model string (e.g. ['--model', '{{model}}'] → --model opus). Applied at launch when a model is requested for this CLI provider (MAGI kind-panel model axis). Absent → no launch-time model selection."
     },
+    "modelOptions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Suggested model values shown as dropdown options in the new-session dialog (brain-routing model axis), e.g. ['opus','sonnet','haiku']. Advisory — the UI still accepts free text, so a stale list never blocks an accepted model."
+    },
     "thinkingLaunchArgs": {
       "type": "array",
       "items": { "type": "string" },

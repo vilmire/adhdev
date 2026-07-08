@@ -257,6 +257,13 @@ export default function DashboardNewSessionDialog({
         () => cliProviders.find(provider => provider.type === selectedTarget) || null,
         [cliProviders, selectedTarget],
     )
+    // Model dropdown options for the currently-selected provider (cli or acp).
+    // Advisory list from the provider manifest; the input still accepts free text.
+    const modelOptionsForTarget = useMemo(() => {
+        const active = [...cliProviders, ...acpProviders].find(p => p.type === selectedTarget) as any
+        const opts = active?.modelOptions
+        return Array.isArray(opts) ? opts.filter((m: any) => typeof m === 'string' && m.trim()) : []
+    }, [cliProviders, acpProviders, selectedTarget])
     const providerMeshManualSetup = useMemo(
         () => buildManualCoordinatorSetup(selectedCliProvider?.meshCoordinator, {
             meshId: selectedMesh?.id || '',
@@ -920,14 +927,31 @@ export default function DashboardNewSessionDialog({
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                     <label className="flex flex-col gap-1">
                                         <span className="text-[11px] text-text-muted">Model</span>
-                                        <input
-                                            type="text"
-                                            value={initialModel}
-                                            onChange={(event) => setInitialModel(event.target.value)}
-                                            placeholder="e.g. opus, sonnet, haiku"
-                                            className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
-                                            disabled={busy}
-                                        />
+                                        {modelOptionsForTarget.length > 0 ? (
+                                            <>
+                                                <input
+                                                    type="text"
+                                                    list="new-session-model-options"
+                                                    value={initialModel}
+                                                    onChange={(event) => setInitialModel(event.target.value)}
+                                                    placeholder="(provider default)"
+                                                    className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
+                                                    disabled={busy}
+                                                />
+                                                <datalist id="new-session-model-options">
+                                                    {modelOptionsForTarget.map((m: string) => <option key={m} value={m} />)}
+                                                </datalist>
+                                            </>
+                                        ) : (
+                                            <input
+                                                type="text"
+                                                value={initialModel}
+                                                onChange={(event) => setInitialModel(event.target.value)}
+                                                placeholder="(provider default)"
+                                                className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
+                                                disabled={busy}
+                                            />
+                                        )}
                                     </label>
                                     <label className="flex flex-col gap-1">
                                         <span className="text-[11px] text-text-muted">Thinking level</span>

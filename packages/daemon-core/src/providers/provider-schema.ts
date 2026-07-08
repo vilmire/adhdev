@@ -67,6 +67,7 @@ const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'status',
   'details',
   'modelLaunchArgs',
+  'modelOptions',
   'thinkingLaunchArgs',
   'thinkingLevelMap',
   'thinkingControlId',
