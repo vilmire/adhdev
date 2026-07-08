@@ -79,6 +79,11 @@ describe('Repo Mesh coordinator prompt', () => {
     // not pin a merge/push task to the worktree.
     expect(prompt).toContain('base-only')
     expect(prompt).toContain('untargeted')
+    // The Configured Nodes list is a launch-time snapshot; a worktree cloned
+    // mid-session is NOT in it, so the guidance must point at the live sources
+    // (mesh_clone_node result / mesh_status) instead of the frozen node list.
+    expect(prompt).toContain('launch-time snapshot')
+    expect(prompt).toContain('mesh_clone_node')
   })
 
   it('requires mesh tool exposure before doing coordinator work', () => {
