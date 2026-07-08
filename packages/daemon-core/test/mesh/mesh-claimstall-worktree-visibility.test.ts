@@ -33,6 +33,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 }))
 
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
+import { getMeshWithCache } from '../../src/mesh/mesh-queue-assignment.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 
@@ -269,5 +270,109 @@ describe('CLAIMSTALL — worktree node claim-time membership visibility', () => 
     } finally {
       cleanup(meshId)
     }
+  })
+})
+
+/**
+ * RESIDUAL-getMeshWithCache-bootstrap-overlay: the merged view itself (getMeshWithCache), read
+ * by consumers OTHER than tryAssignQueueTask's inline-first gate, must observe the inline-cache
+ * terminal bootstrap stamp AND must never let a stale/non-terminal inline status mask a genuine
+ * config state. These assert the merged worktreeBootstrap.status directly, isolating the overlay
+ * precedence (inlineBootstrapIsFresher) from the claim gate.
+ */
+describe('getMeshWithCache — bootstrap runtime overlay precedence', () => {
+  const meshId = 'mesh_overlay_precedence'
+
+  function findNode(mesh: any, nodeId: string): any {
+    return (mesh?.nodes || []).find((n: any) => n.id === nodeId || n.nodeId === nodeId)
+  }
+
+  function componentsWithInline(inlineNodes: any[]): any {
+    return {
+      router: { getCachedInlineMesh: vi.fn(() => ({ id: meshId, name: 'Overlay Mesh', policy: {}, nodes: inlineNodes })) },
+    } as any
+  }
+
+  const baseNode = { id: BASE_NODE_ID, daemonId: 'daemon-local', workspace: '/repo/main', repoRoot: '/repo/main', policy: {} }
+
+  function configWorktree(bootstrap: any): any {
+    return {
+      id: WORKTREE_NODE_ID,
+      nodeId: WORKTREE_NODE_ID,
+      daemonId: 'daemon-local',
+      workspace: '/repo/wt',
+      repoRoot: '/repo/wt',
+      policy: {},
+      isLocalWorktree: true,
+      clonedFromNodeId: BASE_NODE_ID,
+      ...(bootstrap ? { worktreeBootstrap: bootstrap } : {}),
+    }
+  }
+
+  afterEach(() => {
+    vi.clearAllMocks()
+    meshConfigMocks.getMesh.mockReset()
+  })
+
+  it('(a) config running + inline terminal complete → merged view shows complete (terminal stamp propagates to every reader)', () => {
+    meshConfigMocks.getMesh.mockReturnValue({ id: meshId, policy: {}, nodes: [baseNode, configWorktree({ status: 'running', startedAt: new Date().toISOString() })] })
+    const components = componentsWithInline([baseNode, configWorktree({ status: 'complete', completedAt: new Date().toISOString() })])
+
+    const merged = getMeshWithCache(components, meshId)
+
+    expect(findNode(merged, WORKTREE_NODE_ID)?.worktreeBootstrap?.status).toBe('complete')
+    // Config static identity preserved.
+    expect(findNode(merged, WORKTREE_NODE_ID)?.workspace).toBe('/repo/wt')
+    expect(findNode(merged, WORKTREE_NODE_ID)?.isLocalWorktree).toBe(true)
+  })
+
+  it('(b) config running + no inline entry for the node → stays running (defer preserved, no overlay)', () => {
+    meshConfigMocks.getMesh.mockReturnValue({ id: meshId, policy: {}, nodes: [baseNode, configWorktree({ status: 'running', startedAt: new Date().toISOString() })] })
+    // Inline cache has only the base node — no runtime state for the worktree node.
+    const components = componentsWithInline([baseNode])
+
+    const merged = getMeshWithCache(components, meshId)
+
+    expect(findNode(merged, WORKTREE_NODE_ID)?.worktreeBootstrap?.status).toBe('running')
+  })
+
+  it('(c) config running + inline still running (same epoch) → stays running (defer preserved)', () => {
+    const startedAt = new Date().toISOString()
+    meshConfigMocks.getMesh.mockReturnValue({ id: meshId, policy: {}, nodes: [baseNode, configWorktree({ status: 'running', startedAt })] })
+    const components = componentsWithInline([baseNode, configWorktree({ status: 'running', startedAt })])
+
+    const merged = getMeshWithCache(components, meshId)
+
+    expect(findNode(merged, WORKTREE_NODE_ID)?.worktreeBootstrap?.status).toBe('running')
+  })
+
+  it('(d) cache-only worktree node is still appended (base union behavior unchanged)', () => {
+    meshConfigMocks.getMesh.mockReturnValue({ id: meshId, policy: {}, nodes: [baseNode] })
+    const inlineOnly = configWorktree({ status: 'complete', completedAt: new Date().toISOString() })
+    const components = componentsWithInline([baseNode, inlineOnly])
+
+    const merged = getMeshWithCache(components, meshId)
+
+    expect(merged.nodes.length).toBe(2)
+    expect(findNode(merged, WORKTREE_NODE_ID)?.worktreeBootstrap?.status).toBe('complete')
+  })
+
+  it('(e) precedence guard: config terminal complete + stale inline running → stays complete (stale inline never masks a terminal config state)', () => {
+    meshConfigMocks.getMesh.mockReturnValue({ id: meshId, policy: {}, nodes: [baseNode, configWorktree({ status: 'complete', completedAt: new Date().toISOString() })] })
+    const components = componentsWithInline([baseNode, configWorktree({ status: 'running', startedAt: new Date(Date.now() - 60_000).toISOString() })])
+
+    const merged = getMeshWithCache(components, meshId)
+
+    expect(findNode(merged, WORKTREE_NODE_ID)?.worktreeBootstrap?.status).toBe('complete')
+  })
+
+  it('(f) both non-terminal but inline running epoch strictly newer → overlays the fresher running (re-driven bootstrap)', () => {
+    meshConfigMocks.getMesh.mockReturnValue({ id: meshId, policy: {}, nodes: [baseNode, configWorktree({ status: 'running', startedAt: new Date(Date.now() - 120_000).toISOString() })] })
+    const newerStartedAt = new Date().toISOString()
+    const components = componentsWithInline([baseNode, configWorktree({ status: 'running', startedAt: newerStartedAt })])
+
+    const merged = getMeshWithCache(components, meshId)
+
+    expect(findNode(merged, WORKTREE_NODE_ID)?.worktreeBootstrap?.startedAt).toBe(newerStartedAt)
   })
 })

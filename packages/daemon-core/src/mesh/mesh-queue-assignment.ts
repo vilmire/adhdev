@@ -92,12 +92,62 @@ export function getMeshWithCache(components: DaemonComponents, meshId: string): 
  * worktree node therefore read a permanently stale 'running' here, so
  * shouldDeferDispatchForBootstrap deferred its claim forever. We now MERGE the inline
  * cache's dynamic runtime bootstrap state onto the config node (config keeps its static
- * fields; worktreeBootstrap is preferred from the inline cache when the inline entry
- * carries a status) so the gate view sees the terminal stamp. Regression-safe: when the
- * inline entry has no bootstrap status the config value is kept, and when bootstrap is
- * genuinely still 'running' (no terminal stamp yet) the gate still defers — only a node
- * whose inline stamp has actually reached a terminal state opens the gate.
+ * fields; worktreeBootstrap is preferred from the inline cache) so EVERY consumer of the
+ * merged view — not just tryAssignQueueTask's gate — observes the terminal stamp.
+ *
+ * RESIDUAL-getMeshWithCache-bootstrap-overlay (precedence guard): the overlay is DIRECTIONAL —
+ * it prefers the inline entry ONLY when the inline runtime state is actually fresher, never
+ * merely because the inline entry carries a status. inlineBootstrapIsFresher() (below) permits
+ * the overlay in exactly two cases, mirroring the mission's "terminal OR strictly newer" rule:
+ *   (1) the inline state is TERMINAL ('complete'/'failed') while the config state is NOT — the
+ *       markWorktreeBootstrapTerminalState synchronous stamp the async config persist has not
+ *       yet caught up to; this is the whole point of the overlay (opens the gate).
+ *   (2) both states are non-terminal but the inline startedAt is STRICTLY newer — a re-driven
+ *       bootstrap whose fresher 'running' epoch the config has not observed.
+ * It REFUSES the overlay when the config state is already terminal and the inline state is a
+ * stale/non-terminal 'running' — otherwise a stale inline 'running' would MASK a genuinely
+ * complete config node and re-defer its claim forever (the exact anti-case this guard closes).
+ * And when both are 'running' with no newer epoch, the config value is kept and the gate still
+ * defers — the half-built-worktree → empty-session defense is preserved: only a terminal-confirmed
+ * inline state, never an ambiguous read, ever opens the gate.
  */
+const BOOTSTRAP_TERMINAL_STATUSES = new Set(['complete', 'failed']);
+
+function bootstrapEpochMs(bootstrap: any): number {
+    const raw = readNonEmptyString(bootstrap?.startedAt) || readNonEmptyString(bootstrap?.completedAt);
+    if (!raw) return 0;
+    const parsed = Date.parse(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Directional freshness test for the bootstrap overlay: may the inline runtime state
+ * REPLACE the config runtime state? True only when the inline state is terminal and the
+ * config state is not (the synchronous terminal stamp the async persist lags), or when
+ * both are non-terminal but the inline epoch is strictly newer. A terminal config state is
+ * never overwritten by a non-terminal inline read (the stale-'running'-masks-complete
+ * anti-case), and equal states never trigger a rewrite.
+ */
+function inlineBootstrapIsFresher(inlineBootstrap: any, configBootstrap: any): boolean {
+    const inlineStatus = readNonEmptyString(inlineBootstrap?.status);
+    if (!inlineStatus) return false;
+    const configStatus = readNonEmptyString(configBootstrap?.status);
+    const inlineTerminal = BOOTSTRAP_TERMINAL_STATUSES.has(inlineStatus);
+    const configTerminal = !!configStatus && BOOTSTRAP_TERMINAL_STATUSES.has(configStatus);
+    // Config already terminal: only a DIFFERENT terminal inline state (e.g. config 'complete'
+    // vs a later 'failed' re-drive) may supersede it; a non-terminal inline read must never
+    // mask a terminal config state.
+    if (configTerminal) {
+        return inlineTerminal && inlineStatus !== configStatus
+            && bootstrapEpochMs(inlineBootstrap) > bootstrapEpochMs(configBootstrap);
+    }
+    // Config not terminal: an inline terminal state is always fresher (opens the gate).
+    if (inlineTerminal) return true;
+    // Both non-terminal: prefer inline only when its epoch is strictly newer (a re-driven
+    // bootstrap the config has not observed). Equal/older ⇒ keep config, gate still defers.
+    return bootstrapEpochMs(inlineBootstrap) > bootstrapEpochMs(configBootstrap);
+}
+
 function mergeInlineCacheOnlyNodes(localMesh: any, cachedMesh: any): any {
     const localNodes = Array.isArray(localMesh?.nodes) ? localMesh.nodes : [];
     const cachedNodes = Array.isArray(cachedMesh?.nodes) ? cachedMesh.nodes : [];
@@ -111,10 +161,10 @@ function mergeInlineCacheOnlyNodes(localMesh: any, cachedMesh: any): any {
         if (!cachedId) return false;
         return !localNodes.some((localNode: any) => meshNodeIdMatches(localNode, cachedId));
     });
-    // Overlay the inline cache's fresher worktreeBootstrap state onto any config node
-    // that also exists in the inline cache. Only override when the inline entry actually
-    // carries a bootstrap status (an incomplete inline entry never masks a genuine config
-    // 'running'), mirroring the inline-first read the bootstrap gate does directly.
+    // Overlay the inline cache's fresher worktreeBootstrap state onto any config node that
+    // also exists in the inline cache. inlineBootstrapIsFresher() gates the overlay to the
+    // "terminal OR strictly newer" cases, so a stale inline 'running' can never mask a
+    // terminal config state and the gate's deferral is preserved for a genuine 'running'.
     let overlaidLocalNodes: any[] = localNodes;
     let overlaid = false;
     for (let i = 0; i < localNodes.length; i++) {
@@ -122,14 +172,14 @@ function mergeInlineCacheOnlyNodes(localMesh: any, cachedMesh: any): any {
         const localId = readMeshNodeId(localNode);
         if (!localId) continue;
         const inlineMatch = cachedNodes.find((cachedNode: any) => meshNodeIdMatches(cachedNode, localId));
-        const inlineBootstrapStatus = readNonEmptyString(inlineMatch?.worktreeBootstrap?.status);
-        if (!inlineMatch || !inlineBootstrapStatus) continue;
+        if (!inlineMatch) continue;
+        if (!inlineBootstrapIsFresher(inlineMatch.worktreeBootstrap, localNode.worktreeBootstrap)) continue;
         if (!overlaid) {
             overlaidLocalNodes = [...localNodes];
             overlaid = true;
         }
-        // Keep the config node's static fields; prefer the inline cache's dynamic
-        // bootstrap runtime state (fresher terminal stamp).
+        // Keep the config node's static fields; overlay only the dynamic worktreeBootstrap
+        // runtime substate (fresher terminal stamp / epoch) — config identity is unchanged.
         overlaidLocalNodes[i] = { ...localNode, worktreeBootstrap: inlineMatch.worktreeBootstrap };
     }
     if (!cacheOnly.length && !overlaid) return localMesh;
