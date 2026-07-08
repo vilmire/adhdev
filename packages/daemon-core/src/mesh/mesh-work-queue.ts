@@ -585,6 +585,13 @@ export interface MeshWorkQueueEntry {
      */
     model?: string;
     /**
+     * BRAIN-ROUTING (thinking axis): standard reasoning level ('low'|'medium'|'high')
+     * for the session that executes this task. When the task auto-launches, this is
+     * passed to launch_cli as `initialThinkingLevel` (CLI → thinkingLaunchArgs; ACP →
+     * setConfigOption('thought_level')). Rides in payload JSON. Best-effort like model.
+     */
+    thinkingLevel?: string;
+    /**
      * M1: why this task is held back (e.g. "dependency_failed:<taskId>").
      * Only set by the system on dependency failure under the 'block' policy;
      * waiting-on-dependency state is computed at view time, not stored.
@@ -862,6 +869,8 @@ export function enqueueTask(
         consensusGroupId?: string;
         /** MAGI-KIND-PANEL: model override forwarded to the executing session's launch (initialModel). */
         model?: string;
+        /** BRAIN-ROUTING: standard thinking level forwarded to launch (initialThinkingLevel). */
+        thinkingLevel?: string;
         /** Explicit task id for batch/template flows (M5). Random UUID when omitted. */
         id?: string;
         /** (3) Originating coordinator session id (for session-anchored completion routing). */
@@ -918,6 +927,7 @@ export function enqueueTask(
             ...(typeof opts?.missionId === 'string' && opts.missionId.trim() ? { missionId: opts.missionId.trim() } : {}),
             ...(typeof opts?.consensusGroupId === 'string' && opts.consensusGroupId.trim() ? { consensusGroupId: opts.consensusGroupId.trim() } : {}),
             ...(typeof opts?.model === 'string' && opts.model.trim() ? { model: opts.model.trim() } : {}),
+            ...(typeof opts?.thinkingLevel === 'string' && opts.thinkingLevel.trim() ? { thinkingLevel: opts.thinkingLevel.trim() } : {}),
             ...(typeof opts?.sourceCoordinatorSessionId === 'string' && opts.sourceCoordinatorSessionId.trim()
                 ? { sourceCoordinatorSessionId: opts.sourceCoordinatorSessionId.trim() }
                 : {}),

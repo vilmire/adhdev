@@ -1918,6 +1918,8 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                             // MAGI-KIND-PANEL model axis: forward the task's model override so the
                             // remote worker session launches with it (initialModel). Best-effort.
                             ...(typeof task.model === 'string' && task.model.trim() ? { initialModel: task.model.trim() } : {}),
+                            // BRAIN-ROUTING thinking axis: forward the task's thinking level (initialThinkingLevel).
+                            ...(typeof task.thinkingLevel === 'string' && task.thinkingLevel.trim() ? { initialThinkingLevel: task.thinkingLevel.trim() } : {}),
                         });
                     } catch (e: any) {
                         markAutoLaunch(meshId, task.id, { status: 'failed', reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: resolved.providerType });
@@ -1950,6 +1952,8 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     // MAGI-KIND-PANEL model axis: local launch forwards the task's model
                     // override as initialModel (CLI → modelLaunchArgs; ACP → setConfigOption).
                     ...(typeof task.model === 'string' && task.model.trim() ? { initialModel: task.model.trim() } : {}),
+                    // BRAIN-ROUTING thinking axis: forward the task's thinking level (initialThinkingLevel).
+                    ...(typeof task.thinkingLevel === 'string' && task.thinkingLevel.trim() ? { initialThinkingLevel: task.thinkingLevel.trim() } : {}),
                 });
                 if (!launchResult?.success) {
                     const reason = launchResult?.error || 'launch_cli_failed';

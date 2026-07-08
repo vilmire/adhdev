@@ -276,6 +276,10 @@ type CliStartOptions = {
     resumeSessionId?: string;
     settingsOverride?: Record<string, any>;
     extraEnv?: Record<string, string>;
+    /** BRAIN-ROUTING thinking axis: standard level ('low'|'medium'|'high') applied
+     *  at launch via the provider's thinkingLaunchArgs (CLI) or setConfigOption
+     *  ('thought_level', ACP). Best-effort — ignored by providers with no support. */
+    initialThinkingLevel?: string;
 };
 
 const DEFAULT_COORDINATOR_DELEGATED_ENV_UNSETS = [
@@ -424,6 +428,25 @@ function expandModelLaunchArgs(template: string[] | undefined, model: string | u
     const m = typeof model === 'string' ? model.trim() : '';
     if (!m || !Array.isArray(template) || template.length === 0) return undefined;
     return template.map((part) => part === '{{model}}' ? m : part);
+}
+
+/**
+ * Expand a provider's `thinkingLaunchArgs` template with the requested thinking
+ * level, parallel to expandModelLaunchArgs. The standard level ('low'|'medium'|
+ * 'high') is first mapped through the provider's `thinkingLevelMap` (a level absent
+ * from the map passes through unchanged), then substituted into every `{{level}}`
+ * token. Returns undefined when there is no template or no level (best-effort; a
+ * thinking request without a template is a no-op). BRAIN-ROUTING thinking axis.
+ */
+export function expandThinkingLaunchArgs(
+    template: string[] | undefined,
+    level: string | undefined,
+    levelMap: Partial<Record<string, string>> | undefined,
+): string[] | undefined {
+    const raw = typeof level === 'string' ? level.trim() : '';
+    if (!raw || !Array.isArray(template) || template.length === 0) return undefined;
+    const mapped = (levelMap && typeof levelMap[raw] === 'string' && levelMap[raw]!.trim()) ? levelMap[raw]!.trim() : raw;
+    return template.map((part) => part.includes('{{level}}') ? part.replace('{{level}}', mapped) : part);
 }
 
 function readSubcommandSessionId(args: string[], subcommands: string[]): string | undefined {
@@ -956,6 +979,19 @@ export class DaemonCliManager {
                 }
             }
 
+ // Brain routing thinking axis for ACP: route the standard level through the
+ // agent's thought_level config option. Best-effort — throws if the agent declares
+ // no thought_level category (see setConfigOption), so we swallow and warn.
+            if (options?.initialThinkingLevel) {
+                const lvl = options.initialThinkingLevel;
+                try {
+                    await acpInstance.setConfigOption('thought_level', lvl);
+                    console.log(colorize('green', `  🧠 Initial thinking level set: ${lvl}`));
+                } catch (e: any) {
+                    LOG.warn('CLI', `[ACP] Initial thinking level set failed (provider may not support thought_level): ${e?.message}`);
+                }
+            }
+
             this.persistRecentActivity({
                 kind: 'acp',
                 providerType: normalizedType,
@@ -1003,8 +1039,22 @@ export class DaemonCliManager {
             LOG.warn('CLI', `[${normalizedType}] initialModel='${initialModel}' requested but provider declares no modelLaunchArgs template — launching without model selection.`);
         }
 
+ // ─── Thinking axis (brain routing): expand initialThinkingLevel → launch args ───
+ // Parallel to the model axis: a plain CLI provider selects reasoning effort at spawn
+ // via the manifest's thinkingLaunchArgs template ('{{level}}' → the mapped level).
+ // Best-effort; a provider with no template (or no requested level) is a no-op. ACP
+ // providers route thinking through setConfigOption('thought_level') above.
+        const initialThinkingLevel = options?.initialThinkingLevel;
+        const thinkingLaunchArgs = expandThinkingLaunchArgs(provider?.thinkingLaunchArgs, initialThinkingLevel, provider?.thinkingLevelMap);
+        const cliArgsWithBrain = thinkingLaunchArgs
+            ? [...thinkingLaunchArgs, ...(cliArgsWithModel || [])]
+            : cliArgsWithModel;
+        if (initialThinkingLevel && !thinkingLaunchArgs) {
+            LOG.warn('CLI', `[${normalizedType}] initialThinkingLevel='${initialThinkingLevel}' requested but provider declares no thinkingLaunchArgs template — launching without thinking-level selection.`);
+        }
+
  // ─── Resolve launch options → provider session binding ───
-        const sessionBinding = resolveCliSessionBinding(provider, normalizedType, cliArgsWithModel, options?.resumeSessionId);
+        const sessionBinding = resolveCliSessionBinding(provider, normalizedType, cliArgsWithBrain, options?.resumeSessionId);
         const resolvedCliArgs = sessionBinding.cliArgs;
 
  // If InstanceManager exists, manage as CliProviderInstance unified
@@ -1486,6 +1536,7 @@ export class DaemonCliManager {
                         resumeSessionId: args?.resumeSessionId,
                         settingsOverride,
                         extraEnv: delegatedLaunch ? delegatedLaunch.env : args?.env,
+                        ...(typeof args?.initialThinkingLevel === 'string' && args.initialThinkingLevel.trim() ? { initialThinkingLevel: args.initialThinkingLevel.trim() } : {}),
                     },
                 );
 

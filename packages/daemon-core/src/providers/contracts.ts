@@ -604,6 +604,26 @@ export interface ProviderModule {
    * request never fails a launch). Absent → no launch-time model selection for CLI.
    */
   modelLaunchArgs?: string[];
+  /**
+   * BRAIN-ROUTING (thinking axis): template for expanding an `initialThinkingLevel`
+   * selection into launch args for a CLI provider, parallel to modelLaunchArgs.
+   * `{{level}}` is substituted with the provider-appropriate reasoning-effort value
+   * (already mapped from the standard low|medium|high level, see thinkingLevelMap).
+   * Examples: claude-cli `['--effort', '{{level}}']` → `--effort high`; codex-cli
+   * `['-c', 'model_reasoning_effort={{level}}']`. Applied at session launch when
+   * `initialThinkingLevel` is passed AND this provider is a plain CLI. A CLI provider
+   * with no template silently ignores the thinking level (best-effort; never fails a
+   * launch). ACP providers instead route thinking through setConfigOption('thought_level').
+   */
+  thinkingLaunchArgs?: string[];
+  /**
+   * BRAIN-ROUTING (thinking axis): optional per-provider mapping from the standard
+   * thinking levels (`low`|`medium`|`high`) to this provider's own reasoning-effort
+   * vocabulary, used to fill `{{level}}` in thinkingLaunchArgs. e.g. claude-cli might
+   * map `{ high: 'max' }`; codex-cli `{ high: 'xhigh' }`. A level absent from the map
+   * passes through unchanged (so `medium` → `medium` by default).
+   */
+  thinkingLevelMap?: Partial<Record<'low' | 'medium' | 'high', string>>;
   /** Delay before submitting typed CLI input (provider-specific TUI tuning) */
   sendDelayMs?: number;
   /** Submit key used after typing into CLI PTY (default: carriage return) */

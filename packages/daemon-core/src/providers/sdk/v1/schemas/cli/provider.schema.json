@@ -129,6 +129,21 @@
       "items": { "type": "string" },
       "description": "Template for expanding an initialModel selection into launch args. '{{model}}' is substituted with the model string (e.g. ['--model', '{{model}}'] → --model opus). Applied at launch when a model is requested for this CLI provider (MAGI kind-panel model axis). Absent → no launch-time model selection."
     },
+    "thinkingLaunchArgs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Template for expanding an initialThinkingLevel selection into launch args (brain-routing thinking axis, parallel to modelLaunchArgs). '{{level}}' is substituted with the provider-mapped reasoning-effort value (e.g. ['--effort', '{{level}}'] → --effort high; ['-c', 'model_reasoning_effort={{level}}']). Applied at launch when a thinking level is requested. Absent → no launch-time thinking selection."
+    },
+    "thinkingLevelMap": {
+      "type": "object",
+      "properties": {
+        "low": { "type": "string" },
+        "medium": { "type": "string" },
+        "high": { "type": "string" }
+      },
+      "additionalProperties": false,
+      "description": "Optional map from the standard thinking levels (low/medium/high) to this provider's own reasoning-effort vocabulary, used to fill {{level}} in thinkingLaunchArgs. A level absent from the map passes through unchanged."
+    },
     "scriptCallBudgetMs": {
       "type": "integer",
       "minimum": 1,
