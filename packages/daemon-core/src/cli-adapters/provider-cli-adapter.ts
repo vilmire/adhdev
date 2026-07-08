@@ -208,6 +208,13 @@ export class ProviderCliAdapter implements CliAdapter {
     private lastScreenSnapshot = '';
     private lastScreenText = '';
     private lastScreenSnapshotReadAt = Number.NEGATIVE_INFINITY;
+    // (FALSEIDLE Path-C) Count of CONSECUTIVE getStatus polls that observed a
+    // gate-eligible static-idle screen (detect=idle, no modal, quiet, empty
+    // partial buffer). For a mesh/autonomous worker we require several such
+    // polls in a row before confirming static-idle (see getStatus), so a
+    // single momentarily-silent point-sample of a still-live turn cannot flip
+    // it. Reset to 0 the instant any poll is ineligible.
+    private staticIdlePollStreak = 0;
 
  // Server log forwarding
     private serverConn: any = null;
@@ -287,6 +294,13 @@ export class ProviderCliAdapter implements CliAdapter {
         result: any;
     } | null = null;
     private static readonly SCREEN_SNAPSHOT_MIN_INTERVAL_MS = 250;
+    // (FALSEIDLE Path-C) Consecutive gate-eligible getStatus polls a mesh/autonomous
+    // session must show before the poll-static-idle confirm fires. 2 = one extra
+    // status tick of hysteresis: enough to reject a single momentary-silence
+    // point-sample of a still-live turn, cheap enough not to materially delay a
+    // genuine boot-wedge release (the wedge screen is stably static, so it clears
+    // every consecutive poll and confirms on the 2nd).
+    private static readonly STATIC_IDLE_POLL_CONFIRM_COUNT = 2;
 
     private readonly providerResolutionMeta: ProviderResolutionMeta;
 
@@ -392,6 +406,20 @@ export class ProviderCliAdapter implements CliAdapter {
 
     private getStatusActivityHoldMs(): number {
         return this.timeouts.statusActivityHold;
+    }
+
+    // (FALSEIDLE Path-C) Whether this session is a mesh worker or coordinator's
+    // own autonomous session. Mirrors CliProviderInstance.isAutonomousMeshSession
+    // over the runtimeSettings the instance mirrors down via updateRuntimeSettings
+    // (meshNodeFor / meshActiveTaskId / meshNodeId / launchedByCoordinator =
+    // isMeshWorkerSession, plus meshCoordinatorFor for the coordinator's own turn).
+    // Such a session has no human at the keyboard to correct a premature idle, so
+    // the poll-static-idle confirm is debounced for it (multiple consecutive idle
+    // polls) rather than fired on a single point-sample.
+    private isAutonomousMeshSession(): boolean {
+        const s = this.runtimeSettings;
+        return !!(s?.meshNodeFor || s?.meshActiveTaskId || s?.meshNodeId
+            || s?.launchedByCoordinator || s?.meshCoordinatorFor);
     }
 
  // Resolved timeouts
@@ -956,15 +984,56 @@ export class ProviderCliAdapter implements CliAdapter {
             const quietForMs = this.lastNonEmptyOutputAt
                 ? (now - this.lastNonEmptyOutputAt)
                 : Number.MAX_SAFE_INTEGER;
+            let eligible = false;
             if (quietForMs >= this.getStatusActivityHoldMs()) {
                 const screenText = this.terminalScreen.getText();
                 const pollDetect = this.runDetectStatus(screenText || this.recentOutputBuffer);
                 const pollModal = this.runParseApproval(screenText)
                     || this.runParseApproval(this.recentOutputBuffer);
-                if (pollDetect === 'idle' && !pollModal) {
-                    this.engine.confirmPollStaticIdle('poll_static_idle');
-                }
+                // (FALSEIDLE Path-C) Final-assistant / pending-response discriminator.
+                // Paths A and B refuse to finalize a turn whose partial-response buffer
+                // is still non-empty (getCompletedFinalizationBlock 'partial_response_pending'
+                // / completionFinalAssistantEvidence turnClosed at cli-provider-instance.ts).
+                // Path C (this poll) previously OMITTED it, so a genuinely-live but
+                // momentarily-silent turn — silent thinking, a backgrounded/long tool child,
+                // the gap between two assistant bubbles — whose currentTurnScope anchor was
+                // lost still satisfied the weaker gate and flipped to idle prematurely.
+                // Require an EMPTY partial buffer here too. getPartialResponse() returns the
+                // accumulated assistant stream while isWaitingForResponse (which
+                // applyGenerating leaves set on the boot-banner wedge too), so this does NOT
+                // reintroduce the D4b wedge: the attach/boot-banner seeds only the static
+                // ready screen — no assistant turn ever streamed — so its partial buffer is
+                // empty and the gate still releases it. A mid-turn quiet gap holds a
+                // non-empty buffer and is deferred.
+                const partial = this.getPartialResponse();
+                const partialPending = typeof partial === 'string' && partial.trim().length > 0;
+                eligible = pollDetect === 'idle' && !pollModal && !partialPending;
             }
+            if (eligible) {
+                // (FALSEIDLE Path-C) Debounce for autonomous mesh sessions. A worker /
+                // coordinator has no human to correct a premature idle, and a single
+                // runDetectStatus point-sample can land in a live turn's momentary silence.
+                // Require STATIC_IDLE_POLL_CONFIRM_COUNT consecutive eligible polls before
+                // confirming, so the FSM must observe a sustained static-idle screen — a
+                // turn that resumes (fresh output, or a re-armed turn scope) resets the
+                // streak. The status poll runs on the 30s-idle / 5s-generating heartbeat and
+                // this getStatus gate is re-hit each dashboard status tick, so 2 confirms is
+                // ~one extra tick of hysteresis — enough to reject a one-sample silence gap
+                // without materially delaying a genuine boot-wedge release. Foreground /
+                // attended sessions keep the single-poll confirm (a human is watching Send).
+                const requiredStreak = this.isAutonomousMeshSession()
+                    ? ProviderCliAdapter.STATIC_IDLE_POLL_CONFIRM_COUNT
+                    : 1;
+                this.staticIdlePollStreak += 1;
+                if (this.staticIdlePollStreak >= requiredStreak) {
+                    this.engine.confirmPollStaticIdle('poll_static_idle');
+                    this.staticIdlePollStreak = 0;
+                }
+            } else {
+                this.staticIdlePollStreak = 0;
+            }
+        } else {
+            this.staticIdlePollStreak = 0;
         }
         let effectiveStatus = this.projectEffectiveStatus(startupModal);
         let effectiveModal = startupModal || this.engine.activeModal;

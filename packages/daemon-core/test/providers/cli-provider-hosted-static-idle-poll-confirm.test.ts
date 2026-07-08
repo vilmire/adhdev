@@ -76,7 +76,17 @@ function makeScripts() {
     };
 }
 
-function buildHostedWedgeAdapter(screen: string, opts: { lastNonEmptyOutputAgoMs: number } = { lastNonEmptyOutputAgoMs: 5000 }) {
+function buildHostedWedgeAdapter(
+    screen: string,
+    opts: {
+        lastNonEmptyOutputAgoMs?: number;
+        // (FALSEIDLE Path-C) partial-response buffer + mesh markers, to exercise the
+        // hardened poll gate. Defaults reproduce the original D4b boot wedge exactly.
+        partialResponse?: string;
+        meshSettings?: Record<string, any>;
+    } = {},
+) {
+    const lastNonEmptyOutputAgoMs = opts.lastNonEmptyOutputAgoMs ?? 5000;
     const adapter = new ProviderCliAdapter({
         type: 'antigravity-cli',
         name: 'Antigravity CLI',
@@ -94,14 +104,22 @@ function buildHostedWedgeAdapter(screen: string, opts: { lastNonEmptyOutputAgoMs
     adapter.ready = true;
     adapter.terminalScreen = { getText: () => screen };
     adapter.recentOutputBuffer = screen;
-    adapter.lastNonEmptyOutputAt = Date.now() - opts.lastNonEmptyOutputAgoMs;
+    adapter.lastNonEmptyOutputAt = Date.now() - lastNonEmptyOutputAgoMs;
     adapter.lastOutputAt = adapter.lastNonEmptyOutputAt;
 
     // Engine wedge: generating with an in-flight flag but NO real turn scope.
+    // (applyGenerating sets isWaitingForResponse=true even on the boot banner, so
+    // getPartialResponse() returns this.responseBuffer — empty on a genuine wedge.)
     adapter.engine.setStatus('generating', 'boot_banner');
     adapter.engine.isWaitingForResponse = true;
     adapter.engine.currentTurnScope = null;
     adapter.engine.activeModal = null;
+
+    // (FALSEIDLE Path-C) A live silent turn has streamed assistant text that stays
+    // buffered across a mid-turn tool gap (responseBuffer is only cleared on turn
+    // start/completion). Seed it here to exercise the pending-response discriminator.
+    if (opts.partialResponse) adapter.responseBuffer = opts.partialResponse;
+    if (opts.meshSettings) adapter.updateRuntimeSettings(opts.meshSettings);
 
     return adapter;
 }
@@ -166,5 +184,101 @@ describe('ProviderCliAdapter — hosted static-idle poll confirm (D4)', () => {
         // The poll-confirm only runs on the allowParse path (the status tick).
         expect(status.status).toBe('generating');
         expect(adapter.engine.currentStatus).toBe('generating');
+    });
+});
+
+// FALSEIDLE Path-C — harden the poll-static-idle gate so a genuinely-live but
+// momentarily-silent turn does NOT flip to idle, while the D4b boot-banner wedge
+// STILL releases. Two guards: (1) an empty-partial-response discriminator matching
+// Paths A/B's turnClosed/partial_response_pending check, and (2) an N-consecutive-
+// poll debounce for autonomous mesh sessions.
+describe('ProviderCliAdapter — poll-static-idle Path-C hardening (FALSEIDLE)', () => {
+    it('(a) live silent-tool turn with a NON-EMPTY partial buffer does NOT flip to idle', () => {
+        // The screen momentarily reads idle (between two assistant bubbles, a
+        // backgrounded tool child), the turn scope was lost, and it is quiet — the
+        // OLD gate would have flipped it. The still-buffered assistant text is the
+        // discriminator: the turn is not over.
+        const adapter = buildHostedWedgeAdapter(STATIC_IDLE_SCREEN, {
+            partialResponse: 'Here is the first part of my answer, still working on a tool call...',
+        });
+        expect(adapter.getPartialResponse().trim().length).toBeGreaterThan(0);
+
+        const status = adapter.getStatus({ allowParse: true });
+
+        expect(status.status).toBe('generating');
+        expect(adapter.engine.currentStatus).toBe('generating');
+    });
+
+    it('(b) boot-banner wedge (empty partial, isProcessing true, static ready) STILL releases (D4b preserved)', () => {
+        // The genuine wedge: attach seeded only the static ready screen, no assistant
+        // turn ever streamed → partial buffer empty even though isWaitingForResponse
+        // (isProcessing) is true. The hardened gate must still release it.
+        const adapter = buildHostedWedgeAdapter(STATIC_IDLE_SCREEN);
+        expect(adapter.isProcessing()).toBe(true);            // applyGenerating left this set
+        expect(adapter.getPartialResponse()).toBe('');        // no assistant stream
+
+        const status = adapter.getStatus({ allowParse: true });
+
+        expect(status.status).toBe('idle');
+        expect(adapter.engine.currentStatus).toBe('idle');
+    });
+
+    it('(c) mesh session: a single idle poll then busy again does NOT confirm (debounce holds)', () => {
+        const adapter = buildHostedWedgeAdapter(STATIC_IDLE_SCREEN, {
+            meshSettings: { meshNodeId: 'node_test', meshActiveTaskId: 'task_test' },
+        });
+
+        // First poll: eligible, but a mesh session needs 2 consecutive → still generating.
+        let status = adapter.getStatus({ allowParse: true });
+        expect(status.status).toBe('generating');
+        expect(adapter.engine.currentStatus).toBe('generating');
+
+        // The turn resumes: fresh output (screen goes busy). The streak MUST reset so a
+        // later idle sample cannot piggyback on the earlier one.
+        adapter.terminalScreen = { getText: () => BUSY_SCREEN };
+        adapter.recentOutputBuffer = BUSY_SCREEN;
+        status = adapter.getStatus({ allowParse: true });
+        expect(status.status).toBe('generating');
+
+        // A single fresh idle poll now must NOT confirm — streak restarts at 1.
+        adapter.terminalScreen = { getText: () => STATIC_IDLE_SCREEN };
+        adapter.recentOutputBuffer = STATIC_IDLE_SCREEN;
+        status = adapter.getStatus({ allowParse: true });
+        expect(status.status).toBe('generating');
+        expect(adapter.engine.currentStatus).toBe('generating');
+    });
+
+    it('(c2) mesh session: TWO consecutive eligible idle polls DO confirm (wedge still releases for workers)', () => {
+        const adapter = buildHostedWedgeAdapter(STATIC_IDLE_SCREEN, {
+            meshSettings: { meshNodeId: 'node_test', launchedByCoordinator: true },
+        });
+
+        // First eligible poll: debounce holds.
+        expect(adapter.getStatus({ allowParse: true }).status).toBe('generating');
+        // Second consecutive eligible poll: confirms.
+        const status = adapter.getStatus({ allowParse: true });
+        expect(status.status).toBe('idle');
+        expect(adapter.engine.currentStatus).toBe('idle');
+    });
+
+    it('(c3) mesh session with a non-empty partial buffer NEVER confirms even across many polls', () => {
+        const adapter = buildHostedWedgeAdapter(STATIC_IDLE_SCREEN, {
+            meshSettings: { meshNodeId: 'node_test', meshActiveTaskId: 'task_test' },
+            partialResponse: 'partial assistant text mid-turn',
+        });
+
+        for (let i = 0; i < 5; i++) {
+            expect(adapter.getStatus({ allowParse: true }).status).toBe('generating');
+        }
+        expect(adapter.engine.currentStatus).toBe('generating');
+    });
+
+    it('(d) non-mesh (foreground) session keeps the single-poll confirm', () => {
+        const adapter = buildHostedWedgeAdapter(STATIC_IDLE_SCREEN); // no mesh settings
+
+        const status = adapter.getStatus({ allowParse: true });
+
+        expect(status.status).toBe('idle');
+        expect(adapter.engine.currentStatus).toBe('idle');
     });
 });
