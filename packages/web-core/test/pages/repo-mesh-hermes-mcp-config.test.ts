@@ -103,11 +103,22 @@ describe('RepoMesh graph detail affordances', () => {
   })
 
   it('preserves provider priority when provider inventory is unavailable and excludes worktree nodes from the settings list', () => {
-    // Handler lives in useMeshNodeActions.ts (extracted from RepoMesh.tsx by F2)
+    // Handler lives in useMeshNodeActions.ts (extracted from RepoMesh.tsx by F2).
+    // The save handler takes the requested order and persists it AS-IS (dedup only).
+    // The mesh-UI refactor (oss 55f253d5) removed the old inventory-gated filter (the
+    // `providers.length > 0` guard) entirely: priority is now preserved unconditionally
+    // — it is never filtered down to the inventory detected on this machine — which is a
+    // stronger form of the "preserve when inventory is unavailable" guarantee this test
+    // exists to protect. Assert that behavior (full requested order, no inventory filter)
+    // instead of the now-deleted guard string.
     const nodeActionsSource = readSource('pages/repo-mesh/useMeshNodeActions.ts')
     expect(nodeActionsSource).toContain('const requested = nodeProviderPriorityDrafts[node.id] || readNodeProviderPriority(node)')
-    expect(nodeActionsSource).toContain('providers.length > 0')
-    expect(nodeActionsSource).toContain('normalizeProviderPriority(requested)')
+    // The full requested order is persisted (dedup-only) — no inventory filter is applied.
+    expect(nodeActionsSource).toContain('do NOT filter to the')
+    expect(nodeActionsSource).toContain('inventory detected on this machine')
+    expect(nodeActionsSource).toContain('const providerPriority = normalizeProviderPriority(requested)')
+    // Regression guard: the destructive inventory-gated filter must not come back.
+    expect(nodeActionsSource).not.toContain('providers.length > 0')
     expect(nodeActionsSource).toContain('providerPriority')
 
     // IA cleanup: MeshNodeList still detects worktree nodes, but now FILTERS them out
