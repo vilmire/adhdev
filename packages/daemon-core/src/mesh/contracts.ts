@@ -332,7 +332,12 @@ export function assertPendingMeshCoordinatorEventV2(raw: unknown, path = '$'): P
  * Decide whether a v2 pending event should be delivered to the given drainer.
  * Centralised so every drain implementation uses the same rule.
  *
- *   - 'broadcast': always delivered.
+ *   - 'broadcast': always delivered. NOTE: a terminal task event that reached the
+ *     queue as broadcast is an ownership leak (it belongs to its dispatching
+ *     coordinator). This pure helper does not have the drain-window
+ *     daemon-form/session matching semantics, so the terminal+broadcast
+ *     dispatchedBy filter is applied one layer up in the drainer (see
+ *     mesh-events-pending routeV2EventsForDrainer) where those semantics live.
  *   - 'system': never delivered to coordinators (system handler only).
  *   - 'unicast': delivered iff intendedFor matches drainer identity.
  *
@@ -366,6 +371,18 @@ const TERMINAL_TASK_EVENTS: ReadonlySet<string> = new Set([
   'refine:failed',
   'refine:accepted',
 ]);
+
+/**
+ * True for a terminal task event (completion / stop / refine outcome). A terminal
+ * event belongs to exactly the coordinator that dispatched the task, so it must
+ * never fan out to sibling coordinators that did not dispatch it. Used by the
+ * emit-side stamp (to avoid downgrading an unaddressed terminal event to full
+ * broadcast) and by the drain-side filter (defense-in-depth for any terminal
+ * event that already reached the queue as broadcast).
+ */
+export function isTerminalTaskEvent(eventName: string): boolean {
+  return TERMINAL_TASK_EVENTS.has(eventName);
+}
 
 /**
  * Coordinator-addressed dispatch-plane alerts. `mesh:dispatch_blocked` is the
@@ -445,9 +462,18 @@ export function coordinatorIdentityFromEmitFields(fields: {
  * returns undefined: the event stays a v1 (unstamped) event and is broadcast-
  * treated during rollout, exactly as before — no regression, no fabricated
  * identity. When the resolved scope is 'unicast' but no `intendedFor` is
- * available, the scope is downgraded to 'broadcast' so the stamp never violates
- * the "unicast requires intendedFor" contract (a terminal event that cannot be
- * addressed to its originator is safest delivered broadly, not dropped).
+ * available, the fallback depends on the event class:
+ *
+ *   - Terminal task events (completion / stop / refine outcome) MUST NOT be
+ *     broadcast to every coordinator — a completion belongs to the coordinator
+ *     that dispatched the task, and broadcasting it makes non-owner coordinators
+ *     (e.g. sibling MAGI coordinators that never dispatched this replica's task)
+ *     act on a completion that is not theirs (MAGI-REPLICA-COMPLETION-EVENT-LEAK).
+ *     For these we address the event to `dispatchedBy` (the dispatching
+ *     coordinator) and KEEP it unicast, so the stamp stays contract-valid and the
+ *     event reaches only its originating coordinator.
+ *   - Any other unicast event with no addressable target falls back to broadcast
+ *     (contract-valid, still delivered, never dropped) — unchanged.
  */
 export function buildPendingEventEmitStamp(opts: {
   eventName: string;
@@ -460,9 +486,18 @@ export function buildPendingEventEmitStamp(opts: {
   let scope: MeshEventScope = opts.scope ?? defaultScopeForEvent(opts.eventName);
   let intendedFor = opts.intendedFor;
   if (scope === 'unicast' && !intendedFor) {
-    // No addressable target for a unicast event — fall back to broadcast so the
-    // stamp is contract-valid and the event is still delivered (never dropped).
-    scope = 'broadcast';
+    if (isTerminalTaskEvent(opts.eventName)) {
+      // Terminal event with no explicit target: address it to the dispatching
+      // coordinator rather than broadcasting to every coordinator. dispatchedBy
+      // is the coordinator that owns the task, so this is the correct — and
+      // contract-valid (unicast requires intendedFor) — narrowing.
+      intendedFor = opts.dispatchedBy;
+    } else {
+      // No addressable target for a non-terminal unicast event — fall back to
+      // broadcast so the stamp is contract-valid and the event is still
+      // delivered (never dropped).
+      scope = 'broadcast';
+    }
   }
   if (scope !== 'unicast') intendedFor = undefined;
   return {

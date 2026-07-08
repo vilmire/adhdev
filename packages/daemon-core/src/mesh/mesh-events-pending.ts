@@ -14,6 +14,7 @@ import {
     coordinatorIdentityFromEmitFields,
     coordinatorIdentityKey,
     isMeshEventScope,
+    isTerminalTaskEvent,
     MESH_PROTOCOL_VERSION_V2,
     shouldDeliverPendingEventToCoordinator,
     type CoordinatorIdentity,
@@ -408,6 +409,25 @@ function routeV2EventsForDrainer(
         // Broadcast → any coordinator; system → daemon handler only (never a
         // coordinator). Delegates to the contract helper for those two scopes.
         if (validated.scope !== 'unicast') {
+            // Defense-in-depth (MAGI-REPLICA-COMPLETION-EVENT-LEAK): a TERMINAL task
+            // event that reached the queue as broadcast is an ownership leak — a
+            // completion/stop belongs to the coordinator that dispatched the task, so
+            // a sibling coordinator that never dispatched it must NOT act on it. The
+            // emit-side stamp now narrows unaddressed terminal events to unicast, but a
+            // legacy/version-skewed/other-path broadcast can still arrive here; filter
+            // it by dispatchedBy vs the drainer using the SAME daemon-form/session
+            // matching semantics as unicast (identityDeliversTo), so the true owner —
+            // possibly addressed under a different daemon-id form — still receives it.
+            if (validated.scope === 'broadcast' && isTerminalTaskEvent(validated.event)) {
+                if (identityDeliversTo(validated.dispatchedBy, drainer)) {
+                    ctx.batchSeen.add(eventId);
+                    bump('v2Delivered');
+                    kept.push(event);
+                } else {
+                    bump('v2RoutedAway');
+                }
+                continue;
+            }
             if (shouldDeliverPendingEventToCoordinator(validated, drainer)) {
                 ctx.batchSeen.add(eventId);
                 bump('v2Delivered');

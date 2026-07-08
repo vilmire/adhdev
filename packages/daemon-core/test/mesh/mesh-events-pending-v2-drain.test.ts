@@ -258,6 +258,50 @@ describe('mesh pending-event — v2 drain routing (B3a accept-and-warn)', () => 
         expect(getMeshV2DrainCounters().v2ReattributedToDrainer).toBe(0);
     });
 
+    // ── (g) terminal broadcast defense-in-depth (MAGI-REPLICA-COMPLETION-EVENT-LEAK) ─
+    it('does NOT deliver a terminal event that arrived as BROADCAST to a coordinator that did not dispatch it', () => {
+        const meshId = `mesh-tbcast-${randomUUID().slice(0, 8)}`;
+        __clearMeshPendingEventsForTests(meshId);
+
+        // A terminal event stamped broadcast (a legacy / version-skewed / other-path
+        // stamp) but dispatchedBy the coordinator on OTHER_CORE. It must reach only that
+        // coordinator, never a sibling coordinator on BARE that never dispatched it.
+        const stamped = stampPendingEventV2(makeTerminal(meshId, { coordinatorMessage: 'terminal-bcast' }), {
+            dispatchedBy: ident(OTHER_CORE),
+            scope: 'broadcast',
+        });
+        delete (stamped as any).targetCoordinatorDaemonId;
+        queuePendingMeshCoordinatorEvent(stamped);
+
+        // Non-owner coordinator on BARE drains → routed away (not its completion).
+        const drainedForBare = drainPendingMeshCoordinatorEvents(meshId, BARE, { drainerIdentity: ident(BARE) });
+        expect(drainedForBare).toHaveLength(0);
+        expect(getMeshV2DrainCounters().v2RoutedAway).toBe(1);
+        expect(getMeshV2DrainCounters().v2Delivered).toBe(0);
+    });
+
+    it('DOES deliver a terminal BROADCAST event to the coordinator that dispatched it (owner), across daemon-id forms', () => {
+        const meshId = `mesh-tbcast2-${randomUUID().slice(0, 8)}`;
+        __clearMeshPendingEventsForTests(meshId);
+
+        // Terminal event dispatchedBy the CLOUD form of a machine, stamped broadcast.
+        const stamped = stampPendingEventV2(makeTerminal(meshId, { coordinatorMessage: 'owner-bcast' }), {
+            dispatchedBy: ident(CLOUD),
+            scope: 'broadcast',
+        });
+        delete (stamped as any).targetCoordinatorDaemonId;
+        queuePendingMeshCoordinatorEvent(stamped);
+
+        // Owner coordinator knows itself as bare mach_ — same machine core, so it receives it.
+        const drained = drainPendingMeshCoordinatorEvents(meshId, [BARE, STANDALONE], {
+            drainerIdentity: ident(BARE),
+        }) as PendingMeshCoordinatorEvent[];
+        expect(drained).toHaveLength(1);
+        expect(drained[0].coordinatorMessage).toBe('owner-bcast');
+        expect(getMeshV2DrainCounters().v2Delivered).toBe(1);
+        expect(getMeshV2DrainCounters().v2RoutedAway).toBe(0);
+    });
+
     // ── peek mirrors drain routing (mesh_status count parity) ─────────────────────
     it('peek surfaces the same v2-routed set as the drain would deliver', () => {
         const meshId = `mesh-peek-${randomUUID().slice(0, 8)}`;

@@ -125,13 +125,19 @@ describe('mesh pending-event — v2 emit stamping (B2a)', () => {
         // coordinator. It now falls back to THIS daemon's own id as the dispatcher and
         // downgrades the (unicast-defaulting) terminal event to a BROADCAST so it is
         // still deliverable to whatever coordinator drains on this machine.
+        //
+        // MAGI-REPLICA-COMPLETION-EVENT-LEAK: the STAMP is still a broadcast (the
+        // self-fallback has no owner session to address), but the DRAIN now filters a
+        // terminal broadcast by dispatchedBy — so it is delivered only to a coordinator
+        // on the SAME machine (the dispatching self daemon), not fanned out to every
+        // coordinator on every machine. Peek from the self machine to see it.
         const meshId = `mesh-v2-${randomUUID().slice(0, 8)}`;
         __clearMeshPendingEventsForTests(meshId);
         const noIdentity = makeTerminal(meshId);
         delete (noIdentity as any).targetCoordinatorDaemonId; // no coordinator identity to derive
         queuePendingMeshCoordinatorEvent(noIdentity);
 
-        const [peeked] = getPendingMeshCoordinatorEvents(meshId, MACH) as PendingMeshCoordinatorEvent[];
+        const [peeked] = getPendingMeshCoordinatorEvents(meshId, SELF_MACH) as PendingMeshCoordinatorEvent[];
         expect(peeked).toBeTruthy();
         // No longer v1: a v2 envelope is minted from the self-daemon id.
         expect(peeked.protocolVersion).toBe('2.0');
@@ -142,6 +148,22 @@ describe('mesh pending-event — v2 emit stamping (B2a)', () => {
         expect(peeked.intendedFor).toBeUndefined();
         // Dispatcher is this daemon's own id (loadConfig().machineId).
         expect(peeked.dispatchedBy?.daemonId).toBe(SELF_MACH);
+    });
+
+    it('does NOT fan a self-fallback terminal broadcast out to a coordinator on a DIFFERENT machine (MAGI-REPLICA-COMPLETION-EVENT-LEAK)', () => {
+        // The leak: a replica completion with no owner anchor was broadcast and reached
+        // EVERY coordinator, including ones on other machines that never dispatched it.
+        // The drain-side dispatchedBy filter now routes it away from a foreign-machine
+        // drainer.
+        const meshId = `mesh-v2-${randomUUID().slice(0, 8)}`;
+        __clearMeshPendingEventsForTests(meshId);
+        const noIdentity = makeTerminal(meshId);
+        delete (noIdentity as any).targetCoordinatorDaemonId;
+        queuePendingMeshCoordinatorEvent(noIdentity);
+
+        // A coordinator on OTHER_MACH drains — dispatchedBy is SELF_MACH, so it is skipped.
+        const foreign = getPendingMeshCoordinatorEvents(meshId, OTHER_MACH) as PendingMeshCoordinatorEvent[];
+        expect(foreign).toHaveLength(0);
     });
 
     it('persists the v2 envelope into the SQLite columns (queryable idempotency key)', () => {

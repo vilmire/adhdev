@@ -13,6 +13,7 @@ import {
   shouldDeliverPendingEventToCoordinator,
   MeshContractViolationError,
   defaultScopeForEvent,
+  isTerminalTaskEvent,
   coordinatorIdentityFromEmitFields,
   buildPendingEventEmitStamp,
   type CoordinatorIdentity,
@@ -226,6 +227,19 @@ describe('defaultScopeForEvent (B2a)', () => {
   });
 });
 
+describe('isTerminalTaskEvent (MAGI-REPLICA-COMPLETION-EVENT-LEAK)', () => {
+  it('is true for the terminal task events', () => {
+    for (const e of ['agent:generating_completed', 'agent:stopped', 'refine:completed', 'refine:failed', 'refine:accepted']) {
+      expect(isTerminalTaskEvent(e)).toBe(true);
+    }
+  });
+  it('is false for non-terminal events and coordinator alerts', () => {
+    expect(isTerminalTaskEvent('node_joined')).toBe(false);
+    expect(isTerminalTaskEvent('agent:ready')).toBe(false);
+    expect(isTerminalTaskEvent('mesh:dispatch_blocked')).toBe(false);
+  });
+});
+
 describe('coordinatorIdentityFromEmitFields (B2a)', () => {
   it('returns undefined without a daemonId', () => {
     expect(coordinatorIdentityFromEmitFields({})).toBeUndefined();
@@ -255,8 +269,16 @@ describe('buildPendingEventEmitStamp (B2a)', () => {
     expect(stamp).toEqual({ protocolVersion: MESH_PROTOCOL_VERSION_V2, eventId: 'e1', scope: 'unicast', dispatchedBy: COORD, intendedFor: COORD });
   });
 
-  it('downgrades a unicast event with no intendedFor to broadcast (contract-safe, never dropped)', () => {
+  it('narrows a TERMINAL event with no intendedFor to unicast addressed to dispatchedBy (MAGI-REPLICA-COMPLETION-EVENT-LEAK: never broadcast a completion to non-owner coordinators)', () => {
     const stamp = buildPendingEventEmitStamp({ eventName: 'agent:generating_completed', eventId: 'e1', dispatchedBy: COORD });
+    expect(stamp?.scope).toBe('unicast');
+    expect(stamp?.intendedFor).toEqual(COORD);
+  });
+
+  it('falls a NON-terminal unicast event with no intendedFor back to broadcast (contract-safe, never dropped)', () => {
+    // A non-terminal event defaulted to unicast (none currently, but an explicit
+    // scope override may request it) that cannot be addressed is safe to broadcast.
+    const stamp = buildPendingEventEmitStamp({ eventName: 'node_joined', eventId: 'e1', dispatchedBy: COORD, scope: 'unicast' });
     expect(stamp?.scope).toBe('broadcast');
     expect(stamp?.intendedFor).toBeUndefined();
   });

@@ -741,16 +741,18 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('R3: a DIFFERENT coordinator daemon still drains the queued event (dual delivery preserved for others)', () => {
-    // The dedup is scoped per coordinator daemon: only the daemon that received the direct inject
-    // skips the queued copy. A coordinator on another daemon (or an unscoped/MCP-only consumer)
-    // never received the inject and must still backfill from the queue.
+  it('R3: a terminal completion with no coordinator anchor does NOT leak to a foreign-machine coordinator, but reaches one on the dispatching machine (MAGI-REPLICA-COMPLETION-EVENT-LEAK)', () => {
+    // Previously this terminal completion (emitted with no coordinator identity → self-daemon
+    // broadcast) was drained by EVERY coordinator daemon, including ones on other machines that
+    // never dispatched it — the MAGI replica completion leak. The drain now filters a terminal
+    // broadcast by dispatchedBy (the self machine, `test-machine`): a foreign-machine coordinator
+    // is routed away, while a coordinator on the dispatching machine still receives it.
     const meshId = `mesh_r3_other_daemon_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue(undefined)
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
       // Coordinator generating so the emit-time idle-only drain leaves the event queued for
-      // the other-daemon backfill drain below.
+      // the backfill drains below.
       const { components, emit } = createComponents(meshId, undefined, { coordinatorStatus: 'generating' })
 
       setupMeshEventForwarding(components)
@@ -764,9 +766,16 @@ describe('setupMeshEventForwarding', () => {
         timestamp: 99002,
       })
 
-      const otherDaemonDrain = drainPendingMeshCoordinatorEvents(meshId, 'some-other-daemon')
-      expect(otherDaemonDrain).toHaveLength(1)
-      expect(otherDaemonDrain[0].event).toBe('agent:generating_completed')
+      // A coordinator on a DIFFERENT machine never dispatched this — it is routed away (no leak).
+      // Peek (non-destructive) so we can still assert the dispatching-machine delivery below on
+      // the same queued event (a destructive drain empties the shared file for everyone).
+      const otherDaemonPeek = getPendingMeshCoordinatorEvents(meshId, 'some-other-daemon')
+      expect(otherDaemonPeek).toHaveLength(0)
+
+      // A coordinator on the dispatching machine (`test-machine`) still backfills it from the queue.
+      const ownMachineDrain = drainPendingMeshCoordinatorEvents(meshId, 'test-machine')
+      expect(ownMachineDrain).toHaveLength(1)
+      expect(ownMachineDrain[0].event).toBe('agent:generating_completed')
     } finally {
       cleanupMeshFiles(meshId)
     }
