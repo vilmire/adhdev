@@ -801,9 +801,18 @@ describe('git repo status parser', () => {
       commit(repo, 'c1');
 
       // Cold timeout with no prior good status → empty/error status, which must NOT be
-      // cached. forceFresh on the timeout to ensure we exercise the collection path.
-      const timedOut = await getGitRepoStatus(repo, { timeoutMs: 1, forceFresh: true });
-      expect(['timeout', 'not_git_repo']).toContain(timedOut.reason);
+      // cached. Force the timeout DETERMINISTICALLY rather than racing a 1ms budget: a
+      // fast CI runner finishes the status spawn inside the millisecond, the collector
+      // returns healthy (reason: undefined), and the assertion flakes. Spy runGit — the
+      // status-data primitive — to throw the executor's timeout error; resolveGitRepository
+      // is a separate export and stays real, so the catch maps reason 'timeout'. forceFresh
+      // ensures we exercise the collection path (not a cache hit).
+      const spy = vi.spyOn(gitExecutor, 'runGit').mockRejectedValue(
+        new gitExecutor.GitCommandError('timeout', 'Git command timed out', { signal: 'SIGTERM' }),
+      );
+      const timedOut = await getGitRepoStatus(repo, { forceFresh: true });
+      expect(timedOut.reason).toBe('timeout');
+      spy.mockRestore();
 
       // A subsequent normal read must succeed (it cannot have been served a cached error).
       const ok = await getGitRepoStatus(repo);

@@ -2,8 +2,9 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GitCommandError } from '../../src/git/git-executor.js';
+import * as gitExecutor from '../../src/git/git-executor.js';
 import { getGitDiffSummary, getGitFileDiff } from '../../src/git/git-diff.js';
 
 function git(cwd: string, args: string[]): string {
@@ -113,15 +114,24 @@ describe('git diff summary and file diff readers', () => {
     expect(healthy.isGitRepo).toBe(true);
     expect(healthy.repoRoot).toBe(repo);
 
-    // Force a timeout with an impossibly short budget. The catch path flattens this to
-    // isGitRepo:false/repoRoot:null — but the `reason` MUST be `timeout`, distinguishing
-    // a transient slow-spawn from a genuine not_git_repo. This is exactly the Windows
-    // symptom: status block healthy, diff block timed-out + isGitRepo:false.
-    const timedOut = await getGitDiffSummary(repo, { timeoutMs: 1 });
-    expect(['timeout', 'not_git_repo']).toContain(timedOut.reason);
-    if (timedOut.reason === 'timeout') {
+    // Force a timeout DETERMINISTICALLY. Racing a 1ms child_process budget is flaky:
+    // a fast CI runner finishes `git diff` inside the millisecond and the collector
+    // returns a healthy summary (reason: undefined) instead of timing out. Instead,
+    // spy runGit — the diff-data primitive — to throw the exact timeout GitCommandError
+    // the executor produces on a killed spawn. resolveGitRepository is a separate export
+    // and stays real, so repo resolution still succeeds; only the diff reads "time out".
+    // The catch path must flatten this to isGitRepo:false/repoRoot:null with reason
+    // 'timeout', distinguishing a transient slow-spawn from a genuine not_git_repo.
+    const spy = vi.spyOn(gitExecutor, 'runGit').mockRejectedValue(
+      new GitCommandError('timeout', 'Git command timed out', { signal: 'SIGTERM' }),
+    );
+    try {
+      const timedOut = await getGitDiffSummary(repo);
+      expect(timedOut.reason).toBe('timeout');
       expect(timedOut.isGitRepo).toBe(false);
       expect(timedOut.repoRoot).toBeNull();
+    } finally {
+      spy.mockRestore();
     }
   });
 
