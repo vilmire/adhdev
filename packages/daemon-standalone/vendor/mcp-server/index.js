@@ -701,6 +701,7 @@ var MESH_ENQUEUE_TASK_TOOL = {
       mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id)." },
       missionId: { type: "string", description: "CamelCase alias for mission_id." },
       priority: { type: "string", enum: ["low", "normal", "high"], description: "G6 (task-level scheduling priority). Within the claim tier a high task is pulled ahead of an older normal/low task (created_at is the tie-break); low is pulled last. Defaults to normal. This is the TASK priority (which task a node pulls first) \u2014 distinct from a node's schedulingPriority (which node work goes to). Use high to jump an urgent fix ahead of a backlog without cancelling the queue." },
+      model: { type: "string", description: "Optional model override for the agent that runs this task, e.g. opus, sonnet, haiku. Best-effort: applied at launch for providers that support a model flag (claude-cli --model, ACP setConfigOption); ignored by providers that cannot honor it. Use a cheaper model for simple tasks to save tokens, a stronger one for hard work. Blank = the provider default." },
       not_before: { type: "number", description: "G7 (delayed execution). Hold the task pending until this time \u2014 it will not be claimed or auto-launched until the wall clock passes it. Accepts an absolute epoch-ms timestamp, or a small value (< ~1 year in ms) treated as a relative ms offset from now (e.g. 600000 = start no earlier than 10 minutes from now). A past value is a no-op (immediately claimable). A pure time gate \u2014 cron/webhook triggers are out of scope." },
       notBefore: { type: "number", description: "CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string." },
       max_retries: { type: "number", description: "P3 (retry cap). Max automatic requeue attempts before the task auto-fails instead of returning to pending. When requeueCount reaches this, mesh_queue_requeue auto-fails the task unless force=true. Omit to use the mesh policy default (maxTaskRetries, typically 1)." },
@@ -3684,6 +3685,7 @@ async function meshEnqueueTask(ctx, args) {
   const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : void 0;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
   const priority = (0, import_daemon_core4.normalizeMeshTaskPriority)(readString(args.priority)) || void 0;
+  const model = readString(args.model) || void 0;
   const notBeforeRaw = args.notBefore !== void 0 ? args.notBefore : args.not_before;
   const notBefore = (0, import_daemon_core4.resolveNotBefore)(notBeforeRaw);
   const maxRetriesRaw = typeof args.maxRetries === "number" ? args.maxRetries : typeof args.max_retries === "number" ? args.max_retries : void 0;
@@ -3726,6 +3728,7 @@ async function meshEnqueueTask(ctx, args) {
       missionId,
       targetNodeId,
       ...priority ? { priority } : {},
+      ...model ? { model } : {},
       ...notBefore ? { notBefore } : {},
       ...maxRetries !== void 0 ? { maxRetries } : {},
       ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}

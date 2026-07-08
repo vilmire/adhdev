@@ -107,6 +107,7 @@ export async function meshEnqueueTask(
         dependsOn?: string[]; depends_on?: string[];
         missionId?: string; mission_id?: string;
         priority?: string;
+        model?: string;
         notBefore?: string | number; not_before?: string | number;
         maxRetries?: number; max_retries?: number;
         allowDuplicate?: boolean; allow_duplicate?: boolean;
@@ -120,6 +121,9 @@ export async function meshEnqueueTask(
     const missionId = readString(args.missionId) || readString(args.mission_id) || undefined;
     // G6: task-level priority ('low' | 'normal' | 'high'). Invalid input → undefined (defaults to normal).
     const priority = normalizeMeshTaskPriority(readString(args.priority)) || undefined;
+    // Optional model override — best-effort, applied at launch by providers that
+    // support a model flag. Trimmed; blank → undefined (provider default).
+    const model = readString(args.model) || undefined;
     // G7: delayed execution. Accept a camelCase or snake_case not_before; resolveNotBefore
     // (in daemon-core, at enqueue) does the ISO/epoch-ms/relative-ms normalization — echoing it
     // here only for the response and dedup fingerprint.
@@ -193,6 +197,7 @@ export async function meshEnqueueTask(
         const task = enqueueTask(ctx.mesh.id, args.message, {
             taskMode, ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, missionId, targetNodeId,
             ...(priority ? { priority } : {}),
+            ...(model ? { model } : {}),
             ...(notBefore ? { notBefore } : {}),
             ...(maxRetries !== undefined ? { maxRetries } : {}),
             ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
