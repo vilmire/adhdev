@@ -30,7 +30,7 @@
  * `magiKindPanels`) are machine-local config and are absent from `mesh_status`;
  * `panelsReachable` stays false.
  */
-import { readRecord, readString, type JsonRecord } from '@adhdev/mesh-shared'
+import { readRecord, readString, readStringArray, type JsonRecord } from '@adhdev/mesh-shared'
 
 /** Mission title prefix stamped by mesh_magi_review (`MAGI: <question>`). */
 const MAGI_MISSION_TITLE_PREFIX = 'magi:'
@@ -61,6 +61,8 @@ export interface MagiReplicaActivity {
     provider?: string
     /** Resolved node: assignedNodeId, else targetNodeId. */
     nodeId?: string
+    /** The coordinator session that enqueued this replica (`sourceCoordinatorSessionId`). */
+    coordinatorSessionId?: string
     readonly: boolean
     terminal: boolean
 }
@@ -99,6 +101,21 @@ export interface MagiGroupActivity {
     progress: number
     /** True when every replica has reached a terminal status (or the mission is closed). */
     terminal: boolean
+    /**
+     * The coordinator session that dispatched this fan-out (task
+     * `sourceCoordinatorSessionId`, stamped by mesh_magi_review). Undefined for
+     * legacy rows / mission-only groups where no per-replica identity survives.
+     */
+    coordinatorSessionId?: string
+    /**
+     * True when `coordinatorSessionId` is known AND that session is no longer among
+     * the mesh's live sessions (the dashboard X→STOP removed the coordinator instance,
+     * but replica queue tasks are still draining in the background). When set, the
+     * card is surfaced as `terminal` immediately even though live replicas remain —
+     * the drain proceeds in the background but the UI reflects the stop right away.
+     * Only ever set for `source === 'queue'` groups with a resolvable coordinator.
+     */
+    coordinatorGone: boolean
     /**
      * 'queue' — replicas were read from live queue tasks (full per-replica detail).
      * 'mission' — the replicas have aged out of the bounded queue tail; only the
@@ -181,6 +198,36 @@ function readNodeFromTask(task: JsonRecord): string | undefined {
     return readString(task.assignedNodeId, task.targetNodeId)
 }
 
+/**
+ * The coordinator session that enqueued this replica. mesh_magi_review stamps
+ * `sourceCoordinatorSessionId` onto each replica task; it rides in the persisted
+ * queue payload JSON (like `consensusGroupId`) so it reaches the dashboard.
+ */
+function readCoordinatorSessionFromTask(task: JsonRecord): string | undefined {
+    return readString(task.sourceCoordinatorSessionId)
+}
+
+/**
+ * Collect the set of live session ids across every mesh node. Sessions live per
+ * node under `nodes[].activeSessions` (id list) and `nodes[].activeSessionDetails[]`
+ * (records carrying `sessionId`); we union both so a stopped coordinator drops out
+ * of the set the moment its instance is gone.
+ */
+function collectLiveSessionIds(status: JsonRecord): Set<string> {
+    const live = new Set<string>()
+    const nodes = Array.isArray(status.nodes) ? status.nodes : []
+    for (const rawNode of nodes) {
+        const node = readRecord(rawNode)
+        for (const id of readStringArray(node.activeSessions)) live.add(id)
+        const details = Array.isArray(node.activeSessionDetails) ? node.activeSessionDetails : []
+        for (const rawDetail of details) {
+            const sessionId = readString(readRecord(rawDetail).sessionId)
+            if (sessionId) live.add(sessionId)
+        }
+    }
+    return live
+}
+
 function deriveQuestion(mission: JsonRecord | undefined): string | undefined {
     if (!mission) return undefined
     const title = readString(mission.title)
@@ -200,6 +247,7 @@ function buildGroupFromTasks(
     tasks: JsonRecord[],
     mission: JsonRecord | undefined,
     missionId: string | undefined,
+    liveSessionIds: Set<string>,
 ): MagiGroupActivity {
     const replicas: MagiReplicaActivity[] = tasks.map(task => {
         const status = readString(task.status) ?? 'pending'
@@ -208,6 +256,7 @@ function buildGroupFromTasks(
             status,
             provider: readProviderFromTask(task),
             nodeId: readNodeFromTask(task),
+            coordinatorSessionId: readCoordinatorSessionFromTask(task),
             readonly: task.readonly === true || readString(task.taskMode) === 'live_debug_readonly',
             terminal: TERMINAL_TASK_STATUSES.has(status),
         }
@@ -219,6 +268,29 @@ function buildGroupFromTasks(
     const distinctProviders = new Set(replicas.map(r => r.provider).filter((p): p is string => !!p)).size
     const distinctNodes = new Set(replicas.map(r => r.nodeId).filter((n): n is string => !!n)).size
     const replicaCount = replicas.length
+
+    // Coordinator lifecycle binding (visibility fix). The dashboard X→STOP removes only
+    // the coordinator session INSTANCE (a single stop_cli); the replica queue tasks keep
+    // draining, so the reconstructed card would linger non-terminal until every replica
+    // ages out. Bind the card's visibility to the coordinator instead: if the fan-out's
+    // coordinator session is known (`sourceCoordinatorSessionId`, unanimous across replicas)
+    // and it is no longer among the mesh's live sessions, the run has been stopped from the
+    // dashboard — surface the card as terminal immediately. The background drain is left
+    // untouched (that is the separate (a) replica-cancellation change).
+    //
+    // Guard against a data gap: only trust the "gone" signal when the mesh reports a
+    // usable live-session view (≥1 live session anywhere). An empty set can mean either
+    // "everything stopped" OR "session details weren't populated on this status" — in the
+    // ambiguous case hold the card rather than hide an active run.
+    const coordinatorSessionId = replicas
+        .map(r => r.coordinatorSessionId)
+        .find((id): id is string => !!id)
+    const replicasTerminal = replicaCount > 0 && replicas.every(r => r.terminal)
+    const coordinatorGone = !replicasTerminal
+        && !!coordinatorSessionId
+        && liveSessionIds.size > 0
+        && !liveSessionIds.has(coordinatorSessionId)
+
     return {
         consensusGroupId,
         missionId,
@@ -232,7 +304,9 @@ function buildGroupFromTasks(
         distinctNodes,
         coupled: distinctProviders < 2 || distinctNodes < 2,
         progress: replicaCount > 0 ? counts.completed / replicaCount : 0,
-        terminal: replicaCount > 0 && replicas.every(r => r.terminal),
+        terminal: replicasTerminal || coordinatorGone,
+        coordinatorSessionId,
+        coordinatorGone,
         source: 'queue',
     }
 }
@@ -266,6 +340,10 @@ function buildGroupFromMissionOnly(missionId: string, mission: JsonRecord): Magi
         coupled: false,
         progress: total > 0 ? counts.completed / total : 0,
         terminal,
+        // Mission-only groups have aged out of the queue tail — no per-replica identity,
+        // so no coordinator session to bind visibility to. Never coordinator-gone.
+        coordinatorSessionId: undefined,
+        coordinatorGone: false,
         source: 'mission',
     }
 }
@@ -316,6 +394,11 @@ export function extractMagiActivity(response: unknown): MagiActivitySummary {
     const foldedMagiActivity = Array.isArray(status.magiActivity) ? status.magiActivity.map(readRecord) : []
     const synthesisReachable = foldedMagiActivity.some(g => readString(g.status) === 'synthesized')
 
+    // Live session set across all mesh nodes — used to detect a stopped coordinator so
+    // the MAGI card can be surfaced terminal the instant its coordinator instance is gone
+    // (buildGroupFromTasks coordinatorGone binding), without waiting for replica drain.
+    const liveSessionIds = collectLiveSessionIds(status)
+
     const missionById = new Map<string, JsonRecord>()
     for (const mission of missions) {
         const id = readString(mission.id)
@@ -338,7 +421,7 @@ export function extractMagiActivity(response: unknown): MagiActivitySummary {
         const missionId = groupTasks.map(t => readString(t.missionId)).find((id): id is string => !!id)
         const mission = missionId ? missionById.get(missionId) : undefined
         if (missionId) consumedMissionIds.add(missionId)
-        groups.push(buildGroupFromTasks(consensusGroupId, groupTasks, mission, missionId))
+        groups.push(buildGroupFromTasks(consensusGroupId, groupTasks, mission, missionId, liveSessionIds))
     }
 
     // 2. Fold in MAGI missions whose replicas have aged out of the queue tail.

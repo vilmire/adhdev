@@ -148,6 +148,71 @@ describe('extractMagiActivity', () => {
         expect(summary.groups[1].terminal).toBe(true)
     })
 
+    // ─── Coordinator lifecycle → card visibility (MAGI-SESSION-STOP-CLEANUP-SLOW fix) ───
+    // A mesh_status where the MAGI replicas carry a `sourceCoordinatorSessionId` and the
+    // nodes report live sessions. `coordinatorAlive` decides whether that coordinator
+    // session is still among the live sessions (dashboard X→STOP removes only that instance).
+    function magiMeshStatusWithCoordinator({ coordinatorAlive }: { coordinatorAlive: boolean }) {
+        const status = magiMeshStatus() as any
+        const coordinatorSessionId = 'sess_coordinator'
+        // Stamp the coordinator session onto every live replica (as mesh_magi_review does).
+        for (const t of status.queue.tasks) {
+            if (t.consensusGroupId) t.sourceCoordinatorSessionId = coordinatorSessionId
+        }
+        // The replicas run on worker sessions that stay live while draining; the coordinator
+        // session is present only when it hasn't been stopped.
+        const liveSessions = ['sess_worker_a', 'sess_worker_b']
+        if (coordinatorAlive) liveSessions.push(coordinatorSessionId)
+        status.nodes = [
+            {
+                nodeId: 'node_mac',
+                machineLabel: 'mac',
+                activeSessions: liveSessions,
+                activeSessionDetails: liveSessions.map(id => ({ sessionId: id })),
+            },
+        ]
+        return status
+    }
+
+    it('keeps the card non-terminal while the coordinator session is still live (regression guard)', () => {
+        const summary = extractMagiActivity(magiMeshStatusWithCoordinator({ coordinatorAlive: true }))
+        const group = summary.groups[0]
+        expect(group.coordinatorSessionId).toBe('sess_coordinator')
+        expect(group.coordinatorGone).toBe(false)
+        expect(group.terminal).toBe(false)
+        expect(summary.activeGroups).toBe(1)
+    })
+
+    it('surfaces the card terminal immediately when the coordinator session is gone but replica tasks are still live', () => {
+        const summary = extractMagiActivity(magiMeshStatusWithCoordinator({ coordinatorAlive: false }))
+        const group = summary.groups[0]
+        expect(group.coordinatorSessionId).toBe('sess_coordinator')
+        // Replicas are still pending/assigned (not all terminal), yet the card is terminal.
+        expect(group.counts).toEqual({ pending: 1, assigned: 1, completed: 1, failed: 0, cancelled: 0 })
+        expect(group.coordinatorGone).toBe(true)
+        expect(group.terminal).toBe(true)
+        expect(summary.activeGroups).toBe(0)
+    })
+
+    it('holds the card when no live-session view is reported (data gap, not a stop)', () => {
+        // Coordinator stamped but nodes report zero live sessions — ambiguous, so do NOT hide.
+        const status = magiMeshStatusWithCoordinator({ coordinatorAlive: false }) as any
+        status.nodes = [{ nodeId: 'node_mac', machineLabel: 'mac', activeSessions: [], activeSessionDetails: [] }]
+        const group = extractMagiActivity(status).groups[0]
+        expect(group.coordinatorGone).toBe(false)
+        expect(group.terminal).toBe(false)
+    })
+
+    it('never flags a mission-only group (aged-out replicas) as coordinator-gone', () => {
+        const status = magiMeshStatus() as any
+        status.queue.tasks = status.queue.tasks.filter((t: any) => !t.consensusGroupId)
+        status.nodes = [{ nodeId: 'node_mac', machineLabel: 'mac', activeSessions: ['sess_other'], activeSessionDetails: [{ sessionId: 'sess_other' }] }]
+        const group = extractMagiActivity(status).groups[0]
+        expect(group.source).toBe('mission')
+        expect(group.coordinatorSessionId).toBeUndefined()
+        expect(group.coordinatorGone).toBe(false)
+    })
+
     it('always reports the synthesis/panels wiring gap as unreachable', () => {
         const summary = extractMagiActivity(magiMeshStatus())
         expect(summary.synthesisReachable).toBe(false)

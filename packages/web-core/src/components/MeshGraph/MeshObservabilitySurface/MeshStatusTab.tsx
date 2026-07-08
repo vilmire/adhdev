@@ -142,7 +142,15 @@ function MagiGroupRow({ group }: { group: MagiGroupActivity }) {
                     {group.question || group.missionTitle || group.consensusGroupId}
                 </span>
                 {group.missionStatus && <Badge label={group.missionStatus} tone={group.missionStatus === 'completed' ? 'good' : group.missionStatus === 'abandoned' ? 'danger' : 'info'} title="Mission status" />}
-                <Badge label={group.terminal ? 'done' : 'running'} tone={group.terminal ? 'good' : 'info'} title="Whether every replica has reached a terminal status" />
+                {group.coordinatorGone ? (
+                    <Badge
+                        label="stopped"
+                        tone="warn"
+                        title="The coordinator session that launched this fan-out was stopped from the dashboard. The card is closed immediately; any still-live replica tasks drain in the background."
+                    />
+                ) : (
+                    <Badge label={group.terminal ? 'done' : 'running'} tone={group.terminal ? 'good' : 'info'} title="Whether every replica has reached a terminal status" />
+                )}
             </div>
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <Badge label={`${counts.completed}/${group.replicaCount} done`} tone="default" title="Completed replicas vs total dispatched" />
