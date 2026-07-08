@@ -1488,6 +1488,28 @@ export class MeshRuntimeStore {
         return !!row;
     }
 
+    /**
+     * DELIVERED-NOT-CONSUMED re-drive support: true when at least one delivery record for
+     * the task has reached a CONSUMED status ('acked' / 'completed'). Distinct from
+     * {@link taskHasConfirmedDelivery} ('delivered' | 'acked' | 'completed'): a delivery is
+     * flipped to 'delivered' the instant the transport hands the dispatch off, but only
+     * flipped to 'acked' when the worker's agent:generating_started event arrives (see the
+     * generating_started handler in mesh-event-forwarding) — i.e. when the session has
+     * actually begun the turn. That distinction is the cross-daemon consumption signal the
+     * short-grace re-drive uses: a row whose delivery is 'delivered' but never 'acked' was
+     * handed to a REMOTE worker that never started generating — the remote autoLaunch
+     * delivered≠consumed gap — even when the session's busy verdict is UNKNOWN (not locally
+     * observable). Indexed by (mesh_id, task_id).
+     */
+    taskDeliveryConsumed(meshId: string, taskId: string): boolean {
+        const row = this.db.prepare(`
+            SELECT 1 FROM mesh_session_delivery
+            WHERE mesh_id = ? AND task_id = ? AND status IN ('acked','completed')
+            LIMIT 1
+        `).get(meshId, taskId) as { 1: number } | undefined;
+        return !!row;
+    }
+
     expireStaleSessionDeliveries(meshId: string): void {
         const now = new Date().toISOString();
         this.db.prepare(`

@@ -34,7 +34,7 @@ import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, ge
 import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, claimNextTask, reclaimStrandedAssignedTask } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, appendLedgerEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
-import { createSessionDelivery } from '../../src/mesh/mesh-delivery-policy.js'
+import { createSessionDelivery, updateSessionDeliveryStatus } from '../../src/mesh/mesh-delivery-policy.js'
 
 function cleanup(meshId: string) {
   try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }
@@ -2820,6 +2820,154 @@ describe('runMeshReconcileTick', () => {
 
         // PHASE 2.5 returned it to pending + cleared ownership; PHASE 3 re-dispatched it
         // onto the idle worker in the same tick.
+        expect(handleCliCommand).toHaveBeenCalledWith('agent_command', expect.objectContaining({
+          targetSessionId: sessionId,
+          action: 'send_chat',
+        }))
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe(sessionId)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(true)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    // ── DELIVERED-NOT-CONSUMED short-grace re-drive (remote autoLaunch delivered≠consumed) ──
+    // > ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS (25s) but < ASSIGNED_STRANDED_DEADLINE_MS (5min):
+    // provably inside the short-grace re-drive window and well before the 5min confirm gate.
+    const UNCONSUMED_MS = 40_000
+
+    it('re-drives a delivered-but-unconsumed row inside the short grace (delivered, never acked, not generating)', async () => {
+      const meshId = `mesh_phase25_unconsumed_${Date.now()}`
+      const nodeId = 'node_w'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        // Model the remote autoLaunch gap: the dispatch reached the worker (delivery 'delivered')
+        // but the worker never emitted agent:generating_started (delivery never flips to 'acked'),
+        // so the row is stranded 'assigned' with no live turn — but only 40s in, far below 15min.
+        const claimed = claimNextTask(meshId, nodeId, 'sess-remote-gone', [])!
+        backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
+        createSessionDelivery({ meshId, nodeId, sessionId: 'sess-remote-gone', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+        // No local instance for the session → busy verdict UNKNOWN (a remote worker), which the
+        // delivered-not-acked signal must still recover.
+        hostMesh(meshId, nodeId)
+
+        await runMeshReconcileTick(makeNoWorkerComponents())
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('pending')
+        expect(row.assignedSessionId).toBeUndefined()
+        expect(row.dispatchTimestamp).toBeUndefined()
+        const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
+        expect(reclaimed).toHaveLength(1)
+        expect((reclaimed[0].payload as any).reason).toBe('delivered_not_consumed_redrive')
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('does NOT re-drive a delivered row that WAS consumed (acked) inside the short grace', async () => {
+      const meshId = `mesh_phase25_consumed_${Date.now()}`
+      const nodeId = 'node_w'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, 'sess-working', [])!
+        backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
+        // Delivery reached 'acked' — the worker emitted generating_started, i.e. it IS consuming.
+        // The short-grace re-drive must leave it alone (never tear a live turn).
+        const delivery = createSessionDelivery({ meshId, nodeId, sessionId: 'sess-working', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+        updateSessionDeliveryStatus(delivery.id, 'acked')
+        hostMesh(meshId, nodeId)
+
+        await runMeshReconcileTick(makeNoWorkerComponents())
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe('sess-working')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('does NOT re-drive a delivered-but-unconsumed row whose session is locally generating', async () => {
+      const meshId = `mesh_phase25_generating_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-generating'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
+        // Delivery is 'delivered' and never 'acked' (the generating_started ack was lost/late),
+        // but the session is LOCALLY present and generating → verdict GENERATING must protect it.
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+        const generatingInstance = {
+          category: 'cli',
+          getState: () => ({ instanceId: sessionId, status: 'generating', type: 'claude-cli', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
+        }
+        const components = {
+          instanceManager: {
+            getByCategory: (category: string) => (category === 'cli' ? [generatingInstance] : []),
+            getInstance: (id: string) => (id === sessionId ? generatingInstance : undefined),
+          },
+        } as any
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe(sessionId)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('does NOT re-drive a delivered-but-unconsumed row still inside the 25s grace (no premature re-drive)', async () => {
+      const meshId = `mesh_phase25_unconsumed_fresh_${Date.now()}`
+      const nodeId = 'node_w'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, 'sess-fresh-remote', [])!
+        // Only 10s in — below ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS (25s): a slow
+        // generating_started still has room to arrive.
+        backdateDispatch(meshId, claimed.id, 10_000)
+        createSessionDelivery({ meshId, nodeId, sessionId: 'sess-fresh-remote', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+        hostMesh(meshId, nodeId)
+
+        await runMeshReconcileTick(makeNoWorkerComponents())
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe('sess-fresh-remote')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('re-driven delivered-but-unconsumed task is re-dispatched onto a now-idle worker the same tick', async () => {
+      const meshId = `mesh_phase25_unconsumed_redispatch_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-idle-worker'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        // Stranded delivered-but-unconsumed on a gone session; an idle worker can re-claim.
+        const claimed = claimNextTask(meshId, nodeId, 'sess-gone', [])!
+        backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
+        createSessionDelivery({ meshId, nodeId, sessionId: 'sess-gone', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+
+        const { components, handleCliCommand } = makeIdleWorkerComponents(meshId, nodeId, sessionId, 'claude-cli')
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/worker', daemonId: 'test-machine' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+
         expect(handleCliCommand).toHaveBeenCalledWith('agent_command', expect.objectContaining({
           targetSessionId: sessionId,
           action: 'send_chat',

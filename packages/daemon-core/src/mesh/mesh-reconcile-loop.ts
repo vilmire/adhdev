@@ -679,6 +679,19 @@ const ASSIGNED_STRANDED_DEADLINE_MS = 5 * 60_000;
 // reclaimed out from under itself.
 const DELIVERED_NO_TURN_DEADLINE_MS = 15 * 60_000;
 
+// DELIVERED-NOT-CONSUMED (remote autoLaunch delivered≠consumed gap): how long a row may sit
+// 'assigned' with a CONFIRMED delivery ('delivered') that was never CONSUMED ('acked' — the
+// worker's agent:generating_started never arrived) before the watchdog re-drives it. Far shorter
+// than DELIVERED_NO_TURN_DEADLINE_MS (15min): a remote autoLaunch marks markAutoLaunch(completed)
+// and returns immediately, relying on agent:ready/reconcile to inject; if the launch→ready→claim
+// window (widened on win32 by the 3–4s git spawn latency) drops the inject, the row sits 'assigned'
+// but the delivery never flips past 'delivered' to 'acked'. The delivered-not-acked state is the
+// cross-daemon consumption signal — positive evidence the worker never started the turn — so we can
+// safely re-open the task after a SHORT grace (well above a normal generating_started round-trip so
+// a merely-slow start is never torn off) instead of waiting the full 15min turn budget. Floored
+// comfortably above the auto-launch cooldown so a legitimate late inject still has room to land.
+const ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS = 25_000;
+
 // RECLAIM-FALSEPOS: how many CONSECUTIVE UNKNOWN busy-verdict ticks (past the delivered-no-turn
 // deadline) must accumulate before a delivered row whose worker session cannot be positively
 // observed is reclaimed. An UNKNOWN verdict means the assigned session is not present in THIS
@@ -728,7 +741,62 @@ function recoverStrandedAssignedDispatches(components: DaemonComponents, meshId:
     for (const row of assigned) {
         const dispatchedAtMs = Date.parse(row.dispatchTimestamp ?? '');
         if (!Number.isFinite(dispatchedAtMs)) continue;              // no dispatch ts → can't age it
-        if (nowMs - dispatchedAtMs < ASSIGNED_STRANDED_DEADLINE_MS) continue;  // still in confirm window
+        const ageMs = nowMs - dispatchedAtMs;
+        // DELIVERED-NOT-CONSUMED short-grace re-drive (remote autoLaunch delivered≠consumed gap).
+        // Runs BEFORE the ASSIGNED_STRANDED_DEADLINE_MS confirm-window gate below because its whole
+        // point is to recover a delivered-but-unconsumed row well inside that window. A remote
+        // autoLaunch marks the dispatch delivered (transport acked) but the worker may never emit
+        // agent:generating_started — the delivery then sits 'delivered' and never flips to 'acked',
+        // so the task is stranded 'assigned' with no live turn. This branch re-opens exactly that
+        // row after a short grace:
+        //   - the delivery IS confirmed handed off (taskHasConfirmedDelivery) but was NEVER consumed
+        //     (!taskDeliveryConsumed → no 'acked'/'completed' delivery) — the cross-daemon "worker
+        //     never started the turn" signal, valid even for a REMOTE session whose local busy
+        //     verdict is UNKNOWN;
+        //   - AND the busy verdict is NOT GENERATING — a locally-present generating session IS
+        //     consuming (ack lost/late), so never touch it (regression guard against tearing a live
+        //     worker off its turn);
+        //   - AND no terminal ledger evidence exists (the completion already landed → leave it).
+        // reclaimStrandedAssignedTask returns the row to 'pending' (bounded by MAX_STRANDED_RECLAIMS)
+        // so PHASE 3 re-dispatches it this same tick onto a fresh idle session — idempotent: it only
+        // mutates a still-'assigned' row, so a completion/ack that raced in already moved the row off
+        // 'assigned' and this is a no-op.
+        if (
+            ageMs >= ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS
+            && ageMs < ASSIGNED_STRANDED_DEADLINE_MS
+            && store.taskHasConfirmedDelivery(meshId, row.id)
+            && !store.taskDeliveryConsumed(meshId, row.id)
+        ) {
+            const terminal = findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id });
+            if (terminal) {
+                const status = terminal.kind === 'task_completed' ? 'completed' : 'failed';
+                updateTaskStatus(meshId, row.id, status);
+                continue;
+            }
+            const verdict = row.assignedSessionId
+                ? resolveSessionBusyVerdict(components, row.assignedSessionId)
+                : 'IDLE_CONFIRMED'; // no session bound → nothing live generating to protect
+            if (verdict !== 'GENERATING') {
+                const redriven = reclaimStrandedAssignedTask(meshId, row.id, {
+                    reason: 'delivered_not_consumed_redrive',
+                    ageMs,
+                });
+                if (redriven) {
+                    LOG.warn('MeshReconcile', `Re-drove delivered-but-unconsumed task ${row.id} on mesh ${meshId} `
+                        + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}, delivered but no `
+                        + `generating_started in ${Math.round(ageMs / 1000)}s, verdict ${verdict} → ${redriven.status})`);
+                    traceMeshEventDrop('assigned_delivered_not_consumed_redrive', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_started',
+                    }, `delivered_not_consumed ${Math.round(ageMs / 1000)}s → ${redriven.status}`);
+                    continue;
+                }
+            }
+        }
+        if (ageMs < ASSIGNED_STRANDED_DEADLINE_MS) continue;  // still in confirm window
         const terminal = findTerminalLedgerEvidenceForTask({
             meshId,
             taskId: row.id,
