@@ -457,6 +457,30 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         }
     },
 
+    // ─── Brain routing: per-difficulty brain presets (machine-local) ───
+    // getDifficultyBrains returns the seeded defaults when nothing is configured,
+    // so the editor always shows a usable mapping. set replaces the whole map.
+    difficulty_brains_get: async (_ctx: MedFamilyContext, _args: any) => {
+        try {
+            const { getDifficultyBrains } = await import('../../config/mesh-config.js');
+            return { success: true, difficultyBrains: getDifficultyBrains() };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
+    difficulty_brains_set: async (_ctx: MedFamilyContext, args: any) => {
+        try {
+            const { setDifficultyBrains } = await import('../../config/mesh-config.js');
+            // normalizeDifficultyBrainMap (inside setDifficultyBrains) drops unknown
+            // keys and empty slots. An empty result clears the override → defaults.
+            const difficultyBrains = setDifficultyBrains(args?.difficultyBrains);
+            return { success: true, difficultyBrains };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
     add_mesh_node: async (ctx: MedFamilyContext, args: any) => {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         const workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';

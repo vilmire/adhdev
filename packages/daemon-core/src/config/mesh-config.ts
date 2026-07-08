@@ -22,7 +22,8 @@ import type {
     RepoMeshHostMetadata,
     RepoMeshDaemonRole,
 } from '../repo-mesh-types.js';
-import type { MagiKindPanelMap, MagiSlot, MagiTaskKind } from '@adhdev/mesh-shared';
+import type { MagiKindPanelMap, MagiSlot, MagiTaskKind, DifficultyBrainMap } from '@adhdev/mesh-shared';
+import { normalizeDifficultyBrainMap, DEFAULT_DIFFICULTY_BRAINS } from '@adhdev/mesh-shared';
 import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 
@@ -742,4 +743,32 @@ export function removeMagiKindPanel(kind: string): boolean {
     delete stored.magiKindPanels[key];
     saveMeshConfig(stored);
     return true;
+}
+
+// ─── Brain routing: per-difficulty brain presets (machine-local) ───
+
+/**
+ * The difficulty→brain presets, machine-local. When nothing is configured yet,
+ * returns the sensible DEFAULT_DIFFICULTY_BRAINS so the coordinator always has a
+ * usable mapping (the operator can override via setDifficultyBrains). Returns a
+ * normalized copy — never the stored reference.
+ */
+export function getDifficultyBrains(): DifficultyBrainMap {
+    const stored = loadMeshConfig().difficultyBrains;
+    const normalized = normalizeDifficultyBrainMap(stored);
+    return Object.keys(normalized).length > 0 ? normalized : { ...DEFAULT_DIFFICULTY_BRAINS };
+}
+
+/**
+ * Replace the difficulty→brain presets wholesale (the editor pushes the full map).
+ * Passing an empty/normalized-empty map clears the override, so getDifficultyBrains
+ * falls back to the defaults again. Returns the normalized, persisted map.
+ */
+export function setDifficultyBrains(map: unknown): DifficultyBrainMap {
+    const normalized = normalizeDifficultyBrainMap(map);
+    const stored = loadMeshConfig();
+    if (Object.keys(normalized).length > 0) stored.difficultyBrains = normalized;
+    else delete stored.difficultyBrains;
+    saveMeshConfig(stored);
+    return normalized;
 }

@@ -3,13 +3,13 @@ import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
 import type { RepoMeshDaemonRole } from '../repo-mesh-types.js';
 import { MESH_CONVERGE_REFINE_TAG, resolveAutoConvergeCodeChange } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { getMesh } from '../config/mesh-config.js';
+import { getMesh, getDifficultyBrains } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshLedgerKind } from './mesh-ledger.js';
 import { createSessionDelivery } from './mesh-delivery-policy.js';
 import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
-import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { sessionIdsEquivalent, isMeshTaskDifficulty, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -871,6 +871,14 @@ export function enqueueTask(
         model?: string;
         /** BRAIN-ROUTING: standard thinking level forwarded to launch (initialThinkingLevel). */
         thinkingLevel?: string;
+        /**
+         * BRAIN-ROUTING: task execution difficulty ('easy'|'medium'|'difficult'|
+         * 'freeform'). When set, the mesh's difficulty→brain preset fills in model /
+         * thinkingLevel that were not passed explicitly (an explicit model/thinkingLevel
+         * wins). Purely a convenience resolver — the stored task still carries the
+         * resolved model/thinkingLevel, so downstream launch is unchanged.
+         */
+        difficulty?: string;
         /** Explicit task id for batch/template flows (M5). Random UUID when omitted. */
         id?: string;
         /** (3) Originating coordinator session id (for session-anchored completion routing). */
@@ -890,6 +898,21 @@ export function enqueueTask(
     const maxRetries = typeof opts?.maxRetries === 'number' && Number.isFinite(opts.maxRetries) && opts.maxRetries >= 0
         ? Math.floor(opts.maxRetries)
         : undefined;
+    // BRAIN-ROUTING: resolve the difficulty preset into effective model / thinking
+    // level. An explicit opts.model / opts.thinkingLevel always wins; the preset only
+    // fills what the caller left blank. Best-effort — a missing/invalid difficulty or
+    // an unconfigured preset just leaves the explicit values (or none) in place.
+    let effectiveModel = typeof opts?.model === 'string' && opts.model.trim() ? opts.model.trim() : undefined;
+    let effectiveThinkingLevel = typeof opts?.thinkingLevel === 'string' && opts.thinkingLevel.trim() ? opts.thinkingLevel.trim() : undefined;
+    if (isMeshTaskDifficulty(opts?.difficulty)) {
+        try {
+            const preset = getDifficultyBrains()[opts!.difficulty as MeshTaskDifficulty];
+            if (preset) {
+                if (!effectiveModel && preset.model) effectiveModel = preset.model;
+                if (!effectiveThinkingLevel && preset.thinkingLevel) effectiveThinkingLevel = preset.thinkingLevel;
+            }
+        } catch { /* preset read is best-effort — never block enqueue */ }
+    }
     const result = withQueueLock(meshId, () => {
         if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, id)) {
             throw new Error(`duplicate_task_id: task '${id}' already exists in mesh '${meshId}'`);
@@ -926,8 +949,8 @@ export function enqueueTask(
             ...(maxRetries !== undefined ? { maxRetries } : {}),
             ...(typeof opts?.missionId === 'string' && opts.missionId.trim() ? { missionId: opts.missionId.trim() } : {}),
             ...(typeof opts?.consensusGroupId === 'string' && opts.consensusGroupId.trim() ? { consensusGroupId: opts.consensusGroupId.trim() } : {}),
-            ...(typeof opts?.model === 'string' && opts.model.trim() ? { model: opts.model.trim() } : {}),
-            ...(typeof opts?.thinkingLevel === 'string' && opts.thinkingLevel.trim() ? { thinkingLevel: opts.thinkingLevel.trim() } : {}),
+            ...(effectiveModel ? { model: effectiveModel } : {}),
+            ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}),
             ...(typeof opts?.sourceCoordinatorSessionId === 'string' && opts.sourceCoordinatorSessionId.trim()
                 ? { sourceCoordinatorSessionId: opts.sourceCoordinatorSessionId.trim() }
                 : {}),

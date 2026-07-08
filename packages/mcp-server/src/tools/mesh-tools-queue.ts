@@ -108,6 +108,8 @@ export async function meshEnqueueTask(
         missionId?: string; mission_id?: string;
         priority?: string;
         model?: string;
+        thinkingLevel?: string;
+        difficulty?: string;
         notBefore?: string | number; not_before?: string | number;
         maxRetries?: number; max_retries?: number;
         allowDuplicate?: boolean; allow_duplicate?: boolean;
@@ -124,6 +126,11 @@ export async function meshEnqueueTask(
     // Optional model override — best-effort, applied at launch by providers that
     // support a model flag. Trimmed; blank → undefined (provider default).
     const model = readString(args.model) || undefined;
+    // Brain-routing thinking axis + difficulty preset. thinkingLevel is best-effort
+    // at launch; difficulty resolves the mesh preset in daemon-core enqueueTask
+    // (fills model/thinkingLevel left blank). Both trimmed; blank → undefined.
+    const thinkingLevel = readString(args.thinkingLevel) || undefined;
+    const difficulty = readString(args.difficulty) || undefined;
     // G7: delayed execution. Accept a camelCase or snake_case not_before; resolveNotBefore
     // (in daemon-core, at enqueue) does the ISO/epoch-ms/relative-ms normalization — echoing it
     // here only for the response and dedup fingerprint.
@@ -198,6 +205,8 @@ export async function meshEnqueueTask(
             taskMode, ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, missionId, targetNodeId,
             ...(priority ? { priority } : {}),
             ...(model ? { model } : {}),
+            ...(thinkingLevel ? { thinkingLevel } : {}),
+            ...(difficulty ? { difficulty } : {}),
             ...(notBefore ? { notBefore } : {}),
             ...(maxRetries !== undefined ? { maxRetries } : {}),
             ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),

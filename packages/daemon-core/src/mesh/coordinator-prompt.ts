@@ -32,6 +32,8 @@ import type {
     RepoMeshNodeStatus,
 } from '../repo-mesh-types.js';
 import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
+import { getDifficultyBrains } from '../config/mesh-config.js';
+import { MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
 
 /**
  * Cheap, locally-derived "what just happened" snapshot for the coordinator
@@ -278,6 +280,9 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
 
     // ── Policy ──
     sections.push(buildPolicySection(mergeAndNormalizePolicy(undefined, mesh.policy)));
+
+    // ── Brain presets (difficulty → model/thinking) ──
+    sections.push(buildBrainPresetsSection());
 
     // ── Tools ──
     sections.push(TOOLS_SECTION);
@@ -599,6 +604,36 @@ function truncateNote(text: string): string {
     return `${text.slice(0, OPERATING_NOTE_MAX_CHARS).trimEnd()}… [truncated]`;
 }
 
+/**
+ * Render the difficulty→brain presets so the coordinator knows what each
+ * `difficulty` value resolves to (which model / thinking level). Machine-local,
+ * read live at prompt-build time — seeded defaults when nothing is configured.
+ */
+function buildBrainPresetsSection(): string {
+    let brains;
+    try { brains = getDifficultyBrains(); } catch { brains = {}; }
+    const lines = [
+        '## Brain presets',
+        '',
+        'When you pass `difficulty` on `mesh_enqueue_task`, it resolves to this model / thinking level (an explicit model/thinkingLevel on the task overrides it). Pick easy for trivial work to save tokens, difficult for hard reasoning.',
+        '',
+    ];
+    for (const key of MESH_TASK_DIFFICULTIES) {
+        const slot = (brains as Record<string, { provider?: string; model?: string; thinkingLevel?: string } | undefined>)[key];
+        if (!slot || (!slot.provider && !slot.model && !slot.thinkingLevel)) {
+            lines.push(`- **${key}**: (no preset — ordinary routing)`);
+            continue;
+        }
+        const parts = [
+            slot.provider ? `provider: \`${slot.provider}\`` : '',
+            slot.model ? `model: \`${slot.model}\`` : '',
+            slot.thinkingLevel ? `thinking: \`${slot.thinkingLevel}\`` : '',
+        ].filter(Boolean).join(' | ');
+        lines.push(`- **${key}**: ${parts}`);
+    }
+    return lines.join('\n');
+}
+
 function buildPolicySection(policy: RepoMeshPolicy): string {
     const rules: string[] = [];
     if (policy.requirePreTaskCheckpoint) rules.push('- Create a git checkpoint **before** starting each task');
@@ -737,6 +772,7 @@ function buildRulesSection(coordinatorCliType?: string): string {
 - **Front-load task messages.** Include everything the agent needs (files, problem, expected fix) in \`mesh_enqueue_task\` / \`mesh_send_task\`. Append a structured result request at the end: ask the worker to conclude with a JSON block containing \`status\`, \`changedFiles\`, \`gitStatus\`, \`validationResults\`, \`errors\`, \`nextAction\`. The daemon parses this automatically; you can read it from \`mesh_task_history\`.
 - **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start fresh only for independent work, provider mismatch, transcript contamination, or required worktree isolation.
 - **Worktree affinity.** A worktree is a durable per-branch workspace; keep all of a branch's code_change/fix/review work on its worktree node by targeting \`required_tags: ["worktree=<branch>"]\` or \`target_node_id\`. Get the id/branch from the \`mesh_clone_node\` result or a live \`mesh_status\` — the Configured Nodes snapshot won't list a worktree cloned after launch. Untargeted same-branch follow-ups drift to the base node. Only \`convergence\` (merge/push) runs on the base, never pinned to the worktree.
+- **Classify task difficulty to save tokens.** For each task you enqueue, judge its execution difficulty and pass \`difficulty\`: \`easy\` (extraction, renames, doc tweaks, trivial fixes), \`medium\` (ordinary feature/bugfix work), \`difficult\` (architecture, tricky debugging, multi-file refactors, subtle reasoning), or \`freeform\`. The mesh's per-difficulty brain preset then runs easy tasks on a cheaper model at low reasoning effort and hard tasks on a stronger model at high effort — real token savings on simple work. The current presets are shown in the "Brain presets" section below. You may still pass an explicit \`model\`/\`thinkingLevel\` to override the preset for one task.
 - **Respect explicit provider requests.** Map: Hermes → \`hermes-cli\`, Claude/Claude Code → \`claude-cli\`, Codex → \`codex-cli\`, Gemini → \`gemini-cli\`, Antigravity → \`antigravity-cli\`. Never substitute the coordinator's own runtime.
 - **Verify via git, not source.** Use \`mesh_git_status\` to confirm side effects. Treat agent summaries as self-reports, not verification.
 - **Limit parallelism.** Start with 1–2 tasks; scale only on success. Never duplicate a session because \`mesh_read_chat\` shows no final message while tool/terminal activity is ongoing. This caps *concurrent* load — it does not mean serialize independent work: when a new, independent request arrives and there is headroom under \`maxParallelTasks\`, dispatch it right away rather than waiting for an in-flight task or a user nudge (read-only diagnosis especially, since it has no merge cost).

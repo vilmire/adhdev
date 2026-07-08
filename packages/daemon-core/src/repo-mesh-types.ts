@@ -14,7 +14,7 @@
 import type { GitRepoStatus, GitCompactSummary } from './git/git-types.js';
 import type { MeshMissionSummary, MeshMissionSlimSummary } from './mesh/mesh-missions.js';
 import type { MeshMagiActivitySummary } from './mesh/mesh-magi-status.js';
-import type { MagiKindPanelMap } from '@adhdev/mesh-shared';
+import type { MagiKindPanelMap, DifficultyBrainMap } from '@adhdev/mesh-shared';
 
 // ─── Core Mesh Types ────────────────────────────
 
@@ -822,6 +822,15 @@ export interface LocalMeshConfig {
      * Optional; absent on pre-feature configs.
      */
     magiKindPanels?: MagiKindPanelMap;
+    /**
+     * BRAIN-ROUTING: per-task-difficulty brain presets (machine-local), sibling of
+     * magiKindPanels. Keyed by difficulty (easy / medium / difficult / freeform);
+     * each maps to a BrainSlot (provider? / model? / thinkingLevel?). The coordinator
+     * classifies a task's difficulty at enqueue; the matching preset fills in the
+     * task's model / thinking level (an explicit task value wins). Optional; a mesh
+     * with none seeded uses DEFAULT_DIFFICULTY_BRAINS on first read.
+     */
+    difficultyBrains?: DifficultyBrainMap;
 }
 
 export interface LocalMeshEntry {
