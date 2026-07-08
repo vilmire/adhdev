@@ -75,6 +75,18 @@ export interface PendingMeshCoordinatorEvent {
     dispatchedBy?: CoordinatorIdentity;
     /** Present only for unicast scope: the coordinator this event is addressed to. */
     intendedFor?: CoordinatorIdentity;
+    /**
+     * True when this event was stamped as a broadcast SOLELY because no owning
+     * coordinator identity was resolvable at emit time (self-fallback: dispatchedBy
+     * is THIS daemon's own machineId, not a real coordinator). Such a broadcast has
+     * no owner, so the MAGI-REPLICA-COMPLETION-EVENT-LEAK guard — which only exists
+     * to stop a NON-owner coordinator from consuming an OWNED terminal event — must
+     * not apply: an ownerless terminal broadcast is a genuine "deliver to any
+     * coordinator that drains on this machine" event and identity-matching its
+     * self-id dispatchedBy against the drainer would wrongly route it away.
+     * Absent (undefined/false) on a normally-owned event → the leak guard applies.
+     */
+    dispatchedBySelfFallback?: boolean;
 }
 
 /**
@@ -419,7 +431,21 @@ function routeV2EventsForDrainer(
             // matching semantics as unicast (identityDeliversTo), so the true owner —
             // possibly addressed under a different daemon-id form — still receives it.
             if (validated.scope === 'broadcast' && isTerminalTaskEvent(validated.event)) {
-                if (identityDeliversTo(validated.dispatchedBy, drainer)) {
+                // An ownerless self-fallback broadcast (dispatchedBy is this daemon's
+                // own machineId because no coordinator identity existed at emit) has no
+                // coordinator owner — but it must still stay on ITS machine: a replica
+                // completion emitted on machine A must never fan out to a coordinator on
+                // machine B (the MAGI-REPLICA leak). So for a self-fallback event, match
+                // at the MACHINE (daemonId) level — deliver iff the drainer is on the
+                // same machine as the self-dispatcher — instead of the full
+                // identityDeliversTo (which also compares runId/session and would route
+                // the event away from a same-machine coordinator whose id form differs,
+                // the exact symptom for refine:* / agent:generating_completed reaching a
+                // stdio MCP coordinator). Non-self-fallback broadcasts keep the strict
+                // owner check.
+                const deliverSelfFallback = event.dispatchedBySelfFallback
+                    && daemonIdsEquivalent(validated.dispatchedBy.daemonId, drainer.daemonId);
+                if (deliverSelfFallback || identityDeliversTo(validated.dispatchedBy, drainer)) {
                     ctx.batchSeen.add(eventId);
                     bump('v2Delivered');
                     kept.push(event);
@@ -858,6 +884,13 @@ export function stampPendingEventV2(
     });
     if (!stamp) return event; // no coordinator identity at all (no self id) → stays a v1 event
 
+    // Mark an ownerless (self-fallback) broadcast so the drain-side leak guard can
+    // tell it apart from a genuinely owned broadcast terminal event. selfFallback is
+    // true only when no coordinator identity existed and we minted the stamp under
+    // this daemon's own machineId; a broadcast that stays broadcast for that reason
+    // has no owner to leak from and must reach whatever coordinator drains here.
+    const dispatchedBySelfFallback = selfFallback && stamp.scope === 'broadcast';
+
     return {
         ...event,
         protocolVersion: stamp.protocolVersion,
@@ -865,6 +898,7 @@ export function stampPendingEventV2(
         scope: stamp.scope,
         dispatchedBy: stamp.dispatchedBy,
         ...(stamp.intendedFor ? { intendedFor: stamp.intendedFor } : {}),
+        ...(dispatchedBySelfFallback ? { dispatchedBySelfFallback: true } : {}),
     };
 }
 

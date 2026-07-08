@@ -4,9 +4,18 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { meshLedgerQuery, meshWaitEvents } from '../src/tools/mesh-tools.js';
-import { appendLedgerEntry, getLedgerDir, queuePendingMeshCoordinatorEvent } from '@adhdev/daemon-core';
+import { appendLedgerEntry, getLedgerDir, queuePendingMeshCoordinatorEvent, loadConfig } from '@adhdev/daemon-core';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
 import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
+
+// The stdio MCP coordinator runs ON its own daemon/machine, so its localDaemonId is
+// this machine's id — the same id an ownerless (self-fallback) terminal broadcast is
+// stamped under. Use the real machineId so the machine-level self-fallback delivery
+// (deliver an ownerless terminal event to a coordinator on the SAME machine, while a
+// foreign-machine coordinator is still routed away — MAGI-REPLICA leak guard) resolves
+// exactly as it does in production. A hard-coded foreign string here would model a
+// coordinator on a different machine and (correctly) never receive refine:* events.
+const SELF_MACHINE_ID = loadConfig().machineId;
 
 // A plain-object transport (NOT an IpcTransport) makes drainCoordinatorPendingEvents
 // take the in-process local drain path (drainPendingMeshCoordinatorEvents), so these
@@ -15,8 +24,8 @@ function makeCtx(meshId: string) {
   return {
     mesh: { id: meshId, nodes: [] },
     transport: { command: async () => ({ success: false }) },
-    localDaemonId: 'daemon-coordinator',
-    localMachineId: 'machine-coordinator',
+    localDaemonId: SELF_MACHINE_ID,
+    localMachineId: SELF_MACHINE_ID,
   } as any;
 }
 

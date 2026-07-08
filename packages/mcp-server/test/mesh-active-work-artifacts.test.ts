@@ -5,7 +5,14 @@ import { join } from 'node:path';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshEnqueueTask, meshQueueCancel, meshSendTask, meshStatus, meshTaskHistory, meshViewQueue } from '../src/tools/mesh-tools.js';
-import { appendLedgerEntry, buildTaskCompletionEvidence, drainPendingMeshCoordinatorEvents, enqueueTask, getLedgerDir, getQueue, insertDirectDispatch, queuePendingMeshCoordinatorEvent, readLedgerEntries, updateTaskStatus } from '@adhdev/daemon-core';
+import { appendLedgerEntry, buildTaskCompletionEvidence, drainPendingMeshCoordinatorEvents, enqueueTask, getLedgerDir, getQueue, insertDirectDispatch, loadConfig, queuePendingMeshCoordinatorEvent, readLedgerEntries, updateTaskStatus } from '@adhdev/daemon-core';
+
+// The stdio MCP coordinator runs on its own daemon/machine, so a self-fallback (ownerless)
+// terminal broadcast — a refine:* event queued with no coordinator identity — is stamped
+// under THIS machine's id and delivered to a same-machine coordinator, while a foreign
+// machine's coordinator is routed away (MAGI-REPLICA leak guard). Use the real machineId as
+// the coordinator's localDaemonId so this delivery resolves as it does in production.
+const SELF_MACHINE_ID = loadConfig().machineId;
 import { __clearDirectDispatchesForTests, __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
 import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
@@ -714,8 +721,8 @@ test('mesh_task_history returns pending async refine failure events instead of d
         return { success: false };
       },
     },
-    localDaemonId: 'daemon-coordinator',
-    localMachineId: 'machine-coordinator',
+    localDaemonId: SELF_MACHINE_ID,
+    localMachineId: SELF_MACHINE_ID,
   };
   const jobId = 'refine_ix_mpmavtun_zya19p';
   const result = {
