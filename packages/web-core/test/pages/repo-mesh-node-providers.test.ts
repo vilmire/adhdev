@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
     buildProvidersByDaemonId,
     resolveNodeAvailableProviders,
+    deriveNodeCapabilityTags,
 } from '../../src/pages/repo-mesh/node-providers'
 
 function cliProvider(type: string) {
@@ -76,5 +77,47 @@ describe('repo-mesh node provider resolution (per-daemon)', () => {
         const map = buildProvidersByDaemonId([{ availableProviders: [cliProvider('x-cli')] } as any, LOCAL_DAEMON])
         expect(map.has('daemon_local')).toBe(true)
         expect([...map.keys()]).toEqual(['daemon_local'])
+    })
+})
+
+describe('deriveNodeCapabilityTags', () => {
+    it('derives os/arch/provider auto tags in order, custom tags first', () => {
+        const node = {
+            id: 'n1', workspace: '/w',
+            reportedPlatform: 'darwin', reportedArch: 'arm64',
+            policy: { providerPriority: ['claude-cli', 'codex-cli'] },
+            capabilities: ['test-runner', 'gpu'],
+        } as any
+        const tags = deriveNodeCapabilityTags(node)
+        expect(tags.map(t => t.tag)).toEqual(['test-runner', 'gpu', 'os=darwin', 'arch=arm64', 'provider=claude-cli'])
+        // custom vs auto flags
+        expect(tags.filter(t => t.custom).map(t => t.tag)).toEqual(['test-runner', 'gpu'])
+        expect(tags.filter(t => !t.custom).map(t => t.tag)).toEqual(['os=darwin', 'arch=arm64', 'provider=claude-cli'])
+    })
+
+    it('prefers userOverrides platform/arch over reported (matches daemon precedence)', () => {
+        const node = {
+            id: 'n2', workspace: '/w',
+            reportedPlatform: 'darwin', reportedArch: 'arm64',
+            userOverrides: { platform: 'win32', arch: 'x64' },
+        } as any
+        const tags = deriveNodeCapabilityTags(node).map(t => t.tag)
+        expect(tags).toContain('os=win32')
+        expect(tags).toContain('arch=x64')
+        expect(tags).not.toContain('os=darwin')
+    })
+
+    it('adds worktree=<branch> only for a worktree node', () => {
+        const wt = { id: 'n3', workspace: '/w', isLocalWorktree: true, worktreeBranch: 'feat/x' } as any
+        expect(deriveNodeCapabilityTags(wt).map(t => t.tag)).toContain('worktree=feat/x')
+        const plain = { id: 'n4', workspace: '/w', worktreeBranch: 'feat/x' } as any
+        expect(deriveNodeCapabilityTags(plain).map(t => t.tag)).not.toContain('worktree=feat/x')
+    })
+
+    it('omits absent fields and never emits the internal converge= tag', () => {
+        const node = { id: 'n5', workspace: '/w', reportedPlatform: 'linux' } as any
+        const tags = deriveNodeCapabilityTags(node).map(t => t.tag)
+        expect(tags).toEqual(['os=linux'])
+        expect(tags.some(t => t.startsWith('converge='))).toBe(false)
     })
 })

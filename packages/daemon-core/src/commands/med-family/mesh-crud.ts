@@ -480,6 +480,9 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             const daemonId = typeof args?.daemonId === 'string' && args.daemonId.trim() ? args.daemonId.trim() : undefined;
             const machineId = typeof args?.machineId === 'string' && args.machineId.trim() ? args.machineId.trim() : undefined;
             const repoRoot = typeof args?.repoRoot === 'string' && args.repoRoot.trim() ? args.repoRoot.trim() : undefined;
+            const capabilities = Array.isArray(args?.capabilities)
+                ? args.capabilities.map((t: any) => typeof t === 'string' ? t.trim() : '').filter(Boolean)
+                : undefined;
             const node = addNode(meshId, {
                 workspace,
                 ...(repoRoot ? { repoRoot } : {}),
@@ -487,6 +490,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 ...(machineId ? { machineId } : {}),
                 ...(policy ? { policy } : {}),
                 ...(role ? { role } : {}),
+                ...(capabilities && capabilities.length ? { capabilities } : {}),
             });
             if (!node) return { success: false, error: 'Mesh not found' };
             // mesh_status hands back a coordinator-memory aggregate
@@ -542,6 +546,13 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 patch.systemPrompt = trimmed || undefined;
             } else if (args?.systemPrompt === null) {
                 patch.systemPrompt = undefined;
+            }
+            // Operator custom capability tags. An explicit (possibly empty) array
+            // replaces them; omitting the arg leaves existing tags untouched.
+            if (Array.isArray(args?.capabilities)) {
+                patch.capabilities = args.capabilities
+                    .map((t: any) => typeof t === 'string' ? t.trim() : '')
+                    .filter(Boolean);
             }
             const node = updateNode(meshId, nodeId, patch as any);
             if (!node) return { success: false, error: 'Mesh node not found' };

@@ -213,6 +213,25 @@ export function useMeshNodeActions({
         finally { setSavingNodeSchedulingId(null) }
     }
 
+    // Per-node custom capability tags (routing tags). Sent as a top-level
+    // `capabilities` arg so update_mesh_node normalizes it; an explicit
+    // (possibly empty) array replaces the node's custom tags.
+    const [savingNodeCapabilitiesId, setSavingNodeCapabilitiesId] = useState<string | null>(null)
+    async function handleUpdateNodeCapabilities(node: MeshNode, capabilities: string[]) {
+        if (!selectedMeshId) return
+        const targetDaemonId = (selectedMesh as any)?.__sourceDaemonId || primaryDaemonId
+        const cleaned = capabilities.map(t => t.trim()).filter(Boolean)
+        try {
+            setSavingNodeCapabilitiesId(node.id)
+            setError(null)
+            const raw = await sendCommand(targetDaemonId, 'update_mesh_node', { meshId: selectedMeshId, nodeId: node.id, capabilities: cleaned })
+            const result = unwrapResult(raw)
+            if (result?.success === false) { setError(result.error || 'Node tag update failed'); return }
+            await loadMeshes()
+        } catch (e: any) { setError(e?.message || 'Node tag update failed') }
+        finally { setSavingNodeCapabilitiesId(null) }
+    }
+
     async function handleSaveCoordinatorPrompt() {
         if (!primaryDaemonId || !selectedMeshId) return
         const existingCoord = ((selectedMesh as any)?.coordinator || {}) as Record<string, unknown>
@@ -305,12 +324,15 @@ export function useMeshNodeActions({
         savingNodeSystemPromptId,
         // node scheduling
         savingNodeSchedulingId,
+        // node capability tags
+        savingNodeCapabilitiesId,
         // actions
         handleAddNode,
         handleRemoveNode,
         handleUpdatePolicy,
         handleUpdateNodeProviderPriority,
         handleUpdateNodeScheduling,
+        handleUpdateNodeCapabilities,
         handleSaveCoordinatorPrompt,
         handleSaveNodeSystemPrompt,
         handleLaunchCoordinator,

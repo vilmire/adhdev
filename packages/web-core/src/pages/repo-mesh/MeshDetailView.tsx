@@ -94,6 +94,8 @@ interface Props {
     onUpdateNodeProviderPriority: (node: MeshNode) => void
     savingNodeSchedulingId: string | null
     onUpdateNodeScheduling: (node: MeshNode, patch: { schedulingPriority?: number; providerRoles?: MeshProviderRole[] }) => void
+    savingNodeCapabilitiesId: string | null
+    onUpdateNodeCapabilities: (node: MeshNode, capabilities: string[]) => void
     schedulingStrategy: MeshSchedulingStrategy
     nodeSystemPromptDrafts: Record<string, string>
     onNodeSystemPromptDraftChange: (nodeId: string, value: string) => void
@@ -195,6 +197,8 @@ export function MeshDetailView({
     onUpdateNodeProviderPriority,
     savingNodeSchedulingId,
     onUpdateNodeScheduling,
+    savingNodeCapabilitiesId,
+    onUpdateNodeCapabilities,
     schedulingStrategy,
     nodeSystemPromptDrafts,
     onNodeSystemPromptDraftChange,
@@ -345,6 +349,8 @@ export function MeshDetailView({
                 availableCliProviders={availableCliProviders}
                 savingNodePolicyId={savingNodePolicyId}
                 onUpdateNodeProviderPriority={onUpdateNodeProviderPriority}
+                savingNodeCapabilitiesId={savingNodeCapabilitiesId}
+                onUpdateNodeCapabilities={onUpdateNodeCapabilities}
                 nodeSystemPromptDrafts={nodeSystemPromptDrafts}
                 onNodeSystemPromptDraftChange={onNodeSystemPromptDraftChange}
                 savingNodeSystemPromptId={savingNodeSystemPromptId}

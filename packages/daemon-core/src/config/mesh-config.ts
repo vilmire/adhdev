@@ -570,6 +570,11 @@ export function updateNode(
     opts: {
         userOverrides?: Partial<RepoMeshNodeCapabilities>;
         policy?: RepoMeshNodePolicy;
+        /** Operator-defined custom capability tags used by mesh queue matching.
+         *  Passing an array replaces the node's custom tags (empty/whitespace
+         *  entries dropped, deduped); an empty result clears them. Omit to leave
+         *  the existing tags untouched. */
+        capabilities?: string[];
         worktreeBootstrap?: LocalMeshNodeEntry['worktreeBootstrap'];
         /** Per-node instruction surfaced in the coordinator prompt. Pass an
          *  empty string or undefined to clear it. */
@@ -610,6 +615,13 @@ export function updateNode(
         node.reportedDaemonBuildVersion = opts.reportedDaemonBuildVersion.trim();
     }
     if (opts.policy) node.policy = { ...node.policy, ...opts.policy };
+    if (Object.prototype.hasOwnProperty.call(opts, 'capabilities')) {
+        // Explicit replace: normalize (trim/dedup/drop-empties); an empty result
+        // clears the tags entirely so the field never persists as [].
+        const tags = normalizeCapabilityTags(opts.capabilities);
+        if (tags && tags.length) node.capabilities = tags;
+        else delete node.capabilities;
+    }
     if (opts.worktreeBootstrap) node.worktreeBootstrap = opts.worktreeBootstrap;
     if (Object.prototype.hasOwnProperty.call(opts, 'systemPrompt')) {
         // Honor explicit clears: { systemPrompt: undefined } drops the field.

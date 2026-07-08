@@ -173,9 +173,11 @@ export default function RepoMesh() {
         nodeSystemPromptDrafts, setNodeSystemPromptDrafts,
         savingNodeSystemPromptId,
         savingNodeSchedulingId,
+        savingNodeCapabilitiesId,
         handleAddNode, handleRemoveNode, handleUpdatePolicy,
         handleUpdateNodeProviderPriority,
         handleUpdateNodeScheduling,
+        handleUpdateNodeCapabilities,
         handleSaveCoordinatorPrompt, handleSaveNodeSystemPrompt,
         handleLaunchCoordinator,
     } = useMeshNodeActions({
@@ -640,6 +642,8 @@ export default function RepoMesh() {
             savingNodeSchedulingId={savingNodeSchedulingId}
             onUpdateNodeScheduling={handleUpdateNodeScheduling}
             schedulingStrategy={readMeshPolicy(selectedMesh).schedulingStrategy}
+            savingNodeCapabilitiesId={savingNodeCapabilitiesId}
+            onUpdateNodeCapabilities={handleUpdateNodeCapabilities}
             nodeSystemPromptDrafts={nodeSystemPromptDrafts}
             onNodeSystemPromptDraftChange={(nodeId, value) => setNodeSystemPromptDrafts(prev => ({ ...prev, [nodeId]: value }))}
             savingNodeSystemPromptId={savingNodeSystemPromptId}

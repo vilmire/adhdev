@@ -454,6 +454,23 @@ function buildNodeConfigSection(mesh: LocalMeshEntry): string {
             : [];
         const providerRolesSuffix = providerRoles.length ? ` | caps: ${providerRoles.join(', ')}` : '';
         lines.push(`- ${explicitLabel} nodeId: \`${n.id}\` | workspace: \`${n.workspace}\`${n.daemonId ? ` | daemon: \`${n.daemonId}\`` : ''}${providerPriority}${providerRolesSuffix}${suffix}`);
+        // Routing tags: what this node advertises for mesh_enqueue_task required_tags.
+        // Surfaced so the coordinator can route by-capability (e.g. enqueue a Windows
+        // build with required_tags:["os=win32"], or a custom "test-runner" node).
+        // os=/arch= use the same userOverrides → reported precedence as the matcher;
+        // the internal converge= tag is omitted (it is not something to target by hand).
+        const routingTags: string[] = [];
+        const custom = Array.isArray((n as any).capabilities) ? (n as any).capabilities : [];
+        for (const t of custom) { const s = typeof t === 'string' ? t.trim() : ''; if (s) routingTags.push(s); }
+        const tagOs = ((n as any).userOverrides?.platform || (n as any).reportedPlatform || '').toString().trim();
+        const tagArch = ((n as any).userOverrides?.arch || (n as any).reportedArch || '').toString().trim();
+        if (tagOs) routingTags.push(`os=${tagOs}`);
+        if (tagArch) routingTags.push(`arch=${tagArch}`);
+        const wtBranch = typeof (n as any).worktreeBranch === 'string' ? (n as any).worktreeBranch.trim() : '';
+        if (n.isLocalWorktree && wtBranch) routingTags.push(`worktree=${wtBranch}`);
+        if (routingTags.length) {
+            lines.push(`  🏷️ routing tags: ${routingTags.map(t => `\`${t}\``).join(', ')}`);
+        }
         const nodePrompt = typeof (n as any).systemPrompt === 'string' ? (n as any).systemPrompt.trim() : '';
         if (nodePrompt) {
             lines.push(`  📌 Node instruction: ${indentFollowing(nodePrompt, '     ')}`);

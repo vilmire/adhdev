@@ -113,6 +113,39 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('providers: codex-cli')
   })
 
+  it('surfaces per-node routing tags (custom + os/arch) so the coordinator can route by capability', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [
+          {
+            id: 'node_win',
+            machineLabel: 'Windows box',
+            workspace: 'C:/repo',
+            userOverrides: {},
+            reportedPlatform: 'win32',
+            reportedArch: 'x64',
+            capabilities: ['windows-build', 'test-runner'],
+            policy: { providerPriority: ['codex-cli'] },
+          },
+        ],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    // Custom + auto tags appear, so the coordinator can enqueue with required_tags.
+    expect(prompt).toContain('routing tags:')
+    expect(prompt).toContain('`windows-build`')
+    expect(prompt).toContain('`test-runner`')
+    expect(prompt).toContain('`os=win32`')
+    expect(prompt).toContain('`arch=x64`')
+    // The internal convergence tag is never surfaced to the operator/coordinator.
+    expect(prompt).not.toContain('converge=')
+  })
+
   it('discourages repeated read_chat polling and duplicate workers while delegated tools are active', () => {
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {
