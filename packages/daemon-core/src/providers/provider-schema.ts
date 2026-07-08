@@ -70,6 +70,7 @@ const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'modelOptions',
   'thinkingLaunchArgs',
   'thinkingLevelMap',
+  'thinkingLevelOptions',
   'thinkingControlId',
   'sendDelayMs',
   'sendKey',

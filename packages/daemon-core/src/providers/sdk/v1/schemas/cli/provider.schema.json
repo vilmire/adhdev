@@ -149,6 +149,11 @@
       "additionalProperties": false,
       "description": "Optional map from the standard thinking levels (low/medium/high) to this provider's own reasoning-effort vocabulary, used to fill {{level}} in thinkingLaunchArgs. A level absent from the map passes through unchanged."
     },
+    "thinkingLevelOptions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Reasoning-effort values this provider accepts, shown as the thinking-level dropdown in the new-session dialog (e.g. ['low','medium','high','max']). Absent → the UI falls back to standard low/medium/high. Provider's own vocabulary, passed through verbatim."
+    },
     "thinkingControlId": {
       "type": "string",
       "description": "For a provider with no thinkingLaunchArgs but a runtime reasoning-effort control (e.g. hermes 'reasoning'), the controls[].id to drive at launch for the thinking level. The control's setScript is invoked with { value: <mapped level> }."

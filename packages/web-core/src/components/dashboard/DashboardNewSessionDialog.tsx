@@ -170,6 +170,9 @@ export default function DashboardNewSessionDialog({
     // Brain-routing overrides for this session: model + thinking level, best-effort.
     const [initialModel, setInitialModel] = useState('')
     const [initialThinkingLevel, setInitialThinkingLevel] = useState('')
+    // When true, the model field is a free-text input (user picked "Custom…" in the
+    // model dropdown) instead of a select of the provider's suggested models.
+    const [modelIsCustom, setModelIsCustom] = useState(false)
     const [recentArgsOptions, setRecentArgsOptions] = useState<string[]>([])
     const [selectedResumeSessionId, setSelectedResumeSessionId] = useState('')
     const [savedSessions, setSavedSessions] = useState<SavedSessionOption[]>([])
@@ -257,13 +260,22 @@ export default function DashboardNewSessionDialog({
         () => cliProviders.find(provider => provider.type === selectedTarget) || null,
         [cliProviders, selectedTarget],
     )
-    // Model dropdown options for the currently-selected provider (cli or acp).
-    // Advisory list from the provider manifest; the input still accepts free text.
+    // Model + thinking dropdown options for the currently-selected provider (cli or
+    // acp). Advisory lists from the provider manifest; model still accepts free text.
+    const activeLaunchProvider = useMemo(
+        () => [...cliProviders, ...acpProviders].find(p => p.type === selectedTarget) as any,
+        [cliProviders, acpProviders, selectedTarget],
+    )
     const modelOptionsForTarget = useMemo(() => {
-        const active = [...cliProviders, ...acpProviders].find(p => p.type === selectedTarget) as any
-        const opts = active?.modelOptions
+        const opts = activeLaunchProvider?.modelOptions
         return Array.isArray(opts) ? opts.filter((m: any) => typeof m === 'string' && m.trim()) : []
-    }, [cliProviders, acpProviders, selectedTarget])
+    }, [activeLaunchProvider])
+    const thinkingLevelOptionsForTarget = useMemo(() => {
+        const opts = activeLaunchProvider?.thinkingLevelOptions
+        const list = Array.isArray(opts) ? opts.filter((l: any) => typeof l === 'string' && l.trim()) : []
+        // Fall back to the standard levels when the provider declares none.
+        return list.length ? list : ['low', 'medium', 'high']
+    }, [activeLaunchProvider])
     const providerMeshManualSetup = useMemo(
         () => buildManualCoordinatorSetup(selectedCliProvider?.meshCoordinator, {
             meshId: selectedMesh?.id || '',
@@ -309,6 +321,7 @@ export default function DashboardNewSessionDialog({
             setLaunchArgs('')
             setInitialModel('')
             setInitialThinkingLevel('')
+            setModelIsCustom(false)
             setSelectedResumeSessionId('')
             setSavedSessions([])
             setSavedSessionsLoaded(false)
@@ -355,6 +368,14 @@ export default function DashboardNewSessionDialog({
     useEffect(() => {
         setMeshManualSetup(null)
     }, [selectedMachine?.id, selectedMeshId, selectedTarget, workspaceMode])
+
+    // Reset the brain-routing overrides when the provider changes — a model/thinking
+    // value from one provider (e.g. codex gpt-5.5) is meaningless for another (claude).
+    useEffect(() => {
+        setInitialModel('')
+        setInitialThinkingLevel('')
+        setModelIsCustom(false)
+    }, [selectedTarget])
 
     const loadSavedSessions = useCallback(async (machineId: string, providerType: string) => {
         const requestSeq = savedSessionsRequestSeqRef.current + 1
@@ -927,30 +948,46 @@ export default function DashboardNewSessionDialog({
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                     <label className="flex flex-col gap-1">
                                         <span className="text-[11px] text-text-muted">Model</span>
-                                        {modelOptionsForTarget.length > 0 ? (
+                                        {modelOptionsForTarget.length > 0 && !modelIsCustom ? (
+                                            <select
+                                                value={modelOptionsForTarget.includes(initialModel) ? initialModel : ''}
+                                                onChange={(event) => {
+                                                    if (event.target.value === '__custom__') {
+                                                        setModelIsCustom(true)
+                                                        setInitialModel('')
+                                                    } else {
+                                                        setInitialModel(event.target.value)
+                                                    }
+                                                }}
+                                                className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
+                                                disabled={busy}
+                                            >
+                                                <option value="">(provider default)</option>
+                                                {modelOptionsForTarget.map((m: string) => <option key={m} value={m}>{m}</option>)}
+                                                <option value="__custom__">Custom…</option>
+                                            </select>
+                                        ) : (
                                             <>
                                                 <input
                                                     type="text"
-                                                    list="new-session-model-options"
                                                     value={initialModel}
                                                     onChange={(event) => setInitialModel(event.target.value)}
-                                                    placeholder="(provider default)"
-                                                    className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
+                                                    placeholder="Type a model name"
+                                                    className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
                                                     disabled={busy}
+                                                    autoFocus={modelIsCustom}
                                                 />
-                                                <datalist id="new-session-model-options">
-                                                    {modelOptionsForTarget.map((m: string) => <option key={m} value={m} />)}
-                                                </datalist>
+                                                {modelOptionsForTarget.length > 0 && (
+                                                    <button
+                                                        type="button"
+                                                        className="self-start text-[11px] text-accent-primary bg-transparent border-none cursor-pointer p-0"
+                                                        onClick={() => { setModelIsCustom(false); setInitialModel('') }}
+                                                        disabled={busy}
+                                                    >
+                                                        ← Back to model list
+                                                    </button>
+                                                )}
                                             </>
-                                        ) : (
-                                            <input
-                                                type="text"
-                                                value={initialModel}
-                                                onChange={(event) => setInitialModel(event.target.value)}
-                                                placeholder="(provider default)"
-                                                className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
-                                                disabled={busy}
-                                            />
                                         )}
                                     </label>
                                     <label className="flex flex-col gap-1">
@@ -958,13 +995,11 @@ export default function DashboardNewSessionDialog({
                                         <select
                                             value={initialThinkingLevel}
                                             onChange={(event) => setInitialThinkingLevel(event.target.value)}
-                                            className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
+                                            className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
                                             disabled={busy}
                                         >
-                                            <option value="">(default)</option>
-                                            <option value="low">low</option>
-                                            <option value="medium">medium</option>
-                                            <option value="high">high</option>
+                                            <option value="">(provider default)</option>
+                                            {thinkingLevelOptionsForTarget.map((l: string) => <option key={l} value={l}>{l}</option>)}
                                         </select>
                                     </label>
                                 </div>

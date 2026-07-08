@@ -557,6 +557,8 @@ export interface AvailableProviderInfo {
     meshCoordinator?: ProviderMeshCoordinatorConfig;
     /** BRAIN-ROUTING: suggested model values for the new-session model dropdown. */
     modelOptions?: string[];
+    /** BRAIN-ROUTING: reasoning-effort values for the new-session thinking dropdown. */
+    thinkingLevelOptions?: string[];
     /**
      * Provider trust classification — derived from the on-disk layer the
      * manifest came from and the shape of the manifest. Dashboards use

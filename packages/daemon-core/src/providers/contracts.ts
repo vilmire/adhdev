@@ -632,6 +632,16 @@ export interface ProviderModule {
    */
   thinkingLevelMap?: Partial<Record<'low' | 'medium' | 'high', string>>;
   /**
+   * BRAIN-ROUTING (thinking axis): the reasoning-effort values this provider actually
+   * accepts, surfaced as the thinking-level dropdown options in the new-session
+   * dialog (e.g. claude ['low','medium','high','max']; codex ['minimal','low',
+   * 'medium','high','xhigh']). Absent → the UI falls back to the standard
+   * low/medium/high. These are the provider's OWN vocabulary and are passed through
+   * verbatim as initialThinkingLevel (not remapped by thinkingLevelMap, which only
+   * translates the mesh's standard low/medium/high presets).
+   */
+  thinkingLevelOptions?: string[];
+  /**
    * BRAIN-ROUTING (thinking axis, runtime-control providers): the `controls[].id`
    * of a runtime reasoning-effort control to drive for the thinking level when the
    * provider has no `thinkingLaunchArgs` (e.g. hermes-cli's `reasoning` select,
