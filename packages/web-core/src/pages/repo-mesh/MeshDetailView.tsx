@@ -8,6 +8,7 @@ import { IconMesh } from '../../components/Icons'
 // The task_kind → panel binding editor (MagiKindPanelEditor) is the sole MAGI panel
 // surface — the named-panel CRUD (MagiPanelManager) was removed.
 import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
+import DifficultyBrainEditor from '../../components/MeshGraph/DifficultyBrainEditor'
 import CoordinatorPromptDefaultPreview from './CoordinatorPromptDefaultPreview'
 import MeshSchedulingNodes from './MeshSchedulingNodes'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
@@ -320,6 +321,15 @@ export function MeshDetailView({
                     />
                 </Section>
             )}
+
+            {/* ── Brain presets: task difficulty → provider/model/thinking ── */}
+            <Section title="Brain presets" description="Map task difficulty to a model + thinking level so the coordinator runs easy work cheaply and hard work on a stronger brain. Applied when a task is enqueued with a difficulty.">
+                <DifficultyBrainEditor
+                    daemonId={activeDaemonId}
+                    sendDaemonCommand={sendCommand}
+                    providerOptions={(displayedMeshStatus?.nodes ?? []).flatMap(n => (n as any).providers || []).filter(Boolean)}
+                />
+            </Section>
 
             {/* ── Missions (fix b: full-goal fetch-more) ── */}
             <MeshMissionsSection
