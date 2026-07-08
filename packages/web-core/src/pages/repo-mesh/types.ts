@@ -117,7 +117,7 @@ export const SCHEDULING_STRATEGY_OPTIONS: Array<{ value: MeshSchedulingStrategy;
 export type MeshDistribution = 'spread' | 'in_order'
 
 export const DISTRIBUTION_OPTIONS: Array<{ value: MeshDistribution; label: string; description: string }> = [
-    { value: 'spread', label: 'Spread', description: 'Distribute work evenly across eligible nodes (prefers the least-loaded, rotating ties fairly). Set a per-node scheduling priority in Advanced to bias the order.' },
+    { value: 'spread', label: 'Spread', description: 'Distribute work evenly across eligible nodes (prefers the least-loaded, rotating ties fairly). Set a per-node priority below to bias the order.' },
     { value: 'in_order', label: 'In order', description: 'Assign to nodes in the order they were added — the first eligible node takes the work. No load-spreading.' },
 ]
 
@@ -153,6 +153,13 @@ export const DEFAULT_MESH_POLICY: Record<string, any> = {
     schedulingStrategy: 'first_eligible',
     sessionCleanupOnNodeRemove: 'preserve',
 }
+
+// Mirror of daemon-core repo-mesh-types MESH_MAX_PARALLEL_TASKS_MIN/MAX. The
+// daemon clamps to this range in resolveMaxParallelTasks; the UI clamps to the
+// same bounds so the input can never propose a value the daemon would silently
+// clamp away. Keep in sync with repo-mesh-types.ts.
+export const MESH_MAX_PARALLEL_TASKS_MIN = 1
+export const MESH_MAX_PARALLEL_TASKS_MAX = 64
 
 export function readMeshPolicy(mesh: MeshEntry | null): Record<string, any> {
     return { ...DEFAULT_MESH_POLICY, ...(mesh?.policy || {}) }

@@ -50,8 +50,11 @@ interface Props {
 
 export default function MeshSchedulingNodes({ nodes, daemons, schedulingStrategy, savingNodeSchedulingId, onUpdateNodeScheduling }: Props) {
     const providersByDaemonId = useMemo(() => buildProvidersByDaemonId(daemons), [daemons])
-    // Priority only matters when the mesh distributes work (Spread mode).
-    const priorityRelevant = schedulingStrategy !== 'first_eligible'
+    // Priority only matters when the mesh distributes work. An unset strategy
+    // resolves to the 'first_eligible' (In order) default on the daemon, which
+    // ignores priority — so treat unset the same as first_eligible here, not as
+    // "some other strategy" (which the old `!== 'first_eligible'` check did).
+    const priorityRelevant = !!schedulingStrategy && schedulingStrategy !== 'first_eligible'
 
     if (nodes.length === 0) {
         return <div className="text-[12px] text-text-muted">No nodes yet — add one under Nodes &amp; Providers to set per-node scheduling.</div>
@@ -135,10 +138,12 @@ function NodeSchedulingRow({
 
             <div className="grid gap-3 sm:grid-cols-[auto_1fr] sm:items-start">
                 <FormField label="Priority"
-                    hint={priorityRelevant ? 'Higher wins when spreading.' : 'Only used in Spread mode.'}>
+                    hint={priorityRelevant ? 'Higher wins when spreading.' : 'Not used in In order — switch to Spread to enable.'}>
                     <input type="number" step={1}
-                        className="w-24 px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                        value={priority} onChange={e => setPriority(e.target.value)} disabled={saving} />
+                        className="w-24 px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                        value={priority} onChange={e => setPriority(e.target.value)}
+                        disabled={saving || !priorityRelevant}
+                        title={priorityRelevant ? undefined : 'Priority only affects Spread distribution. This mesh is set to In order.'} />
                 </FormField>
 
                 <FormField label="Per-provider max parallel (optional)"

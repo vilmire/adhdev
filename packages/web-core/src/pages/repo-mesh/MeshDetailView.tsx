@@ -24,10 +24,13 @@ import {
     readMeshPolicy,
     SESSION_CLEANUP_MODE_OPTIONS,
     DISTRIBUTION_OPTIONS,
+    MESH_MAX_PARALLEL_TASKS_MIN,
+    MESH_MAX_PARALLEL_TASKS_MAX,
     distributionToStrategy,
     strategyToDistribution,
     type MeshEntry,
     type MeshNode,
+    type MeshDistribution,
     type MeshProviderRole,
     type MeshSchedulingStrategy,
     type MeshQueueEntry,
@@ -228,6 +231,13 @@ export function MeshDetailView({
         const p = Number(n.policy?.schedulingPriority)
         return Number.isFinite(p) && p !== 0
     })
+    // Distribution recommendation (display-only — the stored default stays
+    // 'first_eligible'/In order so meshes.json is untouched). With multiple nodes,
+    // In order sends everything to the first eligible node and never spreads, so we
+    // nudge toward Spread — but only while the operator hasn't explicitly chosen a
+    // strategy yet (schedulingStrategy still unset). Once they pick, no nudge.
+    const distributionUnset = !policy.schedulingStrategy
+    const recommendedDistribution: MeshDistribution | null = (distributionUnset && nodes.length >= 2) ? 'spread' : null
 
     // Graph/detail observability is now a launched dialog (DashboardMeshGraphDialog),
     // not an embedded surface on the page — the page is the mesh SETTINGS surface.
@@ -362,11 +372,18 @@ export function MeshDetailView({
             {/* ── Scheduling ── */}
             <Section title="Scheduling" description="How untargeted queue work is distributed across eligible nodes.">
                 <div className="grid gap-4 sm:grid-cols-2">
-                    <FormField label="Max parallel tasks" hint="Cap on concurrently assigned tasks across the mesh.">
-                        <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                            value={String(policy.maxParallelTasks ?? 2)} onChange={e => onUpdatePolicy({ maxParallelTasks: Number(e.target.value) })} disabled={savingPolicy}>
-                            {[1, 2, 3, 4, 5, 6, 7, 8].map(v => <option key={v} value={v}>{v}</option>)}
-                        </select>
+                    <FormField label="Max parallel tasks" hint={`Cap on concurrently assigned tasks across the mesh (${MESH_MAX_PARALLEL_TASKS_MIN}–${MESH_MAX_PARALLEL_TASKS_MAX}).`}>
+                        <input type="number" inputMode="numeric"
+                            min={MESH_MAX_PARALLEL_TASKS_MIN} max={MESH_MAX_PARALLEL_TASKS_MAX} step={1}
+                            className="w-28 px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                            value={String(policy.maxParallelTasks ?? 2)}
+                            disabled={savingPolicy}
+                            onChange={e => {
+                                const raw = Number(e.target.value)
+                                if (!Number.isFinite(raw)) return
+                                const clamped = Math.max(MESH_MAX_PARALLEL_TASKS_MIN, Math.min(MESH_MAX_PARALLEL_TASKS_MAX, Math.floor(raw)))
+                                onUpdatePolicy({ maxParallelTasks: clamped })
+                            }} />
                     </FormField>
                 </div>
                 <fieldset className="mt-4 border-none p-0 m-0">
@@ -382,7 +399,12 @@ export function MeshDetailView({
                                         value={opt.value} checked={selected} disabled={savingPolicy}
                                         onChange={() => onUpdatePolicy({ schedulingStrategy: distributionToStrategy(opt.value) })} />
                                     <span className="min-w-0">
-                                        <span className="block text-sm text-text-primary">{opt.label}</span>
+                                        <span className="flex items-center gap-2 text-sm text-text-primary">
+                                            {opt.label}
+                                            {recommendedDistribution === opt.value && (
+                                                <span className="rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">Recommended</span>
+                                            )}
+                                        </span>
                                         <span className="block text-[12px] text-text-muted">{opt.description}</span>
                                     </span>
                                 </label>
