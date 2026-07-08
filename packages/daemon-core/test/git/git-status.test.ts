@@ -133,11 +133,21 @@ describe('git repo status parser', () => {
       expect(healthy.branch).toBeTruthy();
       expect(healthy.headCommit).toBe(head);
 
-      // Force a timeout by giving the collection path an impossibly short budget.
-      // forceFresh bypasses the C1 TTL result cache (timeoutMs is not part of the cache
-      // key, so without this the just-seeded healthy status would be returned instead of
-      // re-collecting and tripping the 1ms budget).
-      const timedOut = await getGitRepoStatus(repo, { timeoutMs: 1, forceFresh: true });
+      // Force a timeout DETERMINISTICALLY on the re-collection (forceFresh bypasses the
+      // C1 TTL cache so we actually re-run the data reads). Racing a 1ms budget flakes on
+      // a fast CI runner — the read finishes in time and reason stays undefined, failing
+      // the reason:'timeout' assertion below. Spy runGit to throw the executor's timeout
+      // error; resolveGitRepository is a separate export and stays real, so identity is
+      // still resolvable and the last-known-good must be preserved.
+      const spy = vi.spyOn(gitExecutor, 'runGit').mockRejectedValue(
+        new gitExecutor.GitCommandError('timeout', 'Git command timed out', { signal: 'SIGTERM' }),
+      );
+      let timedOut;
+      try {
+        timedOut = await getGitRepoStatus(repo, { forceFresh: true });
+      } finally {
+        spy.mockRestore();
+      }
 
       // Membership MUST survive: a single git timeout cannot make the node read as
       // "not a git repo" / repoRoot:null — that is exactly what dropped it from the graph.
@@ -157,14 +167,22 @@ describe('git repo status parser', () => {
       commit(repo, 'initial commit');
 
       // No prior successful collection for this workspace → nothing to fall back to.
-      // Resolve succeeds quickly but the porcelain status read times out; with an empty
-      // cache the only safe answer is emptyStatus, still carrying the timeout reason.
-      const timedOut = await getGitRepoStatus(repo, { timeoutMs: 1 });
-      // Either the resolve or the first git read trips the 1ms budget; in both cases the
-      // reason marker distinguishes it from a genuine not_git_repo.
-      expect(['timeout', 'not_git_repo']).toContain(timedOut.reason);
-      if (timedOut.reason === 'timeout') {
+      // Resolve succeeds; the porcelain status read times out; with an empty cache the
+      // only safe answer is emptyStatus, still carrying the timeout reason. Force the
+      // timeout DETERMINISTICALLY via a runGit spy rather than racing a 1ms budget: on a
+      // fast CI runner the read finishes inside the millisecond (or resolve trips a
+      // different path guard), producing a reason other than 'timeout' and flaking.
+      // resolveGitRepository is a separate export and stays real, so only the data read
+      // "times out".
+      const spy = vi.spyOn(gitExecutor, 'runGit').mockRejectedValue(
+        new gitExecutor.GitCommandError('timeout', 'Git command timed out', { signal: 'SIGTERM' }),
+      );
+      try {
+        const timedOut = await getGitRepoStatus(repo);
+        expect(timedOut.reason).toBe('timeout');
         expect(timedOut.isGitRepo).toBe(false);
+      } finally {
+        spy.mockRestore();
       }
     });
   });
