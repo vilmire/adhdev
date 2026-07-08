@@ -12,7 +12,7 @@ import {
     type AvailableCliProviderOption,
 } from '../../utils/provider-priority'
 import { IconTrash, IconPlus, NodeHealthBadge } from './icons'
-import { buildProvidersByDaemonId, resolveNodeAvailableProviders } from './node-providers'
+import { buildProvidersByDaemonId, resolveNodeAvailableProviders, deriveNodeCapabilityTags } from './node-providers'
 import type { MeshNode, MeshNodeListFeatures, MeshQueueEntry, ProviderPriorityDrafts } from './types'
 
 export function getNodeActiveAssignments(node: MeshNode, queue: MeshQueueEntry[]): MeshQueueEntry[] {
@@ -365,6 +365,27 @@ export function MeshNodeList({
                                         )}
 
                                         <div className="text-[10px] text-text-muted font-mono">{node.workspace}</div>
+
+                                        {/* Routing tags — what a task's required_tags can target on this node.
+                                            Auto-derived (os/arch/provider/worktree) tags are read-only chips. */}
+                                        {(() => {
+                                            const tags = deriveNodeCapabilityTags(node)
+                                            if (tags.length === 0) return null
+                                            return (
+                                                <div className="mt-2 flex flex-wrap items-center gap-1" onClick={e => e.stopPropagation()}>
+                                                    <span className="text-[10px] uppercase tracking-wide text-text-muted mr-1">Routing tags</span>
+                                                    {tags.map(t => (
+                                                        <span key={t.tag}
+                                                            className={`rounded-full border px-1.5 py-0.5 font-mono text-[10px] ${t.custom
+                                                                ? 'border-accent-primary/40 bg-accent-primary/10 text-accent-primary'
+                                                                : 'border-border-subtle bg-bg-secondary text-text-muted'}`}
+                                                            title={t.custom ? 'Custom tag (operator-set)' : 'Auto-derived tag'}>
+                                                            {t.tag}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )
+                                        })()}
 
                                         {features.addNodeDaemonPicker && (
                                             <div className="mt-2 text-[11px] text-amber-300">

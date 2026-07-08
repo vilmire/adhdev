@@ -52,3 +52,44 @@ export function resolveNodeAvailableProviders(
     }
     return []
 }
+
+/** A capability tag for display: its raw form plus whether the operator set it. */
+export interface NodeCapabilityTag {
+    tag: string
+    /** true = operator-authored custom tag; false = auto-derived (os/arch/provider/worktree). */
+    custom: boolean
+}
+
+/**
+ * Derive the capability tags shown for a node, mirroring the daemon's
+ * buildMeshNodeCapabilityTags (mesh-work-queue.ts) for the operator-facing subset:
+ * custom `capabilities`, `os=`, `arch=`, `provider=`, and `worktree=<branch>`.
+ *
+ * The daemon's internal `converge=refine|fast_forward` routing tag is intentionally
+ * omitted — it is scheduler plumbing, not something an operator targets by hand.
+ * Precedence for os/arch matches the daemon: userOverrides → reported → (unknown).
+ */
+export function deriveNodeCapabilityTags(node: MeshNode): NodeCapabilityTag[] {
+    const n = node as any
+    const out: NodeCapabilityTag[] = []
+
+    // Operator-authored custom tags first (order preserved).
+    const custom = Array.isArray(n.capabilities) ? n.capabilities : []
+    for (const t of custom) {
+        const s = typeof t === 'string' ? t.trim() : ''
+        if (s) out.push({ tag: s, custom: true })
+    }
+
+    const os = (n.userOverrides?.platform || n.reportedPlatform || '').toString().trim()
+    const arch = (n.userOverrides?.arch || n.reportedArch || '').toString().trim()
+    if (os) out.push({ tag: `os=${os}`, custom: false })
+    if (arch) out.push({ tag: `arch=${arch}`, custom: false })
+
+    const provider = Array.isArray(n.policy?.providerPriority) ? String(n.policy.providerPriority[0] || '').trim() : ''
+    if (provider) out.push({ tag: `provider=${provider}`, custom: false })
+
+    const worktreeBranch = typeof n.worktreeBranch === 'string' ? n.worktreeBranch.trim() : ''
+    if (n.isLocalWorktree === true && worktreeBranch) out.push({ tag: `worktree=${worktreeBranch}`, custom: false })
+
+    return out
+}
