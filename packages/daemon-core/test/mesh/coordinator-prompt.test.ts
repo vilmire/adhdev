@@ -60,6 +60,27 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('require the completion report to classify the touched branch into exactly one final state')
   })
 
+  it('instructs worktree affinity — keep a branch\'s follow-up work on its worktree node', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1', name: 'ADHDev', repoIdentity: 'github.com/acme/adhdev',
+        nodes: [{ id: 'node_1', workspace: '/repo', userOverrides: {}, policy: {} }],
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    // Workflow step + Rules both carry the affinity guidance.
+    expect(prompt).toContain('worktree affinity')
+    expect(prompt).toContain('durable per-branch workspace')
+    // Concrete targeting mechanism, matching the worktree=<branch> tag the nodes
+    // section advertises.
+    expect(prompt).toContain('required_tags: ["worktree=<branch>"]')
+    // The base-only convergence exception must be stated so the coordinator does
+    // not pin a merge/push task to the worktree.
+    expect(prompt).toContain('base-only')
+    expect(prompt).toContain('untargeted')
+  })
+
   it('requires mesh tool exposure before doing coordinator work', () => {
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {
