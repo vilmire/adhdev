@@ -158,6 +158,96 @@ describe('CLAIMSTALL — worktree node claim-time membership visibility', () => 
     }
   })
 
+  it('BOOTSTRAP-DEFER VIEW-CONSISTENCY: a config-registered worktree node claims when the inline cache stamped bootstrap complete but local config still lags on running', async () => {
+    const meshId = `mesh_claimstall_bootstrap_${randomUUID().slice(0, 8)}`
+    try {
+      const baseNode = { id: BASE_NODE_ID, daemonId: 'daemon-local', workspace: '/repo/main', repoRoot: '/repo/main', policy: {} }
+      // Worktree node is registered in BOTH local config AND the inline cache (it was
+      // added via addNode, e.g. a persisted worktree node), but the two views disagree
+      // on the runtime bootstrap state: local config still lags on 'running' (the detached
+      // async persist chain hasn't caught up / never received the terminal event), while the
+      // inline cache carries the synchronous terminal stamp markWorktreeBootstrapTerminalState
+      // wrote ('complete'). Pre-fix, mergeInlineCacheOnlyNodes took the config node verbatim
+      // (it exists in config, so it's not "cache-only"), so the gate read a permanently stale
+      // 'running' and shouldDeferDispatchForBootstrap deferred the claim forever.
+      const worktreeNodeConfig = {
+        id: WORKTREE_NODE_ID,
+        nodeId: WORKTREE_NODE_ID,
+        daemonId: 'daemon-local',
+        workspace: '/repo/wt-bootstrap',
+        repoRoot: '/repo/wt-bootstrap',
+        policy: {},
+        isLocalWorktree: true,
+        clonedFromNodeId: BASE_NODE_ID,
+        // Stale runtime state in local config — NOT old enough for the stale-running
+        // backstop, so only the view merge (not the backstop) can open the gate.
+        worktreeBootstrap: { status: 'running', startedAt: new Date().toISOString() },
+      }
+      const worktreeNodeInline = {
+        ...worktreeNodeConfig,
+        // Fresher terminal stamp in the inline cache.
+        worktreeBootstrap: { status: 'complete', completedAt: new Date().toISOString() },
+      }
+
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, name: 'Bootstrap Mesh', policy: {}, nodes: [baseNode, worktreeNodeConfig] })
+      const cachedInlineMesh = { id: meshId, name: 'Bootstrap Mesh', policy: {}, nodes: [baseNode, worktreeNodeInline] }
+      const components = createComponents({ cachedInlineMesh })
+
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change' })
+      MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, WORKTREE_NODE_ID, 'sess-wt-bs', 'claude-cli', Date.now() + 60_000)
+
+      const result = await triggerMeshQueue(components, meshId)
+
+      // With the inline 'complete' state overlaid onto the config node, the bootstrap gate
+      // no longer defers and the idle session claims the task.
+      expect(result.remoteIdleSessionsChecked).toBe(1)
+      expect(result.claimed).toBe(true)
+      expect(result.newlyAssignedTasks).toEqual([
+        expect.objectContaining({ id: task.id, nodeId: WORKTREE_NODE_ID, sessionId: 'sess-wt-bs' }),
+      ])
+      const claimed = getQueue(meshId).find(t => t.id === task.id)
+      expect(claimed?.status).toBe('assigned')
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('BOOTSTRAP-DEFER regression: a genuinely-running worktree bootstrap (running in both views) still defers the claim', async () => {
+    const meshId = `mesh_claimstall_bootstrap_running_${randomUUID().slice(0, 8)}`
+    try {
+      const baseNode = { id: BASE_NODE_ID, daemonId: 'daemon-local', workspace: '/repo/main', repoRoot: '/repo/main', policy: {} }
+      const runningBootstrap = { status: 'running', startedAt: new Date().toISOString() }
+      const worktreeNodeConfig = {
+        id: WORKTREE_NODE_ID,
+        nodeId: WORKTREE_NODE_ID,
+        daemonId: 'daemon-local',
+        workspace: '/repo/wt-bootstrap-running',
+        repoRoot: '/repo/wt-bootstrap-running',
+        policy: {},
+        isLocalWorktree: true,
+        clonedFromNodeId: BASE_NODE_ID,
+        worktreeBootstrap: runningBootstrap,
+      }
+      // Both views still 'running' — no terminal stamp anywhere. The gate MUST still defer
+      // (guards against dispatching into a half-built worktree → empty session).
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, name: 'Bootstrap Running Mesh', policy: {}, nodes: [baseNode, worktreeNodeConfig] })
+      const cachedInlineMesh = { id: meshId, name: 'Bootstrap Running Mesh', policy: {}, nodes: [baseNode, { ...worktreeNodeConfig, worktreeBootstrap: { ...runningBootstrap } }] }
+      const components = createComponents({ cachedInlineMesh })
+
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change' })
+      MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, WORKTREE_NODE_ID, 'sess-wt-run', 'claude-cli', Date.now() + 60_000)
+
+      const result = await triggerMeshQueue(components, meshId)
+
+      expect(result.claimed).toBe(false)
+      const stranded = getQueue(meshId).find(t => t.id === task.id)
+      // Left pending (untouched) — the claim re-fires once bootstrap reaches a terminal state.
+      expect(stranded?.status).toBe('pending')
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   it('negative control: the merge adds only genuine cache nodes — an idle session for a node in neither view is not claimed', async () => {
     const meshId = `mesh_claimstall_ghost_${randomUUID().slice(0, 8)}`
     try {

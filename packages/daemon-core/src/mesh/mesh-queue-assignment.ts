@@ -76,17 +76,34 @@ export function getMeshWithCache(components: DaemonComponents, meshId: string): 
  *
  * Fix: union the local-config nodes with any inline-cache-ONLY nodes, so the claim
  * view matches the command (send_task) view. Base (non-worktree) nodes present in
- * local config stay config-authoritative — their entry is taken verbatim from
- * localMesh, so base node claim/matching is byte-for-byte unchanged. Only nodes
+ * local config stay config-authoritative — their STATIC fields are taken verbatim
+ * from localMesh, so base node claim/matching is byte-for-byte unchanged. Only nodes
  * that exist solely in the inline cache (the cloned worktree nodes) are appended.
  * Identity comparison uses the shared 3-form normalizer (id / nodeId / node_id),
  * identical to every other claim-path consumer — the matching logic is untouched,
  * only which nodes are visible.
+ *
+ * BOOTSTRAP-DEFER VIEW-CONSISTENCY (this fix): for a worktree node that IS registered
+ * in local config, the union previously took the config node verbatim and discarded the
+ * inline-cache entry entirely. But the inline cache holds the FRESHER runtime bootstrap
+ * state — markWorktreeBootstrapTerminalState stamps worktreeBootstrap.status='complete'
+ * synchronously into the inline cache, while local config lags behind the detached async
+ * persist chain (and on the coordinator may never receive it at all). A config-registered
+ * worktree node therefore read a permanently stale 'running' here, so
+ * shouldDeferDispatchForBootstrap deferred its claim forever. We now MERGE the inline
+ * cache's dynamic runtime bootstrap state onto the config node (config keeps its static
+ * fields; worktreeBootstrap is preferred from the inline cache when the inline entry
+ * carries a status) so the gate view sees the terminal stamp. Regression-safe: when the
+ * inline entry has no bootstrap status the config value is kept, and when bootstrap is
+ * genuinely still 'running' (no terminal stamp yet) the gate still defers — only a node
+ * whose inline stamp has actually reached a terminal state opens the gate.
  */
 function mergeInlineCacheOnlyNodes(localMesh: any, cachedMesh: any): any {
     const localNodes = Array.isArray(localMesh?.nodes) ? localMesh.nodes : [];
     const cachedNodes = Array.isArray(cachedMesh?.nodes) ? cachedMesh.nodes : [];
     if (!cachedNodes.length) return localMesh;
+    // Index inline-cache nodes by identity so we can (a) append cache-only nodes and
+    // (b) prefer the inline runtime bootstrap state on config-registered nodes.
     const cacheOnly = cachedNodes.filter((cachedNode: any) => {
         const cachedId = readMeshNodeId(cachedNode);
         // Unidentifiable cache entries can never be a claim/route target — skip them
@@ -94,8 +111,29 @@ function mergeInlineCacheOnlyNodes(localMesh: any, cachedMesh: any): any {
         if (!cachedId) return false;
         return !localNodes.some((localNode: any) => meshNodeIdMatches(localNode, cachedId));
     });
-    if (!cacheOnly.length) return localMesh;
-    return { ...localMesh, nodes: [...localNodes, ...cacheOnly] };
+    // Overlay the inline cache's fresher worktreeBootstrap state onto any config node
+    // that also exists in the inline cache. Only override when the inline entry actually
+    // carries a bootstrap status (an incomplete inline entry never masks a genuine config
+    // 'running'), mirroring the inline-first read the bootstrap gate does directly.
+    let overlaidLocalNodes: any[] = localNodes;
+    let overlaid = false;
+    for (let i = 0; i < localNodes.length; i++) {
+        const localNode = localNodes[i];
+        const localId = readMeshNodeId(localNode);
+        if (!localId) continue;
+        const inlineMatch = cachedNodes.find((cachedNode: any) => meshNodeIdMatches(cachedNode, localId));
+        const inlineBootstrapStatus = readNonEmptyString(inlineMatch?.worktreeBootstrap?.status);
+        if (!inlineMatch || !inlineBootstrapStatus) continue;
+        if (!overlaid) {
+            overlaidLocalNodes = [...localNodes];
+            overlaid = true;
+        }
+        // Keep the config node's static fields; prefer the inline cache's dynamic
+        // bootstrap runtime state (fresher terminal stamp).
+        overlaidLocalNodes[i] = { ...localNode, worktreeBootstrap: inlineMatch.worktreeBootstrap };
+    }
+    if (!cacheOnly.length && !overlaid) return localMesh;
+    return { ...localMesh, nodes: [...overlaidLocalNodes, ...cacheOnly] };
 }
 
 // ---------------------------------------------------------------------------
