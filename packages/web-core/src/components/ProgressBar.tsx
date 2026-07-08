@@ -1,7 +1,7 @@
 /**
  * ProgressBar — shared progress bar component
  *
- * Used for CPU/MEM display in Machines Fleet, MachineDetail, Dashboard, etc.
+ * Used for CPU/MEM display in Machines overview, MachineDetail, Dashboard, etc.
  * Unifies compact mode (MiniBar) and detail mode (ProgressBar).
  */
 
@@ -12,7 +12,7 @@ interface ProgressBarProps {
     color?: string
     /** Detail text (shown only in detail mode) */
     detail?: string
-    /** If true, mini size (for fleet overview) */
+    /** If true, mini size (for machines overview) */
     compact?: boolean
 }
 

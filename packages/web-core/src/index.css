@@ -3411,10 +3411,10 @@
     }
 
     /* ══════════════════════════════════════════════════
-   Machine / Fleet Pages
+   Machine / Machines Overview Pages
    ══════════════════════════════════════════════════ */
 
-    /* Machine card in Fleet grid */
+    /* Machine card in Machines grid */
     .machine-card {
         background: var(--bg-secondary);
         backdrop-filter: blur(16px);
