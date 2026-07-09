@@ -126,11 +126,6 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
     // datalist so each slot suggests its own provider's models (codex → gpt-*)
     // instead of a hardcoded cross-provider list.
     const optionsByProvider = useMemo(() => buildProviderOptionMap(availableProviders), [availableProviders])
-    // Providers that actually declare a model list — one datalist rendered per.
-    const providersWithModels = useMemo(
-        () => [...optionsByProvider.entries()].filter(([, o]) => o.models.length).map(([type]) => type),
-        [optionsByProvider],
-    )
 
     const [kindPanels, setKindPanels] = useState<MagiKindPanelMap>({})
     const [loading, setLoading] = useState(false)
@@ -330,10 +325,29 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                                             </label>
                                             <label className="flex flex-col gap-1">
                                                 <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>Model</span>
-                                                <input className={inputClass} value={s.model} placeholder="default"
-                                                    list={s.provider && optionsByProvider.get(s.provider)?.models.length ? `magi-model-${s.provider}` : undefined}
-                                                    title="Optional model override (best-effort). Blank uses the provider default."
-                                                    onChange={e => updateSlot(kind, idx, { model: e.target.value })} />
+                                                {(() => {
+                                                    // Same control as the slot editor / New-session dialog: a
+                                                    // provider-scoped dropdown when the provider declares models
+                                                    // (with a Custom… escape to free text), else a plain input.
+                                                    // A model the provider doesn't list reads as custom.
+                                                    const models = (s.provider ? optionsByProvider.get(s.provider)?.models : undefined) ?? []
+                                                    // A truthy model not in the list (incl. the ' ' custom-entry
+                                                    // marker) means the operator picked Custom… — show free text.
+                                                    const modelIsCustom = !!s.model && models.length > 0 && !models.includes(s.model)
+                                                    return models.length > 0 && !modelIsCustom ? (
+                                                        <select className={inputClass} value={models.includes(s.model) ? s.model : ''}
+                                                            title="Optional model override (best-effort). Blank uses the provider default."
+                                                            onChange={e => updateSlot(kind, idx, { model: e.target.value === '__custom__' ? ' ' : e.target.value })}>
+                                                            <option value="">default</option>
+                                                            {models.map(m => <option key={m} value={m}>{m}</option>)}
+                                                            <option value="__custom__">Custom…</option>
+                                                        </select>
+                                                    ) : (
+                                                        <input className={inputClass} value={s.model.trim()} placeholder="default"
+                                                            title="Optional model override (best-effort). Blank uses the provider default."
+                                                            onChange={e => updateSlot(kind, idx, { model: e.target.value })} />
+                                                    )
+                                                })()}
                                             </label>
                                             <label className="flex flex-col gap-1">
                                                 <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>Copies</span>
@@ -366,14 +380,6 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                 })}
             </div>
 
-            {/* Per-provider model suggestion lists — a slot's Model input points at
-                its own provider's datalist, so codex suggests gpt-* and claude
-                suggests opus/sonnet/haiku. Free text is still allowed. */}
-            {providersWithModels.map(type => (
-                <datalist key={type} id={`magi-model-${type}`}>
-                    {(optionsByProvider.get(type)?.models ?? []).map(m => <option key={m} value={m} />)}
-                </datalist>
-            ))}
         </div>
     )
 }
