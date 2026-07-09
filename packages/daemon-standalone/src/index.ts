@@ -32,6 +32,7 @@ import {
   shutdownDaemonComponents,
   loadConfig,
   buildStatusSnapshot,
+  buildAvailableProviders,
   forwardAgentStreamsToIdeInstance,
   SessionHostPtyTransportFactory,
   maybeRunDaemonUpgradeHelperFromEnv,
@@ -2346,12 +2347,23 @@ class StandaloneServer {
   }
 
   private getWsStatus(snapshot: ReturnType<StandaloneServer['buildSharedSnapshot']> = this.buildSharedSnapshot('live')): StandaloneWsStatusPayload {
+    // The 'live' snapshot omits availableProviders (that field only ships in the
+    // heavier 'full'/'metadata' profiles). But the web dashboard reads the
+    // provider inventory — including each provider's advisory modelOptions /
+    // thinkingLevelOptions — off `daemon.availableProviders`, and that inventory
+    // is the single source of truth for the New-session dialog AND the mesh node
+    // slot editor. Without it here, both fall back to a free-text Model field.
+    // The projection is loader-cache-backed (no per-call disk IO), so attach it.
+    const availableProviders = this.components?.providerLoader
+      ? buildAvailableProviders(this.components.providerLoader)
+      : undefined;
     return {
       instanceId: snapshot.instanceId,
       machine: snapshot.machine,
       timestamp: snapshot.timestamp,
       sessions: snapshot.sessions,
       terminalBackend: snapshot.terminalBackend,
+      ...(availableProviders && availableProviders.length ? { availableProviders } : {}),
     };
   }
 
@@ -2362,6 +2374,17 @@ class StandaloneServer {
         hostname: status.machine.hostname,
         platform: status.machine.platform,
       },
+      // Provider inventory rarely changes, but the first status broadcast that
+      // carries it (once detection settles) must not be deduped away — otherwise
+      // the slot editor / New-session dialog never receive the provider list.
+      // Fold a compact per-provider fingerprint (type + machineStatus + advisory
+      // option lists) so an inventory change re-broadcasts.
+      providers: (status.availableProviders || []).map((p) => ({
+        type: p.type,
+        machineStatus: p.machineStatus,
+        modelOptions: p.modelOptions,
+        thinkingLevelOptions: p.thinkingLevelOptions,
+      })),
       sessions: status.sessions.map((session: typeof status.sessions[number]) => ({
         id: session.id,
         parentId: session.parentId,

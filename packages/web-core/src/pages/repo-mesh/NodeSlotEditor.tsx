@@ -106,6 +106,15 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
 
     const update = (i: number, patch: Partial<SlotDraft>) =>
         setDrafts(prev => prev.map((d, idx) => idx === i ? { ...d, ...patch } : d))
+    // Switching provider must clear a model the new provider can't offer — otherwise
+    // a leftover model (e.g. claude's 'opus') is treated as a custom value and the
+    // Model dropdown silently falls back to a free-text input for the new provider.
+    const changeProvider = (i: number, provider: string) => setDrafts(prev => prev.map((d, idx) => {
+        if (idx !== i) return d
+        const models = optionsByProvider.get(provider)?.models ?? []
+        const keepModel = !d.model || models.length === 0 || models.includes(d.model)
+        return { ...d, provider, ...(keepModel ? {} : { model: '' }) }
+    }))
     const remove = (i: number) => setDrafts(prev => prev.filter((_, idx) => idx !== i))
     const add = () => setDrafts(prev => [...prev, emptyDraft()])
     const move = (i: number, dir: -1 | 1) => setDrafts(prev => {
@@ -147,7 +156,7 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
                         <label className="flex flex-col gap-1">
                             <span className="text-[11px] text-text-muted">Provider</span>
                             {providerTypes.length > 0 ? (
-                                <select className={selectCls} value={d.provider} onChange={e => update(i, { provider: e.target.value })}>
+                                <select className={selectCls} value={d.provider} onChange={e => changeProvider(i, e.target.value)}>
                                     <option value="">(select)</option>
                                     {providerTypes.map(t => <option key={t} value={t}>{t}</option>)}
                                     {d.provider && !providerTypes.includes(d.provider) && <option value={d.provider}>{d.provider}</option>}

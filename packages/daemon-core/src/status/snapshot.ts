@@ -130,7 +130,7 @@ function buildDetectedIdeInfos(
         }));
 }
 
-function buildAvailableProviders(
+export function buildAvailableProviders(
     providerLoader: StatusSnapshotOptions['providerLoader'],
 ): AvailableProviderInfo[] {
     const providers: Array<{

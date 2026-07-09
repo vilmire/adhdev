@@ -1080,7 +1080,14 @@ export class DaemonCommandHandler implements CommandHelpers {
         if (!fs.existsSync(installRoot)) return { success: true, providers: [] };
 
         const CATEGORIES = ['cli', 'ide', 'extension', 'acp'] as const;
-        const items: Array<{ type: string; category: string; version: string; path: string }> = [];
+        const items: Array<{
+            type: string;
+            category: string;
+            version: string;
+            path: string;
+            modelOptions?: string[];
+            thinkingLevelOptions?: string[];
+        }> = [];
 
         for (const category of CATEGORIES) {
             const categoryDir = path.join(installRoot, category);
@@ -1095,11 +1102,24 @@ export class DaemonCommandHandler implements CommandHelpers {
                 if (!manifestPath) continue;
                 try {
                     const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+                    // Surface the manifest's advisory model / thinking-level lists so
+                    // consumers of this endpoint (standalone New-session dialog, mesh
+                    // node slot editor) get the same provider-specific dropdowns the
+                    // status-snapshot path already carries — otherwise every provider
+                    // (codex included) falls back to a free-text Model field.
+                    const modelOptions = Array.isArray(m.modelOptions)
+                        ? m.modelOptions.filter((x: unknown): x is string => typeof x === 'string' && !!x.trim())
+                        : [];
+                    const thinkingLevelOptions = Array.isArray(m.thinkingLevelOptions)
+                        ? m.thinkingLevelOptions.filter((x: unknown): x is string => typeof x === 'string' && !!x.trim())
+                        : [];
                     items.push({
                         type,
                         category,
                         version: typeof m.providerVersion === 'string' ? m.providerVersion : '0.0.0',
                         path: manifestPath,
+                        ...(modelOptions.length ? { modelOptions } : {}),
+                        ...(thinkingLevelOptions.length ? { thinkingLevelOptions } : {}),
                     });
                 } catch {
                     // Corrupt manifest — skip but don't fail the whole listing.
