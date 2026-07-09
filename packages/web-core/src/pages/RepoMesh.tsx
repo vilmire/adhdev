@@ -156,8 +156,7 @@ export default function RepoMesh() {
     // ─── Node actions ───
 
     const {
-        nodeProviderPriorityDrafts, setNodeProviderPriorityDrafts,
-        savingNodePolicyId,
+        setNodeProviderPriorityDrafts,
         selectedNodeId, setSelectedNodeId,
         showAddNode, setShowAddNode,
         nodeWorkspace, setNodeWorkspace,
@@ -173,9 +172,10 @@ export default function RepoMesh() {
         nodeSystemPromptDrafts, setNodeSystemPromptDrafts,
         savingNodeSystemPromptId,
         savingNodeSchedulingId,
+        savingNodeSlotsId,
         savingNodeCapabilitiesId,
         handleAddNode, handleRemoveNode, handleUpdatePolicy,
-        handleUpdateNodeProviderPriority,
+        handleUpdateNodeSlots,
         handleUpdateNodeScheduling,
         handleUpdateNodeCapabilities,
         handleSaveCoordinatorPrompt, handleSaveNodeSystemPrompt,
@@ -634,11 +634,9 @@ export default function RepoMesh() {
             activeDaemonId={resolvedActiveDaemonId}
             meshQueue={meshQueue}
             userName={userName}
-            nodeProviderPriorityDrafts={nodeProviderPriorityDrafts}
-            onNodeProviderPriorityDraftChange={(nodeId, next) => setNodeProviderPriorityDrafts(prev => ({ ...prev, [nodeId]: next }))}
             availableCliProviders={availableCliProviders}
-            savingNodePolicyId={savingNodePolicyId}
-            onUpdateNodeProviderPriority={handleUpdateNodeProviderPriority}
+            savingNodeSlotsId={savingNodeSlotsId}
+            onUpdateNodeSlots={handleUpdateNodeSlots}
             savingNodeSchedulingId={savingNodeSchedulingId}
             onUpdateNodeScheduling={handleUpdateNodeScheduling}
             schedulingStrategy={readMeshPolicy(selectedMesh).schedulingStrategy}

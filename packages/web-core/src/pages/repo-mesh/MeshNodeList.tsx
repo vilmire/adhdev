@@ -5,6 +5,7 @@ import { EmptyState } from '../../components/ui/EmptyState'
 import { FormField, Input } from '../../components/ui/FormField'
 import { IconX, IconFolder } from '../../components/Icons'
 import ProviderPriorityEditor from '../../components/provider-priority/ProviderPriorityEditor'
+import NodeSlotEditor from './NodeSlotEditor'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import {
     defaultProviderPriorityFromInventory,
@@ -14,7 +15,7 @@ import {
 import { IconTrash, IconPlus, NodeHealthBadge } from './icons'
 import { buildProvidersByDaemonId, resolveNodeAvailableProviders } from './node-providers'
 import NodeTagEditor from './NodeTagEditor'
-import type { MeshNode, MeshNodeListFeatures, MeshQueueEntry, ProviderPriorityDrafts } from './types'
+import type { MeshNode, MeshNodeListFeatures, MeshQueueEntry, NodeCapabilitySlot } from './types'
 
 export function getNodeActiveAssignments(node: MeshNode, queue: MeshQueueEntry[]): MeshQueueEntry[] {
     return queue.filter(task => {
@@ -87,12 +88,11 @@ interface Props {
     features: MeshNodeListFeatures
     coordinatorDaemonId: string
 
-    // Provider priority drafts
-    nodeProviderPriorityDrafts: ProviderPriorityDrafts
-    onNodeProviderPriorityDraftChange: (nodeId: string, next: string[]) => void
     availableCliProviders: AvailableCliProviderOption[]
-    savingNodePolicyId: string | null
-    onUpdateNodeProviderPriority: (node: MeshNode) => void
+
+    // Capability slots (ORCHESTRATION_NODE_SLOTS.md)
+    savingNodeSlotsId: string | null
+    onUpdateNodeSlots: (node: MeshNode, slots: NodeCapabilitySlot[]) => void
 
     // Custom capability (routing) tags
     savingNodeCapabilitiesId: string | null
@@ -137,11 +137,9 @@ export function MeshNodeList({
     userName,
     features,
     coordinatorDaemonId,
-    nodeProviderPriorityDrafts,
-    onNodeProviderPriorityDraftChange,
     availableCliProviders,
-    savingNodePolicyId,
-    onUpdateNodeProviderPriority,
+    savingNodeSlotsId,
+    onUpdateNodeSlots,
     savingNodeCapabilitiesId,
     onUpdateNodeCapabilities,
     nodeSystemPromptDrafts,
@@ -387,31 +385,15 @@ export function MeshNodeList({
                                             </div>
                                         )}
 
-                                        <div className={`mt-3 max-w-2xl ${!features.addNodeDaemonPicker ? '' : ''}`} onClick={e => e.stopPropagation()}>
-                                            <FormField label="Preferred AI tools (in order)"
-                                                hint={features.addNodeDaemonPicker
-                                                    ? 'Used for coordinator/session launches when no tool is selected explicitly.'
-                                                    : 'Used when launches omit an explicit tool.'}>
-                                                <ProviderPriorityEditor
-                                                    value={nodeProviderPriorityDrafts[node.id] ?? readNodeProviderPriority(node)}
+                                        <div className="mt-3 max-w-2xl" onClick={e => e.stopPropagation()}>
+                                            <FormField label="Preferred AI tools (capability slots)"
+                                                hint="Each slot = provider + model + thinking + the task difficulty/capability it handles + a per-slot parallel cap. Tasks are matched to the best-fit slot (order = preference). With no slots, this node uses its legacy provider order.">
+                                                <NodeSlotEditor
+                                                    slots={Array.isArray(node.policy?.slots) ? node.policy!.slots : []}
                                                     availableProviders={resolveNodeAvailableProviders(node, providersByDaemonId)}
-                                                    onChange={next => onNodeProviderPriorityDraftChange(node.id, next)}
-                                                    disabled={savingNodePolicyId === node.id}
-                                                    saveButton={(
-                                                        <button type="button" className="btn btn-secondary btn-sm shrink-0"
-                                                            onClick={e => { e.stopPropagation(); onUpdateNodeProviderPriority(node) }}
-                                                            disabled={savingNodePolicyId === node.id}>
-                                                            {savingNodePolicyId === node.id ? 'Saving…' : 'Save'}
-                                                        </button>
-                                                    )}
+                                                    saving={savingNodeSlotsId === node.id}
+                                                    onSave={slots => onUpdateNodeSlots(node, slots)}
                                                 />
-                                                <div className="mt-2 text-[12px]">
-                                                    <span className="text-text-muted">Effective order: </span>
-                                                    <span className={priorityStatus.configured ? 'text-text-primary font-mono' : 'text-amber-400'}>{priorityStatus.label}</span>
-                                                    {!priorityStatus.configured && priorityStatus.launchBlockedMessage && (
-                                                        <span className="ml-2 text-amber-400">({priorityStatus.launchBlockedMessage})</span>
-                                                    )}
-                                                </div>
                                             </FormField>
 
                                             {/* Standalone: node instruction */}

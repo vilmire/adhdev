@@ -459,7 +459,11 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     allowAutoPublishSubmoduleMainCommits: false,
     requireApprovalForDestructiveGit: true,
     dirtyWorkspaceBehavior: 'warn',
-    maxParallelTasks: 2,
+    // Mesh-wide task cap is effectively unlimited by default: the real concurrency
+    // limits live per node / per capability slot (ORCHESTRATION_NODE_SLOTS.md), so a
+    // global ceiling is rarely meaningful. The UI hides this control; set it via the
+    // API only to impose a deliberate mesh-wide cap.
+    maxParallelTasks: 200,
     // Coordinator-spawned worker sessions default to hidden so the dashboard is not
     // flooded with mesh noise tabs/notifications. Users can still surface or unmute
     // any specific session manually; that override is preserved per-device.

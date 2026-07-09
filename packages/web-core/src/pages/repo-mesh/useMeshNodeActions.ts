@@ -9,7 +9,7 @@ import {
     type AvailableCliProviderOption,
 } from '../../utils/provider-priority'
 import type { RepoMeshContextValue, RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
-import type { MeshEntry, MeshNode, MeshProviderRole, ProviderPriorityDrafts } from './types'
+import type { MeshEntry, MeshNode, MeshProviderRole, ProviderPriorityDrafts, NodeCapabilitySlot } from './types'
 import { readMeshPolicy } from './types'
 
 interface UseMeshNodeActionsOptions {
@@ -213,6 +213,29 @@ export function useMeshNodeActions({
         finally { setSavingNodeSchedulingId(null) }
     }
 
+    // Per-node capability slots (ORCHESTRATION_NODE_SLOTS.md). Saved as a minimal
+    // policy patch — update_mesh_node shallow-merges the policy, so sending only
+    // `{ slots }` replaces the slots array without clobbering sibling policy fields.
+    // An explicit empty array clears the slots (node falls back to legacy routing).
+    const [savingNodeSlotsId, setSavingNodeSlotsId] = useState<string | null>(null)
+    async function handleUpdateNodeSlots(node: MeshNode, slots: NodeCapabilitySlot[]) {
+        if (!selectedMeshId) return
+        const targetDaemonId = (selectedMesh as any)?.__sourceDaemonId || primaryDaemonId
+        try {
+            setSavingNodeSlotsId(node.id)
+            setError(null)
+            const raw = await sendCommand(targetDaemonId, 'update_mesh_node', {
+                meshId: selectedMeshId,
+                nodeId: node.id,
+                policy: { slots },
+            })
+            const result = unwrapResult(raw)
+            if (result?.success === false) { setError(result.error || 'Node slots update failed'); return }
+            await loadMeshes()
+        } catch (e: any) { setError(e?.message || 'Node slots update failed') }
+        finally { setSavingNodeSlotsId(null) }
+    }
+
     // Per-node custom capability tags (routing tags). Sent as a top-level
     // `capabilities` arg so update_mesh_node normalizes it; an explicit
     // (possibly empty) array replaces the node's custom tags.
@@ -324,6 +347,8 @@ export function useMeshNodeActions({
         savingNodeSystemPromptId,
         // node scheduling
         savingNodeSchedulingId,
+        // node capability slots
+        savingNodeSlotsId,
         // node capability tags
         savingNodeCapabilitiesId,
         // actions
@@ -332,6 +357,7 @@ export function useMeshNodeActions({
         handleUpdatePolicy,
         handleUpdateNodeProviderPriority,
         handleUpdateNodeScheduling,
+        handleUpdateNodeSlots,
         handleUpdateNodeCapabilities,
         handleSaveCoordinatorPrompt,
         handleSaveNodeSystemPrompt,

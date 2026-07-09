@@ -107,8 +107,13 @@ export interface NodeCapabilitySlot {
     provider: string
     /** Optional model, e.g. 'opus' | 'sonnet' | 'haiku'. Best-effort at launch. */
     model?: string
-    /** Optional standard thinking level. Best-effort at launch. */
-    thinkingLevel?: 'low' | 'medium' | 'high'
+    /**
+     * Optional thinking level. The provider's own vocabulary (e.g. low/medium/high,
+     * or codex's low/medium/high/max) passed through verbatim — best-effort at
+     * launch. A string, not the standard union, so provider-declared levels like
+     * 'max' are not dropped.
+     */
+    thinkingLevel?: string
     /**
      * Difficulty range this slot handles. Empty/absent = handles all difficulties
      * (a general-purpose slot). A task's difficulty is matched against this range;
@@ -127,7 +132,9 @@ export function normalizeNodeCapabilitySlot(raw: unknown): NodeCapabilitySlot | 
     const provider = typeof r.provider === 'string' ? r.provider.trim() : ''
     if (!provider) return null
     const model = typeof r.model === 'string' ? r.model.trim() : ''
-    const thinkingLevel = normalizeThinkingLevel(r.thinkingLevel)
+    // Pass the provider's own thinking-level vocabulary through verbatim (don't
+    // clamp to low/medium/high — a provider may declare 'max' etc.).
+    const thinkingLevel = typeof r.thinkingLevel === 'string' ? r.thinkingLevel.trim() : ''
     const difficulty = Array.isArray(r.difficulty)
         ? (r.difficulty.filter(isMeshTaskDifficulty) as MeshTaskDifficulty[])
         : []

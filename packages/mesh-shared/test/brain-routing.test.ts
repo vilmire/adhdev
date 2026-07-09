@@ -60,14 +60,15 @@ describe('node capability slots', () => {
         expect(normalizeNodeCapabilitySlot({
             provider: ' claude-cli ',
             model: ' opus ',
-            thinkingLevel: 'HIGH',
+            // thinking level is the provider's own vocabulary, passed through verbatim (trimmed).
+            thinkingLevel: ' max ',
             difficulty: ['difficult', 'nope', 'medium'],
             capability: [' worktree ', '', 'os=darwin'],
             maxParallel: '2',
         })).toEqual({
             provider: 'claude-cli',
             model: 'opus',
-            thinkingLevel: 'high',
+            thinkingLevel: 'max',
             difficulty: ['difficult', 'medium'],
             capability: ['worktree', 'os=darwin'],
             maxParallel: 2,

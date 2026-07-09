@@ -12,6 +12,10 @@ export interface ProviderPrioritySnapshot {
   enabled?: boolean
   machineStatus?: 'disabled' | 'enabled_unchecked' | 'not_detected' | 'detected' | string
   lastDetection?: { ok?: boolean; message?: string; path?: string | null; command?: string }
+  /** Advisory model list this provider supports (from the provider manifest). */
+  modelOptions?: string[]
+  /** Advisory thinking-level list this provider supports. */
+  thinkingLevelOptions?: string[]
 }
 
 export interface AvailableCliProviderOption {
@@ -20,6 +24,10 @@ export interface AvailableCliProviderOption {
   icon?: string
   statusLabel: string
   detectedPath?: string | null
+  /** Advisory model list for this provider (drives the slot editor's model dropdown). */
+  modelOptions?: string[]
+  /** Advisory thinking-level list for this provider. */
+  thinkingLevelOptions?: string[]
 }
 
 function providerType(provider: ProviderPrioritySnapshot): string {
@@ -56,6 +64,8 @@ export function normalizeAvailableCliProviders(providers: ProviderPrioritySnapsh
       icon: provider.icon,
       statusLabel: detectedPath ? `Detected at ${detectedPath}` : 'Detected on this machine',
       detectedPath,
+      ...(Array.isArray(provider.modelOptions) && provider.modelOptions.length ? { modelOptions: provider.modelOptions } : {}),
+      ...(Array.isArray(provider.thinkingLevelOptions) && provider.thinkingLevelOptions.length ? { thinkingLevelOptions: provider.thinkingLevelOptions } : {}),
     })
   }
   return options

@@ -1,4 +1,7 @@
 import type { MeshCoordinatorMetadata } from '../../utils/mesh-coordinator-setup'
+import type { NodeCapabilitySlot } from '@adhdev/mesh-shared'
+
+export type { NodeCapabilitySlot }
 
 export interface AvailableCliAgent {
     id: string
@@ -24,6 +27,9 @@ export interface MeshNode {
         schedulingPriority?: number
         /** Per-(node, provider) role + maxParallel declarations. */
         providerRoles?: MeshProviderRole[]
+        /** Node capability slots (ORCHESTRATION_NODE_SLOTS.md) — the ordered
+         *  "Preferred AI tools" profile (provider/model/thinking/difficulty/capability/maxParallel). */
+        slots?: NodeCapabilitySlot[]
     }
     isLocalWorktree?: boolean
     worktreeBranch?: string

@@ -8,7 +8,6 @@ import { IconMesh } from '../../components/Icons'
 // The task_kind → panel binding editor (MagiKindPanelEditor) is the sole MAGI panel
 // surface — the named-panel CRUD (MagiPanelManager) was removed.
 import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
-import DifficultyBrainEditor from '../../components/MeshGraph/DifficultyBrainEditor'
 import CoordinatorPromptDefaultPreview from './CoordinatorPromptDefaultPreview'
 import MeshSchedulingNodes from './MeshSchedulingNodes'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
@@ -25,8 +24,6 @@ import {
     readMeshPolicy,
     SESSION_CLEANUP_MODE_OPTIONS,
     DISTRIBUTION_OPTIONS,
-    MESH_MAX_PARALLEL_TASKS_MIN,
-    MESH_MAX_PARALLEL_TASKS_MAX,
     distributionToStrategy,
     strategyToDistribution,
     type MeshEntry,
@@ -36,8 +33,8 @@ import {
     type MeshSchedulingStrategy,
     type MeshQueueEntry,
     type MeshDetailViewFeatures,
-    type ProviderPriorityDrafts,
     type AvailableCliAgent,
+    type NodeCapabilitySlot,
 } from './types'
 
 interface Props {
@@ -88,11 +85,9 @@ interface Props {
     activeDaemonId: string
     meshQueue: MeshQueueEntry[]
     userName?: string
-    nodeProviderPriorityDrafts: ProviderPriorityDrafts
-    onNodeProviderPriorityDraftChange: (nodeId: string, next: string[]) => void
     availableCliProviders: AvailableCliProviderOption[]
-    savingNodePolicyId: string | null
-    onUpdateNodeProviderPriority: (node: MeshNode) => void
+    savingNodeSlotsId: string | null
+    onUpdateNodeSlots: (node: MeshNode, slots: NodeCapabilitySlot[]) => void
     savingNodeSchedulingId: string | null
     onUpdateNodeScheduling: (node: MeshNode, patch: { schedulingPriority?: number; providerRoles?: MeshProviderRole[] }) => void
     savingNodeCapabilitiesId: string | null
@@ -191,11 +186,9 @@ export function MeshDetailView({
     activeDaemonId,
     meshQueue,
     userName,
-    nodeProviderPriorityDrafts,
-    onNodeProviderPriorityDraftChange,
     availableCliProviders,
-    savingNodePolicyId,
-    onUpdateNodeProviderPriority,
+    savingNodeSlotsId,
+    onUpdateNodeSlots,
     savingNodeSchedulingId,
     onUpdateNodeScheduling,
     savingNodeCapabilitiesId,
@@ -322,14 +315,11 @@ export function MeshDetailView({
                 </Section>
             )}
 
-            {/* ── Brain presets: task difficulty → provider/model/thinking ── */}
-            <Section title="Brain presets" description="Map task difficulty to a model + thinking level so the coordinator runs easy work cheaply and hard work on a stronger brain. Applied when a task is enqueued with a difficulty.">
-                <DifficultyBrainEditor
-                    daemonId={activeDaemonId}
-                    sendDaemonCommand={sendCommand}
-                    providerOptions={(displayedMeshStatus?.nodes ?? []).flatMap(n => (n as any).providers || []).filter(Boolean)}
-                />
-            </Section>
+            {/* Brain presets (difficulty → model/thinking) are absorbed into per-node
+                capability slots (ORCHESTRATION_NODE_SLOTS.md): each node slot declares
+                the difficulty range it handles plus its provider/model/thinking, so the
+                mesh-wide difficulty→brain mapping is no longer a separate surface. Edit
+                per-node in "Nodes & Providers" below. */}
 
             {/* ── Missions (fix b: full-goal fetch-more) ── */}
             <MeshMissionsSection
@@ -354,11 +344,9 @@ export function MeshDetailView({
                 userName={userName}
                 features={{ addNodeDaemonPicker: features.addNodeDaemonPicker, nodeInstruction: features.nodeInstruction }}
                 coordinatorDaemonId={coordinatorDaemonId}
-                nodeProviderPriorityDrafts={nodeProviderPriorityDrafts}
-                onNodeProviderPriorityDraftChange={onNodeProviderPriorityDraftChange}
                 availableCliProviders={availableCliProviders}
-                savingNodePolicyId={savingNodePolicyId}
-                onUpdateNodeProviderPriority={onUpdateNodeProviderPriority}
+                savingNodeSlotsId={savingNodeSlotsId}
+                onUpdateNodeSlots={onUpdateNodeSlots}
                 savingNodeCapabilitiesId={savingNodeCapabilitiesId}
                 onUpdateNodeCapabilities={onUpdateNodeCapabilities}
                 nodeSystemPromptDrafts={nodeSystemPromptDrafts}
@@ -387,22 +375,12 @@ export function MeshDetailView({
 
             {/* ── Scheduling ── */}
             <Section title="Scheduling" description="How untargeted queue work is distributed across eligible nodes.">
-                <div className="grid gap-4 sm:grid-cols-2">
-                    <FormField label="Max parallel tasks" hint={`Cap on concurrently assigned tasks across the mesh (${MESH_MAX_PARALLEL_TASKS_MIN}–${MESH_MAX_PARALLEL_TASKS_MAX}).`}>
-                        <input type="number" inputMode="numeric"
-                            min={MESH_MAX_PARALLEL_TASKS_MIN} max={MESH_MAX_PARALLEL_TASKS_MAX} step={1}
-                            className="w-28 px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                            value={String(policy.maxParallelTasks ?? 2)}
-                            disabled={savingPolicy}
-                            onChange={e => {
-                                const raw = Number(e.target.value)
-                                if (!Number.isFinite(raw)) return
-                                const clamped = Math.max(MESH_MAX_PARALLEL_TASKS_MIN, Math.min(MESH_MAX_PARALLEL_TASKS_MAX, Math.floor(raw)))
-                                onUpdatePolicy({ maxParallelTasks: clamped })
-                            }} />
-                    </FormField>
-                </div>
-                <fieldset className="mt-4 border-none p-0 m-0">
+                {/* Mesh-level "Max parallel tasks" is hidden: the real concurrency
+                    limits live per node / per capability slot (ORCHESTRATION_NODE_SLOTS.md),
+                    so a global cap has little meaning. The policy field still exists and
+                    defaults high — set it via the API only if you genuinely need a
+                    mesh-wide ceiling. */}
+                <fieldset className="border-none p-0 m-0">
                     <legend className="text-[13px] font-medium text-text-secondary mb-2">Distribution</legend>
                     <div className="flex flex-col gap-2">
                         {DISTRIBUTION_OPTIONS.map(opt => {
