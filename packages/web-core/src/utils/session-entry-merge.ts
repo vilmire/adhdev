@@ -110,6 +110,7 @@ export function mergeSessionEntrySummary(
     completionMarker: session.completionMarker ?? existingEntry?.completionMarker,
     seenCompletionMarker: session.seenCompletionMarker ?? existingEntry?.seenCompletionMarker,
     surfaceHidden: session.surfaceHidden ?? existingEntry?.surfaceHidden,
+    muted: session.muted ?? existingEntry?.muted,
     resume: session.resume ?? existingEntry?.resume,
     runtimeKey: session.runtimeKey ?? existingEntry?.runtimeKey,
     runtimeDisplayName: session.runtimeDisplayName ?? existingEntry?.runtimeDisplayName,

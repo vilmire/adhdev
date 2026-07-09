@@ -130,7 +130,12 @@ interface DashboardMainViewProps {
         },
     ) => Promise<{ ok: boolean; error?: string }>
     onListMachineMeshes: (machineId: string) => Promise<MeshLaunchOption[]>
-    onLaunchMeshCoordinator: (machineId: string, meshId: string, cliType: string) => Promise<LaunchResult>
+    onLaunchMeshCoordinator: (
+        machineId: string,
+        meshId: string,
+        cliType: string,
+        opts?: { initialModel?: string | null; initialThinkingLevel?: string | null },
+    ) => Promise<LaunchResult>
     onListMachineSavedSessions: (machineId: string, providerType: string) => Promise<Array<{
         id: string
         providerSessionId: string

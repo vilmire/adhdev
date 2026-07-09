@@ -11,7 +11,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { shouldNotify } from './useNotificationPrefs'
-import { isConversationMutedNow } from './useMutedConversations'
 import type { ConversationTarget } from '../components/dashboard/conversation-identity'
 
 interface NotificationOptions {
@@ -33,11 +32,15 @@ interface AgentState {
     status?: string
     activeModal?: { message?: string; buttons?: string[] } | null
     /**
-     * Conversation identity used to honour device-local mute state. When the
-     * conversation is muted (e.g. a coordinator-spawned mesh session), we still
-     * track its status transitions but skip the desktop notification.
+     * Conversation identity (kept for dedup/labeling).
      */
     target?: ConversationTarget
+    /**
+     * Daemon-owned muted flag. When true (e.g. a coordinator-spawned mesh session
+     * or a manual mute), we still track status transitions but skip the desktop
+     * notification. Replaces the old per-browser localStorage mute lookup.
+     */
+    muted?: boolean
 }
 
 const DEFAULT_OPTS: Required<NotificationOptions> = {
@@ -161,8 +164,8 @@ export function useBrowserNotifications(
             const curr = normalizeManagedStatus(agent.status, { activeModal: agent.activeModal })
             const name = agent.name || agent.id
 
-            // Muted conversation: track the transition but stay silent.
-            if (agent.target && isConversationMutedNow(agent.target)) {
+            // Muted conversation (daemon-owned): track the transition but stay silent.
+            if (agent.muted) {
                 prevStates.current.set(agent.id, curr)
                 continue
             }

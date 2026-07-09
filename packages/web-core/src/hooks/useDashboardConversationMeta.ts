@@ -8,6 +8,8 @@ interface UseDashboardConversationMetaOptions {
     clearedTabs: Record<string, number>
     setClearedTabs: Dispatch<SetStateAction<Record<string, number>>>
     setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
+    /** Daemon-owned muted flag lookup so muted sessions skip browser notifications. */
+    isConversationMuted?: (conversation: ActiveConversation) => boolean
 }
 
 export function useDashboardConversationMeta({
@@ -15,6 +17,7 @@ export function useDashboardConversationMeta({
     clearedTabs,
     setClearedTabs,
     setActionLogs,
+    isConversationMuted,
 }: UseDashboardConversationMetaOptions) {
     useEffect(() => {
         requestNotificationPermission()
@@ -33,8 +36,11 @@ export function useDashboardConversationMeta({
                 tabKey: c.tabKey,
                 routeId: c.routeId,
             },
+            // Daemon-owned muted flag: browser notifications stay silent for muted
+            // conversations (e.g. coordinator-spawned workers or a manual mute).
+            muted: isConversationMuted ? isConversationMuted(c) : false,
         })),
-    [visibleConversations])
+    [visibleConversations, isConversationMuted])
 
     useBrowserNotifications(agentStates)
 

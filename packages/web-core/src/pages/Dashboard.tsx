@@ -11,8 +11,6 @@ import {
     applyCliViewModeOverrides,
 } from '../components/dashboard/cliViewModeOverrides'
 import { useWarmSessionChatTailControllers } from '../components/dashboard/session-chat-tail-controller'
-import { useHiddenTabs, isConversationHidden, getAutoHiddenConversationTargets } from '../hooks/useHiddenTabs'
-import { useMutedConversations } from '../hooks/useMutedConversations'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
 import { useDashboardActiveTabRequests } from '../hooks/useDashboardActiveTabRequests'
@@ -40,7 +38,8 @@ import type { Toast } from '../components/dashboard/ToastContainer'
 import type { DashboardMobileSection } from '../components/dashboard/DashboardMobileBottomNav'
 import { getMobileDashboardMode, subscribeMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
 import { getDashboardWarmChatTailOptions } from '../utils/dashboard-warm-chat-tail'
-import { buildLiveSessionInboxStateMap } from '../components/dashboard/DashboardMobileChatShared'
+import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
+import { useConversationPrefs } from '../hooks/useConversationPrefs'
 import { compareMachineEntries } from '../utils/daemon-utils'
 import { getDashboardMachineRefreshTargets } from '../utils/dashboard-machine-refresh'
 
@@ -132,16 +131,13 @@ export default function Dashboard() {
         () => applyCliViewModeOverrides(ides, cliViewModeOverrides),
         [ides, cliViewModeOverrides],
     )
-    // ─── Hidden Tabs ───
-    const {
-        hiddenTabs,
-        autoHiddenTabs,
-        autoHideTarget: autoHideConversation,
-        hideTarget: hideHiddenConversation,
-        toggleTarget: toggleHiddenConversation,
-        showTarget: showHiddenConversation,
-        showAllTabs: showAllHiddenTabs,
-    } = useHiddenTabs();
+    // ─── Hide/Mute are daemon-owned ───
+    // Hidden/muted state lives on the live session (daemon memory) and rides the
+    // status snapshot as surfaceHidden/muted. The coordinator-spawned-worker
+    // default is computed daemon-side (status/builders resolveSurfaceHidden/
+    // resolveMuted), so there is no longer a web-side auto-hide/auto-mute pass or a
+    // per-browser localStorage layer — every client of the daemon sees the same
+    // state. Hide/Mute buttons send set_conversation_prefs (see handlers below).
     const {
         conversations,
         visibleConversations,
@@ -152,32 +148,11 @@ export default function Dashboard() {
         ides: effectiveIdes,
         connectionStates,
         clearedTabs,
-        hiddenTabs,
     })
     const conversationByTabKey = useMemo(
         () => new Map(conversations.map(conversation => [conversation.tabKey, conversation])),
         [conversations],
     )
-    const autoHiddenConversationTargets = useMemo(
-        () => getAutoHiddenConversationTargets(conversations, hiddenTabs, autoHiddenTabs),
-        [conversations, hiddenTabs, autoHiddenTabs],
-    )
-    useEffect(() => {
-        for (const conversation of autoHiddenConversationTargets) {
-            autoHideConversation(conversation)
-        }
-    }, [autoHiddenConversationTargets, autoHideConversation])
-    // ─── Auto-mute (coordinator sessions) ───
-    // Mirror the auto-hide pass: coordinator-spawned mesh sessions are muted on
-    // first sight so their notification channels (toast/audio/browser/push) stay
-    // silent. Works on desktop and cloud, not just standalone mobile. Idempotent
-    // and skips non-coordinator conversations; a manual unmute is never re-applied.
-    const { autoMuteIfCoordinator } = useMutedConversations()
-    useEffect(() => {
-        for (const conversation of conversations) {
-            autoMuteIfCoordinator(conversation)
-        }
-    }, [conversations, autoMuteIfCoordinator])
     useWarmSessionChatTailControllers(visibleConversations, warmChatTailOptions)
     // NOTE: A user's explicit CLI view-mode choice (cliViewModeOverrides) is kept
     // sticky on purpose — it is NOT reconciled away when an incoming status_report
@@ -193,6 +168,10 @@ export default function Dashboard() {
         () => buildLiveSessionInboxStateMap(ides),
         [ides],
     )
+    // Daemon-owned Hide/Mute with an optimistic overlay (instant UI, reconciles
+    // with the status snapshot). Defined here so the notification/meta hooks below
+    // can read conversationPrefs.isMuted.
+    const conversationPrefs = useConversationPrefs(liveSessionInboxState, sendDaemonCommand)
     const {
         notifications,
         unreadCount: notificationUnreadCount,
@@ -328,8 +307,8 @@ export default function Dashboard() {
     )
     const showMobileChatMode = isMobile && mobileViewMode === 'chat'
     const hiddenConversations = useMemo(
-        () => conversations.filter(conversation => isConversationHidden(hiddenTabs, conversation)),
-        [conversations, hiddenTabs],
+        () => conversations.filter(conversation => getConversationLiveInboxState(conversation, liveSessionInboxState).surfaceHidden),
+        [conversations, liveSessionInboxState],
     )
 
     const handleRequestOpenSession = useCallback((sessionId: string) => {
@@ -369,6 +348,7 @@ export default function Dashboard() {
         clearedTabs,
         setClearedTabs,
         setActionLogs,
+        isConversationMuted: conversationPrefs.isMuted,
     })
 
     useDashboardEventManager({
@@ -427,13 +407,23 @@ export default function Dashboard() {
     })
 
     const handleShowHiddenConversation = useCallback((conversation: import('../components/dashboard/types').ActiveConversation) => {
-        showHiddenConversation(conversation)
+        conversationPrefs.setHidden(conversation, false)
         openDesktopConversation(conversation)
-    }, [openDesktopConversation, showHiddenConversation])
+    }, [openDesktopConversation, conversationPrefs])
+
+    const handleShowAllHiddenConversations = useCallback(() => {
+        for (const conversation of hiddenConversations) {
+            conversationPrefs.setHidden(conversation, false)
+        }
+    }, [hiddenConversations, conversationPrefs])
 
     const handleHideConversation = useCallback((conversation: import('../components/dashboard/types').ActiveConversation) => {
-        hideHiddenConversation(conversation)
-    }, [hideHiddenConversation])
+        conversationPrefs.setHidden(conversation, true)
+    }, [conversationPrefs])
+
+    const handleToggleHiddenConversation = useCallback((conversation: import('../components/dashboard/types').ActiveConversation) => {
+        conversationPrefs.toggleHidden(conversation)
+    }, [conversationPrefs])
 
     return (
         <div className="page-dashboard flex-1 min-h-0 bg-bg-primary text-text-primary flex flex-col overflow-hidden">
@@ -498,7 +488,7 @@ export default function Dashboard() {
                 setGroupActiveTab={setGroupActiveTab}
                 groupTabOrders={groupTabOrders}
                 setGroupTabOrder={setGroupTabOrder}
-                toggleHiddenTab={(tabKey) => toggleHiddenConversation(conversationByTabKey.get(tabKey) || { tabKey })}
+                toggleHiddenTab={(tabKey) => { const c = conversationByTabKey.get(tabKey); if (c) handleToggleHiddenConversation(c) }}
                 visibleConversations={visibleConversations}
                 hiddenConversations={hiddenConversations}
                 requestedDesktopTabKey={requestedDesktopTabKey}
@@ -507,7 +497,7 @@ export default function Dashboard() {
                 onRequestScrollToBottom={requestScrollToBottom}
                 onHideConversation={handleHideConversation}
                 onShowHiddenConversation={handleShowHiddenConversation}
-                onShowAllHiddenConversations={showAllHiddenTabs}
+                onShowAllHiddenConversations={handleShowAllHiddenConversations}
                 scrollToBottomRequest={scrollToBottomRequest}
                 machineEntries={machineEntries}
                 layoutProfile={layoutProfile}

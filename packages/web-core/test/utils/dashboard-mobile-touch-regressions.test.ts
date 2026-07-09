@@ -41,7 +41,10 @@ describe('dashboard mobile/touch regressions', () => {
     const source = readSource('components/dashboard/DashboardMobileChatInbox.tsx')
 
     expect(source).toContain('const shouldShowTimestamp = !isWorking && !isTaskComplete')
-    expect(source).toContain('{shouldShowTimestamp && <span')
+    // Timestamp now lives in the top-right corner-actions cluster (left of the
+    // Mute/Hide/Stop icons) so it never sits under them.
+    expect(source).toContain('{shouldShowTimestamp && (')
+    expect(source).toContain('mobile-inbox-corner-actions')
   })
 
   it('supports copying a chat debug bundle directly from mobile inbox rows', () => {
@@ -92,9 +95,11 @@ describe('dashboard mobile/touch regressions', () => {
     expect(inboxSource).toContain('mobile-inbox-hide-button')
     expect(inboxSource).toContain('setHideConfirmConversation(item.conversation)')
     expect(inboxSource).toContain('HideConversationConfirmDialog')
-    expect(inboxSource).toContain('Hide this chat from the inbox?')
+    // Hide confirm dialog now matches the CliStopDialog style (title "Hide {name}?",
+    // card fade-in mobile-compact-dialog, no top-right X, stacked full-width buttons).
+    expect(inboxSource).toContain('Hide {title}?')
+    expect(inboxSource).toContain('card fade-in mobile-compact-dialog')
     expect(inboxSource).toContain('max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] flex flex-col')
-    expect(inboxSource).not.toContain('className="card fade-in relative w-full max-w-[420px]')
     expect(inboxSource).toContain('onHideConversation?.(hideConfirmConversation)')
     expect(inboxSource).not.toContain('onHideConversation(item.conversation)')
     expect(inboxSource).not.toContain('className="flex justify-end px-4 pb-3 -mt-1"')

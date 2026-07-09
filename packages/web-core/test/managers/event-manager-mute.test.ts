@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { eventManager, type ToastConfig } from '../../src/managers/EventManager'
-import { muteConversation } from '../../src/hooks/useMutedConversations'
 
-// (d) A muted conversation must skip the toast/audio channels. The browser-notification
-// and audio side effects are DOM-only and no-op in the node test env (guarded by
-// try/catch and document checks); the observable, deterministic channel here is the toast.
+// (d) A muted conversation must skip the toast/audio channels. Mute is now
+// daemon-owned: EventManager reads the `muted` flag off the owning session entry
+// (fed via setIdes, mirroring the daemon status snapshot) rather than a
+// per-browser localStorage set. The browser-notification and audio side effects
+// are DOM-only and no-op in the node test env; the observable, deterministic
+// channel here is the toast.
 
 function collectToasts(): { toasts: ToastConfig[]; stop: () => void } {
     const toasts: ToastConfig[] = []
@@ -12,8 +14,17 @@ function collectToasts(): { toasts: ToastConfig[]; stop: () => void } {
     return { toasts, stop }
 }
 
-describe('EventManager mute suppression', () => {
+// A muted conversation is surfaced to EventManager as a session entry carrying
+// muted:true (top-level session or a child session), keyed by targetSessionId.
+function seedMutedSession(sessionId: string) {
+    eventManager.setIdes([
+        { id: sessionId, sessionId, type: 'claude-cli', muted: true } as any,
+    ])
+}
+
+describe('EventManager mute suppression (daemon-owned muted flag)', () => {
     it('emits a completion toast for an unmuted conversation', () => {
+        eventManager.setIdes([{ id: 'em-unmuted', sessionId: 'em-unmuted', type: 'claude-cli' } as any])
         const { toasts, stop } = collectToasts()
         eventManager.handleRawEvent({
             event: 'agent:generating_completed',
@@ -27,7 +38,7 @@ describe('EventManager mute suppression', () => {
     })
 
     it('suppresses the completion toast for a muted conversation', () => {
-        muteConversation({ providerSessionId: 'em-muted' })
+        seedMutedSession('em-muted')
         const { toasts, stop } = collectToasts()
         eventManager.handleRawEvent({
             event: 'agent:generating_completed',
@@ -41,7 +52,7 @@ describe('EventManager mute suppression', () => {
     })
 
     it('suppresses the approval toast for a muted conversation', () => {
-        muteConversation({ providerSessionId: 'em-muted-approval' })
+        seedMutedSession('em-muted-approval')
         const { toasts, stop } = collectToasts()
         eventManager.handleRawEvent({
             event: 'agent:waiting_approval',

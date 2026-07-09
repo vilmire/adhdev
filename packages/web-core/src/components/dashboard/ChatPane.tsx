@@ -7,6 +7,7 @@ import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import ChatControlsSection from './ChatControlsSection';
 import ChatInputBar, { type ImageAttachment } from './ChatInputBar';
 import SessionInfoButton from './SessionInfoButton';
+import ConversationMuteButton from './ConversationMuteButton';
 import { getVisibleBarControls } from './ControlsBar';
 import { useControlsBarVisibility } from '../../hooks/useControlsBarVisibility';
 import { useTransport } from '../../context/TransportContext';
@@ -407,6 +408,12 @@ export default function ChatPane({
                 takes its place: same row, right-aligned, opens SessionInfoDialog. */}
             <div className="chat-activity-toggle-bar">
                 <div className="ml-auto flex items-center gap-1">
+                    <ConversationMuteButton
+                        sessionId={activeConv.sessionId}
+                        daemonId={activeConv.daemonId}
+                        muted={!!controlsContext.targetEntry?.muted}
+                        sendDaemonCommand={sendCommand}
+                    />
                     <SessionInfoButton sessionId={activeConv.sessionId} daemonId={activeConv.daemonId} conv={activeConv} />
                 </div>
             </div>

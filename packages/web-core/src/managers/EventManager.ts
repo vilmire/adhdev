@@ -13,7 +13,6 @@
 import { formatIdeType, getMachineDisplayName } from '../utils/daemon-utils'
 import { shouldNotify } from '../hooks/useNotificationPrefs'
 import { notify } from '../hooks/useBrowserNotifications'
-import { isConversationMutedNow } from '../hooks/useMutedConversations'
 import type { DaemonData, DashboardStatusEventPayload } from '../types'
 import {
     buildApprovalToastDescriptors,
@@ -50,7 +49,7 @@ export type DesktopNotificationCallback = (title: string, body: string, tag: str
 export type ResolveActionFn = (routeId: string, action: string, payload: Record<string, any>) => void
 export type ViewRequestRespondFn = (orgId: string, requestId: string, action: 'approve' | 'reject') => Promise<any>
 
-type KnownIdeEntry = Pick<DaemonData, 'id' | 'type' | 'daemonId' | 'machineNickname' | 'hostname' | 'machine' | 'sessionId' | 'childSessions'>
+type KnownIdeEntry = Pick<DaemonData, 'id' | 'type' | 'daemonId' | 'machineNickname' | 'hostname' | 'machine' | 'sessionId' | 'childSessions' | 'muted'>
 
 // ─── Singleton EventManager ───────────────────────
 
@@ -207,10 +206,19 @@ class EventManager {
      * dashboard also goes silent on the toast/audio/browser-notification channels.
      */
     private isConversationEventMuted(payload: StatusEventPayload): boolean {
-        const providerSessionId = payload.providerSessionId
+        // Mute is daemon-owned: the muted flag rides the status snapshot on the
+        // session entry (see status/builders resolveMuted). Read it off the owning
+        // session/child rather than a per-browser localStorage set, so a mute set on
+        // any client silences the notification channels on every client.
         const sessionId = payload.targetSessionId
-        if (!providerSessionId && !sessionId) return false
-        return isConversationMutedNow({ providerSessionId, sessionId })
+        if (!sessionId) return false
+        for (const ide of this.ides) {
+            if (ide.id === sessionId || ide.sessionId === sessionId) return !!ide.muted
+            const childSessions = Array.isArray(ide.childSessions) ? ide.childSessions : []
+            const child = childSessions.find((c) => c?.id === sessionId)
+            if (child) return !!(child as { muted?: boolean }).muted
+        }
+        return false
     }
 
     // ─── Main entry point ─────────────────────────

@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import type { MouseEvent } from 'react'
-import { IconBell, IconSettings, IconChat, IconEyeOff, IconMesh, IconX } from '../Icons'
+import { IconBell, IconBellOff, IconSettings, IconChat, IconEyeOff, IconMesh, IconX } from '../Icons'
 import InstallCommand from '../InstallCommand'
 import { formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
@@ -33,6 +33,8 @@ interface DashboardMobileChatInboxProps {
     onShowAllHidden: () => void
     onHideConversation?: (conversation: ActiveConversation) => void
     onOpenMeshGraph?: (conversation: ActiveConversation) => void
+    /** Optional: stop (terminate) the underlying CLI/agent session for a conversation. */
+    onStopCli?: (conversation?: ActiveConversation) => void | Promise<void>
     onOpenNewSession?: () => void
     onOpenMachine: (machineId: string) => void
     onOpenSettings: () => void
@@ -105,47 +107,35 @@ function HideConversationConfirmDialog({
     onConfirm: () => void
 }) {
     const title = getConversationTitle(conversation)
-    const metaText = getConversationMetaText(conversation)
 
     return (
         <div className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4">
-            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onCancel} />
+            <div onClick={onCancel} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
             <div
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="mobile-hide-confirm-title"
-                className="fade-in relative w-full sm:w-[min(92vw,420px)] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] flex flex-col overflow-hidden rounded-[24px] sm:rounded-[18px] border border-border-subtle bg-bg-primary shadow-[0_20px_40px_rgba(0,0,0,0.4)]"
+                className="card fade-in mobile-compact-dialog relative w-full sm:w-[min(92vw,420px)] md:w-[92%] md:max-w-[420px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] flex flex-col overflow-hidden rounded-[24px] sm:rounded-[18px] shadow-[0_20px_40px_rgba(0,0,0,0.4)]"
             >
-                <div className="flex items-start justify-between gap-3 border-b border-border-subtle bg-[var(--surface-primary)] px-4 py-4">
-                    <div className="min-w-0">
-                        <h3 id="mobile-hide-confirm-title" className="m-0 text-base font-extrabold text-text-primary">
-                            Hide this chat from the inbox?
-                        </h3>
-                        <div className="mt-1 text-[13px] leading-relaxed text-text-muted">
-                            This only collapses the chat locally. You can restore it from Hidden tabs.
-                        </div>
+                <div className="px-4 py-4 md:px-6 md:py-5 border-b border-border-subtle bg-bg-primary">
+                    <h3 id="mobile-hide-confirm-title" className="m-0 text-base md:text-lg font-extrabold">Hide {title}?</h3>
+                    <div className="mt-1 text-[13px] md:text-sm text-text-muted leading-relaxed">
+                        This only collapses the chat locally. You can restore it from Hidden tabs.
                     </div>
+                </div>
+
+                <div className="px-4 py-4 md:px-6 md:py-5 bg-bg-primary flex flex-col gap-2.5">
                     <button
-                        type="button"
-                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-subtle bg-bg-primary text-text-secondary transition-colors hover:bg-surface-primary hover:text-text-primary"
-                        onClick={onCancel}
-                        aria-label="Cancel hide chat"
+                        onClick={onConfirm}
+                        className="btn btn-primary w-full justify-center min-h-[42px]"
                     >
-                        <IconX size={16} />
+                        Hide
                     </button>
-                </div>
-                <div className="px-4 py-4">
-                    <div className="rounded-2xl border border-border-subtle bg-bg-secondary/60 px-3.5 py-3">
-                        <div className="truncate text-sm font-bold text-text-primary">{title}</div>
-                        <div className="mt-1 truncate text-xs text-text-muted">{metaText}</div>
-                    </div>
-                </div>
-                <div className="flex items-center justify-end gap-2 border-t border-border-subtle bg-bg-secondary px-4 py-[calc(12px+env(safe-area-inset-bottom,0px))]">
-                    <button type="button" className="btn btn-secondary min-h-[40px] px-4 text-sm" onClick={onCancel}>
+                    <button
+                        onClick={onCancel}
+                        className="btn btn-secondary w-full justify-center min-h-[42px]"
+                    >
                         Cancel
-                    </button>
-                    <button type="button" className="btn btn-primary min-h-[40px] px-4 text-sm" onClick={onConfirm}>
-                        Hide tab
                     </button>
                 </div>
             </div>
@@ -153,12 +143,14 @@ function HideConversationConfirmDialog({
     )
 }
 
+
 function DashboardMobileChatItem({
     item,
     type,
     getAvatarText,
     onOpenConversation,
     onRequestHideConversation,
+    onRequestStopCli,
     onOpenMeshGraph,
     onCollectChatDebugBundle,
     isMuted,
@@ -169,6 +161,7 @@ function DashboardMobileChatItem({
     getAvatarText: (primary: string) => string
     onOpenConversation: (c: ActiveConversation) => void
     onRequestHideConversation?: () => void
+    onRequestStopCli?: () => void
     onOpenMeshGraph?: (conversation: ActiveConversation) => void
     onCollectChatDebugBundle?: MobileInboxDebugBundleCollector
     isMuted?: boolean
@@ -230,46 +223,10 @@ function DashboardMobileChatItem({
                     >
                         {getAvatarText(title)}
                     </span>
-                    {onRequestHideConversation && (
-                        <button
-                            type="button"
-                            className="mobile-inbox-hide-button inline-flex min-h-7 items-center justify-center gap-1 rounded-full border border-border-subtle bg-bg-primary/70 px-2 text-[10px] font-semibold text-text-muted transition-colors hover:border-border-default hover:text-text-primary"
-                            onClick={(event) => {
-                                event.preventDefault()
-                                event.stopPropagation()
-                                onRequestHideConversation()
-                            }}
-                            aria-label={`Hide ${title}`}
-                            title="Hide conversation"
-                        >
-                            <IconEyeOff size={11} />
-                            <span>Hide</span>
-                        </button>
-                    )}
-                    {onToggleMute && (
-                        <button
-                            type="button"
-                            className={`mobile-inbox-mute-button inline-flex min-h-7 items-center justify-center gap-1 rounded-full border px-2 text-[10px] font-semibold transition-colors ${
-                                isMuted
-                                    ? 'border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'
-                                    : 'border-border-subtle bg-bg-primary/70 text-text-muted hover:border-border-default hover:text-text-primary'
-                            }`}
-                            onClick={(event) => {
-                                event.preventDefault()
-                                event.stopPropagation()
-                                onToggleMute()
-                            }}
-                            aria-label={isMuted ? `Unmute ${title}` : `Mute ${title}`}
-                            title={isMuted ? 'Unmute (resume notifications)' : 'Mute notifications'}
-                        >
-                            <IconBell size={11} />
-                            <span>{isMuted ? 'Muted' : 'Mute'}</span>
-                        </button>
-                    )}
                     {meshGraphAvailable && onOpenMeshGraph && (
                         <button
                             type="button"
-                            className="mobile-inbox-mesh-button inline-flex min-h-7 items-center justify-center gap-1 rounded-full border border-border-subtle bg-bg-primary/70 px-2 text-[10px] font-semibold text-text-muted transition-colors hover:border-border-default hover:text-text-primary"
+                            className="mobile-inbox-mesh-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border-subtle bg-bg-primary/70 text-text-muted transition-colors hover:border-border-default hover:text-text-primary"
                             onClick={(event) => {
                                 event.preventDefault()
                                 event.stopPropagation()
@@ -278,8 +235,7 @@ function DashboardMobileChatItem({
                             aria-label={`Open mesh graph for ${title}`}
                             title="Open live repo mesh graph"
                         >
-                            <IconMesh size={11} />
-                            <span>Graph</span>
+                            <IconMesh size={13} />
                         </button>
                     )}
                 </div>
@@ -289,9 +245,8 @@ function DashboardMobileChatItem({
                     onContextMenu={handleConversationContextMenu}
                     type="button"
                 >
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 pr-[124px]">
                         <span className={`text-[15px] font-bold truncate tracking-tight ${titleClassName}`}>{title}</span>
-                        {shouldShowTimestamp && <span className={`text-[11px] font-medium shrink-0 ${timestampClassName}`}>{formatRelativeTime(item.timestamp)}</span>}
                     </div>
                     <div className={`text-[12px] font-medium truncate flex items-center ${metaClassName}`}>
                         <span className="truncate">{metaText}</span>
@@ -317,13 +272,65 @@ function DashboardMobileChatItem({
                         {item.preview}
                     </div>
                 </button>
-                {isUnread && !isTaskComplete && <span className="absolute top-5 right-4 w-2 h-2 rounded-full bg-accent-primary shadow-glow" />}
-                {isTaskComplete && (
-                    <span className="absolute top-4 right-4 rounded-full border border-accent-primary/16 bg-accent-primary/10 px-2 py-0.5 text-[10px] font-bold text-accent-primary">
-                        Done
-                    </span>
-                )}
-                {isWorking && <span className="absolute top-4 right-4 rounded-full bg-accent-primary/10 px-2 py-0.5 text-[10px] font-bold text-accent-primary">Live</span>}
+                <div className="mobile-inbox-corner-actions absolute top-3 right-3 flex items-center gap-1.5">
+                    {shouldShowTimestamp && (
+                        <span className={`mr-0.5 text-[11px] font-medium shrink-0 ${timestampClassName}`}>{formatRelativeTime(item.timestamp)}</span>
+                    )}
+                    {isTaskComplete && (
+                        <span className="rounded-full border border-accent-primary/16 bg-accent-primary/10 px-2 py-0.5 text-[10px] font-bold text-accent-primary">
+                            Done
+                        </span>
+                    )}
+                    {onToggleMute && (
+                        <button
+                            type="button"
+                            className={`mobile-inbox-mute-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-colors ${
+                                isMuted
+                                    ? 'border-amber-500/60 bg-amber-500 text-white hover:bg-amber-600'
+                                    : 'border-border-subtle bg-bg-primary/70 text-text-muted hover:border-border-default hover:text-text-primary'
+                            }`}
+                            onClick={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                onToggleMute()
+                            }}
+                            aria-label={isMuted ? `Unmute ${title}` : `Mute ${title}`}
+                            title={isMuted ? 'Muted — notifications silenced. Tap to unmute.' : 'Mute notifications'}
+                        >
+                            {isMuted ? <IconBellOff size={13} /> : <IconBell size={13} />}
+                        </button>
+                    )}
+                    {onRequestHideConversation && (
+                        <button
+                            type="button"
+                            className="mobile-inbox-hide-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border-subtle bg-bg-primary/70 text-text-muted transition-colors hover:border-border-default hover:text-text-primary"
+                            onClick={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                onRequestHideConversation()
+                            }}
+                            aria-label={`Hide ${title}`}
+                            title="Hide conversation"
+                        >
+                            <IconEyeOff size={13} />
+                        </button>
+                    )}
+                    {onRequestStopCli && (
+                        <button
+                            type="button"
+                            className="mobile-inbox-stop-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-status-error/30 bg-bg-primary/70 text-status-error transition-colors hover:border-status-error/60 hover:bg-status-error/10"
+                            onClick={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                onRequestStopCli()
+                            }}
+                            aria-label={`Stop ${title} session`}
+                            title="Stop session (terminates the agent)"
+                        >
+                            <IconX size={13} />
+                        </button>
+                    )}
+                </div>
             </div>
         </div>
     )
@@ -355,6 +362,7 @@ export default function DashboardMobileChatInbox({
     onShowAllHidden,
     onHideConversation,
     onOpenMeshGraph,
+    onStopCli,
     onOpenNewSession,
     onOpenMachine,
     onOpenSettings,
@@ -537,6 +545,7 @@ export default function DashboardMobileChatInbox({
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
                                         onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
+                                        onRequestStopCli={onStopCli ? () => onStopCli(item.conversation) : undefined}
                                         onOpenMeshGraph={onOpenMeshGraph}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                         isMuted={isConversationMuted?.(item.conversation)}
@@ -560,6 +569,7 @@ export default function DashboardMobileChatInbox({
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
                                         onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
+                                        onRequestStopCli={onStopCli ? () => onStopCli(item.conversation) : undefined}
                                         onOpenMeshGraph={onOpenMeshGraph}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                         isMuted={isConversationMuted?.(item.conversation)}
@@ -583,6 +593,7 @@ export default function DashboardMobileChatInbox({
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
                                         onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
+                                        onRequestStopCli={onStopCli ? () => onStopCli(item.conversation) : undefined}
                                         onOpenMeshGraph={onOpenMeshGraph}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                         isMuted={isConversationMuted?.(item.conversation)}
@@ -609,6 +620,7 @@ export default function DashboardMobileChatInbox({
                                             getAvatarText={getAvatarText}
                                             onOpenConversation={onOpenConversation}
                                             onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
+                                            onRequestStopCli={onStopCli ? () => onStopCli(item.conversation) : undefined}
                                             onOpenMeshGraph={onOpenMeshGraph}
                                             onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                             isMuted={isConversationMuted?.(item.conversation)}

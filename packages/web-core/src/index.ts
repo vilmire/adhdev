@@ -223,8 +223,6 @@ export { useSessionModalSubscription } from './hooks/useSessionModalSubscription
 export { useNotificationPrefs, shouldNotify, getNotificationPrefs, setNotificationPrefs } from './hooks/useNotificationPrefs'
 export type { NotificationPrefs } from './hooks/useNotificationPrefs'
 export { useBrowserNotifications, requestNotificationPermission } from './hooks/useBrowserNotifications'
-export { useHiddenTabs } from './hooks/useHiddenTabs'
-export { useMutedConversations, isConversationMuted } from './hooks/useMutedConversations'
 export { useInteractivePrompt } from './hooks/useInteractivePrompt'
 
 // ── Compat layer (gradual migration) ──

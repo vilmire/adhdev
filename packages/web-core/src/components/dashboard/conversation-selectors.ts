@@ -18,10 +18,10 @@ export const DASHBOARD_NOTIFICATION_PREVIEW_MAX_CHARS = 180
 
 type ConversationTargetEntry = Pick<
     DaemonData,
-    'type' | 'providerControls' | 'controlValues'
+    'type' | 'providerControls' | 'controlValues' | 'muted'
 > | Pick<
     SessionEntry,
-    'providerType' | 'providerControls' | 'controlValues'
+    'providerType' | 'providerControls' | 'controlValues' | 'muted'
 >
 
 export function isNativeConversation(conversation: ActiveConversation): boolean {

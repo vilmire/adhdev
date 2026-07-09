@@ -416,6 +416,13 @@ export interface SessionEntry {
     completionMarker?: string;
     seenCompletionMarker?: string;
     surfaceHidden?: boolean;
+    /**
+     * User (or coordinator-policy) muted: suppress attention side-effects
+     * (notifications, toasts, completion audio) for this session WITHOUT removing
+     * it from the inbox list. Distinct from surfaceHidden (which collapses it from
+     * the list). Daemon-owned, in-memory; rides the status snapshot.
+     */
+    muted?: boolean;
     settings?: Record<string, any>;
     /**
      * True owning-daemon id for a session a coordinator synthesises into its own
@@ -488,6 +495,7 @@ export interface CompactSessionEntry {
     completionMarker?: string;
     seenCompletionMarker?: string;
     surfaceHidden?: boolean;
+    muted?: boolean;
     controlValues?: Record<string, string | number | boolean>;
     providerControls?: ProviderControlSchema[];
     summaryMetadata?: ProviderSummaryMetadata;

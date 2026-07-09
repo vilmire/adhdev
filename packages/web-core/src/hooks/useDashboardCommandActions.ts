@@ -198,17 +198,22 @@ export function useDashboardCommandActions({
     machineId: string,
     meshId: string,
     cliType: string,
+    opts?: { initialModel?: string | null; initialThinkingLevel?: string | null },
   ): Promise<LaunchResult> => {
     if (!meshId.trim()) return { ok: false, error: 'Choose a mesh first.' }
     // Cloud override
     if (meshOverrides?.launchMeshCoordinator) {
-      return meshOverrides.launchMeshCoordinator(machineId, meshId, cliType)
+      return meshOverrides.launchMeshCoordinator(machineId, meshId, cliType, opts)
     }
     // Standalone/local-only
     const startedAt = Date.now()
     try {
       const launchPayload: Record<string, unknown> = { meshId: meshId.trim() }
       if (cliType.trim()) launchPayload.cliType = cliType.trim()
+      const initialModel = opts?.initialModel?.trim()
+      const initialThinkingLevel = opts?.initialThinkingLevel?.trim()
+      if (initialModel) launchPayload.initialModel = initialModel
+      if (initialThinkingLevel) launchPayload.initialThinkingLevel = initialThinkingLevel
       const raw: any = await sendDaemonCommand(machineId, 'launch_mesh_coordinator', launchPayload)
       const result = raw?.result ?? raw
       if (result?.success === false || raw?.success === false) {

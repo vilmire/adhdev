@@ -5,13 +5,12 @@ import { compareConversationRecency, getConversationSortTimestamp, getPreferredC
 import type { ActiveConversation, DashboardMessage } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
 import { normalizeTextContent } from '../utils/text'
-import { isConversationHidden } from './useHiddenTabs'
+import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
 
 interface UseDashboardConversationsOptions {
     ides: DaemonData[]
     connectionStates: Record<string, string>
     clearedTabs: Record<string, number>
-    hiddenTabs: Set<string>
 }
 
 export function dedupeChatIdes(ides: DaemonData[]) {
@@ -232,9 +231,13 @@ export function useDashboardConversations({
     ides,
     connectionStates,
     clearedTabs,
-    hiddenTabs,
 }: UseDashboardConversationsOptions) {
     const chatIdes = useMemo(() => dedupeChatIdes(ides), [ides])
+    // Daemon-owned hidden split: a conversation is hidden from the tab strip /
+    // visible list when the daemon reports surfaceHidden (mesh-policy hidden,
+    // coordinator-spawned worker default, or the user's manual hide via
+    // set_conversation_prefs). Replaces the old localStorage hiddenTabs set.
+    const liveInboxState = useMemo(() => buildLiveSessionInboxStateMap(ides), [ides])
     const machineNames = useMemo(() => buildMachineNameMap(ides), [ides])
     const conversationsRef = useRef<ActiveConversation[]>([])
     const visibleConversationsRef = useRef<ActiveConversation[]>([])
@@ -353,11 +356,11 @@ export function useDashboardConversations({
     }, [conversationTargetMap])
 
     const visibleConversations = useMemo(() => {
-        const next = conversations.filter(conversation => !isConversationHidden(hiddenTabs, conversation))
+        const next = conversations.filter(conversation => !getConversationLiveInboxState(conversation, liveInboxState).surfaceHidden)
         if (sameArrayRefs(visibleConversationsRef.current, next)) return visibleConversationsRef.current
         visibleConversationsRef.current = next
         return next
-    }, [conversations, hiddenTabs])
+    }, [conversations, liveInboxState])
 
     const visibleTabKeys = useMemo(() => {
         const next = visibleConversations.map(conversation => conversation.tabKey)

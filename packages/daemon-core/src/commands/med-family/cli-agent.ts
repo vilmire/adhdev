@@ -64,6 +64,35 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
         return ctx.deps.cliManager.handleCliCommand('record_provider_pty', args);
     },
 
+    // Daemon-owned per-session user Mute/Hide. Replaces the old browser-local
+    // localStorage layer: the user's manual hide/mute for a conversation is stored
+    // in-memory on the live session's settings (userHidden / userMuted) and rides
+    // the SAME status snapshot pipeline as the coordinator-policy surfaceHidden
+    // flag, so every client of this daemon sees the same state. In-memory only —
+    // resets on daemon restart (coordinator-spawned sessions re-derive their hidden
+    // default from mesh policy on relaunch). Passing null/undefined for a field
+    // leaves it unchanged; pass an explicit boolean to set, or false to clear an
+    // earlier hide/mute (e.g. unmute a coordinator-spawned worker overrides the
+    // policy default until restart).
+    set_conversation_prefs: async (ctx: MedFamilyContext, args: any) => {
+        const sessionId = readStringValue(args?.sessionId, (args as any)?.targetSessionId, (args as any)?.instanceId);
+        if (!sessionId) return { success: false, error: 'sessionId required' };
+        const inst = ctx.deps.instanceManager.getInstance(sessionId);
+        if (!inst || typeof inst.updateSettings !== 'function') {
+            return { success: false, error: 'Session not found or does not support preferences' };
+        }
+        const patch: Record<string, unknown> = {};
+        if (typeof args?.hidden === 'boolean') patch.userHidden = args.hidden;
+        if (typeof args?.muted === 'boolean') patch.userMuted = args.muted;
+        if (!Object.keys(patch).length) return { success: false, error: 'Nothing to update (hidden and/or muted required)' };
+        inst.updateSettings(patch);
+        // Push a fresh status snapshot so all clients see the updated
+        // surfaceHidden/muted immediately (cloud path). The standalone server has a
+        // parallel broadcast gate keyed on the command name (see daemon-standalone).
+        ctx.deps.onStatusChange?.();
+        return { success: true, sessionId, ...patch };
+    },
+
     agent_command: async (ctx: MedFamilyContext, args: any) => {
         // Relay-safety stamp: a dispatch carrying meshContext.coordinatorDaemonId
         // (mesh_send_task / queue assignment over P2P) is the worker daemon's chance

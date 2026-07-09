@@ -3306,7 +3306,7 @@
             font-size: 10px;
         }
 
-        .page-dashboard .card.fade-in {
+        .page-dashboard .card.fade-in:not(.mobile-compact-dialog) {
             width: 100%;
             max-width: 100%;
             max-height: 100%;

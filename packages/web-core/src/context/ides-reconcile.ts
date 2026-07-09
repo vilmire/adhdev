@@ -286,6 +286,7 @@ function buildWeakMetadataUpdate(
         'completionMarker',
         'seenCompletionMarker',
         'surfaceHidden',
+        'muted',
         'runtimeKey',
         'runtimeDisplayName',
         'runtimeWorkspaceLabel',

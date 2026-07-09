@@ -66,9 +66,12 @@ describe('DashboardMobileChatInbox render behavior', () => {
     const hideIndex = html.indexOf('mobile-inbox-hide-button')
     const titleIndex = html.indexOf('Refactor mobile inbox')
 
+    // Layout: leading rail (avatar + Graph) → content (title) → top-right
+    // corner-actions cluster (timestamp · Mute · Hide · Stop). So Hide is icon-only
+    // in the corner cluster, rendered after the title in DOM order.
     expect(railIndex).toBeGreaterThanOrEqual(0)
     expect(hideIndex).toBeGreaterThan(railIndex)
-    expect(titleIndex).toBeGreaterThan(hideIndex)
+    expect(hideIndex).toBeGreaterThan(titleIndex)
     expect(html).not.toContain('Hide this chat from the inbox?')
   })
 
@@ -103,8 +106,11 @@ describe('DashboardMobileChatInbox render behavior', () => {
     const hideIndex = html.indexOf('mobile-inbox-hide-button')
     const meshIndex = html.indexOf('mobile-inbox-mesh-button')
 
-    expect(meshIndex).toBeGreaterThan(hideIndex)
-    expect(hideIndex).toBeGreaterThan(railIndex)
+    // Graph (mesh) button lives in the leading rail under the avatar (before the
+    // title); Hide lives in the top-right corner cluster (after). So the mesh
+    // button precedes Hide in DOM order and sits just after the rail marker.
+    expect(meshIndex).toBeGreaterThan(railIndex)
+    expect(hideIndex).toBeGreaterThan(meshIndex)
     expect(html).toContain('Open mesh graph for Refactor mobile inbox')
   })
 })

@@ -24,9 +24,9 @@ export default function CliStopDialog({
             <div
                 role="dialog"
                 aria-modal="true"
-                className="card fade-in relative w-full sm:w-[min(92vw,420px)] md:w-[92%] md:max-w-[420px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] flex flex-col overflow-hidden rounded-[24px] sm:rounded-[18px] shadow-[0_20px_40px_rgba(0,0,0,0.4)]"
+                className="card fade-in mobile-compact-dialog relative w-full sm:w-[min(92vw,420px)] md:w-[92%] md:max-w-[420px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] flex flex-col overflow-hidden rounded-[24px] sm:rounded-[18px] shadow-[0_20px_40px_rgba(0,0,0,0.4)]"
             >
-                <div className="px-4 py-4 md:px-6 md:py-5 border-b border-border-subtle bg-[var(--surface-primary)]">
+                <div className="px-4 py-4 md:px-6 md:py-5 border-b border-border-subtle bg-bg-primary">
                     <h3 className="m-0 text-base md:text-lg font-extrabold">Stop {agentLabel}?</h3>
                     <div className="mt-1 text-[13px] md:text-sm text-text-muted leading-relaxed">
                         {canSaveAndStop

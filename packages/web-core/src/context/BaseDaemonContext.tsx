@@ -136,6 +136,7 @@ export interface CompactSessionEntry {
     completionMarker?: string
     seenCompletionMarker?: string
     surfaceHidden?: boolean
+    muted?: boolean
     controlValues?: DaemonData['controlValues']
     providerControls?: DaemonData['providerControls']
     summaryMetadata?: DaemonData['summaryMetadata']
@@ -290,6 +291,7 @@ export function expandCompactDaemons(
                 ...(ide.completionMarker !== undefined && { completionMarker: ide.completionMarker }),
                 ...(ide.seenCompletionMarker !== undefined && { seenCompletionMarker: ide.seenCompletionMarker }),
                 ...(ide.surfaceHidden !== undefined && { surfaceHidden: ide.surfaceHidden }),
+                ...(ide.muted !== undefined && { muted: ide.muted }),
                 ...(ide.controlValues !== undefined && { controlValues: ide.controlValues }),
                 ...(ide.providerControls !== undefined && { providerControls: ide.providerControls }),
                 summaryMetadata: ide.summaryMetadata,
@@ -337,6 +339,7 @@ export function expandCompactDaemons(
                 ...(cli.completionMarker !== undefined && { completionMarker: cli.completionMarker }),
                 ...(cli.seenCompletionMarker !== undefined && { seenCompletionMarker: cli.seenCompletionMarker }),
                 ...(cli.surfaceHidden !== undefined && { surfaceHidden: cli.surfaceHidden }),
+                ...(cli.muted !== undefined && { muted: cli.muted }),
                 ...(cli.controlValues !== undefined && { controlValues: cli.controlValues }),
                 ...(cli.providerControls !== undefined && { providerControls: cli.providerControls }),
                 summaryMetadata: cli.summaryMetadata,
@@ -385,6 +388,7 @@ export function expandCompactDaemons(
                 ...(acp.completionMarker !== undefined && { completionMarker: acp.completionMarker }),
                 ...(acp.seenCompletionMarker !== undefined && { seenCompletionMarker: acp.seenCompletionMarker }),
                 ...(acp.surfaceHidden !== undefined && { surfaceHidden: acp.surfaceHidden }),
+                ...(acp.muted !== undefined && { muted: acp.muted }),
                 ...(acp.controlValues !== undefined && { controlValues: acp.controlValues }),
                 ...(acp.providerControls !== undefined && { providerControls: acp.providerControls }),
                 summaryMetadata: acp.summaryMetadata,

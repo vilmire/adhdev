@@ -146,6 +146,7 @@ export function buildIdeConversations(
         inboxBucket?: RecentSessionBucket;
         completionMarker?: string;
         surfaceHidden?: boolean;
+        muted?: boolean;
         git?: GitCompactSummary;
         settings?: Record<string, any>;
         coordinator?: { meshId: string; role: 'coordinator' };
@@ -174,6 +175,7 @@ export function buildIdeConversations(
             inboxBucket: child.inboxBucket,
             completionMarker: child.completionMarker,
             surfaceHidden: child.surfaceHidden,
+            muted: child.muted,
             git: child.git,
             settings: child.settings,
             coordinator: child.coordinator,

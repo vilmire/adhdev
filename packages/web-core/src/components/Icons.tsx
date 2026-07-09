@@ -490,6 +490,17 @@ export function IconBell({ size = defaults.size, className }: IconProps) {
   );
 }
 
+export function IconBellOff({ size = defaults.size, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M8.7 3A6 6 0 0 1 18 8c0 3 .6 5 1.4 6.5" />
+      <path d="M17 17H3s3-2 3-9a5.98 5.98 0 0 1 .6-2.6" />
+      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+      <line x1="2" y1="2" x2="22" y2="22" />
+    </svg>
+  );
+}
+
 // ─── Theme Toggle ────────────────────────────────
 
 export function IconSun({ size = defaults.size, className }: IconProps) {

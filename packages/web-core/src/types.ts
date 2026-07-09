@@ -193,6 +193,7 @@ export interface BaseDaemonData {
     completionMarker?: string;
     seenCompletionMarker?: string;
     surfaceHidden?: boolean;
+    muted?: boolean;
     lastMessagePreview?: string;
     lastMessageRole?: string;
     lastMessageAt?: number;

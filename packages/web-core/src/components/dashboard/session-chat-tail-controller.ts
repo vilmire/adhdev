@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { buildChatMessageSignature } from '@adhdev/daemon-core/chat/chat-signatures'
 import type { SessionChatTailUpdate, SubscribeRequest } from '@adhdev/daemon-core'
 import type { ActiveConversation, DashboardMessage } from './types'
@@ -97,6 +97,30 @@ const WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES = new Set([
   'working',
 ])
 const controllerRegistry = new Map<string, SessionChatTailController>()
+
+// Bumped whenever a controller is added to / removed from the registry. Lets
+// reactive consumers (useWarmSessionChatTailSnapshotVersion) re-run their
+// per-controller subscription effect when membership changes — the warm-retain
+// effect may create a controller AFTER the version hook's effect first ran, so
+// the version hook needs a signal to (re)subscribe once the controller exists.
+let controllerRegistryGeneration = 0
+const controllerRegistryListeners = new Set<() => void>()
+
+function notifyControllerRegistryChanged(): void {
+  controllerRegistryGeneration += 1
+  for (const listener of controllerRegistryListeners) listener()
+}
+
+function subscribeControllerRegistry(listener: () => void): () => void {
+  controllerRegistryListeners.add(listener)
+  return () => {
+    controllerRegistryListeners.delete(listener)
+  }
+}
+
+function getControllerRegistryGeneration(): number {
+  return controllerRegistryGeneration
+}
 
 function getControllerKey(daemonId: string, sessionId: string, historySessionId?: string): string {
   return `${daemonId}::${sessionId}::${historySessionId || sessionId}`
@@ -803,6 +827,7 @@ export function getOrCreateSessionChatTailController(options: SessionChatTailCon
   }
   const controller = new SessionChatTailController(options)
   controllerRegistry.set(key, controller)
+  notifyControllerRegistryChanged()
   return controller
 }
 
@@ -1158,4 +1183,77 @@ export function useWarmSessionChatTailControllers(
       controllers.forEach((controller) => controller.release())
     }
   }, [descriptorState.signature, enabled, sendData, tailLimit])
+}
+
+/**
+ * (B2) Reactive version counter that bumps whenever any warm chat_tail controller
+ * for the given conversations emits a new snapshot.
+ *
+ * The mobile inbox derives its list-item preview/timestamp from the warm
+ * controller snapshots via getSessionChatTailSnapshotForConversation(), which is
+ * an imperative read of a non-reactive module-level registry Map. That read alone
+ * does NOT re-run the inbox `items` memo when a `session.chat_tail` push updates a
+ * controller — so previews only refreshed when some OTHER dependency (e.g. opening
+ * and closing a conversation) forced the memo to recompute.
+ *
+ * This hook subscribes to the same controllers the inbox reads and returns a
+ * number that increments on every snapshot change. Feed the returned value into
+ * the inbox `items` memo dependency array so the memo recomputes (and re-reads the
+ * now-updated snapshot) as soon as a new tail arrives — no re-entry required.
+ */
+export function useWarmSessionChatTailSnapshotVersion(
+  conversations: ActiveConversation[],
+): number {
+  const [version, setVersion] = useState(0)
+
+  const controllerKeys = useMemo(() => {
+    const keys: string[] = []
+    for (const conversation of conversations) {
+      const daemonId = getConversationDaemonRouteId(conversation)
+      const sessionId = conversation.sessionId || ''
+      if (!daemonId || !sessionId) continue
+      const historySessionIdForRead = getConversationHistorySessionIdForRead(conversation)
+      keys.push(getControllerKey(daemonId, sessionId, historySessionIdForRead || sessionId))
+    }
+    return keys
+  }, [conversations])
+
+  const controllerKeySignature = controllerKeys.join('|')
+
+  // Track registry membership changes so we (re)subscribe once a warm controller
+  // for one of our keys is actually created (it may not exist yet at first run).
+  const registryGeneration = useSyncExternalStore(
+    subscribeControllerRegistry,
+    getControllerRegistryGeneration,
+    getControllerRegistryGeneration,
+  )
+
+  useEffect(() => {
+    if (controllerKeys.length === 0) return
+    const unsubscribes: Array<() => void> = []
+    for (const key of controllerKeys) {
+      const controller = controllerRegistry.get(key)
+      if (!controller) continue
+      // subscribe() synchronously seeds the listener once with the current
+      // snapshot; skip that first call so mount/(re)subscribe doesn't bump.
+      let seededSnapshot = false
+      unsubscribes.push(
+        controller.subscribe(() => {
+          if (!seededSnapshot) {
+            seededSnapshot = true
+            return
+          }
+          setVersion((prev) => prev + 1)
+        }),
+      )
+    }
+    return () => {
+      for (const unsubscribe of unsubscribes) unsubscribe()
+    }
+    // Re-run on membership change (controllerKeySignature) and when a controller
+    // is added/removed from the registry (registryGeneration) so late-created
+    // warm controllers get subscribed.
+  }, [controllerKeySignature, registryGeneration])
+
+  return version
 }

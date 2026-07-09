@@ -48,6 +48,18 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                 const extraSystemPrompt = typeof args?.extraSystemPrompt === 'string'
                     ? args.extraSystemPrompt.trim()
                     : '';
+                // Optional per-launch model / thinking-level override for the
+                // coordinator session. Passed straight through to launch_cli,
+                // which applies them best-effort for providers that support it
+                // (claude --effort, codex model_reasoning_effort). Blank / absent
+                // => provider default. This is a launch-time override only; it is
+                // NOT persisted to the mesh coordinator config.
+                const initialModel = typeof args?.initialModel === 'string' && args.initialModel.trim()
+                    ? args.initialModel.trim()
+                    : null;
+                const initialThinkingLevel = typeof args?.initialThinkingLevel === 'string' && args.initialThinkingLevel.trim()
+                    ? args.initialThinkingLevel.trim()
+                    : null;
                 if (!meshId) return { success: false, error: 'meshId required' };
 
                 try {
@@ -390,6 +402,8 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             cliArgs: cliCmdArgs.length > 0 ? cliCmdArgs : undefined,
                             env: Object.keys(cliCmdEnv).length > 0 ? cliCmdEnv : undefined,
                             settings: { meshCoordinatorFor: meshId },
+                            ...(initialModel ? { initialModel } : {}),
+                            ...(initialThinkingLevel ? { initialThinkingLevel } : {}),
                         });
 
                         // R48 inject-then-remove. Spawn was just kicked off above; agy and
@@ -609,7 +623,9 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         env: Object.keys(launchEnv).length > 0 ? launchEnv : undefined,
                         settings: {
                             meshCoordinatorFor: meshId
-                        }
+                        },
+                        ...(initialModel ? { initialModel } : {}),
+                        ...(initialThinkingLevel ? { initialThinkingLevel } : {}),
                     });
 
                     // R48 inject-then-remove. See the cli_command branch for context;

@@ -63,7 +63,6 @@ describe('DashboardNewSessionDialog', () => {
     expect(html).toContain('Workspace')
     expect(html).toContain('Mesh')
     expect(html).toContain('Coordinator session')
-    expect(html).toContain('Start from a normal workspace, or select a repo mesh and run a mesh coordinator.')
   })
 
   it('shows machines as direct-click chips when there are five or fewer machines', () => {

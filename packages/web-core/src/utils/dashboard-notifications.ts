@@ -35,6 +35,7 @@ export interface DashboardNotificationLiveState {
   lastUpdated?: number
   inboxBucket?: RecentSessionBucket
   surfaceHidden?: boolean
+  muted?: boolean
 }
 
 export const MAX_DASHBOARD_NOTIFICATIONS = 80
@@ -114,7 +115,9 @@ export function buildDashboardNotificationCandidates(
 
   for (const conversation of conversations) {
     const liveState = conversation.sessionId ? stateBySessionId.get(conversation.sessionId) : undefined
-    if (liveState?.surfaceHidden) continue
+    // surfaceHidden collapses from the list entirely; muted keeps it in the list
+    // but must not raise a notification (attention side-effect).
+    if (liveState?.surfaceHidden || liveState?.muted) continue
 
     const surfaceState = getConversationInboxSurfaceState(conversation, stateBySessionId)
     const type: DashboardNotificationType | null = surfaceState.inboxBucket === 'needs_attention'

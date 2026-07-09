@@ -62,7 +62,12 @@ interface DashboardNewSessionDialogProps {
         },
     ) => Promise<{ ok: boolean; error?: string }>
     onListMeshes: (machineId: string) => Promise<MeshLaunchOption[]>
-    onLaunchMeshCoordinator: (machineId: string, meshId: string, cliType: string) => Promise<LaunchResult>
+    onLaunchMeshCoordinator: (
+        machineId: string,
+        meshId: string,
+        cliType: string,
+        opts?: { initialModel?: string | null; initialThinkingLevel?: string | null },
+    ) => Promise<LaunchResult>
     onListSavedSessions: (machineId: string, providerType: string) => Promise<SavedSessionOption[]>
 }
 
@@ -240,13 +245,13 @@ export default function DashboardNewSessionDialog({
             ? cliProviders.map(provider => ({
                 id: provider.type,
                 label: provider.displayName || provider.type,
-                meta: 'CLI provider',
+                meta: '',
             }))
             : activeKind === 'acp'
                 ? acpProviders.map(provider => ({
                     id: provider.type,
                     label: provider.displayName || provider.type,
-                    meta: 'ACP provider',
+                    meta: '',
                 }))
                 : ideTargets,
         [acpProviders, activeKind, cliProviders, ideTargets],
@@ -582,7 +587,10 @@ export default function DashboardNewSessionDialog({
             setBusy(true)
             setMessage('')
             setMeshManualSetup(null)
-            const result = await onLaunchMeshCoordinator(selectedMachine.id, selectedMeshId, selectedTarget)
+            const result = await onLaunchMeshCoordinator(selectedMachine.id, selectedMeshId, selectedTarget, {
+                initialModel: initialModel.trim() ? initialModel.trim() : null,
+                initialThinkingLevel: initialThinkingLevel.trim() ? initialThinkingLevel.trim() : null,
+            })
             setBusy(false)
             if (!result.ok) {
                 if (result.code === 'mesh_coordinator_manual_mcp_setup_required' && result.manualSetup) {
@@ -673,9 +681,6 @@ export default function DashboardNewSessionDialog({
                             <h2 id="dashboard-new-title" className="m-0 text-base font-semibold text-text-primary">
                                 Start session
                             </h2>
-                            <p className="m-0 mt-1 text-xs leading-relaxed text-text-muted">
-                                Pick a machine and workspace, then choose whether to start fresh or resume saved history.
-                            </p>
                         </div>
                         <button
                             type="button"
@@ -736,7 +741,6 @@ export default function DashboardNewSessionDialog({
 
                         <LaunchSectionCard
                             title="Workspace"
-                            description="Start from a normal workspace, or select a repo mesh and run a mesh coordinator."
                             action={workspaceMode === 'workspace' ? (
                                 <button
                                     type="button"
@@ -863,11 +867,6 @@ export default function DashboardNewSessionDialog({
                                             ))}
                                         </div>
                                     )}
-                                    {selectedMesh && (
-                                        <div className="text-[11px] text-text-muted">
-                                            Mesh coordinators use the selected CLI provider and the mesh's configured coordinator workspace.
-                                        </div>
-                                    )}
                                 </div>
                             )}
                         </LaunchSectionCard>
@@ -896,7 +895,7 @@ export default function DashboardNewSessionDialog({
                                         disabled={busy}
                                     >
                                         <div className="text-sm font-semibold text-text-primary">{target.label}</div>
-                                        <div className="text-xs text-text-secondary mt-1">{target.meta}</div>
+                                        {target.meta && <div className="text-xs text-text-secondary mt-1">{target.meta}</div>}
                                     </button>
                                 ))}
                                 {providerTargets.length === 0 && (
@@ -943,7 +942,7 @@ export default function DashboardNewSessionDialog({
                             </LaunchSectionCard>
                         )}
 
-                        {workspaceMode !== 'mesh' && activeKind !== 'ide' && (
+                        {((workspaceMode === 'mesh' && !!selectedTarget) || (workspaceMode !== 'mesh' && activeKind !== 'ide')) && (
                             <LaunchSectionCard title="Model & thinking (optional)">
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                     <label className="flex flex-col gap-1">
@@ -1003,7 +1002,6 @@ export default function DashboardNewSessionDialog({
                                         </select>
                                     </label>
                                 </div>
-                                <p className="mt-1.5 text-[11px] text-text-muted">Best-effort: applied at launch by providers that support it (e.g. claude, codex). Blank = provider default.</p>
                             </LaunchSectionCard>
                         )}
 

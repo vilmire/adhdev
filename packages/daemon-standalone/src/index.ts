@@ -2375,6 +2375,7 @@ class StandaloneServer {
         unread: session.unread,
         inboxBucket: session.inboxBucket,
         surfaceHidden: session.surfaceHidden,
+        muted: session.muted,
       })),
     });
   }
@@ -2434,7 +2435,7 @@ class StandaloneServer {
     }
     const result = await this.components.router.execute(type, args, 'standalone');
     const affectsMeshGraphStatus = commandMayAffectMeshGraphStatus(type);
-    if (type === 'invoke_provider_script' || type.startsWith('workspace_') || type.startsWith('session_host_') || affectsMeshGraphStatus) {
+    if (type === 'invoke_provider_script' || type === 'set_conversation_prefs' || type.startsWith('workspace_') || type.startsWith('session_host_') || affectsMeshGraphStatus) {
       this.scheduleBroadcastStatus();
     }
     if (

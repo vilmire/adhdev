@@ -34,6 +34,47 @@ import {
 } from '../providers/open-panel-support.js';
 import { TEXT_ONLY_MESSAGE_INPUT_SUPPORT } from '../providers/provider-input-support.js';
 
+/**
+ * A coordinator-spawned worker session that mesh policy launched hidden. This is
+ * the daemon-side equivalent of the web `shouldAutoHideMeshConversation` predicate:
+ * these sessions should default to muted+hidden in the user dashboard (the user
+ * interacts through the ONE coordinator session, not each worker), while the
+ * coordinator↔worker mesh data/completion path (mesh-event-forwarding) is
+ * unaffected.
+ */
+function isCoordinatorSpawnedHiddenWorker(settings: Record<string, any> | undefined): boolean {
+    if (!settings) return false;
+    return settings.launchedByCoordinator === true
+        && typeof settings.meshNodeFor === 'string'
+        && settings.meshNodeFor.trim().length > 0
+        && settings.spawnedSessionVisibility === 'hidden';
+}
+
+/**
+ * A session is surface-hidden (collapsed from the user's inbox/notifications) when
+ * mesh policy spawned it hidden, OR when a coordinator-spawned worker defaults
+ * hidden, OR when the user manually hid it (userHidden). userHidden === false is an
+ * explicit un-hide that overrides the policy/worker default until daemon restart.
+ */
+function resolveSurfaceHidden(settings: Record<string, any> | undefined): boolean {
+    if (!settings) return false;
+    if (settings.userHidden === true) return true;
+    if (settings.userHidden === false) return false;
+    return settings.spawnedSessionVisibility === 'hidden' || isCoordinatorSpawnedHiddenWorker(settings);
+}
+
+/**
+ * A session is muted (attention side-effects suppressed, but still shown in the
+ * list) when the user muted it, OR a coordinator-spawned worker defaults muted.
+ * userMuted === false is an explicit un-mute overriding the worker default.
+ */
+function resolveMuted(settings: Record<string, any> | undefined): boolean {
+    if (!settings) return false;
+    if (settings.userMuted === true) return true;
+    if (settings.userMuted === false) return false;
+    return isCoordinatorSpawnedHiddenWorker(settings);
+}
+
 export type SessionEntryProfile = 'full' | 'live' | 'metadata';
 
 export interface SessionEntryBuildOptions {
@@ -342,7 +383,8 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         settings: state.settings,
         ...(coordinator && { coordinator }),
         ...(meshQueueStats && { meshQueueStats }),
-        ...(state.settings?.spawnedSessionVisibility === 'hidden' && { surfaceHidden: true }),
+        ...(resolveSurfaceHidden(state.settings) && { surfaceHidden: true }),
+        ...(resolveMuted(state.settings) && { muted: true }),
     };
 }
 
@@ -384,7 +426,8 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
         settings: state.settings,
         ...(coordinator && { coordinator }),
         ...(meshQueueStats && { meshQueueStats }),
-        ...(state.settings?.spawnedSessionVisibility === 'hidden' && { surfaceHidden: true }),
+        ...(resolveSurfaceHidden(state.settings) && { surfaceHidden: true }),
+        ...(resolveMuted(state.settings) && { muted: true }),
     };
 }
 
