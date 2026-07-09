@@ -24,7 +24,10 @@ describe('Repo Mesh coordinator prompt', () => {
       coordinatorCliType: 'claude-cli',
     })
 
-    expect(prompt).toContain('Maximum **2** tasks running in parallel')
+    // The mesh-wide cap defaults high (200) but resolveMaxParallelTasks clamps the
+    // rendered value to MESH_MAX_PARALLEL_TASKS_MAX (64). The cap is de-emphasized
+    // now that real limits live per capability slot (ORCHESTRATION_NODE_SLOTS.md).
+    expect(prompt).toContain('Maximum **64** tasks running in parallel')
     expect(prompt).toContain('Hermes → `hermes-cli`')
     expect(prompt).toContain('Never substitute the coordinator')
     expect(prompt).toContain('Coordinator runtime is not a delegation default')

@@ -46,7 +46,8 @@ import {
   meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshLedgerQuery, meshWaitEvents, meshRecordNote, meshForgetNote, meshReconcileLedger, meshRequeueHeldEvents, meshMissionUpsert,
   meshMissionList, meshReviewInbox,
   meshMagiReview, meshMagiCollect,
-  meshMagiKindPanelSet, meshMagiKindPanelList, meshWriteMeshJsonConfig
+  meshMagiKindPanelSet, meshMagiKindPanelList, meshWriteMeshJsonConfig,
+  meshNodeSlotsSet, meshNodeSlotsList
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 
@@ -256,6 +257,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_magi_collect': text = await meshMagiCollect(meshCtx, a as any); break;
           case 'mesh_magi_kind_panel_set': text = await meshMagiKindPanelSet(meshCtx, a as any); break;
           case 'mesh_magi_kind_panel_list': text = await meshMagiKindPanelList(meshCtx, a as any); break;
+          case 'mesh_node_slots_set': text = await meshNodeSlotsSet(meshCtx, a as any); break;
+          case 'mesh_node_slots_list': text = await meshNodeSlotsList(meshCtx, a as any); break;
           default: return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
         }
         return { content: [{ type: 'text', text }] };

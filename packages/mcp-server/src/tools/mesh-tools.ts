@@ -140,6 +140,11 @@ export {
 } from './mesh-tools-magi.js';
 
 export {
+    meshNodeSlotsSet,
+    meshNodeSlotsList,
+} from './mesh-tools-slots.js';
+
+export {
     computeIdleDispatchAckRisk,
     meshApprove,
     meshListPendingApprovals,

@@ -1306,6 +1306,46 @@ var MESH_MAGI_KIND_PANEL_LIST_TOOL = {
     }
   }
 };
+var MESH_NODE_SLOTS_SET_TOOL = {
+  name: "mesh_node_slots_set",
+  description: "PROPOSE (dry-run) or APPLY a mesh node's capability-slot list (policy.slots) \u2014 the orchestrator's surface for autonomously adjusting a node's AI-tool profile mid-run (ORCHESTRATION_NODE_SLOTS.md \xA75). A node's slots drive task\u2192node fitness routing and MAGI fan-out, so changing them changes how work is distributed. IMPORTANT \u2014 WHOLESALE REPLACEMENT: the `slots` you pass become the node's COMPLETE new slot list; any prior slot not in the list is dropped (not merged). Because it silently replaces the profile, get EXPLICIT user approval before writing: the default dry-run (write=false) returns `currentSlots` vs `proposedSlots` for you to present as a diff \u2014 re-run with write=true ONLY after the user approves. Apply goes through update_mesh_node (machine-local node policy).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "REQUIRED \u2014 the mesh node id whose capability slots to set." },
+      slots: {
+        type: "array",
+        description: "The COMPLETE desired capability-slot list for this node (wholesale replacement). Each slot: { provider (REQUIRED), model?, thinkingLevel?, difficulty?, capability?, maxParallel? }.",
+        items: {
+          type: "object",
+          properties: {
+            provider: { type: "string", description: "REQUIRED \u2014 provider type, e.g. claude-cli / codex-cli / gemini-cli / hermes-cli." },
+            model: { type: "string", description: "Optional \u2014 model for this slot (best-effort at launch, e.g. opus / gpt-5-codex)." },
+            thinkingLevel: { type: "string", description: "Optional \u2014 provider-specific thinking level verbatim (e.g. low/medium/high/max, or codex minimal/xhigh)." },
+            difficulty: { type: "array", items: { type: "string" }, description: "Optional \u2014 task difficulties this slot handles (easy/medium/difficult/freeform). Empty = all (general-purpose)." },
+            capability: { type: "array", items: { type: "string" }, description: "Optional \u2014 capability tags this slot satisfies (matched against a task's requiredTags)." },
+            maxParallel: { type: "number", description: "Optional \u2014 per-node\xB7per-slot max concurrent tasks. Omit = no per-slot cap." }
+          },
+          required: ["provider"]
+        }
+      },
+      reason: { type: "string", description: "Optional \u2014 a short rationale for the proposal, echoed in the dry-run so the user sees WHY the change is suggested." },
+      write: { type: "boolean", description: "When true, apply the slot list (wholesale replacement) to the node. Defaults false (dry-run preview of proposedSlots + currentSlots)." }
+    },
+    required: ["node_id", "slots"]
+  }
+};
+var MESH_NODE_SLOTS_LIST_TOOL = {
+  name: "mesh_node_slots_list",
+  description: "List a mesh node's capability slots (policy.slots). Read-only. Use to confirm the current AI-tool profile of a node and to diff current-vs-proposed before a mesh_node_slots_set overwrite.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "REQUIRED \u2014 the mesh node id whose capability slots to list." }
+    },
+    required: ["node_id"]
+  }
+};
 var MESH_WRITE_MESH_JSON_CONFIG_TOOL = {
   name: "mesh_write_mesh_json_config",
   description: "Write `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Gated WRITE sibling of the draft-only export_mesh_json_config. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false), never clobbers an existing repo mesh.json unless overwrite=true, and validates before writing. Overwrite silently replaces the file, so present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope (commit target) \u2014 distinct from the machine-local MAGI kind-panel writes.",
@@ -1361,7 +1401,9 @@ var ALL_MESH_TOOLS = [
   MESH_MAGI_REVIEW_TOOL,
   MESH_MAGI_COLLECT_TOOL,
   MESH_MAGI_KIND_PANEL_SET_TOOL,
-  MESH_MAGI_KIND_PANEL_LIST_TOOL
+  MESH_MAGI_KIND_PANEL_LIST_TOOL,
+  MESH_NODE_SLOTS_SET_TOOL,
+  MESH_NODE_SLOTS_LIST_TOOL
 ];
 
 // src/tools/mesh-compact.ts
@@ -5890,6 +5932,149 @@ ${magiOutputContractFor(kind)}`;
   return { responses, terminal, timedOut: !terminal, staleCount, retriedCount: retried.size };
 }
 
+// ../mesh-shared/dist/index.mjs
+var MESH_TASK_DIFFICULTIES = ["easy", "medium", "difficult", "freeform"];
+function isMeshTaskDifficulty(value) {
+  return typeof value === "string" && MESH_TASK_DIFFICULTIES.includes(value);
+}
+function normalizeNodeCapabilitySlot(raw) {
+  const r = raw && typeof raw === "object" ? raw : {};
+  const provider = typeof r.provider === "string" ? r.provider.trim() : "";
+  if (!provider) return null;
+  const model = typeof r.model === "string" ? r.model.trim() : "";
+  const thinkingLevel = typeof r.thinkingLevel === "string" ? r.thinkingLevel.trim() : "";
+  const difficulty = Array.isArray(r.difficulty) ? r.difficulty.filter(isMeshTaskDifficulty) : [];
+  const capability = Array.isArray(r.capability) ? r.capability.filter((t) => typeof t === "string" && !!t.trim()).map((t) => t.trim()) : [];
+  const maxParallelNum = Number(r.maxParallel);
+  const maxParallel = Number.isFinite(maxParallelNum) && maxParallelNum > 0 ? Math.floor(maxParallelNum) : void 0;
+  return {
+    provider,
+    ...model ? { model } : {},
+    ...thinkingLevel ? { thinkingLevel } : {},
+    ...difficulty.length ? { difficulty } : {},
+    ...capability.length ? { capability } : {},
+    ...maxParallel !== void 0 ? { maxParallel } : {}
+  };
+}
+function normalizeNodeCapabilitySlots(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const entry of raw) {
+    const slot = normalizeNodeCapabilitySlot(entry);
+    if (slot) out.push(slot);
+  }
+  return out;
+}
+var CANONICAL_MESH_TOOL_NAMES = [
+  "mesh_status",
+  "mesh_list_nodes",
+  "mesh_enqueue_task",
+  "mesh_view_queue",
+  "mesh_queue_cancel",
+  "mesh_queue_requeue",
+  "mesh_send_task",
+  "mesh_read_chat",
+  "mesh_read_debug",
+  "mesh_launch_session",
+  "mesh_git_status",
+  "mesh_read_node_logs",
+  "mesh_fast_forward_node",
+  "mesh_restart_daemon",
+  "mesh_checkpoint",
+  "mesh_approve",
+  "mesh_list_pending_approvals",
+  "mesh_clone_node",
+  "mesh_remove_node",
+  "mesh_refine_node",
+  "mesh_refine_batch",
+  "mesh_refine_config",
+  "mesh_change_impact_config",
+  "mesh_init",
+  "mesh_reinit",
+  "mesh_write_mesh_json_config",
+  "mesh_refine_plan",
+  "mesh_cleanup_sessions",
+  "mesh_prune_stale_direct",
+  "mesh_task_history",
+  "mesh_ledger_query",
+  "mesh_record_note",
+  "mesh_forget_note",
+  "mesh_reconcile_ledger",
+  "mesh_requeue_held_events",
+  "mesh_wait_events",
+  "mesh_mission_upsert",
+  "mesh_mission_list",
+  "mesh_review_inbox",
+  "mesh_magi_review",
+  "mesh_magi_collect",
+  "mesh_magi_kind_panel_set",
+  "mesh_magi_kind_panel_list",
+  "mesh_node_slots_set",
+  "mesh_node_slots_list"
+];
+var CANONICAL_MESH_TOOL_COUNT = CANONICAL_MESH_TOOL_NAMES.length;
+
+// src/tools/mesh-tools-slots.ts
+function readNodeSlots(node) {
+  return normalizeNodeCapabilitySlots(node?.policy?.slots);
+}
+async function meshNodeSlotsList(ctx, args = {}) {
+  const nodeId = String(args.node_id || args.nodeId || "").trim();
+  if (!nodeId) return JSON.stringify({ success: false, error: "node_id required" });
+  try {
+    const node = await findNodeWithRefresh(ctx, nodeId);
+    return JSON.stringify({
+      success: true,
+      nodeId: node.id,
+      slots: readNodeSlots(node)
+    }, null, 2);
+  } catch (e) {
+    return JSON.stringify({ success: false, error: e?.message || String(e) });
+  }
+}
+async function meshNodeSlotsSet(ctx, args) {
+  const nodeId = String(args.node_id || args.nodeId || "").trim();
+  if (!nodeId) return JSON.stringify({ success: false, error: "node_id required" });
+  const write = args.write === true;
+  try {
+    const node = await findNodeWithRefresh(ctx, nodeId);
+    const current = readNodeSlots(node);
+    const proposed = normalizeNodeCapabilitySlots(args.slots);
+    if (!write) {
+      return JSON.stringify({
+        success: true,
+        dryRun: true,
+        nodeId: node.id,
+        replacement: true,
+        ...typeof args.reason === "string" && args.reason.trim() ? { reason: args.reason.trim() } : {},
+        currentSlots: current,
+        proposedSlots: proposed,
+        note: "Dry-run only \u2014 nothing written. This is a WHOLESALE replacement of the node's capability slots (policy.slots): currentSlots would be fully replaced by proposedSlots. Present this diff to the user and re-run with write=true ONLY after explicit approval."
+      }, null, 2);
+    }
+    const raw = await commandForNode(ctx, node, "update_mesh_node", {
+      meshId: ctx.mesh.id,
+      nodeId: node.id,
+      policy: { slots: proposed }
+    });
+    const result = unwrapCommandPayload(raw);
+    if (result?.success === false) {
+      return JSON.stringify({ success: false, error: result.error || "update_mesh_node failed" });
+    }
+    return JSON.stringify({
+      success: true,
+      written: true,
+      nodeId: node.id,
+      replacement: true,
+      previousSlots: current,
+      slots: proposed,
+      nextAction: "Verify with mesh_node_slots_list. Slot-fitness routing picks these up on the next queue drain."
+    }, null, 2);
+  } catch (e) {
+    return JSON.stringify({ success: false, error: e?.message || String(e) });
+  }
+}
+
 // src/tools/mesh-tools-session.ts
 function computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, sessionId) {
   if (!sessionWasIdle || dispatchPreRecorded) return {};
@@ -8286,6 +8471,12 @@ async function startMcpServer(opts) {
             break;
           case "mesh_magi_kind_panel_list":
             text = await meshMagiKindPanelList(meshCtx, a);
+            break;
+          case "mesh_node_slots_set":
+            text = await meshNodeSlotsSet(meshCtx, a);
+            break;
+          case "mesh_node_slots_list":
+            text = await meshNodeSlotsList(meshCtx, a);
             break;
           default:
             return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };

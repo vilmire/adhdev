@@ -768,6 +768,48 @@ export const MESH_MAGI_KIND_PANEL_LIST_TOOL = {
     },
 };
 
+export const MESH_NODE_SLOTS_SET_TOOL = {
+    name: 'mesh_node_slots_set',
+    description: 'PROPOSE (dry-run) or APPLY a mesh node\'s capability-slot list (policy.slots) — the orchestrator\'s surface for autonomously adjusting a node\'s AI-tool profile mid-run (ORCHESTRATION_NODE_SLOTS.md §5). A node\'s slots drive task→node fitness routing and MAGI fan-out, so changing them changes how work is distributed. IMPORTANT — WHOLESALE REPLACEMENT: the `slots` you pass become the node\'s COMPLETE new slot list; any prior slot not in the list is dropped (not merged). Because it silently replaces the profile, get EXPLICIT user approval before writing: the default dry-run (write=false) returns `currentSlots` vs `proposedSlots` for you to present as a diff — re-run with write=true ONLY after the user approves. Apply goes through update_mesh_node (machine-local node policy).',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'REQUIRED — the mesh node id whose capability slots to set.' },
+            slots: {
+                type: 'array',
+                description: 'The COMPLETE desired capability-slot list for this node (wholesale replacement). Each slot: { provider (REQUIRED), model?, thinkingLevel?, difficulty?, capability?, maxParallel? }.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        provider: { type: 'string', description: 'REQUIRED — provider type, e.g. claude-cli / codex-cli / gemini-cli / hermes-cli.' },
+                        model: { type: 'string', description: 'Optional — model for this slot (best-effort at launch, e.g. opus / gpt-5-codex).' },
+                        thinkingLevel: { type: 'string', description: 'Optional — provider-specific thinking level verbatim (e.g. low/medium/high/max, or codex minimal/xhigh).' },
+                        difficulty: { type: 'array', items: { type: 'string' }, description: 'Optional — task difficulties this slot handles (easy/medium/difficult/freeform). Empty = all (general-purpose).' },
+                        capability: { type: 'array', items: { type: 'string' }, description: 'Optional — capability tags this slot satisfies (matched against a task\'s requiredTags).' },
+                        maxParallel: { type: 'number', description: 'Optional — per-node·per-slot max concurrent tasks. Omit = no per-slot cap.' },
+                    },
+                    required: ['provider'],
+                },
+            },
+            reason: { type: 'string', description: 'Optional — a short rationale for the proposal, echoed in the dry-run so the user sees WHY the change is suggested.' },
+            write: { type: 'boolean', description: 'When true, apply the slot list (wholesale replacement) to the node. Defaults false (dry-run preview of proposedSlots + currentSlots).' },
+        },
+        required: ['node_id', 'slots'],
+    },
+};
+
+export const MESH_NODE_SLOTS_LIST_TOOL = {
+    name: 'mesh_node_slots_list',
+    description: 'List a mesh node\'s capability slots (policy.slots). Read-only. Use to confirm the current AI-tool profile of a node and to diff current-vs-proposed before a mesh_node_slots_set overwrite.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'REQUIRED — the mesh node id whose capability slots to list.' },
+        },
+        required: ['node_id'],
+    },
+};
+
 export const MESH_WRITE_MESH_JSON_CONFIG_TOOL = {
     name: 'mesh_write_mesh_json_config',
     description: 'Write `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Gated WRITE sibling of the draft-only export_mesh_json_config. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false), never clobbers an existing repo mesh.json unless overwrite=true, and validates before writing. Overwrite silently replaces the file, so present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope (commit target) — distinct from the machine-local MAGI kind-panel writes.',
@@ -825,4 +867,6 @@ export const ALL_MESH_TOOLS = [
     MESH_MAGI_COLLECT_TOOL,
     MESH_MAGI_KIND_PANEL_SET_TOOL,
     MESH_MAGI_KIND_PANEL_LIST_TOOL,
+    MESH_NODE_SLOTS_SET_TOOL,
+    MESH_NODE_SLOTS_LIST_TOOL,
 ];
