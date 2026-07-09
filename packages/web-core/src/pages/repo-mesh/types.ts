@@ -100,7 +100,7 @@ export const SESSION_CLEANUP_MODE_OPTIONS: Array<{ value: RepoMeshSessionCleanup
 /** Mesh-wide tie-break strategy for distributing untargeted queue work. Mirrors
  *  RepoMeshSchedulingStrategy in daemon-core. 'first_eligible' is the strict
  *  no-change default. */
-export type MeshSchedulingStrategy = 'first_eligible' | 'least_loaded' | 'round_robin' | 'priority_only'
+export type MeshSchedulingStrategy = 'first_eligible' | 'least_loaded' | 'round_robin' | 'priority_only' | 'fitness'
 
 /**
  * @deprecated The raw 4-union is retained as an escape hatch (a hand-edited
@@ -120,20 +120,23 @@ export const SCHEDULING_STRATEGY_OPTIONS: Array<{ value: MeshSchedulingStrategy;
  * (distributionToStrategy) into the policy; reading maps the raw strategy back
  * (strategyToDistribution).
  */
-export type MeshDistribution = 'spread' | 'in_order'
+export type MeshDistribution = 'smart' | 'spread' | 'in_order'
 
 export const DISTRIBUTION_OPTIONS: Array<{ value: MeshDistribution; label: string; description: string }> = [
+    { value: 'smart', label: 'Smart', description: 'Match each task to the node whose capability slot best fits it (task difficulty + capability tags), then load-spread among ties. Auto-enabled when any node has capability slots.' },
     { value: 'spread', label: 'Spread', description: 'Distribute work evenly across eligible nodes (prefers the least-loaded, rotating ties fairly). Set a per-node priority below to bias the order.' },
     { value: 'in_order', label: 'In order', description: 'Assign to nodes in the order they were added — the first eligible node takes the work. No load-spreading.' },
 ]
 
 /** Map a distribution mode to the raw scheduling strategy persisted in policy. */
 export function distributionToStrategy(distribution: MeshDistribution): MeshSchedulingStrategy {
-    return distribution === 'spread' ? 'least_loaded' : 'first_eligible'
+    if (distribution === 'smart') return 'fitness'
+    if (distribution === 'spread') return 'least_loaded'
+    return 'first_eligible'
 }
 
 /**
- * Map a raw scheduling strategy back to the 2-mode façade for the toggle. priority_only
+ * Map a raw scheduling strategy back to the 3-mode façade for the toggle. priority_only
  * shows as 'spread' only when a node priority is actually configured (it is otherwise
  * behaviorally identical to first_eligible). Mirrors daemon-core strategyToDistribution.
  */
@@ -142,6 +145,7 @@ export function strategyToDistribution(
     opts?: { priorityConfigured?: boolean },
 ): MeshDistribution {
     const s = (strategy || 'first_eligible') as MeshSchedulingStrategy
+    if (s === 'fitness') return 'smart'
     if (s === 'first_eligible') return 'in_order'
     if (s === 'priority_only') return opts?.priorityConfigured ? 'spread' : 'in_order'
     if (s === 'least_loaded' || s === 'round_robin') return 'spread'

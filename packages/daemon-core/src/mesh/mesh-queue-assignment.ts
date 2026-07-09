@@ -1141,17 +1141,36 @@ function nodeActiveLoad(meshId: string, nodeId: string): number {
     return MeshRuntimeStore.getInstance().nodeActiveAssignmentCount(meshId, nodeId);
 }
 
+/** True when any node in the mesh has an EXPLICIT capability-slot list configured
+ *  (policy.slots). Legacy-derived slots don't count — only an operator (or the
+ *  orchestrator, with approval) authoring slots signals intent to route by fitness. */
+function meshHasExplicitSlots(mesh: any): boolean {
+    const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
+    return nodes.some((n: any) => normalizeNodeCapabilitySlots(n?.policy?.slots).length > 0);
+}
+
 /**
  * The mesh-wide scheduling strategy, read from the MACHINE-LOCAL stored mesh
  * policy. Resolution order:
- *   1. the stored mesh policy schedulingStrategy raw 4-union, then
- *   2. 'first_eligible' (strict no-change default).
- * Policy is machine-local only — there is no repo-file (`.adhdev/mesh.json`)
- * overlay. Only governs the final tie-break; eligibility, capacity, and priority
- * gates apply identically to every strategy.
+ *   1. an EXPLICITLY stored schedulingStrategy (operator picked a mode) wins, else
+ *   2. 'fitness' AUTO when the mesh has any node with explicit capability slots —
+ *      configuring slots is itself the signal to route tasks by task→slot fitness
+ *      (difficulty/capability), no separate strategy toggle required, else
+ *   3. 'first_eligible' (strict no-change default for slot-less meshes).
+ *
+ * Persistence economy drops schedulingStrategy from policy when it equals the
+ * first_eligible default (repo-mesh-types normalizeMeshPolicy), so an ABSENT value
+ * means "unset" — safe to auto-upgrade — while a PRESENT value means the operator
+ * chose it and we never override. Policy is machine-local only; this only governs
+ * the final tie-break — eligibility, capacity, and priority gates are unchanged.
  */
 function resolveSchedulingStrategy(mesh: any): RepoMeshSchedulingStrategy {
-    return normalizeMeshSchedulingStrategy(mesh?.policy?.schedulingStrategy);
+    const raw = mesh?.policy?.schedulingStrategy;
+    if (typeof raw === 'string' && raw.trim()) {
+        return normalizeMeshSchedulingStrategy(raw);
+    }
+    // Unset → auto-fitness when slots exist, else the historical default.
+    return meshHasExplicitSlots(mesh) ? 'fitness' : normalizeMeshSchedulingStrategy(undefined);
 }
 
 /**

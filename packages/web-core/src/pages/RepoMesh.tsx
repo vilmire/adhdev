@@ -31,7 +31,6 @@ import { useMeshQueue } from './repo-mesh/useMeshQueue'
 import { useMeshGraph, getCachedMeshGraphStatus } from './repo-mesh/useMeshGraph'
 import { resolveFirstSetupSeedDaemonId } from './repo-mesh/host-seed'
 import type { MeshNode, MeshQueueEntry, AvailableCliAgent } from './repo-mesh/types'
-import { readMeshPolicy } from './repo-mesh/types'
 
 // Re-export types that cloud/standalone wrappers may reference
 export type { MeshNode, MeshQueueEntry, AvailableCliAgent }
@@ -171,12 +170,10 @@ export default function RepoMesh() {
         savingCoordinatorPrompt,
         nodeSystemPromptDrafts, setNodeSystemPromptDrafts,
         savingNodeSystemPromptId,
-        savingNodeSchedulingId,
         savingNodeSlotsId,
         savingNodeCapabilitiesId,
         handleAddNode, handleRemoveNode, handleUpdatePolicy,
         handleUpdateNodeSlots,
-        handleUpdateNodeScheduling,
         handleUpdateNodeCapabilities,
         handleSaveCoordinatorPrompt, handleSaveNodeSystemPrompt,
         handleLaunchCoordinator,
@@ -637,9 +634,6 @@ export default function RepoMesh() {
             availableCliProviders={availableCliProviders}
             savingNodeSlotsId={savingNodeSlotsId}
             onUpdateNodeSlots={handleUpdateNodeSlots}
-            savingNodeSchedulingId={savingNodeSchedulingId}
-            onUpdateNodeScheduling={handleUpdateNodeScheduling}
-            schedulingStrategy={readMeshPolicy(selectedMesh).schedulingStrategy}
             savingNodeCapabilitiesId={savingNodeCapabilitiesId}
             onUpdateNodeCapabilities={handleUpdateNodeCapabilities}
             nodeSystemPromptDrafts={nodeSystemPromptDrafts}

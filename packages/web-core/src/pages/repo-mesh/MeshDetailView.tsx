@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import AppPage from '../../components/ui/AppPage'
 import { Section } from '../../components/ui/Section'
@@ -9,7 +9,6 @@ import { IconMesh } from '../../components/Icons'
 // surface — the named-panel CRUD (MagiPanelManager) was removed.
 import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
 import CoordinatorPromptDefaultPreview from './CoordinatorPromptDefaultPreview'
-import MeshSchedulingNodes from './MeshSchedulingNodes'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
@@ -29,8 +28,6 @@ import {
     type MeshEntry,
     type MeshNode,
     type MeshDistribution,
-    type MeshProviderRole,
-    type MeshSchedulingStrategy,
     type MeshQueueEntry,
     type MeshDetailViewFeatures,
     type AvailableCliAgent,
@@ -88,11 +85,8 @@ interface Props {
     availableCliProviders: AvailableCliProviderOption[]
     savingNodeSlotsId: string | null
     onUpdateNodeSlots: (node: MeshNode, slots: NodeCapabilitySlot[]) => void
-    savingNodeSchedulingId: string | null
-    onUpdateNodeScheduling: (node: MeshNode, patch: { schedulingPriority?: number; providerRoles?: MeshProviderRole[] }) => void
     savingNodeCapabilitiesId: string | null
     onUpdateNodeCapabilities: (node: MeshNode, capabilities: string[]) => void
-    schedulingStrategy: MeshSchedulingStrategy
     nodeSystemPromptDrafts: Record<string, string>
     onNodeSystemPromptDraftChange: (nodeId: string, value: string) => void
     savingNodeSystemPromptId: string | null
@@ -189,11 +183,8 @@ export function MeshDetailView({
     availableCliProviders,
     savingNodeSlotsId,
     onUpdateNodeSlots,
-    savingNodeSchedulingId,
-    onUpdateNodeScheduling,
     savingNodeCapabilitiesId,
     onUpdateNodeCapabilities,
-    schedulingStrategy,
     nodeSystemPromptDrafts,
     onNodeSystemPromptDraftChange,
     savingNodeSystemPromptId,
@@ -230,12 +221,20 @@ export function MeshDetailView({
         return Number.isFinite(p) && p !== 0
     })
     // Distribution recommendation (display-only — the stored default stays
-    // 'first_eligible'/In order so meshes.json is untouched). With multiple nodes,
-    // In order sends everything to the first eligible node and never spreads, so we
-    // nudge toward Spread — but only while the operator hasn't explicitly chosen a
-    // strategy yet (schedulingStrategy still unset). Once they pick, no nudge.
+    // 'first_eligible'/In order so meshes.json is untouched). While the operator
+    // hasn't explicitly chosen a strategy (schedulingStrategy still unset):
+    //  • any node with capability slots → Smart (the daemon already auto-routes by
+    //    fitness; the badge just makes the active behavior visible), else
+    //  • multiple nodes → Spread (In order would pin everything to the first node).
+    // Once the operator picks a strategy, no nudge.
     const distributionUnset = !policy.schedulingStrategy
-    const recommendedDistribution: MeshDistribution | null = (distributionUnset && nodes.length >= 2) ? 'spread' : null
+    const anyNodeHasSlots = useMemo(
+        () => nodes.some(n => Array.isArray((n.policy as any)?.slots) && (n.policy as any).slots.length > 0),
+        [nodes],
+    )
+    const recommendedDistribution: MeshDistribution | null = !distributionUnset
+        ? null
+        : anyNodeHasSlots ? 'smart' : (nodes.length >= 2 ? 'spread' : null)
 
     // Graph/detail observability is now a launched dialog (DashboardMeshGraphDialog),
     // not an embedded surface on the page — the page is the mesh SETTINGS surface.
@@ -384,19 +383,12 @@ export function MeshDetailView({
                 </fieldset>
                 {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">Saving…</div>}
 
-                {/* Per-node scheduling — moved here from the Nodes & Providers cards so
-                    every scheduling knob (mesh-wide cap, distribution, per-node priority
-                    and per-provider caps) lives in one section. */}
-                <fieldset className="mt-5 border-none p-0 m-0">
-                    <legend className="text-[13px] font-medium text-text-secondary mb-2">Per-node</legend>
-                    <MeshSchedulingNodes
-                        nodes={nodes}
-                        daemons={daemons}
-                        schedulingStrategy={schedulingStrategy}
-                        savingNodeSchedulingId={savingNodeSchedulingId}
-                        onUpdateNodeScheduling={onUpdateNodeScheduling}
-                    />
-                </fieldset>
+                {/* Per-node scheduling knobs (priority + per-provider max-parallel) were
+                    removed: capability slots absorb both — slot order = preference and
+                    slot.maxParallel = the per-slot concurrency cap — so editing them lives
+                    entirely in each node's "Preferred AI tools" slot list under Nodes &
+                    Providers. The daemon still reads legacy providerRoles/priority for
+                    back-compat; this page just no longer offers a second place to set them. */}
             </Section>
 
             {/* ── MAGI task_kind → panel binding editor ──

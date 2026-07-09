@@ -17,7 +17,7 @@ vi.mock('../../src/config/config.js', () => ({
 
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
-import { __orderEligibleNodesForTests } from '../../src/mesh/mesh-events-coordinator.js';
+import { __orderEligibleNodesForTests, __resolveSchedulingStrategyForTests } from '../../src/mesh/mesh-events-coordinator.js';
 import type { RepoMeshSchedulingStrategy } from '../../src/repo-mesh-types.js';
 
 // Build the RankableNode list the scheduler orders. `index` is the original
@@ -270,5 +270,48 @@ describe('mesh scheduling pipeline — fitness strategy', () => {
             { id: 'b', priority: 100, slots: [{ provider: 'claude-cli' }] },
         ]), {}).map(n => n.nodeId);
         expect(result[0]).toBe('b');
+    });
+});
+
+// ── Auto-fitness: configuring slots is itself the signal to route by fitness ──
+describe('resolveSchedulingStrategy — slot-driven auto-fitness', () => {
+    afterEach(() => {
+        __resetMeshRuntimeStoreForTests();
+        try { rmSync(testTmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    });
+
+    it('a slot-less mesh with no explicit strategy stays first_eligible (no behavior change)', () => {
+        const mesh = { policy: {}, nodes: [{ id: 'a', policy: {} }] };
+        expect(__resolveSchedulingStrategyForTests(mesh)).toBe('first_eligible');
+    });
+
+    it('a mesh with any node carrying explicit policy.slots auto-upgrades to fitness', () => {
+        const mesh = {
+            policy: {}, // unset strategy
+            nodes: [
+                { id: 'a', policy: {} },
+                { id: 'b', policy: { slots: [{ provider: 'codex-cli', difficulty: ['difficult'] }] } },
+            ],
+        };
+        expect(__resolveSchedulingStrategyForTests(mesh)).toBe('fitness');
+    });
+
+    it('an EXPLICIT strategy always wins over slot auto-upgrade', () => {
+        const mesh = {
+            policy: { schedulingStrategy: 'least_loaded' },
+            nodes: [{ id: 'a', policy: { slots: [{ provider: 'codex-cli' }] } }],
+        };
+        // Operator chose spread → respect it, don't silently switch to fitness.
+        expect(__resolveSchedulingStrategyForTests(mesh)).toBe('least_loaded');
+    });
+
+    it('legacy-derived slots do NOT trigger auto-fitness — only explicit policy.slots do', () => {
+        // A node with providerPriority but no policy.slots would derive slots via
+        // deriveSlotsFromLegacy, but that must not flip a whole mesh to fitness.
+        const mesh = {
+            policy: {},
+            nodes: [{ id: 'a', policy: { providerPriority: ['claude-cli', 'codex-cli'] } }],
+        };
+        expect(__resolveSchedulingStrategyForTests(mesh)).toBe('first_eligible');
     });
 });
