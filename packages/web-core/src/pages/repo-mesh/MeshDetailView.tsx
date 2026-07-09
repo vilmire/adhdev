@@ -302,38 +302,13 @@ export function MeshDetailView({
                 </div>
             </Section>
 
-            {/* ── MAGI task_kind → panel binding editor ──
-                 The sole MAGI panel surface. The named-panel CRUD (MagiPanelManager) and its
-                 magi_panel_* daemon commands were removed; only magi_kind_panel_* remains. */}
-            {displayedMeshStatus && (
-                <Section title="MAGI review panels" description="MAGI (Multi-Agent Ground-truth Insight) runs a panel of AI agents that cross-check each other's work to surface the ground truth. Choose which agents handle each review type.">
-                    <MagiKindPanelEditor
-                        status={displayedMeshStatus}
-                        daemonId={activeDaemonId}
-                        sendDaemonCommand={sendCommand}
-                        availableProviders={availableCliProviders}
-                    />
-                </Section>
-            )}
-
-            {/* Brain presets (difficulty → model/thinking) are absorbed into per-node
-                capability slots (ORCHESTRATION_NODE_SLOTS.md): each node slot declares
-                the difficulty range it handles plus its provider/model/thinking, so the
-                mesh-wide difficulty→brain mapping is no longer a separate surface. Edit
-                per-node in "Nodes & Providers" below. */}
-
-            {/* ── Missions (fix b: full-goal fetch-more) ── */}
-            <MeshMissionsSection
-                status={displayedMeshStatus}
-                daemonId={activeDaemonId}
-                meshId={selectedMesh.id}
-                sendCommand={sendCommand}
-            />
-
-            {/* Queue, Review Inbox, and MAGI synthesis are runtime telemetry, not static
-                settings — they were removed from this page. Live queue/graph/node-runtime
-                truth is reached through the Observability dialog above; review-inbox runtime
-                has no settings-page home and is intentionally absent here. */}
+            {/* Section order follows the setup flow: add nodes first, then decide how
+                work is scheduled across them, then configure MAGI review panels, then
+                runtime telemetry (missions). Brain presets (difficulty → model/thinking)
+                are absorbed into per-node capability slots (ORCHESTRATION_NODE_SLOTS.md):
+                each node slot declares the difficulty range it handles plus its
+                provider/model/thinking, so the mesh-wide difficulty→brain mapping is no
+                longer a separate surface — edit per-node in "Nodes & Providers" below. */}
 
             {/* ── Nodes & Providers ── */}
             <MeshNodeList
@@ -423,6 +398,30 @@ export function MeshDetailView({
                     />
                 </fieldset>
             </Section>
+
+            {/* ── MAGI task_kind → panel binding editor ──
+                 Placed after Nodes & Scheduling: MAGI panels reference the nodes/providers
+                 configured above. The sole MAGI panel surface — the named-panel CRUD
+                 (MagiPanelManager) and its magi_panel_* daemon commands were removed; only
+                 magi_kind_panel_* remains. */}
+            {displayedMeshStatus && (
+                <Section title="MAGI review panels" description="MAGI (Multi-Agent Ground-truth Insight) runs a panel of AI agents that cross-check each other's work to surface the ground truth. Choose which agents handle each review type.">
+                    <MagiKindPanelEditor
+                        status={displayedMeshStatus}
+                        daemonId={activeDaemonId}
+                        sendDaemonCommand={sendCommand}
+                        availableProviders={availableCliProviders}
+                    />
+                </Section>
+            )}
+
+            {/* ── Missions (runtime telemetry) ── */}
+            <MeshMissionsSection
+                status={displayedMeshStatus}
+                daemonId={activeDaemonId}
+                meshId={selectedMesh.id}
+                sendCommand={sendCommand}
+            />
 
             {/* ── Coordinator prompt (advanced) ──
                  Two axes live here:
