@@ -18,6 +18,7 @@ import { getGitRepoStatus } from '../../git/git-status.js';
 import {
     normalizeMeshNodeId,
     daemonIdsEquivalent,
+    normalizeNodeCapabilitySlots,
 } from '@adhdev/mesh-shared';
 import {
     getPendingMeshCoordinatorEvents,
@@ -357,6 +358,13 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                 ? { daemonBuildVersion: node.reportedDaemonBuildVersion }
                                 : {}),
                             providerPriority,
+                            // ORCHESTRATION_NODE_SLOTS.md: surface the node's capability
+                            // slots so the dashboard slot editor can read them. Only
+                            // emitted when explicitly configured (derived-from-legacy
+                            // slots stay implicit — the editor shows the legacy fields).
+                            ...(Array.isArray((node.policy as any)?.slots) && (node.policy as any).slots.length
+                                ? { slots: normalizeNodeCapabilitySlots((node.policy as any).slots) }
+                                : {}),
                             activeSessions: [],
                             activeSessionDetails: [],
                             launchReady: false,

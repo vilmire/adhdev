@@ -14,7 +14,7 @@
 import type { GitRepoStatus, GitCompactSummary } from './git/git-types.js';
 import type { MeshMissionSummary, MeshMissionSlimSummary } from './mesh/mesh-missions.js';
 import type { MeshMagiActivitySummary } from './mesh/mesh-magi-status.js';
-import type { MagiKindPanelMap, DifficultyBrainMap } from '@adhdev/mesh-shared';
+import type { MagiKindPanelMap, DifficultyBrainMap, NodeCapabilitySlot } from '@adhdev/mesh-shared';
 
 // ─── Core Mesh Types ────────────────────────────
 
@@ -139,13 +139,18 @@ export type RepoMeshSchedulingStrategy =
     | 'first_eligible'
     | 'least_loaded'
     | 'round_robin'
-    | 'priority_only';
+    | 'priority_only'
+    // ORCHESTRATION_NODE_SLOTS.md: rank nodes by task→capability-slot fitness
+    // (task difficulty/requiredTags vs the node's slots), then priority/load/order.
+    // Falls back to load ordering when no task is in scope (idle-session drain).
+    | 'fitness';
 
 export const MESH_SCHEDULING_STRATEGIES: RepoMeshSchedulingStrategy[] = [
     'first_eligible',
     'least_loaded',
     'round_robin',
     'priority_only',
+    'fitness',
 ];
 
 export const DEFAULT_MESH_SCHEDULING_STRATEGY: RepoMeshSchedulingStrategy = 'first_eligible';
@@ -403,8 +408,22 @@ export interface RepoMeshNodePolicy {
      * enforced as an additional, stricter-wins constraint on top of the global
      * maxParallelTasks/taskMode caps. Missing/empty: the node behaves exactly as
      * before (global caps only). Routing is governed solely by required_tags.
+     *
+     * SUPERSEDED by `slots` (ORCHESTRATION_NODE_SLOTS.md). Kept for back-compat:
+     * when `slots` is absent, providerRoles + providerPriority + the machine-global
+     * difficultyBrains are auto-derived into slots via deriveSlotsFromLegacy.
      */
     providerRoles?: RepoMeshProviderRole[];
+    /**
+     * Node capability slots (ORCHESTRATION_NODE_SLOTS.md) — the ordered "Preferred
+     * AI tools" profile that is the single source of truth for task routing, MAGI
+     * fan-out, and orchestrator-proposed edits. Each slot bundles provider + model
+     * + thinkingLevel + difficulty range + capability tags + per-slot maxParallel.
+     * Order = preference. When absent, the scheduler derives slots from the legacy
+     * providerPriority/providerRoles/difficultyBrains (deriveSlotsFromLegacy) so
+     * existing nodes keep working without reconfiguration.
+     */
+    slots?: NodeCapabilitySlot[];
     /**
      * Per-node override for RepoMeshPolicy.delegatedWorkerAutoApprove. When set, takes
      * precedence over the mesh-level policy for worker sessions launched onto this node.
@@ -1143,6 +1162,8 @@ export interface RepoMeshNodeStatus {
     activeSessions: string[];
     activeSessionDetails?: RepoMeshSessionStatus[];
     providerPriority?: string[];
+    /** Explicitly-configured node capability slots (ORCHESTRATION_NODE_SLOTS.md). */
+    slots?: NodeCapabilitySlot[];
     launchReady?: boolean;
     /** True when the node is clean, ahead=0, behind>0, and safe for fast-forward consideration. */
     autoFastForwardEligible?: boolean;

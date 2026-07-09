@@ -592,6 +592,15 @@ export interface MeshWorkQueueEntry {
      */
     thinkingLevel?: string;
     /**
+     * SLOT-ROUTING (ORCHESTRATION_NODE_SLOTS.md): the coordinator's difficulty
+     * classification for this task ('easy'|'medium'|'difficult'|'freeform'),
+     * PERSISTED on the entry so the scheduler can match it against node capability
+     * slots at assignment time. Previously an enqueue-only option consumed to
+     * resolve model/thinkingLevel and then discarded; keeping it lets task→node
+     * fitness matching run. Absent on tasks enqueued without a difficulty.
+     */
+    difficulty?: string;
+    /**
      * M1: why this task is held back (e.g. "dependency_failed:<taskId>").
      * Only set by the system on dependency failure under the 'block' policy;
      * waiting-on-dependency state is computed at view time, not stored.
@@ -904,6 +913,10 @@ export function enqueueTask(
     // an unconfigured preset just leaves the explicit values (or none) in place.
     let effectiveModel = typeof opts?.model === 'string' && opts.model.trim() ? opts.model.trim() : undefined;
     let effectiveThinkingLevel = typeof opts?.thinkingLevel === 'string' && opts.thinkingLevel.trim() ? opts.thinkingLevel.trim() : undefined;
+    // SLOT-ROUTING: persist the difficulty class on the entry so the scheduler can
+    // match it against node capability slots at assignment time (not just resolve
+    // model/thinking here). Absent/invalid → undefined (task carries no difficulty).
+    const taskDifficulty = isMeshTaskDifficulty(opts?.difficulty) ? (opts!.difficulty as MeshTaskDifficulty) : undefined;
     if (isMeshTaskDifficulty(opts?.difficulty)) {
         try {
             const preset = getDifficultyBrains()[opts!.difficulty as MeshTaskDifficulty];
@@ -951,6 +964,7 @@ export function enqueueTask(
             ...(typeof opts?.consensusGroupId === 'string' && opts.consensusGroupId.trim() ? { consensusGroupId: opts.consensusGroupId.trim() } : {}),
             ...(effectiveModel ? { model: effectiveModel } : {}),
             ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}),
+            ...(taskDifficulty ? { difficulty: taskDifficulty } : {}),
             ...(typeof opts?.sourceCoordinatorSessionId === 'string' && opts.sourceCoordinatorSessionId.trim()
                 ? { sourceCoordinatorSessionId: opts.sourceCoordinatorSessionId.trim() }
                 : {}),

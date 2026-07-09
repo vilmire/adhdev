@@ -2,7 +2,7 @@ import { existsSync } from 'fs';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { MESH_CONNECT_TIMEOUT_MS } from '../runtime-defaults.js';
 import { loadConfig } from '../config/config.js';
-import { getMesh } from '../config/mesh-config.js';
+import { getMesh, getDifficultyBrains } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
@@ -15,7 +15,7 @@ import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
 import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
-import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, deriveSlotsFromLegacy, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
@@ -1193,7 +1193,7 @@ export function __orderEligibleNodesForTests(
     meshId: string,
     strategy: RepoMeshSchedulingStrategy,
     nodes: RankableNode[],
-    opts?: { bumpCursor?: boolean },
+    opts?: { bumpCursor?: boolean; task?: { difficulty?: string; requiredTags?: string[] } },
 ): RankableNode[] {
     return orderEligibleNodes(meshId, strategy, nodes, opts);
 }
@@ -1249,14 +1249,105 @@ export function __buildSchedulingPoolForTests(
     return buildSchedulingPool(localCandidates, remoteCandidates);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Node capability slots — task→node/slot fitness (ORCHESTRATION_NODE_SLOTS.md)
+//
+// A node's capability slots are the single source of truth for routing. When a
+// node has explicit `policy.slots` we use them; otherwise we derive slots from the
+// legacy providerPriority/providerRoles + the machine-global difficultyBrains so
+// existing nodes keep working (back-compat). The fitness scorer ranks a node for a
+// specific task by how well its best slot matches the task's difficulty and
+// required tags — with graceful fallback so a task is never blocked by a missing
+// exact match.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The task shape the fitness scorer reads (a subset of MeshWorkQueueEntry). */
+interface FitnessTask {
+    difficulty?: string;
+    requiredTags?: string[];
+}
+
+/** Resolve a node's capability slots: explicit policy.slots, else derived from legacy. */
+function resolveNodeCapabilitySlots(node: any): NodeCapabilitySlot[] {
+    const explicit = normalizeNodeCapabilitySlots(node?.policy?.slots);
+    if (explicit.length) return explicit;
+    let difficultyBrains: any;
+    try { difficultyBrains = getDifficultyBrains(); } catch { difficultyBrains = undefined; }
+    return deriveSlotsFromLegacy({
+        providerPriority: normalizeProviderPriority(node?.policy),
+        providerRoles: Array.isArray(node?.policy?.providerRoles) ? node.policy.providerRoles : undefined,
+        difficultyBrains,
+    });
+}
+
+/**
+ * Score how well one slot fits a task. Higher = better. A slot whose difficulty
+ * range contains the task's difficulty scores highest; a general-purpose slot
+ * (no declared difficulty) is a valid fallback; a slot whose capability tags cover
+ * the task's requiredTags gets a capability bonus. Never negative — the worst a
+ * slot does is score 0 (still selectable as a last-resort fallback).
+ */
+function scoreSlotForTask(slot: NodeCapabilitySlot, task: FitnessTask): number {
+    let score = 1; // base: any slot can run the task (fallback floor)
+    const diff = isMeshTaskDifficulty(task.difficulty) ? task.difficulty as MeshTaskDifficulty : undefined;
+    if (diff) {
+        if (slot.difficulty?.length) {
+            score += slot.difficulty.includes(diff) ? 100 : 0; // exact difficulty match dominates
+        } else {
+            score += 20; // general-purpose slot: decent fallback for any difficulty
+        }
+    }
+    const req = task.requiredTags?.filter(t => !!t) ?? [];
+    if (req.length) {
+        const cap = new Set(slot.capability ?? []);
+        const covered = req.every(t => cap.has(t));
+        score += covered ? 30 : 0; // capability coverage bonus (hard filter is applied elsewhere)
+    }
+    return score;
+}
+
+/** Best (slot, score) for a task on a node, or null when the node has no slots. */
+function bestSlotForTask(node: any, task: FitnessTask): { slot: NodeCapabilitySlot; score: number } | null {
+    const slots = resolveNodeCapabilitySlots(node);
+    if (!slots.length) return null;
+    let best: { slot: NodeCapabilitySlot; score: number } | null = null;
+    for (const slot of slots) {
+        const score = scoreSlotForTask(slot, task);
+        if (!best || score > best.score) best = { slot, score };
+    }
+    return best;
+}
+
+/** Node-level fitness for a task = its best slot's score (0 when the node has no slots). */
+function nodeFitnessForTask(node: any, task: FitnessTask): number {
+    return bestSlotForTask(node, task)?.score ?? 0;
+}
+
 function orderEligibleNodes(
     meshId: string,
     strategy: RepoMeshSchedulingStrategy,
     nodes: RankableNode[],
-    opts?: { bumpCursor?: boolean },
+    opts?: { bumpCursor?: boolean; task?: FitnessTask },
 ): RankableNode[] {
     if (strategy === 'first_eligible' || nodes.length <= 1) {
         return nodes;
+    }
+
+    // Fitness strategy: rank by task→slot fit first (when a task is in scope —
+    // auto-launch drains per-task), then fall through to priority/load/rotation for
+    // ties. Without a task (idle-session drain ranks task-independently) fitness is
+    // inert and this behaves like least_loaded.
+    if (strategy === 'fitness' && opts?.task) {
+        const task = opts.task;
+        return [...nodes].sort((a, b) => {
+            const fitDelta = nodeFitnessForTask(b.node, task) - nodeFitnessForTask(a.node, task);
+            if (fitDelta !== 0) return fitDelta; // higher fitness first
+            const prioDelta = resolveNodeSchedulingPriority(b.node?.policy) - resolveNodeSchedulingPriority(a.node?.policy);
+            if (prioDelta !== 0) return prioDelta;
+            const loadDelta = nodeActiveLoad(meshId, a.nodeId) - nodeActiveLoad(meshId, b.nodeId);
+            if (loadDelta !== 0) return loadDelta;
+            return a.index - b.index;
+        });
     }
 
     const priorityOf = (n: { node: any }) => resolveNodeSchedulingPriority(n.node?.policy);
@@ -1542,19 +1633,29 @@ async function resolveUsableProvider(
     nodeId: string,
     node: any,
     requiredTags?: string[],
-): Promise<{ providerType?: string; reason?: string }> {
-    const providerPriority = normalizeProviderPriority(node?.policy);
-    if (!providerPriority.length) return { reason: 'missing_provider_priority' };
+    task?: FitnessTask,
+): Promise<{ providerType?: string; model?: string; thinkingLevel?: string; reason?: string }> {
     const providerLoader = components.providerLoader;
     if (!providerLoader) return { reason: 'provider_loader_unavailable' };
 
+    // Slot-based order (ORCHESTRATION_NODE_SLOTS.md): rank the node's capability
+    // slots by task→slot fitness (difficulty/requiredTags) so the best-fit slot's
+    // provider is tried first, and its model/thinkingLevel ride along. Falls back
+    // to the legacy providerPriority-derived slots when no explicit slots exist.
+    const slots = resolveNodeCapabilitySlots(node);
+    if (!slots.length) return { reason: 'missing_provider_priority' };
+    const orderedSlots = task
+        ? [...slots].sort((a, b) => scoreSlotForTask(b, task) - scoreSlotForTask(a, task))
+        : slots;
+
     const failed: string[] = [];
-    for (const requestedType of providerPriority) {
+    for (const slot of orderedSlots) {
+        const requestedType = slot.provider;
         const normalizedType = typeof providerLoader.resolveAlias === 'function'
             ? providerLoader.resolveAlias(requestedType)
             : requestedType;
         // Skip providers that can't satisfy the task's requiredTags (e.g. provider=hermes-cli
-        // means only hermes-cli qualifies, not any other type in providerPriority).
+        // means only hermes-cli qualifies, not any other slot's provider).
         if (requiredTags?.length && !nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node, normalizedType))) {
             failed.push(`${requestedType}: required_tags_mismatch`);
             continue;
@@ -1578,7 +1679,13 @@ async function resolveUsableProvider(
             }], false);
         }
         (components as any).onStatusChange?.();
-        if (detected) return { providerType: normalizedType };
+        if (detected) {
+            return {
+                providerType: normalizedType,
+                ...(slot.model ? { model: slot.model } : {}),
+                ...(slot.thinkingLevel ? { thinkingLevel: slot.thinkingLevel } : {}),
+            };
+        }
         failed.push(`${requestedType}: not detected`);
     }
     return { reason: `provider_priority_unusable: ${failed.join('; ') || nodeId}` };
@@ -1850,7 +1957,9 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 candidateNodes
                     .map((node: any, index: number) => ({ nodeId: readMeshNodeId(node), node, index }))
                     .filter((c: RankableNode) => c.nodeId),
-                { bumpCursor: true },
+                // Auto-launch drains one task at a time, so the task IS in scope here —
+                // pass it through for the 'fitness' strategy's task→slot ranking.
+                { bumpCursor: true, task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags } },
             ).map((c: RankableNode) => c.node);
 
         for (const node of orderedCandidateNodes) {
@@ -1914,11 +2023,16 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
 
             autoLaunchInProgress.add(launchKey);
             try {
-                const resolved = await resolveUsableProvider(components, nodeId, node, task.requiredTags);
+                const resolved = await resolveUsableProvider(components, nodeId, node, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags });
                 if (!resolved.providerType) {
                     markAutoLaunch(meshId, task.id, { status: 'skipped', reason: resolved.reason || 'provider_unusable', nodeId });
                     continue;
                 }
+                // Slot-derived model/thinking: an explicit task.model/thinkingLevel
+                // (resolved from the enqueue-time brain) still wins; the matched
+                // slot fills only what the task left blank (ORCHESTRATION_NODE_SLOTS.md).
+                const effectiveModel = (typeof task.model === 'string' && task.model.trim()) ? task.model.trim() : resolved.model;
+                const effectiveThinkingLevel = (typeof task.thinkingLevel === 'string' && task.thinkingLevel.trim()) ? task.thinkingLevel.trim() : resolved.thinkingLevel;
 
                 // Don't spawn a session for a (node, provider) already at its declared
                 // maxParallel cap — it would launch only to fail the claim. The claim
@@ -1967,9 +2081,10 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                             settings: remoteSettings,
                             // MAGI-KIND-PANEL model axis: forward the task's model override so the
                             // remote worker session launches with it (initialModel). Best-effort.
-                            ...(typeof task.model === 'string' && task.model.trim() ? { initialModel: task.model.trim() } : {}),
-                            // BRAIN-ROUTING thinking axis: forward the task's thinking level (initialThinkingLevel).
-                            ...(typeof task.thinkingLevel === 'string' && task.thinkingLevel.trim() ? { initialThinkingLevel: task.thinkingLevel.trim() } : {}),
+                            // Slot-aware: task override wins, else the matched slot's model.
+                            ...(effectiveModel ? { initialModel: effectiveModel } : {}),
+                            // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).
+                            ...(effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}),
                         });
                     } catch (e: any) {
                         markAutoLaunch(meshId, task.id, { status: 'failed', reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: resolved.providerType });
@@ -1999,11 +2114,11 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     cliType: resolved.providerType,
                     dir: node.workspace,
                     settings: launchSettings,
-                    // MAGI-KIND-PANEL model axis: local launch forwards the task's model
-                    // override as initialModel (CLI → modelLaunchArgs; ACP → setConfigOption).
-                    ...(typeof task.model === 'string' && task.model.trim() ? { initialModel: task.model.trim() } : {}),
-                    // BRAIN-ROUTING thinking axis: forward the task's thinking level (initialThinkingLevel).
-                    ...(typeof task.thinkingLevel === 'string' && task.thinkingLevel.trim() ? { initialThinkingLevel: task.thinkingLevel.trim() } : {}),
+                    // MAGI-KIND-PANEL model axis: local launch forwards the effective model
+                    // (task override, else matched slot) as initialModel (CLI → modelLaunchArgs; ACP → setConfigOption).
+                    ...(effectiveModel ? { initialModel: effectiveModel } : {}),
+                    // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).
+                    ...(effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}),
                 });
                 if (!launchResult?.success) {
                     const reason = launchResult?.error || 'launch_cli_failed';
@@ -2211,7 +2326,10 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
                 const aPrio = resolveNodeSchedulingPriority(a.node?.policy);
                 const bPrio = resolveNodeSchedulingPriority(b.node?.policy);
                 if (aPrio !== bPrio) return bPrio - aPrio;
-                if (strategy === 'least_loaded' || strategy === 'round_robin') {
+                // The idle-session drain ranks task-independently (a session pulls
+                // whatever task matches), so 'fitness' here reduces to load-aware
+                // ordering — the same tiebreak as least_loaded/round_robin.
+                if (strategy === 'least_loaded' || strategy === 'round_robin' || strategy === 'fitness') {
                     const loadDelta = nodeActiveLoad(meshId, a.nodeId) - nodeActiveLoad(meshId, b.nodeId);
                     if (loadDelta !== 0) return loadDelta;
                 }

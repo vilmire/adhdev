@@ -209,3 +209,66 @@ describe('MeshRuntimeStore — round-robin cursor', () => {
         expect(db.getSchedulerCursor(m2)).toBe(0);
     });
 });
+
+// ── Fitness strategy: task→capability-slot ranking (ORCHESTRATION_NODE_SLOTS.md) ──
+describe('mesh scheduling pipeline — fitness strategy', () => {
+    afterEach(() => {
+        __resetMeshRuntimeStoreForTests();
+        try { rmSync(testTmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    });
+
+    // Nodes with explicit capability slots. Each spec's `slots` becomes policy.slots.
+    function slotNodes(specs: Array<{ id: string; priority?: number; slots?: any[] }>) {
+        return specs.map((s, index) => ({
+            nodeId: s.id,
+            index,
+            node: { id: s.id, policy: { schedulingPriority: s.priority, slots: s.slots } },
+        }));
+    }
+
+    const fitnessOrder = (
+        meshId: string,
+        specs: Array<{ id: string; priority?: number; slots?: any[] }>,
+        task?: { difficulty?: string; requiredTags?: string[] },
+    ): string[] =>
+        __orderEligibleNodesForTests(meshId, 'fitness', slotNodes(specs), { task }).map(n => n.nodeId);
+
+    it('ranks the node whose slot handles the task difficulty first', () => {
+        const meshId = `m-fit-${randomUUID().slice(0, 8)}`;
+        // node a: easy-only slot; node b: difficult slot. A difficult task prefers b.
+        const result = fitnessOrder(meshId, [
+            { id: 'a', slots: [{ provider: 'codex-cli', difficulty: ['easy'] }] },
+            { id: 'b', slots: [{ provider: 'claude-cli', difficulty: ['difficult'] }] },
+        ], { difficulty: 'difficult' });
+        expect(result[0]).toBe('b');
+    });
+
+    it('a general-purpose slot outranks a mismatched-difficulty slot (fallback, never blocks)', () => {
+        const meshId = `m-fit2-${randomUUID().slice(0, 8)}`;
+        // node a: easy-only (mismatch for difficult); node b: no difficulty (general).
+        const result = fitnessOrder(meshId, [
+            { id: 'a', slots: [{ provider: 'codex-cli', difficulty: ['easy'] }] },
+            { id: 'b', slots: [{ provider: 'claude-cli' }] },
+        ], { difficulty: 'difficult' });
+        expect(result[0]).toBe('b');
+    });
+
+    it('capability coverage breaks ties among equal-difficulty slots', () => {
+        const meshId = `m-fit3-${randomUUID().slice(0, 8)}`;
+        const result = fitnessOrder(meshId, [
+            { id: 'a', slots: [{ provider: 'codex-cli', difficulty: ['difficult'] }] },
+            { id: 'b', slots: [{ provider: 'claude-cli', difficulty: ['difficult'], capability: ['worktree'] }] },
+        ], { difficulty: 'difficult', requiredTags: ['worktree'] });
+        expect(result[0]).toBe('b');
+    });
+
+    it('without a task, fitness falls back to priority/load ordering (idle drain)', () => {
+        const meshId = `m-fit4-${randomUUID().slice(0, 8)}`;
+        // No task → fitness inert; higher priority wins like priority ordering.
+        const result = __orderEligibleNodesForTests(meshId, 'fitness', slotNodes([
+            { id: 'a', priority: 0, slots: [{ provider: 'codex-cli' }] },
+            { id: 'b', priority: 100, slots: [{ provider: 'claude-cli' }] },
+        ]), {}).map(n => n.nodeId);
+        expect(result[0]).toBe('b');
+    });
+});

@@ -85,3 +85,139 @@ export function normalizeDifficultyBrainMap(raw: unknown): DifficultyBrainMap {
     }
     return out
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Node capability slots (ORCHESTRATION_NODE_SLOTS.md)
+//
+// A node's "Preferred AI tools" list is redefined as an ordered array of
+// capability slots. Each slot bundles what used to be scattered across
+// providerPriority (order), providerRoles (per-provider maxParallel), and the
+// machine-global difficultyBrains (difficulty → model/thinking). Slot order =
+// preference. This single profile is the source of truth for task routing, MAGI
+// fan-out, and orchestrator-proposed edits.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One capability slot on a mesh node. Extends the BrainSlot shape
+ * (provider/model/thinkingLevel) with the difficulty range it handles, capability
+ * tags, and a per-slot parallelism cap.
+ */
+export interface NodeCapabilitySlot {
+    /** Provider type this slot uses, e.g. 'claude-cli' | 'codex-cli'. Required (a slot is defined by its provider). */
+    provider: string
+    /** Optional model, e.g. 'opus' | 'sonnet' | 'haiku'. Best-effort at launch. */
+    model?: string
+    /** Optional standard thinking level. Best-effort at launch. */
+    thinkingLevel?: 'low' | 'medium' | 'high'
+    /**
+     * Difficulty range this slot handles. Empty/absent = handles all difficulties
+     * (a general-purpose slot). A task's difficulty is matched against this range;
+     * no exact match falls back to the nearest/general slot (never blocks).
+     */
+    difficulty?: MeshTaskDifficulty[]
+    /** Capability tags this slot satisfies (matched against a task's requiredTags). */
+    capability?: string[]
+    /** Per-node·per-slot max concurrent tasks. Omit = no per-slot cap. */
+    maxParallel?: number
+}
+
+/** Normalize a raw NodeCapabilitySlot; returns null when it has no usable provider. */
+export function normalizeNodeCapabilitySlot(raw: unknown): NodeCapabilitySlot | null {
+    const r = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {}
+    const provider = typeof r.provider === 'string' ? r.provider.trim() : ''
+    if (!provider) return null
+    const model = typeof r.model === 'string' ? r.model.trim() : ''
+    const thinkingLevel = normalizeThinkingLevel(r.thinkingLevel)
+    const difficulty = Array.isArray(r.difficulty)
+        ? (r.difficulty.filter(isMeshTaskDifficulty) as MeshTaskDifficulty[])
+        : []
+    const capability = Array.isArray(r.capability)
+        ? r.capability.filter((t): t is string => typeof t === 'string' && !!t.trim()).map(t => t.trim())
+        : []
+    const maxParallelNum = Number(r.maxParallel)
+    const maxParallel = Number.isFinite(maxParallelNum) && maxParallelNum > 0 ? Math.floor(maxParallelNum) : undefined
+    return {
+        provider,
+        ...(model ? { model } : {}),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+        ...(difficulty.length ? { difficulty } : {}),
+        ...(capability.length ? { capability } : {}),
+        ...(maxParallel !== undefined ? { maxParallel } : {}),
+    }
+}
+
+/** Normalize a raw slot array, dropping provider-less entries. */
+export function normalizeNodeCapabilitySlots(raw: unknown): NodeCapabilitySlot[] {
+    if (!Array.isArray(raw)) return []
+    const out: NodeCapabilitySlot[] = []
+    for (const entry of raw) {
+        const slot = normalizeNodeCapabilitySlot(entry)
+        if (slot) out.push(slot)
+    }
+    return out
+}
+
+/**
+ * Back-compat migration: derive capability slots from the legacy fields when a
+ * node has no explicit `slots`. Order follows providerPriority; per-provider
+ * maxParallel comes from providerRoles; difficulty/model/thinking are folded in
+ * from the machine-global difficultyBrains (each difficulty attaches to the slot
+ * whose provider the brain preset names, or — when the brain has no provider — to
+ * every slot as a shared model/thinking default for that difficulty).
+ *
+ * Returns [] when there's nothing to derive (caller then keeps legacy behavior:
+ * first available provider).
+ */
+export function deriveSlotsFromLegacy(input: {
+    providerPriority?: string[]
+    providerRoles?: Array<{ providerType: string; maxParallel?: number }>
+    difficultyBrains?: DifficultyBrainMap
+}): NodeCapabilitySlot[] {
+    const priority = Array.isArray(input.providerPriority)
+        ? input.providerPriority.filter((p): p is string => typeof p === 'string' && !!p.trim()).map(p => p.trim())
+        : []
+    if (priority.length === 0) return []
+
+    const roleCap = new Map<string, number>()
+    for (const role of input.providerRoles || []) {
+        if (role && typeof role.providerType === 'string' && Number.isFinite(role.maxParallel)) {
+            roleCap.set(role.providerType.trim(), Math.floor(Number(role.maxParallel)))
+        }
+    }
+
+    // Brain presets keyed by the provider they name (provider-specific), plus a
+    // provider-agnostic list applied to every slot as a shared default.
+    const brains = input.difficultyBrains || {}
+    const byProvider = new Map<string, Array<{ difficulty: MeshTaskDifficulty; model?: string; thinkingLevel?: 'low' | 'medium' | 'high' }>>()
+    const shared: Array<{ difficulty: MeshTaskDifficulty; model?: string; thinkingLevel?: 'low' | 'medium' | 'high' }> = []
+    for (const diff of MESH_TASK_DIFFICULTIES) {
+        const b = brains[diff]
+        if (!b) continue
+        const entry = { difficulty: diff, model: b.model, thinkingLevel: b.thinkingLevel }
+        if (b.provider) {
+            const list = byProvider.get(b.provider) ?? []
+            list.push(entry)
+            byProvider.set(b.provider, list)
+        } else {
+            shared.push(entry)
+        }
+    }
+
+    return priority.map((provider): NodeCapabilitySlot => {
+        // Provider-specific brain first, else the shared default, else nothing.
+        const specific = byProvider.get(provider) || []
+        const applied = specific.length ? specific : shared
+        const difficulty = applied.map(a => a.difficulty)
+        // Fold model/thinking from the applied presets: take the first that sets each.
+        const model = applied.find(a => a.model)?.model
+        const thinkingLevel = applied.find(a => a.thinkingLevel)?.thinkingLevel
+        const maxParallel = roleCap.get(provider)
+        return {
+            provider,
+            ...(model ? { model } : {}),
+            ...(thinkingLevel ? { thinkingLevel } : {}),
+            ...(difficulty.length ? { difficulty } : {}),
+            ...(maxParallel !== undefined ? { maxParallel } : {}),
+        }
+    })
+}
