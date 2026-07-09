@@ -175,9 +175,19 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
                                                 <option value="__custom__">Custom…</option>
                                             </select>
                                         ) : (
-                                            <input className={selectCls} value={d.model.trim()}
-                                                placeholder={d.provider ? `${d.provider} model` : 'model'}
-                                                onChange={e => update(i, { model: e.target.value })} />
+                                            <>
+                                                <input className={selectCls} value={d.model.trim()}
+                                                    placeholder={d.provider ? `${d.provider} model` : 'model'}
+                                                    onChange={e => update(i, { model: e.target.value })} />
+                                                {/* Back to the dropdown — only when the provider has a list to go back to. */}
+                                                {models.length > 0 && (
+                                                    <button type="button"
+                                                        className="self-start bg-transparent border-none cursor-pointer p-0 text-[10px] text-text-muted hover:underline"
+                                                        onClick={() => update(i, { model: '' })}>
+                                                        ← Back to model list
+                                                    </button>
+                                                )}
+                                            </>
                                         )}
                                     </label>
                                     <label className="flex flex-col gap-1">

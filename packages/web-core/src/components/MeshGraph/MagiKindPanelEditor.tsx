@@ -343,9 +343,19 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                                                             <option value="__custom__">Custom…</option>
                                                         </select>
                                                     ) : (
-                                                        <input className={inputClass} value={s.model.trim()} placeholder="default"
-                                                            title="Optional model override (best-effort). Blank uses the provider default."
-                                                            onChange={e => updateSlot(kind, idx, { model: e.target.value })} />
+                                                        <>
+                                                            <input className={inputClass} value={s.model.trim()} placeholder="default"
+                                                                title="Optional model override (best-effort). Blank uses the provider default."
+                                                                onChange={e => updateSlot(kind, idx, { model: e.target.value })} />
+                                                            {/* Back to the dropdown — only when the provider has a list to go back to. */}
+                                                            {models.length > 0 && (
+                                                                <button type="button"
+                                                                    className={`self-start bg-transparent border-none cursor-pointer p-0 text-[10px] ${meshTheme.textSecondary} hover:underline`}
+                                                                    onClick={() => updateSlot(kind, idx, { model: '' })}>
+                                                                    ← Back to model list
+                                                                </button>
+                                                            )}
+                                                        </>
                                                     )
                                                 })()}
                                             </label>
