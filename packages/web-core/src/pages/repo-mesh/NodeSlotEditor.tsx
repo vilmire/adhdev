@@ -14,7 +14,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { MESH_TASK_DIFFICULTIES, type MeshTaskDifficulty, type NodeCapabilitySlot } from '@adhdev/mesh-shared'
-import type { AvailableCliProviderOption } from '../../utils/provider-priority'
+import { buildProviderOptionMap, type AvailableCliProviderOption } from '../../utils/provider-priority'
 import { IconX, IconPlus } from '../../components/Icons'
 
 const THINKING_LEVELS = ['', 'low', 'medium', 'high'] as const
@@ -87,17 +87,9 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
     // Per-provider advisory model / thinking option lists (from the provider
     // manifest), so a slot's Model dropdown only offers models that provider
     // actually supports (e.g. codex has no 'haiku'). Falls back to free text when
-    // the provider declares no model list.
-    const optionsByProvider = useMemo(() => {
-        const map = new Map<string, { models: string[]; thinking: string[] }>()
-        for (const p of availableProviders) {
-            map.set(p.type, {
-                models: Array.isArray(p.modelOptions) ? p.modelOptions.filter(Boolean) : [],
-                thinking: Array.isArray(p.thinkingLevelOptions) ? p.thinkingLevelOptions.filter(Boolean) : [],
-            })
-        }
-        return map
-    }, [availableProviders])
+    // the provider declares no model list. Shared lookup — same source the
+    // New-session dialog and MAGI editor read.
+    const optionsByProvider = useMemo(() => buildProviderOptionMap(availableProviders), [availableProviders])
 
     const dirty = useMemo(() => {
         const next = drafts.map(draftToSlot).filter(Boolean) as NodeCapabilitySlot[]

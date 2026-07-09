@@ -17,6 +17,7 @@ import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-
 import SavedHistoryLaunchSection from '../SavedHistoryLaunchSection'
 import LaunchSectionCard from '../LaunchSectionCard'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
+import { modelOptionsForProvider, thinkingOptionsForProvider } from '../../utils/provider-priority'
 import type { LaunchResult, MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
 import MeshCoordinatorManualSetupPanel from '../MeshCoordinatorManualSetupPanel'
 import { buildManualCoordinatorSetup, type MeshCoordinatorManualSetup } from '../../utils/mesh-coordinator-setup'
@@ -271,13 +272,14 @@ export default function DashboardNewSessionDialog({
         () => [...cliProviders, ...acpProviders].find(p => p.type === selectedTarget) as any,
         [cliProviders, acpProviders, selectedTarget],
     )
-    const modelOptionsForTarget = useMemo(() => {
-        const opts = activeLaunchProvider?.modelOptions
-        return Array.isArray(opts) ? opts.filter((m: any) => typeof m === 'string' && m.trim()) : []
-    }, [activeLaunchProvider])
+    // Shared provider-option lookup — same source the slot editor and MAGI editor
+    // read, so a provider's model/thinking lists come from one place.
+    const modelOptionsForTarget = useMemo(
+        () => modelOptionsForProvider(activeLaunchProvider ? [activeLaunchProvider] : [], activeLaunchProvider?.type),
+        [activeLaunchProvider],
+    )
     const thinkingLevelOptionsForTarget = useMemo(() => {
-        const opts = activeLaunchProvider?.thinkingLevelOptions
-        const list = Array.isArray(opts) ? opts.filter((l: any) => typeof l === 'string' && l.trim()) : []
+        const list = thinkingOptionsForProvider(activeLaunchProvider ? [activeLaunchProvider] : [], activeLaunchProvider?.type)
         // Fall back to the standard levels when the provider declares none.
         return list.length ? list : ['low', 'medium', 'high']
     }, [activeLaunchProvider])

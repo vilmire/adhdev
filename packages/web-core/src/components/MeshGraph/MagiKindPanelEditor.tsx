@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { MagiSlot, MagiKindPanelMap, MagiTaskKind } from '@adhdev/mesh-shared'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
+import { buildProviderOptionMap, type AvailableCliProviderOption } from '../../utils/provider-priority'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 
 /**
@@ -39,13 +40,18 @@ const TASK_KINDS: { kind: MagiTaskKind; label: string; hint: string }[] = [
     { kind: 'freeform', label: 'Freeform review', hint: 'freeform' },
 ]
 
-/** Common model suggestions offered via the datalist (free text still allowed). */
-const MODEL_SUGGESTIONS = ['opus', 'sonnet', 'haiku']
-
 interface MagiKindPanelEditorProps {
     status: RepoMeshStatus | null
     daemonId?: string | null
     sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
+    /**
+     * Detected CLI providers with their advisory modelOptions. Drives the
+     * per-slot Model suggestion list so the datalist offers the models the
+     * slot's *own* provider actually supports (codex → gpt-*, claude → opus/…)
+     * instead of a hardcoded opus/sonnet/haiku list that made no sense for
+     * codex or antigravity.
+     */
+    availableProviders?: AvailableCliProviderOption[]
 }
 
 /** Slim live-node view, matching the (nodeId, providers, providerPriority) axis. */
@@ -111,9 +117,20 @@ function draftsToSlots(drafts: SlotDraft[]): { slots: MagiSlot[] } | { error: st
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function MagiKindPanelEditor({ status, daemonId, sendDaemonCommand }: MagiKindPanelEditorProps) {
+export default function MagiKindPanelEditor({ status, daemonId, sendDaemonCommand, availableProviders }: MagiKindPanelEditorProps) {
     const { theme } = useTheme()
     const meshTheme: MeshGraphTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
+
+    // provider type → advisory {models, thinking} — shared lookup, same source
+    // the slot editor and New-session dialog read. Drives the per-slot Model
+    // datalist so each slot suggests its own provider's models (codex → gpt-*)
+    // instead of a hardcoded cross-provider list.
+    const optionsByProvider = useMemo(() => buildProviderOptionMap(availableProviders), [availableProviders])
+    // Providers that actually declare a model list — one datalist rendered per.
+    const providersWithModels = useMemo(
+        () => [...optionsByProvider.entries()].filter(([, o]) => o.models.length).map(([type]) => type),
+        [optionsByProvider],
+    )
 
     const [kindPanels, setKindPanels] = useState<MagiKindPanelMap>({})
     const [loading, setLoading] = useState(false)
@@ -314,7 +331,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                                             <label className="flex flex-col gap-1">
                                                 <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>Model</span>
                                                 <input className={inputClass} value={s.model} placeholder="default"
-                                                    list="magi-kind-model-options"
+                                                    list={s.provider && optionsByProvider.get(s.provider)?.models.length ? `magi-model-${s.provider}` : undefined}
                                                     title="Optional model override (best-effort). Blank uses the provider default."
                                                     onChange={e => updateSlot(kind, idx, { model: e.target.value })} />
                                             </label>
@@ -349,10 +366,14 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                 })}
             </div>
 
-            {/* Shared model suggestion list — free text still allowed. */}
-            <datalist id="magi-kind-model-options">
-                {MODEL_SUGGESTIONS.map(m => <option key={m} value={m} />)}
-            </datalist>
+            {/* Per-provider model suggestion lists — a slot's Model input points at
+                its own provider's datalist, so codex suggests gpt-* and claude
+                suggests opus/sonnet/haiku. Free text is still allowed. */}
+            {providersWithModels.map(type => (
+                <datalist key={type} id={`magi-model-${type}`}>
+                    {(optionsByProvider.get(type)?.models ?? []).map(m => <option key={m} value={m} />)}
+                </datalist>
+            ))}
         </div>
     )
 }

@@ -311,6 +311,7 @@ export function MeshDetailView({
                         status={displayedMeshStatus}
                         daemonId={activeDaemonId}
                         sendDaemonCommand={sendCommand}
+                        availableProviders={availableCliProviders}
                     />
                 </Section>
             )}

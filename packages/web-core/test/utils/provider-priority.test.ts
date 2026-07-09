@@ -13,7 +13,44 @@ import {
   readRepoMeshNodePolicy,
   readRepoMeshNodeProviderPriority,
   removeProviderPriorityItem,
+  modelOptionsForProvider,
+  thinkingOptionsForProvider,
+  buildProviderOptionMap,
 } from '../../src/utils/provider-priority'
+
+describe('provider-specific model / thinking option lookup', () => {
+  const inv = [
+    { type: 'codex-cli', modelOptions: ['gpt-5.5', ' gpt-5-codex '], thinkingLevelOptions: ['minimal', 'xhigh'] },
+    { type: 'claude-cli', modelOptions: ['opus', 'sonnet', 'haiku'], thinkingLevelOptions: ['low', 'max'] },
+    { type: 'antigravity-cli' }, // declares no lists
+  ]
+
+  it('modelOptionsForProvider returns each provider its own trimmed list', () => {
+    expect(modelOptionsForProvider(inv, 'codex-cli')).toEqual(['gpt-5.5', 'gpt-5-codex'])
+    expect(modelOptionsForProvider(inv, 'claude-cli')).toEqual(['opus', 'sonnet', 'haiku'])
+    // codex has no haiku — the whole reason lists are provider-scoped.
+    expect(modelOptionsForProvider(inv, 'codex-cli')).not.toContain('haiku')
+  })
+
+  it('returns [] for a provider that declares no list, and for unknown/empty types', () => {
+    expect(modelOptionsForProvider(inv, 'antigravity-cli')).toEqual([])
+    expect(modelOptionsForProvider(inv, 'gemini-cli')).toEqual([])
+    expect(modelOptionsForProvider(inv, '')).toEqual([])
+    expect(modelOptionsForProvider(undefined, 'codex-cli')).toEqual([])
+  })
+
+  it('thinkingOptionsForProvider preserves provider vocabulary verbatim', () => {
+    expect(thinkingOptionsForProvider(inv, 'codex-cli')).toEqual(['minimal', 'xhigh'])
+    expect(thinkingOptionsForProvider(inv, 'antigravity-cli')).toEqual([])
+  })
+
+  it('buildProviderOptionMap keys by type with cleaned lists', () => {
+    const map = buildProviderOptionMap(inv)
+    expect(map.get('codex-cli')).toEqual({ models: ['gpt-5.5', 'gpt-5-codex'], thinking: ['minimal', 'xhigh'] })
+    expect(map.get('antigravity-cli')).toEqual({ models: [], thinking: [] })
+    expect(map.has('gemini-cli')).toBe(false)
+  })
+})
 
 describe('provider priority utilities', () => {
   it('filters inventory to detected CLI providers only', () => {

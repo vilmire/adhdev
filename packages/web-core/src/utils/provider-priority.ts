@@ -34,6 +34,66 @@ function providerType(provider: ProviderPrioritySnapshot): string {
   return String(provider.type || provider.id || '').trim()
 }
 
+// ─── Provider-specific model / thinking option lookup ──────────────────────────
+//
+// The single source of truth for "which models / thinking levels does this
+// provider advertise" across every UI that offers a provider-scoped Model or
+// Thinking picker: the mesh node slot editor, the New-session dialog, and the
+// MAGI kind-panel editor. Each provider's manifest declares its own lists
+// (codex → gpt-*, minimal/…/xhigh; claude → opus/sonnet/haiku, low/…/max), so a
+// consumer must never hardcode a cross-provider list. These read that advisory
+// list off the resolved `availableProviders` inventory and never invent values.
+
+/** Clean advisory string list: keep non-empty strings, trimmed, in order. */
+function cleanOptionList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((x): x is string => typeof x === 'string' && !!x.trim()).map(x => x.trim())
+    : []
+}
+
+/**
+ * The model list a given provider advertises, or [] when it declares none
+ * (caller then falls back to a free-text field). `providers` is the resolved
+ * availableProviders inventory (normalizeAvailableCliProviders output, or any
+ * shape carrying `type` + `modelOptions`).
+ */
+export function modelOptionsForProvider(
+  providers: Array<{ type: string; modelOptions?: string[] }> | undefined | null,
+  type: string,
+): string[] {
+  const t = (type || '').trim()
+  if (!t) return []
+  const match = (providers || []).find(p => p.type === t)
+  return cleanOptionList(match?.modelOptions)
+}
+
+/**
+ * The thinking-level list a provider advertises, verbatim (provider vocab like
+ * codex's 'xhigh' is preserved). Returns [] when the provider declares none —
+ * callers decide whether to fall back to the standard low/medium/high axis.
+ */
+export function thinkingOptionsForProvider(
+  providers: Array<{ type: string; thinkingLevelOptions?: string[] }> | undefined | null,
+  type: string,
+): string[] {
+  const t = (type || '').trim()
+  if (!t) return []
+  const match = (providers || []).find(p => p.type === t)
+  return cleanOptionList(match?.thinkingLevelOptions)
+}
+
+/** Build a provider-type → advisory {models, thinking} map for repeated lookup. */
+export function buildProviderOptionMap(
+  providers: Array<{ type: string; modelOptions?: string[]; thinkingLevelOptions?: string[] }> | undefined | null,
+): Map<string, { models: string[]; thinking: string[] }> {
+  const map = new Map<string, { models: string[]; thinking: string[] }>()
+  for (const p of providers || []) {
+    if (!p?.type) continue
+    map.set(p.type, { models: cleanOptionList(p.modelOptions), thinking: cleanOptionList(p.thinkingLevelOptions) })
+  }
+  return map
+}
+
 export function isAvailableCliProvider(provider: ProviderPrioritySnapshot): boolean {
   if (provider.category !== 'cli') return false
   if (!providerType(provider)) return false
