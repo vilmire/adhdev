@@ -6055,7 +6055,8 @@ async function meshNodeSlotsSet(ctx, args) {
     const raw = await commandForNode(ctx, node, "update_mesh_node", {
       meshId: ctx.mesh.id,
       nodeId: node.id,
-      policy: { slots: proposed }
+      policy: { slots: proposed },
+      inlineMesh: ctx.mesh
     });
     const result = unwrapCommandPayload(raw);
     if (result?.success === false) {
