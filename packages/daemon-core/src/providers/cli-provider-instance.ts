@@ -180,13 +180,18 @@ export class CliProviderInstance implements ProviderInstance {
      * INVARIANT (do not regress): must be STRICTLY GREATER than
      * AUTO_APPROVE_FLAP_CONTINUITY_MS + max_busy_phase + AUTO_APPROVE_SETTLE_MS so
      * that during a flap the settle clock (which FLAP_CONTINUITY keeps alive across
-     * each ~4.3–4.5s busy phase) gets to accrue its 600ms on the RETURNING approval
-     * frame before this stall bound can trip. Observed geometry: approval ~1.5s,
-     * busy ~4.3–4.5s. 9000ms ≥ CONTINUITY(6000) + busy(~4.5s) + SETTLE(600) headroom;
+     * each busy phase) gets to accrue its 600ms on the RETURNING approval frame
+     * before this stall bound can trip. Observed geometry — worker: approval ~1.5s,
+     * busy ~4.3–4.5s; coordinator self-session: approval ~1.5s, busy ~2.85s. Both
+     * now use the extended window (isAutonomousMeshSession covers worker +
+     * meshCoordinatorFor). Worst case: CONTINUITY(6000) + busy(~4.5s) + SETTLE(600)
+     * = ~11100ms, so the stall bound must exceed that. 10500ms satisfies the invariant
+     * for coordinator (6000 + 2850 + 600 = 9450 < 10500) and was previously 9000ms
+     * (which failed for a worker busy phase of 4.5s: 6000+4500+600=11100 > 9000).
      * the old 4500ms tripped inside the very first busy phase (while modal=none, so
      * the nudge was NOT deferred) and leaked to the coordinator.
      */
-    private static readonly AUTO_APPROVE_MASK_STALL_MS = 9000;
+    private static readonly AUTO_APPROVE_MASK_STALL_MS = 10500;
 
     private adapter: ProviderCliAdapter;
     private context: InstanceContext | null = null;
@@ -1788,7 +1793,7 @@ export class CliProviderInstance implements ProviderInstance {
      * genuine resolution frees the gate promptly.
      */
     private autoApproveContinuityWindowMs(): number {
-        return this.autoApproveMaskSince > 0 && this.isMeshWorkerSession()
+        return this.autoApproveMaskSince > 0 && this.isAutonomousMeshSession()
             ? CliProviderInstance.AUTO_APPROVE_FLAP_CONTINUITY_MS
             : CliProviderInstance.AUTO_APPROVE_GATE_HYSTERESIS_MS;
     }

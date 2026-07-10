@@ -29,7 +29,7 @@ import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.j
 // terminal backend), driving `now` manually so the settle math is deterministic.
 
 const FLAP_CONTINUITY_MS = 6000
-const MASK_STALL_MS = 9000
+const MASK_STALL_MS = 10500
 
 type Harness = {
   instance: any
@@ -41,7 +41,7 @@ type Harness = {
 
 const liveInstances: any[] = []
 
-function makeHarness(): Harness {
+function makeHarness(settingsOverride?: Record<string, unknown>): Harness {
   const fires: Array<{ message?: string }> = []
   const resolves: number[] = []
   const events: any[] = []
@@ -50,7 +50,7 @@ function makeHarness(): Harness {
   instance.provider = { name: 'Claude', settings: {} }
   // Mesh worker markers: enables the extended flap-continuity window AND the
   // stalled-approval coordinator nudge path (both gated on isMeshWorkerSession).
-  instance.settings = { autoApprove: true, meshActiveTaskId: 'task_abc' }
+  instance.settings = { autoApprove: true, meshActiveTaskId: 'task_abc', ...settingsOverride }
   instance.workingDir = '/tmp/worker-workspace'
   instance.autoApproveBusy = false
   instance.autoApproveBusyTimer = null
@@ -226,5 +226,87 @@ describe('cli-provider auto-approve — FLAP-RECUR constants', () => {
     expect(flap).toBe(FLAP_CONTINUITY_MS)
     expect(flap).toBeGreaterThan(hyst)
     expect(flap).toBeLessThan(mask)
+  })
+
+  it('mask-stall bound satisfies invariant for coordinator busy phase (2.85s): CONTINUITY + busy + SETTLE < MASK_STALL', () => {
+    const mask = (CliProviderInstance as any).AUTO_APPROVE_MASK_STALL_MS
+    const coordinatorBusyMs = 2850
+    expect(FLAP_CONTINUITY_MS + coordinatorBusyMs + 600).toBeLessThan(mask)
+  })
+})
+
+// AUTOAPPROVE-FLAP-RECUR defect A: the coordinator's own claude-cli session
+// (settings: { meshCoordinatorFor } with NO worker flags) previously got the
+// tight 1500ms continuity window because autoApproveContinuityWindowMs() only
+// checked isMeshWorkerSession(). A coordinator busy phase of ~2.85s exceeded
+// 1500ms → settle clock torn down → resolveModal never fired → mask-stall
+// tripped → spurious agent:waiting_approval surfaced.
+//
+// Fix: gate on isAutonomousMeshSession() (worker || meshCoordinatorFor) so the
+// coordinator's own session gets the 6000ms window exactly like a worker.
+describe('cli-provider auto-approve — coordinator self-session continuity (defect A)', () => {
+  // Creates a harness that mimics a coordinator's own claude-cli session:
+  // meshCoordinatorFor is set; NO worker flags (meshActiveTaskId / meshNodeFor /
+  // meshNodeId / launchedByCoordinator are absent).
+  function makeCoordinatorHarness(): Harness {
+    return makeHarness({ meshActiveTaskId: undefined, meshCoordinatorFor: 'coord_session_xyz' })
+  }
+
+  it('coordinator session gets 6000ms continuity window: busy phase of 2850ms does NOT wipe the settle clock', () => {
+    const h = makeCoordinatorHarness()
+
+    h.call(APPROVAL(1), 1000)
+    expect(h.instance.pendingAutoApprovalSince).toBe(1000)
+    expect(h.instance.autoApproveMaskSince).toBe(1000)
+
+    // Coordinator busy phase: 2850ms > 1500ms tight hysteresis, < 6000ms continuity.
+    // Pre-fix (isMeshWorkerSession gate): coordinator took the tight 1500ms window
+    // → inactiveSince armed, then goneForMs=2000 crossed 1500 → settle wiped.
+    // Post-fix (isAutonomousMeshSession gate): coordinator takes the 6000ms window
+    // → settle clock survives the whole busy phase.
+    h.call(GENERATING(2), 1400) // inactiveSince = 1400
+    h.call(GENERATING(3), 3400) // goneForMs = 2000 > 1500 but < 6000 → NOT wiped
+    expect(h.instance.pendingAutoApprovalSince).toBe(1000)
+    expect(h.instance.autoApproveMaskSince).toBe(1000)
+
+    // Approval returns; cumulative settle (3600 − 1000 = 2600ms) ≥ 600 → fires.
+    h.call(APPROVAL(4), 3600)
+    expect(h.fires.length).toBe(1)
+    expect(h.instance.autoApproveMaskSince).toBe(0)
+    expect(h.events.filter(isNudge).length).toBe(0)
+  })
+
+  it('coordinator session resolves on approval return after multi-frame busy and never nudges', () => {
+    const h = makeCoordinatorHarness()
+
+    h.call(APPROVAL(1), 1000)
+    h.call(GENERATING(2), 1400)
+    h.call(GENERATING(3), 2800) // 1400ms into busy
+    h.call(GENERATING(4), 3500) // 2100ms into busy > 1500 tight, < 6000 continuity
+    h.call(APPROVAL(5), 4200)   // approval back, 3200ms cumulative ≥ 600 → fire
+    expect(h.fires.length).toBe(1)
+    expect(h.events.filter(isNudge).length).toBe(0)
+    expect(h.instance.autoApproveMaskSince).toBe(0)
+  })
+
+  it('worker session regression: meshActiveTaskId still gets 6000ms continuity window', () => {
+    // Ensure the existing worker path is unaffected by the isAutonomousMeshSession change.
+    const h = makeHarness() // default: meshActiveTaskId = 'task_abc'
+    h.call(APPROVAL(1), 1000)
+    h.call(GENERATING(2), 1400)
+    h.call(GENERATING(3), 3200) // 1800ms > 1500 hysteresis
+    expect(h.instance.pendingAutoApprovalSince).toBe(1000) // still warm
+    h.call(APPROVAL(4), 3400)
+    expect(h.fires.length).toBe(1)
+    expect(h.events.filter(isNudge).length).toBe(0)
+  })
+
+  it('foreground session (no mesh flags) still gets the tight 1500ms window', () => {
+    // Non-mesh session must NOT get the extended window — tight hysteresis preserved.
+    const h = makeHarness({ meshActiveTaskId: undefined, meshCoordinatorFor: undefined })
+    h.call(APPROVAL(1), 1000)
+    h.call(GENERATING(2), 1400)         // inactiveSince = 1400
+    h.call(GENERATING(3), 3200)         // goneForMs = 1800 > 1500 → settle wiped for foreground
+    expect(h.instance.pendingAutoApprovalSince).toBe(0) // reset for foreground
   })
 })
