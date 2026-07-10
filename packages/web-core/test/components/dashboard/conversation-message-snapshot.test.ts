@@ -311,6 +311,55 @@ describe('conversation message authority snapshot', () => {
         expect(timestamps).toEqual(sorted)
     })
 
+    it('keeps the just-finished assistant answer pinned when a user-send activity flood pushes it into the hidden tail (CHAT-ASSISTANT-ANCHOR-PRESERVE)', () => {
+        // Reproduces the reported flicker: a LONG conversation whose visible window
+        // (slice(-50)) is entirely older activity + older turns, then the user sends a
+        // prompt. The daemon appends the user echo and a burst of hidden activity
+        // bubbles, shifting the raw slice forward so the substantive assistant answer
+        // that just landed is pushed OUT of the visible window into the hidden tail —
+        // while the fresh trailing user echo stays visible. Without the pin the pane
+        // would render the user bubble but drop the assistant answer for a beat.
+        const liveMessages = [
+            // Older tail already filling most of the slice budget (activity-heavy).
+            ...Array.from({ length: 45 }, (_, index) => ({
+                role: 'assistant' as const,
+                content: `older activity ${index}`,
+                id: `older-activity-${index}`,
+                kind: 'tool',
+                receivedAt: 1000 + index,
+            })),
+            // The turn the user was reading: prompt + the substantive answer.
+            { role: 'user' as const, content: 'previous prompt', id: 'prev-user', kind: 'standard', receivedAt: 2000 },
+            { role: 'assistant' as const, content: 'THE ANSWER I WAS READING', id: 'the-answer', kind: 'standard', receivedAt: 2100 },
+            // User sends again -> echo + a flood of hidden activity that shoves the
+            // answer above the slice(-50) window.
+            { role: 'user' as const, content: 'new user prompt', id: 'new-user', kind: 'standard', receivedAt: 3000 },
+            ...Array.from({ length: 12 }, (_, index) => ({
+                role: 'assistant' as const,
+                content: `dispatch activity ${index}`,
+                id: `dispatch-activity-${index}`,
+                kind: index % 2 === 0 ? 'tool' : 'thought',
+                receivedAt: 3100 + index,
+            })),
+        ]
+
+        const visibleMessages = buildVisibleConversationMessages({
+            historyMessages: [],
+            liveMessages,
+            visibleLiveCount: 50,
+        })
+
+        const rendered = filterChatMessagesForDefaultTranscript(visibleMessages)
+        const renderedContents = rendered.map(message => message.content)
+        // The assistant answer the user was reading is still on screen (never dropped)...
+        expect(renderedContents).toContain('THE ANSWER I WAS READING')
+        // ...and the fresh user prompt is still on screen too (both substantive turns kept).
+        expect(renderedContents).toContain('new user prompt')
+        // The answer sorts before the newer user prompt (chronological slot preserved).
+        expect(renderedContents.indexOf('THE ANSWER I WAS READING'))
+            .toBeLessThan(renderedContents.indexOf('new user prompt'))
+    })
+
     it('does not add conversational anchors when the visible live window already contains one', () => {
         const liveMessages = [
             { role: 'user' as const, content: 'older prompt', id: 'user-older', kind: 'standard', receivedAt: 1000 },
