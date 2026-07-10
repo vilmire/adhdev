@@ -24,6 +24,7 @@ import {
     buildNoProgressCompletionReconciliation,
 } from './mesh-events-stale.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
+import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 import {
     buildMeshSystemMessage,
     readNonEmptyString,
@@ -716,6 +717,58 @@ function sourceWorkerAutoApproves(components: DaemonComponents, sessionId: strin
     }
 }
 
+/**
+ * REDRIVE-DUP: stop a worker session that started a STALE (reclaimed) mesh dispatch,
+ * so it discards the reclaimed task before it double-executes it. Prefers the local
+ * transport when the session's adapter lives on this daemon; otherwise forwards a
+ * `stop_cli` to the worker node's daemon over P2P (best-effort — a failed stop only
+ * loses the belt-and-suspenders stop; the ack was already rejected, so the coordinator
+ * never treats the stale run as the authoritative execution).
+ */
+function stopStaleMeshWorker(
+    components: DaemonComponents,
+    args: { meshId: string; sessionId: string; nodeId?: string; providerType?: string; daemonId?: string },
+): void {
+    const { meshId, sessionId, providerType } = args;
+    const stopArgs: Record<string, unknown> = {
+        targetSessionId: sessionId,
+        ...(providerType ? { cliType: providerType } : {}),
+        mode: 'hard',
+        reason: 'stale_mesh_dispatch_reclaimed',
+    };
+    try {
+        const isLocal = components.cliManager?.adapters?.has?.(sessionId) === true;
+        if (isLocal) {
+            // cliType is required by stop_cli; resolve it from the local adapter when the
+            // event carried no providerType.
+            if (!stopArgs.cliType) {
+                const localType = components.cliManager?.adapters?.get?.(sessionId)?.cliType;
+                if (localType) stopArgs.cliType = localType;
+            }
+            Promise.resolve(components.cliManager?.handleCliCommand?.('stop_cli', stopArgs))
+                .catch((e: any) => LOG.warn('MeshQueue', `Local stop of stale worker ${sessionId} failed: ${e?.message || e}`));
+            return;
+        }
+        // Remote: resolve the worker node's daemon id (event metadata first, then the mesh node).
+        let daemonId = args.daemonId;
+        if (!daemonId && args.nodeId) {
+            try {
+                const mesh = getMeshWithCache(components, meshId);
+                const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, args.nodeId!));
+                daemonId = node ? readMeshNodeDaemonId(node) || undefined : undefined;
+            } catch { /* best-effort */ }
+        }
+        if (daemonId && components.dispatchMeshCommand) {
+            Promise.resolve(components.dispatchMeshCommand(daemonId, 'stop_cli', stopArgs))
+                .catch((e: any) => LOG.warn('MeshQueue', `Remote stop of stale worker ${sessionId} on daemon ${daemonId} failed: ${e?.message || e}`));
+        } else {
+            LOG.warn('MeshQueue', `Cannot stop stale worker ${sessionId}: no local adapter and no resolvable remote daemon id (node ${args.nodeId ?? '?'}). Ack already rejected — task will re-strand-and-fail if the worker completes.`);
+        }
+    } catch (e: any) {
+        LOG.warn('MeshQueue', `stopStaleMeshWorker error for ${sessionId}: ${e?.message || e}`);
+    }
+}
+
 function injectMeshSystemMessage(components: DaemonComponents, args: {
     meshId: string;
     sourceInstanceId?: string;
@@ -1115,6 +1168,45 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             // sibling must keep that row 'dispatched' so its own confirm can match it; acking
             // by session would mark it 'acked' prematurely and hide a genuine non-delivery.
             const startedTaskId = readNonEmptyString(args.metadataEvent.taskId) || undefined;
+            // REDRIVE-DUP: reject a STALE dispatch. When a delivered-but-unconsumed task is
+            // reclaimed (reclaimStrandedAssignedTask) and re-dispatched to another node, the
+            // ORIGINAL inject to the first node is not cancelled — it can still fire and make
+            // that worker start the SAME taskId, double-executing it. The reclaim bumped the
+            // task row's dispatchNonce, so the stranded inject's generating_started echoes a
+            // nonce STRICTLY LESS than the row's current value. Detect that here: skip the ack
+            // (do NOT resurrect the row onto this stale session) and stop the worker so it
+            // discards the reclaimed task. A matching/greater nonce, or an absent nonce
+            // (legacy worker), falls through to the normal ack — backward safe.
+            const startedNonce = typeof args.metadataEvent.dispatchNonce === 'number'
+                ? args.metadataEvent.dispatchNonce
+                : undefined;
+            if (startedTaskId && startedNonce !== undefined) {
+                const currentRow = (() => {
+                    try { return MeshRuntimeStore.getInstance().findQueueEntryById(args.meshId, startedTaskId); }
+                    catch { return null; }
+                })();
+                const currentNonce = typeof currentRow?.dispatchNonce === 'number' ? currentRow.dispatchNonce : undefined;
+                if (currentNonce !== undefined && startedNonce < currentNonce) {
+                    LOG.warn('MeshQueue', `Rejecting stale mesh dispatch: task ${startedTaskId} generating_started from session ${sessionId} `
+                        + `(node ${nodeId ?? '?'}) carries dispatchNonce ${startedNonce} < current ${currentNonce} — the task was reclaimed and `
+                        + `re-dispatched; stopping this worker to prevent duplicate execution.`);
+                    traceMeshEventDrop('stale_dispatch_nonce_rejected', {
+                        taskId: startedTaskId,
+                        sessionId,
+                        nodeId,
+                        meshId: args.meshId,
+                        event: 'agent:generating_started',
+                    }, `nonce ${startedNonce} < ${currentNonce}`);
+                    stopStaleMeshWorker(components, {
+                        meshId: args.meshId,
+                        sessionId,
+                        nodeId,
+                        providerType: readNonEmptyString(args.metadataEvent.providerType) || readNonEmptyString(args.metadataEvent.cliType),
+                        daemonId: readNonEmptyString(args.metadataEvent.sourceDaemonId) || readNonEmptyString(args.metadataEvent.daemonId),
+                    });
+                    return { success: true, forwarded: 0, suppressed: true, staleDispatchRejected: true };
+                }
+            }
             // WARMUPGAP: only ack a dispatch row when the event names its task, or the session
             // currently holds an active assignment. A no-taskId generating_started from an
             // unassigned session is a pre-assignment warmup — the session_id fallback would ack a

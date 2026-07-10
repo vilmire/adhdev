@@ -1725,6 +1725,10 @@ export class DaemonCliManager {
                                 meshId: meshContext.meshId,
                                 ...(typeof meshContext.nodeId === 'string' && meshContext.nodeId ? { nodeId: meshContext.nodeId } : {}),
                                 ...(typeof meshContext.taskId === 'string' && meshContext.taskId ? { taskId: meshContext.taskId } : {}),
+                                // REDRIVE-DUP: carry the dispatch nonce onto the worker session so
+                                // its generating_started event echoes it back for the coordinator's
+                                // stale-nonce guard.
+                                ...(typeof meshContext.dispatchNonce === 'number' ? { dispatchNonce: meshContext.dispatchNonce } : {}),
                                 ...(typeof meshContext.coordinatorDaemonId === 'string' && meshContext.coordinatorDaemonId ? { coordinatorDaemonId: meshContext.coordinatorDaemonId } : {}),
                             });
                         } catch { /* best-effort — stamping is a routing aid, not a hard requirement */ }

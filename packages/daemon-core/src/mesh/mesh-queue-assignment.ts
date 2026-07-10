@@ -588,6 +588,10 @@ export function tryAssignQueueTask(
                         meshId,
                         nodeId,
                         taskId: task.id,
+                        // REDRIVE-DUP: carry the current dispatch nonce so the worker can echo it
+                        // back on generating_started; a reclaim bumps this row's nonce, making an
+                        // already-in-flight stale inject rejectable on arrival.
+                        ...(typeof task.dispatchNonce === 'number' ? { dispatchNonce: task.dispatchNonce } : {}),
                         ...(localDaemonIdForDispatch ? { coordinatorDaemonId: localDaemonIdForDispatch } : {}),
                         ...(sourceCoordinatorSessionId ? { coordinatorSessionId: sourceCoordinatorSessionId } : {}),
                     },
@@ -668,6 +672,8 @@ export function tryAssignQueueTask(
                 meshId,
                 nodeId,
                 taskId: task.id,
+                // REDRIVE-DUP: carry the current dispatch nonce (see remote branch above).
+                ...(typeof task.dispatchNonce === 'number' ? { dispatchNonce: task.dispatchNonce } : {}),
                 ...(localCoordinatorDaemonId() ? { coordinatorDaemonId: localCoordinatorDaemonId() } : {}),
                 ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { coordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
             },

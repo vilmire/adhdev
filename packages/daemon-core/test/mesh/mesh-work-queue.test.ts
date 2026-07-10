@@ -199,6 +199,60 @@ describe('Mesh Work Queue (GUPP)', () => {
         });
     });
 
+    // REDRIVE-DUP: a reclaimed+re-dispatched task must bump its dispatch nonce so the
+    // stale inject to the original node carries a now-lower nonce and is rejectable.
+    describe('REDRIVE-DUP dispatch nonce', () => {
+        it('stamps a monotonic dispatch nonce on claim', () => {
+            enqueueTask(meshId, 'task 1');
+            const claimed = claimNextTask(meshId, 'node1', 'session1');
+            expect(claimed?.dispatchNonce).to.equal(1);
+            // The nonce round-trips through the SQLite payload JSON.
+            const fromQueue = getQueue(meshId).find(t => t.id === claimed?.id);
+            expect(fromQueue?.dispatchNonce).to.equal(1);
+        });
+
+        it('reclaimStrandedAssignedTask bumps the nonce so a stale inject is rejectable', () => {
+            const t1 = enqueueTask(meshId, 'stranded task');
+            const claimed = claimNextTask(meshId, 'nodeA', 'sessionA');
+            expect(claimed?.dispatchNonce).to.equal(1);
+            const nonceAtDispatch = claimed!.dispatchNonce!;
+
+            // The delivered-not-consumed watchdog reclaims it back to pending.
+            const reclaimed = reclaimStrandedAssignedTask(meshId, t1.id, { reason: 'delivered_not_consumed_redrive' });
+            expect(reclaimed?.status).to.equal('pending');
+            // The reclaim bumped the nonce strictly above the value the original inject carried,
+            // so a late generating_started echoing nonceAtDispatch is now stale (< current).
+            expect(reclaimed!.dispatchNonce!).to.be.greaterThan(nonceAtDispatch);
+            expect(reclaimed!.assignedNodeId).to.be.undefined;
+            expect(reclaimed!.assignedSessionId).to.be.undefined;
+
+            // Re-claiming onto a DIFFERENT node bumps the nonce again — the current value the
+            // coordinator compares against is strictly greater than the stale inject's.
+            const reclaimedNonce = reclaimed!.dispatchNonce!;
+            const redispatched = claimNextTask(meshId, 'nodeB', 'sessionB');
+            expect(redispatched?.id).to.equal(t1.id);
+            expect(redispatched!.dispatchNonce!).to.be.greaterThan(reclaimedNonce);
+            expect(redispatched!.dispatchNonce!).to.be.greaterThan(nonceAtDispatch);
+        });
+
+        it('preserves readonly parallelism: two DIFFERENT readonly tasks both claim on one node', () => {
+            const r1 = enqueueTask(meshId, 'readonly diagnose 1', { readonly: true } as any);
+            const r2 = enqueueTask(meshId, 'readonly diagnose 2', { readonly: true } as any);
+
+            // Both readonly tasks claim concurrently on the SAME node (different sessions) —
+            // the node-busy gate is bypassed for readonly work; the nonce change does not
+            // touch that path.
+            const c1 = claimNextTask(meshId, 'node1', 'session-ro-1', undefined, { nodeIsWorktree: false } as any);
+            const c2 = claimNextTask(meshId, 'node1', 'session-ro-2', undefined, { nodeIsWorktree: false } as any);
+            expect(c1).to.not.be.null;
+            expect(c2).to.not.be.null;
+            expect(new Set([c1!.id, c2!.id])).to.deep.equal(new Set([r1.id, r2.id]));
+            // Each got its own independent nonce (both first-dispatch → 1).
+            expect(c1!.dispatchNonce).to.equal(1);
+            expect(c2!.dispatchNonce).to.equal(1);
+        });
+    });
+
     it('should only claim targeted tasks if node matches', () => {
         const t1 = enqueueTask(meshId, 'targeted task', { targetNodeId: 'node-target' });
 

@@ -82,7 +82,65 @@ export function buildRefineJobHandle(self: DaemonCommandRouter, args: {
         };
     }
 
+/**
+ * Slim the terminal-stage refine result down to the fields a coordinator needs to
+ * decide next-step, dropping the heavy per-command / per-entry detail.
+ *
+ * The full `CommandRouterResult` (with `validationSummary.commandsRun[]` carrying
+ * per-command stdout/stderr, `rejectedCommands`, `suggestions`, `suggestedConfig`,
+ * the full `patchEquivalence`, and `submoduleReachability.entries[]`/`.unreachable[]`)
+ * routinely exceeds 70KB and overflows the coordinator token limit when it rides on a
+ * `mesh_wait_events` payload. The full detail is still persisted verbatim to the ledger
+ * (`appendRefineJobLedger`) and `terminalRefineJobs`, so slimming only the EVENT loses
+ * nothing — the coordinator can pull the full record on demand via
+ * `evidence.ledgerCommand` / `taskHistoryKind`.
+ */
+export function slimRefineEventResult(result: Record<string, unknown>): Record<string, unknown> {
+        const slim: Record<string, unknown> = {};
+        // Top-level scalars the coordinator branches on.
+        for (const key of [
+            'success', 'code', 'error', 'convergenceStatus', 'blockedReason',
+            'branch', 'into', 'terminalKind', 'nextStep', 'finalBranchConvergenceState',
+        ] as const) {
+            if (result[key] !== undefined) slim[key] = result[key];
+        }
+        // Mapped subset of the unreachable-submodule commits (path + autoPublishAllowed),
+        // not the full commit records.
+        if (Array.isArray(result.unreachableSubmoduleCommits)) {
+            slim.unreachableSubmoduleCommits = (result.unreachableSubmoduleCommits as Array<Record<string, unknown>>)
+                .map(e => ({ path: e?.path, autoPublishAllowed: e?.autoPublishAllowed }));
+        }
+        // Reduced validation summary — status + failure classification + config source
+        // + a count of commands run (drop the full commandsRun/rejectedCommands/
+        // suggestions/suggestedConfig detail).
+        if (result.validationSummary && typeof result.validationSummary === 'object') {
+            const vs = result.validationSummary as Record<string, unknown>;
+            slim.validationSummary = {
+                status: vs.status,
+                failureCode: vs.failureCode,
+                configSource: vs.configSource,
+                configSourceType: vs.configSourceType,
+                commandsRunCount: Array.isArray(vs.commandsRun) ? vs.commandsRun.length : undefined,
+            };
+        }
+        // Reduce patch-equivalence to just its verdict.
+        if (result.patchEquivalence && typeof result.patchEquivalence === 'object') {
+            const pe = result.patchEquivalence as Record<string, unknown>;
+            slim.patchEquivalence = { status: pe.status, equivalent: pe.equivalent };
+        }
+        // Reduce submodule reachability to counts; drop the full entries/unreachable arrays.
+        if (result.submoduleReachability && typeof result.submoduleReachability === 'object') {
+            const sr = result.submoduleReachability as Record<string, unknown>;
+            slim.submoduleReachability = {
+                checked: Array.isArray(sr.entries) ? sr.entries.length : undefined,
+                unreachable: Array.isArray(sr.unreachable) ? sr.unreachable.length : undefined,
+            };
+        }
+        return slim;
+}
+
 export function queueRefineJobEvent(self: DaemonCommandRouter, event: 'refine:accepted' | 'refine:completed' | 'refine:failed', handle: MeshRefineJobHandle, result?: Record<string, unknown>): void {
+        const slimResult = result ? slimRefineEventResult(result) : undefined;
         const metadataEvent = {
             source: 'refine_mesh_node_async_job',
             jobId: handle.jobId,
@@ -95,7 +153,7 @@ export function queueRefineJobEvent(self: DaemonCommandRouter, event: 'refine:ac
             startedAt: handle.startedAt,
             completedAt: handle.completedAt,
             retryOfJobId: handle.retryOfJobId,
-            ...(result ? { result } : {}),
+            ...(slimResult ? { result: slimResult } : {}),
         };
         const eventPayload = {
             event,
@@ -122,7 +180,7 @@ export function queueRefineJobEvent(self: DaemonCommandRouter, event: 'refine:ac
                     startedAt: handle.startedAt,
                     completedAt: handle.completedAt,
                     retryOfJobId: handle.retryOfJobId,
-                    ...(result ? { result } : {}),
+                    ...(slimResult ? { result: slimResult } : {}),
                 },
             );
             if (forwarded?.success === true) return;

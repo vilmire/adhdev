@@ -1043,6 +1043,11 @@ export class MeshRuntimeStore {
             entry.assignedSessionId = sessionId;
             if (providerType) entry.assignedProviderType = providerType;
             entry.dispatchTimestamp = now;
+            // REDRIVE-DUP: bump the per-task dispatch nonce on every claim so this dispatch
+            // carries a nonce strictly greater than any prior (reclaimed) dispatch of the same
+            // task. The worker echoes it on agent:generating_started; the coordinator rejects a
+            // stale-nonce ack so a reclaimed+re-dispatched task's original inject cannot execute.
+            entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
             entry.updatedAt = now;
 
             this.db.prepare(`

@@ -825,7 +825,7 @@ export class CliProviderInstance implements ProviderInstance {
      * completion events silently drop because the forwarder has nothing to
      * match against.
      */
-    attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
+    attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
         if (!assignment?.meshId) return;
         this.settings = {
             ...this.settings,
@@ -838,6 +838,10 @@ export class CliProviderInstance implements ProviderInstance {
             // shares this daemon. See isMeshOwnedDelegateSession's post-detach gate.
             ...(assignment.nodeId ? { meshNodeId: assignment.nodeId, meshLastNodeId: assignment.nodeId } : {}),
             ...(assignment.taskId ? { meshActiveTaskId: assignment.taskId } : {}),
+            // REDRIVE-DUP: task-level dispatch nonce, echoed on generating_started so the
+            // coordinator can reject a stale (reclaimed) dispatch. Cleared with meshActiveTaskId
+            // on detach so a subsequent unrelated turn never re-echoes a prior task's nonce.
+            ...(typeof assignment.dispatchNonce === 'number' ? { meshActiveDispatchNonce: assignment.dispatchNonce } : {}),
             ...(assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {}),
             // Session-level routing anchor: the originating coordinator session, so this
             // worker's completion events route back to the exact session that dispatched it.
@@ -872,17 +876,18 @@ export class CliProviderInstance implements ProviderInstance {
      */
     detachMeshAssignment(): void {
         if (!this.settings.meshNodeFor && !this.settings.meshActiveTaskId && !this.settings.meshNodeId) return;
-        // Session-level member: keep membership, drop only the task-level marker.
+        // Session-level member: keep membership, drop only the task-level markers.
         if (this.settings.launchedByCoordinator === true) {
             if (!this.settings.meshActiveTaskId) return;
-            const { meshActiveTaskId, ...rest } = this.settings;
-            void meshActiveTaskId;
+            // REDRIVE-DUP: clear the task-level dispatch nonce with the task marker.
+            const { meshActiveTaskId, meshActiveDispatchNonce, ...rest } = this.settings;
+            void meshActiveTaskId; void meshActiveDispatchNonce;
             this.settings = rest;
             this.adapter.updateRuntimeSettings?.(this.settings);
             return;
         }
-        const { meshNodeFor, meshNodeId, meshActiveTaskId, ...rest } = this.settings;
-        void meshNodeFor; void meshActiveTaskId;
+        const { meshNodeFor, meshNodeId, meshActiveTaskId, meshActiveDispatchNonce, ...rest } = this.settings;
+        void meshNodeFor; void meshActiveTaskId; void meshActiveDispatchNonce;
         // WTCLAIM (A): clear the active binding but PRESERVE the last bound node id
         // (meshLastNodeId) so a later sessionless dispatch can re-adopt this idle
         // session ONLY for the node it last served. Carry the id being cleared, or
@@ -3188,6 +3193,12 @@ export class CliProviderInstance implements ProviderInstance {
             if (!existingTaskId) {
                 const resolved = this.completingTurnTaskId();
                 if (resolved) enrichedEvent.taskId = resolved;
+            }
+            // REDRIVE-DUP: echo the dispatch nonce this session's active task was stamped with
+            // so the coordinator's generating_started handler can reject a stale (reclaimed)
+            // dispatch and stop this worker before it double-executes the reclaimed task.
+            if (enrichedEvent.dispatchNonce === undefined && typeof this.settings.meshActiveDispatchNonce === 'number') {
+                enrichedEvent.dispatchNonce = this.settings.meshActiveDispatchNonce;
             }
         }
         if (this.context?.emitProviderEvent) {

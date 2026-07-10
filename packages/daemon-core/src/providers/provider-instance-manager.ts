@@ -312,7 +312,7 @@ export class ProviderInstanceManager {
      *  applied, or `{ stamped: false, reason }` when it was refused — the instance
      *  was missing / has no attach method, or the DOUBLE-DISPATCH idempotence guard
      *  fired (the same task is already running on another live session here). */
-    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): { stamped: boolean; reason?: string } {
+    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; coordinatorDaemonId?: string; coordinatorSessionId?: string }): { stamped: boolean; reason?: string } {
         const inst = this.instances.get(instanceId);
         if (!inst || typeof inst.attachMeshAssignment !== 'function') {
             LOG.warn('MeshDispatch', `attachMeshAssignment skipped: instance ${instanceId} ${inst ? 'has no attach method' : 'not found'}`);

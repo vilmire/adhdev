@@ -645,6 +645,17 @@ export interface MeshWorkQueueEntry {
     /** ISO timestamp when the task was dispatched (assigned) to a node/session. Used for precise matching on completion. */
     dispatchTimestamp?: string;
     /**
+     * REDRIVE-DUP: monotonic per-task dispatch nonce. Bumped on every (re)dispatch of
+     * this task (assignQueueTask) AND on every reclaim (reclaimStrandedAssignedTask), and
+     * carried to the worker in meshContext.dispatchNonce. The worker echoes it back on
+     * agent:generating_started (metadataEvent.dispatchNonce). When a delivered-not-consumed
+     * task is reclaimed and re-dispatched to a different node, the ORIGINAL inject to the
+     * first node still carries the now-stale nonce; the coordinator rejects that node's
+     * generating_started ack (and stops it) so the SAME taskId is never executed twice.
+     * Absent on legacy rows → the coordinator skips the stale-nonce guard (backward safe).
+     */
+    dispatchNonce?: number;
+    /**
      * (3) The ORIGINATING coordinator session that enqueued this task. Stamped onto the
      * worker at dispatch (meshCoordinatorSessionId) so the task's completion routes back to
      * the exact coordinator session — even when several coordinator sessions share one
@@ -1386,6 +1397,13 @@ export function reclaimStrandedAssignedTask(
         delete entry.assignedSessionId;
         delete entry.assignedProviderType;
         delete entry.dispatchTimestamp;
+        // REDRIVE-DUP: bump the dispatch nonce so the ORIGINAL inject to prevNode/prevSession
+        // (which is delivered-but-unconsumed and about to be re-dispatched elsewhere) now
+        // carries a stale nonce. When that stranded inject finally fires and the worker emits
+        // agent:generating_started echoing the old nonce, the coordinator's stale-nonce guard
+        // rejects the ack and stops that worker — so the reclaimed+re-dispatched task is never
+        // executed by the originally-assigned session (no duplicate execution).
+        entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
         entry.strandedReclaimCount = reclaims;
         entry.updatedAt = now;
         // The stranded assignment is being torn down (→ pending or failed); end its
