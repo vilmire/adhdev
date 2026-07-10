@@ -66,6 +66,16 @@ export interface CliStateEngineCallbacks {
     onStatusChange(): void;
     onApplyParsedSession(session: ParsedSession): void;
     onTurnCompleted(): void;
+    /**
+     * FALSE-IDLE (Fix 2): true when the owning session is inside the post-approval
+     * resume grace — an autonomous auto-approving mesh session that resolved a modal
+     * within the resume-grace window. The engine cannot decide this on its own (it has
+     * no mesh/auto-approve awareness); the instance answers using the SAME
+     * `inApprovalResumeGrace` judgment Fix 1 uses, so the two fixes stay in lockstep.
+     * Optional: absent ⇒ treated as false (no hysteresis) so any non-instance embedder
+     * keeps the pre-fix behavior.
+     */
+    isInApprovalResumeGrace?(): boolean;
 }
 
 interface IdleFinishCandidate {
@@ -94,6 +104,13 @@ const FINISH_RETRY_DELAY_MS = 300;
 const MAX_TRACE_ENTRIES = 250;
 const APPROVAL_EXIT_TIMEOUT_MS = 60_000;
 const IDLE_CONFIRMATION_GRACE_MS = 2_000;
+// FALSE-IDLE (Fix 2): hard upper bound on how long applyIdle may keep deferring
+// finishResponse inside the post-approval resume grace. Mirrors the instance-side
+// APPROVAL_RESUME_GRACE_MS (18s) — kept as a local constant since the engine has no
+// access to the instance's static. If the turn truly ended right after an approval
+// and stays silent this long, we stop suppressing and let the normal idle-finish run,
+// so a genuinely-finished turn can never be held past this bound (no infinite defer).
+const APPROVAL_RESUME_IDLE_DEFER_CAP_MS = 18_000;
 
 // ─── Engine ────────────────────────────────────────────────────────────────
 
@@ -184,6 +201,13 @@ export class CliStateEngine {
 
     // ── Idle candidate ───────────────────────────────
     private idleFinishCandidate: IdleFinishCandidate | null = null;
+
+    // FALSE-IDLE (Fix 2): wall-clock when the current post-approval resume-grace idle
+    // defer began, scoped to a responseEpoch. Zero when not deferring. Bounds the defer
+    // to APPROVAL_RESUME_IDLE_DEFER_CAP_MS so a turn that genuinely ended right after an
+    // approval eventually finishes. Reset whenever a new turn/response starts or completes.
+    private approvalResumeDeferSince = 0;
+    private approvalResumeDeferEpoch = -1;
 
     // ── Idle confirmation grace ──────────────────────
     /**
@@ -450,6 +474,8 @@ export class CliStateEngine {
         this.activeModal = null;
         this.pendingScriptStatus = null;
         this.pendingScriptStatusSince = 0;
+        this.approvalResumeDeferSince = 0;
+        this.approvalResumeDeferEpoch = -1;
     }
 
     clearIdleFinishCandidate(reason: string): void {
@@ -959,6 +985,28 @@ export class CliStateEngine {
             && assistantLength >= candidate.assistantLength
             && (now - candidate.armedAt) >= idleFinishConfirmMs;
 
+        // FALSE-IDLE (Fix 2) FSM-level hysteresis: an autonomous auto-approving mesh
+        // worker that just auto-resolved an approval resumes the same turn and falls
+        // briefly silent (the inter-approval quiet valley) before the next tool/approval.
+        // resetActiveTurnState tearing the turn down in that valley is the root cause the
+        // downstream Fix 1 / hasAdapterPendingResponse gates then inherit as "turn closed".
+        // Suppress the idle declaration here — at the FSM level — while inside the
+        // post-approval resume grace, so the turn scope is NOT torn down mid-flight.
+        // Bounded by APPROVAL_RESUME_IDLE_DEFER_CAP_MS: if the turn genuinely ended right
+        // after an approval and stays silent past the cap, we stop deferring and let the
+        // normal idle-finish run. Re-arm the idle timeout so we re-evaluate after the
+        // quiet grows (either the worker resumes → this path releases, or the cap lapses
+        // → finish). Scoped through the instance callback so a plain/interactive turn with
+        // no autonomous auto-approve is never affected.
+        if (this.shouldDeferIdleForApprovalResume(now)) {
+            this.clearIdleFinishCandidate('approval_resume_grace_defer');
+            if (this.idleTimeout) clearTimeout(this.idleTimeout);
+            this.idleTimeout = setTimeout(() => {
+                if (this.isWaitingForResponse) this.evaluateSettled(this.transport.getSnapshot());
+            }, this.timeouts.idleFinish);
+            return;
+        }
+
         if (idleReady && candidateQuiet) {
             this.clearIdleFinishCandidate('finish_response');
             if (this.idleTimeout) clearTimeout(this.idleTimeout);
@@ -975,6 +1023,12 @@ export class CliStateEngine {
         if (this.idleTimeout) clearTimeout(this.idleTimeout);
         this.idleTimeout = setTimeout(() => {
             if (this.isWaitingForResponse && !this.hasActionableApproval()) {
+                if (this.shouldDeferIdleForApprovalResume(Date.now())) {
+                    this.idleTimeout = setTimeout(() => {
+                        if (this.isWaitingForResponse) this.evaluateSettled(this.transport.getSnapshot());
+                    }, this.timeouts.idleFinish);
+                    return;
+                }
                 if (this.shouldDeferIdleTimeoutFinish()) return;
                 const parsed = this.runParseSession(this.transport.getSnapshot());
                 if (this.shouldDeferFinishForTranscript(parsed)) {
@@ -985,6 +1039,49 @@ export class CliStateEngine {
                 this.finishResponse();
             }
         }, this.timeouts.idleFinish);
+    }
+
+    /**
+     * FALSE-IDLE (Fix 2): should applyIdle suppress the idle/finish for the current
+     * turn because we are inside the post-approval resume grace?
+     *
+     * True only when: (a) the owning instance reports it is an autonomous auto-approving
+     * mesh session that resolved a modal within the resume-grace window
+     * (isInApprovalResumeGrace callback — the SAME judgment Fix 1 uses), AND (b) the defer
+     * for THIS response epoch has not yet exceeded APPROVAL_RESUME_IDLE_DEFER_CAP_MS.
+     * The cap guarantees no infinite defer: a turn that genuinely ended right after an
+     * approval and stays silent past the cap stops being suppressed and finishes normally.
+     * The per-epoch anchor means a fresh turn/response restarts the clock.
+     */
+    private shouldDeferIdleForApprovalResume(now: number): boolean {
+        if (typeof this.callbacks.isInApprovalResumeGrace !== 'function') { this.clearApprovalResumeDefer(); return false; }
+        let inGrace = false;
+        try { inGrace = this.callbacks.isInApprovalResumeGrace() === true; } catch { inGrace = false; }
+        // Probe says the session is no longer in the post-approval resume grace — reset the
+        // cap clock so a LATER approval-resume valley in this same response starts fresh.
+        if (!inGrace) { this.clearApprovalResumeDefer(); return false; }
+        if (this.approvalResumeDeferEpoch !== this.responseEpoch || this.approvalResumeDeferSince === 0) {
+            // First defer for this response — start the cap clock. Note: the clock is only
+            // reset by clearApprovalResumeDefer (probe false, turn teardown), NOT by a
+            // cap-release below — so once the cap trips it STAYS released for the whole
+            // grace episode (no arm/clear cycle can restart the 18s and defer forever).
+            this.approvalResumeDeferEpoch = this.responseEpoch;
+            this.approvalResumeDeferSince = now;
+            return true;
+        }
+        if ((now - this.approvalResumeDeferSince) >= APPROVAL_RESUME_IDLE_DEFER_CAP_MS) {
+            // Cap reached: stop suppressing so the normal idle-finish can run. Deliberately
+            // does NOT clear the clock — leaving deferSince set keeps this branch returning
+            // false on every subsequent call until the probe drops (clearApprovalResumeDefer)
+            // or the turn ends (resetActiveTurnState), preventing an infinite re-defer.
+            return false;
+        }
+        return true;
+    }
+
+    private clearApprovalResumeDefer(): void {
+        this.approvalResumeDeferSince = 0;
+        this.approvalResumeDeferEpoch = -1;
     }
 
     finishResponse(): void {

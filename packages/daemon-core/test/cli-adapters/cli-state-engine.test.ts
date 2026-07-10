@@ -711,4 +711,126 @@ describe('CliStateEngine', () => {
             expect(engine.currentStatus).toBe('idle')
         })
     })
+
+    // ── FALSE-IDLE (Fix 2): applyIdle post-approval resume-grace hysteresis ──────
+    //
+    // An autonomous auto-approving mesh worker that auto-resolved a modal resumes the
+    // same turn and falls briefly silent (the inter-approval quiet valley). At the FSM
+    // level applyIdle must NOT tear the turn down during that valley — resetActiveTurnState
+    // there is the root cause the downstream completion gate inherits as "turn closed".
+    // The instance answers isInApprovalResumeGrace() via a callback; the engine only defers
+    // while it returns true, bounded by APPROVAL_RESUME_IDLE_DEFER_CAP_MS.
+    describe('applyIdle — post-approval resume grace hysteresis (Fix 2)', () => {
+        // Reach applyIdle with an active turn + parsed idle + a current-turn final
+        // standard assistant so shouldHoldGenerating is released and applyIdle runs.
+        function driveIdleValley(inGrace: boolean) {
+            const graceProbe = vi.fn(() => inGrace)
+            const { engine, transport, callbacks } = buildEngine({}, {})
+            ;(engine as any).callbacks.isInApprovalResumeGrace = graceProbe
+
+            const stalePast = Date.now() - 5000
+            const snap = makeSnap({
+                lastNonEmptyOutputAt: stalePast,
+                lastScreenChangeAt: stalePast,
+                isWaitingForResponse: true,
+            })
+            transport.getSnapshot = () => snap
+            transport.runParseSession = vi.fn(() => ({
+                status: 'idle',
+                messages: [
+                    { role: 'user', content: 'go' },
+                    // A mid-turn assistant bubble — the FALSE-IDLE evidence.
+                    { role: 'assistant', kind: 'standard', content: 'Working on it.', meta: {} },
+                ],
+                activeModal: null,
+                parsedStatus: 'idle',
+            }))
+
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = {
+                prompt: 'go',
+                startedAt: Date.now() - 3000,
+                bufferStart: 0,
+                rawBufferStart: 0,
+            }
+            engine.setStatus('generating')
+
+            return { engine, transport, callbacks, graceProbe, snap }
+        }
+
+        it('(1) DEFERS finishResponse in the valley — turn scope is NOT torn down while in grace', () => {
+            const { engine, callbacks, graceProbe } = driveIdleValley(true)
+
+            engine.evaluateSettled(engine['transport'].getSnapshot())
+            // Even after the idleFinish timeout would normally finish the turn, the
+            // defer re-arms and re-evaluates rather than tearing the turn down.
+            vi.advanceTimersByTime(DEFAULT_TIMEOUTS.idleFinish + 50)
+
+            expect(graceProbe).toHaveBeenCalled()
+            expect(engine.isWaitingForResponse).toBe(true)
+            expect(engine.currentTurnScope).not.toBe(null)
+            expect(callbacks.onTurnCompleted).not.toHaveBeenCalled()
+        })
+
+        // Drive applyIdle to actually FINISH: the first pass arms the idleFinishCandidate,
+        // a second pass past idleFinishConfirm confirms it and calls finishResponse.
+        function settleToFinish(engine: CliStateEngine, snap: CliBufferSnapshot) {
+            engine.evaluateSettled(snap) // arm candidate
+            vi.advanceTimersByTime(DEFAULT_TIMEOUTS.idleFinishConfirm + 50)
+            engine.evaluateSettled(snap) // confirm → finishResponse
+        }
+
+        it('(2) stops deferring past APPROVAL_RESUME_IDLE_DEFER_CAP_MS (no infinite defer) — turn finishes', () => {
+            const { engine, callbacks, snap } = driveIdleValley(true)
+
+            // First evaluation starts the cap clock (defers, no finish).
+            engine.evaluateSettled(snap)
+            expect(engine.isWaitingForResponse).toBe(true)
+
+            // Advance past the 18s cap; now the defer releases even though the probe still
+            // says "in grace", and the candidate confirm-pass finishes the turn.
+            vi.advanceTimersByTime(19_000)
+            settleToFinish(engine, snap)
+
+            expect(engine.isWaitingForResponse).toBe(false)
+            expect(engine.currentTurnScope).toBe(null)
+            expect(callbacks.onTurnCompleted).toHaveBeenCalled()
+        })
+
+        it('(3) REGRESSION: a normal turn (probe returns false) finishes normally — no defer', () => {
+            const { engine, callbacks, graceProbe, snap } = driveIdleValley(false)
+
+            settleToFinish(engine, snap)
+
+            expect(graceProbe).toHaveBeenCalled()
+            expect(engine.isWaitingForResponse).toBe(false)
+            expect(engine.currentTurnScope).toBe(null)
+            expect(callbacks.onTurnCompleted).toHaveBeenCalled()
+        })
+
+        it('(3b) REGRESSION: no callback registered ⇒ pre-fix behavior (finishes normally)', () => {
+            const { engine, transport, callbacks } = buildEngine() // callbacks has no isInApprovalResumeGrace
+            const stalePast = Date.now() - 5000
+            const snap = makeSnap({ lastNonEmptyOutputAt: stalePast, lastScreenChangeAt: stalePast, isWaitingForResponse: true })
+            transport.getSnapshot = () => snap
+            transport.runParseSession = vi.fn(() => ({
+                status: 'idle',
+                messages: [
+                    { role: 'user', content: 'go' },
+                    { role: 'assistant', kind: 'standard', content: 'Done.', meta: {} },
+                ],
+                activeModal: null,
+                parsedStatus: 'idle',
+            }))
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = { prompt: 'go', startedAt: Date.now() - 3000, bufferStart: 0, rawBufferStart: 0 }
+            engine.setStatus('generating')
+
+            settleToFinish(engine, snap)
+
+            expect(engine.isWaitingForResponse).toBe(false)
+            expect(engine.currentTurnScope).toBe(null)
+            expect(callbacks.onTurnCompleted).toHaveBeenCalled()
+        })
+    })
 })

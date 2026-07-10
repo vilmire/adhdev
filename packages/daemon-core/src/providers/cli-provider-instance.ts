@@ -193,6 +193,29 @@ export class CliProviderInstance implements ProviderInstance {
      */
     private static readonly AUTO_APPROVE_MASK_STALL_MS = 10500;
 
+    /**
+     * FALSE-IDLE (inter-approval quiet valley): grace window after an auto-approve
+     * (or mesh_approve) RESOLVES a modal during which a subsequent generating→idle
+     * quiet valley must NOT be treated as turn completion.
+     *
+     * The RCA: auto-approve resolves a modal → the agent resumes the same turn →
+     * between resolving that approval and preparing the next tool/approval the agent
+     * falls briefly silent. The FSM sees idle + a recorded mid-turn assistant bubble
+     * and fires an early agent:generating_completed even though the turn is still in
+     * flight. Live evidence showed the same session resuming waiting_approval ~13s
+     * after a "clean" completion emit.
+     *
+     * The window must be comfortably larger than the observed resume gap (~13s) so
+     * the valley is bridged, but not so large that a turn that genuinely ended right
+     * after an approval is held for an annoying stretch. 18s clears 13s with margin
+     * while capping the worst-case extra hold on a truly-finished turn at 18s (still
+     * well under COMPLETED_FINALIZATION_MAX_WAIT_MS's 30s hard bound). The recency is
+     * measured from the engine's lastApprovalResolvedAt, which is stamped ONLY by
+     * resolveModal (auto-approve fire / dashboard / mesh_approve) — so a plain turn
+     * with no approval never carries recency and is never held (no regression).
+     */
+    private static readonly APPROVAL_RESUME_GRACE_MS = 18_000;
+
     private adapter: ProviderCliAdapter;
     private context: InstanceContext | null = null;
     private events: ProviderEvent[] = [];
@@ -399,6 +422,12 @@ export class CliProviderInstance implements ProviderInstance {
         this.adapter.setOnStatusChange(() => {
             this.detectStatusTransition();
         });
+
+ // FALSE-IDLE (Fix 2): let the engine's applyIdle hysteresis consult THIS instance's
+ // auto-approve/mesh-scoped resume-grace judgment (the same one Fix 1 uses).
+        if (typeof this.adapter.setInApprovalResumeGraceProbe === 'function') {
+            this.adapter.setInApprovalResumeGraceProbe(() => this.inApprovalResumeGrace());
+        }
 
  // PTY spawn
         await this.adapter.spawn();
@@ -1630,6 +1659,26 @@ export class CliProviderInstance implements ProviderInstance {
         if (adapterAny?.currentTurnScope) return { reason: 'adapter_turn_scope_active', terminal: !approvalResolvedIdle };
         if (this.hasAdapterPendingResponse()) return { reason: 'adapter_pending_response', terminal: !approvalResolvedIdle };
 
+        // (FALSE-IDLE, Fix 1) SETTLE-VALLEY hold extension for the generating→idle valley.
+        // The existing SETTLE-VALLEY hold below only covers previousStatus==='waiting_approval'.
+        // But when auto-approve RESOLVES a modal the engine flips straight to 'generating'
+        // (resolveModal → setStatus('generating')), so the resumed turn's brief inter-approval
+        // quiet valley arrives with previousStatus==='generating' and a recorded mid-turn
+        // assistant bubble — which satisfies every gate below and fires an early completion
+        // mid-turn (RCA: same session re-enters waiting_approval ~13s later). Here we HOLD:
+        // by this point the adapter's own pending-response evidence (above) is clean — the
+        // engine has torn down currentTurnScope/isWaitingForResponse in the valley — so we
+        // rely on the approval-resume recency signal instead. Non-terminal, so the retry loop
+        // re-runs the resume guard (busy_reentry / new_pty_output / resumed_status in the
+        // flush) and cancels the moment the turn actually resumes; and it clears on its own
+        // once the grace window lapses (a turn that genuinely ended right after an approval
+        // then emits normally). Bounded by COMPLETED_FINALIZATION_MAX_WAIT_MS as a hard floor
+        // against a wedge. Scoped by inApprovalResumeGrace to autonomous auto-approving mesh
+        // sessions with a recent resolveModal, so a plain non-approval turn is untouched.
+        if (!approvalResolvedIdle && this.inApprovalResumeGrace()) {
+            return { reason: 'approval_resume_grace', terminal: false };
+        }
+
         const partial = typeof this.adapter.getPartialResponse === 'function'
             ? this.adapter.getPartialResponse()
             : '';
@@ -1835,6 +1884,27 @@ export class CliProviderInstance implements ProviderInstance {
     // as a finalSummary. Mirrors the isAutonomousMeshSession notion in isTransientToolConsent.
     private isAutonomousMeshSession(): boolean {
         return this.isMeshWorkerSession() || !!this.settings.meshCoordinatorFor;
+    }
+
+    /**
+     * FALSE-IDLE: are we inside the post-approval resume grace window? True when this
+     * is an autonomous auto-approving mesh session AND the engine resolved a modal
+     * (auto-approve / mesh_approve) within APPROVAL_RESUME_GRACE_MS. This is the single
+     * "auto-approve recency" judgment shared by Fix 1 (the SETTLE-VALLEY completion
+     * hold below) and Fix 2 (the FSM-level applyIdle hysteresis in cli-state-engine).
+     *
+     * Scoped to autonomous auto-approving sessions so a foreground/attended session,
+     * or a session with auto-approve off (whose approvals a human answers), is never
+     * held. The recency clock (adapter.lastApprovalResolvedAt) is 0 until the first
+     * resolveModal, so a plain turn that never saw an approval always returns false.
+     */
+    private inApprovalResumeGrace(now = Date.now()): boolean {
+        if (!this.isAutonomousMeshSession() || !this.shouldAutoApprove()) return false;
+        const resolvedAt = typeof (this.adapter as any)?.lastApprovalResolvedAt === 'number'
+            ? (this.adapter as any).lastApprovalResolvedAt as number
+            : 0;
+        if (resolvedAt <= 0) return false;
+        return (now - resolvedAt) < CliProviderInstance.APPROVAL_RESUME_GRACE_MS;
     }
 
     /**

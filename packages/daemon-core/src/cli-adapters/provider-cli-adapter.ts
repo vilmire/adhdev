@@ -169,6 +169,9 @@ export class ProviderCliAdapter implements CliAdapter {
     private ptyProcess: PtyRuntimeTransport | null = null;
     private transportFactory: PtyTransportFactory;
     private onStatusChange: (() => void) | null = null;
+    // FALSE-IDLE (Fix 2): probe the owning instance for the post-approval resume grace.
+    // Null until the instance registers it; the engine treats absence as "not in grace".
+    private inApprovalResumeGraceProbe: (() => boolean) | null = null;
 
     // ─── State machine engine ─────────────────────────
     readonly engine: CliStateEngine;
@@ -477,6 +480,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 onStatusChange: () => { this.onStatusChange?.(); },
                 onApplyParsedSession: (session) => { this.applyParsedSessionMetadata(session); },
                 onTurnCompleted: () => { this.responseBuffer = ''; },
+                isInApprovalResumeGrace: () => this.inApprovalResumeGraceProbe?.() === true,
             } satisfies CliStateEngineCallbacks,
             resolvedConfig.timeouts,
         );
@@ -547,6 +551,13 @@ export class ProviderCliAdapter implements CliAdapter {
 
     setOnStatusChange(callback: () => void): void {
         this.onStatusChange = callback;
+    }
+
+    // FALSE-IDLE (Fix 2): the instance registers its inApprovalResumeGrace judgment so the
+    // engine's applyIdle hysteresis can scope itself to autonomous auto-approving sessions
+    // without the engine needing any mesh/auto-approve awareness of its own.
+    setInApprovalResumeGraceProbe(probe: () => boolean): void {
+        this.inApprovalResumeGraceProbe = probe;
     }
 
     setOnPtyData(callback: (data: string) => void): void {
