@@ -537,7 +537,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node update');
         if (ownerFailure) return ownerFailure;
         try {
-            const { updateNode } = await import('../../config/mesh-config.js');
+            const { updateNode, normalizeCapabilityTags } = await import('../../config/mesh-config.js');
             const policy = args?.policy && typeof args.policy === 'object' && !Array.isArray(args.policy)
                 ? { ...(args.policy as Record<string, unknown>) }
                 : {};
@@ -579,13 +579,54 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                     .filter(Boolean);
             }
             const node = updateNode(meshId, nodeId, patch as any);
-            if (!node) return { success: false, error: 'Mesh node not found' };
-            // Provider priority / systemPrompt changes don't touch
-            // the queue revision, so without a manual bust the
-            // cached aggregate keeps surfacing pre-update values
-            // (priority chip, coordinator prompt preview, etc.).
-            ctx.invalidateAggregateMeshStatus(meshId);
-            return { success: true, node };
+            if (node) {
+                // Provider priority / systemPrompt changes don't touch
+                // the queue revision, so without a manual bust the
+                // cached aggregate keeps surfacing pre-update values
+                // (priority chip, coordinator prompt preview, etc.).
+                ctx.invalidateAggregateMeshStatus(meshId);
+                return { success: true, node };
+            }
+            // NODE-SLOTS-REMOTE-WRITE: updateNode reads ONLY this daemon's local
+            // meshes.json. When update_mesh_node is forwarded to a node's home-daemon
+            // that has no local config entry for a coordinator-owned mesh (a remote
+            // member daemon, or a cloud coordinator that holds the mesh solely in its
+            // inline cache), updateNode returns undefined and the write failed with
+            // "Mesh node not found" — even though the coordinator attached the mesh
+            // snapshot as inlineMesh and the read paths (get_mesh / dry-run / list)
+            // resolve it fine via getMeshForCommand's inline fallback. Mirror those
+            // read paths here: resolve the mesh from the inline cache and apply the
+            // same field semantics as updateNode, persisting to the inline cache.
+            const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+            const mesh = meshRecord?.mesh;
+            if (!mesh) return { success: false, error: 'Mesh not found' };
+            const inlineNode = Array.isArray(mesh.nodes)
+                ? mesh.nodes.find((n: any) => meshNodeIdMatches(n, nodeId))
+                : undefined;
+            if (!inlineNode) return { success: false, error: 'Mesh node not found' };
+            // Apply the SAME field semantics updateNode uses so the inline write and a
+            // local-config write are indistinguishable: shallow-merge policy, honor an
+            // explicit systemPrompt clear, replace/normalize capability tags.
+            inlineNode.policy = {
+                ...(inlineNode.policy && typeof inlineNode.policy === 'object' && !Array.isArray(inlineNode.policy)
+                    ? inlineNode.policy as Record<string, unknown>
+                    : {}),
+                ...(patch.policy as Record<string, unknown>),
+            };
+            if (Object.prototype.hasOwnProperty.call(patch, 'systemPrompt')) {
+                const sp = (patch as any).systemPrompt;
+                if (typeof sp === 'string' && sp.trim()) inlineNode.systemPrompt = sp;
+                else delete inlineNode.systemPrompt;
+            }
+            if (Object.prototype.hasOwnProperty.call(patch, 'capabilities')) {
+                const tags = normalizeCapabilityTags((patch as any).capabilities);
+                if (tags && tags.length) inlineNode.capabilities = tags;
+                else delete inlineNode.capabilities;
+            }
+            // updateInlineMeshNode canonicalizes node identity, persists the mutated
+            // mesh back to the inline cache, and busts the aggregate-status cache.
+            ctx.updateInlineMeshNode(meshId, mesh, inlineNode);
+            return { success: true, node: inlineNode };
         } catch (e: any) {
             return { success: false, error: e.message };
         }

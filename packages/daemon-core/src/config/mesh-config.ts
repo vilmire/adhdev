@@ -104,7 +104,7 @@ function stripDeadRoleFromProviderRoles(policy: unknown): boolean {
     return changed;
 }
 
-function normalizeCapabilityTags(value: unknown): string[] | undefined {
+export function normalizeCapabilityTags(value: unknown): string[] | undefined {
     if (!Array.isArray(value)) return undefined;
     const seen = new Set<string>();
     const tags = value
