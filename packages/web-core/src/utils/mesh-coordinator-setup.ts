@@ -55,6 +55,14 @@ export function buildManualCoordinatorSetup(
 ): MeshCoordinatorManualSetup | null {
     const mcpConfig = metadata?.mcpConfig
     if (mcpConfig?.mode !== 'manual') return null
+    // Mirror daemon-core mesh-coordinator.ts resolveMeshCoordinatorSetup: single-line non-JSON
+    // templates are reclassified as cli_command and auto-run via PTY — no manual user action needed.
+    const renderedForHeuristic = renderCoordinatorTemplate(mcpConfig.template || '', {
+        ...values,
+        serverName: mcpConfig.serverName || 'adhdev-mesh',
+    })
+    const trimmed = renderedForHeuristic.trim()
+    if (!trimmed.includes('\n') && !trimmed.startsWith('{')) return null
     return {
         serverName: mcpConfig.serverName || 'adhdev-mesh',
         configFormat: mcpConfig.format,

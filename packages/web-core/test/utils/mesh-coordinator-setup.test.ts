@@ -63,7 +63,9 @@ describe('mesh coordinator setup UI helpers', () => {
     }))
   })
 
-  it('renders transport-aware MCP launch args in CLI registration templates', () => {
+  it('suppresses panel for single-line cli_command templates (codex-style) — mirrors daemon reclassification', () => {
+    // Codex provider.v1.json uses mode:'manual' but a single-line template the daemon auto-runs via PTY.
+    // buildManualCoordinatorSetup must return null so the pre-launch panel is not shown.
     const setup = buildManualCoordinatorSetup({
       supported: true,
       mcpConfig: {
@@ -77,6 +79,25 @@ describe('mesh coordinator setup UI helpers', () => {
       adhdevMcpArgs: 'mcp --mode local --repo-mesh mesh_local --port 3847',
     })
 
-    expect(setup?.template).toBe('codex mcp add adhdev-mesh -- adhdev mcp --mode local --repo-mesh mesh_local --port 3847')
+    expect(setup).toBeNull()
+  })
+
+  it('does not suppress panel for multi-line templates (hermes-style truly-manual configs)', () => {
+    const setup = buildManualCoordinatorSetup({
+      supported: true,
+      mcpConfig: {
+        mode: 'manual',
+        format: 'hermes_config_yaml',
+        serverName: 'adhdev-mesh',
+        instructions: 'Add this MCP server to Hermes config.',
+        template: 'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args: []\n',
+      },
+    }, {
+      meshId: 'mesh_local',
+      adhdevMcpCommand: 'adhdev-mcp',
+    })
+
+    expect(setup).not.toBeNull()
+    expect(setup?.template).toContain('\n')
   })
 })
