@@ -824,8 +824,12 @@ describe('claude-cli v4 FSM — approval→busy footer guard (sticky approval)',
 
     it('(flicker) the proceed-question guard is present on approval→busy', () => {
         const clauses = (spec.transitions.find(t => t.label === 'approval→busy')!.when as any).all as any[];
-        const proceedGuard = clauses.find(c => c.not && !c.not.section
-            && typeof c.not.matches === 'string' && /Do you want to proceed/.test(c.not.matches));
+        // The spec may use a regex alternation group (e.g. "Do you want to (?:proceed|...)")
+        // so match against any not-clause whose matches string covers the proceed/consent question,
+        // either whole-screen (no section) or modal-scoped.
+        const proceedGuard = clauses.find(c => c.not
+            && typeof c.not.matches === 'string'
+            && /Do you want to/.test(c.not.matches));
         expect(proceedGuard, 'approval→busy missing not(Do you want to proceed?) guard').toBeTruthy();
         const stableGuard = clauses.find(c => typeof c.stable_ms === 'number');
         expect(stableGuard, 'approval→busy missing stable_ms tear guard').toBeTruthy();
