@@ -369,7 +369,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('continue anyway\r')
   })
 
-  it('resolves numeric approval menus with an explicit confirm prompt using selection plus enter', () => {
+  it('resolves numeric approval menus with an explicit confirm prompt using selection plus enter', async () => {
     const adapter = new ProviderCliAdapter({
       type: 'menu-cli',
       name: 'Menu CLI',
@@ -400,6 +400,10 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     }
 
     adapter.resolveModal(0)
+    // resolveModal → writeRaw is fire-and-forget; the actual PTY write is now
+    // serialized onto the per-session write chain, so it lands on the next
+    // microtask rather than synchronously. Flush the chain before asserting.
+    await adapter.ptyWriteChain
 
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('1\r')
   })

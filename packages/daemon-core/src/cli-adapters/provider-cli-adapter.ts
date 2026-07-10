@@ -226,6 +226,17 @@ export class ProviderCliAdapter implements CliAdapter {
     // Submit retry timer — PTY-level, not state machine
     private submitRetryTimer: NodeJS.Timeout | null = null;
 
+    // PTY-WRITE-SERIALIZE: a single per-session tail promise that serializes every
+    // PTY write. Each writeToPty() call chains its actual write after the previous
+    // one and returns a promise that resolves only after ITS write completes, so
+    // two consecutive sends (e.g. mesh force-dispatch burst → forceSendMessage, or
+    // a retry-timer's bare CR interleaving a fresh body) can never write into the
+    // same input line: message A's (body + sendKey/CR) is fully written to the PTY
+    // before message B's body write starts. The chain is kept alive across errors
+    // (each link swallows/logs its own failure) so one failed write never wedges
+    // all later writes behind a permanently-rejected tail.
+    private ptyWriteChain: Promise<void> = Promise.resolve();
+
  // Resize redraw suppression
     private resizeSuppressUntil: number = 0;
 
@@ -1292,7 +1303,22 @@ export class ProviderCliAdapter implements CliAdapter {
         return true;
     }
 
-    private async writeToPty(data: string): Promise<void> {
+    /** Serialize `data` onto the per-session PTY write chain. Returns a promise
+     *  that resolves (or rejects) with THIS write's own outcome, so callers keep
+     *  their existing "await my write completion" semantics. The underlying chain
+     *  link swallows its own error before releasing the next write, so a failed
+     *  write surfaces to its caller but never wedges subsequent writes behind a
+     *  permanently-rejected tail (FIFO order preserved). */
+    private writeToPty(data: string): Promise<void> {
+        const run = this.ptyWriteChain.then(() => this.doWriteToPty(data));
+        // Keep the tail resolved so the next writeToPty() always chains onto a
+        // settled promise (never a rejected one). The caller still sees run's
+        // rejection; only the shared chain is insulated from it.
+        this.ptyWriteChain = run.catch(() => {});
+        return run;
+    }
+
+    private async doWriteToPty(data: string): Promise<void> {
         if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
         // win32 ConPTY paced write: a single unbounded write beyond ~1KB overflows
         // the console input pipe and drops LEADING bytes (the "long message gets
