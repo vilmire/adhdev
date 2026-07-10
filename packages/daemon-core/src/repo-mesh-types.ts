@@ -315,8 +315,9 @@ export interface RepoMeshPolicy {
     autoConvergeCodeChange?: boolean;
     /**
      * Whether sessions spawned by mesh/coordinator policy should auto-open as visible
-     * dashboard tabs or start hidden. Defaults to 'visible' to preserve existing
-     * watch-the-agents behavior; hidden sessions remain discoverable and manually openable.
+     * dashboard tabs or start hidden. Defaults to 'hidden' so the dashboard is not
+     * flooded with mesh noise tabs; users can still surface or unmute any specific
+     * session manually from the dashboard (that override is preserved per-device).
      */
     spawnedSessionVisibility?: RepoMeshSpawnedSessionVisibility;
     /**
