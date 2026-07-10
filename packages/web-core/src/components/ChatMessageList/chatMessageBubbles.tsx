@@ -6,14 +6,14 @@
  * exactly. No logic change, no optimization, no bug fix.
  */
 
-import { memo } from 'react';
+import { memo, useState, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkAlert from 'remark-github-blockquote-alert';
 import remarkBreaks from 'remark-breaks';
 import { buildChatMessageSignature } from '@adhdev/daemon-core/chat/chat-signatures';
 import type { Pluggable, PluggableList } from 'unified';
-import { IconThought } from '../Icons';
+import { IconThought, IconClipboard, IconCheck } from '../Icons';
 import { stringifyTextContent } from '../../utils/text';
 import { classifyChatMessageForDisplay } from '../dashboard/chat-activity-visibility';
 import type { ChatMessage } from '../../types';
@@ -27,6 +27,25 @@ import {
     type MessageMeta,
     type StructuredMessagePart,
 } from './chatMessageHelpers';
+
+function CopyButton({ text }: { text: string }) {
+    const [copied, setCopied] = useState(false);
+    const handleCopy = useCallback(() => {
+        navigator.clipboard.writeText(text).catch(() => {});
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+    }, [text]);
+    return (
+        <button
+            type="button"
+            onClick={handleCopy}
+            aria-label="메시지 복사"
+            className="chat-copy-btn"
+        >
+            {copied ? <IconCheck size={11} /> : <IconClipboard size={11} />}
+        </button>
+    );
+}
 
 const gfmRemarkPlugin: Pluggable = [remarkGfm, { singleTilde: false }];
 const chatRemarkPlugins: PluggableList = [gfmRemarkPlugin, remarkAlert, remarkBreaks];
@@ -378,9 +397,14 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                         <span className="chat-sender">
                             {isUser ? (userName || 'You') : (message.senderName || agentName)}
                         </span>
-                        {receivedAt != null && (
-                            <span className="chat-time">{formatTime(receivedAt)}</span>
-                        )}
+                        <span className="chat-bubble-header-end">
+                            {(displayContent || hasStructuredRenderer) && (
+                                <CopyButton text={contentStr} />
+                            )}
+                            {receivedAt != null && (
+                                <span className="chat-time">{formatTime(receivedAt)}</span>
+                            )}
+                        </span>
                     </div>
                     {(displayContent || hasStructuredRenderer) && (
                         <div className="chat-markdown">

@@ -1070,6 +1070,41 @@
         flex: 0 0 auto;
     }
 
+    .chat-bubble-header-end {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex: 0 0 auto;
+    }
+
+    .chat-copy-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: currentColor;
+        opacity: 0;
+        border-radius: 3px;
+        transition: opacity 0.15s, background 0.15s;
+        line-height: 0;
+    }
+
+    .chat-bubble:hover .chat-copy-btn {
+        opacity: 0.45;
+    }
+
+    .chat-copy-btn:hover {
+        opacity: 0.85 !important;
+        background: color-mix(in srgb, currentColor 10%, transparent);
+    }
+
+    .chat-copy-btn:active {
+        opacity: 1 !important;
+    }
+
     .chat-msg-thought {
         max-width: min(78ch, 90%);
         min-width: 0;
