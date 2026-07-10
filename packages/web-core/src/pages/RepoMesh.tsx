@@ -362,17 +362,16 @@ export default function RepoMesh() {
     // HOST-MISSEED-FIRSTSETUP: the old first-setup fallback was a bare `daemons[0]`,
     // which on cloud is just the P2P insertion order — so an unrelated member daemon
     // (e.g. moltbot) could land at index 0 and get seeded as the host candidate,
-    // producing "Will host on <wrong daemon>". The daemon-side read-side pin now fills
-    // meshHost.hostDaemonId for host meshes, so persistedHostInfo.pinned should be true
-    // in steady state. This seed chain is the UI-side belt-and-suspenders for the
-    // transition window (before the pin propagates) and for any mesh that still lacks a
-    // persisted pin: prefer the node already marked role:'host', then the daemon the
-    // operator is viewing from (self), only then fall back to daemons[0]. All matches
-    // go through daemonIdsEquivalent (daemon_mach_/mach_/standalone_ forms describe one
-    // machine). Standalone keeps daemons[0]===self, so its prior behavior is preserved.
+    // producing "Will host on <wrong daemon>" for a flash on cold entry. That arbitrary
+    // fallback (and the self/primaryDaemonId collapse that also reduces to daemons[0] on
+    // cloud) is now REMOVED: resolveFirstSetupSeedDaemonId seeds ONLY from an authoritative
+    // signal — the daemon-resolved host pin (mesh_status meshHost.hostDaemonId), else a
+    // node already flagged role:'host'. With neither present it returns '' and the header
+    // renders a neutral "resolving host… / pick a daemon" state instead of a wrong node.
+    // The operator explicitly picks the host in genuine first-setup (no pin exists yet).
     // HOST-MISSEED-CLOUD-SURFACE: feed the daemon-resolved host pin (mesh_status
     // meshHost.hostDaemonId for THIS mesh) into the seed so the transition-window seed
-    // prefers the daemon the daemon itself names as host over daemons[0].
+    // prefers the daemon the daemon itself names as host.
     const resolvedHostPinDaemonId = useMemo(() => {
         if (!meshGraphStatus?.meshId || String(meshGraphStatus.meshId) !== String(selectedMesh?.id ?? '')) return undefined
         return (meshGraphStatus.meshHost as { hostDaemonId?: string } | undefined)?.hostDaemonId
@@ -615,6 +614,7 @@ export default function RepoMesh() {
             onSaveCoordinatorPrompt={handleSaveCoordinatorPrompt}
             daemons={daemons}
             coordinatorDaemonId={coordinatorDaemonId}
+            onCoordinatorDaemonIdChange={setCoordinatorDaemonId}
             coordinatorCliType={coordinatorCliType}
             onCoordinatorCliTypeChange={setCoordinatorCliType}
             launchingCoordinator={launchingCoordinator}

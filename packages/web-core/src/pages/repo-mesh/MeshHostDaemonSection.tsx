@@ -13,6 +13,13 @@ interface Props {
     daemons: RepoMeshDaemonEntry[]
     /** Resolved command/view-source daemon id (derived, not user-chosen). */
     coordinatorDaemonId: string
+    /**
+     * First-setup only: let the operator explicitly pick which connected daemon becomes
+     * the host, used when NO authoritative host signal exists yet (no pin, no role:'host'
+     * node). We deliberately do not auto-seed an arbitrary peer (HOST-MISSEED-FIRSTSETUP),
+     * so the operator chooses instead of a wrong node flashing in the header.
+     */
+    onCoordinatorDaemonIdChange: (id: string) => void
     coordinatorCliType: string
     onCoordinatorCliTypeChange: (type: string) => void
     launchingCoordinator: boolean
@@ -46,6 +53,7 @@ interface Props {
 export function MeshHostDaemonSection({
     daemons,
     coordinatorDaemonId,
+    onCoordinatorDaemonIdChange,
     coordinatorCliType,
     onCoordinatorCliTypeChange,
     launchingCoordinator,
@@ -135,8 +143,11 @@ export function MeshHostDaemonSection({
 
     // ── First-time setup: no host pinned yet ──
     // The host is established by launching the coordinator on a connected daemon —
-    // that launch pins it daemon-side. No "pick a daemon" select; the command target
-    // is the resolved daemon (coordinatorDaemonId), and launch fixes it as the host.
+    // that launch pins it daemon-side. When an authoritative host signal already named
+    // a daemon (coordinatorDaemonId set via the pin / role:'host' seed), we just show it
+    // as the host-to-be. Otherwise (HOST-MISSEED-FIRSTSETUP) there is NO auto-seed to an
+    // arbitrary connected peer — the operator explicitly picks the host from a select,
+    // so the header never flashes a wrong remote node on cold entry.
     const setupDaemon = daemons.find(d => d.id === coordinatorDaemonId)
     return (
         <Section title="Mesh Host daemon" description="This mesh has no host yet. Launching the coordinator on a connected daemon fixes that daemon as the mesh host (a 1:1 pin); it owns live truth thereafter.">
@@ -146,18 +157,34 @@ export function MeshHostDaemonSection({
             </AlertBanner>
             {daemons.length > 0 ? (
                 <>
-                    <div className="mb-3 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-muted">
-                        {coordinatorDaemonId
-                            ? isHostNodeAttached
+                    {coordinatorDaemonId ? (
+                        // Authoritative host signal resolved (pin / role:'host' node) — the
+                        // seed named a specific daemon. Show it as the host-to-be.
+                        <div className="mb-3 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-muted">
+                            {isHostNodeAttached
                                 ? <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>{selectedHostNode?.workspace ? <> · setup node <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span></> : null}. Launching sets this daemon as the mesh host.</>
-                                : <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>. Attach one of its workspaces as a node first, then launch to set the host.</>
-                            : 'Waiting for a connected daemon to host this mesh.'}
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-[180px_auto] items-end">
+                                : <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>. Attach one of its workspaces as a node first, then launch to set the host.</>}
+                        </div>
+                    ) : (
+                        // No authoritative host signal yet. We deliberately do NOT auto-seed
+                        // an arbitrary connected daemon (HOST-MISSEED-FIRSTSETUP) — that is
+                        // what flashed a wrong remote node (e.g. moltbot) in the header on
+                        // cold entry. Let the operator explicitly pick the host instead.
+                        <FormField label="Host daemon" hint="Pick the daemon that will host this mesh. Launching the coordinator on it fixes it as the host.">
+                            <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                                value="" onChange={e => onCoordinatorDaemonIdChange(e.target.value)}>
+                                <option value="">Resolving host… (or pick a daemon to host)</option>
+                                {daemons.map(d => (
+                                    <option key={d.id} value={d.id}>{daemonLabel(d)}</option>
+                                ))}
+                            </select>
+                        </FormField>
+                    )}
+                    <div className="grid gap-3 sm:grid-cols-[180px_auto] items-end mt-3">
                         {cliProviderField}
                         <button className="btn btn-primary btn-sm" onClick={onLaunchCoordinator}
                             disabled={!coordinatorDaemonId || !isHostNodeAttached || launchingCoordinator}
-                            title={!isHostNodeAttached && coordinatorDaemonId ? 'Attach a workspace from this daemon as a node first.' : undefined}>
+                            title={!coordinatorDaemonId ? 'Pick a host daemon (or wait for the host pin to resolve) first.' : !isHostNodeAttached ? 'Attach a workspace from this daemon as a node first.' : undefined}>
                             {launchingCoordinator ? 'Launching...' : 'Launch Host Coordinator (sets host)'}
                         </button>
                     </div>

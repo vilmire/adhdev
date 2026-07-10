@@ -61,6 +61,8 @@ interface Props {
     // props feed the read-only host display + the offline command re-bind action.
     daemons: RepoMeshDaemonEntry[]
     coordinatorDaemonId: string
+    /** First-setup host picker: set the host daemon when no authoritative pin exists yet. */
+    onCoordinatorDaemonIdChange: (id: string) => void
     coordinatorCliType: string
     onCoordinatorCliTypeChange: (type: string) => void
     launchingCoordinator: boolean
@@ -164,6 +166,7 @@ export function MeshDetailView({
     onSaveCoordinatorPrompt,
     daemons,
     coordinatorDaemonId,
+    onCoordinatorDaemonIdChange,
     coordinatorCliType,
     onCoordinatorCliTypeChange,
     launchingCoordinator,
@@ -264,6 +267,7 @@ export function MeshDetailView({
                 <MeshHostDaemonSection
                     daemons={daemons}
                     coordinatorDaemonId={coordinatorDaemonId}
+                    onCoordinatorDaemonIdChange={onCoordinatorDaemonIdChange}
                     coordinatorCliType={coordinatorCliType}
                     onCoordinatorCliTypeChange={onCoordinatorCliTypeChange}
                     launchingCoordinator={launchingCoordinator}
