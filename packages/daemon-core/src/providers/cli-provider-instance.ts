@@ -2308,8 +2308,31 @@ export class CliProviderInstance implements ProviderInstance {
         // Mirrors the SDK v1 detect-status approval heuristic (detect-status.ts).
         const modalKind = typeof modal?.kind === 'string' ? modal.kind : 'approval';
         if (modalKind !== 'approval') {
-            // Picker/confirm — leave it for the user; keep the modal surfaced.
-            return autoApproveActive;
+            // Defense-in-depth (APPROVAL-PICKER-MISROUTE): a genuine tool-consent
+            // modal ("Do you want to proceed?" + 1. Yes / 3. No) can be MIS-routed
+            // to modal_kind='picker' by the spec FSM when a picker matcher wins the
+            // priority tie in the wrong state. The spec-level negative guard (Fix A)
+            // is the root fix, but a stale/undeployed spec would leave the worker
+            // wedged on a modal it could safely have approved. So don't bail on the
+            // kind label alone: only bail when this modal is ALSO a genuine SELECTION
+            // picker (/model, /mode — "Select a model/mode/option" / "Switch
+            // between") with NO consent structure. A modal that carries approval
+            // text or a decline/grant anchor is treated as an approval and falls
+            // through to the structural gate below, even under kind='picker'.
+            const modalText = `${String(modal?.title || '')}\n${String(modal?.message || '')}\n${buttons.join('\n')}`;
+            const looksLikeSelectionPicker = /Select (?:a |an )?(?:model|mode|option)\b|Switch between/i.test(modalText);
+            const looksLikeConsent = looksLikeActiveApprovalPromptText(modalText)
+                || /Do you want to (?:proceed|create|make|edit|apply|run|delete|modify|allow)\b|allow all edits\b|don'?t ask again\b/i.test(modalText)
+                || hasNegativeApprovalOption(buttons)
+                || hasReliableApprovalAffirmative(buttons);
+            if (looksLikeSelectionPicker && !looksLikeConsent) {
+                // Genuine /model or /mode selection picker — no safe default to
+                // auto-pick. Leave it for the user; keep the modal surfaced.
+                return autoApproveActive;
+            }
+            // Otherwise: mis-routed consent modal (or an ambiguous picker that still
+            // carries consent structure) — fall through to the structural approval
+            // gate below, which only fires on a real affirmative+decline/grant set.
         }
         const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, this.provider);
         // Structural decline anchor. A real approval offers BOTH an affirmative

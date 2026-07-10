@@ -270,6 +270,110 @@ describe('auto-approve gate — picker excluded, approval preserved (real evalua
     expect(gate.resolves).toEqual([]);
     expect(gate.fires).toBe(0);
   });
+
+  // ── APPROVAL-PICKER-MISROUTE: consent modal mis-routed to kind='picker' ──────
+  //
+  // Fix A (spec) stops the mis-route at the source, and Fix B (gate) is the
+  // defense-in-depth backstop: even if a stale spec routes a genuine consent
+  // modal to kind='picker', the gate must still auto-approve it — but a genuine
+  // /model selection picker must STILL bail (no safe default to auto-pick).
+
+  it('(1) DOES auto-approve a consent modal even when it is mis-routed to kind=picker (Fix B backstop)', async () => {
+    // Simulates the stale-spec case: the FSM handed us kind='picker' but the
+    // modal is a real "Do you want to proceed?" Bash consent prompt with
+    // 1. Yes / 3. No. Fix B must recognize the consent structure and fire.
+    const gate = makeGate();
+    const status = modalStatus(
+      'picker',
+      ['1. Yes', "2. Yes, and don't ask again", '3. No, tell Claude what to do differently'],
+      'Do you want to proceed?',
+    );
+    gate.call(status, 1_000);
+    expect(gate.fires).toBe(0); // first sighting — settle clock starts
+    gate.call(status, 1_000 + SETTLE_MS + 50);
+    expect(gate.fires).toBe(1);
+    await new Promise(r => setTimeout(r, 10));
+    expect(gate.resolves).toEqual([0]); // affirmative "Yes", never a decline/blind first
+  });
+
+  it('(2) after a real /model picker, a mis-routed consent modal still auto-approves (kind=picker → approval)', async () => {
+    // The prior FSM state was a genuine picker; then a consent modal appears but
+    // is still tagged kind='picker' by a stale spec. The gate must treat it as an
+    // approval because its text/buttons carry consent structure.
+    const gate = makeGate();
+    // First, a real picker sighting — must NOT resolve.
+    const pickerStatus = modalStatus('picker', ['1. Default (recommended)', '2. Opus', '3. Sonnet'], 'Select a model');
+    gate.call(pickerStatus, 1_000);
+    gate.call(pickerStatus, 1_000 + SETTLE_MS + 50);
+    expect(gate.resolves).toEqual([]);
+    // Now the consent modal, still mislabeled kind='picker'.
+    const consentStatus = modalStatus(
+      'picker',
+      ['1. Yes', "2. Yes, and don't ask again", '3. No'],
+      'Do you want to allow this edit?',
+    );
+    gate.call(consentStatus, 2_000);
+    gate.call(consentStatus, 2_000 + SETTLE_MS + 50);
+    expect(gate.fires).toBe(1);
+    await new Promise(r => setTimeout(r, 10));
+    expect(gate.resolves).toEqual([0]);
+  });
+
+  it('(3) regression: a genuine /model picker still BAILS even under Fix B (no auto model-select)', () => {
+    // "Select a model" + Default/Opus/Sonnet with no consent text and no decline
+    // must remain user-owned — Fix B must NOT loosen this. Drive well past settle.
+    const gate = makeGate();
+    const status = modalStatus('picker', ['1. Default (recommended)', '2. Opus', '3. Sonnet'], 'Select a model');
+    gate.call(status, 1_000);
+    gate.call(status, 1_000 + SETTLE_MS + 50);
+    gate.call(status, 1_000 + SETTLE_MS * 3);
+    expect(gate.resolves).toEqual([]);
+    expect(gate.fires).toBe(0);
+  });
+});
+
+// ── Fix A (spec): the live claude-cli spec must route a consent modal that
+// ALSO carries picker-ish wording to approval, not picker ─────────────────────
+describe('claude-cli spec — picker matcher yields to approval on consent text (Fix A)', () => {
+  it('routes a consent modal to approval even if picker wording is present in the frame', () => {
+    const spec = loadLiveSpec('claude-cli');
+    // A frame that carries BOTH a picker trigger phrase ("Select a mode") in the
+    // modal AND the decisive consent question. Before Fix A the →picker matcher
+    // (priority 100) would win the tie; the negative guard now makes it yield so
+    // →approval fires. (Contrived to prove the guard — real consent modals don't
+    // print "Select a mode", but a stale/odd frame must not wedge as picker.)
+    const screen = [
+      '⏺ I will run a command.',
+      '────────────────────────────────────────────',
+      ' Bash command',
+      ' npm test',
+      ' Do you want to proceed?',
+      ' Select a mode',
+      '❯ 1. Yes',
+      "  2. Yes, and don't ask again",
+      '  3. No, tell Claude what to do differently',
+      '────────────────────────────────────────────',
+      ' Esc to cancel · Tab to amend · ctrl+e to explain',
+    ].join('\n');
+    const ev = evaluateFsm(spec, 'busy', screen, { row: 8, col: 2 }, undefined,
+      { now: 10_000, stateEnteredAt: 0, regionLastChangedAt: new Map() });
+    expect(ev.fired?.to).toBe('approval');
+  });
+
+  it('a genuine /model picker (no consent text) still routes to picker', () => {
+    const spec = loadLiveSpec('claude-cli');
+    const screen = [
+      '────────────────────────────────────────────',
+      ' Select a model',
+      '❯ 1. Default (recommended)',
+      '  2. Opus',
+      '  3. Sonnet',
+      '────────────────────────────────────────────',
+    ].join('\n');
+    const ev = evaluateFsm(spec, 'busy', screen, { row: 3, col: 2 }, undefined,
+      { now: 10_000, stateEnteredAt: 0, regionLastChangedAt: new Map() });
+    expect(ev.fired?.to).toBe('picker');
+  });
 });
 
 describe('miniSpec sanity', () => {
