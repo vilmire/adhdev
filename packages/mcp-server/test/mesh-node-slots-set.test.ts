@@ -101,6 +101,61 @@ test('missing node_id is a clean error', async () => {
   assert.match(out.error, /node_id required/);
 });
 
+test('write=true forwards inlineMesh so a remote daemon can resolve the mesh without a local meshes.json', async () => {
+  const transport = recordingTransport();
+  const ctx = makeCtx(transport, [{ provider: 'codex-cli' }]);
+
+  await meshNodeSlotsSet(ctx, {
+    node_id: NODE,
+    slots: [{ provider: 'claude-cli', model: 'opus' }],
+    write: true,
+  });
+
+  assert.equal(transport.commands.length, 1);
+  const cmd = transport.commands[0];
+  assert.equal(cmd.cmd, 'update_mesh_node');
+  // inlineMesh must be present so the remote daemon's requireMeshHostMutationOwner
+  // can resolve the mesh via getMeshForCommand(meshId, inlineMesh) instead of
+  // falling through to a missing meshes.json → 'Mesh not found'.
+  assert.ok(cmd.args.inlineMesh, 'inlineMesh must be forwarded with update_mesh_node');
+  assert.equal(cmd.args.inlineMesh.id, 'mesh_test');
+});
+
+test('update_mesh_node without inlineMesh returns Mesh not found (remote regression canary)', async () => {
+  // Simulates what the remote daemon returns when inlineMesh is absent:
+  // requireMeshHostMutationOwner → getMeshForCommand(meshId, undefined) → null.
+  const transport: any = {
+    commands: [] as Array<{ cmd: string; args: any }>,
+    command: async (cmd: string, args: any) => {
+      transport.commands.push({ cmd, args });
+      if (cmd === 'update_mesh_node' && !args.inlineMesh) {
+        return { success: false, error: 'Mesh not found' };
+      }
+      return { success: true };
+    },
+    getStatus: async () => ({ sessions: [] }),
+  };
+  const ctx = makeCtx(transport, [{ provider: 'codex-cli' }]);
+
+  // Manually strip inlineMesh to replicate the pre-fix bug.
+  const origCommand = transport.command.bind(transport);
+  transport.command = async (cmd: string, args: any) => {
+    const stripped = { ...args };
+    delete stripped.inlineMesh;
+    return origCommand(cmd, stripped);
+  };
+
+  const out = JSON.parse(await meshNodeSlotsSet(ctx, {
+    node_id: NODE,
+    slots: [{ provider: 'claude-cli' }],
+    write: true,
+  }));
+
+  // Without inlineMesh the remote daemon signals 'Mesh not found'.
+  assert.equal(out.success, false);
+  assert.match(out.error, /Mesh not found/);
+});
+
 test('list returns the node\'s normalized slots (read-only)', async () => {
   const transport = recordingTransport();
   const ctx = makeCtx(transport, [{ provider: 'claude-cli', model: 'opus' }, { provider: 'codex-cli' }]);

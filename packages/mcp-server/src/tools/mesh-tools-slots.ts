@@ -92,10 +92,13 @@ export async function meshNodeSlotsSet(
 
         // Apply via the existing update_mesh_node seam — daemon shallow-merges
         // policy.slots. Send the normalized proposal so the stored value is clean.
+        // inlineMesh lets the remote member daemon resolve the mesh without a local
+        // meshes.json entry (same pattern as remove_mesh_node, clone_mesh_node, etc.).
         const raw = await commandForNode(ctx, node, 'update_mesh_node', {
             meshId: ctx.mesh.id,
             nodeId: node.id,
             policy: { slots: proposed },
+            inlineMesh: ctx.mesh,
         });
         const result = unwrapCommandPayload(raw);
         if (result?.success === false) {
