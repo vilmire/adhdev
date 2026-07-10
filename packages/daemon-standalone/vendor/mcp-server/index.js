@@ -6062,6 +6062,16 @@ async function meshNodeSlotsSet(ctx, args) {
     if (result?.success === false) {
       return JSON.stringify({ success: false, error: result.error || "update_mesh_node failed" });
     }
+    const idx = ctx.mesh.nodes.findIndex((n) => n.id === node.id);
+    if (idx >= 0) {
+      const target = ctx.mesh.nodes[idx];
+      target.policy = {
+        ...target.policy && typeof target.policy === "object" && !Array.isArray(target.policy) ? target.policy : {},
+        slots: proposed
+      };
+      ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      await syncCoordinatorDaemonMeshCache(ctx);
+    }
     return JSON.stringify({
       success: true,
       written: true,

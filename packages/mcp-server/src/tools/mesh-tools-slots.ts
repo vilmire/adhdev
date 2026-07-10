@@ -24,6 +24,7 @@ import { normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared';
 import {
     commandForNode,
     findNodeWithRefresh,
+    syncCoordinatorDaemonMeshCache,
     unwrapCommandPayload,
     type MeshContext,
 } from './mesh-tools-internal.js';
@@ -103,6 +104,27 @@ export async function meshNodeSlotsSet(
         const result = unwrapCommandPayload(raw);
         if (result?.success === false) {
             return JSON.stringify({ success: false, error: result.error || 'update_mesh_node failed' });
+        }
+        // Coordinator-side sync (mirror clone_mesh_node / remove_mesh_node above): the
+        // write landed on the node's home-daemon and its inline cache, but the
+        // coordinator's in-memory ctx.mesh — the view slot-fitness routing reads — still
+        // holds the OLD slots, and mesh_node_slots_list resolves off ctx.mesh too. Fold
+        // the new slots back into ctx.mesh and push the refreshed snapshot to the
+        // coordinator daemon's inline cache via syncCoordinatorDaemonMeshCache so the
+        // next queue drain (and an immediate list) sees them. Without this the remote
+        // write returns success yet the slots stay invisible coordinator-side.
+        // [NODE-SLOTS-REMOTE-WRITE follow-up]
+        const idx = ctx.mesh.nodes.findIndex(n => n.id === node.id);
+        if (idx >= 0) {
+            const target: any = ctx.mesh.nodes[idx];
+            target.policy = {
+                ...(target.policy && typeof target.policy === 'object' && !Array.isArray(target.policy)
+                    ? target.policy
+                    : {}),
+                slots: proposed,
+            };
+            ctx.mesh.updatedAt = new Date().toISOString();
+            await syncCoordinatorDaemonMeshCache(ctx);
         }
         return JSON.stringify({
             success: true,

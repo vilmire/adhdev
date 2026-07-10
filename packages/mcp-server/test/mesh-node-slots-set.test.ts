@@ -156,6 +156,41 @@ test('update_mesh_node without inlineMesh returns Mesh not found (remote regress
   assert.match(out.error, /Mesh not found/);
 });
 
+test('write=true folds the new slots into ctx.mesh so an immediate list reflects them (coordinator-side sync)', async () => {
+  // NODE-SLOTS-REMOTE-WRITE follow-up: the remote write lands on the node's
+  // home-daemon + inline cache, but the coordinator's ctx.mesh (what list and
+  // slot-fitness routing read) must be folded too. Before this fix, write=true
+  // returned success yet the very next list surfaced the STALE slots.
+  const transport = recordingTransport();
+  const ctx = makeCtx(transport, [{ provider: 'codex-cli' }]);
+
+  const before = JSON.parse(await meshNodeSlotsList(ctx, { node_id: NODE }));
+  assert.deepEqual(before.slots, [{ provider: 'codex-cli' }]);
+
+  const out = JSON.parse(await meshNodeSlotsSet(ctx, {
+    node_id: NODE,
+    slots: [{ provider: 'claude-cli', model: 'opus', difficulty: ['difficult'] }],
+    write: true,
+  }));
+  assert.equal(out.written, true);
+
+  const after = JSON.parse(await meshNodeSlotsList(ctx, { node_id: NODE }));
+  assert.deepEqual(after.slots, [{ provider: 'claude-cli', model: 'opus', difficulty: ['difficult'] }]);
+  // The fold is a targeted policy.slots update — it must not disturb other node fields.
+  assert.equal(ctx.mesh.nodes[0].daemonId, 'daemon_alpha');
+  assert.equal(ctx.mesh.nodes[0].workspace, '/repo/alpha');
+});
+
+test('dry-run does not mutate ctx.mesh (a following list still shows the old slots)', async () => {
+  const transport = recordingTransport();
+  const ctx = makeCtx(transport, [{ provider: 'codex-cli' }]);
+
+  await meshNodeSlotsSet(ctx, { node_id: NODE, slots: [{ provider: 'claude-cli' }] }); // write=false
+
+  const after = JSON.parse(await meshNodeSlotsList(ctx, { node_id: NODE }));
+  assert.deepEqual(after.slots, [{ provider: 'codex-cli' }]);
+});
+
 test('list returns the node\'s normalized slots (read-only)', async () => {
   const transport = recordingTransport();
   const ctx = makeCtx(transport, [{ provider: 'claude-cli', model: 'opus' }, { provider: 'codex-cli' }]);
