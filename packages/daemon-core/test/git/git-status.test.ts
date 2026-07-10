@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __changeImpactEvalCacheSizeForTests,
   __resetGitStatusCacheForTests,
+  classifyChangedPackages,
   GIT_FETCH_THROTTLE_MS,
   GIT_STATUS_CACHE_TTL_MS,
   getGitRepoStatus,
@@ -1021,6 +1022,87 @@ describe('git repo status parser', () => {
       expect(second.daemonBuildBehind?.head).not.toBe(firstHead);
       // HEAD moved → memo miss → ancestry probes ran again for the new oid.
       expect(ancestryProbeCount(spy)).toBeGreaterThan(0);
+    });
+  });
+
+  describe('classifyChangedPackages (ref-parameterized change-impact)', () => {
+    // Seed a base commit, then apply a change, and classify base..HEAD directly —
+    // no daemonBuildInfo involved (the helper is build-stamp independent).
+    function seedAndChange(name: string, apply: (repo: string) => void): { repo: string; from: string; to: string } {
+      const repo = tempRepo(name);
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+      commit(repo, 'c1');
+      const from = git(repo, ['rev-parse', 'HEAD']);
+      apply(repo);
+      commit(repo, 'c2');
+      const to = git(repo, ['rev-parse', 'HEAD']);
+      return { repo, from, to };
+    }
+
+    it('isDaemonAffecting:false when only a web package changed', async () => {
+      const { repo, from, to } = seedAndChange('classify-web-only', (r) => {
+        mkdirSync(join(r, 'packages', 'web-core', 'src'), { recursive: true });
+        writeFileSync(join(r, 'packages', 'web-core', 'src', 'ui.ts'), 'export const ui = 1;\n');
+      });
+      const result = await classifyChangedPackages(repo, from, to);
+      expect(result.isDaemonAffecting).toBe(false);
+      expect(result.affectedPackages).toEqual(['web-core']);
+    });
+
+    it('isDaemonAffecting:true when a daemon-runtime package changed', async () => {
+      const { repo, from, to } = seedAndChange('classify-daemon', (r) => {
+        mkdirSync(join(r, 'packages', 'daemon-core', 'src'), { recursive: true });
+        writeFileSync(join(r, 'packages', 'daemon-core', 'src', 'x.ts'), 'export const x = 1;\n');
+      });
+      const result = await classifyChangedPackages(repo, from, to);
+      expect(result.isDaemonAffecting).toBe(true);
+      expect(result.affectedPackages).toContain('daemon-core');
+    });
+
+    it('isDaemonAffecting:true (fail-safe) for an unlisted / new package', async () => {
+      const { repo, from, to } = seedAndChange('classify-unlisted', (r) => {
+        mkdirSync(join(r, 'packages', 'brand-new-pkg', 'src'), { recursive: true });
+        writeFileSync(join(r, 'packages', 'brand-new-pkg', 'src', 'z.ts'), 'export const z = 1;\n');
+      });
+      const result = await classifyChangedPackages(repo, from, to);
+      // An unclassified package is neither known-web nor known-daemon → must default
+      // to daemon-affecting so an unknown change is never silently skipped.
+      expect(result.isDaemonAffecting).toBe(true);
+      expect(result.affectedPackages).toEqual(['brand-new-pkg']);
+    });
+
+    it('stays daemon-affecting when web and daemon packages both changed', async () => {
+      const { repo, from, to } = seedAndChange('classify-mixed', (r) => {
+        mkdirSync(join(r, 'packages', 'web-core', 'src'), { recursive: true });
+        mkdirSync(join(r, 'packages', 'daemon-standalone', 'src'), { recursive: true });
+        writeFileSync(join(r, 'packages', 'web-core', 'src', 'ui.ts'), 'export const ui = 1;\n');
+        writeFileSync(join(r, 'packages', 'daemon-standalone', 'src', 'y.ts'), 'export const y = 1;\n');
+      });
+      const result = await classifyChangedPackages(repo, from, to);
+      expect(result.isDaemonAffecting).toBe(true);
+    });
+
+    it('honors an injected change-impact config (web-only reclassification)', async () => {
+      const { repo, from, to } = seedAndChange('classify-config', (r) => {
+        mkdirSync(join(r, 'packages', 'my-daemon', 'src'), { recursive: true });
+        writeFileSync(join(r, 'packages', 'my-daemon', 'src', 'a.ts'), 'export const a = 1;\n');
+      });
+      // Without config, my-daemon is unlisted → daemon-affecting (fail-safe).
+      const bare = await classifyChangedPackages(repo, from, to);
+      expect(bare.isDaemonAffecting).toBe(true);
+      // Declaring it web-only flips the verdict.
+      const configured = await classifyChangedPackages(repo, from, to, {
+        changeImpactConfig: { webOnlyPackages: ['my-daemon'] },
+      });
+      expect(configured.isDaemonAffecting).toBe(false);
+      expect(configured.affectedPackages).toEqual(['my-daemon']);
+    });
+
+    it('throws (fail-open signal) on an invalid ref so the caller runs full validation', async () => {
+      const repo = tempRepo('classify-bad-ref');
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+      commit(repo, 'c1');
+      await expect(classifyChangedPackages(repo, 'nope-not-a-ref', 'HEAD')).rejects.toBeTruthy();
     });
   });
 });

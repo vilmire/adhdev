@@ -438,6 +438,54 @@ function isNonRuntimeRootFile(file: string, policy: ResolvedChangeImpactPolicy):
   return false;
 }
 
+/** Coarse change-impact verdict produced from a changed-file list. */
+export interface ChangedPackageClassification {
+  isDaemonAffecting: boolean;
+  affectedPackages: string[];
+}
+
+/**
+ * Pure bucketer: classify an already-collected changed-file list into the coarse
+ * daemon-vs-web verdict, per the resolved policy. Shared by classifyDaemonBuildChange
+ * (buildCommit..HEAD) and classifyChangedPackages (arbitrary ref range) so the
+ * daemon/web boundary logic lives in exactly one place. An empty list stays
+ * conservative (daemon-affecting) so an actionable warning is never suppressed.
+ */
+function classifyChangedFileList(
+  files: string[],
+  policy: ResolvedChangeImpactPolicy,
+): ChangedPackageClassification {
+  if (files.length === 0) {
+    // No file diff (e.g. only merge metadata) — nothing actionable, but stay
+    // conservative and treat as daemon-affecting so we don't suppress a real warning.
+    return { isDaemonAffecting: true, affectedPackages: [] };
+  }
+  const pkgs = new Set<string>();
+  // A non-package path that is NOT a recognized benign root file (marker/doc).
+  // Only these force daemon-affecting; benign markers/docs are ignored so a
+  // gitlink-moving root commit over a marker-only oss commit no longer over-warns.
+  let sawRuntimeAmbiguousNonPackage = false;
+  for (const file of files) {
+    const match = file.match(/(?:^|\/)packages\/([^/]+)\//);
+    if (!match) {
+      if (!isNonRuntimeRootFile(file, policy)) sawRuntimeAmbiguousNonPackage = true;
+      continue;
+    }
+    pkgs.add(match[1]);
+  }
+  const affectedPackages = [...pkgs].sort();
+  // Daemon-affecting if: any runtime-ambiguous non-package file changed, any
+  // unknown package changed, or any explicit daemon-runtime package changed.
+  // The daemon is unaffected only when every changed file is either a known
+  // web-only package or a recognized benign root file (and at least one such
+  // file changed) — i.e. nothing runtime-ambiguous remains. Unlisted/new packages
+  // therefore stay daemon-affecting (fail-safe default preserved).
+  const allBenign =
+    !sawRuntimeAmbiguousNonPackage &&
+    affectedPackages.every((p) => policy.webOnlyPackages.has(p) && !policy.daemonRuntimePackages.has(p));
+  return { isDaemonAffecting: !allBenign, affectedPackages };
+}
+
 /**
  * Determine whether the changes between buildCommit..HEAD touch any daemon-runtime
  * package, per the resolved policy. Returns isDaemonAffecting:true conservatively
@@ -449,45 +497,52 @@ async function classifyDaemonBuildChange(
   buildCommit: string,
   options: GitStatusOptions,
   policy: ResolvedChangeImpactPolicy,
-): Promise<{ isDaemonAffecting: boolean; affectedPackages: string[] }> {
+): Promise<ChangedPackageClassification> {
   try {
     const diff = await runGit(repoPath, ['diff', '--name-only', `${buildCommit}..HEAD`], options);
     const files = diff.stdout
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean);
-    if (files.length === 0) {
-      // No file diff (e.g. only merge metadata) — nothing actionable, but stay
-      // conservative and treat as daemon-affecting so we don't suppress a real warning.
-      return { isDaemonAffecting: true, affectedPackages: [] };
-    }
-    const pkgs = new Set<string>();
-    // A non-package path that is NOT a recognized benign root file (marker/doc).
-    // Only these force daemon-affecting; benign markers/docs are ignored so a
-    // gitlink-moving root commit over a marker-only oss commit no longer over-warns.
-    let sawRuntimeAmbiguousNonPackage = false;
-    for (const file of files) {
-      const match = file.match(/(?:^|\/)packages\/([^/]+)\//);
-      if (!match) {
-        if (!isNonRuntimeRootFile(file, policy)) sawRuntimeAmbiguousNonPackage = true;
-        continue;
-      }
-      pkgs.add(match[1]);
-    }
-    const affectedPackages = [...pkgs].sort();
-    // Daemon-affecting if: any runtime-ambiguous non-package file changed, any
-    // unknown package changed, or any explicit daemon-runtime package changed.
-    // The daemon is unaffected only when every changed file is either a known
-    // web-only package or a recognized benign root file (and at least one such
-    // file changed) — i.e. nothing runtime-ambiguous remains.
-    const allBenign =
-      !sawRuntimeAmbiguousNonPackage &&
-      affectedPackages.every((p) => policy.webOnlyPackages.has(p) && !policy.daemonRuntimePackages.has(p));
-    return { isDaemonAffecting: !allBenign, affectedPackages };
+    return classifyChangedFileList(files, policy);
   } catch {
     // diff probe failed → can't prove web-only; stay conservative.
     return { isDaemonAffecting: true, affectedPackages: [] };
   }
+}
+
+/**
+ * Ref-parameterized change-impact classification for a repo/worktree, reusing the
+ * exact daemon-vs-web bucketing that the stale-build detector uses — but over an
+ * arbitrary `fromRef..toRef` range (e.g. a refine base head → branch head) instead
+ * of the live daemon's build commit → HEAD, and WITHOUT any daemonBuildInfo caching.
+ *
+ * Policy is resolved the same way as getGitRepoStatus: an explicit
+ * `options.changeImpactConfig` wins; otherwise the repo's `.adhdev/change-impact.*`
+ * is auto-loaded; otherwise the built-in ADHDev default policy applies. The
+ * classification uses `git diff --name-only fromRef..toRef`.
+ *
+ * FAIL-OPEN on error: if the diff can't be collected (bad ref, not a repo), the
+ * caller should treat "no verdict" as "run everything" — so we throw rather than
+ * returning a misleading benign verdict. Callers wrap this in try/catch and leave
+ * changeImpact undefined on failure. Unclassified/new packages still default to
+ * isDaemonAffecting:true (never silently skipped).
+ */
+export async function classifyChangedPackages(
+  repoPath: string,
+  fromRef: string,
+  toRef: string,
+  options: GitStatusOptions = {},
+): Promise<ChangedPackageClassification> {
+  const repo = await resolveGitRepository(repoPath, options);
+  const { config } = resolveChangeImpactConfigForRepo(repo.repoRoot, options);
+  const policy = resolveChangeImpactPolicy(config);
+  const diff = await runGit(repoPath, ['diff', '--name-only', `${fromRef}..${toRef}`], options);
+  const files = diff.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return classifyChangedFileList(files, policy);
 }
 
 /**

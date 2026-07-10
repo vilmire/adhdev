@@ -1,0 +1,155 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { runMeshRefineValidationGate } from '../../src/mesh/mesh-refine-gates.js';
+
+// Directly exercises the validation gate's coarse change-impact scoping (a) and its
+// graceful missing-deps continuation (b) without the full async refine orchestration.
+describe('runMeshRefineValidationGate change-impact scoping', () => {
+    const roots: string[] = [];
+    afterEach(() => {
+        for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+    });
+
+    function workspace(opts: { withNodeModules?: boolean } = {}): string {
+        const dir = mkdtempSync(join(tmpdir(), 'adhdev-refine-scope-'));
+        roots.push(dir);
+        writeFileSync(join(dir, 'package.json'), JSON.stringify({
+            scripts: {
+                typecheck: 'node ok.js',
+                'test:web-core': 'node ok.js',
+                'test:daemon-core': 'node ok.js',
+            },
+        }, null, 2), 'utf-8');
+        // A lockfile makes dependenciesLikelyMissing() fire when node_modules is absent.
+        writeFileSync(join(dir, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: {} }), 'utf-8');
+        writeFileSync(join(dir, 'ok.js'), 'process.exit(0)\n', 'utf-8');
+        // A plain node script that needs no node_modules — stands in for
+        // scripts/check-vendor-drift.mjs.
+        writeFileSync(join(dir, 'check-vendor-drift.mjs'), 'process.exit(0)\n', 'utf-8');
+        if (opts.withNodeModules) mkdirSync(join(dir, 'node_modules'), { recursive: true });
+        return dir;
+    }
+
+    function meshWith(commands: Array<{ command: string; args?: string[]; category?: string }>): any {
+        return {
+            id: 'mesh-scope',
+            policy: {
+                refineConfig: {
+                    version: 1,
+                    validation: { required: true, bootstrap: 'skip', commands },
+                },
+            },
+        };
+    }
+
+    it('(a) web-only impact skips daemon-scoped commands but still runs web + typecheck', async () => {
+        const ws = workspace({ withNodeModules: true });
+        const mesh = meshWith([
+            { command: 'npm', args: ['run', 'typecheck'], category: 'typecheck' },
+            { command: 'npm', args: ['run', 'test:web-core'], category: 'test' },
+            { command: 'npm', args: ['run', 'test:daemon-core'], category: 'test' },
+            { command: 'node', args: ['check-vendor-drift.mjs'], category: 'custom' },
+        ]);
+
+        const summary = await runMeshRefineValidationGate(mesh, ws, {
+            changeImpact: { isDaemonAffecting: false, affectedPackages: ['web-core'] },
+        });
+
+        expect(summary.status).toBe('passed');
+        const byCommand = new Map(summary.commandsRun.map((c: any) => [c.displayCommand, c]));
+        // typecheck + web-core actually ran (not skipped).
+        expect(byCommand.get('npm run typecheck')).toMatchObject({ passed: true });
+        expect(byCommand.get('npm run typecheck')?.skipped).toBeUndefined();
+        expect(byCommand.get('npm run test:web-core')).toMatchObject({ passed: true });
+        expect(byCommand.get('npm run test:web-core')?.skipped).toBeUndefined();
+        // daemon-core test + vendor-drift skipped as unaffected daemon scope, visibly.
+        expect(byCommand.get('npm run test:daemon-core')).toMatchObject({ skipped: true, skipReason: 'unaffected_daemon_scope' });
+        expect(byCommand.get('node check-vendor-drift.mjs')).toMatchObject({ skipped: true, skipReason: 'unaffected_daemon_scope' });
+        expect(summary.changeImpact).toMatchObject({
+            isDaemonAffecting: false,
+            skippedDaemonCommands: ['npm run test:daemon-core', 'node check-vendor-drift.mjs'],
+        });
+    });
+
+    it('(a) daemon-affecting impact runs the full command set (nothing skipped)', async () => {
+        const ws = workspace({ withNodeModules: true });
+        const mesh = meshWith([
+            { command: 'npm', args: ['run', 'typecheck'], category: 'typecheck' },
+            { command: 'npm', args: ['run', 'test:daemon-core'], category: 'test' },
+            { command: 'node', args: ['check-vendor-drift.mjs'], category: 'custom' },
+        ]);
+
+        const summary = await runMeshRefineValidationGate(mesh, ws, {
+            changeImpact: { isDaemonAffecting: true, affectedPackages: ['daemon-core'] },
+        });
+
+        expect(summary.status).toBe('passed');
+        expect(summary.commandsRun.every((c: any) => !c.skipped)).toBe(true);
+        expect(summary.commandsRun.map((c: any) => c.displayCommand)).toEqual([
+            'npm run typecheck',
+            'npm run test:daemon-core',
+            'node check-vendor-drift.mjs',
+        ]);
+    });
+
+    it('(b) a package-manager daemon command that would hit missing-deps is filtered out before the deps check, so a runnable web command still passes', async () => {
+        // No node_modules → the daemon-scoped `npm run test:daemon-core` would hit the
+        // missing-deps hard-block if it ran. Under web-only impact it is filtered out
+        // BEFORE the deps check, so the runnable no-dep web command passes the gate.
+        const ws = workspace({ withNodeModules: false });
+        const mesh = meshWith([
+            { command: 'npm', args: ['run', 'test:daemon-core'], category: 'test' },
+            // A plain-node web-side check needs no node_modules and is not daemon-scoped.
+            { command: 'node', args: ['ok.js'], category: 'test' },
+        ]);
+
+        const summary = await runMeshRefineValidationGate(mesh, ws, {
+            changeImpact: { isDaemonAffecting: false, affectedPackages: ['web-core'] },
+        });
+
+        expect(summary.status).toBe('passed');
+        const web = summary.commandsRun.find((c: any) => c.displayCommand === 'node ok.js');
+        expect(web).toMatchObject({ passed: true });
+        expect(web?.skipped).toBeUndefined();
+        const daemon = summary.commandsRun.find((c: any) => c.displayCommand === 'npm run test:daemon-core');
+        expect(daemon).toMatchObject({ skipped: true, skipReason: 'unaffected_daemon_scope' });
+    });
+
+    it('(b) a genuinely missing-deps command no longer aborts a following no-dep command; gate still fails missing_dependencies', async () => {
+        // No change-impact → no scoping. typecheck needs deps that are absent (blocked),
+        // but the following no-dep check must still run, and the gate surfaces the real
+        // missing-deps block at the end.
+        const ws = workspace({ withNodeModules: false });
+        const mesh = meshWith([
+            { command: 'npm', args: ['run', 'typecheck'], category: 'typecheck' },
+            { command: 'node', args: ['check-vendor-drift.mjs'], category: 'custom' },
+        ]);
+
+        const summary = await runMeshRefineValidationGate(mesh, ws);
+
+        expect(summary.status).toBe('failed');
+        expect(summary.failureCode).toBe('missing_dependencies');
+        const typecheck = summary.commandsRun.find((c: any) => c.displayCommand === 'npm run typecheck');
+        expect(typecheck).toMatchObject({ skipped: true, failureKind: 'missing_dependencies' });
+        // The no-dep command was NOT aborted — it ran to completion.
+        const drift = summary.commandsRun.find((c: any) => c.displayCommand === 'node check-vendor-drift.mjs');
+        expect(drift).toMatchObject({ passed: true });
+    });
+
+    it('fails open (runs full set) when no change-impact is provided', async () => {
+        const ws = workspace({ withNodeModules: true });
+        const mesh = meshWith([
+            { command: 'npm', args: ['run', 'typecheck'], category: 'typecheck' },
+            { command: 'npm', args: ['run', 'test:daemon-core'], category: 'test' },
+        ]);
+
+        const summary = await runMeshRefineValidationGate(mesh, ws);
+
+        expect(summary.status).toBe('passed');
+        expect(summary.commandsRun.every((c: any) => !c.skipped)).toBe(true);
+        expect(summary.changeImpact).toBeUndefined();
+    });
+});

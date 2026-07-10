@@ -13,6 +13,7 @@
  */
 
 import { getGitRepoStatus } from '../git/git-status.js';
+import type { ChangedPackageClassification } from '../git/git-status.js';
 import * as yaml from 'js-yaml';
 import { loadMeshRefineConfig, resolveMeshRefineValidationPlan } from '../mesh/refine-config.js';
 import type { MeshRefineValidationCommandPlan } from '../mesh/refine-config.js';
@@ -74,6 +75,19 @@ type MeshRefineValidationSummary = {
     };
     /** M2-2: deprecation notices from the refine config (e.g. bootstrapCommands). */
     deprecationWarnings?: string[];
+    /**
+     * Coarse daemon-vs-web change-impact used to scope the validation command set.
+     * When `isDaemonAffecting === false`, daemon-scoped commands are recorded in
+     * `commandsRun` with `skipped: true, skipReason: 'unaffected_daemon_scope'`
+     * rather than executed; web + typecheck commands always run. Absent when no
+     * change-impact was threaded in (legacy: full command set runs).
+     */
+    changeImpact?: {
+        isDaemonAffecting: boolean;
+        affectedPackages: string[];
+        /** displayCommands skipped because the daemon scope is unaffected. */
+        skippedDaemonCommands?: string[];
+    };
 };
 
 type MeshRefineStageStatus = 'passed' | 'failed' | 'skipped';
@@ -343,6 +357,13 @@ export interface RefineContext {
     baseBranch: string;
     baseHead: string;
     branchHead: string;
+    /**
+     * Coarse daemon-vs-web change-impact for baseHead..branchHead, resolved in the
+     * resolve_refs stage and threaded into the validation gate to scope its command
+     * set. `undefined` means "could not classify" → the gate fails open and runs ALL
+     * commands (never skip on uncertainty).
+     */
+    changeImpact?: ChangedPackageClassification;
     validationSummary: Awaited<ReturnType<typeof runMeshRefineValidationGate>>;
     patchEquivalence: Awaited<ReturnType<typeof runMeshRefinePatchEquivalenceGate>>;
     submoduleReachability: Awaited<ReturnType<typeof runMeshRefineSubmoduleReachabilityGate>>;
@@ -1477,6 +1498,14 @@ export async function runMeshRefineValidationGate(
         persistedBootstrapState?: WorktreeBootstrapState | null;
         /** M2-2: called after an inherit-mode bootstrap run so the caller can persist the new state. */
         onBootstrapStateChange?: (state: WorktreeBootstrapState) => void;
+        /**
+         * Coarse daemon-vs-web change-impact for the branch (resolve_refs computes it
+         * over baseHead..branchHead). When provided and `isDaemonAffecting === false`,
+         * daemon-scoped validation commands are skipped (web + typecheck still run).
+         * When omitted or `isDaemonAffecting === true`, the full command set runs —
+         * fail-open to full validation on any uncertainty.
+         */
+        changeImpact?: ChangedPackageClassification;
     },
 ): Promise<MeshRefineValidationSummary> {
     const { execFile } = await import('node:child_process');
@@ -1574,6 +1603,63 @@ export async function runMeshRefineValidationGate(
         return ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock']
             .some(lock => fs.existsSync(pathJoin(cwd, lock)));
     };
+    // A validation command needs installed node_modules to run. Only these can hit
+    // the missing-deps hard-block; non-package-manager commands (e.g. a plain
+    // `node scripts/check-vendor-drift.mjs`) need no deps and must never be aborted
+    // by a preceding command's missing-deps.
+    const needsNodeModules = (candidate: MeshRefineValidationCommand, cwd: string): boolean =>
+        isPackageManagerValidation(candidate) && dependenciesLikelyMissing(cwd);
+
+    // (a) Coarse change-impact scoping. When the branch is web-only
+    // (changeImpact.isDaemonAffecting === false), daemon-scoped validation commands
+    // are pointless — and often un-runnable in a web-only worktree that never
+    // bootstrapped daemon deps. Identify daemon-scoped commands ONLY by the coarse
+    // daemon-vs-web bucket: a command whose script/args reference a daemon package
+    // (daemon-core / daemon-cloud) or the vendor-drift check. web-side commands
+    // (test:web-core / test:web-cloud) and `typecheck` ALWAYS run — the daemon/web
+    // boundary is the human-curated safe line; we deliberately do NOT do fine
+    // per-package skipping (web-cloud consumes web-core, so it must still run).
+    const isDaemonScopedCommand = (candidate: MeshRefineValidationCommand): boolean => {
+        const haystack = [candidate.command, ...(candidate.args || []), candidate.displayCommand || '']
+            .join(' ')
+            .toLowerCase();
+        // Never treat a typecheck or an explicit web-side command as daemon-scoped.
+        if (candidate.category === 'typecheck') return false;
+        if (/\btypecheck\b/.test(haystack)) return false;
+        if (/\bweb-core\b|\bweb-cloud\b|\bweb-standalone\b|\btest:web\b/.test(haystack)) return false;
+        // Daemon-scoped signals: a daemon package name, a daemon test script, or the
+        // vendor-drift check (which validates the daemon vendor bundle).
+        return /\bdaemon-core\b|\bdaemon-cloud\b|\btest:daemon\b|check-vendor-drift/.test(haystack);
+    };
+
+    const scopeUnaffectedDaemon = opts?.changeImpact?.isDaemonAffecting === false;
+    const skippedDaemonCommands: string[] = [];
+    const commandsToRun: MeshRefineValidationCommand[] = [];
+    for (const candidate of selection.commands) {
+        if (scopeUnaffectedDaemon && isDaemonScopedCommand(candidate)) {
+            skippedDaemonCommands.push(candidate.displayCommand);
+            // Record the skip so it's visible in the summary, never silently dropped.
+            summary.commandsRun.push({
+                command: candidate.command,
+                args: candidate.args,
+                displayCommand: candidate.displayCommand,
+                category: candidate.category,
+                source: candidate.source,
+                passed: true,
+                skipped: true,
+                skipReason: 'unaffected_daemon_scope',
+            });
+            continue;
+        }
+        commandsToRun.push(candidate);
+    }
+    if (opts?.changeImpact) {
+        summary.changeImpact = {
+            isDaemonAffecting: opts.changeImpact.isDaemonAffecting,
+            affectedPackages: opts.changeImpact.affectedPackages,
+            ...(skippedDaemonCommands.length ? { skippedDaemonCommands } : {}),
+        };
+    }
 
     if (runLegacyBootstrapCommands) {
         summary.bootstrap = { stage: 'legacy' };
@@ -1619,23 +1705,31 @@ export async function runMeshRefineValidationGate(
         }
     }
 
-    for (const candidate of selection.commands) {
+    // (b) Track a genuine missing-deps block for an AFFECTED command. Instead of
+    // aborting the whole gate at the first missing-deps hit (which also killed
+    // trailing no-dep commands like check-vendor-drift.mjs), we mark the blocked
+    // command and CONTINUE evaluating the rest: commands whose deps are present, or
+    // which need no deps at all, still run. missing_dependencies only becomes the
+    // gate failure if at least one command that truly needed deps could not run.
+    let missingDepsBlocked = false;
+    for (const candidate of commandsToRun) {
         const startedAt = Date.now();
         const cwd = candidate.cwd ? pathResolve(workspace, candidate.cwd) : workspace;
         const timeout = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
         const bootstrapProvidedDependencies = summary.bootstrap?.stage === 'cached' || summary.bootstrap?.stage === 'ran' || summary.bootstrap?.stage === 'legacy';
-        if (!bootstrapProvidedDependencies && isPackageManagerValidation(candidate) && dependenciesLikelyMissing(cwd)) {
+        if (!bootstrapProvidedDependencies && needsNodeModules(candidate, cwd)) {
+            // This command genuinely needs node_modules that are absent. Mark it
+            // blocked, but do NOT abort — a following no-dep command (or one in a
+            // different cwd that DOES have deps) must still get its chance to run.
             summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, {
-                stderr: 'Dependencies appear to be missing: package.json and a lockfile are present, but node_modules is absent. Configure validation.bootstrapCommands in repo mesh/refine config if Refinery should install/bootstrap before validation.',
+                stderr: 'Dependencies appear to be missing: package.json and a lockfile are present, but node_modules is absent. Configure validation.bootstrapCommands (or .adhdev/worktree_bootstrap.json) in repo mesh/refine config if Refinery should install/bootstrap before validation.',
             }, false, {
                 exitCode: null,
                 skipped: true,
                 failureKind: 'missing_dependencies',
             }));
-            summary.status = 'failed';
-            summary.failureKind = 'missing_dependencies';
-            summary.failureCode = 'missing_dependencies';
-            return summary;
+            missingDepsBlocked = true;
+            continue;
         }
         // See the bootstrap loop above: resolve the win32 .cmd shim to an
         // absolute path before handing it to the spawn boundary.
@@ -1679,6 +1773,18 @@ export async function runMeshRefineValidationGate(
             }
             return summary;
         }
+    }
+
+    // (b) A command that genuinely needed deps could not run. Surface it as the
+    // gate failure now (after letting no-dep / deps-present commands run), so the
+    // caller can classify it blocked_review and emit a self-service hint. Every
+    // daemon-scoped command in a web-only branch was already filtered above, so a
+    // missing-deps block here is a real affected-command block.
+    if (missingDepsBlocked) {
+        summary.status = 'failed';
+        summary.failureKind = 'missing_dependencies';
+        summary.failureCode = 'missing_dependencies';
+        return summary;
     }
 
     summary.status = 'passed';

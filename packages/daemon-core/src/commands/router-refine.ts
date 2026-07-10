@@ -17,6 +17,8 @@ import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../mes
 import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
+import { classifyChangedPackages } from '../git/git-status.js';
+import type { ChangedPackageClassification } from '../git/git-status.js';
 import { readStringValue } from '../mesh/mesh-node-identity.js';
 import {
     alignRefinerySubmodulesAfterMerge,
@@ -312,7 +314,24 @@ export async function refineResolveRefsStage(self: DaemonCommandRouter,
             const { stdout: branchHeadStdout } = await execFileAsync('git', ['rev-parse', branch], { cwd: node.workspace, encoding: 'utf8' });
             const baseHead = baseHeadRaw;
             const branchHead = branchHeadStdout.trim();
-            recordMeshRefineStage(refineStages, 'resolve_refs', 'passed', resolveStarted, { branch, baseBranch, baseHead, branchHead, ...(fetchWarning ? { fetchWarning } : {}) });
+
+            // Coarse daemon-vs-web change-impact for baseHead..branchHead, computed
+            // against the worktree so the same policy (.adhdev/change-impact.*) as the
+            // stale-build detector applies. Threaded onto ctx so the validation gate
+            // can scope its command set: a web-only branch skips daemon-scoped commands.
+            // FAIL-OPEN: any classification error leaves changeImpact undefined → the
+            // gate runs the full command set (never skip on uncertainty).
+            let changeImpact: ChangedPackageClassification | undefined;
+            try {
+                changeImpact = await classifyChangedPackages(node.workspace, baseHead, branchHead);
+            } catch {
+                changeImpact = undefined;
+            }
+            recordMeshRefineStage(refineStages, 'resolve_refs', 'passed', resolveStarted, {
+                branch, baseBranch, baseHead, branchHead,
+                ...(changeImpact ? { changeImpact } : {}),
+                ...(fetchWarning ? { fetchWarning } : {}),
+            });
 
             return {
                 kind: 'continue',
@@ -330,6 +349,7 @@ export async function refineResolveRefsStage(self: DaemonCommandRouter,
                     baseBranch,
                     baseHead,
                     branchHead,
+                    changeImpact,
                     validationSummary: undefined as any,
                     patchEquivalence: undefined as any,
                     submoduleReachability: undefined as any,
@@ -346,6 +366,9 @@ export async function refineValidationStage(self: DaemonCommandRouter, ctx: Refi
             const { mesh, node, branch, baseBranch, refineStages } = ctx;
             const validationStarted = Date.now();
             const validationSummary = await runMeshRefineValidationGate(mesh, node.workspace, {
+                // (a) Scope the validation command set by coarse change-impact (resolved
+                // in resolve_refs). Undefined → gate runs the full command set (fail-open).
+                changeImpact: ctx.changeImpact,
                 // M2-2: consume the node's persisted bootstrap state; persist re-runs.
                 persistedBootstrapState: (node as any).worktreeBootstrap as WorktreeBootstrapState | undefined,
                 onBootstrapStateChange: (state) => {
@@ -369,7 +392,9 @@ export async function refineValidationStage(self: DaemonCommandRouter, ctx: Refi
                     : undefined;
                 const buildValidationFailedError = (): string => {
                     const base = validationSummary.failureCode === 'missing_dependencies'
-                        ? 'Refinery validation dependencies are missing; merge/refine was not attempted. Configure validation.bootstrapCommands if Refinery should bootstrap dependencies before validation.'
+                        ? 'Refinery validation dependencies are missing for a change-affected package; merge/refine was not attempted. '
+                            + 'To make this self-service, either (1) configure .adhdev/worktree_bootstrap.json (or validation.bootstrapCommands in .adhdev/refine.json) so Refinery installs deps before validation, '
+                            + 'or (2) converge the branch via the documented manual fast-forward-only bypass (rebase onto the fetched base, verify strict ancestry, then push ff-only) instead of the refine gate.'
                         : validationSummary.failureCode === 'dependency_bootstrap_failed'
                             ? 'Refinery dependency/bootstrap command failed; merge/refine was not attempted.'
                             : validationSummary.failureCode === 'spawn_resolution_failed'
