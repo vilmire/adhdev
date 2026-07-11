@@ -785,12 +785,12 @@ export default function MeshObservabilitySurface({
                             )}
                             {selectedGraphNode.branchConvergence && (selectedGraphNode.branchConvergence.reason || selectedGraphNode.branchConvergence.nextStep) && (
                                 <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-sky-400/20 bg-sky-500/10 p-3 text-xs text-sky-100' : 'mt-3 rounded-xl border border-sky-300 bg-sky-50 p-3 text-xs text-sky-800'}>
-                                    <div className="font-medium">{BRANCH_CONVERGENCE_LABEL[selectedGraphNode.branchConvergence.status] ?? selectedGraphNode.branchConvergence.status}</div>
+                                    <div className="font-medium">Follow-up — {BRANCH_CONVERGENCE_LABEL[selectedGraphNode.branchConvergence.status] ?? selectedGraphNode.branchConvergence.status}</div>
                                     {selectedGraphNode.branchConvergence.reason && (
                                         <div className="mt-1">{selectedGraphNode.branchConvergence.reason}</div>
                                     )}
                                     {selectedGraphNode.branchConvergence.nextStep && (
-                                        <div className={`${selectedGraphNode.branchConvergence.reason ? 'mt-1.5 pt-1.5 border-t border-sky-400/20' : 'mt-1'} font-medium`}>Next: <span className="font-normal">{selectedGraphNode.branchConvergence.nextStep}</span></div>
+                                        <div className={`${selectedGraphNode.branchConvergence.reason ? 'mt-1.5 pt-1.5 border-t border-sky-400/20' : 'mt-1'}`}>{selectedGraphNode.branchConvergence.nextStep}</div>
                                     )}
                                 </div>
                             )}
