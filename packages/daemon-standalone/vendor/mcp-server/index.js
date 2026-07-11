@@ -1098,16 +1098,6 @@ var MESH_REQUEUE_HELD_EVENTS_TOOL = {
     }
   }
 };
-var MESH_WAIT_EVENTS_TOOL = {
-  name: "mesh_wait_events",
-  description: 'Long-poll blocking wait for coordinator events \u2014 the polling-killer for pure-MCP coordinators. A pure-MCP coordinator only drains pendingCoordinatorEvents (worker completions, approvals, stall nudges, dispatch outcomes) when it calls a mesh tool, so "waiting" degrades into busy-polling mesh_status/mesh_view_queue. Instead call this: if events are already pending it drains and returns them immediately; otherwise it blocks up to timeoutMs for events to arrive, returning as soon as any do. On timeout it returns an empty events array with timedOut:true. Scope is the FULL pendingCoordinatorEvents queue (identical to what the reconcile loop drains) \u2014 not filtered by kind. This is the force-inject symmetric for MCP coordinators: after dispatching or enqueueing work, call mesh_wait_events instead of polling; when it returns events, act on them. Read-only w.r.t. mesh state (it only drains the coordinator inbox, which is what any mesh tool call already does).',
-  inputSchema: {
-    type: "object",
-    properties: {
-      timeoutMs: { type: "number", description: "Maximum time to block waiting for events, in milliseconds. Default 30000; clamped to [1000, 60000]. Returns early the moment any event arrives." }
-    }
-  }
-};
 var MESH_PRUNE_STALE_DIRECT_TOOL = {
   name: "mesh_prune_stale_direct",
   description: "Prune orphaned staleDirect dispatch records \u2014 direct task dispatches whose original node/session is no longer present in the live mesh. dry_run (default) reports exactly which records would be pruned without mutating anything; pass execute=true to delete them. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved. The append-only mesh ledger audit history is left intact.",
@@ -1394,7 +1384,6 @@ var ALL_MESH_TOOLS = [
   MESH_FORGET_NOTE_TOOL,
   MESH_RECONCILE_LEDGER_TOOL,
   MESH_REQUEUE_HELD_EVENTS_TOOL,
-  MESH_WAIT_EVENTS_TOOL,
   MESH_MISSION_UPSERT_TOOL,
   MESH_MISSION_LIST_TOOL,
   MESH_REVIEW_INBOX_TOOL,
@@ -4171,34 +4160,6 @@ async function meshTaskHistory(ctx, args) {
     ...pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}
   }, null, 2);
 }
-var WAIT_EVENTS_DEFAULT_TIMEOUT_MS = 3e4;
-var WAIT_EVENTS_MIN_TIMEOUT_MS = 1e3;
-var WAIT_EVENTS_MAX_TIMEOUT_MS = 6e4;
-var WAIT_EVENTS_POLL_INTERVAL_MS = 1e3;
-async function meshWaitEvents(ctx, args) {
-  const { mesh } = ctx;
-  const sleep2 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const requested = typeof args.timeoutMs === "number" && args.timeoutMs > 0 ? Math.floor(args.timeoutMs) : WAIT_EVENTS_DEFAULT_TIMEOUT_MS;
-  const timeoutMs = Math.min(Math.max(requested, WAIT_EVENTS_MIN_TIMEOUT_MS), WAIT_EVENTS_MAX_TIMEOUT_MS);
-  const startedAt = Date.now();
-  const deadline = startedAt + timeoutMs;
-  let events = await drainCoordinatorPendingEvents(ctx);
-  while (events.length === 0 && Date.now() < deadline) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    await sleep2(Math.min(WAIT_EVENTS_POLL_INTERVAL_MS, remaining));
-    events = await drainCoordinatorPendingEvents(ctx);
-  }
-  const waitedMs = Date.now() - startedAt;
-  const timedOut = events.length === 0;
-  return JSON.stringify({
-    meshId: mesh.id,
-    timedOut,
-    waitedMs,
-    timeoutMs,
-    ...events.length > 0 ? { events, pendingCoordinatorEvents: events } : { events: [] }
-  }, null, 2);
-}
 async function meshLedgerQuery(ctx, args) {
   const { mesh } = ctx;
   const pendingEvents = await drainCoordinatorPendingEvents(ctx);
@@ -6001,7 +5962,6 @@ var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_forget_note",
   "mesh_reconcile_ledger",
   "mesh_requeue_held_events",
-  "mesh_wait_events",
   "mesh_mission_upsert",
   "mesh_mission_list",
   "mesh_review_inbox",
@@ -8458,9 +8418,6 @@ async function startMcpServer(opts) {
             break;
           case "mesh_requeue_held_events":
             text = await meshRequeueHeldEvents(meshCtx, a);
-            break;
-          case "mesh_wait_events":
-            text = await meshWaitEvents(meshCtx, a);
             break;
           case "mesh_mission_upsert":
             text = await meshMissionUpsert(meshCtx, a);
