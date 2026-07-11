@@ -21,6 +21,7 @@ import {
     type JoinedMeshNode,
     type SessionInfoConversation,
 } from './session-info-data'
+import Dialog from '../ui/Dialog'
 
 export type { SessionInfoConversation } from './session-info-data'
 
@@ -162,41 +163,28 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
 
     useEffect(() => { void loadMeshNode() }, [loadMeshNode])
 
-    // Esc closes — same convention as other modals in web-core.
-    useEffect(() => {
-        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-        window.addEventListener('keydown', onKey)
-        return () => window.removeEventListener('keydown', onKey)
-    }, [onClose])
+    const footer = (
+        <>
+            <button
+                type="button"
+                onClick={() => void load()}
+                className="px-3 py-1 text-sm rounded border border-border-default hover:bg-surface-secondary"
+            >Refresh</button>
+            <button
+                type="button"
+                onClick={onClose}
+                className="px-3 py-1 text-sm rounded bg-accent text-white hover:opacity-90"
+            >Close</button>
+        </>
+    )
 
     return (
-        <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Session info"
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-            onClick={onClose}
-            /* SessionInfoButton's parent (the chat-activity-toggle-bar) has
-               pointer-events: none so the bar doesn't steal clicks from the
-               chat body. We portal-by-fixed-positioning visually, but the DOM
-               parent chain still inherits that, so clicks on the backdrop —
-               and on Close/✕ — would silently fall through. Re-enable here. */
-            style={{ pointerEvents: 'auto' }}
-        >
-            <div
-                className="bg-[var(--surface-primary)] text-text-primary border border-border-default rounded-lg shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col"
-                onClick={e => e.stopPropagation()}
-            >
-                <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
-                    <h2 className="text-base font-semibold">Session info</h2>
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        className="text-text-secondary hover:text-text-primary px-2 py-1 rounded"
-                        aria-label="Close"
-                    >×</button>
-                </div>
-                <div className="overflow-y-auto px-4 py-3 text-sm space-y-4">
+        /* SessionInfoButton's parent (the chat-activity-toggle-bar) has
+           pointer-events: none so the bar doesn't steal clicks from the
+           chat body. Dialog portals into <body> which is outside that
+           subtree, so pointer events work correctly. */
+        <Dialog open onClose={onClose} title="Session info" size="lg" footer={footer}>
+            <div className="text-sm space-y-4">
                     {loading && <div className="text-text-secondary">Loading…</div>}
                     {error && <div className="text-red-500">{error}</div>}
                     {data?.session && (
@@ -357,20 +345,7 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                         </div>
                     )}
                 </div>
-                <div className="border-t border-border-subtle px-4 py-2 flex justify-end gap-2">
-                    <button
-                        type="button"
-                        onClick={() => void load()}
-                        className="px-3 py-1 text-sm rounded border border-border-default hover:bg-surface-secondary"
-                    >Refresh</button>
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        className="px-3 py-1 text-sm rounded bg-accent text-white hover:opacity-90"
-                    >Close</button>
-                </div>
-            </div>
-        </div>
+        </Dialog>
     )
 }
 
@@ -385,8 +360,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
     return (
-        <div className="flex gap-3">
-            <div className="w-44 shrink-0 text-text-secondary">{k}</div>
+        <div className="flex flex-col sm:flex-row gap-1 sm:gap-3">
+            <div className="w-full sm:w-36 sm:shrink-0 text-text-secondary font-medium sm:font-normal">{k}</div>
             <div className="min-w-0 break-all">{v}</div>
         </div>
     )
