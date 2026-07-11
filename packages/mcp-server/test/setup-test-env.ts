@@ -9,8 +9,8 @@
  * (a) littered the live coordinator's ~/.adhdev/mesh-ledger with thousands of
  * test-mesh files, and (b) contended on the live daemon's mesh-runtime.db WAL lock:
  * ~30 parallel test processes plus the running daemon share one busy_timeout=5000ms
- * database, so timing-sensitive tests (mesh_wait_events' 5s wake budget) blew their
- * deadlines and writers threw SQLITE_BUSY (mesh-status-missions-compact).
+ * database, so timing-sensitive tests blew their deadlines and writers threw
+ * SQLITE_BUSY (mesh-status-missions-compact).
  *
  * mkdtemp per PROCESS (not one shared fixed dir): a unique dir per test process
  * removes cross-file DB contention entirely. Unconditional on purpose — the parent

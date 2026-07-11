@@ -515,17 +515,6 @@ export const MESH_REQUEUE_HELD_EVENTS_TOOL = {
     },
 };
 
-export const MESH_WAIT_EVENTS_TOOL = {
-    name: 'mesh_wait_events',
-    description: 'Long-poll blocking wait for coordinator events — the polling-killer for pure-MCP coordinators. A pure-MCP coordinator only drains pendingCoordinatorEvents (worker completions, approvals, stall nudges, dispatch outcomes) when it calls a mesh tool, so "waiting" degrades into busy-polling mesh_status/mesh_view_queue. Instead call this: if events are already pending it drains and returns them immediately; otherwise it blocks up to timeoutMs for events to arrive, returning as soon as any do. On timeout it returns an empty events array with timedOut:true. Scope is the FULL pendingCoordinatorEvents queue (identical to what the reconcile loop drains) — not filtered by kind. This is the force-inject symmetric for MCP coordinators: after dispatching or enqueueing work, call mesh_wait_events instead of polling; when it returns events, act on them. Read-only w.r.t. mesh state (it only drains the coordinator inbox, which is what any mesh tool call already does).',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            timeoutMs: { type: 'number', description: 'Maximum time to block waiting for events, in milliseconds. Default 30000; clamped to [1000, 60000]. Returns early the moment any event arrives.' },
-        },
-    },
-};
-
 export const MESH_PRUNE_STALE_DIRECT_TOOL = {
     name: 'mesh_prune_stale_direct',
     description: 'Prune orphaned staleDirect dispatch records — direct task dispatches whose original node/session is no longer present in the live mesh. dry_run (default) reports exactly which records would be pruned without mutating anything; pass execute=true to delete them. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved. The append-only mesh ledger audit history is left intact.',
@@ -859,7 +848,6 @@ export const ALL_MESH_TOOLS = [
     MESH_FORGET_NOTE_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
     MESH_REQUEUE_HELD_EVENTS_TOOL,
-    MESH_WAIT_EVENTS_TOOL,
     MESH_MISSION_UPSERT_TOOL,
     MESH_MISSION_LIST_TOOL,
     MESH_REVIEW_INBOX_TOOL,

@@ -3,23 +3,13 @@ import test from 'node:test';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { meshLedgerQuery, meshWaitEvents } from '../src/tools/mesh-tools.js';
-import { appendLedgerEntry, getLedgerDir, queuePendingMeshCoordinatorEvent, loadConfig } from '@adhdev/daemon-core';
+import { meshLedgerQuery } from '../src/tools/mesh-tools.js';
+import { appendLedgerEntry, getLedgerDir, loadConfig } from '@adhdev/daemon-core';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
 import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
 
-// The stdio MCP coordinator runs ON its own daemon/machine, so its localDaemonId is
-// this machine's id — the same id an ownerless (self-fallback) terminal broadcast is
-// stamped under. Use the real machineId so the machine-level self-fallback delivery
-// (deliver an ownerless terminal event to a coordinator on the SAME machine, while a
-// foreign-machine coordinator is still routed away — MAGI-REPLICA leak guard) resolves
-// exactly as it does in production. A hard-coded foreign string here would model a
-// coordinator on a different machine and (correctly) never receive refine:* events.
 const SELF_MACHINE_ID = loadConfig().machineId;
 
-// A plain-object transport (NOT an IpcTransport) makes drainCoordinatorPendingEvents
-// take the in-process local drain path (drainPendingMeshCoordinatorEvents), so these
-// tests exercise the real drain the reconcile loop uses without a live daemon.
 function makeCtx(meshId: string) {
   return {
     mesh: { id: meshId, nodes: [] },
@@ -30,8 +20,6 @@ function makeCtx(meshId: string) {
 }
 
 function cleanup(meshId: string) {
-  // Clear SQLite-primary state AND the JSONL export artifact — otherwise the
-  // JSONL is re-imported on the next process/run and doubles the ledger.
   __clearMeshLedgerForTests(meshId);
   __clearMeshPendingEventsForTests(meshId);
   const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -84,80 +72,6 @@ test('mesh_ledger_query clamps tail to 500 and echoes the resolved query', async
     // default tail when unspecified is 50.
     const res2 = JSON.parse(await meshLedgerQuery(makeCtx(meshId), {}));
     assert.equal(res2.query.tail, 50);
-  } finally {
-    cleanup(meshId);
-  }
-});
-
-test('mesh_wait_events returns immediately when events are already pending', async () => {
-  const meshId = 'mesh_wait_events_immediate';
-  cleanup(meshId);
-  try {
-    queuePendingMeshCoordinatorEvent({
-      event: 'session:completed',
-      meshId,
-      nodeLabel: 'node-a',
-      nodeId: 'node-a',
-      metadataEvent: { source: 'test', event: 'session:completed' },
-      queuedAt: Date.now(),
-    });
-    const started = Date.now();
-    const res = JSON.parse(await meshWaitEvents(makeCtx(meshId), { timeoutMs: 30000 }));
-    const elapsed = Date.now() - started;
-    assert.equal(res.timedOut, false);
-    assert.equal(res.events.length, 1);
-    assert.equal(res.events[0].event, 'session:completed');
-    // Also surfaced under the canonical pendingCoordinatorEvents key.
-    assert.equal(res.pendingCoordinatorEvents.length, 1);
-    // Immediate: must not have waited anywhere near the timeout.
-    assert.equal(elapsed < 1000, true);
-  } finally {
-    cleanup(meshId);
-  }
-});
-
-test('mesh_wait_events times out with an empty array when no events arrive', async () => {
-  const meshId = 'mesh_wait_events_timeout';
-  cleanup(meshId);
-  try {
-    const started = Date.now();
-    // timeoutMs clamps up to the 1000ms floor.
-    const res = JSON.parse(await meshWaitEvents(makeCtx(meshId), { timeoutMs: 10 }));
-    const elapsed = Date.now() - started;
-    assert.equal(res.timedOut, true);
-    assert.deepEqual(res.events, []);
-    assert.equal(res.pendingCoordinatorEvents, undefined);
-    assert.equal(res.timeoutMs, 1000);
-    // Honored the clamped floor rather than returning after 10ms.
-    assert.equal(elapsed >= 900, true);
-  } finally {
-    cleanup(meshId);
-  }
-});
-
-test('mesh_wait_events wakes up when an event arrives mid-wait', async () => {
-  const meshId = 'mesh_wait_events_wake';
-  cleanup(meshId);
-  try {
-    // Enqueue an event ~1.2s into a 5s wait; the poll loop (1s cadence) should
-    // pick it up and return well before the deadline.
-    setTimeout(() => {
-      queuePendingMeshCoordinatorEvent({
-        event: 'refine:completed',
-        meshId,
-        nodeLabel: 'node-b',
-        nodeId: 'node-b',
-        metadataEvent: { source: 'test', event: 'refine:completed' },
-        queuedAt: Date.now(),
-      });
-    }, 1200);
-    const started = Date.now();
-    const res = JSON.parse(await meshWaitEvents(makeCtx(meshId), { timeoutMs: 5000 }));
-    const elapsed = Date.now() - started;
-    assert.equal(res.timedOut, false);
-    assert.equal(res.events.length, 1);
-    assert.equal(res.events[0].event, 'refine:completed');
-    assert.equal(elapsed < 5000, true);
   } finally {
     cleanup(meshId);
   }

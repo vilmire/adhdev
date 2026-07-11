@@ -89,8 +89,8 @@ export function buildRefineJobHandle(self: DaemonCommandRouter, args: {
  * The full `CommandRouterResult` (with `validationSummary.commandsRun[]` carrying
  * per-command stdout/stderr, `rejectedCommands`, `suggestions`, `suggestedConfig`,
  * the full `patchEquivalence`, and `submoduleReachability.entries[]`/`.unreachable[]`)
- * routinely exceeds 70KB and overflows the coordinator token limit when it rides on a
- * `mesh_wait_events` payload. The full detail is still persisted verbatim to the ledger
+ * routinely exceeds 70KB and overflows the coordinator token limit when surfaced as a
+ * coordinator event payload. The full detail is still persisted verbatim to the ledger
  * (`appendRefineJobLedger`) and `terminalRefineJobs`, so slimming only the EVENT loses
  * nothing — the coordinator can pull the full record on demand via
  * `evidence.ledgerCommand` / `taskHistoryKind`.

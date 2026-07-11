@@ -43,7 +43,7 @@ import {
   meshCloneNode, meshRemoveNode, meshRefineNode,
   meshRefineConfig, meshInit, meshReinit, meshRefinePlan, meshRefineBatch,
   meshChangeImpactConfig,
-  meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshLedgerQuery, meshWaitEvents, meshRecordNote, meshForgetNote, meshReconcileLedger, meshRequeueHeldEvents, meshMissionUpsert,
+  meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshLedgerQuery, meshRecordNote, meshForgetNote, meshReconcileLedger, meshRequeueHeldEvents, meshMissionUpsert,
   meshMissionList, meshReviewInbox,
   meshMagiReview, meshMagiCollect,
   meshMagiKindPanelSet, meshMagiKindPanelList, meshWriteMeshJsonConfig,
@@ -249,7 +249,6 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_forget_note': text = await meshForgetNote(meshCtx, a as any); break;
           case 'mesh_reconcile_ledger': text = await meshReconcileLedger(meshCtx, a as any); break;
           case 'mesh_requeue_held_events': text = await meshRequeueHeldEvents(meshCtx, a as any); break;
-          case 'mesh_wait_events': text = await meshWaitEvents(meshCtx, a as any); break;
           case 'mesh_mission_upsert': text = await meshMissionUpsert(meshCtx, a as any); break;
           case 'mesh_mission_list': text = await meshMissionList(meshCtx, a as any); break;
           case 'mesh_review_inbox': text = await meshReviewInbox(meshCtx, a as any); break;

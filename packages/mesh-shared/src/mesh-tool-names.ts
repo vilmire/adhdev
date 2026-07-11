@@ -54,7 +54,6 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_forget_note',
     'mesh_reconcile_ledger',
     'mesh_requeue_held_events',
-    'mesh_wait_events',
     'mesh_mission_upsert',
     'mesh_mission_list',
     'mesh_review_inbox',

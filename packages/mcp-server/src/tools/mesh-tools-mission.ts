@@ -81,55 +81,6 @@ export async function meshTaskHistory(
     }, null, 2);
 }
 
-/** Clamp bounds for the mesh_wait_events long-poll window. */
-const WAIT_EVENTS_DEFAULT_TIMEOUT_MS = 30_000;
-const WAIT_EVENTS_MIN_TIMEOUT_MS = 1_000;
-const WAIT_EVENTS_MAX_TIMEOUT_MS = 60_000;
-/**
- * Poll cadence for the wait loop. There is no in-process signal when a pending
- * coordinator event is persisted (the whole path is SQLite/JSONL polled by the
- * reconcile loop), so this tool polls the same drain the reconcile loop uses.
- * 1s keeps it well under the 4s reconcile interval — responsive without turning
- * the IPC drain (which also pulls remote nodes) into a hot spin.
- */
-const WAIT_EVENTS_POLL_INTERVAL_MS = 1_000;
-
-export async function meshWaitEvents(
-    ctx: MeshContext,
-    args: { timeoutMs?: number },
-): Promise<string> {
-    const { mesh } = ctx;
-    const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
-    const requested = typeof args.timeoutMs === 'number' && args.timeoutMs > 0
-        ? Math.floor(args.timeoutMs)
-        : WAIT_EVENTS_DEFAULT_TIMEOUT_MS;
-    const timeoutMs = Math.min(Math.max(requested, WAIT_EVENTS_MIN_TIMEOUT_MS), WAIT_EVENTS_MAX_TIMEOUT_MS);
-    const startedAt = Date.now();
-    const deadline = startedAt + timeoutMs;
-
-    // Long-poll: drain immediately; if anything is already pending, return it now.
-    // Otherwise sleep-poll the SAME drain path the reconcile loop uses until an
-    // event arrives or the deadline passes. Reusing drainCoordinatorPendingEvents
-    // guarantees identical drain/dedup/routing semantics — no divergent second
-    // drain that could lose or double-deliver events.
-    let events = await drainCoordinatorPendingEvents(ctx);
-    while (events.length === 0 && Date.now() < deadline) {
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) break;
-        await sleep(Math.min(WAIT_EVENTS_POLL_INTERVAL_MS, remaining));
-        events = await drainCoordinatorPendingEvents(ctx);
-    }
-    const waitedMs = Date.now() - startedAt;
-    const timedOut = events.length === 0;
-    return JSON.stringify({
-        meshId: mesh.id,
-        timedOut,
-        waitedMs,
-        timeoutMs,
-        ...(events.length > 0 ? { events, pendingCoordinatorEvents: events } : { events: [] }),
-    }, null, 2);
-}
-
 export async function meshLedgerQuery(
     ctx: MeshContext,
     args: { kind?: string; since?: string; node?: string; tail?: number },
