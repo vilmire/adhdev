@@ -42,7 +42,8 @@
 
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { loadConfig } from '../config/config.js';
-import { listMeshes } from '../config/mesh-config.js';
+import { listMeshes, getMesh } from '../config/mesh-config.js';
+import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
 import { LOG, getLogLevel } from '../logging/logger.js';
 import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, buildPendingEventFingerprint, queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
@@ -1407,7 +1408,19 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         // O(1) guard: skip the drain entirely when the queue is empty.
         if (store) {
             try {
-                if (store.pendingEventCount(meshId) === 0) continue;
+                if (store.pendingEventCount(meshId) === 0) {
+                    // An idle coordinator is present (the no-idle short-circuit already
+                    // `continue`d above) and the pending queue is empty → this mesh is at a
+                    // fully-idle edge with nothing to inject. Nudge (once/debounced) if it
+                    // still has active missions but no work in flight, so a lingering mission
+                    // is not left drifting in 'active'. Best-effort; never blocks the loop.
+                    maybeInjectIdleActiveMissionReminder(
+                        meshId,
+                        targetCoordinators[0].instance,
+                        getMesh(meshId)?.policy,
+                    );
+                    continue;
+                }
             } catch { /* fall through to drain */ }
         }
 

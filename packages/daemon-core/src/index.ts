@@ -280,6 +280,7 @@ export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshTaskPriority
 export { buildCompactStaleDirectWorkSummary, buildMeshActiveWork, buildMeshActiveWorkSummary, collectPendingApprovals, classifyStaleDirectForPrune, pruneStaleDirectDispatches, PRUNABLE_ORPHAN_STALE_REASONS } from './mesh/mesh-active-work.js';
 export type { StaleDirectPruneClassification, StaleDirectPruneResult, PruneStaleDirectDispatchesOptions } from './mesh/mesh-active-work.js';
 export type { MeshActiveWorkRecord, MeshActiveWorkStatus, MeshActiveWorkSummary, MeshActiveWorkSource, MeshStaleDirectWorkSummary, MeshPendingApproval } from './mesh/mesh-active-work.js';
+export { maybeInjectIdleActiveMissionReminder, shouldFireIdleReminder, buildIdleReminderMessage, missionSetHash, IDLE_REMINDER_DEBOUNCE_MS } from './mesh/mesh-idle-reminder.js';
 export { buildMeshAsyncRefineJobs, summarizeMeshAsyncRefineJobs, STALE_TERMINAL_REFINE_WINDOW_MS, RECENT_TERMINAL_REFINE_CAP } from './mesh/mesh-refine-status.js';
 export type { MeshAsyncRefineJobStatus, MeshAsyncRefineJobSummary, MeshAsyncRefineJobsSummary } from './mesh/mesh-refine-status.js';
 export { buildMeshMagiActivity, summarizeMeshMagiActivity, getMeshMagiActivityByGroup, STALE_MAGI_WINDOW_MS, RECENT_MAGI_CAP, MAGI_NEEDS_VERIFICATION_PREVIEW_CAP } from './mesh/mesh-magi-status.js';

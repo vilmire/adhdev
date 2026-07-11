@@ -359,6 +359,16 @@ export interface RepoMeshPolicy {
      * Defaults to 1 (allow one retry). Set to 0 to disable auto-recovery advice.
      */
     maxTaskRetries?: number;
+    /**
+     * When true (default), the daemon injects a one-shot "[System] Coordinator idle
+     * with N active mission(s)" reminder into an idle coordinator session whenever the
+     * mesh is fully idle (no queue/direct work in flight, no pending coordinator events)
+     * yet still has `active` missions. This nudges the coordinator to close or continue
+     * missions that would otherwise drift in `active` while their real outcome is decided.
+     * Idempotent/debounced per mission-set (see maybeInjectIdleActiveMissionReminder).
+     * Set to false to suppress the reminder entirely.
+     */
+    idleActiveMissionReminder?: boolean;
 }
 
 export interface RepoMeshRelatedRepo {
@@ -478,6 +488,9 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     magiSessionCleanup: 'stop_and_delete',
     autoFastForward: { enabled: true },
     maxTaskRetries: 1,
+    // Nudge the coordinator when the mesh is fully idle but active missions linger,
+    // so a mission is never left drifting in `active` after its work is really done.
+    idleActiveMissionReminder: true,
 };
 
 // ─── Policy normalization (single source of truth) ──────────────────────────

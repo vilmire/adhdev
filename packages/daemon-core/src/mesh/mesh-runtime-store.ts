@@ -116,6 +116,13 @@ export class MeshRuntimeStore {
     private readonly db: DatabaseHandle;
     private readonly dbPath: string;
     private readonly migratedMeshIds = new Set<string>();
+    // Idle-active-mission-reminder debounce (mesh-idle-reminder.ts). In-memory only:
+    // this is a spam guard for a best-effort coordinator nudge, so a daemon restart
+    // resetting it (at most one extra reminder) is harmless — no SQLite persistence
+    // is warranted. Keyed by meshId; the value records when the last reminder fired
+    // and the hash of the active-mission id set it named, so a changed mission set
+    // re-fires before the time window elapses.
+    private readonly idleReminderState = new Map<string, { emittedAt: number; missionSetHash: string }>();
     private fingerprintSweepCounter = 0;
     private walWriteCounter = 0;
     // Independent cadence for the tool-call-log sweep. Must NOT share walWriteCounter:
@@ -2162,6 +2169,25 @@ export class MeshRuntimeStore {
         return this.db.prepare(
             'UPDATE mesh_missions SET close_candidate_emitted_at = ? WHERE mesh_id = ? AND id = ?'
         ).run(emittedAt, meshId, missionId).changes;
+    }
+
+    /**
+     * Read the last idle-active-mission-reminder debounce marker for a mesh, or null if
+     * none has fired this process. In-memory only (see idleReminderState) — best-effort
+     * spam guard for a coordinator nudge, intentionally not SQLite-backed.
+     */
+    getIdleReminderState(meshId: string): { emittedAt: number; missionSetHash: string } | null {
+        return this.idleReminderState.get(meshId) ?? null;
+    }
+
+    /** Record that an idle-active-mission reminder just fired for a mesh (debounce marker). */
+    setIdleReminderState(meshId: string, state: { emittedAt: number; missionSetHash: string }): void {
+        this.idleReminderState.set(meshId, state);
+    }
+
+    /** Clear the idle-reminder debounce marker for a mesh — mesh deletion / test cleanup. */
+    clearIdleReminderState(meshId: string): void {
+        this.idleReminderState.delete(meshId);
     }
 
     /** Remove all missions for a mesh — mesh deletion / test cleanup. */

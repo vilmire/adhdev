@@ -7,6 +7,7 @@ import type { SessionRecoveryContext } from './mesh-ledger.js';
 import { updateSessionTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue } from './mesh-work-queue.js';
 import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore, pruneMeshRuntimeRetention } from './mesh-runtime-store.js';
+import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, prunePendingMeshCoordinatorEventsRetention, readV2EnvelopeFromWire, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
@@ -1948,6 +1949,17 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
                                             ...(forcePending ? { force: true } : {}),
                                         });
                                     }
+                                } else {
+                                    // Nothing to flush → this idle edge left the coordinator with an
+                                    // empty inbox. If the mesh is fully idle but still has active
+                                    // missions, nudge (once/debounced) so a lingering mission is not
+                                    // left drifting in 'active'. Suppressed when events WERE injected,
+                                    // so we never pile a reminder on top of real completion traffic.
+                                    maybeInjectIdleActiveMissionReminder(
+                                        coordinatorMeshId,
+                                        flushSource,
+                                        getMesh(coordinatorMeshId)?.policy,
+                                    );
                                 }
                             } catch (e: any) {
                                 LOG.warn('MeshEvents', `Failed to auto-flush pending coordinator events: ${e?.message || e}`);
