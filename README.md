@@ -29,7 +29,7 @@ These are the integrations currently working or explicitly tested enough to call
 - IDE extension integrations: Codex, Claude Code
 - CLI agents: Hermes Agent, Codex CLI, Claude Code CLI
 
-Other providers and adapters exist in the shipped inventory, but many are still incomplete, experimental, or not yet verified enough to present as fully supported. For the current support policy and caveats, see:
+Other providers and adapters ship in the inventory as community-supported. They work but have not all been verified end-to-end, so support levels vary. For the current support policy and caveats, see:
 
 - [Supported Providers](https://docs.adhf.dev/reference/supported-providers)
 - [Supported IDEs](https://docs.adhf.dev/reference/supported-ides)
