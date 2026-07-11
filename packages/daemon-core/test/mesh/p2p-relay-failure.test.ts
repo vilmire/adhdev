@@ -22,8 +22,8 @@ describe('P2P relay failure classification', () => {
       expect(classified.recoverable).toBe(true);
       expect(classified.retryRecommended).toBe(true);
       expect(classified.transport).toBe('p2p');
-      expect(classified.nextAction).toContain('P2P');
-      expect(classified.noFallbackReason).toContain('WS/REST');
+      expect(classified.nextAction).toContain('connection');
+      expect(classified.noFallbackReason).toContain('no cloud/WS relay fallback');
       expect(isP2pRelayTransportFailure(error)).toBe(true);
     }
   });
@@ -56,8 +56,8 @@ describe('P2P relay failure classification', () => {
     expect(payload.code).toBe('p2p_timeout');
     expect(payload.transport).toBe('p2p');
     expect(payload.retryRecommended).toBe(true);
-    expect(payload.nextAction).toContain('bounded retry');
-    expect(payload.noFallbackReason).toContain('P2P-only');
+    expect(payload.nextAction).toContain('recoverable');
+    expect(payload.noFallbackReason).toContain('no cloud/WS relay fallback');
     expect(payload.targetDaemonId).toBe('daemon-remote');
     expect(payload.command).toBe('agent_command');
   });

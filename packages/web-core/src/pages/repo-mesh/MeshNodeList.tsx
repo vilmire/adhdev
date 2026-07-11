@@ -45,7 +45,7 @@ function readNodeProviderPriority(node: MeshNode): string[] {
 
 function describeNodeProviderPriority(node: MeshNode): { configured: boolean; label: string; launchBlockedMessage?: string } {
     const pp = readNodeProviderPriority(node)
-    if (!pp.length) return { configured: false, label: 'not configured', launchBlockedMessage: 'launch not ready unless an explicit provider is selected' }
+    if (!pp.length) return { configured: false, label: 'not configured', launchBlockedMessage: 'No provider detected on this node — task launch is blocked until a provider is selected or installed. (Empty capability slots alone do not block launch; this means no provider was found.)' }
     return { configured: true, label: pp.join(' → ') }
 }
 

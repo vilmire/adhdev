@@ -95,7 +95,7 @@ export default function NodeTagEditor({ node, saving, onSave }: Props) {
             </div>
             {draftError && <div className="mt-1 text-[11px] text-amber-400">{draftError}</div>}
             {custom.length === 0 && autoTags.length === 0 && (
-                <div className="mt-1 text-[11px] text-text-muted">No tags yet.</div>
+                <div className="mt-1 text-[11px] text-text-muted">No routing tags — tasks can run here without matching any specific capability. Tags are optional.</div>
             )}
         </div>
     )

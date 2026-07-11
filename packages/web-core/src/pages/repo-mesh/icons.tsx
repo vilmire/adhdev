@@ -38,11 +38,11 @@ export function IconPlus({ size = 14 }: { size?: number }) {
 }
 
 export function NodeHealthBadge({ status }: { status: string }) {
-    const config: Record<string, { color: string; label: string }> = {
+    const config: Record<string, { color: string; label: string; title?: string }> = {
         online: { color: '#22c55e', label: 'Online' },
-        dirty: { color: '#f59e0b', label: 'Dirty' },
+        dirty: { color: '#f59e0b', label: 'Dirty', title: 'Workspace has uncommitted changes' },
         offline: { color: '#6b7280', label: 'Offline' },
-        degraded: { color: '#ef4444', label: 'Degraded' },
+        degraded: { color: '#ef4444', label: 'Degraded', title: 'P2P connection to this node is down or timed out — often transient. Wait and retry, or re-establish the node\'s connection.' },
         enabled: { color: '#22c55e', label: 'Enabled' },
         pending: { color: '#a855f7', label: 'Pending' },
         assigned: { color: '#3b82f6', label: 'Assigned' },
@@ -55,6 +55,7 @@ export function NodeHealthBadge({ status }: { status: string }) {
         <span
             className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md"
             style={{ background: c.color + '15', color: c.color, border: `1px solid ${c.color}25` }}
+            title={c.title}
         >
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: c.color }} />
             {c.label}

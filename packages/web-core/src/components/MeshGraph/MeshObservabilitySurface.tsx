@@ -51,6 +51,14 @@ export {
     summarizeSelectedHead,
 } from './MeshObservabilitySurface/meshSurfaceHelpers'
 
+const BRANCH_CONVERGENCE_LABEL: Record<string, string> = {
+    merged_to_main: 'Merged to main',
+    pushed_feature_branch_needs_merge: 'Needs merge',
+    blocked_review: 'Blocked — needs review',
+    cleanup_candidate: 'Ready to clean up',
+    not_mergeable: 'Not mergeable',
+}
+
 type DetailSelection =
     | { kind: 'node'; nodeId: string }
     | { kind: 'edge'; edgeId: string }
@@ -775,10 +783,15 @@ export default function MeshObservabilitySurface({
                                     <div className="mt-1">{selectedGraphNode.snapshotWarnings[0]}</div>
                                 </div>
                             )}
-                            {selectedGraphNode.branchConvergence?.nextStep && (
+                            {selectedGraphNode.branchConvergence && (selectedGraphNode.branchConvergence.reason || selectedGraphNode.branchConvergence.nextStep) && (
                                 <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-sky-400/20 bg-sky-500/10 p-3 text-xs text-sky-100' : 'mt-3 rounded-xl border border-sky-300 bg-sky-50 p-3 text-xs text-sky-800'}>
-                                    <div className="font-medium">Follow-up</div>
-                                    <div className="mt-1">{selectedGraphNode.branchConvergence.nextStep}</div>
+                                    <div className="font-medium">{BRANCH_CONVERGENCE_LABEL[selectedGraphNode.branchConvergence.status] ?? selectedGraphNode.branchConvergence.status}</div>
+                                    {selectedGraphNode.branchConvergence.reason && (
+                                        <div className="mt-1">{selectedGraphNode.branchConvergence.reason}</div>
+                                    )}
+                                    {selectedGraphNode.branchConvergence.nextStep && (
+                                        <div className={`${selectedGraphNode.branchConvergence.reason ? 'mt-1.5 pt-1.5 border-t border-sky-400/20' : 'mt-1'} font-medium`}>Next: <span className="font-normal">{selectedGraphNode.branchConvergence.nextStep}</span></div>
+                                    )}
                                 </div>
                             )}
                             {healPreview && (

@@ -29,8 +29,8 @@ export interface P2pRelayFailurePayload extends P2pRelayFailureClassification {
   targetDaemonId?: string;
 }
 
-const NO_FALLBACK_REASON = 'Repo Mesh command/data-plane is P2P-only; WS/REST command fallback is intentionally disabled to preserve the transport boundary.';
-const P2P_NEXT_ACTION = 'Check daemon/P2P health, wait briefly for connection establishment, then do one bounded retry or requeue the mesh task after clearing stale target session metadata.';
+const NO_FALLBACK_REASON = 'This mesh operation needs a live peer-to-peer connection to the node, which is not open right now. This is often transient — the peer may be connecting, slow via TURN relay, or briefly offline. Wait a moment and retry, or re-establish the node\'s connection. Mesh commands use P2P only by design — there is no cloud/WS relay fallback.';
+const P2P_NEXT_ACTION = 'The peer connection is recoverable. Wait a moment for the connection to establish (especially over TURN relay), then retry. If the node remains unreachable, check that the target daemon is running and online, then re-establish its connection.';
 const NON_P2P_NEXT_ACTION = 'Inspect the provider/command error and fix the underlying logic or configuration before retrying.';
 
 function messageFromError(error: unknown): string {

@@ -128,8 +128,7 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
         <div className="flex flex-col gap-2" onClick={e => e.stopPropagation()}>
             {drafts.length === 0 && (
                 <div className="text-[12px] text-text-muted">
-                    No capability slots — this node routes with its legacy provider order.
-                    Add a slot to match tasks by difficulty/capability to a specific tool.
+                    No capability slots set — that's fine. This node still runs tasks using its provider priority order (below). Slots are optional fine-tuning: add one to route specific task difficulties or capabilities to a specific tool.
                 </div>
             )}
             {drafts.map((d, i) => (
