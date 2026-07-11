@@ -1384,6 +1384,7 @@ describe('runMeshReconcileTick', () => {
             getInstance: () => undefined,
           },
           commandHandler: { handle: readChat },
+          router: { execute: (cmd: string) => readChat(cmd) },
         } as any
 
         await runMeshReconcileTick(components)
@@ -1522,6 +1523,7 @@ describe('runMeshReconcileTick', () => {
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: { handle: readChat },
+          router: { execute: (cmd: string) => readChat(cmd) },
         } as any
 
         await runMeshReconcileTick(components)
@@ -1572,6 +1574,7 @@ describe('runMeshReconcileTick', () => {
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: { handle: readChat },
+          router: { execute: (cmd: string) => readChat(cmd) },
         } as any
 
         await runMeshReconcileTick(components)
@@ -1608,23 +1611,23 @@ describe('runMeshReconcileTick', () => {
           { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
         ])
 
+        const handle = vi.fn(async (cmd: string) => {
+          // PHASE 5's live-session probe: a generating session is present in the live
+          // status — so PHASE 5 sees it as live (not an orphan) and never prunes it.
+          if (cmd === 'get_status_metadata') {
+            return { success: true, status: { sessions: [{ id: sessionId, status: 'generating' }] } }
+          }
+          // PHASE 4's read_chat: mid-turn, must not be completed.
+          return {
+            success: true,
+            status: 'generating',
+            messages: [{ role: 'assistant', content: 'still working…', timestamp: 1_700_000_000_000 - 5_000 }],
+          }
+        })
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
-          commandHandler: {
-            handle: vi.fn(async (cmd: string) => {
-              // PHASE 5's live-session probe: a generating session is present in the live
-              // status — so PHASE 5 sees it as live (not an orphan) and never prunes it.
-              if (cmd === 'get_status_metadata') {
-                return { success: true, status: { sessions: [{ id: sessionId, status: 'generating' }] } }
-              }
-              // PHASE 4's read_chat: mid-turn, must not be completed.
-              return {
-                success: true,
-                status: 'generating',
-                messages: [{ role: 'assistant', content: 'still working…', timestamp: 1_700_000_000_000 - 5_000 }],
-              }
-            }),
-          },
+          commandHandler: { handle },
+          router: { execute: (cmd: string) => handle(cmd) },
         } as any
 
         await runMeshReconcileTick(components)
@@ -1696,6 +1699,7 @@ describe('runMeshReconcileTick', () => {
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: { handle: readChat },
+          router: { execute: (cmd: string) => readChat(cmd) },
         } as any
 
         // Many idle ticks — a finite tick/settle guard would eventually FIRE here (the R4e bug);
@@ -1731,6 +1735,7 @@ describe('runMeshReconcileTick', () => {
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: { handle: readChat },
+          router: { execute: (cmd: string) => readChat(cmd) },
         } as any
 
         // Several idle ticks while the worker is "still generating" (slow turn): NO synth (held).
@@ -1793,6 +1798,7 @@ describe('runMeshReconcileTick', () => {
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: { handle: readChat },
+          router: { execute: (cmd: string) => readChat(cmd) },
         } as any
 
         // Deadline crossed (= 0) on the very first idle read → the notification-loss net synthesizes.
@@ -1841,6 +1847,7 @@ describe('runMeshReconcileTick', () => {
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: { handle: readChat },
+          router: { execute: (cmd: string) => readChat(cmd) },
         } as any
 
         // Tick 1 (live idle, held under indefinite hold) then 4 failing reads (death streak).
@@ -1878,6 +1885,7 @@ describe('runMeshReconcileTick', () => {
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: { handle: readChat },
+          router: { execute: (cmd: string) => readChat(cmd) },
         } as any
         for (let i = 0; i < 3; i++) await runMeshReconcileTick(components)
         expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
@@ -1923,6 +1931,7 @@ describe('runMeshReconcileTick', () => {
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: { handle: readChat },
+          router: { execute: (cmd: string) => readChat(cmd) },
         } as any
 
         await runMeshReconcileTick(components)
@@ -1965,6 +1974,7 @@ describe('runMeshReconcileTick', () => {
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: { handle: readChat },
+          router: { execute: (cmd: string) => readChat(cmd) },
         } as any
 
         // One tick: the streak anchors but grace (40s) is not yet met → no synth.
@@ -2004,6 +2014,7 @@ describe('runMeshReconcileTick', () => {
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: { handle: readChat },
+          router: { execute: (cmd: string) => readChat(cmd) },
         } as any
 
         await runMeshReconcileTick(components)
@@ -2039,6 +2050,7 @@ describe('runMeshReconcileTick', () => {
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: { handle: readChat },
+          router: { execute: (cmd: string) => readChat(cmd) },
         } as any
 
         // Tick 1: fast-track promotes the synth (grace=0).
@@ -2084,6 +2096,7 @@ describe('runMeshReconcileTick', () => {
         const components = {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: { handle: readChat },
+          router: { execute: (cmd: string) => readChat(cmd) },
         } as any
 
         for (let i = 0; i < 3; i++) await runMeshReconcileTick(components)
@@ -2130,7 +2143,7 @@ describe('runMeshReconcileTick', () => {
               messages: [{ role: 'assistant', content: 'All done — built and tests pass.', timestamp: 1_700_000_000_000 - 5_000 }],
             }
           })
-          const components = { instanceManager: { getByCategory: () => [], getInstance: () => undefined }, commandHandler: { handle: readChat } } as any
+          const components = { instanceManager: { getByCategory: () => [], getInstance: () => undefined }, commandHandler: { handle: readChat }, router: { execute: (cmd: string) => readChat(cmd) } } as any
 
           await runMeshReconcileTick(components)
           expect(getMeshV2BackstopCounters().phase4SynthesisFired).toBe(1)
@@ -2163,7 +2176,7 @@ describe('runMeshReconcileTick', () => {
               messages: [{ role: 'assistant', content: 'All done — built and tests pass.', timestamp: 1_700_000_000_000 - 5_000 }],
             }
           })
-          const components = { instanceManager: { getByCategory: () => [], getInstance: () => undefined }, commandHandler: { handle: readChat } } as any
+          const components = { instanceManager: { getByCategory: () => [], getInstance: () => undefined }, commandHandler: { handle: readChat }, router: { execute: (cmd: string) => readChat(cmd) } } as any
 
           await runMeshReconcileTick(components)
           expect(getMeshV2BackstopCounters().ackedHoldFastTrackFired).toBe(1)
@@ -2193,7 +2206,7 @@ describe('runMeshReconcileTick', () => {
               messages: [{ role: 'assistant', content: 'All done — built and tests pass.', timestamp: 1_700_000_000_000 - 5_000 }],
             }
           })
-          const components = { instanceManager: { getByCategory: () => [], getInstance: () => undefined }, commandHandler: { handle: readChat } } as any
+          const components = { instanceManager: { getByCategory: () => [], getInstance: () => undefined }, commandHandler: { handle: readChat }, router: { execute: (cmd: string) => readChat(cmd) } } as any
 
           await runMeshReconcileTick(components)
           expect(getMeshV2BackstopCounters().ackedHoldDeathDeadlineFired).toBe(1)
@@ -2224,7 +2237,7 @@ describe('runMeshReconcileTick', () => {
               messages: [{ role: 'assistant', content: 'intermediate text', timestamp: 1_700_000_000_000 - 5_000 }],
             }
           })
-          const components = { instanceManager: { getByCategory: () => [], getInstance: () => undefined }, commandHandler: { handle: readChat } } as any
+          const components = { instanceManager: { getByCategory: () => [], getInstance: () => undefined }, commandHandler: { handle: readChat }, router: { execute: (cmd: string) => readChat(cmd) } } as any
 
           await runMeshReconcileTick(components)
           expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed')).toBe(false)
@@ -2273,9 +2286,11 @@ describe('runMeshReconcileTick', () => {
           meshConfigMocks.listMeshes.mockReturnValue([
             { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
           ])
+          const handle = idleWithFinalAssistant(sessionId, 'claude-history-t2write')
           const components = {
             instanceManager: { getByCategory: () => [], getInstance: () => undefined },
-            commandHandler: { handle: idleWithFinalAssistant(sessionId, 'claude-history-t2write') },
+            commandHandler: { handle },
+            router: { execute: (cmd: string) => handle(cmd) },
           } as any
 
           await runMeshReconcileTick(components)
@@ -2303,9 +2318,11 @@ describe('runMeshReconcileTick', () => {
           meshConfigMocks.listMeshes.mockReturnValue([
             { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
           ])
+          const handle = idleWithFinalAssistant(sessionId, 'claude-history-t2rehy')
           const components = {
             instanceManager: { getByCategory: () => [], getInstance: () => undefined },
-            commandHandler: { handle: idleWithFinalAssistant(sessionId, 'claude-history-t2rehy') },
+            commandHandler: { handle },
+            router: { execute: (cmd: string) => handle(cmd) },
           } as any
 
           // Tick with the DEFAULT grace (40s): the idle-with-final-assistant streak anchors
@@ -2347,9 +2364,11 @@ describe('runMeshReconcileTick', () => {
           meshConfigMocks.listMeshes.mockReturnValue([
             { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
           ])
+          const handle = idleWithFinalAssistant(sessionId, 'claude-history-t2promote')
           const components = {
             instanceManager: { getByCategory: () => [], getInstance: () => undefined },
-            commandHandler: { handle: idleWithFinalAssistant(sessionId, 'claude-history-t2promote') },
+            commandHandler: { handle },
+            router: { execute: (cmd: string) => handle(cmd) },
           } as any
 
           // Pre-restart tick with a real (40s) grace anchors the streak but does not promote.
@@ -2385,9 +2404,11 @@ describe('runMeshReconcileTick', () => {
           meshConfigMocks.listMeshes.mockReturnValue([
             { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/local' }] },
           ])
+          const handle = idleWithFinalAssistant(sessionId, 'claude-history-t2prune')
           const components = {
             instanceManager: { getByCategory: () => [], getInstance: () => undefined },
-            commandHandler: { handle: idleWithFinalAssistant(sessionId, 'claude-history-t2prune') },
+            commandHandler: { handle },
+            router: { execute: (cmd: string) => handle(cmd) },
           } as any
 
           // Establish the persisted hold row.
@@ -2428,10 +2449,17 @@ describe('runMeshReconcileTick', () => {
         if (cmd === 'get_status_metadata') return { success: true, status: { sessions: statusSessions } }
         return { success: true }
       })
+      // Local get_status_metadata is a LOW-family registry command, so the
+      // reconcile status probe dispatches it through router.execute (not the
+      // bare commandHandler.handle, which has no such case and would return
+      // "Unknown command"). Mirror that here: router delegates to the same
+      // handle fn so the probe resolves.
+      const execute = vi.fn(async (cmd: string) => handle(cmd))
       return {
         components: {
           instanceManager: { getByCategory: () => [], getInstance: () => undefined },
           commandHandler: { handle },
+          router: { execute },
         } as any,
         handle,
       }

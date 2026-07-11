@@ -198,7 +198,14 @@ export async function collectLiveNodesWithSessions(
         let statusResult: unknown;
         try {
             if (isLocalNode) {
-                statusResult = await components.commandHandler.handle('get_status_metadata', {});
+                // get_status_metadata is a LOW-family registry command, not a
+                // DaemonCommandHandler switch case — so it must be dispatched
+                // through the router (which consults lowFamilyRegistry before
+                // delegating to commandHandler). Calling commandHandler.handle()
+                // directly falls through to `Unknown command: get_status_metadata`
+                // and leaves the local node's live-session list empty in the mesh
+                // graph. See router.execute() / low-family/index.ts.
+                statusResult = await components.router.execute('get_status_metadata', {}, 'mesh');
             } else if (dispatchMeshCommand) {
                 statusResult = await dispatchMeshCommand(nodeDaemonId, 'get_status_metadata', {});
             } else {

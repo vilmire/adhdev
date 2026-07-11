@@ -34,6 +34,15 @@ export function getMobileMachineConnectionLabel(machineEntry: DaemonData): 'Conn
     const p2pState = machineEntry.p2p?.state || ''
     if (p2pState === 'connected') return 'Connected'
     if (p2pState === 'connecting' || p2pState === 'new' || p2pState === 'checking') return 'Connecting'
+    // Standalone (localhost WS, no P2P) never populates `p2p`, so P2P state alone would
+    // mislabel a live local daemon as Offline. When there is no P2P telemetry at all, fall
+    // back to the daemon entry's own reported status — its presence means the daemon is
+    // reporting over WS, and desktop Machines derives "online" from this same signal. Cloud
+    // entries always carry p2p telemetry, so this fallback never changes cloud behavior.
+    const hasP2pTelemetry = !!machineEntry.p2p?.available || !!machineEntry.p2p?.state
+    if (!hasP2pTelemetry && machineEntry.status && machineEntry.status !== 'offline') {
+        return 'Connected'
+    }
     return 'Offline'
 }
 
