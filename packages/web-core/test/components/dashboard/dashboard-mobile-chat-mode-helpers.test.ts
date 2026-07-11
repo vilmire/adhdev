@@ -136,7 +136,10 @@ describe('dashboard mobile chat mode helpers', () => {
         expect(cards[0]).toMatchObject({
             id: 'machine-1',
             label: 'Studio Mac',
-            subtitle: 'darwin · Offline',
+            // Standalone fixture: status 'online' with no P2P telemetry → the connection
+            // label falls back to the reported daemon status ('Connected'), not 'Offline'.
+            // See getMobileMachineConnectionLabel's no-P2P-telemetry fallback.
+            subtitle: 'darwin · Connected',
             unread: 1,
             total: 1,
             preview: 'repo · Cursor · Codex · Studio Mac',
