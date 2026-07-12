@@ -40,6 +40,23 @@ export interface CliAdapterStatus {
      * (undefined) for non-FSM adapters — they keep the boot one-shot behavior.
      */
     fsmReadySeen?: boolean;
+    /**
+     * claude-cli only: true when the session's native-history transcript shows
+     * ≥1 unresolved `run_in_background` bash job (a Bash tool_use whose
+     * completion tool_result has not yet appeared). NEW passthrough signal —
+     * it rides ALONGSIDE `status` and is NOT forced through the 5-value FSM
+     * normalization (like `activeModal`/`providerSessionId`). The completion
+     * gate uses it to HOLD a false idle→completed transition while a background
+     * job is still running: the parent turn can return to a ready prompt (idle)
+     * while its background bash keeps running, which otherwise fired a false
+     * agent:generating_completed. Absent/undefined for every non-claude-cli
+     * provider and whenever the transcript can't be read or shows nothing.
+     */
+    backgroundTaskActive?: boolean;
+    /** Count of unresolved background bash jobs (only when backgroundTaskActive). */
+    backgroundTaskCount?: number;
+    /** tool_use ids of the unresolved background bash jobs (diagnostics). */
+    backgroundTaskIds?: string[];
 }
 
 export interface AcpAdapterHandle {

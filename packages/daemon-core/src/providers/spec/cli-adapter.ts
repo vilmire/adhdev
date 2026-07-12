@@ -21,6 +21,7 @@
 import { FsmDriver, type DashboardEvent, type ISpecDriver } from './fsm-driver.js';
 import { lastContiguousNumberedBlock } from './evaluator.js';
 import { executeNativeHistory } from './native-history-executor.js';
+import { detectBackgroundTaskActive } from './background-task-detector.js';
 import * as fs from 'node:fs';
 import type { NativeHistoryConfig, Control, ControlAction } from './types.js';
 import type { CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
@@ -224,11 +225,36 @@ export class SpecCliAdapter implements CliAdapter {
         const providerSessionId = this.extractProviderSessionIdFromScreen();
         if (providerSessionId) this.providerSessionId = providerSessionId;
         const status = this.getStatus();
+        // Background-task passthrough: read the claude-cli native-history
+        // transcript at poll time for an unresolved run_in_background bash. This
+        // is a NEW signal that rides alongside `status` (it is NOT run through
+        // the 5-value FSM normalization). Absent for every non-claude-cli
+        // provider (detector short-circuits on agentType). Read at each poll —
+        // the JSONL trails the live idle transition, so it must be observed
+        // BEFORE completion fires, which SUB-B's hold + settle window give us.
+        const bg = this.detectBackgroundTask();
         return {
             ...status,
             messages: this.readClaudeScreenAssistantMessages(),
             ...(this.providerSessionId ? { providerSessionId: this.providerSessionId } : {}),
+            ...(bg.active ? { backgroundTaskActive: true, backgroundTaskCount: bg.count, backgroundTaskIds: bg.ids } : {}),
         };
+    }
+
+    private detectBackgroundTask(): { active: boolean; count: number; ids: string[] } {
+        if (this.cliType !== 'claude-cli') return { active: false, count: 0, ids: [] };
+        if (!this.spec.native_history?.source) return { active: false, count: 0, ids: [] };
+        try {
+            return detectBackgroundTaskActive(this.spec.native_history, {
+                agentType: this.cliType,
+                providerSessionId: this.providerSessionId,
+                sessionStartedAtMs: this.spawnedAtMs,
+                envOverrides: this.spawnedEnv,
+                workspace: this.workingDir,
+            });
+        } catch {
+            return { active: false, count: 0, ids: [] };
+        }
     }
 
     getPartialResponse(): string {

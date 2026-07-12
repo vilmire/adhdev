@@ -56,6 +56,7 @@ import {
     COMPLETED_FINALIZATION_RETRY_MS,
     COMPLETED_FINALIZATION_MAX_WAIT_MS,
     NATIVE_HISTORY_MESH_IDLE_SETTLE_MS,
+    BACKGROUND_TASK_HOLD_MAX_MS,
     USER_INPUT_ACK_DEDUP_WINDOW_MS,
     STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS,
     TERMINAL_MESH_EVENTS,
@@ -2036,6 +2037,56 @@ export class CliProviderInstance implements ProviderInstance {
             this.completedDebouncePending = null;
             this.completedDebounceTimer = null;
             return;
+        }
+
+        // (FALSE-IDLE-BACKGROUND-CMD) FOURTH hold condition: claude-cli's idle/generating
+        // judgment is PTY-screen-derived and has no awareness of its own run_in_background
+        // bash jobs. When a background bash is launched and the parent turn returns to a
+        // ready prompt, the parent turn is genuinely idle → the point-sample above reads
+        // 'idle' → a false agent:generating_completed would fire while the background job
+        // is still running. The durable signal is the native-history transcript: a
+        // background bash tool_use with NO matching tool_result is an unresolved job.
+        // getScriptParsedStatus() reads that transcript at poll time and surfaces
+        // backgroundTaskActive. When set, HOLD (re-arm) instead of emitting — the flag
+        // clears once the tool_result lands, at which point a later flush proceeds normally.
+        //
+        // ★Bounded against a permanent wedge: the signal is a MISSING tool_result in an
+        // append-only file, so a killed/crashed/never-finishing background job would leave
+        // the flag stuck true forever. BACKGROUND_TASK_HOLD_MAX_MS (5min) caps the total
+        // hold: once exceeded we stop holding on this signal alone and fall through to the
+        // normal finalization path (emit). This guarantees eventual release — a stuck
+        // background job can delay, never permanently pin, the completion.
+        const bgParsed = (() => {
+            try { return this.adapter.getScriptParsedStatus?.() as { backgroundTaskActive?: boolean; backgroundTaskCount?: number } | undefined; }
+            catch { return undefined; }
+        })();
+        if (bgParsed?.backgroundTaskActive === true) {
+            if (typeof pending.backgroundTaskHoldSince !== 'number') pending.backgroundTaskHoldSince = Date.now();
+            const heldMs = Date.now() - pending.backgroundTaskHoldSince;
+            if (heldMs < BACKGROUND_TASK_HOLD_MAX_MS) {
+                if (pending.loggedBlockReason !== 'background_task_active') {
+                    LOG.info('CLI', `[${this.type}] holding pending completed (background_task_active count=${bgParsed.backgroundTaskCount ?? '?'} heldMs=${heldMs} max=${BACKGROUND_TASK_HOLD_MAX_MS})`);
+                    if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
+                        blockReason: 'background_task_active',
+                        latestVisibleStatus,
+                        previousStatus: pending.previousStatus,
+                        backgroundTaskCount: bgParsed.backgroundTaskCount ?? null,
+                        heldMs,
+                    });
+                    pending.loggedBlockReason = 'background_task_active';
+                }
+                this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
+                return;
+            }
+            // Hold cap exceeded — stop deferring on the background signal; the background
+            // job is not clearing. Fall through to normal finalization so the completion
+            // is never pinned indefinitely.
+            LOG.warn('CLI', `[${this.type}] background_task_active hold cap exceeded (heldMs=${heldMs} >= ${BACKGROUND_TASK_HOLD_MAX_MS}); releasing to normal finalization`);
+        } else if (typeof pending.backgroundTaskHoldSince === 'number') {
+            // The background job resolved during the hold — clear the marker so a later
+            // re-hold (if a new background job starts) restarts the cap window.
+            pending.backgroundTaskHoldSince = undefined;
+            if (pending.loggedBlockReason === 'background_task_active') pending.loggedBlockReason = undefined;
         }
 
         const block = this.getCompletedFinalizationBlock(latestVisibleStatus, pending);

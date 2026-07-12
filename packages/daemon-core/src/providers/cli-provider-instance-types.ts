@@ -46,6 +46,12 @@ export type CompletedDebouncePending = {
     // output after arming means the session was not continuously idle through the
     // settle window (the agent kept printing), so the completion is cancelled.
     lastOutputAtArm?: number;
+    // (FALSE-IDLE-BACKGROUND-CMD) Wall clock of the FIRST flush attempt that observed
+    // backgroundTaskActive=true and held. Used to bound the hold: once the hold has
+    // lasted BACKGROUND_TASK_HOLD_MAX_MS the flush stops deferring on this signal alone,
+    // so a never-completing / killed background job can't pin the session in generating
+    // forever. Cleared implicitly when the pending is reset on cancel/emit.
+    backgroundTaskHoldSince?: number;
 };
 
 export type CompletedFinalizationBlock = {
@@ -99,6 +105,19 @@ export const COMPLETED_FINALIZATION_MAX_WAIT_MS = 30_000;
 // hold only covers the approval-resolved valley; widening this settle window to 4000ms
 // covers that race AND the ~3s waiting_approval valley within the settle bound.
 export const NATIVE_HISTORY_MESH_IDLE_SETTLE_MS = 4000;
+// (FALSE-IDLE-BACKGROUND-CMD) Hard cap on how long a pending completion may be HELD
+// solely because the claude-cli transcript still shows an unresolved run_in_background
+// bash job (backgroundTaskActive). The hold is the correct behaviour while the job is
+// genuinely running — the parent turn is idle but the session is not done. But the
+// signal derives from a MISSING tool_result in an append-only transcript: if a
+// background job is killed, crashes, or its completion is never written, the flag would
+// never clear and the session would be pinned in generating forever — strictly worse
+// than the original false-idle bug. This cap is the escape hatch: once a pending
+// completion has been held this long on the background-task signal alone, we stop
+// holding and let the normal finalization proceed (emit). Sized generously (5 min) so
+// realistic background jobs (tests, builds, long greps) complete and clear the flag
+// naturally, while still guaranteeing eventual release.
+export const BACKGROUND_TASK_HOLD_MAX_MS = 5 * 60_000;
 // TASKBUBBLE-DUP: window during which an identical user-input ack (same trimmed
 // content on the same instance) is treated as a redelivery of one dispatch and
 // suppressed from the chat transcript. Matches the coordinator-side

@@ -88,6 +88,70 @@ export function executeNativeHistory(cfg: NativeHistoryConfig, input: NativeHist
 // ────────────────────────────────────────────────────────────────────────────
 
 function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput): NativeHistoryResult | null {
+    const sourcePath = resolveJsonlSourcePath(src, input);
+    if (!sourcePath) {
+        // Was silent before — a slug miss produced 0 messages with no trace, so
+        // a live read_chat returning empty was indistinguishable from "no file"
+        // vs "wrong path". Log the attempted concrete path + both slug variants
+        // so the failure mode is greppable in daemon logs.
+        const resolved = expandPath(src.path, input);
+        const requestedSessionId = readRequestedSessionId(input);
+        const wsRaw = typeof input.workspace === 'string' ? input.workspace : '';
+        let wsReal = wsRaw;
+        try { if (wsRaw) wsReal = fs.realpathSync(wsRaw); } catch { /* keep raw */ }
+        LOG.debug('NativeHistory', `jsonl unresolved: tried=${JSON.stringify(resolved)} sessionId=${requestedSessionId || '(none)'} wsRaw=${JSON.stringify(wsRaw)} wsReal=${JSON.stringify(wsReal)} rawSlug=${JSON.stringify(claudeProjectDirName(wsRaw))} realSlug=${JSON.stringify(claudeProjectDirName(wsReal))} (concrete miss + raw-slug retry + projects scan all failed)`);
+        return null;
+    }
+
+    const mtime = safeMtimeMs(sourcePath);
+    const lines = readJsonlLines(sourcePath);
+    if (lines.length === 0) return null;
+    const transcriptWorkspace = readSessionMetaWorkspace(lines);
+
+    // session id: filename uuid or extracted from first record
+    let providerSessionId: string | undefined;
+    if (src.session_id_from === 'first_record' && src.session_id_path) {
+        const v = jsonPathGet(lines[0], src.session_id_path);
+        if (typeof v === 'string' && v) providerSessionId = v;
+    } else if (src.session_id_from === 'filename_uuid' || !src.session_id_from) {
+        const m = path.basename(sourcePath).match(UUID_RE);
+        if (m) providerSessionId = m[1];
+    }
+
+    const requested = readRequestedSessionId(input) || '';
+    if (requested && providerSessionId && providerSessionId !== requested) return null;
+
+    const filter = src.message_filter ? compileWhere(src.message_filter.where) : null;
+    const messages: NativeHistoryMessage[] = [];
+    for (let i = 0; i < lines.length; i += 1) {
+        const rec = lines[i];
+        if (filter && !filter(rec)) continue;
+        for (const msg of projectMessages(rec, src.message_map, i, lines.length, mtime)) {
+            if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
+            messages.push(msg);
+        }
+    }
+    if (messages.length === 0) return null;
+
+    return {
+        messages,
+        providerSessionId,
+        sourcePath,
+        sourceMtimeMs: mtime,
+        nativeHistoryCoverage: 'full',
+        workspace: transcriptWorkspace,
+    };
+}
+
+/**
+ * Resolve the concrete on-disk transcript file a jsonl native-history source
+ * points at, applying the same slug/date/session-bound/scan fallbacks the
+ * message reader uses. Returns null when no file can be located.
+ *
+ * Extracted so status-only readers (background-task detection) can locate the
+ * live transcript without re-parsing every message on each status poll.
+ */
+export function resolveJsonlSourcePath(src: NativeHistoryJsonlSource, input: NativeHistoryInput): string | null {
     const resolved = expandPath(src.path, input);
     if (!resolved) return null;
 
@@ -172,56 +236,7 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
             sourcePath = scanProjectsRootForSessionFile(src.path, input, requestedSessionId);
         }
     }
-    if (!sourcePath) {
-        // Was silent before — a slug miss produced 0 messages with no trace, so
-        // a live read_chat returning empty was indistinguishable from "no file"
-        // vs "wrong path". Log the attempted concrete path + both slug variants
-        // so the failure mode is greppable in daemon logs.
-        const wsRaw = typeof input.workspace === 'string' ? input.workspace : '';
-        let wsReal = wsRaw;
-        try { if (wsRaw) wsReal = fs.realpathSync(wsRaw); } catch { /* keep raw */ }
-        LOG.debug('NativeHistory', `jsonl unresolved: tried=${JSON.stringify(resolved)} sessionId=${requestedSessionId || '(none)'} wsRaw=${JSON.stringify(wsRaw)} wsReal=${JSON.stringify(wsReal)} rawSlug=${JSON.stringify(claudeProjectDirName(wsRaw))} realSlug=${JSON.stringify(claudeProjectDirName(wsReal))} (concrete miss + raw-slug retry + projects scan all failed)`);
-        return null;
-    }
-
-    const mtime = safeMtimeMs(sourcePath);
-    const lines = readJsonlLines(sourcePath);
-    if (lines.length === 0) return null;
-    const transcriptWorkspace = readSessionMetaWorkspace(lines);
-
-    // session id: filename uuid or extracted from first record
-    let providerSessionId: string | undefined;
-    if (src.session_id_from === 'first_record' && src.session_id_path) {
-        const v = jsonPathGet(lines[0], src.session_id_path);
-        if (typeof v === 'string' && v) providerSessionId = v;
-    } else if (src.session_id_from === 'filename_uuid' || !src.session_id_from) {
-        const m = path.basename(sourcePath).match(UUID_RE);
-        if (m) providerSessionId = m[1];
-    }
-
-    const requested = requestedSessionId || '';
-    if (requested && providerSessionId && providerSessionId !== requested) return null;
-
-    const filter = src.message_filter ? compileWhere(src.message_filter.where) : null;
-    const messages: NativeHistoryMessage[] = [];
-    for (let i = 0; i < lines.length; i += 1) {
-        const rec = lines[i];
-        if (filter && !filter(rec)) continue;
-        for (const msg of projectMessages(rec, src.message_map, i, lines.length, mtime)) {
-            if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
-            messages.push(msg);
-        }
-    }
-    if (messages.length === 0) return null;
-
-    return {
-        messages,
-        providerSessionId,
-        sourcePath,
-        sourceMtimeMs: mtime,
-        nativeHistoryCoverage: 'full',
-        workspace: transcriptWorkspace,
-    };
+    return sourcePath;
 }
 
 function readSessionMetaWorkspace(lines: any[]): string | undefined {
