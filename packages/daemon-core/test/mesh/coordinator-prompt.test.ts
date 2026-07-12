@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT } from '@adhdev/mesh-shared'
-import { buildCoordinatorSystemPrompt } from '../../src/mesh/coordinator-prompt.js'
+import { buildCoordinatorSystemPrompt, buildMagiKindPanelsSection } from '../../src/mesh/coordinator-prompt.js'
 
 describe('Repo Mesh coordinator prompt', () => {
   it('uses default policy for cloud inline meshes that omit policy/coordinator fields', () => {
@@ -624,6 +624,71 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(exposed).toContain('mesh_mission_list')
     // mesh_requeue_held_events is the G2 event_held→pending recovery path.
     expect(exposed).toContain('mesh_requeue_held_events')
+  })
+
+  // ── Configured MAGI panels section ──
+
+  describe('buildMagiKindPanelsSection', () => {
+    it('returns null when panels is undefined, null, or all-empty', () => {
+      expect(buildMagiKindPanelsSection(undefined)).toBeNull()
+      expect(buildMagiKindPanelsSection(null)).toBeNull()
+      expect(buildMagiKindPanelsSection({})).toBeNull()
+      // A kind bound to an empty slot list contributes nothing → still omitted.
+      expect(buildMagiKindPanelsSection({ rca: [], design: undefined })).toBeNull()
+    })
+
+    it('renders a section with kind headers and slot providers when panels are present', () => {
+      const section = buildMagiKindPanelsSection({
+        rca: [
+          { provider: 'codex-cli', nodeId: 'node_f1f8' },
+          { provider: 'antigravity-cli', nodeId: 'node_8440' },
+        ],
+        design: [
+          { provider: 'hermes-cli', model: 'opus', capabilityTags: ['reasoning'], n: 2 },
+        ],
+      })
+      expect(section).not.toBeNull()
+      const text = section as string
+      expect(text).toContain('## Configured MAGI panels')
+      // Per-kind headers.
+      expect(text).toContain('**rca**')
+      expect(text).toContain('**design**')
+      // Slot providers + node pins.
+      expect(text).toContain('codex-cli@node_f1f8')
+      expect(text).toContain('antigravity-cli@node_8440')
+      // Model / tags / replica-count rendering for the design slot.
+      expect(text).toContain('hermes-cli')
+      expect(text).toContain('model: opus')
+      expect(text).toContain('tags: reasoning')
+      expect(text).toContain('×2')
+      // Guidance line — required task_kind + read-only replicas.
+      expect(text).toContain('mesh_magi_review')
+      expect(text).toContain('mesh_magi_kind_panel_list')
+      expect(text).toContain('read-only')
+    })
+
+    it('counts replicas from per-slot n when computing the kind label', () => {
+      const section = buildMagiKindPanelsSection({
+        rca: [
+          { provider: 'codex-cli', n: 2 },
+          { provider: 'hermes-cli', n: 2 },
+        ],
+      }) as string
+      // 2 slots but 4 total replicas → "4 replicas".
+      expect(section).toContain('**rca** (4 replicas)')
+    })
+  })
+
+  it('full prompt includes the Configured MAGI panels section only when panels are passed', () => {
+    const withoutPanels = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
+    expect(withoutPanels).not.toContain('## Configured MAGI panels')
+
+    const withPanels = buildCoordinatorSystemPrompt({
+      mesh: baseMesh() as any,
+      magiKindPanels: { rca: [{ provider: 'codex-cli', nodeId: 'node_f1f8' }] },
+    })
+    expect(withPanels).toContain('## Configured MAGI panels')
+    expect(withPanels).toContain('codex-cli@node_f1f8')
   })
 })
 

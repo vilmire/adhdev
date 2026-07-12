@@ -34,6 +34,7 @@ import type {
 import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { getDifficultyBrains } from '../config/mesh-config.js';
 import { MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
+import type { MagiKindPanelMap, MagiSlot, MagiTaskKind } from '@adhdev/mesh-shared';
 
 /**
  * Cheap, locally-derived "what just happened" snapshot for the coordinator
@@ -109,6 +110,14 @@ export interface CoordinatorPromptContext {
      * section.
      */
     operatingNotes?: CoordinatorOperatingNote[];
+    /**
+     * Machine-local MAGI kind-panel bindings (`~/.adhdev/meshes.json`
+     * `magiKindPanels`), read live at launch. Omitted / empty / all-empty →
+     * no "## Configured MAGI panels" section, so a mesh with no MAGI configured
+     * renders identically to before. Threaded in the same systematic way as the
+     * brain presets: read machine-local config at launch, render a pure section.
+     */
+    magiKindPanels?: MagiKindPanelMap;
 }
 
 /**
@@ -283,6 +292,11 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
 
     // ── Brain presets (difficulty → model/thinking) ──
     sections.push(buildBrainPresetsSection());
+
+    // ── Configured MAGI panels (machine-local magiKindPanels) — only present
+    //     when at least one task_kind has a non-empty slot list. ──
+    const magiSection = buildMagiKindPanelsSection(ctx.magiKindPanels);
+    if (magiSection) sections.push(magiSection);
 
     // ── Tools ──
     sections.push(TOOLS_SECTION);
@@ -632,6 +646,58 @@ function buildBrainPresetsSection(): string {
         lines.push(`- **${key}**: ${parts}`);
     }
     return lines.join('\n');
+}
+
+/**
+ * Render the machine-local MAGI kind-panel bindings so the coordinator KNOWS
+ * which cross-verification panels (rca / design / claim_audit / freeform) are
+ * actually configured on this machine. Without this the coordinator only sees
+ * the `mesh_magi_*` tools in the static table and has no idea MAGI is set up.
+ *
+ * Pure — takes the panels map (read live at launch, mirroring how brain presets
+ * read getDifficultyBrains). Returns null (section OMITTED) when nothing usable
+ * is configured: undefined/null map, or every kind maps to an empty slot list.
+ * That keeps a MAGI-less mesh's prompt byte-identical to before.
+ */
+export function buildMagiKindPanelsSection(panels: MagiKindPanelMap | undefined | null): string | null {
+    if (!panels) return null;
+    // Keep only kinds with a non-empty slot list; drop empty/undefined bindings.
+    const configured = (Object.entries(panels) as Array<[MagiTaskKind, MagiSlot[] | undefined]>)
+        .filter(([, slots]) => Array.isArray(slots) && slots.length > 0) as Array<[MagiTaskKind, MagiSlot[]]>;
+    if (configured.length === 0) return null;
+
+    const lines = [
+        '## Configured MAGI panels',
+        '',
+        'These machine-local MAGI kind-panels are configured on this mesh — read-only cross-verification quorums:',
+        '',
+    ];
+
+    for (const [kind, slots] of configured) {
+        const replicaCount = slots.reduce((sum, s) => sum + (s.n && s.n > 0 ? s.n : 1), 0);
+        const label = replicaCount === slots.length
+            ? `${slots.length} ${slots.length === 1 ? 'slot' : 'slots'}`
+            : `${replicaCount} replicas`;
+        const rendered = slots.map(renderMagiSlot).join(', ');
+        lines.push(`- **${kind}** (${label}): ${rendered}`);
+    }
+
+    lines.push('');
+    lines.push('Use these via `mesh_magi_review` (the `task_kind` is REQUIRED — it selects BOTH the output schema and the panel). The live authoritative slot list is `mesh_magi_kind_panel_list`. MAGI worker replicas are read-only and typically do NOT have mesh MCP tools exposed, so for live timing / tool-behavior claims you MUST gather the primary evidence yourself and use MAGI only for independent source-level corroboration.');
+
+    return lines.join('\n');
+}
+
+/** Render one MAGI slot as `provider[@nodeId][ (model, tags…, xN)]`. */
+function renderMagiSlot(slot: MagiSlot): string {
+    let s = slot.provider;
+    if (slot.nodeId) s += `@${slot.nodeId}`;
+    const extra: string[] = [];
+    if (slot.model) extra.push(`model: ${slot.model}`);
+    if (slot.capabilityTags && slot.capabilityTags.length) extra.push(`tags: ${slot.capabilityTags.join('+')}`);
+    if (slot.n && slot.n > 1) extra.push(`×${slot.n}`);
+    if (extra.length) s += ` (${extra.join(', ')})`;
+    return s;
 }
 
 function buildPolicySection(policy: RepoMeshPolicy): string {
