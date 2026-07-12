@@ -4333,20 +4333,19 @@ async function meshReconcileLedger(ctx, args) {
     ...typeof args.after_id === "string" && args.after_id.trim() ? { afterId: args.after_id.trim() } : {},
     ...typeof args.since === "string" && args.since.trim() ? { since: args.since.trim() } : {}
   };
-  for (const node of nodes) {
+  const reconcileNode = async (node) => {
     try {
       if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) {
         const slice2 = (0, import_daemon_core4.readLedgerSliceFromStore)(ctx.mesh.id, queryArgs);
-        replicas.push((0, import_daemon_core4.buildMeshLedgerReplicaEvidence)({
+        return (0, import_daemon_core4.buildMeshLedgerReplicaEvidence)({
           nodeId: node.id,
           daemonId: node.daemonId,
           transport: "local",
           slice: slice2,
           status: "local"
-        }));
-        continue;
+        });
       }
-      const result = await commandForNode(ctx, node, "get_mesh_ledger_slice", queryArgs);
+      const result = await commandForNode(ctx, node, "get_mesh_ledger_slice", queryArgs, { statusProbe: true });
       const payload = unwrapCommandPayload(result);
       if (payload?.success === false) {
         throw new Error(payload.error || "remote get_mesh_ledger_slice failed");
@@ -4356,13 +4355,6 @@ async function meshReconcileLedger(ctx, args) {
         throw new Error("remote daemon returned an invalid ledger slice payload");
       }
       const importResult = shouldImport ? (0, import_daemon_core4.appendRemoteLedgerEntries)(ctx.mesh.id, slice.entries) : { accepted: 0, skippedDuplicate: 0, rejectedInvalid: 0, entries: [] };
-      replicas.push((0, import_daemon_core4.buildMeshLedgerReplicaEvidence)({
-        nodeId: node.id,
-        daemonId: node.daemonId,
-        transport: "p2p_datachannel",
-        slice,
-        importResult
-      }));
       if (shouldImport && importResult.accepted > 0) {
         (0, import_daemon_core4.appendLedgerEntry)(ctx.mesh.id, {
           kind: "ledger_replicated",
@@ -4377,16 +4369,38 @@ async function meshReconcileLedger(ctx, args) {
           }
         });
       }
+      return (0, import_daemon_core4.buildMeshLedgerReplicaEvidence)({
+        nodeId: node.id,
+        daemonId: node.daemonId,
+        transport: "p2p_datachannel",
+        slice,
+        importResult
+      });
     } catch (e) {
-      replicas.push((0, import_daemon_core4.buildMeshLedgerReplicaEvidence)({
+      return (0, import_daemon_core4.buildMeshLedgerReplicaEvidence)({
         nodeId: node.id,
         daemonId: node.daemonId,
         transport: node.daemonId ? "p2p_datachannel" : "local",
         status: "failed",
         error: e?.message ?? String(e)
+      });
+    }
+  };
+  const settled = await Promise.allSettled(nodes.map(reconcileNode));
+  settled.forEach((outcome, idx) => {
+    if (outcome.status === "fulfilled") {
+      replicas.push(outcome.value);
+    } else {
+      const node = nodes[idx];
+      replicas.push((0, import_daemon_core4.buildMeshLedgerReplicaEvidence)({
+        nodeId: node.id,
+        daemonId: node.daemonId,
+        transport: node.daemonId ? "p2p_datachannel" : "local",
+        status: "failed",
+        error: outcome.reason?.message ?? String(outcome.reason)
       }));
     }
-  }
+  });
   const evidence = (0, import_daemon_core4.buildMeshLedgerReconciliationEvidence)(ctx.mesh.id, replicas);
   (0, import_daemon_core4.appendLedgerEntry)(ctx.mesh.id, {
     kind: "ledger_reconciled",
@@ -4533,7 +4547,7 @@ async function meshReviewInbox(ctx, args = {}) {
   const result = await commandForNode(ctx, ctx.mesh.nodes[0], "get_mesh_review_inbox", {
     meshId,
     inlineMesh: ctx.mesh
-  });
+  }, { statusProbe: true });
   return JSON.stringify(result, null, 2);
 }
 
@@ -5641,13 +5655,11 @@ async function cleanupMagiAutoLaunchedSessions(ctx, args) {
   if (targets.size === 0) return null;
   let cleanedSessionCount = 0;
   const perNode = [];
-  for (const [nodeId, group] of targets) {
-    if (group.sessionIds.length === 0) continue;
+  const cleanupNode = async (nodeId, group) => {
     try {
       const node = await findOptionalNodeWithRefresh(ctx, nodeId);
       if (!node) {
-        perNode.push({ nodeId, skipped: "node_not_in_live_mesh", sessionIds: group.sessionIds });
-        continue;
+        return { cleaned: 0, entry: { nodeId, skipped: "node_not_in_live_mesh", sessionIds: group.sessionIds } };
       }
       const result = await commandForNode(ctx, node, "cleanup_mesh_sessions", {
         meshId: ctx.mesh.id,
@@ -5657,23 +5669,38 @@ async function cleanupMagiAutoLaunchedSessions(ctx, args) {
         source: "magi_session_cleanup",
         requireAutoLaunchedForTaskIds: group.requireAutoLaunchedForTaskIds,
         inlineMesh: ctx.mesh
-      });
+      }, { statusProbe: true });
       const payload = unwrapCommandPayload(result);
       const deleted = Array.isArray(payload?.deletedSessionIds) ? payload.deletedSessionIds.length : 0;
       const stopped = Array.isArray(payload?.stoppedSessionIds) ? payload.stoppedSessionIds.length : 0;
-      cleanedSessionCount += deleted + stopped;
-      perNode.push({
-        nodeId,
-        requested: group.sessionIds.length,
-        deleted,
-        ...stopped ? { stopped } : {},
-        ...Array.isArray(payload?.skippedMarkerMismatchSessionIds) && payload.skippedMarkerMismatchSessionIds.length ? { skippedMarkerMismatch: payload.skippedMarkerMismatchSessionIds } : {},
-        ...payload?.deleteUnsupported ? { deleteUnsupported: true } : {}
-      });
+      return {
+        cleaned: deleted + stopped,
+        entry: {
+          nodeId,
+          requested: group.sessionIds.length,
+          deleted,
+          ...stopped ? { stopped } : {},
+          ...Array.isArray(payload?.skippedMarkerMismatchSessionIds) && payload.skippedMarkerMismatchSessionIds.length ? { skippedMarkerMismatch: payload.skippedMarkerMismatchSessionIds } : {},
+          ...payload?.deleteUnsupported ? { deleteUnsupported: true } : {}
+        }
+      };
     } catch (e) {
-      perNode.push({ nodeId, error: e?.message || String(e), sessionIds: group.sessionIds });
+      return { cleaned: 0, entry: { nodeId, error: e?.message || String(e), sessionIds: group.sessionIds } };
     }
-  }
+  };
+  const cleanupTargets = Array.from(targets).filter(([, group]) => group.sessionIds.length > 0);
+  const settled = await Promise.allSettled(
+    cleanupTargets.map(([nodeId, group]) => cleanupNode(nodeId, group))
+  );
+  settled.forEach((outcome, idx) => {
+    if (outcome.status === "fulfilled") {
+      cleanedSessionCount += outcome.value.cleaned;
+      perNode.push(outcome.value.entry);
+    } else {
+      const [nodeId, group] = cleanupTargets[idx];
+      perNode.push({ nodeId, error: outcome.reason?.message ?? String(outcome.reason), sessionIds: group.sessionIds });
+    }
+  });
   return { cleanedSessionCount, perNode };
 }
 function sessionSharedWithAnotherReplica(task, allTasks) {
@@ -6634,9 +6661,16 @@ async function meshLaunchSession(ctx, args) {
         return JSON.stringify({ success: false, error: missingProviderPriorityMessage(args.node_id) });
       }
       const failed = [];
+      let unreachableError = null;
       for (const providerType of providerPriority) {
-        const detectedResult = await commandForNode(ctx, node, "detect_provider", { providerType });
-        const detectedPayload = unwrapCommandPayload(detectedResult);
+        let detectedPayload;
+        try {
+          const detectedResult = await commandForNode(ctx, node, "detect_provider", { providerType }, { statusProbe: true });
+          detectedPayload = unwrapCommandPayload(detectedResult);
+        } catch (e) {
+          unreachableError = e?.message || String(e);
+          break;
+        }
         if (detectedPayload?.success && detectedPayload?.detected) {
           resolvedProviderType = providerType;
           break;
@@ -6644,6 +6678,9 @@ async function meshLaunchSession(ctx, args) {
         failed.push(`${providerType}: ${detectedPayload?.error || "not detected"}`);
       }
       if (!resolvedProviderType) {
+        if (unreachableError) {
+          return JSON.stringify({ success: false, error: `Node '${args.node_id}' is unreachable \u2014 cannot detect a provider (${unreachableError}). The node's daemon may be offline; retry once it reconnects.` });
+        }
         return JSON.stringify({ success: false, error: `No usable provider detected for node '${args.node_id}' from providerPriority: ${failed.join("; ")}` });
       }
     }
