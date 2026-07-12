@@ -33,6 +33,7 @@ import { IpcTransport } from '../transports/ipc.js';
 import type { CommandTransport } from '../transports/mode.js';
 import { compactChatPayload, isCoordinatorVisibleMessage, messageContent } from './chat-compact.js';
 import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
+import { withStatusProbeMarker } from '@adhdev/mesh-shared';
 import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
 import {
     daemonIdsEquivalent,
@@ -1658,7 +1659,9 @@ export async function collectRelatedRepoStatuses(ctx: MeshContext, node: LocalMe
     const results: Array<Record<string, unknown>> = [];
     for (const repo of relatedRepos) {
         try {
-            const statusResult = await commandForNode(ctx, node, 'git_status', { workspace: repo.workspace, refreshUpstream: true });
+            // OFFLINE-NODE-STATUS-REFRESH: related-repo status is part of the mesh_status
+            // per-node assembly — mark it status-origin for the SHORT connect-wait budget.
+            const statusResult = await commandForNode(ctx, node, 'git_status', { workspace: repo.workspace, refreshUpstream: true }, { statusProbe: true });
             const status = extractGitStatus(statusResult);
             results.push(summarizeRelatedRepoStatus(repo, status));
         } catch (e: any) {
@@ -1825,7 +1828,9 @@ export async function collectLiveStatusProbe(
     node: LocalMeshNodeEntry,
 ): Promise<{ sessions: any[]; daemonBuild?: { commit: string; commitShort: string; version: string; builtAt?: string } }> {
     try {
-        const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {});
+        // OFFLINE-NODE-STATUS-REFRESH: part of the mesh_status per-node assembly — mark it
+        // status-origin so the relay to an offline peer uses the SHORT connect-wait budget.
+        const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {}, { statusProbe: true });
         return {
             sessions: extractStatusMetadataSessions(statusResult),
             daemonBuild: extractDaemonBuildInfo(statusResult),
@@ -2031,11 +2036,18 @@ export async function commandForNode(
     node: LocalMeshNodeEntry,
     command: string,
     args: Record<string, unknown> = {},
+    opts?: { statusProbe?: boolean },
 ): Promise<any> {
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
 
     if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
-        return ctx.transport.meshCommand(node.daemonId, command, args);
+        // OFFLINE-NODE-STATUS-REFRESH: a status-origin probe (explicit_refresh /
+        // mesh_status) stamps the marker into the relayed args so the daemon-cloud
+        // relay handler grants the SHORT connect-wait budget — an offline peer is
+        // rejected in ~seconds instead of blocking the relay for the full 90s connect
+        // deadline. A local-transport call needs no marker (no relay / no connect wait).
+        const relayedArgs = opts?.statusProbe ? withStatusProbeMarker(args) : args;
+        return ctx.transport.meshCommand(node.daemonId, command, relayedArgs);
     }
     return ctx.transport.command(command, args);
 }

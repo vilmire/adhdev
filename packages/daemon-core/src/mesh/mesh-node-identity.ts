@@ -14,7 +14,7 @@
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { getGitRepoStatus } from '../git/git-status.js';
-import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, daemonIdsEquivalent, meshWorkspacesEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, daemonIdsEquivalent, meshWorkspacesEquivalent, sessionIdsEquivalent, withStatusProbeMarker } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from '../mesh/mesh-warmup-deadline.js';
@@ -1468,7 +1468,16 @@ async function probeRemoteMeshGitStatus(args: {
     // cold-open handshake to the connect budget and only the warm round trip to
     // the response budget, so the first probe to a cold peer is no longer
     // false-timed-out before its channel has even opened.
-    const dispatch = args.dispatchMeshCommand(args.daemonId, 'git_status', { workspace: args.workspace, refreshUpstream: true });
+    // OFFLINE-NODE-STATUS-REFRESH: stamp the status-origin marker so the daemon-cloud
+    // dispatch wrapper grants this explicit_refresh / mesh_status git_status probe the
+    // SHORT connect-wait budget. Without it, an offline (powered-off) peer sinks the
+    // probe into the 90s connect deadline and blocks the whole status assembly. A
+    // user-driven / targeted git_status (no marker) is unaffected.
+    const dispatch = args.dispatchMeshCommand(
+        args.daemonId,
+        'git_status',
+        withStatusProbeMarker({ workspace: args.workspace, refreshUpstream: true }),
+    );
     // A missing connection getter no longer silently becomes `() => true`
     // ("always warm") — that charged a still-opening channel against the response
     // budget and re-introduced the cold-open false-timeout. resolveWarmupDeadlineOpts

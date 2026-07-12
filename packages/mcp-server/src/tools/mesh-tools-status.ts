@@ -170,12 +170,16 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         let liveTruthProbed = false;
         try {
             const autoDiscover = (node.policy as any)?.autoDiscoverSubmodules !== false;
+            // OFFLINE-NODE-STATUS-REFRESH: this is the mesh_status per-node git_status probe
+            // (first awaited in the sequence, so it blocks earliest). Mark it status-origin so
+            // an offline peer's relay gives up on the SHORT connect-wait budget instead of
+            // sinking the whole explicit_refresh into the 90s connect deadline.
             const statusResult = await commandForNode(ctx, node, 'git_status', {
                 workspace: node.workspace,
                 refreshUpstream: true,
                 includeSubmodules: autoDiscover,
                 submoduleIgnorePaths: (node.policy as any)?.submoduleIgnorePaths || undefined,
-            });
+            }, { statusProbe: true });
             liveTruthProbed = true;
             const status = extractGitStatus(statusResult);
             const uncommittedChanges = countUncommittedChanges(status);

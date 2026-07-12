@@ -339,6 +339,91 @@ function compactChatPayload(payload, opts = {}) {
   };
 }
 
+// ../mesh-shared/dist/index.mjs
+var MESH_TASK_DIFFICULTIES = ["easy", "medium", "difficult", "freeform"];
+function isMeshTaskDifficulty(value) {
+  return typeof value === "string" && MESH_TASK_DIFFICULTIES.includes(value);
+}
+function normalizeNodeCapabilitySlot(raw) {
+  const r = raw && typeof raw === "object" ? raw : {};
+  const provider = typeof r.provider === "string" ? r.provider.trim() : "";
+  if (!provider) return null;
+  const model = typeof r.model === "string" ? r.model.trim() : "";
+  const thinkingLevel = typeof r.thinkingLevel === "string" ? r.thinkingLevel.trim() : "";
+  const difficulty = Array.isArray(r.difficulty) ? r.difficulty.filter(isMeshTaskDifficulty) : [];
+  const capability = Array.isArray(r.capability) ? r.capability.filter((t) => typeof t === "string" && !!t.trim()).map((t) => t.trim()) : [];
+  const maxParallelNum = Number(r.maxParallel);
+  const maxParallel = Number.isFinite(maxParallelNum) && maxParallelNum > 0 ? Math.floor(maxParallelNum) : void 0;
+  return {
+    provider,
+    ...model ? { model } : {},
+    ...thinkingLevel ? { thinkingLevel } : {},
+    ...difficulty.length ? { difficulty } : {},
+    ...capability.length ? { capability } : {},
+    ...maxParallel !== void 0 ? { maxParallel } : {}
+  };
+}
+function normalizeNodeCapabilitySlots(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const entry of raw) {
+    const slot = normalizeNodeCapabilitySlot(entry);
+    if (slot) out.push(slot);
+  }
+  return out;
+}
+var CANONICAL_MESH_TOOL_NAMES = [
+  "mesh_status",
+  "mesh_list_nodes",
+  "mesh_enqueue_task",
+  "mesh_view_queue",
+  "mesh_queue_cancel",
+  "mesh_queue_requeue",
+  "mesh_send_task",
+  "mesh_read_chat",
+  "mesh_read_debug",
+  "mesh_launch_session",
+  "mesh_git_status",
+  "mesh_read_node_logs",
+  "mesh_fast_forward_node",
+  "mesh_restart_daemon",
+  "mesh_checkpoint",
+  "mesh_approve",
+  "mesh_list_pending_approvals",
+  "mesh_clone_node",
+  "mesh_remove_node",
+  "mesh_refine_node",
+  "mesh_refine_batch",
+  "mesh_refine_config",
+  "mesh_change_impact_config",
+  "mesh_init",
+  "mesh_reinit",
+  "mesh_write_mesh_json_config",
+  "mesh_refine_plan",
+  "mesh_cleanup_sessions",
+  "mesh_prune_stale_direct",
+  "mesh_task_history",
+  "mesh_ledger_query",
+  "mesh_record_note",
+  "mesh_forget_note",
+  "mesh_reconcile_ledger",
+  "mesh_requeue_held_events",
+  "mesh_mission_upsert",
+  "mesh_mission_list",
+  "mesh_review_inbox",
+  "mesh_magi_review",
+  "mesh_magi_collect",
+  "mesh_magi_kind_panel_set",
+  "mesh_magi_kind_panel_list",
+  "mesh_node_slots_set",
+  "mesh_node_slots_list"
+];
+var CANONICAL_MESH_TOOL_COUNT = CANONICAL_MESH_TOOL_NAMES.length;
+var STATUS_PROBE_ARG_KEY = "_statusProbe";
+function withStatusProbeMarker(args = {}) {
+  return { ...args, [STATUS_PROBE_ARG_KEY]: true };
+}
+
 // src/tools/mesh-tools-internal.ts
 var import_daemon_core3 = require("@adhdev/daemon-core");
 
@@ -2682,7 +2767,7 @@ async function collectRelatedRepoStatuses(ctx, node) {
   const results = [];
   for (const repo of relatedRepos) {
     try {
-      const statusResult = await commandForNode(ctx, node, "git_status", { workspace: repo.workspace, refreshUpstream: true });
+      const statusResult = await commandForNode(ctx, node, "git_status", { workspace: repo.workspace, refreshUpstream: true }, { statusProbe: true });
       const status = extractGitStatus(statusResult);
       results.push(summarizeRelatedRepoStatus(repo, status));
     } catch (e) {
@@ -2779,7 +2864,7 @@ async function collectLiveStatusSessions(ctx, node) {
 }
 async function collectLiveStatusProbe(ctx, node) {
   try {
-    const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
+    const statusResult = await commandForNode(ctx, node, "get_status_metadata", {}, { statusProbe: true });
     return {
       sessions: extractStatusMetadataSessions(statusResult),
       daemonBuild: extractDaemonBuildInfo(statusResult)
@@ -2947,10 +3032,11 @@ function summarizeBranchConvergence(nodes, compact = false) {
     ...omitted > 0 ? { followUpsOmitted: omitted, followUpsHint: "Per-node followUp rows are capped in compact mode; counts above are complete. Use verbose=true for the full list." } : {}
   };
 }
-async function commandForNode(ctx, node, command, args = {}) {
+async function commandForNode(ctx, node, command, args = {}, opts) {
   const isLocalNode = isLocalControlPlaneNode(ctx, node);
   if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
-    return ctx.transport.meshCommand(node.daemonId, command, args);
+    const relayedArgs = opts?.statusProbe ? withStatusProbeMarker(args) : args;
+    return ctx.transport.meshCommand(node.daemonId, command, relayedArgs);
   }
   return ctx.transport.command(command, args);
 }
@@ -3220,7 +3306,7 @@ async function meshStatus(ctx, args = {}) {
         refreshUpstream: true,
         includeSubmodules: autoDiscover,
         submoduleIgnorePaths: node.policy?.submoduleIgnorePaths || void 0
-      });
+      }, { statusProbe: true });
       liveTruthProbed = true;
       const status = extractGitStatus(statusResult);
       const uncommittedChanges = countUncommittedChanges(status);
@@ -5920,87 +6006,6 @@ ${magiOutputContractFor(kind)}`;
   const staleCount = responses.filter((r) => r.source.stale === true).length;
   return { responses, terminal, timedOut: !terminal, staleCount, retriedCount: retried.size };
 }
-
-// ../mesh-shared/dist/index.mjs
-var MESH_TASK_DIFFICULTIES = ["easy", "medium", "difficult", "freeform"];
-function isMeshTaskDifficulty(value) {
-  return typeof value === "string" && MESH_TASK_DIFFICULTIES.includes(value);
-}
-function normalizeNodeCapabilitySlot(raw) {
-  const r = raw && typeof raw === "object" ? raw : {};
-  const provider = typeof r.provider === "string" ? r.provider.trim() : "";
-  if (!provider) return null;
-  const model = typeof r.model === "string" ? r.model.trim() : "";
-  const thinkingLevel = typeof r.thinkingLevel === "string" ? r.thinkingLevel.trim() : "";
-  const difficulty = Array.isArray(r.difficulty) ? r.difficulty.filter(isMeshTaskDifficulty) : [];
-  const capability = Array.isArray(r.capability) ? r.capability.filter((t) => typeof t === "string" && !!t.trim()).map((t) => t.trim()) : [];
-  const maxParallelNum = Number(r.maxParallel);
-  const maxParallel = Number.isFinite(maxParallelNum) && maxParallelNum > 0 ? Math.floor(maxParallelNum) : void 0;
-  return {
-    provider,
-    ...model ? { model } : {},
-    ...thinkingLevel ? { thinkingLevel } : {},
-    ...difficulty.length ? { difficulty } : {},
-    ...capability.length ? { capability } : {},
-    ...maxParallel !== void 0 ? { maxParallel } : {}
-  };
-}
-function normalizeNodeCapabilitySlots(raw) {
-  if (!Array.isArray(raw)) return [];
-  const out = [];
-  for (const entry of raw) {
-    const slot = normalizeNodeCapabilitySlot(entry);
-    if (slot) out.push(slot);
-  }
-  return out;
-}
-var CANONICAL_MESH_TOOL_NAMES = [
-  "mesh_status",
-  "mesh_list_nodes",
-  "mesh_enqueue_task",
-  "mesh_view_queue",
-  "mesh_queue_cancel",
-  "mesh_queue_requeue",
-  "mesh_send_task",
-  "mesh_read_chat",
-  "mesh_read_debug",
-  "mesh_launch_session",
-  "mesh_git_status",
-  "mesh_read_node_logs",
-  "mesh_fast_forward_node",
-  "mesh_restart_daemon",
-  "mesh_checkpoint",
-  "mesh_approve",
-  "mesh_list_pending_approvals",
-  "mesh_clone_node",
-  "mesh_remove_node",
-  "mesh_refine_node",
-  "mesh_refine_batch",
-  "mesh_refine_config",
-  "mesh_change_impact_config",
-  "mesh_init",
-  "mesh_reinit",
-  "mesh_write_mesh_json_config",
-  "mesh_refine_plan",
-  "mesh_cleanup_sessions",
-  "mesh_prune_stale_direct",
-  "mesh_task_history",
-  "mesh_ledger_query",
-  "mesh_record_note",
-  "mesh_forget_note",
-  "mesh_reconcile_ledger",
-  "mesh_requeue_held_events",
-  "mesh_mission_upsert",
-  "mesh_mission_list",
-  "mesh_review_inbox",
-  "mesh_magi_review",
-  "mesh_magi_collect",
-  "mesh_magi_kind_panel_set",
-  "mesh_magi_kind_panel_list",
-  "mesh_node_slots_set",
-  "mesh_node_slots_list"
-];
-var CANONICAL_MESH_TOOL_COUNT = CANONICAL_MESH_TOOL_NAMES.length;
 
 // src/tools/mesh-tools-slots.ts
 function readNodeSlots(node) {
