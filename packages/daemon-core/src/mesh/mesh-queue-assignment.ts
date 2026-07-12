@@ -23,6 +23,7 @@ import { queuePendingMeshCoordinatorEvent, retractPendingDispatchBlockedEvent } 
 import { isWorktreeBootstrapStaleRunning, shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
 import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
+import { isModelCompatibleWithProvider } from './model-provider-compat.js';
 
 /**
  * CANON: the single canonical coordinator-daemon id this daemon stamps onto every
@@ -2056,8 +2057,26 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 // Slot-derived model/thinking: an explicit task.model/thinkingLevel
                 // (resolved from the enqueue-time brain) still wins; the matched
                 // slot fills only what the task left blank (ORCHESTRATION_NODE_SLOTS.md).
-                const effectiveModel = (typeof task.model === 'string' && task.model.trim()) ? task.model.trim() : resolved.model;
+                const rawEffectiveModel = (typeof task.model === 'string' && task.model.trim()) ? task.model.trim() : resolved.model;
                 const effectiveThinkingLevel = (typeof task.thinkingLevel === 'string' && task.thinkingLevel.trim()) ? task.thinkingLevel.trim() : resolved.thinkingLevel;
+
+                // CODEX-400 GUARD: the difficulty→brain presets (and MAGI slots) carry
+                // provider-agnostic Anthropic model aliases (opus/sonnet/haiku). Now that
+                // resolved.providerType is definitively known, drop the model if it is a
+                // Claude model but the provider is NOT Anthropic-backed (codex-cli /
+                // antigravity-cli / hermes-cli): forwarding `claude-*` as an initialModel
+                // makes those providers convert it to `-c model='claude-...'`, and a
+                // ChatGPT-account codex then rejects the launch with a 400. Stripping it
+                // lets the provider fall back to its own default model; the provider-neutral
+                // thinkingLevel axis is preserved. This is the single authoritative point
+                // that enforces the invariant across every model source (preset, slot,
+                // explicit) because both remote and local launch consume effectiveModel below.
+                const effectiveModel = isModelCompatibleWithProvider(rawEffectiveModel, resolved.providerType)
+                    ? rawEffectiveModel
+                    : undefined;
+                if (rawEffectiveModel && effectiveModel === undefined) {
+                    LOG.info('MeshQueue', `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${resolved.providerType}' on node ${nodeId} (task ${task.id}); provider will use its own default model`);
+                }
 
                 // Don't spawn a session for a (node, provider) already at its declared
                 // maxParallel cap — it would launch only to fail the claim. The claim

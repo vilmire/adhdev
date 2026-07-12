@@ -239,6 +239,48 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('send only the delta')
   })
 
+  it('carries the repo-agnostic delegated-agent operating rules migrated from CLAUDE.md into the static prompt', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        defaultBranch: 'main',
+        nodes: [
+          {
+            id: 'node_1',
+            workspace: '/repo',
+            daemonId: 'daemon_1',
+            userOverrides: {},
+            policy: {},
+          },
+        ],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    // (1) Fresh-session 4-condition guard merged into "Reuse idle sessions".
+    expect(prompt).toContain('Start a fresh session only when: (a) branch/worktree isolation is required')
+    expect(prompt).toContain('(d) the user explicitly asks for a different provider/session')
+    // (2) Sequential same-issue continuation is allowed; the rule only blocks concurrent unrelated interleaving.
+    expect(prompt).toContain('Continuation of the same issue in an already-idle session is allowed and preferred')
+    expect(prompt).toContain('not sequential same-issue follow-ups')
+    // (3) No nested coordinator for simple inspection.
+    expect(prompt).toContain('Do not spawn a nested coordinator-like agent for simple inspection tasks')
+    // (4) Internal traffic must not surface as user-visible transcript.
+    expect(prompt).toContain('must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing')
+    // (5) Don't reopen already-done work after compaction/resume.
+    expect(prompt).toContain('Before reopening a reported issue after context compaction or session resume')
+    expect(prompt).toContain('continue from the existing diff/commit instead of starting a duplicate investigation')
+    // (6) Stuck-but-verified → stop polling, verify with git, land.
+    expect(prompt).toContain('If a delegated session appears stuck but has already produced a verified final summary or diff')
+    // (7) Manual strict fast-forward convergence bypass when Refinery falsely blocks a clean branch.
+    expect(prompt).toContain('converge by strict fast-forward')
+    expect(prompt).toContain('rebase the submodule commit onto the submodule `origin/main`')
+    expect(prompt).toContain('NEVER force-push or reset; abort and report on any non-fast-forward')
+  })
+
   it('requires a branch convergence final state before reporting completion', () => {
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {
