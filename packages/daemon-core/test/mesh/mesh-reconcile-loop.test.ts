@@ -1285,6 +1285,39 @@ describe('runMeshReconcileTick', () => {
         cleanup(meshId)
       }
     })
+
+    // OFFLINE-NODE-FANOUT null-race harden: when the getter IS wired (cloud) but returns
+    // null for a node — the exact state a powered-off node lands in each cycle
+    // (failPeer deletes the peer → getPeerConnectionStatus returns null) — the pre-check
+    // must treat "no peer object right now" as NOT connected and skip the pull, NOT fall
+    // through and dial (which would re-queue for another 90s connect wait). Only the
+    // genuinely-unwired case (previous test) falls through.
+    it('skips a node whose wired getter returns null (offline node null-race — no dispatch)', async () => {
+      const meshId = `mesh_reconcile_precheck_null_${Date.now()}`
+      try {
+        const sink: any[] = []
+        const coordinator = makeCoordinator(meshId, 'idle', sink)
+        const dispatchMeshCommand = vi.fn(async () => ({ success: true, events: [] }))
+
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: 'node_remote', workspace: '/repo/remote', daemonId: 'remote-daemon' }] },
+        ])
+
+        // Getter WIRED, but returns null for the offline node (no live peer object).
+        const getMeshPeerConnectionStatus = vi.fn((_daemonId: string) => null)
+
+        const components = makeComponents([coordinator], dispatchMeshCommand, undefined, getMeshPeerConnectionStatus)
+
+        await runMeshReconcileTick(components)
+
+        // Consulted the getter, saw null → skipped the pull entirely (no 90s dial).
+        expect(getMeshPeerConnectionStatus).toHaveBeenCalledWith('remote-daemon')
+        const pullCalls = dispatchMeshCommand.mock.calls.filter((c: any[]) => c[1] === 'get_pending_mesh_events')
+        expect(pullCalls).toHaveLength(0)
+      } finally {
+        cleanup(meshId)
+      }
+    })
   })
 
   // ── PHASE 3: pending-claim recovery ───────────────────────────────────────

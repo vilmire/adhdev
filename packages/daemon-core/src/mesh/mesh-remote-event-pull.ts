@@ -72,18 +72,26 @@ export async function pullRemoteNodeQueues(
         if (daemonIdsEquivalent(nodeDaemonId, localDaemonId)) return;
         if (daemonIdListIncludes(candidateDaemonIds, nodeDaemonId)) return;
 
-        // Peer-connected pre-check (EVENT-DELIVERY-DELAY fix(a)): a degraded peer whose
-        // DataChannel is not open would sink this pull into peer.connectQueue and stall
-        // until CONNECT_TIMEOUT_MS (90s), formerly freezing the whole serial loop and
-        // delaying completion-event recovery from healthy nodes. Skip such a node THIS
-        // tick and retry next tick — LOSSLESS: an unconnected peer has not drained
-        // anything (drained=0 preserved), so its events are recovered whole on the next
-        // successful tick. Skip = delay, never loss.
-        //   • snapshot present and state !== 'connected' → skip (continue next tick).
-        //   • snapshot null/undefined (getter unwired, e.g. standalone) → DO NOT skip;
-        //     fall through to the legacy path so this stays regression-free.
-        const peerSnapshot = components.getMeshPeerConnectionStatus?.(nodeDaemonId);
-        if (peerSnapshot && String(peerSnapshot.state) !== 'connected') return;
+        // Peer-connected pre-check (EVENT-DELIVERY-DELAY fix(a) + OFFLINE-NODE-FANOUT):
+        // a degraded peer whose DataChannel is not open would sink this pull into
+        // peer.connectQueue and stall until CONNECT_TIMEOUT_MS (90s), formerly freezing
+        // the whole serial loop and delaying completion-event recovery from healthy
+        // nodes. Skip such a node THIS tick and retry next tick — LOSSLESS: an
+        // unconnected peer has not drained anything (drained=0 preserved), so its events
+        // are recovered whole on the next successful tick. Skip = delay, never loss.
+        //   • getter WIRED (cloud) → a null/undefined snapshot means "no peer object
+        //     right now" = NOT connected (a powered-off node whose failPeer just deleted
+        //     the peer each cycle). Treat it EXACTLY like state !== 'connected' and skip;
+        //     dialing here would re-queue for another 90s (the null-race the guard is
+        //     meant to prevent). Only a snapshot with state === 'connected' proceeds.
+        //   • getter UNWIRED (standalone) → DO NOT skip; fall through to the legacy path
+        //     so this stays regression-free (the standalone case the guard's history
+        //     references).
+        const getPeerStatus = components.getMeshPeerConnectionStatus;
+        if (getPeerStatus) {
+            const peerSnapshot = getPeerStatus(nodeDaemonId);
+            if (!peerSnapshot || String(peerSnapshot.state) !== 'connected') return;
+        }
 
         for (const pendingEventArgs of pulls) {
             let events: unknown;
@@ -185,15 +193,23 @@ export async function collectLiveNodesWithSessions(
         const isLocalNode = !nodeDaemonId
             || daemonIdListIncludes(selfIds, nodeDaemonId)
             || daemonIdsEquivalent(nodeDaemonId, localDaemonId);
-        // Peer-connected pre-check (EVENT-DELIVERY-DELAY fix(a)): mirror pullRemoteNodeQueues.
-        // Without this the 90s connect-deadline block re-enters via this Promise.all —
-        // a degraded remote's get_status_metadata sinks into peer.connectQueue and stalls
-        // the whole prune probe. Only call the remote when the peer is 'connected'; an
-        // unconnected peer is left undecorated (empty session list), same as unreachable.
-        // Getter unwired (null/undefined) → do NOT skip, fall through (regression-free).
+        // Peer-connected pre-check (EVENT-DELIVERY-DELAY fix(a) + OFFLINE-NODE-FANOUT):
+        // mirror pullRemoteNodeQueues. Without this the 90s connect-deadline block
+        // re-enters via this Promise.all — a degraded remote's get_status_metadata sinks
+        // into peer.connectQueue and stalls the whole prune probe. Only call the remote
+        // when the peer is 'connected'; an unconnected peer is left undecorated (empty
+        // session list), same as unreachable.
+        //   • getter WIRED (cloud) → a null snapshot means "no peer object right now" =
+        //     NOT connected (offline node whose failPeer deleted the peer). Skip (leave
+        //     undecorated) rather than dialing into another 90s connect wait — the same
+        //     null-race harden as pullRemoteNodeQueues.
+        //   • getter UNWIRED (standalone) → do NOT skip, fall through (regression-free).
         if (!isLocalNode) {
-            const peerSnapshot = components.getMeshPeerConnectionStatus?.(nodeDaemonId);
-            if (peerSnapshot && String(peerSnapshot.state) !== 'connected') return node;
+            const getPeerStatus = components.getMeshPeerConnectionStatus;
+            if (getPeerStatus) {
+                const peerSnapshot = getPeerStatus(nodeDaemonId);
+                if (!peerSnapshot || String(peerSnapshot.state) !== 'connected') return node;
+            }
         }
         let statusResult: unknown;
         try {
