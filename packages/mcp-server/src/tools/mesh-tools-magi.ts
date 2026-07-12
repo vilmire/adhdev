@@ -776,6 +776,55 @@ function nodeHeadCommit(node: any): string | undefined {
 }
 
 /**
+ * Canonical, order-independent key of a node's submodule gitlinks
+ * (GitSubmoduleStatus[] on node.git.submodules — path + commit). Two nodes on the
+ * same root HEAD but different submodule pointers (the oss/adhdev-providers case,
+ * where the submodule carries the actual fix code) must NOT be treated as the same
+ * base. Returns undefined when the node carries NO submodule telemetry at all
+ * (missing / non-array / empty) — so the caller only compares submodule keys when
+ * BOTH sides advertise submodules, and a node without submodule telemetry is never
+ * silently excluded (mirrors the missing-HEAD "can't prove → fresh" rule). An empty
+ * array is telemetry-absent (no submodules reported), NOT "a repo with zero
+ * submodules", so it too yields undefined and falls back to root-HEAD-only compare.
+ */
+function nodeSubmoduleKey(node: any): string | undefined {
+    const subs = node?.git?.submodules;
+    if (!Array.isArray(subs) || subs.length === 0) return undefined;
+    const parts = subs
+        .map((s: any) => {
+            const path = typeof s?.path === 'string' ? s.path.trim() : '';
+            const commit = typeof s?.commit === 'string' ? s.commit.trim() : '';
+            return path && commit ? `${path}@${commit}` : undefined;
+        })
+        .filter((p: string | undefined): p is string => !!p)
+        .sort((a: string, b: string) => a.localeCompare(b));
+    return parts.length > 0 ? parts.join(',') : undefined;
+}
+
+/**
+ * Whether a candidate node shares the same base as the coordinator reference.
+ * Root HEAD must match. Submodule gitlinks are additionally compared ONLY when the
+ * reference AND the candidate both carry submodule telemetry — if either side lacks
+ * it, we fall back to root-HEAD-only (the pre-fingerprint behavior), so telemetry
+ * absence never causes a silent exclusion. A candidate with no known HEAD can't be
+ * proven stale and is treated as fresh by the caller (this helper is only consulted
+ * once the candidate HEAD is known to match the reference HEAD).
+ */
+function candidateMatchesReferenceBase(
+    candidateHead: string,
+    candidateSubKey: string | undefined,
+    referenceCommit: string,
+    referenceSubKey: string | undefined,
+): boolean {
+    if (candidateHead !== referenceCommit) return false;
+    // Only diff submodule gitlinks when BOTH sides advertise them.
+    if (referenceSubKey !== undefined && candidateSubKey !== undefined) {
+        return candidateSubKey === referenceSubKey;
+    }
+    return true;
+}
+
+/**
  * Fix B fallback: a node's drift from its OWN upstream (GitCompactSummary.behind/ahead).
  * Used only when no coordinator reference commit is known — a node that reports it is
  * behind/ahead of its upstream is provably on different code than the panel baseline even
@@ -803,12 +852,13 @@ function nodeHasGitDrift(node: any): boolean {
 export function buildMagiFanoutPlan(
     slots: MagiSlot[],
     nodes: LocalMeshNodeEntry[],
-    opts: { n?: number; defaultN?: number; maxReplicas?: number; referenceCommit?: string; includeStale?: boolean } = {},
+    opts: { n?: number; defaultN?: number; maxReplicas?: number; referenceCommit?: string; referenceSubmoduleKey?: string; includeStale?: boolean } = {},
 ): MagiFanoutPlan {
     const cap = Math.max(1, Math.floor(opts.maxReplicas ?? MAGI_MAX_REPLICAS));
     const slotList = Array.isArray(slots) ? slots : [];
     const defaultN = opts.defaultN;
     const referenceCommit = typeof opts.referenceCommit === 'string' && opts.referenceCommit.trim() ? opts.referenceCommit.trim() : undefined;
+    const referenceSubmoduleKey = typeof opts.referenceSubmoduleKey === 'string' && opts.referenceSubmoduleKey.trim() ? opts.referenceSubmoduleKey.trim() : undefined;
     const includeStale = opts.includeStale === true;
     const replicas: MagiReplicaPlan[] = [];
     const unavailableSlots: MagiUnavailableSlot[] = [];
@@ -865,7 +915,13 @@ export function buildMagiFanoutPlan(
         if (referenceCommit) {
             const freshCandidate = candidateNodes.find(n => {
                 const h = nodeHeadCommit(n);
-                return !h || h === referenceCommit;
+                // No known HEAD → can't be proven stale → fresh (never exclude on missing
+                // telemetry). Otherwise same-base iff root HEAD matches AND — when both the
+                // reference and this candidate advertise submodules — the submodule gitlinks
+                // match too. Two nodes on the same root HEAD but different oss/adhdev-providers
+                // pointer are NOT the same base.
+                if (!h) return true;
+                return candidateMatchesReferenceBase(h, nodeSubmoduleKey(n), referenceCommit, referenceSubmoduleKey);
             });
             if (freshCandidate) {
                 headCommit = nodeHeadCommit(freshCandidate);
@@ -915,9 +971,15 @@ export function buildMagiFanoutPlan(
         // the reference); include_stale=true overrides but the caller surfaces a warning.
         if (gitStale && !includeStale) {
             resolution.excluded = true;
-            resolution.reason = referenceCommit
-                ? `git-stale: node HEAD ${headCommit ?? '(unknown)'} differs from reference ${referenceCommit}`
-                : `git-stale: node reports drift from its upstream (behind/ahead) and no coordinator reference commit is known`;
+            if (referenceCommit) {
+                // Same root HEAD but a differing submodule gitlink is the extended-fingerprint
+                // case — name the submodule drift so the surface is not misleading.
+                resolution.reason = headCommit && headCommit === referenceCommit
+                    ? `git-stale: node HEAD ${headCommit} matches reference but submodule gitlink(s) differ from reference base`
+                    : `git-stale: node HEAD ${headCommit ?? '(unknown)'} differs from reference ${referenceCommit}`;
+            } else {
+                resolution.reason = `git-stale: node reports drift from its upstream (behind/ahead) and no coordinator reference commit is known`;
+            }
             slotResolutions.push(resolution);
             return;
         }
@@ -971,6 +1033,17 @@ export function buildMagiFanoutPlan(
 function resolveMagiReferenceCommit(ctx: MeshContext): string | undefined {
     const node = resolveCoordinatorNode(ctx);
     return nodeHeadCommit(node);
+}
+
+/**
+ * The coordinator node's submodule-gitlink key, paired with the reference commit above
+ * to form the base fingerprint (root HEAD + sorted submodule gitlinks). Undefined when
+ * the coordinator carries no submodule telemetry → submodule drift is simply not diffed
+ * (root-HEAD-only comparison, the pre-fingerprint behavior).
+ */
+function resolveMagiReferenceSubmoduleKey(ctx: MeshContext): string | undefined {
+    const node = resolveCoordinatorNode(ctx);
+    return nodeSubmoduleKey(node);
 }
 
 // ─── Task prompt (common-schema contract) ───────
@@ -1356,6 +1429,11 @@ export async function meshMagiReview(
     // refresh, so slot resolution pins fresh live nodes against the SAME baseline
     // buildMagiFanoutPlan uses for git-staleness. read-only — safe to hoist.
     const referenceCommit = resolveMagiReferenceCommit(ctx);
+    // Extend the base fingerprint with the coordinator's submodule gitlinks so two nodes
+    // on the SAME root HEAD but a different oss/adhdev-providers pointer are not treated
+    // as the same base (that submodule carries the actual fix code). Undefined when the
+    // coordinator has no submodule telemetry → root-HEAD-only comparison (pre-fingerprint).
+    const referenceSubmoduleKey = resolveMagiReferenceSubmoduleKey(ctx);
 
     // 1. Resolve the panel SOLELY from the user's configured kind→slots binding
     // (magiKindPanels). There is NO named-panel, inline-members, or preset auto-synthesis
@@ -1395,7 +1473,7 @@ export async function meshMagiReview(
     // include_stale=true keeps them (with a warning). The ≥2-target guard below is
     // re-checked AFTER this exclusion, so it never silently degrades to N=1.
     const includeStale = (args.include_stale ?? args.includeStale) === true;
-    const plan = buildMagiFanoutPlan(planSlots, ctx.mesh.nodes, { n: args.n, referenceCommit, includeStale });
+    const plan = buildMagiFanoutPlan(planSlots, ctx.mesh.nodes, { n: args.n, referenceCommit, referenceSubmoduleKey, includeStale });
     if (!plan.enoughTargets) {
         const droppedByStale = plan.staleSlots.length > 0;
         return JSON.stringify({

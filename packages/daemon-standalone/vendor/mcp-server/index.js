@@ -4891,6 +4891,23 @@ function nodeHeadCommit(node) {
   const h = node?.git?.headCommit;
   return typeof h === "string" && h.trim() ? h.trim() : void 0;
 }
+function nodeSubmoduleKey(node) {
+  const subs = node?.git?.submodules;
+  if (!Array.isArray(subs) || subs.length === 0) return void 0;
+  const parts = subs.map((s) => {
+    const path = typeof s?.path === "string" ? s.path.trim() : "";
+    const commit = typeof s?.commit === "string" ? s.commit.trim() : "";
+    return path && commit ? `${path}@${commit}` : void 0;
+  }).filter((p) => !!p).sort((a, b) => a.localeCompare(b));
+  return parts.length > 0 ? parts.join(",") : void 0;
+}
+function candidateMatchesReferenceBase(candidateHead, candidateSubKey, referenceCommit, referenceSubKey) {
+  if (candidateHead !== referenceCommit) return false;
+  if (referenceSubKey !== void 0 && candidateSubKey !== void 0) {
+    return candidateSubKey === referenceSubKey;
+  }
+  return true;
+}
 function nodeGitDrift(node) {
   const git = node?.git;
   const behind = git && typeof git.behind === "number" && Number.isFinite(git.behind) ? Math.max(0, git.behind) : 0;
@@ -4906,6 +4923,7 @@ function buildMagiFanoutPlan(slots, nodes, opts = {}) {
   const slotList = Array.isArray(slots) ? slots : [];
   const defaultN = opts.defaultN;
   const referenceCommit = typeof opts.referenceCommit === "string" && opts.referenceCommit.trim() ? opts.referenceCommit.trim() : void 0;
+  const referenceSubmoduleKey = typeof opts.referenceSubmoduleKey === "string" && opts.referenceSubmoduleKey.trim() ? opts.referenceSubmoduleKey.trim() : void 0;
   const includeStale = opts.includeStale === true;
   const replicas = [];
   const unavailableSlots = [];
@@ -4948,7 +4966,8 @@ function buildMagiFanoutPlan(slots, nodes, opts = {}) {
     if (referenceCommit) {
       const freshCandidate = candidateNodes.find((n) => {
         const h = nodeHeadCommit(n);
-        return !h || h === referenceCommit;
+        if (!h) return true;
+        return candidateMatchesReferenceBase(h, nodeSubmoduleKey(n), referenceCommit, referenceSubmoduleKey);
       });
       if (freshCandidate) {
         headCommit = nodeHeadCommit(freshCandidate);
@@ -4983,7 +5002,11 @@ function buildMagiFanoutPlan(slots, nodes, opts = {}) {
     };
     if (gitStale && !includeStale) {
       resolution.excluded = true;
-      resolution.reason = referenceCommit ? `git-stale: node HEAD ${headCommit ?? "(unknown)"} differs from reference ${referenceCommit}` : `git-stale: node reports drift from its upstream (behind/ahead) and no coordinator reference commit is known`;
+      if (referenceCommit) {
+        resolution.reason = headCommit && headCommit === referenceCommit ? `git-stale: node HEAD ${headCommit} matches reference but submodule gitlink(s) differ from reference base` : `git-stale: node HEAD ${headCommit ?? "(unknown)"} differs from reference ${referenceCommit}`;
+      } else {
+        resolution.reason = `git-stale: node reports drift from its upstream (behind/ahead) and no coordinator reference commit is known`;
+      }
       slotResolutions.push(resolution);
       return;
     }
@@ -5023,6 +5046,10 @@ function buildMagiFanoutPlan(slots, nodes, opts = {}) {
 function resolveMagiReferenceCommit(ctx) {
   const node = resolveCoordinatorNode(ctx);
   return nodeHeadCommit(node);
+}
+function resolveMagiReferenceSubmoduleKey(ctx) {
+  const node = resolveCoordinatorNode(ctx);
+  return nodeSubmoduleKey(node);
 }
 var MAGI_CLAIM_AUDIT_CONTRACT = `When done, respond with ONLY a single JSON object (no prose, no code fence) matching this exact schema:
 {
@@ -5230,6 +5257,7 @@ async function meshMagiReview(ctx, args) {
   const judgeWarning = useJudge ? "use_judge=true requested, but judge synthesis is not yet implemented \u2014 falling back to clustering synthesis." : null;
   await refreshMeshFromDaemon(ctx);
   const referenceCommit = resolveMagiReferenceCommit(ctx);
+  const referenceSubmoduleKey = resolveMagiReferenceSubmoduleKey(ctx);
   const taskKind = normalizeMagiTaskKind(explicitTaskKind);
   const panelName = `(kind:${taskKind})`;
   const slots = (0, import_daemon_core4.getMagiKindPanel)(taskKind);
@@ -5256,7 +5284,7 @@ async function meshMagiReview(ctx, args) {
     }, null, 2);
   }
   const includeStale = (args.include_stale ?? args.includeStale) === true;
-  const plan = buildMagiFanoutPlan(planSlots, ctx.mesh.nodes, { n: args.n, referenceCommit, includeStale });
+  const plan = buildMagiFanoutPlan(planSlots, ctx.mesh.nodes, { n: args.n, referenceCommit, referenceSubmoduleKey, includeStale });
   if (!plan.enoughTargets) {
     const droppedByStale = plan.staleSlots.length > 0;
     return JSON.stringify({
