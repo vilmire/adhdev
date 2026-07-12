@@ -150,6 +150,48 @@ describe('mesh pending-event — v2 emit stamping (B2a)', () => {
         expect(peeked.dispatchedBy?.daemonId).toBe(SELF_MACH);
     });
 
+    it('CODA-TERMINAL-EVENT-HELD: stamps the self daemon id as targetCoordinatorDaemonId on an ownerless self-fallback broadcast so a held event is addressable on idle return', () => {
+        // The defect: a self-fallback broadcast terminal event (worktree_bootstrap_complete /
+        // refine:completed / summary-less agent:generating_completed emitted while THIS
+        // machine's coordinator is generating) carried targetCoordinatorDaemonId:null, so the
+        // reconcile-loop hold recorded a null-target event_held row and the coordinator only
+        // ever learned of it by polling the ledger. It must now be addressed to this machine's
+        // own daemon id — deliverable to the local coordinator's per-daemon scoped drain — while
+        // staying BROADCAST + dispatchedBySelfFallback (the machine-level leak guard is intact).
+        for (const eventName of ['agent:generating_completed', 'refine:completed', 'worktree_bootstrap_complete']) {
+            const meshId = `mesh-v2-${randomUUID().slice(0, 8)}`;
+            __clearMeshPendingEventsForTests(meshId);
+            const noIdentity = makeTerminal(meshId, { event: eventName });
+            delete (noIdentity as any).targetCoordinatorDaemonId;
+            queuePendingMeshCoordinatorEvent(noIdentity);
+
+            const [peeked] = getPendingMeshCoordinatorEvents(meshId, SELF_MACH) as PendingMeshCoordinatorEvent[];
+            expect(peeked, `${eventName} surfaced to self`).toBeTruthy();
+            expect(peeked.scope, `${eventName} scope`).toBe('broadcast');
+            expect(peeked.dispatchedBySelfFallback, `${eventName} selfFallback`).toBe(true);
+            // The fix: the ownerless broadcast is now addressed to this machine's own daemon.
+            expect(peeked.targetCoordinatorDaemonId, `${eventName} target`).toBe(SELF_MACH);
+        }
+    });
+
+    it('CODA-TERMINAL-EVENT-HELD: does NOT stamp a daemon target on a SESSION-strict self-fallback event (strict-route hold stays session-keyed)', () => {
+        // A self-fallback event that carries a targetCoordinatorSessionId is deliberately held /
+        // expired by the reconcile loop's strict-route path keyed on the SESSION. Stamping a
+        // daemon target on it would let it drain to a sibling before its session returns, breaking
+        // the strict-route hold — so the daemon-target stamp must skip session-strict events.
+        const meshId = `mesh-v2-${randomUUID().slice(0, 8)}`;
+        __clearMeshPendingEventsForTests(meshId);
+        const strict = makeTerminal(meshId, { targetCoordinatorSessionId: 'coord-GONE' });
+        delete (strict as any).targetCoordinatorDaemonId;
+        queuePendingMeshCoordinatorEvent(strict);
+
+        const [peeked] = getPendingMeshCoordinatorEvents(meshId, SELF_MACH) as PendingMeshCoordinatorEvent[];
+        expect(peeked).toBeTruthy();
+        expect(peeked.dispatchedBySelfFallback).toBe(true);
+        // No daemon target stamped — the strict-route hold remains session-keyed.
+        expect(peeked.targetCoordinatorDaemonId).toBeUndefined();
+    });
+
     it('does NOT fan a self-fallback terminal broadcast out to a coordinator on a DIFFERENT machine (MAGI-REPLICA-COMPLETION-EVENT-LEAK)', () => {
         // The leak: a replica completion with no owner anchor was broadcast and reached
         // EVERY coordinator, including ones on other machines that never dispatched it.

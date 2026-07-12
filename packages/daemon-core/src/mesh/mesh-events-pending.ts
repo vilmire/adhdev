@@ -891,6 +891,39 @@ export function stampPendingEventV2(
     // has no owner to leak from and must reach whatever coordinator drains here.
     const dispatchedBySelfFallback = selfFallback && stamp.scope === 'broadcast';
 
+    // CODA-TERMINAL-EVENT-HELD-WHILE-GENERATING (project-mesh-self-fallback-terminal-
+    // broadcast-drop): an ownerless self-fallback broadcast terminal event
+    // (worktree_bootstrap_complete / refine:completed / a summary-less
+    // agent:generating_completed emitted while THIS machine's coordinator CLI session is
+    // generating) previously carried NO targetCoordinatorDaemonId. The reconcile loop
+    // holds it under `generating_no_idle_coordinator`, and its `event_held` ledger mirror
+    // records targetCoordinatorDaemonId:null — so the held event is not addressable to
+    // the local coordinator's per-daemon scoped file, and (live 2026-07-12) the
+    // coordinator only ever learns of it by polling the ledger, violating the no-polling
+    // rule.
+    //
+    // The event's INTENDED coordinator IS this machine's own coordinator: the
+    // self-fallback minted `dispatchedBy` under this daemon's own machineId precisely
+    // because the originating task was dispatched by this machine's coordinator. Stamp
+    // `targetCoordinatorDaemonId` = that same self daemon id so the held event is
+    // addressable to the local coordinator's scoped file / drain filter, WITHOUT
+    // changing its BROADCAST scope or the `dispatchedBySelfFallback` machine-level
+    // `deliverSelfFallback` guard (which already keeps a replica completion on machine A
+    // from fanning out to a coordinator on machine B). The target is a MACHINE id,
+    // matched by machine core, so it only ever reaches a coordinator on THIS machine.
+    //
+    // Gate: apply ONLY when the event carries NO targetCoordinatorSessionId. A
+    // session-strict event (targetCoordinatorSessionId set, coordinator daemon id
+    // unresolved) is deliberately held/expired by the reconcile loop's strict-route path
+    // keyed on the SESSION, not the daemon — stamping a daemon target there would let it
+    // drain to a sibling before its session returns and break the strict-route hold. An
+    // event that already carries an explicit daemon target is likewise left untouched.
+    const selfFallbackTarget = dispatchedBySelfFallback
+        && !readNonEmptyString(event.targetCoordinatorDaemonId)
+        && !readNonEmptyString(event.targetCoordinatorSessionId)
+        ? readNonEmptyString(stamp.dispatchedBy.daemonId)
+        : undefined;
+
     return {
         ...event,
         protocolVersion: stamp.protocolVersion,
@@ -899,6 +932,7 @@ export function stampPendingEventV2(
         dispatchedBy: stamp.dispatchedBy,
         ...(stamp.intendedFor ? { intendedFor: stamp.intendedFor } : {}),
         ...(dispatchedBySelfFallback ? { dispatchedBySelfFallback: true } : {}),
+        ...(selfFallbackTarget ? { targetCoordinatorDaemonId: selfFallbackTarget } : {}),
     };
 }
 

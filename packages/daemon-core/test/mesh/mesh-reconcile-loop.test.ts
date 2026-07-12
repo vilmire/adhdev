@@ -363,6 +363,55 @@ describe('runMeshReconcileTick', () => {
     }
   })
 
+  it('CODA-TERMINAL-EVENT-HELD: an ownerless self-fallback broadcast terminal event held while the coordinator generates is delivered to that coordinator on idle return', async () => {
+    // project-mesh-self-fallback-terminal-broadcast-drop. A terminal event
+    // (worktree_bootstrap_complete / refine:completed) emitted while THIS machine's
+    // coordinator CLI session is generating has NO coordinator identity → self-fallback
+    // BROADCAST, previously targetCoordinatorDaemonId:null. It is held under
+    // generating_no_idle_coordinator; the fix stamps the self daemon id so it is
+    // addressable and delivered on the coordinator's next idle tick (not stranded in the
+    // ledger where the coordinator would have to poll to find it).
+    for (const eventName of ['worktree_bootstrap_complete', 'refine:completed']) {
+      const meshId = `mesh_reconcile_selffb_${eventName.replace(/[^a-z]/g, '')}_${Date.now()}`
+      try {
+        const sink: any[] = []
+        let status: 'generating' | 'idle' = 'generating'
+        const coordinator = {
+          category: 'cli',
+          getState: () => ({ instanceId: 'coord-selffb', status, settings: { meshCoordinatorFor: meshId } }),
+          onEvent: vi.fn((_event: string, payload: any) => sink.push(payload)),
+        }
+        const components = makeComponents([coordinator])
+        // Queue with NO targetCoordinatorDaemonId and NO targetCoordinatorSessionId →
+        // ownerless self-fallback broadcast (the exact live-stranded shape).
+        queuePendingMeshCoordinatorEvent({
+          event: eventName,
+          meshId,
+          nodeLabel: "Node 'node_child_1'",
+          nodeId: 'node_child_1',
+          metadataEvent: { sessionId: `sess-${eventName}`, timestamp: Date.now(), finalSummary: 'work done' },
+          coordinatorMessage: `Node 'node_child_1' finished (${eventName}).`,
+          queuedAt: Date.now(),
+        })
+
+        // Tick 1: coordinator generating → held, nothing injected.
+        await runMeshReconcileTick(components)
+        expect(coordinator.onEvent, `${eventName} held while generating`).not.toHaveBeenCalled()
+        expect(getPendingMeshCoordinatorEvents(meshId), `${eventName} still queued`).toHaveLength(1)
+
+        // Tick 2: coordinator idle → the held self-fallback broadcast is delivered.
+        status = 'idle'
+        await runMeshReconcileTick(components)
+        expect(coordinator.onEvent, `${eventName} delivered on idle`).toHaveBeenCalledTimes(1)
+        expect(coordinator.onEvent.mock.calls[0][1].input.textFallback).toContain('finished')
+        // Consumed exactly once — not stranded, no re-delivery.
+        expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
+      } finally {
+        cleanup(meshId)
+      }
+    }
+  })
+
   it('does NOT inject a non-force progress event into a generating coordinator — it stays queued', async () => {
     const meshId = `mesh_reconcile_progress_generating_${Date.now()}`
     try {
