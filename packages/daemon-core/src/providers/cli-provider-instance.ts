@@ -256,6 +256,15 @@ export class CliProviderInstance implements ProviderInstance {
     // R4b miss: collapse at boot+8s, dispatch at boot+12.4s > the 12s boot window).
     // Anchoring on the collapse moment makes the window cover dispatch-delay+turn.
     private startupGraceCollapseAt: number | null = null;
+    // ANTIGRAVITY-PREMATURE-COMPLETION gate: wall-clock when the CURRENT mesh task
+    // was injected/attached (attachMeshAssignment). The injected task counts as having
+    // genuinely entered generating only once a turn STARTS after this moment
+    // (currentTurnStartedAt > meshTaskInjectedAt) — because currentTurnStartedAt
+    // persists from the PRIOR turn and forceSendMessage pre-binds currentTurnTaskId at
+    // inject time, so neither alone distinguishes "injected but not yet generating"
+    // from "genuinely generating". This timestamp is that discriminator. 0 = no task
+    // injected since boot (ad-hoc/non-mesh turns fall back to the plain turn-started check).
+    private meshTaskInjectedAt = 0;
     private settings: Record<string, any> = {};
     private monitor: StatusMonitor;
     private generatingDebounceTimer: NodeJS.Timeout | null = null;
@@ -862,6 +871,13 @@ export class CliProviderInstance implements ProviderInstance {
      */
     attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
         if (!assignment?.meshId) return;
+        // ANTIGRAVITY-PREMATURE-COMPLETION gate: stamp the injection moment for a task
+        // attach so injectedTaskHasStartedGenerating() can require the producing turn to
+        // START after this point (rejecting the prior turn's stale native-history tail
+        // that would otherwise fire generating_completed before generating_started).
+        if (assignment.taskId && assignment.taskId.trim()) {
+            this.meshTaskInjectedAt = Date.now();
+        }
         this.settings = {
             ...this.settings,
             meshNodeFor: assignment.meshId,
@@ -1468,7 +1484,25 @@ export class CliProviderInstance implements ProviderInstance {
 
         const externalMessages = this.readExternalCompletionMessages();
         if (externalMessages) {
-            const present = turnClosed && this.completionHasFinalAssistantMessage(externalMessages, turnStartedAt);
+            // ANTIGRAVITY-PREMATURE-COMPLETION (recur): the external-native transcript is
+            // the WHOLE session's native-history, not turn-scoped by the provider. On a
+            // reused-idle antigravity session, a completion-gate poll can run AFTER a new
+            // task is injected but BEFORE that task's onTurnStarted fires. The transcript
+            // then still tails the PRIOR turn's final-assistant bubble; completionHasFinal‑
+            // AssistantMessage accepts it (turnStartedAt is 0/undefined pre-onTurnStarted →
+            // fails open, or the prior bubble post-dates the prior turn → passes) and a
+            // generating_completed fires for the NEW task BEFORE generating_started — the
+            // exact live 06:34→06:35 inversion. Gate external-native evidence on the current
+            // injected task having genuinely entered generating: if a task is attached but its
+            // turn has not started (turnStartedInjectedTask() === false), the tail is stale by
+            // construction, so this evidence must NOT satisfy the completion gate. Fail CLOSED
+            // (present=false) rather than open. This does NOT regress the rc.480/481 win: once
+            // the injected task's onTurnStarted fires, currentTurnStartedAt/currentTurnTaskId
+            // bind to it and a real final bubble still fires completion normally.
+            const injectedTaskGenerating = this.injectedTaskHasStartedGenerating();
+            const present = injectedTaskGenerating
+                && turnClosed
+                && this.completionHasFinalAssistantMessage(externalMessages, turnStartedAt);
             // Dashboard tail-repair cache: this runs on EVERY completion check
             // (mesh AND non-mesh — the non-mesh path suppresses the
             // generating_completed emit, so completionFinalSummary never runs there
@@ -1922,6 +1956,43 @@ export class CliProviderInstance implements ProviderInstance {
         if (typeof turnTaskId === 'string' && turnTaskId.trim()) return turnTaskId;
         const scalar = this.settings.meshActiveTaskId;
         return typeof scalar === 'string' && scalar.trim() ? scalar : undefined;
+    }
+
+    /**
+     * ANTIGRAVITY-PREMATURE-COMPLETION gate: has the CURRENTLY-injected task actually
+     * entered generating (a real onTurnStarted for it)? Used to reject stale external-
+     * native completion evidence that predates the injected task's turn.
+     *
+     * The injected task's id is the session scalar `meshActiveTaskId`, stamped by
+     * attachMeshAssignment BEFORE the PTY turn starts. That stamp also records
+     * `meshTaskInjectedAt`. The turn that has genuinely started is marked by
+     * `adapter.currentTurnStartedAt` (set ONLY by onTurnStarted). Two naive signals both
+     * FAIL for a reused-idle session:
+     *  - `currentTurnStartedAt > 0` alone: it persists from the PRIOR turn, so it is
+     *    already > 0 the instant a new task is injected (pre-onTurnStarted).
+     *  - `currentTurnTaskId === meshActiveTaskId` alone: forceSendMessage (the mesh
+     *    inject path) pre-binds currentTurnTaskId to the new taskId at inject time,
+     *    BEFORE the turn starts, so this matches prematurely too.
+     * The robust discriminator is TEMPORAL: the producing turn must have STARTED AFTER
+     * the injection — `currentTurnStartedAt > meshTaskInjectedAt`. Only then has the
+     * injected task's own onTurnStarted fired.
+     *  - No injected task since boot (meshTaskInjectedAt === 0, e.g. an ad-hoc/dashboard
+     *    turn or a non-mesh session): fall back to the plain "a turn has started" check
+     *    so non-mesh completion is unaffected.
+     * Fails CLOSED for the injected-but-not-started window; open once the injected turn is
+     * genuinely underway (preserving the rc.480/481 completion-fires win).
+     */
+    private injectedTaskHasStartedGenerating(): boolean {
+        const turnStartedAt = typeof (this.adapter as any)?.currentTurnStartedAt === 'number'
+            ? (this.adapter as any).currentTurnStartedAt as number
+            : 0;
+        const turnStarted = Number.isFinite(turnStartedAt) && turnStartedAt > 0;
+        if (this.meshTaskInjectedAt <= 0) {
+            // No mesh task injected since boot — plain "a turn has started" suffices.
+            return turnStarted;
+        }
+        // A task was injected: the producing turn must have STARTED after that injection.
+        return turnStarted && turnStartedAt > this.meshTaskInjectedAt;
     }
 
     // EVTTRACE correlation context for this session's completion lifecycle. taskId is
