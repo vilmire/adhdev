@@ -59,7 +59,7 @@ import {
 } from './mesh-unresolved-forward-outbox.js';
 import { readNonEmptyString, readMeshCompletionSummary, buildMeshSystemMessage } from './mesh-events-utils.js';
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
-import { expandDaemonIdForms, daemonIdsEquivalent, sessionIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { expandDaemonIdForms, daemonIdsEquivalent, sessionIdsEquivalent, meshNodeIdMatches, withStatusProbeMarker } from '@adhdev/mesh-shared';
 import { getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-work-queue.js';
 import { resolveSessionBusyVerdict } from './mesh-queue-assignment.js';
 import { readLedgerEntries } from './mesh-ledger.js';
@@ -1637,7 +1637,15 @@ async function retryUnresolvedDelegateForwards(components: DaemonComponents): Pr
         let result: any;
         try {
             traceMeshEventStage('forward_send', entryTraceCtx, `retry → ${entry.coordinatorDaemonId}`);
-            result = await dispatchMeshCommand(entry.coordinatorDaemonId, 'mesh_forward_event', pushPayload);
+            // OFFLINE-NODE-BLOCKING: stamp the status-origin marker so the daemon-cloud relay
+            // grants the SHORT connect-wait budget. Without it, a retry to a coordinator whose
+            // daemon is powered off sinks into the 90s connect deadline per entry, serializing
+            // the whole unresolved-forward outbox behind one dead coordinator. With it, the
+            // dispatch throws in ~2s and the entry is left queued for the next tick — the
+            // existing retry-backoff and age-expiry below are unchanged. The marker only
+            // affects the connect wait and is stripped before mesh_forward_event executes, so
+            // delivery semantics are identical.
+            result = await dispatchMeshCommand(entry.coordinatorDaemonId, 'mesh_forward_event', withStatusProbeMarker(pushPayload));
         } catch (e: any) {
             // Coordinator unreachable (transport threw) — keep the entry queued and try again
             // next tick. This is NOT a hard rejection, so it does not count toward the cap;

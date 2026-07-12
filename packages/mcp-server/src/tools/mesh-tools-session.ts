@@ -821,10 +821,31 @@ export async function meshLaunchSession(
                 return JSON.stringify({ success: false, error: missingProviderPriorityMessage(args.node_id) });
             }
 
+            // OFFLINE-NODE-BLOCKING: probe each candidate provider until one is detected. Two
+            // guards keep an OFFLINE target node from serializing a ~90s × providers stall
+            // (~270s for a 3-provider priority list):
+            //   (a) `detect_provider` is read-only, so stamp it with the status-origin marker
+            //       ({ statusProbe: true }) — the daemon-cloud relay then grants the SHORT
+            //       connect-wait budget so a probe to an unconnected peer gives up in ~2s
+            //       instead of the 90s connect deadline.
+            //   (b) short-circuit on the FIRST transport-level failure. A per-provider
+            //       "not detected" comes back as a RESOLVED { detected: false } payload (try
+            //       the next provider); a THROW means the node itself is unreachable (peer not
+            //       connected / offline / relay timeout) — every remaining provider would fail
+            //       identically, so break immediately and fail fast with a node-unreachable error.
             const failed: string[] = [];
+            let unreachableError: string | null = null;
             for (const providerType of providerPriority) {
-                const detectedResult = await commandForNode(ctx, node, 'detect_provider', { providerType });
-                const detectedPayload = unwrapCommandPayload(detectedResult);
+                let detectedPayload: any;
+                try {
+                    const detectedResult = await commandForNode(ctx, node, 'detect_provider', { providerType }, { statusProbe: true });
+                    detectedPayload = unwrapCommandPayload(detectedResult);
+                } catch (e: any) {
+                    // Transport/connection failure: the node is unreachable, not the provider
+                    // missing. Stop probing the rest of the priority list.
+                    unreachableError = e?.message || String(e);
+                    break;
+                }
                 if (detectedPayload?.success && detectedPayload?.detected) {
                     resolvedProviderType = providerType;
                     break;
@@ -832,6 +853,9 @@ export async function meshLaunchSession(
                 failed.push(`${providerType}: ${detectedPayload?.error || 'not detected'}`);
             }
             if (!resolvedProviderType) {
+                if (unreachableError) {
+                    return JSON.stringify({ success: false, error: `Node '${args.node_id}' is unreachable — cannot detect a provider (${unreachableError}). The node's daemon may be offline; retry once it reconnects.` });
+                }
                 return JSON.stringify({ success: false, error: `No usable provider detected for node '${args.node_id}' from providerPriority: ${failed.join('; ')}` });
             }
         }

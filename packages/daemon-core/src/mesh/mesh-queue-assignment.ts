@@ -15,7 +15,7 @@ import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
 import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
-import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, deriveSlotsFromLegacy, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, deriveSlotsFromLegacy, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
@@ -2100,7 +2100,15 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: resolved.providerType });
                     let launchResult: any;
                     try {
-                        launchResult = await components.dispatchMeshCommand!(launchTarget.daemonId!, 'launch_cli', {
+                        // OFFLINE-NODE-BLOCKING: no peer-connected pre-check before this remote
+                        // launch_cli meant an OFFLINE target node sank the dispatch into the 90s
+                        // connect deadline, stalling the 4s auto-launch loop for a full 90s. Stamp
+                        // the status-origin marker so the daemon-cloud relay grants the SHORT
+                        // connect-wait budget — an offline node throws in ~2s, the catch below sets
+                        // the 25s cooldown (autoLaunchCooldownUntil) that already gates retries, so
+                        // the loop moves on. The marker only affects the connect wait and is
+                        // stripped before launch_cli executes, so a live node spawns identically.
+                        launchResult = await components.dispatchMeshCommand!(launchTarget.daemonId!, 'launch_cli', withStatusProbeMarker({
                             cliType: resolved.providerType,
                             dir: node.workspace,
                             settings: remoteSettings,
@@ -2110,7 +2118,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                             ...(effectiveModel ? { initialModel: effectiveModel } : {}),
                             // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).
                             ...(effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}),
-                        });
+                        }));
                     } catch (e: any) {
                         markAutoLaunch(meshId, task.id, { status: 'failed', reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: resolved.providerType });
                         autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();

@@ -16,7 +16,7 @@ import { enqueueUnresolvedDelegateForward, nudgeUnresolvedForwardRetry } from '.
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { resolveDelegatedWorkerAutoApprove } from '../repo-mesh-types.js';
-import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent, withStatusProbeMarker, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
     findTerminalLedgerEvidenceForTask,
@@ -760,7 +760,15 @@ function stopStaleMeshWorker(
             } catch { /* best-effort */ }
         }
         if (daemonId && components.dispatchMeshCommand) {
-            Promise.resolve(components.dispatchMeshCommand(daemonId, 'stop_cli', stopArgs))
+            // OFFLINE-NODE-BLOCKING: this stop is fire-and-forget. Without a short connect-wait,
+            // a stop_cli to a worker node whose daemon is powered off leaves a pending request
+            // hanging for the full 90s connect deadline before its .catch fires (a leaked
+            // pending per stale worker). Stamp the status-origin marker so the daemon-cloud relay
+            // grants the SHORT connect-wait budget — an offline node rejects in ~2s and the .catch
+            // logs it immediately. The marker only affects the connect wait and is stripped before
+            // stop_cli executes, so a live worker is stopped identically. (Best-effort by design:
+            // a failed stop only loses the belt-and-suspenders stop; the ack was already rejected.)
+            Promise.resolve(components.dispatchMeshCommand(daemonId, 'stop_cli', withStatusProbeMarker(stopArgs)))
                 .catch((e: any) => LOG.warn('MeshQueue', `Remote stop of stale worker ${sessionId} on daemon ${daemonId} failed: ${e?.message || e}`));
         } else {
             LOG.warn('MeshQueue', `Cannot stop stale worker ${sessionId}: no local adapter and no resolvable remote daemon id (node ${args.nodeId ?? '?'}). Ack already rejected — task will re-strand-and-fail if the worker completes.`);

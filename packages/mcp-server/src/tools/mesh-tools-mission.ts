@@ -203,23 +203,29 @@ export async function meshReconcileLedger(
         ...(typeof args.since === 'string' && args.since.trim() ? { since: args.since.trim() } : {}),
     };
 
-    for (const node of nodes) {
+    // OFFLINE-NODE-BLOCKING: the ledger fan-out issues one `get_mesh_ledger_slice` per
+    // node. Run them concurrently with per-node error isolation (Promise.allSettled) so a
+    // single dead node no longer serializes the rest, AND stamp the read-only slice probe
+    // with the status-origin marker ({ statusProbe: true }) so the daemon-cloud relay grants
+    // the SHORT connect-wait budget — an offline (powered-off) node is rejected in ~2s with
+    // PEER_NOT_CONNECTED instead of sinking into the 90s connect deadline. Order-preserving:
+    // results are collected back in `nodes` order so the aggregated evidence is unchanged.
+    const reconcileNode = async (node: (typeof nodes)[number]): Promise<any> => {
         try {
             if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) {
                 // G4: Use SQLite mesh_event_ledger (bounded slice) as the local P2P reconcile read path.
                 // readLedgerSlice (JSONL) is retained for per-daemon P2P export; coordinator local reads use SQLite.
                 const slice = readLedgerSliceFromStore(ctx.mesh.id, queryArgs);
-                replicas.push(buildMeshLedgerReplicaEvidence({
+                return buildMeshLedgerReplicaEvidence({
                     nodeId: node.id,
                     daemonId: node.daemonId,
                     transport: 'local',
                     slice,
                     status: 'local',
-                }));
-                continue;
+                });
             }
 
-            const result = await commandForNode(ctx, node, 'get_mesh_ledger_slice', queryArgs);
+            const result = await commandForNode(ctx, node, 'get_mesh_ledger_slice', queryArgs, { statusProbe: true });
             const payload = unwrapCommandPayload(result);
             if (payload?.success === false) {
                 throw new Error(payload.error || 'remote get_mesh_ledger_slice failed');
@@ -231,13 +237,6 @@ export async function meshReconcileLedger(
             const importResult = shouldImport
                 ? appendRemoteLedgerEntries(ctx.mesh.id, slice.entries)
                 : { accepted: 0, skippedDuplicate: 0, rejectedInvalid: 0, entries: [] };
-            replicas.push(buildMeshLedgerReplicaEvidence({
-                nodeId: node.id,
-                daemonId: node.daemonId,
-                transport: 'p2p_datachannel',
-                slice,
-                importResult,
-            }));
             if (shouldImport && importResult.accepted > 0) {
                 appendLedgerEntry(ctx.mesh.id, {
                     kind: 'ledger_replicated',
@@ -252,16 +251,41 @@ export async function meshReconcileLedger(
                     },
                 });
             }
+            return buildMeshLedgerReplicaEvidence({
+                nodeId: node.id,
+                daemonId: node.daemonId,
+                transport: 'p2p_datachannel',
+                slice,
+                importResult,
+            });
         } catch (e: any) {
-            replicas.push(buildMeshLedgerReplicaEvidence({
+            return buildMeshLedgerReplicaEvidence({
                 nodeId: node.id,
                 daemonId: node.daemonId,
                 transport: node.daemonId ? 'p2p_datachannel' : 'local',
                 status: 'failed',
                 error: e?.message ?? String(e),
+            });
+        }
+    };
+
+    const settled = await Promise.allSettled(nodes.map(reconcileNode));
+    settled.forEach((outcome, idx) => {
+        if (outcome.status === 'fulfilled') {
+            replicas.push(outcome.value);
+        } else {
+            // reconcileNode swallows its own errors, so a rejection here is unexpected —
+            // fall back to a failed-replica marker rather than dropping the node silently.
+            const node = nodes[idx];
+            replicas.push(buildMeshLedgerReplicaEvidence({
+                nodeId: node.id,
+                daemonId: node.daemonId,
+                transport: node.daemonId ? 'p2p_datachannel' : 'local',
+                status: 'failed',
+                error: outcome.reason?.message ?? String(outcome.reason),
             }));
         }
-    }
+    });
 
     const evidence = buildMeshLedgerReconciliationEvidence(ctx.mesh.id, replicas);
     appendLedgerEntry(ctx.mesh.id, {
@@ -474,9 +498,14 @@ export async function meshReviewInbox(
 ): Promise<string> {
     await refreshMeshFromDaemon(ctx);
     const meshId = (args.mesh_id ?? ctx.mesh.id).trim();
+    // OFFLINE-NODE-BLOCKING: the review inbox is read from a single hardcoded node
+    // (nodes[0]). If that node is offline (powered off) the read-only `get_mesh_review_inbox`
+    // relay would otherwise sink into the 90s connect deadline. Stamp the status-origin
+    // marker ({ statusProbe: true }) so the daemon-cloud relay grants the SHORT connect-wait
+    // budget and an offline nodes[0] fails fast (~2s) instead of hanging the inbox read.
     const result = await commandForNode(ctx, ctx.mesh.nodes[0], 'get_mesh_review_inbox', {
         meshId,
         inlineMesh: ctx.mesh,
-    });
+    }, { statusProbe: true });
     return JSON.stringify(result, null, 2);
 }

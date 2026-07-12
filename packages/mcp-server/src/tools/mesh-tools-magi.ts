@@ -1919,14 +1919,23 @@ export async function cleanupMagiAutoLaunchedSessions(
 
     let cleanedSessionCount = 0;
     const perNode: Array<Record<string, unknown>> = [];
-    for (const [nodeId, group] of targets) {
-        if (group.sessionIds.length === 0) continue;
+    // OFFLINE-NODE-BLOCKING: run the per-node cleanup fan-out concurrently with per-node
+    // error isolation (Promise.allSettled) so one offline replica node no longer serializes
+    // the rest. cleanup_mesh_sessions is a MUTATION (not a pure read), but it is idempotent
+    // and safe to skip for an unreachable node — an offline replica has no live sessions we
+    // could reach anyway. Stamp it with the status-origin marker ({ statusProbe: true }): the
+    // marker is used ONLY to grant the daemon-cloud relay's SHORT connect-wait budget (so an
+    // offline node fails fast in ~2s instead of the 90s connect deadline) and is stripped
+    // before the command executes, so the server-side cleanup semantics are unchanged.
+    const cleanupNode = async (
+        nodeId: string,
+        group: { sessionIds: string[]; requireAutoLaunchedForTaskIds?: unknown },
+    ): Promise<{ cleaned: number; entry: Record<string, unknown> }> => {
         try {
             const node = await findOptionalNodeWithRefresh(ctx, nodeId);
             if (!node) {
                 // Node gone from the live mesh — its sessions are unreachable; report, don't fail.
-                perNode.push({ nodeId, skipped: 'node_not_in_live_mesh', sessionIds: group.sessionIds });
-                continue;
+                return { cleaned: 0, entry: { nodeId, skipped: 'node_not_in_live_mesh', sessionIds: group.sessionIds } };
             }
             const result = await commandForNode(ctx, node, 'cleanup_mesh_sessions', {
                 meshId: ctx.mesh.id,
@@ -1936,25 +1945,42 @@ export async function cleanupMagiAutoLaunchedSessions(
                 source: 'magi_session_cleanup',
                 requireAutoLaunchedForTaskIds: group.requireAutoLaunchedForTaskIds,
                 inlineMesh: ctx.mesh,
-            });
+            }, { statusProbe: true });
             const payload = unwrapCommandPayload(result) as any;
             const deleted = Array.isArray(payload?.deletedSessionIds) ? payload.deletedSessionIds.length : 0;
             const stopped = Array.isArray(payload?.stoppedSessionIds) ? payload.stoppedSessionIds.length : 0;
-            cleanedSessionCount += deleted + stopped;
-            perNode.push({
-                nodeId,
-                requested: group.sessionIds.length,
-                deleted,
-                ...(stopped ? { stopped } : {}),
-                ...(Array.isArray(payload?.skippedMarkerMismatchSessionIds) && payload.skippedMarkerMismatchSessionIds.length
-                    ? { skippedMarkerMismatch: payload.skippedMarkerMismatchSessionIds }
-                    : {}),
-                ...(payload?.deleteUnsupported ? { deleteUnsupported: true } : {}),
-            });
+            return {
+                cleaned: deleted + stopped,
+                entry: {
+                    nodeId,
+                    requested: group.sessionIds.length,
+                    deleted,
+                    ...(stopped ? { stopped } : {}),
+                    ...(Array.isArray(payload?.skippedMarkerMismatchSessionIds) && payload.skippedMarkerMismatchSessionIds.length
+                        ? { skippedMarkerMismatch: payload.skippedMarkerMismatchSessionIds }
+                        : {}),
+                    ...(payload?.deleteUnsupported ? { deleteUnsupported: true } : {}),
+                },
+            };
         } catch (e: any) {
-            perNode.push({ nodeId, error: e?.message || String(e), sessionIds: group.sessionIds });
+            return { cleaned: 0, entry: { nodeId, error: e?.message || String(e), sessionIds: group.sessionIds } };
         }
-    }
+    };
+
+    const cleanupTargets = Array.from(targets).filter(([, group]) => group.sessionIds.length > 0);
+    const settled = await Promise.allSettled(
+        cleanupTargets.map(([nodeId, group]) => cleanupNode(nodeId, group)),
+    );
+    settled.forEach((outcome, idx) => {
+        if (outcome.status === 'fulfilled') {
+            cleanedSessionCount += outcome.value.cleaned;
+            perNode.push(outcome.value.entry);
+        } else {
+            // cleanupNode swallows its own errors, so a rejection here is unexpected.
+            const [nodeId, group] = cleanupTargets[idx];
+            perNode.push({ nodeId, error: outcome.reason?.message ?? String(outcome.reason), sessionIds: group.sessionIds });
+        }
+    });
     return { cleanedSessionCount, perNode };
 }
 
