@@ -20,7 +20,7 @@ const SHARED_STEPS: OnboardingStep[] = [
   {
     icon: '🦦',
     title: 'Welcome to ADHDev',
-    desc: 'Monitor and control your AI coding agents from anywhere — web, mobile, or CLI.',
+    desc: 'Drive any local CLI coding agent — Claude Code, Codex, Gemini — straight from your browser or phone. The agents keep running on your machine; you control them from the web.',
     visual: '🎉',
   },
   {
@@ -30,9 +30,9 @@ const SHARED_STEPS: OnboardingStep[] = [
     visual: '📱',
   },
   {
-    icon: '🖥️',
-    title: 'Remote desktop',
-    desc: 'View and control your IDE screen via P2P connection. Click, type, scroll — just like being there.',
+    icon: '👀',
+    title: 'Watch and steer, live',
+    desc: "Follow each agent's session in real time and steer it as it works — switch sessions, take screenshots, and (for IDE sessions) view and control the screen over a P2P connection.",
     visual: '🖱️',
   },
   {
@@ -46,8 +46,8 @@ const SHARED_STEPS: OnboardingStep[] = [
 const CLOUD_FINAL_STEP: OnboardingStep = {
   icon: '🚀',
   title: 'Get started',
-  desc: 'Install the daemon and link it to your dashboard. It connects automatically.',
-  code: 'npm install -g @adhdev/daemon-standalone && adhdev-standalone',
+  desc: 'Run this on any machine you want to drive, then sign in — the daemon pairs itself to your dashboard automatically.',
+  code: 'curl -fsSL https://adhf.dev/install | sh',
 }
 
 const STANDALONE_FINAL_STEP: OnboardingStep = {
