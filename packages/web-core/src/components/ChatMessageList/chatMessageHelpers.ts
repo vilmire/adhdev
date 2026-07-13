@@ -78,18 +78,70 @@ export function buildMediaSrc(part: StructuredMessagePart): string | undefined {
     return undefined;
 }
 
+/**
+ * Deterministic, position-independent hash of a string (djb2 xor variant),
+ * returned as an unsigned base-36 digest. Used to fold full message content
+ * into the stable-key fallback tier without depending on array position.
+ */
+function hashContent(input: string): string {
+    let hash = 5381;
+    for (let i = 0; i < input.length; i++) {
+        // hash * 33 ^ charCode, kept in 32-bit range
+        hash = ((hash << 5) + hash) ^ input.charCodeAt(i);
+        hash |= 0;
+    }
+    return (hash >>> 0).toString(36);
+}
+
+/**
+ * Stable React key for a chat message.
+ *
+ * The key MUST be position-independent: the message list is data-windowed and
+ * re-sorted on every user send (`buildVisibleConversationMessages`), which
+ * renumbers array positions. If the key depended on the array index, a windowed
+ * or re-sorted assistant bubble would change keys across a send and React would
+ * unmount+remount it — a visible flash (CHAT-FLAP-LONG-CONVO).
+ *
+ * Preference order (all intrinsic to the message, none position-derived):
+ *   id > _localId > _turnKey > bubbleId > providerUnitKey > message.index/sequence
+ * Legacy CLI/native transcript bubbles carry none of those, so we fall back to a
+ * position-independent digest of the message's own fields (role + full-content
+ * hash + timestamp), NOT the array index.
+ *
+ * `index` is retained in the signature for call-site compatibility
+ * (`getRenderableTimestamp` and existing callers pass it) but is intentionally
+ * NOT part of the returned key.
+ */
 export function getChatMessageStableKey(message: ChatMessage, index: number): string {
+    void index;
     const dashboardMessage = message as ChatMessage & { _localId?: string; _turnKey?: string }
     const content = stringifyTextContent(message.content, { joiner: '\n' });
-    const parts = [
+
+    // Position-independent stable identity, most-authoritative first.
+    const identity = [
         message.id ? `id:${message.id}` : '',
         dashboardMessage._localId ? `local:${dashboardMessage._localId}` : '',
         dashboardMessage._turnKey ? `turn:${dashboardMessage._turnKey}` : '',
+        message.bubbleId ? `bubble:${message.bubbleId}` : '',
+        message.providerUnitKey ? `unit:${message.providerUnitKey}` : '',
         typeof message.index === 'number' ? `msgIndex:${message.index}` : '',
-        message.role ? `role:${message.role}` : '',
-        content ? `content:${content.slice(0, 80)}` : '',
-        `fallback:${index}`,
+        typeof message.sequence === 'number' ? `seq:${message.sequence}` : '',
     ].filter(Boolean);
 
-    return parts.join('|');
+    if (identity.length > 0) {
+        return identity.join('|');
+    }
+
+    // Legacy bubbles with no intrinsic identity: derive a position-independent
+    // fallback from the message's own fields. Hash the FULL content (not a
+    // slice) to reduce collisions; include a timestamp when present to
+    // disambiguate identical-content messages.
+    const timestamp = message.receivedAt || message.timestamp || 0;
+    const fallback = [
+        message.role ? `role:${message.role}` : 'role:',
+        `chash:${hashContent(content)}`,
+        timestamp ? `ts:${timestamp}` : '',
+    ].filter(Boolean);
+
+    return fallback.join('|');
 }
