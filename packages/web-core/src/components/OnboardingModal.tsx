@@ -38,7 +38,7 @@ const SHARED_STEPS: OnboardingStep[] = [
   {
     icon: '🕸️',
     title: 'Orchestrate your agents',
-    desc: 'With Repo Mesh, one coordinator hands work to agents across many machines — parallel git worktrees, automatic branch convergence, and cross-checking the same repo from several angles.',
+    desc: 'Repo Mesh (Cloud Pro) lets one coordinator hand work to agents across many machines — parallel git worktrees, automatic branch convergence, and cross-checking the same repo from several angles.',
     visual: '🕸️',
   },
 ]
