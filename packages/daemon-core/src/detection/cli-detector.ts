@@ -235,11 +235,31 @@ let cachedProviderVersions: Record<string, string> = {};
 let cachedProviderVersionsAt = 0;
 let providerVersionsRefreshInFlight: Promise<void> | null = null;
 
+// The daemon's active ProviderLoader, registered once at boot. detectCLIs only
+// builds its detection list from a loader (no loader ⇒ empty list ⇒ empty version
+// map), and getCachedProviderVersions is reachable on paths that have no loader in
+// scope — most importantly the coordinator's own self/worktree node self-heal in
+// mesh-node-identity.ts, which is a pure module with no daemon handle. Registering
+// the loader here lets those loader-less reads still detect providers instead of
+// silently returning {}. An explicit loader argument always wins over this default.
+let defaultProviderLoader: ProviderLoader | undefined;
+
+/**
+ * Register this daemon's ProviderLoader as the fallback used by loader-less
+ * provider-version reads (getCachedProviderVersions() with no argument). Called
+ * once at boot. Without it the coordinator's self node never resolves a CLI list,
+ * so its provider-version chips stay empty even though remote nodes populate.
+ */
+export function setDefaultProviderLoader(providerLoader: ProviderLoader): void {
+    defaultProviderLoader = providerLoader;
+}
+
 function refreshProviderVersionsSnapshot(providerLoader?: ProviderLoader): Promise<void> {
     if (providerVersionsRefreshInFlight) return providerVersionsRefreshInFlight;
+    const loader = providerLoader ?? defaultProviderLoader;
     providerVersionsRefreshInFlight = (async () => {
         try {
-            const detected = await detectCLIs(providerLoader, { includeVersion: true });
+            const detected = await detectCLIs(loader, { includeVersion: true });
             cachedProviderVersions = buildProviderVersions(detected);
             cachedProviderVersionsAt = Date.now();
         } catch {

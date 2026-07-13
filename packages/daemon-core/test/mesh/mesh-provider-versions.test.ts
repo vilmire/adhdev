@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildProviderVersions, type CLIInfo } from '../../src/detection/cli-detector.js'
+import { buildProviderVersions, getCachedProviderVersions, setDefaultProviderLoader, type CLIInfo } from '../../src/detection/cli-detector.js'
 import { recordInlineMeshDirectGitTruth } from '../../src/mesh/mesh-node-identity.js'
 import { buildCoordinatorSystemPrompt } from '../../src/mesh/coordinator-prompt.js'
 
@@ -39,6 +39,34 @@ describe('T7 buildProviderVersions', () => {
 
   it('returns an empty map for an empty detection set', () => {
     expect(buildProviderVersions([])).toEqual({})
+  })
+})
+
+describe('T7 default provider loader fallback (self-node chip fix)', () => {
+  // Root cause of the self-node "no version chips" defect: getCachedProviderVersions()
+  // is called with no loader from the coordinator's own self/worktree self-heal
+  // (mesh-node-identity.ts). detectCLIs with no loader builds an EMPTY detection list,
+  // so the version map is always {} for the self node — even though remote nodes (which
+  // self-report via the git_status envelope) populate. setDefaultProviderLoader registers
+  // the daemon's loader so the loader-less refresh consults it.
+  it('a loader-less refresh consults the registered default loader instead of yielding an empty list', async () => {
+    let detectionListCalls = 0
+    const fakeLoader: any = {
+      // An empty command list keeps the refresh deterministic (no `which`/`--version`
+      // shelling): we only assert the loader was consulted at all — proving the default
+      // fallback is wired, which is exactly what the self node was missing.
+      getCliDetectionList: () => {
+        detectionListCalls += 1
+        return []
+      },
+      resolveAlias: (id: string) => id,
+    }
+    setDefaultProviderLoader(fakeLoader)
+    // Force a stale/cold read so the lazy background refresh fires with no explicit loader.
+    getCachedProviderVersions()
+    // The refresh is fire-and-forget; let its microtask/detection promise settle.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(detectionListCalls).toBeGreaterThan(0)
   })
 })
 

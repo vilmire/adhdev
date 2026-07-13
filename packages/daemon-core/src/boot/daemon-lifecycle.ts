@@ -25,7 +25,7 @@ import { VersionArchive, detectAllVersions } from '../providers/version-archive.
 import { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { DevServer } from '../daemon/dev-server.js';
 import { detectIDEs, type IDEInfo } from '../detection/ide-detector.js';
-import { detectCLI, detectCLIs, getCachedProviderVersions } from '../detection/cli-detector.js';
+import { detectCLI, detectCLIs, getCachedProviderVersions, setDefaultProviderLoader } from '../detection/cli-detector.js';
 import { getDaemonBuildInfo } from '../build-info.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG, installGlobalInterceptor } from '../logging/logger.js';
@@ -192,6 +192,12 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // commands (and the REST endpoint at /api/v1/providers/updates).
     providerLoader.loadAll();
     providerLoader.registerToDetector();
+    // Register this loader as the default for loader-less provider-version reads.
+    // The coordinator's own self/worktree node self-heal (mesh-node-identity.ts) reads
+    // getCachedProviderVersions() with no loader in scope; without this the detection
+    // list is empty and the self node's provider-version chips never populate, even
+    // though remote nodes (which self-report via the git_status envelope) do.
+    setDefaultProviderLoader(providerLoader);
 
     // 2.5 Provider version detection & archive
     // Run after startup work continues. The detector still performs expensive

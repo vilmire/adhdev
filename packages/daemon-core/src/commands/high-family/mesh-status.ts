@@ -555,6 +555,18 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         }
                         applyInlineMeshBranchConvergence(mesh, node, status);
                         finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
+                        // T7: providerVersions/daemonBuildVersion are stamped onto the initial
+                        // status snapshot above from node.reported* — but recordInlineMeshDirectGitTruth
+                        // (which self-heals those node fields from the local version cache for the
+                        // coordinator's own self/worktree nodes) runs AFTER that snapshot. Re-sync from
+                        // the now-stamped node here so the self node surfaces its chips in the same call
+                        // rather than lagging a poll cycle. Additive; skipped when the node never reported.
+                        if (node.reportedProviderVersions && typeof node.reportedProviderVersions === 'object') {
+                            status.providerVersions = node.reportedProviderVersions;
+                        }
+                        if (typeof node.reportedDaemonBuildVersion === 'string' && node.reportedDaemonBuildVersion) {
+                            status.daemonBuildVersion = node.reportedDaemonBuildVersion;
+                        }
                         return status;
                     };
                     const meshNodeEntries = [...(mesh.nodes || []).entries()];
