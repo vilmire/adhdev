@@ -15,7 +15,8 @@ import type { ProviderLoader } from '../providers/provider-loader.js';
 import { detectCLI, getCachedProviderVersions } from '../detection/cli-detector.js';
 import { getDaemonBuildInfo } from '../build-info.js';
 import { getGitRepoStatus } from '../git/git-status.js';
-import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, daemonIdsEquivalent, meshWorkspacesEquivalent, sessionIdsEquivalent, withStatusProbeMarker } from '@adhdev/mesh-shared';
+import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, daemonIdsEquivalent, meshWorkspacesEquivalent, sessionIdsEquivalent, withStatusProbeMarker, normalizeNodeCapabilitySlots, type NodeCapabilitySlot } from '@adhdev/mesh-shared';
+import type { MeshReportedMemberState } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from '../mesh/mesh-warmup-deadline.js';
@@ -326,6 +327,7 @@ export function recordInlineMeshDirectGitTruth(
     reporterMachineNickname: string | null;
     reporterProviderVersions: Record<string, string> | null;
     reporterDaemonBuildVersion: string | null;
+    reportedMemberState: MeshReportedMemberState | null;
 } {
     if (!node || typeof node !== 'object' || Array.isArray(node)) {
         return {
@@ -334,6 +336,7 @@ export function recordInlineMeshDirectGitTruth(
             reporterMachineNickname: null,
             reporterProviderVersions: null,
             reporterDaemonBuildVersion: null,
+            reportedMemberState: null,
         };
     }
     const checkedAt = readNumberValue(git.lastCheckedAt) ?? Date.now();
@@ -389,21 +392,81 @@ export function recordInlineMeshDirectGitTruth(
     // carries no reporter* versions — mirror the platform/arch self-heal above and read
     // this daemon's own warm version cache directly, so the coordinator's self node gets
     // the same provider/build chips a remote node does.
+    // Direction-B: parse the UNIFIED reportedMemberState envelope first (versions +
+    // build + the member's own resolved slots), falling back to the flat legacy
+    // fields so a mixed-version mesh during rollout still ingests. This is the single
+    // place the coordinator mirrors a remote member's reported state wholesale.
+    const unified = normalizeReportedMemberState(git.reporterMemberState);
     const reporterProviderVersions =
-        readProviderVersionsRecord(git.reporterProviderVersions)
+        (unified?.providerVersions ? readProviderVersionsRecord(unified.providerVersions) : null)
+        ?? readProviderVersionsRecord(git.reporterProviderVersions)
         ?? (isLocalSource ? readLocalReporterProviderVersions() : null);
     if (reporterProviderVersions) node.reportedProviderVersions = reporterProviderVersions;
     const reporterDaemonBuildVersion =
-        (readStringValue(git.reporterDaemonBuildVersion)
+        (readStringValue(unified?.daemonBuildVersion)
+            ?? readStringValue(git.reporterDaemonBuildVersion)
             ?? (isLocalSource ? readLocalReporterDaemonBuildVersion() : null))
         ?? null;
     if (reporterDaemonBuildVersion) node.reportedDaemonBuildVersion = reporterDaemonBuildVersion;
+    // Mirror the unified state onto the node record so resolveNodeCapabilitySlots can
+    // read the remote member's OWN resolved slots. Only stamped for a REMOTE member
+    // (!isLocalSource): the coordinator's own / worktree nodes own their slots via
+    // local policy.slots, so a self node deliberately carries NO reportedMemberState
+    // — this is what keeps the resolver's precedence inversion-free (a self node's
+    // local policy is never shadowed by a mirror it doesn't have). Synthesize from
+    // the legacy flat fields when a node reports only those (no unified envelope yet).
+    if (!isLocalSource) {
+        const reportedSlots = normalizeNodeCapabilitySlots(unified?.slots);
+        const mirrored: {
+            providerVersions?: Record<string, string>;
+            daemonBuildVersion?: string;
+            slots?: NodeCapabilitySlot[];
+            lastReportedAt?: number;
+        } = {
+            ...(reporterProviderVersions ? { providerVersions: reporterProviderVersions } : {}),
+            ...(reporterDaemonBuildVersion ? { daemonBuildVersion: reporterDaemonBuildVersion } : {}),
+            ...(reportedSlots.length ? { slots: reportedSlots } : {}),
+            lastReportedAt: readNumberValue(unified?.lastReportedAt) ?? checkedAt,
+        };
+        // Only stamp when there's actual reported content beyond the timestamp — a
+        // bare {lastReportedAt} carries no observability and would just churn the
+        // record on every probe.
+        if (mirrored.providerVersions || mirrored.daemonBuildVersion || mirrored.slots) {
+            node.reportedMemberState = mirrored;
+        }
+    }
     return {
         reporterPlatform,
         reporterArch,
         reporterMachineNickname,
         reporterProviderVersions,
         reporterDaemonBuildVersion,
+        reportedMemberState: (!isLocalSource ? (node.reportedMemberState ?? null) : null) as MeshReportedMemberState | null,
+    };
+}
+
+/**
+ * Direction-B: coerce an unknown git-envelope `reporterMemberState` into a clean
+ * {@link MeshReportedMemberState}. Reuses readProviderVersionsRecord for the version
+ * map and normalizeNodeCapabilitySlots for slots (dropping provider-less entries).
+ * Returns null when nothing usable is present (bare/absent envelope) so callers fall
+ * back to the legacy flat fields. Best-effort, never throws.
+ */
+function normalizeReportedMemberState(value: unknown): MeshReportedMemberState | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const raw = value as Record<string, unknown>;
+    const providerVersions = readProviderVersionsRecord(raw.providerVersions);
+    const daemonBuildVersion = readStringValue(raw.daemonBuildVersion);
+    const slots = normalizeNodeCapabilitySlots(raw.slots);
+    const lastReportedAt = readNumberValue(raw.lastReportedAt);
+    if (!providerVersions && !daemonBuildVersion && !slots.length && lastReportedAt === undefined) {
+        return null;
+    }
+    return {
+        ...(providerVersions ? { providerVersions } : {}),
+        ...(daemonBuildVersion ? { daemonBuildVersion } : {}),
+        ...(slots.length ? { slots } : {}),
+        ...(lastReportedAt !== undefined ? { lastReportedAt } : {}),
     };
 }
 
@@ -493,6 +556,7 @@ export function persistNodeReporterPlatform(
         reporterMachineNickname?: string | null;
         reporterProviderVersions?: Record<string, string> | null;
         reporterDaemonBuildVersion?: string | null;
+        reportedMemberState?: MeshReportedMemberState | null;
     },
 ): void {
     if (meshSource !== 'local_config') return;
@@ -503,12 +567,16 @@ export function persistNodeReporterPlatform(
     const reportedMachineNickname = reporter.reporterMachineNickname ?? undefined;
     const reportedProviderVersions = reporter.reporterProviderVersions ?? undefined;
     const reportedDaemonBuildVersion = reporter.reporterDaemonBuildVersion ?? undefined;
+    // Direction-B: persist the unified mirrored member state so a remote node's
+    // slot-cap chips survive a coordinator restart (mirrors the per-field self-heal).
+    const reportedMemberState = reporter.reportedMemberState ?? undefined;
     if (
         !reportedPlatform &&
         !reportedArch &&
         !reportedMachineNickname &&
         !reportedProviderVersions &&
-        !reportedDaemonBuildVersion
+        !reportedDaemonBuildVersion &&
+        !reportedMemberState
     ) {
         return;
     }
@@ -519,6 +587,7 @@ export function persistNodeReporterPlatform(
             reportedMachineNickname,
             reportedProviderVersions,
             reportedDaemonBuildVersion,
+            reportedMemberState,
         }))
         .catch(() => { /* best-effort self-heal; never block status assembly */ });
 }
@@ -1549,6 +1618,12 @@ async function probeRemoteMeshGitStatus(args: {
     if (reporterProviderVersions) git.reporterProviderVersions = reporterProviderVersions;
     const reporterDaemonBuildVersion = readStringValue(remoteResult?.reporterDaemonBuildVersion);
     if (reporterDaemonBuildVersion) git.reporterDaemonBuildVersion = reporterDaemonBuildVersion;
+    // Direction-B: propagate the member's UNIFIED reportedMemberState (versions +
+    // build + its own resolved slots + lastReportedAt) on the same channel so the
+    // coordinator can ingest it wholesale. Carried alongside the legacy flat fields
+    // above for a mixed-version-mesh rollout.
+    const reporterMemberState = normalizeReportedMemberState(remoteResult?.reporterMemberState);
+    if (reporterMemberState) git.reporterMemberState = reporterMemberState;
     return git;
 }
 

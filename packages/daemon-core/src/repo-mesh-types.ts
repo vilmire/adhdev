@@ -398,6 +398,40 @@ export interface RepoMeshRelatedRepo {
  * (see migrateLoadedMeshConfig).
  */
 
+/**
+ * Direction-B unified mirrored member state (REMOTE-NODE-SLOT-CAP-CHIP fix).
+ *
+ * A single self-reported observability envelope stamped by the daemon that OWNS a
+ * node's workspace and carried wholesale on the git_status envelope
+ * (reporterMemberState), replacing the fragmented per-field self-heal that mirrored
+ * providerVersions and daemonBuildVersion ad-hoc but silently dropped `slots`. The
+ * coordinator ingests this whole object onto the mirrored remote node in one place
+ * (mesh-node-identity.recordInlineMeshDirectGitTruth).
+ *
+ * Source-of-truth model: EACH NODE owns its own slots/versions locally; the
+ * coordinator is a pure mirror of a remote member's reported state. Its own
+ * join-time `policy` copy for a remote member is a stale empty `{}` and must never
+ * shadow this mirror (that would be a precedence inversion — see
+ * resolveNodeCapabilitySlots).
+ */
+export interface MeshReportedMemberState {
+    /** Reporter node's detected provider CLI/ACP versions (keyed by provider id). */
+    providerVersions?: Record<string, string>;
+    /** Reporter daemon's build version (getDaemonBuildInfo().version). */
+    daemonBuildVersion?: string;
+    /**
+     * Reporter node's OWN resolved capability slots (resolveNodeCapabilitySlots over
+     * its LOCAL real policy). This is the field the coordinator's join-time policy
+     * copy lacks for a remote member, and the reason remote slot-cap chips were
+     * missing. For a remote mirrored node this is authoritative over the (empty)
+     * local policy.slots; for the coordinator's own node the local policy is used
+     * directly (never mirrored here).
+     */
+    slots?: NodeCapabilitySlot[];
+    /** Epoch ms the report was stamped; used for mirror staleness reasoning. */
+    lastReportedAt?: number;
+}
+
 export interface RepoMeshNodePolicy {
     readOnly?: boolean;
     canPush?: boolean;
@@ -915,6 +949,24 @@ export interface LocalMeshNodeEntry {
      *  owning daemon, carried on the git_status envelope (reporterDaemonBuildVersion)
      *  alongside the provider versions. Absent until first reported. */
     reportedDaemonBuildVersion?: string;
+    /**
+     * Unified mirrored "member state" self-reported by the daemon that owns this
+     * node's workspace, carried wholesale on the git_status envelope
+     * (reporterMemberState) and ingested by the coordinator in one place. This is
+     * the Direction-B consolidation of the previously per-field self-heal
+     * (reportedProviderVersions, reportedDaemonBuildVersion — and now the node's
+     * OWN resolved capability `slots`, which the coordinator's join-time policy copy
+     * for a remote member does NOT carry). Each node owns its own slots/versions
+     * locally; the coordinator is a pure mirror of what a remote member reports over
+     * P2P — it must never treat its stale join-time policy copy as authoritative for
+     * a remote node's slots. The legacy flat fields above stay populated in parallel
+     * during rollout for back-compat (see mesh-node-identity ingest). `slots` is the
+     * reporter node's own resolved capability slots (resolveNodeCapabilitySlots over
+     * its LOCAL real policy). `lastReportedAt` is the epoch ms the report was
+     * stamped, so a partitioned node's mirror does not linger as fresh forever.
+     * Absent until the first envelope carrying it is ingested.
+     */
+    reportedMemberState?: MeshReportedMemberState;
     /**
      * The operator-set machine nickname (config.machineNickname) of the daemon
      * that owns this node's workspace. The local coordinator stamps its own

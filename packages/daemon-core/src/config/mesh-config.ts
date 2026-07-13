@@ -21,6 +21,7 @@ import type {
     RepoMeshCoordinatorConfig,
     RepoMeshHostMetadata,
     RepoMeshDaemonRole,
+    MeshReportedMemberState,
 } from '../repo-mesh-types.js';
 import type { MagiKindPanelMap, MagiSlot, MagiTaskKind, DifficultyBrainMap, NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import { normalizeDifficultyBrainMap, DEFAULT_DIFFICULTY_BRAINS, normalizeNodeCapabilitySlots, deriveSlotsFromLegacy } from '@adhdev/mesh-shared';
@@ -643,6 +644,11 @@ export function updateNode(
          *  is overwritten by the next report. */
         reportedProviderVersions?: Record<string, string>;
         reportedDaemonBuildVersion?: string;
+        /** Direction-B unified mirrored member state (versions + build + own resolved
+         *  slots + lastReportedAt) self-reported by the owning daemon on the git_status
+         *  envelope. Persisted wholesale so a remote node's slot-cap chips survive a
+         *  coordinator restart, mirroring the per-field reported* self-heal. */
+        reportedMemberState?: MeshReportedMemberState;
     },
 ): LocalMeshNodeEntry | undefined {
     const config = loadMeshConfig();
@@ -661,6 +667,12 @@ export function updateNode(
     }
     if (opts.reportedDaemonBuildVersion && opts.reportedDaemonBuildVersion.trim()) {
         node.reportedDaemonBuildVersion = opts.reportedDaemonBuildVersion.trim();
+    }
+    if (opts.reportedMemberState) {
+        // Whole-object replace (auto-detected observability, overwritten by the next
+        // report so a stale mirror never sticks — same policy as the flat reported*
+        // fields). normalizeReportedMemberState upstream guarantees a clean shape.
+        node.reportedMemberState = opts.reportedMemberState;
     }
     if (opts.policy) node.policy = { ...node.policy, ...opts.policy };
     if (Object.prototype.hasOwnProperty.call(opts, 'capabilities')) {

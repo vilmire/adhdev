@@ -37,6 +37,7 @@ import { loadConfig } from '../config/config.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { IdeProviderInstance } from '../providers/ide-provider-instance.js';
 import { createDefaultGitCommandServices } from '../git/git-commands.js';
+import { resolveLocalNodeSlotsForWorkspace } from '../mesh/mesh-node-slots.js';
 import { setupMeshEventForwarding } from '../mesh/mesh-events.js';
 import { setupMeshReconcileLoop } from '../mesh/mesh-reconcile-loop.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
@@ -312,15 +313,24 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         instanceManager,
         sessionRegistry,
         gitCommandServices: createDefaultGitCommandServices({
-            // T7: fold this daemon's cached provider versions + build version onto the
-            // git_status envelope so the mesh coordinator self-heals each node's
-            // providerVersions. Non-blocking: reads a TTL cache, lazily refreshed.
-            getReporterProviderVersions: () => {
+            // T7 + Direction-B: fold this daemon's cached provider versions + build
+            // version AND its OWN resolved capability slots for the reported workspace
+            // onto the git_status envelope so the mesh coordinator self-heals each
+            // node's providerVersions AND its slot-cap chips (REMOTE-NODE-SLOT-CAP-CHIP
+            // fix). Non-blocking: reads a TTL cache + local meshes.json, lazily
+            // refreshed. The slots the reporter resolves are its LOCAL real policy's
+            // slots — the coordinator mirrors them wholesale for a remote member whose
+            // join-time policy copy is empty. (setDefaultProviderLoader is registered
+            // above so getCachedProviderVersions/slot resolution is not empty — see
+            // the 380556d3 version-chip lesson.)
+            getReporterProviderVersions: (workspace?: string) => {
                 const providerVersions = getCachedProviderVersions(providerLoader);
                 const daemonBuildVersion = getDaemonBuildInfo().version;
+                const slots = resolveLocalNodeSlotsForWorkspace(workspace);
                 return {
                     ...(Object.keys(providerVersions).length > 0 ? { providerVersions } : {}),
                     ...(daemonBuildVersion && daemonBuildVersion !== 'unknown' ? { daemonBuildVersion } : {}),
+                    ...(slots.length > 0 ? { slots } : {}),
                 };
             },
         }),
