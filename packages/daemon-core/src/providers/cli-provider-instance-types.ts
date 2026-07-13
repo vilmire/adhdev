@@ -105,6 +105,21 @@ export const COMPLETED_FINALIZATION_MAX_WAIT_MS = 30_000;
 // hold only covers the approval-resolved valley; widening this settle window to 4000ms
 // covers that race AND the ~3s waiting_approval valley within the settle bound.
 export const NATIVE_HISTORY_MESH_IDLE_SETTLE_MS = 4000;
+// (FALSE-IDLE-MIDTURN codex/PTY) Minimum quiet dwell required after the LAST raw PTY
+// output before a PTY-PARSED (non-native-history) provider's on-screen "final" assistant
+// bubble may be trusted as a turn-complete reply. codex parses its assistant text from the
+// terminal screen, so a completion-gate poll that lands MID-STREAM — while the screen still
+// shows a partial sentence fragment ("...하겠습니다") and the FSM momentarily reads idle —
+// satisfies completionHasFinalAssistantMessage (present=true) and would clean-emit an early
+// completion. The busyEpoch/lastOutputAt continuity guard in the flush only CANCELS when new
+// output ARRIVES during the settle; it cannot catch a turn that fell quiet just before the
+// arm and is still mid-turn. Require instead that the screen has been QUIET for at least this
+// long since the last output: a genuinely finished turn's tail is stable well past this bound,
+// while a mid-stream fragment is by definition still receiving output (or just did). Bounded,
+// non-terminal HOLD — a real completion re-passes the gate one retry later once the dwell is
+// met. Scoped (at the call site) to autonomous mesh sessions, so interactive sessions are
+// untouched.
+export const PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS = 1200;
 // (FALSE-IDLE-BACKGROUND-CMD) Hard cap on how long a pending completion may be HELD
 // solely because the claude-cli transcript still shows an unresolved run_in_background
 // bash job (backgroundTaskActive). The hold is the correct behaviour while the job is

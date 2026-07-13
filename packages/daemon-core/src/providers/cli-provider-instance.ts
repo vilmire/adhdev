@@ -56,6 +56,7 @@ import {
     COMPLETED_FINALIZATION_RETRY_MS,
     COMPLETED_FINALIZATION_MAX_WAIT_MS,
     NATIVE_HISTORY_MESH_IDLE_SETTLE_MS,
+    PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS,
     BACKGROUND_TASK_HOLD_MAX_MS,
     USER_INPUT_ACK_DEDUP_WINDOW_MS,
     STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS,
@@ -1753,7 +1754,27 @@ export class CliProviderInstance implements ProviderInstance {
                     if (probe?.lastRole === 'assistant' && (probe.contentLen ?? 0) > 0) {
                         return null;
                     }
+                    // (FALSE-IDLE-MIDTURN antigravity) A native-history session whose
+                    // external-native transcript has NO in-turn final assistant bubble yet
+                    // (present=false AND the probe's tail is not an assistant reply) is NOT
+                    // proven done. antigravity previously returned null here — an IMMEDIATE
+                    // clean emit with zero transcript evidence — so a momentary PTY-parser
+                    // idle blip MID-TURN (the parser reads idle while the turn is still in
+                    // flight and the transcript's answer has not landed) fired an early
+                    // agent:generating_completed the coordinator could never correct. Instead
+                    // HOLD for the transcript: re-probe each retry (readExternalCompletionMessages
+                    // runs forceRefresh every call) and clear the block only once the assistant
+                    // turn actually lands (the probe branch above → genuine emit). Non-terminal
+                    // and bounded by COMPLETED_FINALIZATION_MAX_WAIT_MS (30s) so a turn that
+                    // genuinely produced no assistant bubble (tool-only) still force-emits a weak
+                    // completion rather than wedging — preserving the a0fb6b05 "antigravity always
+                    // eventually emits" fix while filtering the mid-turn false-idle. Scoped to
+                    // autonomous mesh sessions (allowMissingAssistantTimeout) so an interactive
+                    // antigravity session, which has no coordinator to misfire at, is untouched.
                     if (this.type === 'antigravity-cli') {
+                        if (allowMissingAssistantTimeout) {
+                            return { reason: 'missing_final_assistant', terminal: false, holdForTranscript: true };
+                        }
                         return null;
                     }
                     // (SETTLE-VALLEY) The inter-approval idle valley: a native-history mesh worker
@@ -1808,6 +1829,40 @@ export class CliProviderInstance implements ProviderInstance {
                 }
             }
         } catch { /* defensive: screen text read is best-effort */ }
+
+        // (FALSE-IDLE-MIDTURN codex/PTY) The turn-complete quiet-dwell gate. We only reach
+        // here with finalAssistantEvidence.present === true. For a PTY-PARSED provider
+        // (codex: !adapterOwnsMessagesElsewhere), that "present" verdict is derived from the
+        // on-screen assistant text, which can be a PARTIAL sentence fragment captured mid-stream
+        // when the FSM momentarily read idle. completionHasFinalAssistantMessage accepts the
+        // fragment and hasAdapterPendingResponse can transiently read clean between chunks, so
+        // present flips true mid-turn and this path would clean-emit an early completion. The
+        // flush's lastOutputAt continuity guard only cancels when NEW output ARRIVES during the
+        // settle — it cannot catch a turn that fell quiet just before the arm. Require instead a
+        // minimum QUIET DWELL since the last raw PTY output: a genuinely finished turn's screen
+        // has been stable well past this bound, whereas a mid-stream fragment either just received
+        // output or is about to. Non-terminal HOLD (bounded by COMPLETED_FINALIZATION_MAX_WAIT_MS),
+        // so a real completion re-passes the gate one retry later once the dwell is met; and it
+        // force-emits at the 30s cap rather than wedging. Scoped to autonomous mesh sessions
+        // (allowMissingAssistantTimeout) and PTY-parsed sources only — native-history providers
+        // (antigravity/claude) resolve evidence from the authoritative transcript above, not the
+        // screen, so this dwell does not apply to them and interactive sessions are untouched.
+        if (allowMissingAssistantTimeout
+            && !adapterOwnsMessagesElsewhere
+            && finalAssistantEvidence.source === 'parsed') {
+            try {
+                const outStatus = this.adapter.getStatus({ allowParse: false }) as any;
+                const lastOutputAt = typeof outStatus?.lastOutputAt === 'number' && Number.isFinite(outStatus.lastOutputAt)
+                    ? outStatus.lastOutputAt as number
+                    : undefined;
+                if (typeof lastOutputAt === 'number') {
+                    const quietMs = Date.now() - lastOutputAt;
+                    if (quietMs < PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS) {
+                        return { reason: 'parsed_final_assistant_quiet_dwell', terminal: false };
+                    }
+                }
+            } catch { /* defensive: dwell read is best-effort — fall through to emit */ }
+        }
 
         return null;
     }
