@@ -7,54 +7,63 @@ import {
   DEFAULT_MESH_SCHEDULING_STRATEGY,
 } from '../../src/repo-mesh-types.js';
 
-describe('resolveProviderMaxParallel', () => {
-  it('returns undefined when no cap is declared (backward compatible)', () => {
+describe('resolveProviderMaxParallel (slots-based)', () => {
+  it('returns undefined when no matching slot declares a cap (backward compatible)', () => {
     expect(resolveProviderMaxParallel(undefined, 'claude-cli')).toBeUndefined();
     expect(resolveProviderMaxParallel(null, 'claude-cli')).toBeUndefined();
-    expect(resolveProviderMaxParallel({}, 'claude-cli')).toBeUndefined();
-    expect(resolveProviderMaxParallel({ providerRoles: [] }, 'claude-cli')).toBeUndefined();
-    expect(resolveProviderMaxParallel({ providerRoles: [{ providerType: 'claude-cli' }] }, 'claude-cli')).toBeUndefined();
+    expect(resolveProviderMaxParallel([], 'claude-cli')).toBeUndefined();
+    // slot present for the provider but no cap → uncapped
+    expect(resolveProviderMaxParallel([{ provider: 'claude-cli' }], 'claude-cli')).toBeUndefined();
+    // capped slot but for a different provider
+    expect(resolveProviderMaxParallel([{ provider: 'codex-cli', maxParallel: 2 }], 'claude-cli')).toBeUndefined();
   });
 
   it('returns undefined for a blank/missing providerType lookup', () => {
-    const policy = { providerRoles: [{ providerType: 'claude-cli', maxParallel: 2 }] };
-    expect(resolveProviderMaxParallel(policy, '')).toBeUndefined();
-    expect(resolveProviderMaxParallel(policy, undefined)).toBeUndefined();
-    expect(resolveProviderMaxParallel(policy, null)).toBeUndefined();
+    const slots = [{ provider: 'claude-cli', maxParallel: 2 }];
+    expect(resolveProviderMaxParallel(slots, '')).toBeUndefined();
+    expect(resolveProviderMaxParallel(slots, undefined)).toBeUndefined();
+    expect(resolveProviderMaxParallel(slots, null)).toBeUndefined();
   });
 
-  it('matches providerType case-insensitively and trims', () => {
-    const policy = {
-      providerRoles: [
-        { providerType: 'claude-cli', maxParallel: 2 },
-        { providerType: 'codex-cli', maxParallel: 4 },
-      ],
-    };
-    expect(resolveProviderMaxParallel(policy, 'CLAUDE-CLI')).toBe(2);
-    expect(resolveProviderMaxParallel(policy, '  codex-cli ')).toBe(4);
+  it('matches the slot provider case-insensitively and trims', () => {
+    const slots = [
+      { provider: 'claude-cli', maxParallel: 2 },
+      { provider: 'codex-cli', maxParallel: 4 },
+    ];
+    expect(resolveProviderMaxParallel(slots, 'CLAUDE-CLI')).toBe(2);
+    expect(resolveProviderMaxParallel(slots, '  codex-cli ')).toBe(4);
   });
 
-  it('skips malformed entries without throwing', () => {
-    const policy = {
-      providerRoles: [
-        null as any,
-        'nope' as any,
-        { providerType: '' },
-        { providerType: 'claude-cli', maxParallel: 3 },
-      ],
-    };
-    expect(resolveProviderMaxParallel(policy, 'claude-cli')).toBe(3);
+  it('sums maxParallel across multiple slots for the same provider', () => {
+    const slots = [
+      { provider: 'claude-cli', maxParallel: 2, difficulty: ['easy'] as any },
+      { provider: 'claude-cli', maxParallel: 3, difficulty: ['difficult'] as any },
+      { provider: 'codex-cli', maxParallel: 5 },
+    ];
+    expect(resolveProviderMaxParallel(slots, 'claude-cli')).toBe(5);
+    expect(resolveProviderMaxParallel(slots, 'codex-cli')).toBe(5);
   });
 
-  it('returns the declared cap as a floored non-negative integer', () => {
-    expect(resolveProviderMaxParallel({ providerRoles: [{ providerType: 'claude-cli', maxParallel: 2 }] }, 'claude-cli')).toBe(2);
-    expect(resolveProviderMaxParallel({ providerRoles: [{ providerType: 'claude-cli', maxParallel: 3.9 }] }, 'claude-cli')).toBe(3);
-    expect(resolveProviderMaxParallel({ providerRoles: [{ providerType: 'claude-cli', maxParallel: 0 }] }, 'claude-cli')).toBe(0);
+  it('skips malformed slots without throwing', () => {
+    const slots = [
+      null as any,
+      'nope' as any,
+      { provider: '' } as any,
+      { provider: 'claude-cli', maxParallel: 3 },
+    ];
+    expect(resolveProviderMaxParallel(slots, 'claude-cli')).toBe(3);
   });
 
-  it('treats a negative or non-finite cap as undeclared', () => {
-    expect(resolveProviderMaxParallel({ providerRoles: [{ providerType: 'claude-cli', maxParallel: -1 }] }, 'claude-cli')).toBeUndefined();
-    expect(resolveProviderMaxParallel({ providerRoles: [{ providerType: 'claude-cli', maxParallel: NaN }] }, 'claude-cli')).toBeUndefined();
+  it('floors caps and ignores negative/non-finite ones', () => {
+    expect(resolveProviderMaxParallel([{ provider: 'claude-cli', maxParallel: 3.9 }], 'claude-cli')).toBe(3);
+    expect(resolveProviderMaxParallel([{ provider: 'claude-cli', maxParallel: 0 }], 'claude-cli')).toBe(0);
+    // one bad + one good slot: bad is skipped, good still counts
+    expect(resolveProviderMaxParallel([
+      { provider: 'claude-cli', maxParallel: -1 } as any,
+      { provider: 'claude-cli', maxParallel: 2 },
+    ], 'claude-cli')).toBe(2);
+    // only bad caps → undefined (no contribution)
+    expect(resolveProviderMaxParallel([{ provider: 'claude-cli', maxParallel: NaN } as any], 'claude-cli')).toBeUndefined();
   });
 });
 

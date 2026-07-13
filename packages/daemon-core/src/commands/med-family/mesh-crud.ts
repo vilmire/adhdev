@@ -489,17 +489,20 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node addition');
         if (ownerFailure) return ownerFailure;
         try {
-            const { addNode } = await import('../../config/mesh-config.js');
+            const { addNode, migrateProviderRolesToSlots } = await import('../../config/mesh-config.js');
             const providerPriority = Array.isArray(args?.providerPriority)
                 ? args.providerPriority.map((type: any) => typeof type === 'string' ? type.trim() : '').filter(Boolean)
                 : [];
             const readOnly = args?.readOnly === true;
+            // Back-compat: an incoming `providerRoles` arg (legacy callers) is folded
+            // into `slots[].maxParallel` — the field itself is no longer persisted.
             const providerRoles = normalizeProviderRoles(args?.providerRoles);
-            const policy = {
+            const policy: Record<string, unknown> = {
                 ...(readOnly ? { readOnly: true } : {}),
                 ...(providerPriority.length ? { providerPriority } : {}),
                 ...(providerRoles.length ? { providerRoles } : {}),
             };
+            if (providerRoles.length) migrateProviderRolesToSlots(policy);
             const role = normalizeMeshDaemonRole(args?.role);
             const daemonId = typeof args?.daemonId === 'string' && args.daemonId.trim() ? args.daemonId.trim() : undefined;
             const machineId = typeof args?.machineId === 'string' && args.machineId.trim() ? args.machineId.trim() : undefined;
@@ -537,7 +540,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node update');
         if (ownerFailure) return ownerFailure;
         try {
-            const { updateNode, normalizeCapabilityTags } = await import('../../config/mesh-config.js');
+            const { updateNode, normalizeCapabilityTags, migrateProviderRolesToSlots } = await import('../../config/mesh-config.js');
             const policy = args?.policy && typeof args.policy === 'object' && !Array.isArray(args.policy)
                 ? { ...(args.policy as Record<string, unknown>) }
                 : {};
@@ -552,18 +555,17 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                     delete (policy as any).providerPriority;
                 }
             }
-            // providerRoles: per-(node, provider) role label + maxParallel cap.
-            // Passing an explicit (possibly empty) array clears/replaces the
-            // declarations; omitting the arg leaves any value already on policy
-            // untouched (a full policy object passed by the caller still carries it).
+            // Back-compat: a legacy `providerRoles` arg is folded into
+            // `slots[].maxParallel` — the per-(node, provider) cap now lives on slots.
+            // The field itself is never persisted (migrateProviderRolesToSlots deletes
+            // it). A full policy object passed by the caller that still carries
+            // providerRoles is likewise migrated.
             if (Array.isArray(args?.providerRoles)) {
                 const providerRoles = normalizeProviderRoles(args.providerRoles);
-                if (providerRoles.length) {
-                    (policy as any).providerRoles = providerRoles;
-                } else {
-                    delete (policy as any).providerRoles;
-                }
+                if (providerRoles.length) (policy as any).providerRoles = providerRoles;
+                else delete (policy as any).providerRoles;
             }
+            migrateProviderRolesToSlots(policy);
             const patch: Record<string, unknown> = { policy: policy as any };
             if (typeof args?.systemPrompt === 'string') {
                 const trimmed = (args.systemPrompt as string).trim();
@@ -1011,8 +1013,14 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             }
 
             let node: any;
+            const { migrateProviderRolesToSlots } = await import('../../config/mesh-config.js');
             if (meshRecord.inline) {
                 const { randomUUID } = await import('crypto');
+                const clonedPolicy: Record<string, unknown> = { ...(sourceNode.policy || {}) };
+                // Defensive: a source policy that still carries the removed legacy
+                // providerRoles (e.g. an inline node not yet load-migrated) has its cap
+                // folded into slots so the clone never re-seeds providerRoles.
+                migrateProviderRolesToSlots(clonedPolicy);
                 node = {
                     id: `node_${randomUUID().replace(/-/g, '')}`,
                     workspace: result.worktreePath,
@@ -1020,7 +1028,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                     daemonId: sourceNode.daemonId,
                     machineId: sourceNode.machineId ?? (sourceNode as any).machine_id,
                     userOverrides: { ...(sourceNode.userOverrides || {}) },
-                    policy: { ...(sourceNode.policy || {}) },
+                    policy: clonedPolicy as any,
                     isLocalWorktree: true,
                     worktreeBranch: result.branch,
                     clonedFromNodeId: sourceNodeId,
@@ -1028,6 +1036,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 ctx.updateInlineMeshNode(meshId, mesh, node);
             } else {
                 const { addNode } = await import('../../config/mesh-config.js');
+                const clonedPolicy: Record<string, unknown> = { ...(sourceNode.policy || {}) };
+                migrateProviderRolesToSlots(clonedPolicy);
                 node = addNode(meshId, {
                     workspace: result.worktreePath,
                     repoRoot: result.worktreePath,
@@ -1037,7 +1047,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                     isLocalWorktree: true,
                     worktreeBranch: result.branch,
                     clonedFromNodeId: sourceNodeId,
-                    policy: { ...(sourceNode.policy || {}) },
+                    policy: clonedPolicy as any,
                 });
                 if (!node) return { success: false, error: 'Failed to register worktree node' };
                 // Also reconcile the freshly-registered node into any warmed inline

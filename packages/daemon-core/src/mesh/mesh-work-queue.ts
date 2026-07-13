@@ -612,8 +612,8 @@ export interface MeshWorkQueueEntry {
     assignedSessionId?: string;
     /**
      * Provider type of the session that claimed the task. Recorded so the queue
-     * can enforce per-(node, provider) maxParallel caps (RepoMeshNodePolicy
-     * providerRoles) by counting active assignments grouped by node + provider.
+     * can enforce per-(node, provider) maxParallel caps (summed slots[].maxParallel)
+     * by counting active assignments grouped by node + provider.
      */
     assignedProviderType?: string;
     /** Human/operator reason for terminal cancellation. */
@@ -1095,7 +1095,7 @@ export function getMeshQueueRevision(meshId: string): string {
  *
  * `opts.providerType` is stamped onto the claimed entry (assignedProviderType) so
  * per-(node, provider) caps can be counted. `opts.providerMaxParallel`, when set,
- * is the enforced per-(node, provider) cap from RepoMeshNodePolicy.providerRoles:
+ * is the enforced per-(node, provider) cap (summed slots[].maxParallel):
  * a task is not assigned to this (node, provider) once it already has that many
  * active assignments. This composes with the global/taskMode caps (stricter wins).
  */

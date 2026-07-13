@@ -2,7 +2,7 @@ import { existsSync } from 'fs';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { MESH_CONNECT_TIMEOUT_MS } from '../runtime-defaults.js';
 import { loadConfig } from '../config/config.js';
-import { getMesh, getDifficultyBrains } from '../config/mesh-config.js';
+import { getMesh } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
@@ -15,7 +15,8 @@ import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
 import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
-import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, deriveSlotsFromLegacy, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
+import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
@@ -505,11 +506,12 @@ export function tryAssignQueueTask(
     }
 
     const capabilityTags = buildMeshNodeCapabilityTags(node, providerType);
-    // Per-(node, provider) maxParallel cap (RepoMeshNodePolicy.providerRoles) layers
-    // on top of the global/taskMode caps — stricter wins. Resolved here where the
-    // claiming session's providerType + node policy are both known, then enforced
-    // inside the atomic claim transaction so concurrent claims can't overshoot it.
-    const providerMaxParallel = resolveProviderMaxParallel(node?.policy, providerType);
+    // Per-(node, provider) maxParallel cap (summed across the node's slots for this
+    // provider) layers on top of the global/taskMode caps — stricter wins. Resolved
+    // here where the claiming session's providerType + node policy are both known,
+    // then enforced inside the atomic claim transaction so concurrent claims can't
+    // overshoot it.
+    const providerMaxParallel = resolveProviderMaxParallel(resolveNodeCapabilitySlots(node), providerType);
     // WTDISPATCH-FANOUT: tell the atomic claim whether the claiming node is a worktree
     // clone so a `convergence` task (base-only: merge → push → cleanup) is refused for
     // worktree sessions. Without it, every sibling worktree session on this daemon could
@@ -1280,8 +1282,8 @@ export function __buildSchedulingPoolForTests(
 //
 // A node's capability slots are the single source of truth for routing. When a
 // node has explicit `policy.slots` we use them; otherwise we derive slots from the
-// legacy providerPriority/providerRoles + the machine-global difficultyBrains so
-// existing nodes keep working (back-compat). The fitness scorer ranks a node for a
+// legacy providerPriority + the machine-global difficultyBrains so existing nodes
+// keep working (back-compat). The fitness scorer ranks a node for a
 // specific task by how well its best slot matches the task's difficulty and
 // required tags — with graceful fallback so a task is never blocked by a missing
 // exact match.
@@ -1291,19 +1293,6 @@ export function __buildSchedulingPoolForTests(
 interface FitnessTask {
     difficulty?: string;
     requiredTags?: string[];
-}
-
-/** Resolve a node's capability slots: explicit policy.slots, else derived from legacy. */
-function resolveNodeCapabilitySlots(node: any): NodeCapabilitySlot[] {
-    const explicit = normalizeNodeCapabilitySlots(node?.policy?.slots);
-    if (explicit.length) return explicit;
-    let difficultyBrains: any;
-    try { difficultyBrains = getDifficultyBrains(); } catch { difficultyBrains = undefined; }
-    return deriveSlotsFromLegacy({
-        providerPriority: normalizeProviderPriority(node?.policy),
-        providerRoles: Array.isArray(node?.policy?.providerRoles) ? node.policy.providerRoles : undefined,
-        difficultyBrains,
-    });
 }
 
 /**
@@ -2092,7 +2081,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 // Don't spawn a session for a (node, provider) already at its declared
                 // maxParallel cap — it would launch only to fail the claim. The claim
                 // transaction enforces the cap regardless; this just avoids a doomed launch.
-                const providerCap = resolveProviderMaxParallel(node?.policy, resolved.providerType);
+                const providerCap = resolveProviderMaxParallel(resolveNodeCapabilitySlots(node), resolved.providerType);
                 if (
                     providerCap !== undefined
                     && activeProviderAssignedCount(meshId, nodeId, resolved.providerType) >= providerCap

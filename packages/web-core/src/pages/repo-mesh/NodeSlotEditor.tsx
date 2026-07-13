@@ -5,8 +5,9 @@
  * A node's slots are an ordered array; order = preference. Each slot bundles a
  * provider + optional model + thinking level + the task difficulty range it
  * handles + capability tags + a per-slot maxParallel cap. This one editor absorbs
- * what used to be three surfaces: provider priority (order), per-node maxParallel
- * (providerRoles), and the machine-global difficulty→model/thinking brain presets.
+ * what used to be three surfaces: provider priority (order), the per-node
+ * per-provider maxParallel cap, and the machine-global difficulty→model/thinking
+ * brain presets.
  *
  * Saves the whole array via onSave; the daemon persists it as node.policy.slots.
  * An empty array clears slots (the node falls back to legacy providerPriority

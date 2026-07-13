@@ -388,16 +388,15 @@ export interface RepoMeshRelatedRepo {
  * must satisfy both. Omitting `maxParallel` means this provider is bounded only
  * by the global/taskMode caps (full backward compatibility).
  *
- * Routing is governed exclusively by required_tags (see nodeSatisfiesRequiredTags);
- * this entry carries no routing role. To route work to a specific node, advertise an
- * ordinary capability tag on the node and require it on the task.
+ * Routing is governed exclusively by required_tags (see nodeSatisfiesRequiredTags).
+ * To route work to a specific node, advertise an ordinary capability tag on the
+ * node and require it on the task.
+ *
+ * NOTE: the per-(node, provider) parallelism cap now lives on `slots[].maxParallel`
+ * (see NodeCapabilitySlot). The former `providerRoles` field has been removed; a
+ * persisted meshes.json that still carries it is migrated to `slots` on load
+ * (see migrateLoadedMeshConfig).
  */
-export interface RepoMeshProviderRole {
-    /** Provider type this entry governs (e.g. 'claude-cli', 'codex-cli'). */
-    providerType: string;
-    /** Max concurrent active tasks for this (node, provider). Omit = no per-provider cap. */
-    maxParallel?: number;
-}
 
 export interface RepoMeshNodePolicy {
     readOnly?: boolean;
@@ -414,25 +413,13 @@ export interface RepoMeshNodePolicy {
     /** Ordered provider preference used when mesh_launch_session omits an explicit type. */
     providerPriority?: string[];
     /**
-     * Per-(node, provider) parallelism declarations. Each entry binds a
-     * providerType on THIS node to an optional maxParallel cap. maxParallel is
-     * enforced as an additional, stricter-wins constraint on top of the global
-     * maxParallelTasks/taskMode caps. Missing/empty: the node behaves exactly as
-     * before (global caps only). Routing is governed solely by required_tags.
-     *
-     * SUPERSEDED by `slots` (ORCHESTRATION_NODE_SLOTS.md). Kept for back-compat:
-     * when `slots` is absent, providerRoles + providerPriority + the machine-global
-     * difficultyBrains are auto-derived into slots via deriveSlotsFromLegacy.
-     */
-    providerRoles?: RepoMeshProviderRole[];
-    /**
      * Node capability slots (ORCHESTRATION_NODE_SLOTS.md) — the ordered "Preferred
      * AI tools" profile that is the single source of truth for task routing, MAGI
      * fan-out, and orchestrator-proposed edits. Each slot bundles provider + model
      * + thinkingLevel + difficulty range + capability tags + per-slot maxParallel.
      * Order = preference. When absent, the scheduler derives slots from the legacy
-     * providerPriority/providerRoles/difficultyBrains (deriveSlotsFromLegacy) so
-     * existing nodes keep working without reconfiguration.
+     * providerPriority/difficultyBrains (deriveSlotsFromLegacy) so existing nodes
+     * keep working without reconfiguration.
      */
     slots?: NodeCapabilitySlot[];
     /**
@@ -696,29 +683,38 @@ export function resolveDelegatedWorkerAutoApprove(
 }
 
 /**
- * Resolve the enforced per-(node, provider) maxParallel cap, or undefined when
- * no finite, non-negative cap is declared for this provider. Used by the queue
- * claim path as a stricter-wins constraint layered on top of the global caps.
- * Case-insensitive, trimmed match on providerType. Defensive against malformed
- * config — non-object entries and blank providerTypes are skipped rather than throwing.
+ * Resolve the enforced per-(node, provider) maxParallel cap from a node's resolved
+ * capability slots, or undefined when no matching slot declares a finite cap. Used
+ * by the queue claim path as a stricter-wins constraint layered on top of the global
+ * caps. Case-insensitive, trimmed match on the slot's provider.
+ *
+ * When a node declares multiple slots for the same provider (e.g. distinct
+ * difficulty ranges), their caps SUM into a single per-(node, provider) pool — the
+ * provider can run up to the total across all its slots. Legacy-derived slots (via
+ * deriveSlotsFromLegacy) produce one slot per provider, so the sum equals that
+ * single slot's cap and behavior is preserved exactly.
+ *
+ * Callers pass the already-resolved slots (explicit policy.slots, else legacy-
+ * derived) — this keeps the resolver free of the difficultyBrains dependency and
+ * usable from any layer.
  */
 export function resolveProviderMaxParallel(
-    nodePolicy: Pick<RepoMeshNodePolicy, 'providerRoles'> | null | undefined,
+    slots: NodeCapabilitySlot[] | null | undefined,
     providerType: string | null | undefined,
 ): number | undefined {
     const wanted = typeof providerType === 'string' ? providerType.trim().toLowerCase() : '';
     if (!wanted) return undefined;
-    const roles = nodePolicy?.providerRoles;
-    if (!Array.isArray(roles)) return undefined;
-    for (const entry of roles) {
-        if (!entry || typeof entry !== 'object') continue;
-        const type = typeof entry.providerType === 'string' ? entry.providerType.trim().toLowerCase() : '';
+    if (!Array.isArray(slots)) return undefined;
+    let total: number | undefined;
+    for (const slot of slots) {
+        if (!slot || typeof slot !== 'object') continue;
+        const type = typeof slot.provider === 'string' ? slot.provider.trim().toLowerCase() : '';
         if (!type || type !== wanted) continue;
-        const raw = Number(entry.maxParallel);
-        if (!Number.isFinite(raw) || raw < 0) return undefined;
-        return Math.floor(raw);
+        const raw = Number(slot.maxParallel);
+        if (!Number.isFinite(raw) || raw < 0) continue;
+        total = (total ?? 0) + Math.floor(raw);
     }
-    return undefined;
+    return total;
 }
 
 // ─── Capabilities ───────────────────────────────
@@ -987,6 +983,11 @@ export interface RepoMeshNodeSchedulingStatus {
     load: number;
     schedulingPriority?: number;
     maxConcurrentSessions?: number;
+    /**
+     * Per-(node, provider) caps + consumption. Field name kept for dashboard
+     * back-compat; the cap source is now slots[].maxParallel (the removed
+     * policy.providerRoles no longer exists).
+     */
     providerRoles?: RepoMeshNodeProviderSchedulingStatus[];
     capReached: boolean;
     capReasons?: string[];

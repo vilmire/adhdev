@@ -21,6 +21,7 @@ import {
     resolveProviderMaxParallel,
 } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId } from '@adhdev/mesh-shared';
+import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { isTaskReadonly } from './mesh-work-queue.js';
 
@@ -44,7 +45,11 @@ export interface MeshNodeSchedulingRuntime {
     schedulingPriority: number;
     /** Per-node concurrent-session cap, when configured. */
     maxConcurrentSessions?: number;
-    /** Per-(node, provider) caps + consumption, when providerRoles declares any. */
+    /**
+     * Per-(node, provider) caps + consumption, when the node's slots declare a
+     * maxParallel for any provider. (Field name kept for dashboard back-compat;
+     * the cap source is now slots[].maxParallel, not the removed providerRoles.)
+     */
     providerRoles?: MeshNodeProviderSchedulingRuntime[];
     /**
      * True when the node currently cannot claim a NEW write (non-readonly) task —
@@ -147,17 +152,27 @@ export function buildMeshSchedulingRuntime(
         // Write isolation: a node already holding an assigned write task can't take another.
         if ((writeAssignedByNode.get(nodeId) ?? 0) > 0) capReasons.push('node_has_active_assignment');
 
-        // Per-(node, provider) caps, with live consumption.
+        // Per-(node, provider) caps, with live consumption. Derived from the node's
+        // resolved capability slots (explicit policy.slots, else legacy-derived): the
+        // distinct providers named by slots that declare a maxParallel cap, each cap
+        // summed across that provider's slots by resolveProviderMaxParallel.
         let providerRoles: MeshNodeProviderSchedulingRuntime[] | undefined;
-        const declaredRoles = Array.isArray(policy?.providerRoles) ? policy!.providerRoles! : [];
-        if (declaredRoles.length) {
+        const slots = resolveNodeCapabilitySlots(rawNode);
+        const cappedProviders: string[] = [];
+        const seenProvider = new Set<string>();
+        for (const slot of slots) {
+            const providerType = typeof slot?.provider === 'string' ? slot.provider.trim() : '';
+            if (!providerType) continue;
+            const key = providerType.toLowerCase();
+            if (seenProvider.has(key)) continue;
+            seenProvider.add(key);
+            if (resolveProviderMaxParallel(slots, providerType) !== undefined) cappedProviders.push(providerType);
+        }
+        if (cappedProviders.length) {
             const byProvider = providerCountByNode.get(nodeId);
             providerRoles = [];
-            for (const role of declaredRoles) {
-                if (!role || typeof role !== 'object') continue;
-                const providerType = typeof role.providerType === 'string' ? role.providerType.trim() : '';
-                if (!providerType) continue;
-                const maxParallel = resolveProviderMaxParallel(policy, providerType);
+            for (const providerType of cappedProviders) {
+                const maxParallel = resolveProviderMaxParallel(slots, providerType);
                 const activeAssigned = byProvider?.get(providerType) ?? 0;
                 const capReached = maxParallel !== undefined && activeAssigned >= maxParallel;
                 providerRoles.push({

@@ -391,8 +391,8 @@ export function MeshDetailView({
                     removed: capability slots absorb both — slot order = preference and
                     slot.maxParallel = the per-slot concurrency cap — so editing them lives
                     entirely in each node's "Preferred AI tools" slot list under Nodes &
-                    Providers. The daemon still reads legacy providerRoles/priority for
-                    back-compat; this page just no longer offers a second place to set them. */}
+                    Providers. The daemon still reads legacy providerPriority for
+                    back-compat; this page just no longer offers a second place to set it. */}
             </Section>
 
             {/* ── MAGI task_kind → panel binding editor ──

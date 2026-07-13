@@ -66,7 +66,7 @@ describe('buildMeshSchedulingRuntime', () => {
                     id: 'node_1',
                     policy: {
                         schedulingPriority: 5,
-                        providerRoles: [{ providerType: 'claude-cli', maxParallel: 2 }],
+                        slots: [{ provider: 'claude-cli', maxParallel: 2 }],
                     },
                 }],
             },

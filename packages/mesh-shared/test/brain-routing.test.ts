@@ -98,10 +98,9 @@ describe('node capability slots', () => {
         expect(deriveSlotsFromLegacy({ providerPriority: [] })).toEqual([])
     })
 
-    it('deriveSlotsFromLegacy maps priority order → slots and folds roles + shared brains', () => {
+    it('deriveSlotsFromLegacy maps priority order → slots and folds shared brains', () => {
         const slots = deriveSlotsFromLegacy({
             providerPriority: ['claude-cli', 'codex-cli'],
-            providerRoles: [{ providerType: 'codex-cli', maxParallel: 2 }],
             // provider-agnostic brains apply to every slot as a shared model/thinking default
             difficultyBrains: {
                 difficult: { model: 'opus', thinkingLevel: 'high' },
@@ -112,9 +111,10 @@ describe('node capability slots', () => {
         // order preserved from providerPriority
         expect(slots[0].provider).toBe('claude-cli')
         expect(slots[1].provider).toBe('codex-cli')
-        // per-provider maxParallel folded onto the matching slot only
+        // deriveSlotsFromLegacy no longer folds a per-provider cap (the legacy
+        // providerRoles cap is migrated onto slots at config-load time instead).
         expect(slots[0].maxParallel).toBeUndefined()
-        expect(slots[1].maxParallel).toBe(2)
+        expect(slots[1].maxParallel).toBeUndefined()
         // shared brains → difficulty range on each slot (first model/thinking wins)
         expect(slots[0].difficulty).toEqual(['easy', 'difficult'])
         expect(slots[0].model).toBe('haiku')

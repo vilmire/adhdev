@@ -22,8 +22,8 @@ import type {
     RepoMeshHostMetadata,
     RepoMeshDaemonRole,
 } from '../repo-mesh-types.js';
-import type { MagiKindPanelMap, MagiSlot, MagiTaskKind, DifficultyBrainMap } from '@adhdev/mesh-shared';
-import { normalizeDifficultyBrainMap, DEFAULT_DIFFICULTY_BRAINS } from '@adhdev/mesh-shared';
+import type { MagiKindPanelMap, MagiSlot, MagiTaskKind, DifficultyBrainMap, NodeCapabilitySlot } from '@adhdev/mesh-shared';
+import { normalizeDifficultyBrainMap, DEFAULT_DIFFICULTY_BRAINS, normalizeNodeCapabilitySlots, deriveSlotsFromLegacy } from '@adhdev/mesh-shared';
 import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 
@@ -63,12 +63,14 @@ function loadMeshConfig(): LocalMeshConfig {
  * outlived the feature that wrote it so the persisted config converges on the
  * current schema the next time it is saved.
  *
- * Currently: drops the dead `role` field from each node policy's providerRoles
- * entries. providerRoles is retained for its `maxParallel` per-(node, provider)
- * cap, but the routing `role` was removed (routing is governed solely by
- * required_tags). A meshes.json written before the removal still carries
- * `role: "validator"` etc.; this drops it on load so mesh_status / mesh_list_nodes
- * never surface the dead field and the next saveMeshConfig() persists it gone.
+ * Currently: migrates the removed `providerRoles` per-(node, provider) cap onto
+ * `slots[].maxParallel`. A meshes.json written before the removal carries
+ * `providerRoles: [{ providerType, maxParallel }]` (possibly alongside a dead
+ * `role` field). On load we fold each cap into the node's slots — into an existing
+ * matching-provider slot that has no cap, else by deriving slots from the legacy
+ * providerPriority/providerRoles when the node had no explicit slots — then delete
+ * `providerRoles` so mesh_status / mesh_list_nodes never surface the removed field
+ * and the next saveMeshConfig() persists it gone.
  *
  * Returns true when the config was mutated (caller may persist eagerly).
  */
@@ -77,31 +79,76 @@ function migrateLoadedMeshConfig(config: LocalMeshConfig): boolean {
     for (const mesh of config.meshes) {
         if (!mesh || !Array.isArray(mesh.nodes)) continue;
         for (const node of mesh.nodes) {
-            if (stripDeadRoleFromProviderRoles(node?.policy)) changed = true;
+            if (migrateProviderRolesToSlots(node?.policy)) changed = true;
         }
     }
     return changed;
 }
 
 /**
- * Drop the legacy `role` field from each providerRoles entry of a node policy,
- * in place. Keeps providerType + maxParallel (the still-meaningful per-(node,
- * provider) cap). Defensive against malformed entries — non-object items are
- * left untouched. Returns true when at least one `role` field was removed.
+ * Migrate a node policy's legacy `providerRoles` cap onto `slots[].maxParallel`,
+ * in place, then delete the `providerRoles` field. Defensive against malformed
+ * entries. Returns true when the policy was mutated.
+ *
+ * Behavior-preserving: the resulting slots carry the same per-(node, provider)
+ * cap the queue previously enforced from providerRoles. When the node had no
+ * explicit slots, slots are derived from the legacy providerPriority (folding the
+ * caps in via deriveSlotsFromLegacy-equivalent logic); when it did, each cap is
+ * merged into the first matching-provider slot lacking a maxParallel.
  */
-function stripDeadRoleFromProviderRoles(policy: unknown): boolean {
-    if (!policy || typeof policy !== 'object') return false;
-    const roles = (policy as { providerRoles?: unknown }).providerRoles;
-    if (!Array.isArray(roles)) return false;
-    let changed = false;
-    for (const entry of roles) {
-        if (entry && typeof entry === 'object' && !Array.isArray(entry)
-            && Object.prototype.hasOwnProperty.call(entry, 'role')) {
-            delete (entry as Record<string, unknown>).role;
-            changed = true;
-        }
+export function migrateProviderRolesToSlots(policy: unknown): boolean {
+    if (!policy || typeof policy !== 'object' || Array.isArray(policy)) return false;
+    const p = policy as Record<string, unknown>;
+    const rawRoles = p.providerRoles;
+    if (!Array.isArray(rawRoles)) return false;
+
+    // Extract provider → cap from the legacy roles (case-insensitive key, last wins).
+    const roleCap = new Map<string, { provider: string; cap: number }>();
+    for (const entry of rawRoles) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+        const rec = entry as Record<string, unknown>;
+        const provider = typeof rec.providerType === 'string' ? rec.providerType.trim() : '';
+        if (!provider) continue;
+        const cap = Number(rec.maxParallel);
+        if (!Number.isFinite(cap) || cap < 0) continue;
+        roleCap.set(provider.toLowerCase(), { provider, cap: Math.floor(cap) });
     }
-    return changed;
+
+    const explicitSlots = Array.isArray(p.slots)
+        ? normalizeNodeCapabilitySlots(p.slots)
+        : [];
+
+    if (explicitSlots.length) {
+        // Merge each cap into the first matching-provider slot that has no cap yet.
+        for (const { provider, cap } of roleCap.values()) {
+            const target = explicitSlots.find(s =>
+                s.provider.trim().toLowerCase() === provider.toLowerCase()
+                && s.maxParallel === undefined);
+            if (target) target.maxParallel = cap;
+        }
+        p.slots = explicitSlots;
+    } else if (roleCap.size) {
+        // No explicit slots: derive from legacy providerPriority, then fold caps in.
+        // Falls back to a provider-per-role slot list when providerPriority is empty
+        // so the cap is never silently dropped.
+        let difficultyBrains: DifficultyBrainMap | undefined;
+        try { difficultyBrains = getDifficultyBrains(); } catch { difficultyBrains = undefined; }
+        const priority = Array.isArray(p.providerPriority)
+            ? (p.providerPriority as unknown[]).map(t => typeof t === 'string' ? t.trim() : '').filter(Boolean)
+            : [];
+        const derived = deriveSlotsFromLegacy({ providerPriority: priority, difficultyBrains });
+        const slots: NodeCapabilitySlot[] = derived.length
+            ? derived
+            : [...roleCap.values()].map(r => ({ provider: r.provider }));
+        for (const slot of slots) {
+            const match = roleCap.get(slot.provider.trim().toLowerCase());
+            if (match && slot.maxParallel === undefined) slot.maxParallel = match.cap;
+        }
+        p.slots = slots;
+    }
+
+    delete p.providerRoles;
+    return true;
 }
 
 export function normalizeCapabilityTags(value: unknown): string[] | undefined {

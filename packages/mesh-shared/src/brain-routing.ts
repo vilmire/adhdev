@@ -91,7 +91,7 @@ export function normalizeDifficultyBrainMap(raw: unknown): DifficultyBrainMap {
 //
 // A node's "Preferred AI tools" list is redefined as an ordered array of
 // capability slots. Each slot bundles what used to be scattered across
-// providerPriority (order), providerRoles (per-provider maxParallel), and the
+// providerPriority (order), a per-provider maxParallel cap, and the
 // machine-global difficultyBrains (difficulty → model/thinking). Slot order =
 // preference. This single profile is the source of truth for task routing, MAGI
 // fan-out, and orchestrator-proposed edits.
@@ -166,31 +166,26 @@ export function normalizeNodeCapabilitySlots(raw: unknown): NodeCapabilitySlot[]
 
 /**
  * Back-compat migration: derive capability slots from the legacy fields when a
- * node has no explicit `slots`. Order follows providerPriority; per-provider
- * maxParallel comes from providerRoles; difficulty/model/thinking are folded in
- * from the machine-global difficultyBrains (each difficulty attaches to the slot
- * whose provider the brain preset names, or — when the brain has no provider — to
- * every slot as a shared model/thinking default for that difficulty).
+ * node has no explicit `slots`. Order follows providerPriority; difficulty/model/
+ * thinking are folded in from the machine-global difficultyBrains (each difficulty
+ * attaches to the slot whose provider the brain preset names, or — when the brain
+ * has no provider — to every slot as a shared model/thinking default for that
+ * difficulty).
+ *
+ * (Legacy nodes' per-provider `maxParallel` cap has been migrated onto
+ * `slots[].maxParallel` at config-load time, so it is no longer folded in here.)
  *
  * Returns [] when there's nothing to derive (caller then keeps legacy behavior:
  * first available provider).
  */
 export function deriveSlotsFromLegacy(input: {
     providerPriority?: string[]
-    providerRoles?: Array<{ providerType: string; maxParallel?: number }>
     difficultyBrains?: DifficultyBrainMap
 }): NodeCapabilitySlot[] {
     const priority = Array.isArray(input.providerPriority)
         ? input.providerPriority.filter((p): p is string => typeof p === 'string' && !!p.trim()).map(p => p.trim())
         : []
     if (priority.length === 0) return []
-
-    const roleCap = new Map<string, number>()
-    for (const role of input.providerRoles || []) {
-        if (role && typeof role.providerType === 'string' && Number.isFinite(role.maxParallel)) {
-            roleCap.set(role.providerType.trim(), Math.floor(Number(role.maxParallel)))
-        }
-    }
 
     // Brain presets keyed by the provider they name (provider-specific), plus a
     // provider-agnostic list applied to every slot as a shared default.
@@ -218,13 +213,11 @@ export function deriveSlotsFromLegacy(input: {
         // Fold model/thinking from the applied presets: take the first that sets each.
         const model = applied.find(a => a.model)?.model
         const thinkingLevel = applied.find(a => a.thinkingLevel)?.thinkingLevel
-        const maxParallel = roleCap.get(provider)
         return {
             provider,
             ...(model ? { model } : {}),
             ...(thinkingLevel ? { thinkingLevel } : {}),
             ...(difficulty.length ? { difficulty } : {}),
-            ...(maxParallel !== undefined ? { maxParallel } : {}),
         }
     })
 }

@@ -15,7 +15,7 @@ vi.mock('../../src/config/config.js', () => ({
     loadConfig: () => ({ machineId: 'test-machine' }),
 }));
 
-import { listMeshes, getMesh } from '../../src/config/mesh-config.js';
+import { listMeshes, getMesh, createMesh, addNode, migrateProviderRolesToSlots } from '../../src/config/mesh-config.js';
 
 function configPath(): string {
     return join(testConfigDir, 'meshes.json');
@@ -34,8 +34,8 @@ afterEach(() => {
     if (existsSync(testTmpDir)) rmSync(testTmpDir, { recursive: true, force: true });
 });
 
-describe('mesh-config — dead providerRoles.role migration (Part A)', () => {
-    it('strips the legacy role field from providerRoles on load, keeping maxParallel', () => {
+describe('mesh-config — legacy providerRoles → slots migration on load', () => {
+    it('migrates providerRoles maxParallel onto derived slots and deletes the field', () => {
         writeRawMeshConfig({
             meshes: [
                 {
@@ -50,7 +50,7 @@ describe('mesh-config — dead providerRoles.role migration (Part A)', () => {
                             workspace: '/tmp/a',
                             userOverrides: {},
                             policy: {
-                                providerPriority: ['claude-cli'],
+                                providerPriority: ['claude-cli', 'codex-cli'],
                                 providerRoles: [
                                     { providerType: 'claude-cli', maxParallel: 2, role: 'validator' },
                                     { providerType: 'codex-cli', role: 'worker' },
@@ -65,17 +65,83 @@ describe('mesh-config — dead providerRoles.role migration (Part A)', () => {
         });
 
         const node = getMesh('mesh_a')!.nodes[0];
-        const roles = (node.policy as any).providerRoles;
-        expect(roles).toHaveLength(2);
-        // role must be gone…
-        expect(Object.prototype.hasOwnProperty.call(roles[0], 'role')).toBe(false);
-        expect(Object.prototype.hasOwnProperty.call(roles[1], 'role')).toBe(false);
-        // …while providerType + maxParallel survive.
-        expect(roles[0]).toEqual({ providerType: 'claude-cli', maxParallel: 2 });
-        expect(roles[1]).toEqual({ providerType: 'codex-cli' });
+        // The removed field is gone…
+        expect((node.policy as any).providerRoles).toBeUndefined();
+        // …and its cap now lives on a slot for that provider (derived from providerPriority).
+        const slots = (node.policy as any).slots as Array<{ provider: string; maxParallel?: number }>;
+        const claude = slots.find(s => s.provider === 'claude-cli');
+        const codex = slots.find(s => s.provider === 'codex-cli');
+        expect(claude?.maxParallel).toBe(2);
+        // codex had no maxParallel → its slot stays uncapped.
+        expect(codex?.maxParallel).toBeUndefined();
     });
 
-    it('persists the stripped config to disk on the first load (pure-read path converges)', () => {
+    it('folds the cap into an existing explicit slot lacking a cap', () => {
+        writeRawMeshConfig({
+            meshes: [
+                {
+                    id: 'mesh_e',
+                    name: 'm',
+                    repoIdentity: 'id_e',
+                    policy: {},
+                    coordinator: {},
+                    nodes: [
+                        {
+                            id: 'node_e',
+                            workspace: '/tmp/e',
+                            userOverrides: {},
+                            policy: {
+                                slots: [{ provider: 'claude-cli', model: 'opus' }],
+                                providerRoles: [{ providerType: 'claude-cli', maxParallel: 4 }],
+                            },
+                        },
+                    ],
+                    createdAt: '2026-01-01T00:00:00.000Z',
+                    updatedAt: '2026-01-01T00:00:00.000Z',
+                },
+            ],
+        });
+
+        const node = getMesh('mesh_e')!.nodes[0];
+        expect((node.policy as any).providerRoles).toBeUndefined();
+        const slots = (node.policy as any).slots;
+        expect(slots).toHaveLength(1);
+        expect(slots[0]).toMatchObject({ provider: 'claude-cli', model: 'opus', maxParallel: 4 });
+    });
+
+    it('does not overwrite an explicit slot that already declares its own cap', () => {
+        writeRawMeshConfig({
+            meshes: [
+                {
+                    id: 'mesh_f',
+                    name: 'm',
+                    repoIdentity: 'id_f',
+                    policy: {},
+                    coordinator: {},
+                    nodes: [
+                        {
+                            id: 'node_f',
+                            workspace: '/tmp/f',
+                            userOverrides: {},
+                            policy: {
+                                slots: [{ provider: 'claude-cli', maxParallel: 1 }],
+                                providerRoles: [{ providerType: 'claude-cli', maxParallel: 9 }],
+                            },
+                        },
+                    ],
+                    createdAt: '2026-01-01T00:00:00.000Z',
+                    updatedAt: '2026-01-01T00:00:00.000Z',
+                },
+            ],
+        });
+
+        const node = getMesh('mesh_f')!.nodes[0];
+        expect((node.policy as any).providerRoles).toBeUndefined();
+        // Explicit slot cap wins — the legacy cap is dropped, not merged over it.
+        expect((node.policy as any).slots[0].maxParallel).toBe(1);
+    });
+
+    it('persists the migration to disk on the first (pure-read) load', () => {
         writeRawMeshConfig({
             meshes: [
                 {
@@ -90,7 +156,8 @@ describe('mesh-config — dead providerRoles.role migration (Part A)', () => {
                             workspace: '/tmp/b',
                             userOverrides: {},
                             policy: {
-                                providerRoles: [{ providerType: 'claude-cli', role: 'validator' }],
+                                providerPriority: ['claude-cli'],
+                                providerRoles: [{ providerType: 'claude-cli', maxParallel: 5 }],
                             },
                         },
                     ],
@@ -101,16 +168,16 @@ describe('mesh-config — dead providerRoles.role migration (Part A)', () => {
         });
 
         // listMeshes is a pure-read accessor; the on-load migration must still
-        // rewrite the file so the dead field is gone from disk too.
+        // rewrite the file so the removed field is gone from disk too.
         listMeshes();
 
         const onDisk = readRawMeshConfig();
-        const role = onDisk.meshes[0].nodes[0].policy.providerRoles[0];
-        expect(Object.prototype.hasOwnProperty.call(role, 'role')).toBe(false);
-        expect(role).toEqual({ providerType: 'claude-cli' });
+        const policy = onDisk.meshes[0].nodes[0].policy;
+        expect(policy.providerRoles).toBeUndefined();
+        expect(policy.slots.find((s: any) => s.provider === 'claude-cli').maxParallel).toBe(5);
     });
 
-    it('leaves a clean providerRoles array untouched (no role fields, no needless rewrite)', () => {
+    it('leaves a policy with no providerRoles untouched (no needless rewrite)', () => {
         writeRawMeshConfig({
             meshes: [
                 {
@@ -125,7 +192,7 @@ describe('mesh-config — dead providerRoles.role migration (Part A)', () => {
                             workspace: '/tmp/c',
                             userOverrides: {},
                             policy: {
-                                providerRoles: [{ providerType: 'claude-cli', maxParallel: 3 }],
+                                slots: [{ provider: 'claude-cli', maxParallel: 3 }],
                             },
                         },
                     ],
@@ -137,8 +204,8 @@ describe('mesh-config — dead providerRoles.role migration (Part A)', () => {
 
         const before = readFileSync(configPath(), 'utf-8');
         const node = getMesh('mesh_c')!.nodes[0];
-        expect((node.policy as any).providerRoles[0]).toEqual({ providerType: 'claude-cli', maxParallel: 3 });
-        // No `role` field present → no eager rewrite (file unchanged).
+        expect((node.policy as any).slots[0]).toEqual({ provider: 'claude-cli', maxParallel: 3 });
+        // No legacy providerRoles present → no eager rewrite (file unchanged).
         expect(readFileSync(configPath(), 'utf-8')).toBe(before);
     });
 
@@ -154,7 +221,7 @@ describe('mesh-config — dead providerRoles.role migration (Part A)', () => {
                     nodes: [
                         { id: 'n1', workspace: '/tmp/d1', userOverrides: {}, policy: {} },
                         { id: 'n2', workspace: '/tmp/d2', userOverrides: {}, policy: { providerRoles: 'nope' } as any },
-                        { id: 'n3', workspace: '/tmp/d3', userOverrides: {}, policy: { providerRoles: [null, 'x', { providerType: 'claude-cli', role: 'r' }] } as any },
+                        { id: 'n3', workspace: '/tmp/d3', userOverrides: {}, policy: { providerPriority: ['claude-cli'], providerRoles: [null, 'x', { providerType: 'claude-cli', maxParallel: 2, role: 'r' }] } as any },
                     ],
                     createdAt: '2026-01-01T00:00:00.000Z',
                     updatedAt: '2026-01-01T00:00:00.000Z',
@@ -164,9 +231,36 @@ describe('mesh-config — dead providerRoles.role migration (Part A)', () => {
 
         const mesh = getMesh('mesh_d')!;
         expect(mesh.nodes).toHaveLength(3);
-        const n3Roles = (mesh.nodes[2].policy as any).providerRoles;
-        // Malformed entries are left as-is; the one valid object loses its role.
-        expect(Object.prototype.hasOwnProperty.call(n3Roles[2], 'role')).toBe(false);
-        expect(n3Roles[2]).toEqual({ providerType: 'claude-cli' });
+        // n2's non-array providerRoles is not a valid legacy shape → left untouched.
+        expect((mesh.nodes[1].policy as any).providerRoles).toBe('nope');
+        // n3: malformed entries skipped, the one valid cap migrates onto a slot.
+        const n3 = mesh.nodes[2].policy as any;
+        expect(n3.providerRoles).toBeUndefined();
+        expect(n3.slots.find((s: any) => s.provider === 'claude-cli').maxParallel).toBe(2);
+    });
+});
+
+describe('node creation never seeds providerRoles', () => {
+    it('addNode with a plain policy produces no providerRoles field', () => {
+        const mesh = createMesh({ name: 'n1', repoIdentity: 'r1' });
+        const node = addNode(mesh.id, {
+            workspace: '/tmp/new1',
+            policy: { providerPriority: ['claude-cli'] },
+        } as any)!;
+        expect((node.policy as any).providerRoles).toBeUndefined();
+    });
+
+    it('an incoming legacy providerRoles arg folds into slots (via migrateProviderRolesToSlots)', () => {
+        // Mirrors what the mesh_add_node handler does before calling addNode.
+        const policy: Record<string, unknown> = {
+            providerPriority: ['claude-cli'],
+            providerRoles: [{ providerType: 'claude-cli', maxParallel: 7 }],
+        };
+        migrateProviderRolesToSlots(policy);
+        const mesh = createMesh({ name: 'n2', repoIdentity: 'r2' });
+        const node = addNode(mesh.id, { workspace: '/tmp/new2', policy } as any)!;
+        expect((node.policy as any).providerRoles).toBeUndefined();
+        const slot = (node.policy as any).slots.find((s: any) => s.provider === 'claude-cli');
+        expect(slot.maxParallel).toBe(7);
     });
 });

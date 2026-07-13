@@ -9,12 +9,6 @@ export interface AvailableCliAgent {
     meshCoordinator?: MeshCoordinatorMetadata
 }
 
-/** Per-(node, provider) parallelism declaration. Mirrors RepoMeshProviderRole. */
-export interface MeshProviderRole {
-    providerType: string
-    maxParallel?: number
-}
-
 export interface MeshNode {
     id: string
     workspace: string
@@ -25,8 +19,6 @@ export interface MeshNode {
         readOnly?: boolean
         /** Soft scheduling priority (higher = preferred) for distribution strategies. */
         schedulingPriority?: number
-        /** Per-(node, provider) role + maxParallel declarations. */
-        providerRoles?: MeshProviderRole[]
         /** Node capability slots (ORCHESTRATION_NODE_SLOTS.md) — the ordered
          *  "Preferred AI tools" profile (provider/model/thinking/difficulty/capability/maxParallel). */
         slots?: NodeCapabilitySlot[]

@@ -31,8 +31,9 @@ import type {
     RepoMeshStatus,
     RepoMeshNodeStatus,
 } from '../repo-mesh-types.js';
-import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
+import { mergeAndNormalizePolicy, resolveProviderMaxParallel } from '../repo-mesh-types.js';
 import { getDifficultyBrains } from '../config/mesh-config.js';
+import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
 import type { MagiKindPanelMap, MagiSlot, MagiTaskKind } from '@adhdev/mesh-shared';
 
@@ -459,19 +460,23 @@ function buildNodeConfigSection(mesh: LocalMeshEntry): string {
         const explicitMachineLabel = typeof (n as any).machineLabel === 'string' ? (n as any).machineLabel : '';
         const explicitLabel = explicitMachineLabel ? ` label: **${explicitMachineLabel}** |` : '';
         const providerPriority = n.policy?.providerPriority?.length ? ` | providers: ${n.policy.providerPriority.join(', ')}` : '';
-        // Per-(node, provider) maxParallel cap. Only maxParallel is enforced by the
-        // queue; routing is governed by required_tags, not provider roles.
-        const providerRoles = Array.isArray(n.policy?.providerRoles)
-            ? (n.policy!.providerRoles as Array<{ providerType?: unknown; maxParallel?: unknown }>)
-                .map(r => {
-                    const type = typeof r?.providerType === 'string' ? r.providerType.trim() : '';
-                    if (!type) return '';
-                    const cap = Number.isFinite(Number(r?.maxParallel)) ? ` (max ${Math.floor(Number(r.maxParallel))})` : '';
-                    return `${type}${cap}`;
-                })
-                .filter(Boolean)
-            : [];
-        const providerRolesSuffix = providerRoles.length ? ` | caps: ${providerRoles.join(', ')}` : '';
+        // Per-(node, provider) maxParallel cap, derived from the node's slots (the
+        // cap summed across a provider's slots). Only maxParallel is enforced by the
+        // queue; routing is governed by required_tags, not slot order.
+        const nodeSlots = resolveNodeCapabilitySlots(n);
+        const seenCapProvider = new Set<string>();
+        const providerCaps: string[] = [];
+        for (const slot of nodeSlots) {
+            const type = typeof slot?.provider === 'string' ? slot.provider.trim() : '';
+            if (!type) continue;
+            const key = type.toLowerCase();
+            if (seenCapProvider.has(key)) continue;
+            seenCapProvider.add(key);
+            const cap = resolveProviderMaxParallel(nodeSlots, type);
+            if (cap === undefined) continue;
+            providerCaps.push(`${type} (max ${cap})`);
+        }
+        const providerRolesSuffix = providerCaps.length ? ` | caps: ${providerCaps.join(', ')}` : '';
         lines.push(`- ${explicitLabel} nodeId: \`${n.id}\` | workspace: \`${n.workspace}\`${n.daemonId ? ` | daemon: \`${n.daemonId}\`` : ''}${providerPriority}${providerRolesSuffix}${suffix}`);
         // Routing tags: what this node advertises for mesh_enqueue_task required_tags.
         // Surfaced so the coordinator can route by-capability (e.g. enqueue a Windows

@@ -867,8 +867,8 @@ export class MeshRuntimeStore {
     /**
      * Count active (status='assigned') tasks on a (node, provider) combination,
      * matched by the assignedProviderType stamped on the payload at claim time.
-     * Drives the per-(node, provider) maxParallel cap (RepoMeshNodePolicy
-     * providerRoles). The active-assignment set for a single node is tiny, so
+     * Drives the per-(node, provider) maxParallel cap (summed across a provider's
+     * slots[].maxParallel). The active-assignment set for a single node is tiny, so
      * parsing payloads here is cheap and avoids a schema migration. Pre-cap legacy
      * rows (no provider stamp) and other providers on the same node do not consume
      * this provider's budget, so the cap is fully backward compatible.
@@ -906,7 +906,7 @@ export class MeshRuntimeStore {
             if (this.hasActiveSessionAssignment(meshId, sessionId)) return null;
             const nodeBusy = this.hasActiveNodeAssignment(meshId, nodeId);
 
-            // Per-(node, provider) maxParallel cap (RepoMeshNodePolicy providerRoles).
+            // Per-(node, provider) maxParallel cap (summed slots[].maxParallel).
             // Orthogonal to taskMode: this bounds the (node, provider) resource pool
             // regardless of read-only vs write. When the cap is already met, this
             // session cannot claim any candidate here — return null. This composes

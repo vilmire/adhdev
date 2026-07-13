@@ -829,13 +829,13 @@ describe('buildMeshNodeCapabilityTags — live reportedPlatform/reportedArch sel
 });
 
 describe('buildMeshNodeCapabilityTags — no role= advertising (role affinity removed)', () => {
-    const node = (providerRoles: Array<{ providerType: string; maxParallel?: number }>) => ({
-        policy: { providerPriority: providerRoles.map(r => r.providerType), providerRoles },
+    const node = (slots: Array<{ provider: string; maxParallel?: number }>) => ({
+        policy: { providerPriority: slots.map(s => s.provider), slots },
     });
 
-    it('never advertises a role= tag, even when providerRoles are declared', () => {
+    it('never advertises a role= tag, even when capped slots are declared', () => {
         const tags = buildMeshNodeCapabilityTags(
-            node([{ providerType: 'claude-cli', maxParallel: 2 }, { providerType: 'codex-cli', maxParallel: 1 }]),
+            node([{ provider: 'claude-cli', maxParallel: 2 }, { provider: 'codex-cli', maxParallel: 1 }]),
             'claude-cli',
         );
         expect(tags.some(t => t.startsWith('role='))).toBe(false);
