@@ -1104,5 +1104,99 @@ describe('git repo status parser', () => {
       commit(repo, 'c1');
       await expect(classifyChangedPackages(repo, 'nope-not-a-ref', 'HEAD')).rejects.toBeTruthy();
     });
+
+    // --- Submodule-aware descent -------------------------------------------
+    // A root diff that only moves the `oss` gitlink is runtime-ambiguous from the
+    // root's point of view. Descend into the submodule and classify its own content
+    // range so a web-only oss commit no longer forces daemon-affecting.
+
+    /**
+     * Build a parent repo with an `oss` submodule, advance the submodule by one commit
+     * that `applyToSub` writes, bump the gitlink in the parent, and return the parent
+     * range across just the gitlink bump.
+     */
+    function seedSubmoduleBump(
+      name: string,
+      applyToSub: (subRepo: string) => void,
+    ): { repo: string; from: string; to: string } {
+      const sub = tempRepo(`${name}-child`);
+      writeFileSync(join(sub, 'seed.txt'), 'seed\n');
+      commit(sub, 'sub c1');
+
+      const repo = tempRepo(`${name}-parent`);
+      writeFileSync(join(repo, 'README.md'), 'parent\n');
+      commit(repo, 'parent init');
+      git(repo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', sub, 'oss']);
+      commit(repo, 'add oss submodule');
+      const from = git(repo, ['rev-parse', 'HEAD']);
+
+      // Advance the submodule's own HEAD, then bump the parent's gitlink to it.
+      applyToSub(join(repo, 'oss'));
+      commit(join(repo, 'oss'), 'sub c2');
+      const to = commitBump(repo);
+      return { repo, from, to };
+    }
+
+    function commitBump(repo: string): string {
+      git(repo, ['add', 'oss']);
+      git(repo, ['commit', '-m', 'bump oss gitlink']);
+      return git(repo, ['rev-parse', 'HEAD']);
+    }
+
+    it('isDaemonAffecting:false when the only root change is a submodule bump whose content is web-only', async () => {
+      const { repo, from, to } = seedSubmoduleBump('classify-sub-web', (subRepo) => {
+        mkdirSync(join(subRepo, 'packages', 'web-core', 'src'), { recursive: true });
+        writeFileSync(join(subRepo, 'packages', 'web-core', 'src', 'ui.ts'), 'export const ui = 1;\n');
+      });
+      const result = await classifyChangedPackages(repo, from, to);
+      expect(result.isDaemonAffecting).toBe(false);
+      expect(result.affectedPackages).toEqual(['web-core']);
+    });
+
+    it('isDaemonAffecting:false for a submodule bump whose content is only a doc/JSON non-runtime file', async () => {
+      const { repo, from, to } = seedSubmoduleBump('classify-sub-doc', (subRepo) => {
+        mkdirSync(join(subRepo, 'docs'), { recursive: true });
+        writeFileSync(join(subRepo, 'docs', 'note.md'), '# note\n');
+      });
+      const result = await classifyChangedPackages(repo, from, to);
+      // Submodule content is entirely a recognized benign root file → not daemon-affecting.
+      expect(result.isDaemonAffecting).toBe(false);
+    });
+
+    it('isDaemonAffecting:true when the submodule bump content touches a daemon-runtime package', async () => {
+      const { repo, from, to } = seedSubmoduleBump('classify-sub-daemon', (subRepo) => {
+        mkdirSync(join(subRepo, 'packages', 'daemon-core', 'src'), { recursive: true });
+        writeFileSync(join(subRepo, 'packages', 'daemon-core', 'src', 'x.ts'), 'export const x = 1;\n');
+      });
+      const result = await classifyChangedPackages(repo, from, to);
+      expect(result.isDaemonAffecting).toBe(true);
+      expect(result.affectedPackages).toContain('daemon-core');
+    });
+
+    it('stays daemon-affecting when a submodule bump is accompanied by a runtime-ambiguous root file', async () => {
+      const sub = tempRepo('classify-sub-mixed-child');
+      writeFileSync(join(sub, 'seed.txt'), 'seed\n');
+      commit(sub, 'sub c1');
+
+      const repo = tempRepo('classify-sub-mixed-parent');
+      writeFileSync(join(repo, 'README.md'), 'parent\n');
+      commit(repo, 'parent init');
+      git(repo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', sub, 'oss']);
+      commit(repo, 'add oss submodule');
+      const from = git(repo, ['rev-parse', 'HEAD']);
+
+      // Submodule content is web-only...
+      mkdirSync(join(repo, 'oss', 'packages', 'web-core', 'src'), { recursive: true });
+      writeFileSync(join(repo, 'oss', 'packages', 'web-core', 'src', 'ui.ts'), 'export const ui = 1;\n');
+      commit(join(repo, 'oss'), 'sub c2');
+      // ...but a root-level runtime-ambiguous config file also changed → stays daemon.
+      writeFileSync(join(repo, 'tsconfig.json'), '{"compilerOptions":{}}\n');
+      git(repo, ['add', '.']);
+      git(repo, ['commit', '-m', 'bump gitlink + root config']);
+      const to = git(repo, ['rev-parse', 'HEAD']);
+
+      const result = await classifyChangedPackages(repo, from, to);
+      expect(result.isDaemonAffecting).toBe(true);
+    });
   });
 });

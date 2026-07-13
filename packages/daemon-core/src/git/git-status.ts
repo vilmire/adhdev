@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import type { DaemonBuildBehind, GitRepoStatus, GitSubmoduleStatus, GitUpstreamFreshness } from './git-types.js';
 import { GIT_STATUS_TIMEOUT_MS, GitCommandError, resolveGitRepository, runGit } from './git-executor.js';
 import { getDaemonBuildInfo, type DaemonBuildInfo } from '../build-info.js';
@@ -445,6 +446,18 @@ export interface ChangedPackageClassification {
 }
 
 /**
+ * Same as {@link ChangedPackageClassification} but also carries the runtime-ambiguous
+ * non-package paths that forced (or would force) a daemon-affecting verdict. Callers
+ * with git access (classifyChangedPackages) inspect these to descend into submodule
+ * gitlinks — a bare submodule path (e.g. `oss`) is runtime-ambiguous from the root's
+ * point of view, but its *content* diff may be entirely web-only.
+ */
+interface ChangedFileListClassification extends ChangedPackageClassification {
+  /** Non-package paths that were not recognized as benign root files. */
+  ambiguousNonPackageFiles: string[];
+}
+
+/**
  * Pure bucketer: classify an already-collected changed-file list into the coarse
  * daemon-vs-web verdict, per the resolved policy. Shared by classifyDaemonBuildChange
  * (buildCommit..HEAD) and classifyChangedPackages (arbitrary ref range) so the
@@ -454,21 +467,21 @@ export interface ChangedPackageClassification {
 function classifyChangedFileList(
   files: string[],
   policy: ResolvedChangeImpactPolicy,
-): ChangedPackageClassification {
+): ChangedFileListClassification {
   if (files.length === 0) {
     // No file diff (e.g. only merge metadata) — nothing actionable, but stay
     // conservative and treat as daemon-affecting so we don't suppress a real warning.
-    return { isDaemonAffecting: true, affectedPackages: [] };
+    return { isDaemonAffecting: true, affectedPackages: [], ambiguousNonPackageFiles: [] };
   }
   const pkgs = new Set<string>();
-  // A non-package path that is NOT a recognized benign root file (marker/doc).
+  // Non-package paths that are NOT recognized benign root files (marker/doc).
   // Only these force daemon-affecting; benign markers/docs are ignored so a
   // gitlink-moving root commit over a marker-only oss commit no longer over-warns.
-  let sawRuntimeAmbiguousNonPackage = false;
+  const ambiguousNonPackageFiles: string[] = [];
   for (const file of files) {
     const match = file.match(/(?:^|\/)packages\/([^/]+)\//);
     if (!match) {
-      if (!isNonRuntimeRootFile(file, policy)) sawRuntimeAmbiguousNonPackage = true;
+      if (!isNonRuntimeRootFile(file, policy)) ambiguousNonPackageFiles.push(file);
       continue;
     }
     pkgs.add(match[1]);
@@ -481,9 +494,9 @@ function classifyChangedFileList(
   // file changed) — i.e. nothing runtime-ambiguous remains. Unlisted/new packages
   // therefore stay daemon-affecting (fail-safe default preserved).
   const allBenign =
-    !sawRuntimeAmbiguousNonPackage &&
+    ambiguousNonPackageFiles.length === 0 &&
     affectedPackages.every((p) => policy.webOnlyPackages.has(p) && !policy.daemonRuntimePackages.has(p));
-  return { isDaemonAffecting: !allBenign, affectedPackages };
+  return { isDaemonAffecting: !allBenign, affectedPackages, ambiguousNonPackageFiles };
 }
 
 /**
@@ -542,7 +555,138 @@ export async function classifyChangedPackages(
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
-  return classifyChangedFileList(files, policy);
+  const rootVerdict = classifyChangedFileList(files, policy);
+  return refineVerdictThroughSubmodules(repoPath, fromRef, toRef, options, policy, rootVerdict);
+}
+
+/**
+ * A `.gitmodules`-registered submodule root path (e.g. `oss`) appears in the root diff
+ * as a bare gitlink — no `packages/...` segment — so classifyChangedFileList treats it
+ * as runtime-ambiguous and the root verdict is daemon-affecting. But the submodule's
+ * *content* diff may be entirely web-only (a web-core-only oss commit) — in which case
+ * the daemon genuinely isn't affected and the refine gate should skip daemon-scoped
+ * validation. This descends into each submodule that is the *only* thing blocking a
+ * benign verdict, classifies its own gitlink-range content diff with the SAME policy,
+ * and folds the result back.
+ *
+ * Strictly conservative — a submodule verdict can only ever KEEP the root benign or
+ * flip an otherwise-benign root back to daemon-affecting; it never overrides a root
+ * that was daemon-affecting for its own reasons (a runtime package / unknown package /
+ * a runtime-ambiguous non-submodule file). If ANY blocking non-package path is not a
+ * registered submodule, or any submodule probe fails, we keep the conservative root
+ * verdict (fail-safe: never silence a real warning on uncertainty).
+ */
+async function refineVerdictThroughSubmodules(
+  repoPath: string,
+  fromRef: string,
+  toRef: string,
+  options: GitStatusOptions,
+  policy: ResolvedChangeImpactPolicy,
+  rootVerdict: ChangedFileListClassification,
+): Promise<ChangedPackageClassification> {
+  const strip = ({ isDaemonAffecting, affectedPackages }: ChangedPackageClassification) => ({ isDaemonAffecting, affectedPackages });
+  const ambiguous = rootVerdict.ambiguousNonPackageFiles;
+  // Fast path: nothing to descend into, or the root is daemon-affecting for a reason
+  // other than an ambiguous path (an unknown/daemon package). Submodule descent only
+  // ever addresses the ambiguous-non-package reason, so it cannot help here.
+  if (ambiguous.length === 0) return strip(rootVerdict);
+
+  let submodulePaths: Set<string>;
+  try {
+    submodulePaths = await listSubmodulePaths(repoPath, options);
+  } catch {
+    return strip(rootVerdict); // can't read .gitmodules → stay conservative.
+  }
+  // Every blocking ambiguous path must be a registered submodule for descent to be able
+  // to clear the verdict — otherwise a non-submodule ambiguous file keeps it daemon.
+  if (ambiguous.length === 0 || !ambiguous.every((f) => submodulePaths.has(f))) {
+    return strip(rootVerdict);
+  }
+
+  const submoduleAffectedPackages: string[] = [];
+  for (const subPath of ambiguous) {
+    let range: { from: string; to: string };
+    try {
+      range = await resolveSubmoduleGitlinkRange(repoPath, fromRef, toRef, subPath, options);
+    } catch {
+      return strip(rootVerdict); // couldn't read the gitlink SHAs → conservative.
+    }
+    // A recursive classify inside the submodule reuses the SAME repo config resolution:
+    // the submodule has its own packages/ layout and may carry its own change-impact
+    // config; classifyChangedPackages(subRepo, ...) resolves it there.
+    let subVerdict: ChangedPackageClassification;
+    try {
+      subVerdict = await classifyChangedPackages(join(repoPath, subPath), range.from, range.to, {
+        ...options,
+        // Do not force the root's injected config onto the submodule — let it resolve
+        // its own .adhdev/change-impact.* (or fall back to defaults).
+        changeImpactConfig: undefined,
+      });
+    } catch {
+      return strip(rootVerdict); // submodule diff failed → conservative.
+    }
+    if (subVerdict.isDaemonAffecting) {
+      // The submodule content really does touch daemon runtime → keep daemon-affecting,
+      // surfacing the submodule packages so the reason is visible.
+      return {
+        isDaemonAffecting: true,
+        affectedPackages: [...new Set([...rootVerdict.affectedPackages, ...subVerdict.affectedPackages])].sort(),
+      };
+    }
+    submoduleAffectedPackages.push(...subVerdict.affectedPackages);
+  }
+
+  // Every ambiguous path was a submodule whose content is web-only. The remaining root
+  // packages (if any) must themselves be benign web-only for the whole change to be
+  // benign — reuse the exact same rule by re-checking the root package set.
+  const rootPackagesBenign = rootVerdict.affectedPackages.every(
+    (p) => policy.webOnlyPackages.has(p) && !policy.daemonRuntimePackages.has(p),
+  );
+  return {
+    isDaemonAffecting: !rootPackagesBenign,
+    affectedPackages: [...new Set([...rootVerdict.affectedPackages, ...submoduleAffectedPackages])].sort(),
+  };
+}
+
+/** Registered submodule paths from `.gitmodules` (empty set if none / unreadable). */
+async function listSubmodulePaths(repoPath: string, options: GitStatusOptions): Promise<Set<string>> {
+  // `git config -f .gitmodules --get-regexp path` lists `submodule.<name>.path <path>`.
+  const res = await runGit(repoPath, ['config', '-f', '.gitmodules', '--get-regexp', 'path'], options);
+  const paths = new Set<string>();
+  for (const line of res.stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const idx = trimmed.indexOf(' ');
+    if (idx === -1) continue;
+    const p = trimmed.slice(idx + 1).trim();
+    if (p) paths.add(p);
+  }
+  return paths;
+}
+
+/**
+ * Read the old/new subproject SHAs a root gitlink moved between over `fromRef..toRef`.
+ * `git diff <range> -- <subPath>` on a gitlink prints `-Subproject commit <old>` /
+ * `+Subproject commit <new>`. Throws if either SHA can't be resolved.
+ */
+async function resolveSubmoduleGitlinkRange(
+  repoPath: string,
+  fromRef: string,
+  toRef: string,
+  subPath: string,
+  options: GitStatusOptions,
+): Promise<{ from: string; to: string }> {
+  const res = await runGit(repoPath, ['diff', `${fromRef}..${toRef}`, '--', subPath], options);
+  let from = '';
+  let to = '';
+  for (const line of res.stdout.split('\n')) {
+    const m = line.match(/^([+-])Subproject commit ([0-9a-f]{7,40})/);
+    if (!m) continue;
+    if (m[1] === '-') from = m[2];
+    else to = m[2];
+  }
+  if (!from || !to) throw new Error(`no gitlink range for submodule ${subPath}`);
+  return { from, to };
 }
 
 /**
