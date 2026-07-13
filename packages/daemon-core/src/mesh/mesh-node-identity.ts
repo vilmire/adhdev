@@ -865,6 +865,48 @@ export function deriveMeshNodeHealthFromGit(git: Record<string, unknown> | null 
     return 'online';
 }
 
+/**
+ * Resolve a node's EFFECTIVE health from whatever telemetry the node object carries,
+ * in the same precedence the coordinator surfaces use (applyCachedInlineMeshNodeStatus):
+ *   1. an explicit `node.health` scalar (set by a fresh mesh_status probe / status report),
+ *   2. else the cached inline status health (`node.cachedStatus.health`),
+ *   3. else derived from the node's git telemetry (`node.git` / cachedStatus.git) via
+ *      deriveMeshNodeHealthFromGit,
+ *   4. else 'unknown' (no telemetry — cannot prove unhealthy).
+ *
+ * This is the SINGLE source of truth for "what is this node's health right now" shared by
+ * the auto-launch gate (isMeshNodeHealthLaunchable → isLaunchableNode) and the MAGI fan-out
+ * planner, so the two never disagree about whether a degraded node is a viable target.
+ * Returns a lowercased string (empty string is normalized to 'unknown').
+ */
+export function resolveEffectiveMeshNodeHealth(node: any): string {
+    const explicit = (readStringValue(node?.health) ?? '').toLowerCase();
+    if (explicit) return explicit;
+    const cachedStatus = readObjectRecord(node?.cachedStatus);
+    const cachedHealth = (readStringValue(cachedStatus.health) ?? '').toLowerCase();
+    if (cachedHealth) return cachedHealth;
+    const git = readObjectRecord(node?.git);
+    if (Object.keys(git).length > 0) return deriveMeshNodeHealthFromGit(git).toLowerCase();
+    const cachedGit = readObjectRecord(cachedStatus.git);
+    if (Object.keys(cachedGit).length > 0) return deriveMeshNodeHealthFromGit(cachedGit).toLowerCase();
+    return 'unknown';
+}
+
+/**
+ * Whether a node's health permits launching / assigning a fresh worker session onto it.
+ * Mirrors the auto-launch gate in mesh-queue-assignment.isLaunchableNode: 'online' and
+ * 'unknown' (and an absent/empty health, treated as unknown) pass — we never block on
+ * missing telemetry; every other resolved health ('degraded', 'offline', 'dirty',
+ * 'wrong_branch') is NOT launchable. A task assigned to a non-launchable node parks in
+ * `pending` forever (isLaunchableNode skips it → node_not_launch_ready) with no
+ * re-assignment, so the MAGI planner must exclude such nodes UP FRONT rather than emit a
+ * replica that can never run.
+ */
+export function isMeshNodeHealthLaunchable(node: any): boolean {
+    const health = resolveEffectiveMeshNodeHealth(node);
+    return health === 'online' || health === 'unknown';
+}
+
 function readMeshNodeLabel(status: Record<string, unknown>, node: any): string {
     return readStringValue(status.nodeId, normalizeMeshNodeId(node)) ?? 'unknown';
 }

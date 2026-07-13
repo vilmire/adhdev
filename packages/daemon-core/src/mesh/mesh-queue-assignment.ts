@@ -19,7 +19,7 @@ import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalD
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { readMeshNodeDaemonId } from './mesh-node-identity.js';
+import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable } from './mesh-node-identity.js';
 import { queuePendingMeshCoordinatorEvent, retractPendingDispatchBlockedEvent } from './mesh-events-pending.js';
 import { isWorktreeBootstrapStaleRunning, shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
@@ -1047,9 +1047,10 @@ function nodeHasActiveMeshWork(components: DaemonComponents, meshId: string, nod
 
 function isLaunchableNode(node: any): boolean {
     if (!node || node.status === 'disabled' || node.status === 'removed') return false;
-    const health = readNonEmptyString(node.health).toLowerCase();
-    if (!health) return true;
-    return health === 'online' || health === 'unknown';
+    // Delegate the health gate to the shared resolver so the auto-launch gate and the
+    // MAGI fan-out planner agree on exactly what "launchable health" means (online /
+    // unknown / absent pass; degraded / offline / dirty / wrong_branch are blocked).
+    return isMeshNodeHealthLaunchable(node);
 }
 
 /** Whether a mesh node's daemon/machine identity resolves to THIS coordinator daemon

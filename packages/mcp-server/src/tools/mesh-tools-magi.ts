@@ -23,6 +23,8 @@ import {
     getMeshMission,
     getQueue,
     isWeakCompletionEvidence,
+    isMeshNodeHealthLaunchable,
+    resolveEffectiveMeshNodeHealth,
     getMagiKindPanel,
     listMagiKindPanels,
     setMagiKindPanel,
@@ -726,6 +728,17 @@ export interface MagiUnavailableSlot {
     reason: string;
 }
 
+/** A slot excluded because every candidate node's health is not launch-ready. */
+export interface MagiUnhealthySlot {
+    slotIndex: number;
+    provider: string;
+    nodeId?: string;
+    capabilityTags: string[];
+    /** The resolved health that made the slot unhealthy (e.g. 'degraded', 'offline'). */
+    health: string;
+    reason: string;
+}
+
 /** Per-slot resolution detail (for the git-stale exclusion + the review response surface). */
 export interface MagiSlotResolution {
     slotIndex: number;
@@ -738,7 +751,11 @@ export interface MagiSlotResolution {
     headCommit?: string;
     /** True when available AND every candidate node's known HEAD differs from referenceCommit. */
     gitStale: boolean;
-    /** Excluded from the fan-out (unavailable, or git-stale and not include_stale). */
+    /** True when available but NO candidate node's health is launch-ready (degraded/offline). */
+    unhealthy: boolean;
+    /** The resolved health of the (representative) candidate node — surfaced for diagnosis. */
+    health?: string;
+    /** Excluded from the fan-out (unavailable, unhealthy, or git-stale and not include_stale). */
     excluded: boolean;
     reason?: string;
 }
@@ -754,6 +771,10 @@ export interface MagiFanoutPlan {
     enoughTargets: boolean;
     coupled: boolean;
     unavailableSlots: MagiUnavailableSlot[];
+    /** Slots excluded because every candidate node's health is not launch-ready
+     *  (degraded / offline). Without this gate the replica would be assigned to a node
+     *  isLaunchableNode refuses, so it parks in `pending` forever — the infinite-wait defect. */
+    unhealthySlots: MagiUnhealthySlot[];
     /** The commit the panel is being resolved against (coordinator HEAD); undefined when unknown. */
     referenceCommit?: string;
     /** Per-slot resolution detail, aligned to the kind-panel slot order. */
@@ -862,6 +883,7 @@ export function buildMagiFanoutPlan(
     const includeStale = opts.includeStale === true;
     const replicas: MagiReplicaPlan[] = [];
     const unavailableSlots: MagiUnavailableSlot[] = [];
+    const unhealthySlots: MagiUnhealthySlot[] = [];
     const slotResolutions: MagiSlotResolution[] = [];
     const targetKeys = new Set<string>();
     const providerSet = new Set<string>();
@@ -901,9 +923,44 @@ export function buildMagiFanoutPlan(
                     ? `pinned node '${slot.nodeId}' is not a member of this mesh`
                     : `no mesh node satisfies required tags [${requiredTags.join(', ')}]`,
             });
-            slotResolutions.push({ slotIndex, provider, nodeId: slot.nodeId, capabilityTags, available: false, gitStale: false, excluded: true, reason: 'unavailable' });
+            slotResolutions.push({ slotIndex, provider, nodeId: slot.nodeId, capabilityTags, available: false, gitStale: false, unhealthy: false, excluded: true, reason: 'unavailable' });
             return;
         }
+
+        // Health gate (PRIMARY FIX). A slot is available by capability tags, but a node
+        // whose P2P/git health is not launch-ready (degraded / offline) is refused by the
+        // daemon's auto-launch gate (isLaunchableNode → node_not_launch_ready): the replica
+        // task would be assigned yet never launch, parking in `pending` forever with no
+        // re-assignment or cancellation — the MAGI infinite-wait defect. So exclude such a
+        // slot UP FRONT, exactly as the git-stale gate does. Prefer routing to a launch-ready
+        // candidate when the pool is mixed; only exclude when EVERY candidate is unhealthy.
+        // 'unknown'/'online' (and absent health) pass — we never exclude on missing telemetry
+        // (mirrors the missing-HEAD "can't prove → fresh" rule), so a mesh whose nodes carry
+        // no health telemetry behaves exactly as before this gate.
+        const launchableCandidates = candidateNodes.filter(n => isMeshNodeHealthLaunchable(n));
+        if (launchableCandidates.length === 0) {
+            const health = resolveEffectiveMeshNodeHealth(candidateNodes[0]);
+            unhealthySlots.push({
+                slotIndex,
+                provider,
+                nodeId: targetNodeId ?? slot.nodeId,
+                capabilityTags,
+                health,
+                reason: slot.nodeId
+                    ? `pinned node '${slot.nodeId}' health is '${health}' (not launch-ready)`
+                    : `no launch-ready node satisfies required tags [${requiredTags.join(', ')}] — all candidates are '${health}'`,
+            });
+            slotResolutions.push({
+                slotIndex, provider, nodeId: targetNodeId ?? slot.nodeId, capabilityTags,
+                available: true, gitStale: false, unhealthy: true, health, excluded: true,
+                reason: `node_unhealthy: ${health}`,
+            });
+            return;
+        }
+        // Narrow the candidate pool to launch-ready nodes for all downstream resolution
+        // (git-staleness, target pinning) so a mixed pool routes to a healthy node.
+        if (slot.nodeId && launchableCandidates[0]) targetNodeId = (launchableCandidates[0] as any).id;
+        candidateNodes = launchableCandidates;
 
         // Git staleness vs the reference commit. A slot is git-stale only when a
         // reference commit is known AND every candidate node with a known HEAD differs
@@ -964,6 +1021,10 @@ export function buildMagiFanoutPlan(
             available: true,
             ...(headCommit ? { headCommit } : {}),
             gitStale,
+            // Candidate pool was already narrowed to launch-ready nodes above, so an
+            // included slot is health-launchable by construction.
+            unhealthy: false,
+            health: resolveEffectiveMeshNodeHealth(candidateNodes[0]),
             excluded: false,
         };
 
@@ -1002,8 +1063,9 @@ export function buildMagiFanoutPlan(
     const distinctProviders = providerSet.size;
     const distinctNodeTargets = nodeTargetSet.size;
     // enoughTargets / coupled are computed over INCLUDED targets only — i.e. AFTER the
-    // git-stale exclusion — so the ≥2-independent-target guard re-checks post-exclusion
-    // and never silently degrades to N=1.
+    // health gate AND the git-stale exclusion (unhealthy/stale slots never add to
+    // targetKeys) — so the ≥2-independent-target guard re-checks post-exclusion and never
+    // silently degrades to N=1.
     const staleSlots = slotResolutions.filter(m => m.gitStale && m.excluded);
     const includedStaleSlots = slotResolutions.filter(m => m.gitStale && !m.excluded);
     return {
@@ -1017,6 +1079,7 @@ export function buildMagiFanoutPlan(
         enoughTargets: targetKeys.size >= MAGI_MIN_TARGETS,
         coupled: distinctProviders < 2 || distinctNodeTargets < 2,
         unavailableSlots,
+        unhealthySlots,
         ...(referenceCommit ? { referenceCommit } : {}),
         slotResolutions,
         staleSlots,
@@ -1476,18 +1539,36 @@ export async function meshMagiReview(
     const plan = buildMagiFanoutPlan(planSlots, ctx.mesh.nodes, { n: args.n, referenceCommit, referenceSubmoduleKey, includeStale });
     if (!plan.enoughTargets) {
         const droppedByStale = plan.staleSlots.length > 0;
+        const droppedByHealth = plan.unhealthySlots.length > 0;
+        // Health exclusion is the PRIMARY new failure cause: a degraded/offline node was
+        // excluded up front (it would have parked in `pending` forever). Surface it as a
+        // distinct code so the coordinator knows the panel is under-quorum because a node
+        // is unhealthy — NOT because the panel is mis-configured — and never silently
+        // degrades to N=1.
+        const code = droppedByHealth
+            ? 'magi_insufficient_targets_after_health_exclusion'
+            : droppedByStale
+                ? 'magi_insufficient_targets_after_stale_exclusion'
+                : 'magi_insufficient_targets';
+        const error = droppedByHealth
+            ? `Kind-panel '${panelName}' resolves to only ${plan.distinctTargets} independent (node, provider) target(s) AFTER excluding ${plan.unhealthySlots.length} unhealthy slot(s) (${plan.unhealthySlots.map(s => `${s.nodeId ?? `[${s.provider}]`}=${s.health}`).join(', ')}); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1. A degraded node would leave its replica parked in 'pending' forever, so it is excluded rather than dispatched.`
+            : droppedByStale
+                ? `Kind-panel '${panelName}' resolves to only ${plan.distinctTargets} independent (node, provider) target(s) AFTER excluding ${plan.staleSlots.length} git-stale slot(s) (HEAD differs from reference ${referenceCommit ?? '(unknown)'}); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`
+                : `Kind-panel '${panelName}' resolves to ${plan.distinctTargets} available (node, provider) target(s); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`;
+        const hint = droppedByHealth
+            ? 'Bring the degraded node(s) back online (check P2P/git health via mesh_status), or configure additional healthy (machine + provider) slots for this kind-panel, then retry.'
+            : droppedByStale
+                ? 'Bring the stale node(s) to the reference commit, or pass include_stale=true to mesh_magi_review to fan out to them anyway (results will be git-skewed).'
+                : 'Fix the kind-panel slots with mesh_magi_kind_panel_set (or in mesh settings), and use mesh_status to confirm nodes/providers are online.';
         return JSON.stringify({
             success: false,
-            code: droppedByStale ? 'magi_insufficient_targets_after_stale_exclusion' : 'magi_insufficient_targets',
-            error: droppedByStale
-                ? `Kind-panel '${panelName}' resolves to only ${plan.distinctTargets} independent (node, provider) target(s) AFTER excluding ${plan.staleSlots.length} git-stale slot(s) (HEAD differs from reference ${referenceCommit ?? '(unknown)'}); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`
-                : `Kind-panel '${panelName}' resolves to ${plan.distinctTargets} available (node, provider) target(s); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`,
+            code,
+            error,
             ...(referenceCommit ? { referenceCommit } : {}),
             unavailableSlots: plan.unavailableSlots,
+            ...(droppedByHealth ? { unhealthySlots: plan.unhealthySlots } : {}),
             ...(droppedByStale ? { staleSlots: plan.staleSlots } : {}),
-            hint: droppedByStale
-                ? 'Bring the stale node(s) to the reference commit, or pass include_stale=true to mesh_magi_review to fan out to them anyway (results will be git-skewed).'
-                : 'Fix the kind-panel slots with mesh_magi_kind_panel_set (or in mesh settings), and use mesh_status to confirm nodes/providers are online.',
+            hint,
         }, null, 2);
     }
 
@@ -1578,6 +1659,13 @@ export async function meshMagiReview(
             ...(plan.coupled ? { banner: 'Panel collapsed to a single provider or machine — agreements will be flagged source-coupled.' } : {}),
         },
         ...(plan.referenceCommit ? { referenceCommit: plan.referenceCommit } : {}),
+        // Surface health-gate exclusions even when quorum still held: these replicas were
+        // NEVER dispatched (their node is degraded/offline and would park in `pending`
+        // forever), so the coordinator/collect must know not to wait on them.
+        ...(plan.unhealthySlots.length > 0 ? {
+            excludedSlots: plan.unhealthySlots,
+            healthExcludedWarning: `${plan.unhealthySlots.length} slot(s) were excluded from this fan-out because their node health is not launch-ready (${plan.unhealthySlots.map(s => `${s.nodeId ?? `[${s.provider}]`}=${s.health}`).join(', ')}) — those replicas were NOT dispatched. Bring the node(s) online (mesh_status) to include them.`,
+        } : {}),
         // Surface git-stale handling: which slots were excluded (default), or included
         // despite being stale (include_stale=true) — the latter makes results git-skewed.
         ...(plan.staleSlots.length > 0 ? {
