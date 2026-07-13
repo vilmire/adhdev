@@ -138,6 +138,88 @@ describe('claude-cli v4 FSM — divider-less approval modal', () => {
     });
 });
 
+// ── Leading shell-redirect in an approval command preview (AUTOAPPROVE wedge) ─
+// Root cause of a 144s auto-approve wedge: a Bash approval's command preview can
+// wrap so a shell redirect lands at line start (` >/dev/null 2>&1`). The modal
+// `until` anchor's char class used to include a bare `>`, so it mistook that
+// redirect line for the input prompt and terminated the modal section ABOVE the
+// `❯ 1. Yes / 2. No` choices. deriveModal then saw < min_count buttons →
+// current_modal=null → auto-approve bailed every frame → the session stalled in
+// approval forever. Content-dependent: only commands with a leading-`>` redirect
+// line broke (plain commands auto-approved fine). The fix narrows the anchor so a
+// bare `>` only terminates the modal as a real input prompt (`>` at EOL / before
+// whitespace), never a redirect (`>/dev/null`, `>&2`, `>file`).
+const redirectApproval = [
+    '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+    '  ▘▘ ▝▝    ~/Work/adhdev',
+    '',
+    '⏺ Bash(rm -rf build',
+    ' >/dev/null 2>&1)',
+    '',
+    'Do you want to proceed?',
+    ' ❯ 1. Yes',
+    '   2. No',
+    '',
+    ' Esc to cancel · Tab to amend · ctrl+e to explain',
+].join('\n');
+
+describe('claude-cli v4 FSM — leading shell-redirect approval (AUTOAPPROVE wedge)', () => {
+    const spec = loadSpec();
+
+    it('modal section KEEPS the choices below a leading `>/dev/null` redirect line', () => {
+        const lines = strip(redirectApproval);
+        const sections = resolveSections(spec.sections ?? {}, lines);
+        const modal = sectionText(sections, 'modal', lines.join('\n'));
+        // The redirect line must NOT terminate the modal above the buttons.
+        expect(modal).toContain('Do you want to proceed?');
+        expect(modal).toContain('1.');
+        expect(modal).toContain('2.');
+        expect(modal).toMatch(/yes/i);
+    });
+
+    it('extracts BOTH buttons (min_count satisfied → auto-approve can fire)', () => {
+        const approval = spec.states.find(s => s.id === 'approval')!;
+        const lines = strip(redirectApproval);
+        const sections = resolveSections(spec.sections ?? {}, lines);
+        const rule = approval.extract!.buttons!;
+        const hay = sectionText(sections, rule.section, lines.join('\n'));
+        const buttons = extractButtonsFromRule(rule, hay);
+        expect(buttons.map(b => b.index)).toEqual([1, 2]);
+        expect(buttons[0].key).toBe('1\r');
+        expect(buttons.map(b => b.label).join(' ')).toMatch(/yes/i);
+    });
+
+    it('unit: modal `until` anchor rejects shell redirects but accepts a bare input prompt', () => {
+        const until = new RegExp((spec.sections as any).modal.until);
+        // Redirects at line start must NOT be treated as the modal terminator.
+        expect(until.test(' >/dev/null 2>&1')).toBe(false);
+        expect(until.test('>&2')).toBe(false);
+        expect(until.test('>file.txt')).toBe(false);
+        // A genuine bare input prompt (`>` at EOL / before whitespace) still is.
+        expect(until.test('> ')).toBe(true);
+        expect(until.test('>')).toBe(true);
+        // Cursor / shell-prompt glyphs still terminate; button rows never do.
+        expect(until.test(' ❯ ')).toBe(true);
+        expect(until.test(' ❯ 1. Yes')).toBe(false);
+    });
+
+    it('daemon-core whole-screen fallback recovers buttons when a (stale-spec) modal section clips them', () => {
+        // Simulate a node still running an over-broad `until` that clips the
+        // modal above the buttons: the buttons are absent from the modal section
+        // but present in the full buffer. extractButtonsFromRule over the whole
+        // screen must still isolate the real Yes/No block. This proves the
+        // fsm-driver fallback path (whole-screen re-extract) works even before
+        // the spec fix is deployed to a node.
+        const approval = spec.states.find(s => s.id === 'approval')!;
+        const lines = strip(redirectApproval);
+        const rule = approval.extract!.buttons!;
+        const wholeScreen = lines.join('\n');
+        const buttons = extractButtonsFromRule(rule, wholeScreen);
+        expect(buttons.map(b => b.index)).toEqual([1, 2]);
+        expect(buttons.map(b => b.label).join(' ')).toMatch(/yes/i);
+    });
+});
+
 // ── Spinner-glyph unification (false-idle root fix) ───────────────────────────
 // Live root cause: the busy→idle not-spinner check and the idle→busy spinner
 // check used a narrow inline glyph set (8 Braille frames + a few asterisks). When

@@ -790,7 +790,24 @@ export class FsmDriver implements ISpecDriver {
         if (!rule) return null;
         const hay = sectionText(sections, rule.section, fullScreen);
         const minCount = rule.min_count ?? 2;
-        const buttons = extractButtonsFromRule(rule, hay);
+        let buttons = extractButtonsFromRule(rule, hay);
+        if (buttons.length < minCount && rule.section) {
+            // Whole-screen fallback: the modal `section` can resolve too short
+            // when a spec's `until` anchor clips the section BEFORE the choices
+            // (e.g. a claude-cli approval whose command preview carries a leading
+            // shell-redirect line — `>/dev/null 2>&1` — that an over-broad
+            // `[…>…]` modal-terminator anchor mistakes for the input prompt,
+            // stranding the `❯ 1. Yes / 2. No` buttons below the cut and wedging
+            // auto-approve forever). The buttons are still present in the full
+            // buffer, so re-extract from it. `lastContiguousNumberedBlock`
+            // (inside extractButtonsFromRule) already isolates the real
+            // bottom-most choice block from any stray body-numbered lines the
+            // wider scope pulls in, so this cannot bind the wrong rows. Guards
+            // it to the buttons-under-count case only, so a correctly-scoped
+            // spec pays nothing.
+            const whole = extractButtonsFromRule(rule, fullScreen);
+            if (whole.length >= minCount) buttons = whole;
+        }
         if (buttons.length < minCount) return null;
         const title = this.deriveTitle(state, sections, fullScreen);
         return { title, buttons };
