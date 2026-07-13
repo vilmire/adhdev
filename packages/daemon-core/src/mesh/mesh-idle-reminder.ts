@@ -19,10 +19,12 @@
  * Design invariants:
  *  - Only fires when the mesh has ≥1 `active` mission AND is fully idle. Fully idle =
  *    buildMeshActiveWork over queue + direct dispatches reports totalActiveCount === 0
- *    && generatingCount === 0. We intentionally do NOT probe remote node sessions here
- *    (expensive per-tick RPC): any non-terminal queue/direct work already makes
- *    totalActiveCount > 0, so the idle check is conservative — it suppresses the
- *    reminder whenever any work is outstanding, which is the safe direction.
+ *    && generatingCount === 0 AND no async refine job is accepted/running. We intentionally
+ *    do NOT probe remote node sessions here (expensive per-tick RPC): any non-terminal
+ *    queue/direct work already makes totalActiveCount > 0, so the idle check is
+ *    conservative — it suppresses the reminder whenever any work is outstanding, which is
+ *    the safe direction. Async refine jobs (`mesh_refine_node`) are a separate class that
+ *    buildMeshActiveWork does not count, so they are checked explicitly from the ledger.
  *  - NEVER transitions a mission's status. It only surfaces a hint; the coordinator
  *    decides via mesh_mission_upsert.
  *  - Debounced per mission-set. Re-fires only when the debounce window has elapsed OR
@@ -39,6 +41,7 @@ import { getMeshMissions, type MeshMissionRecord } from './mesh-missions.js';
 import { getQueue, getActiveDirectDispatches } from './mesh-work-queue.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import { buildMeshActiveWork } from './mesh-active-work.js';
+import { buildMeshAsyncRefineJobs, summarizeMeshAsyncRefineJobs } from './mesh-refine-status.js';
 
 /** Coordinator instance the reminder is injected into (the idle CLI session). */
 type CoordinatorInstance = ReturnType<DaemonComponents['instanceManager']['getInstance']>;
@@ -119,14 +122,27 @@ export function maybeInjectIdleActiveMissionReminder(
         // We pass no `nodes`: totalActiveCount already counts pending/assigned queue tasks
         // and un-acknowledged direct dispatches from the store alone, so the check stays
         // cheap (no per-node status RPC) and conservative.
+        const ledgerEntries = readLedgerEntries(meshId, { tail: 200 });
         const summary = buildMeshActiveWork({
             meshId,
             queue: getQueue(meshId),
             directDispatches: getActiveDirectDispatches(meshId),
-            ledgerEntries: readLedgerEntries(meshId, { tail: 200 }),
+            ledgerEntries,
             now,
         }).summary;
         if (summary.totalActiveCount !== 0 || summary.generatingCount !== 0) return false;
+
+        // Async refine jobs are NOT modeled as queue/direct dispatches, so buildMeshActiveWork
+        // never counts them — an accepted/running `mesh_refine_node` job (each pass runs
+        // typecheck/test/build for minutes) would otherwise read as "no work in flight" and the
+        // reminder would push the coordinator to close a mission whose verification is still
+        // in progress. Derive in-flight refine jobs from the SAME ledger tail already read
+        // (buildMeshAsyncRefineJobs maps `task_dispatched` refine entries with no terminal to
+        // accepted/running) and suppress the reminder while any is non-terminal.
+        const activeRefineJobs = summarizeMeshAsyncRefineJobs(
+            buildMeshAsyncRefineJobs({ meshId, ledgerEntries }),
+        ).activeJobs;
+        if (activeRefineJobs.length > 0) return false;
 
         // Debounce — same mission set within the window is nudged at most once.
         const store = MeshRuntimeStore.getInstance();

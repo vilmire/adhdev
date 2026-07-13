@@ -26,7 +26,7 @@ import {
 import { upsertMeshMission } from '../../src/mesh/mesh-missions.js';
 import { enqueueTask } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
-import { __clearMeshLedgerForTests } from '../../src/mesh/mesh-ledger.js';
+import { __clearMeshLedgerForTests, appendLedgerEntry } from '../../src/mesh/mesh-ledger.js';
 import type { MeshMissionRecord } from '../../src/mesh/mesh-missions.js';
 
 // Minimal coordinator stub: the reminder only ever calls onEvent('send_message', …).
@@ -137,6 +137,57 @@ describe('mesh idle-active-mission reminder', () => {
         const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
         expect(fired).toBe(false);
         expect(coord.calls).toHaveLength(0);
+    });
+
+    // A running `mesh_refine_node` job is recorded in the ledger as a `task_dispatched`
+    // refine entry with no matching terminal. buildMeshActiveWork does not model refine jobs,
+    // so without the explicit async-refine gate this mesh reads as "no work in flight" and the
+    // reminder would push the coordinator to close a mission whose verification is still running.
+    function appendRefineDispatch(id: string) {
+        appendLedgerEntry(meshId, {
+            kind: 'task_dispatched',
+            nodeId: 'node-a',
+            payload: {
+                source: 'refine_mesh_node_async_job',
+                refineJob: { jobId: id, status: 'accepted', meshId, nodeId: 'node-a' },
+                async: true,
+            },
+        } as any);
+    }
+    function appendRefineTerminal(id: string) {
+        appendLedgerEntry(meshId, {
+            kind: 'task_completed',
+            nodeId: 'node-a',
+            payload: {
+                source: 'refine_mesh_node_async_job',
+                refineJob: { jobId: id, status: 'completed', meshId, nodeId: 'node-a' },
+                async: true,
+                success: true,
+            },
+        } as any);
+    }
+
+    it('no-op when an async refine job is in flight (accepted/running)', () => {
+        upsertMeshMission(meshId, { title: 'Refining branch', goal: 'x' });
+        appendRefineDispatch('job-inflight');
+        const coord = makeCoordinator();
+
+        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
+        expect(fired).toBe(false);
+        expect(coord.calls).toHaveLength(0);
+    });
+
+    it('fires once the async refine job terminates and nothing else is in flight', () => {
+        upsertMeshMission(meshId, { title: 'Refining branch', goal: 'x' });
+        appendRefineDispatch('job-done');
+        const coord = makeCoordinator();
+
+        // Still running → suppressed.
+        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(false);
+        // Terminal entry lands → the job is no longer active → reminder now fires.
+        appendRefineTerminal('job-done');
+        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 2_000)).toBe(true);
+        expect(coord.calls).toHaveLength(1);
     });
 
     it('debounces a second reminder for the same mission set inside the window', () => {
