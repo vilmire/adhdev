@@ -709,7 +709,7 @@ const AUTO_LAUNCH_COOLDOWN_MS = 5_000;
 // successfully-launched session whose claim we are still waiting on, do not launch it
 // again until the window lapses. It is generous (a slow remote spawn can take tens of
 // seconds) but bounded so a launch that silently never reaches idle is eventually retried.
-const AUTO_LAUNCH_AWAIT_CLAIM_MS = 90_000;
+export const AUTO_LAUNCH_AWAIT_CLAIM_MS = 90_000;
 
 // AUTOLAUNCH-CLAIM-CHURN. For a REMOTE node the launch→claim handshake is purely
 // event-sourced: the worker's agent:ready must be pulled (reconcile PHASE 1) to run

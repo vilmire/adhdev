@@ -44,7 +44,39 @@ import {
     runIdleMaintenanceThenAssignQueue,
     maybeAutoFastForwardIdleNode,
     sessionHasActiveAssignment,
+    AUTO_LAUNCH_AWAIT_CLAIM_MS,
 } from './mesh-queue-assignment.js';
+
+// ---------------------------------------------------------------------------
+// BOOTSTRAP-MSG: worktreeHasQueuedTask predicate (exported for unit testing)
+// ---------------------------------------------------------------------------
+// Returns true when a queue task entry should be counted as "this worktree node already
+// has work being handled" — suppressing the misleading 'use mesh_launch_session' advice
+// in the worktree_bootstrap_complete system message.
+//
+// Mirrors the autoLaunchPending logic in triggerMeshQueue (mesh-queue-assignment.ts):
+//   • assigned           → true  (session claimed it)
+//   • pending, no al     → true  (queue will auto-launch, no action needed)
+//   • pending, al started|completed within AUTO_LAUNCH_AWAIT_CLAIM_MS
+//                        → true  (session spun up, will claim soon)
+//   • pending, al started|completed but OUTSIDE the window
+//                        → false (launch timed out, manual launch IS needed)
+//   • pending, other al  → true  (not yet tried, queue will handle)
+export function bootstrapQueueTaskCountsAsHandled(
+    task: { status: string; targetNodeId?: string | null; autoLaunch?: { status: string; updatedAt: string } | null },
+    bootstrapNodeId: string,
+    nowMs: number,
+): boolean {
+    if (!meshNodeIdMatches({ id: task.targetNodeId } as MeshNodeIdentified, bootstrapNodeId)) return false;
+    if (task.status === 'assigned') return true;
+    const al = task.autoLaunch;
+    if (!al) return true;
+    if (al.status === 'started' || al.status === 'completed') {
+        const launchedAtMs = Date.parse(al.updatedAt);
+        return Number.isFinite(launchedAtMs) && nowMs - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
+    }
+    return true;
+}
 
 // The set of coordinator-daemon ids this daemon answers to when draining the
 // pending-events queue. Mirrors resolveCoordinatorDaemonIds in mesh-reconcile-loop:
@@ -1319,8 +1351,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         // Only meaningful for the 'complete' transition (a failed bootstrap claims nothing).
         if (args.event === 'worktree_bootstrap_complete' && bootstrapNodeId) {
             try {
+                const nowMs = Date.now();
                 worktreeHasQueuedTask = getQueue(args.meshId, { status: ['pending', 'assigned'] })
-                    .some((task) => meshNodeIdMatches({ id: task.targetNodeId } as MeshNodeIdentified, bootstrapNodeId));
+                    .some((task) => bootstrapQueueTaskCountsAsHandled(task, bootstrapNodeId, nowMs));
             } catch (e: any) {
                 LOG.warn('MeshQueue', `Failed to check queued task for ${bootstrapNodeId} (mesh ${args.meshId}): ${e?.message || e}`);
             }
