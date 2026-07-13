@@ -37,7 +37,6 @@ import { loadConfig } from '../config/config.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { IdeProviderInstance } from '../providers/ide-provider-instance.js';
 import { createDefaultGitCommandServices } from '../git/git-commands.js';
-import { resolveLocalNodeSlotsForWorkspace } from '../mesh/mesh-node-slots.js';
 import { setupMeshEventForwarding } from '../mesh/mesh-events.js';
 import { setupMeshReconcileLoop } from '../mesh/mesh-reconcile-loop.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
@@ -313,24 +312,26 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         instanceManager,
         sessionRegistry,
         gitCommandServices: createDefaultGitCommandServices({
-            // T7 + Direction-B: fold this daemon's cached provider versions + build
-            // version AND its OWN resolved capability slots for the reported workspace
-            // onto the git_status envelope so the mesh coordinator self-heals each
-            // node's providerVersions AND its slot-cap chips (REMOTE-NODE-SLOT-CAP-CHIP
-            // fix). Non-blocking: reads a TTL cache + local meshes.json, lazily
-            // refreshed. The slots the reporter resolves are its LOCAL real policy's
-            // slots — the coordinator mirrors them wholesale for a remote member whose
-            // join-time policy copy is empty. (setDefaultProviderLoader is registered
-            // above so getCachedProviderVersions/slot resolution is not empty — see
-            // the 380556d3 version-chip lesson.)
-            getReporterProviderVersions: (workspace?: string) => {
+            // T7: fold this daemon's cached provider versions + build version onto the
+            // git_status envelope so the mesh coordinator self-heals each node's
+            // providerVersions/build (the blue version chips) — these are per-machine
+            // RUNTIME facts (e.g. this node has claude-cli@2.1.168 while the
+            // coordinator has @2.1.170), so they stay reported. Non-blocking: reads a
+            // TTL cache, lazily refreshed. (setDefaultProviderLoader is registered
+            // above so getCachedProviderVersions is not empty — see the 380556d3
+            // version-chip lesson.)
+            //
+            // Slots are NOT reported: they are coordinator-owned config
+            // (node.policy.slots for every node, resolved via
+            // resolveNodeCapabilitySlots), not a per-machine runtime fact — the
+            // reporter round-trip for slots was removed (REMOTE-NODE-SLOTS-
+            // COORDINATOR-LOCAL fix).
+            getReporterProviderVersions: () => {
                 const providerVersions = getCachedProviderVersions(providerLoader);
                 const daemonBuildVersion = getDaemonBuildInfo().version;
-                const slots = resolveLocalNodeSlotsForWorkspace(workspace);
                 return {
                     ...(Object.keys(providerVersions).length > 0 ? { providerVersions } : {}),
                     ...(daemonBuildVersion && daemonBuildVersion !== 'unknown' ? { daemonBuildVersion } : {}),
-                    ...(slots.length > 0 ? { slots } : {}),
                 };
             },
         }),

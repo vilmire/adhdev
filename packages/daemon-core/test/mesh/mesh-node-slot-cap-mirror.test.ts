@@ -3,17 +3,17 @@ import { resolveNodeCapabilitySlots } from '../../src/mesh/mesh-node-slots.js'
 import { recordInlineMeshDirectGitTruth } from '../../src/mesh/mesh-node-identity.js'
 import { buildMeshSchedulingRuntime } from '../../src/mesh/mesh-scheduling-runtime.js'
 
-// REMOTE-NODE-SLOT-CAP-CHIP fix, Direction B (unified mirror channel).
+// REMOTE-NODE-SLOTS-COORDINATOR-LOCAL fix.
 //
 // The dashboard NODE cards render slot-cap chips from node.scheduling.providerRoles,
-// which is populated by buildMeshSchedulingRuntime → resolveNodeCapabilitySlots. That
-// only found slots on node.policy.slots, which is written ONLY to a node's OWN local
-// meshes.json — the coordinator holds an empty join-time {} policy for a remote member,
-// so remote slot-cap chips never rendered. Direction B mirrors each member's OWN
-// resolved slots wholesale onto node.reportedMemberState over the git_status envelope,
-// with EXPLICIT self-vs-remote precedence that avoids a precedence inversion:
-//   - SELF/locally-owned node → local policy.slots authoritative (never mirrored).
-//   - REMOTE mirrored node    → reportedMemberState.slots fills the empty local policy.
+// which is populated by buildMeshSchedulingRuntime → resolveNodeCapabilitySlots.
+// The coordinator's local meshes.json owns policy.slots for EVERY node in the mesh
+// (self AND remote members — a remote member's mesh config lives on the coordinator;
+// its own on-disk meshes.json is empty). So slots resolve directly from the
+// coordinator's locally-owned node.policy.slots for ALL nodes, with no remote
+// reporter round-trip. Provider VERSIONS + daemon BUILD are per-machine runtime facts
+// (e.g. a member has claude-cli@2.1.168 while the coordinator has @2.1.170) and STAY
+// reported via reportedMemberState — only the dead slots round-trip was removed.
 
 const baseGit = { isGitRepo: true, lastCheckedAt: 1_700_000_000_000 }
 
@@ -22,41 +22,54 @@ function cappedSlot(provider: string, maxParallel: number) {
   return { provider, maxParallel }
 }
 
-describe('Direction B — resolveNodeCapabilitySlots precedence', () => {
-  it('(a) a REMOTE node with empty policy.slots resolves its slots from reportedMemberState.slots (the P2P mirror)', () => {
+describe('coordinator-owned slots — resolveNodeCapabilitySlots reads policy.slots for all nodes', () => {
+  it('(a) a REMOTE node with NO reported state resolves its slots from the coordinator-owned policy.slots', () => {
+    // The coordinator owns this remote member's policy.slots locally (its meshes.json
+    // node record). No reportedMemberState is present or needed — slots are not reported.
     const node: any = {
       id: 'node_remote',
-      policy: {}, // coordinator's stale join-time empty policy for a remote member
-      reportedMemberState: { slots: [cappedSlot('claude-cli', 8)] },
+      policy: { slots: [cappedSlot('antigravity-cli', 2), cappedSlot('hermes-cli', 2)] },
+      reportedMemberState: null,
     }
     const slots = resolveNodeCapabilitySlots(node)
-    expect(slots).toEqual([{ provider: 'claude-cli', maxParallel: 8 }])
+    expect(slots).toEqual([
+      { provider: 'antigravity-cli', maxParallel: 2 },
+      { provider: 'hermes-cli', maxParallel: 2 },
+    ])
   })
 
-  it('(b) precedence — a SELF node prefers its local policy.slots over any mirror (no inversion)', () => {
-    // Even if a reportedMemberState is somehow present, an explicit local policy.slots
-    // is authoritative — the mirror may only ever FILL an empty local policy, never
-    // shadow a populated one.
+  it('(b) a SELF node reads its local policy.slots (unchanged — no regression, no double-count)', () => {
     const node: any = {
       id: 'node_self',
       policy: { slots: [cappedSlot('codex-cli', 3)] },
-      reportedMemberState: { slots: [cappedSlot('claude-cli', 8)] },
     }
     const slots = resolveNodeCapabilitySlots(node)
     expect(slots).toEqual([{ provider: 'codex-cli', maxParallel: 3 }])
   })
 
-  it('falls through to legacy-derived slots when neither local policy nor a mirror carries slots', () => {
+  it('(c) a stray reportedMemberState.slots is IGNORED — the reporter no longer supplies slots', () => {
+    // Even if some legacy/foreign envelope stamped a reportedMemberState with slots,
+    // the resolver never consults it; policy.slots (coordinator-owned) is authoritative.
+    const node: any = {
+      id: 'node_remote',
+      policy: { slots: [cappedSlot('codex-cli', 3)] },
+      reportedMemberState: { slots: [cappedSlot('claude-cli', 8)] } as any,
+    }
+    const slots = resolveNodeCapabilitySlots(node)
+    expect(slots).toEqual([{ provider: 'codex-cli', maxParallel: 3 }])
+  })
+
+  it('falls through to legacy-derived slots when policy carries no explicit slots', () => {
     // No difficultyBrains configured in the test env → derive maps providerPriority to
-    // bare (uncapped) slots. The point is the mirror does not clobber the legacy path.
+    // bare (uncapped) slots.
     const node: any = { id: 'node_legacy', policy: { providerPriority: ['claude-cli'] } }
     const slots = resolveNodeCapabilitySlots(node)
     expect(slots.map(s => s.provider)).toEqual(['claude-cli'])
   })
 })
 
-describe('Direction B — recordInlineMeshDirectGitTruth ingest', () => {
-  it('(a) ingests a unified reporterMemberState wholesale onto a REMOTE node (versions + build + slots)', () => {
+describe('version/build report channel stays intact — recordInlineMeshDirectGitTruth ingest', () => {
+  it('(a) ingests a reporterMemberState (versions + build) onto a REMOTE node — the blue version chips', () => {
     const node: any = { id: 'node_remote', userOverrides: {} }
     const reporter = recordInlineMeshDirectGitTruth(
       node,
@@ -65,48 +78,55 @@ describe('Direction B — recordInlineMeshDirectGitTruth ingest', () => {
         reporterMemberState: {
           providerVersions: { 'claude-cli': '1.2.3' },
           daemonBuildVersion: '0.9.82',
-          slots: [cappedSlot('claude-cli', 8)],
           lastReportedAt: 1_700_000_000_500,
         },
       },
       'selected_coordinator_mesh_p2p_git',
     )
-    // Legacy flat fields stay populated (back-compat) …
+    // Flat fields (feed RepoMeshNodeStatus.providerVersions) …
     expect(node.reportedProviderVersions).toEqual({ 'claude-cli': '1.2.3' })
     expect(node.reportedDaemonBuildVersion).toBe('0.9.82')
-    // … and the unified mirror carries the slots that drive the chips.
-    expect(node.reportedMemberState?.slots).toEqual([{ provider: 'claude-cli', maxParallel: 8 }])
+    // … and the unified mirror carries versions/build (NOT slots).
     expect(node.reportedMemberState?.providerVersions).toEqual({ 'claude-cli': '1.2.3' })
+    expect(node.reportedMemberState?.daemonBuildVersion).toBe('0.9.82')
     expect(node.reportedMemberState?.lastReportedAt).toBe(1_700_000_000_500)
-    expect(reporter.reportedMemberState?.slots).toEqual([{ provider: 'claude-cli', maxParallel: 8 }])
+    expect((node.reportedMemberState as any)?.slots).toBeUndefined()
+    expect(reporter.reportedMemberState?.providerVersions).toEqual({ 'claude-cli': '1.2.3' })
   })
 
-  it('(b) precedence — a SELF (local-source) node is NOT stamped with a reportedMemberState even when the envelope carries one', () => {
-    // A self node owns its slots via local policy.slots; mirroring onto it would create
-    // the very precedence inversion Direction B avoids. Ingest deliberately skips the
-    // mirror for the local source, so the resolver always uses the self node's policy.
+  it('(b) a stray slots field on the reported envelope is dropped — slots are never ingested from the reporter', () => {
+    const node: any = { id: 'node_remote', userOverrides: {} }
+    recordInlineMeshDirectGitTruth(
+      node,
+      {
+        ...baseGit,
+        reporterMemberState: {
+          providerVersions: { 'claude-cli': '1.2.3' },
+          slots: [cappedSlot('claude-cli', 8)],
+        } as any,
+      },
+      'selected_coordinator_mesh_p2p_git',
+    )
+    expect(node.reportedProviderVersions).toEqual({ 'claude-cli': '1.2.3' })
+    expect((node.reportedMemberState as any)?.slots).toBeUndefined()
+  })
+
+  it('(c) a SELF (local-source) node is NOT stamped with a reportedMemberState, but its flat version self-heal still applies', () => {
     const node: any = { id: 'node_self', userOverrides: {} }
     const reporter = recordInlineMeshDirectGitTruth(
       node,
       {
         ...baseGit,
-        reporterMemberState: {
-          providerVersions: { 'claude-cli': '3.2.57' },
-          slots: [cappedSlot('claude-cli', 8)],
-        },
+        reporterMemberState: { providerVersions: { 'claude-cli': '3.2.57' } },
       },
       'selected_coordinator_local_git',
     )
     expect(node.reportedMemberState).toBeUndefined()
     expect(reporter.reportedMemberState).toBeNull()
-    // The flat version self-heal still applies to the self node.
     expect(node.reportedProviderVersions).toEqual({ 'claude-cli': '3.2.57' })
   })
 
-  it('(c) legacy-only envelope: flat reporterProviderVersions with NO reporterMemberState still ingests and synthesizes the mirror', () => {
-    // An older-daemon member that has not yet learned the unified envelope reports only
-    // the flat fields. The coordinator must still ingest them without breaking, and
-    // synthesize a reportedMemberState from them (slots simply absent until upgrade).
+  it('(d) legacy-only envelope: flat reporterProviderVersions with NO reporterMemberState still ingests and synthesizes the version mirror', () => {
     const node: any = { id: 'node_remote_legacy', userOverrides: {} }
     const reporter = recordInlineMeshDirectGitTruth(
       node,
@@ -119,12 +139,8 @@ describe('Direction B — recordInlineMeshDirectGitTruth ingest', () => {
     )
     expect(node.reportedProviderVersions).toEqual({ 'claude-cli': '1.0.0', 'codex-cli': '0.9.0' })
     expect(node.reportedDaemonBuildVersion).toBe('0.9.80')
-    // Synthesized mirror carries versions/build but NO slots (none were reported).
     expect(node.reportedMemberState?.providerVersions).toEqual({ 'claude-cli': '1.0.0', 'codex-cli': '0.9.0' })
     expect(node.reportedMemberState?.daemonBuildVersion).toBe('0.9.80')
-    expect(node.reportedMemberState?.slots).toBeUndefined()
-    // …and the resolver still works (falls through to legacy derive, no crash).
-    expect(() => resolveNodeCapabilitySlots(node)).not.toThrow()
     expect(reporter.reportedMemberState).not.toBeNull()
   })
 
@@ -136,27 +152,29 @@ describe('Direction B — recordInlineMeshDirectGitTruth ingest', () => {
   })
 })
 
-describe('Direction B — end-to-end: remote slot-cap chips reach the scheduling runtime', () => {
-  it('(a) a remote node ingested from a unified envelope surfaces providerRoles chips via buildMeshSchedulingRuntime', () => {
+describe('end-to-end: remote slot-cap chips + scheduling.providerRoles from coordinator-owned policy.slots', () => {
+  it('(a) a REMOTE node (reportedMemberState=null) surfaces providerRoles chips from policy.slots via buildMeshSchedulingRuntime', () => {
     // The exact read-site the dashboard uses: mesh.scheduling.providerRoles comes from
-    // buildMeshSchedulingRuntime → resolveNodeCapabilitySlots. Before the fix a remote
-    // node (empty policy) produced no providerRoles; now the mirror drives it.
-    const remoteNode: any = { id: 'node_remote', workspace: '/repo', daemonId: 'daemon_2', policy: {}, userOverrides: {} }
-    recordInlineMeshDirectGitTruth(
-      remoteNode,
-      { ...baseGit, reporterMemberState: { slots: [cappedSlot('claude-cli', 8)] } },
-      'selected_coordinator_mesh_p2p_git',
-    )
+    // buildMeshSchedulingRuntime → resolveNodeCapabilitySlots. A remote node with NO
+    // reported state but coordinator-owned policy.slots now produces non-null chips.
+    const remoteNode: any = {
+      id: 'node_remote',
+      workspace: '/repo',
+      daemonId: 'daemon_2',
+      policy: { slots: [cappedSlot('antigravity-cli', 2), cappedSlot('hermes-cli', 2)] },
+      reportedMemberState: null,
+      userOverrides: {},
+    }
     const runtime = buildMeshSchedulingRuntime({ id: 'mesh_1', nodes: [remoteNode], policy: {} } as any, [])
     const nodeRuntime = runtime.nodes.find(n => n.nodeId === 'node_remote')
     expect(nodeRuntime?.providerRoles).toEqual([
-      { providerType: 'claude-cli', maxParallel: 8, activeAssigned: 0, capReached: false },
+      { providerType: 'antigravity-cli', maxParallel: 2, activeAssigned: 0, capReached: false },
+      { providerType: 'hermes-cli', maxParallel: 2, activeAssigned: 0, capReached: false },
     ])
   })
 
-  it('a remote node with only a v1 (no-slots) envelope surfaces no provider chips — parity with pre-fix behavior for old members', () => {
+  it('a remote node with an empty policy (no slots, no legacy priority) surfaces no provider chips', () => {
     const remoteNode: any = { id: 'node_old', workspace: '/repo', daemonId: 'daemon_3', policy: {}, userOverrides: {} }
-    recordInlineMeshDirectGitTruth(remoteNode, { ...baseGit }, 'selected_coordinator_mesh_p2p_git')
     const runtime = buildMeshSchedulingRuntime({ id: 'mesh_1', nodes: [remoteNode], policy: {} } as any, [])
     const nodeRuntime = runtime.nodes.find(n => n.nodeId === 'node_old')
     expect(nodeRuntime?.providerRoles).toBeUndefined()

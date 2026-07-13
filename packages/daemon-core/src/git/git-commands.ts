@@ -112,14 +112,6 @@ export interface GitCommandServices {
   getReporterProviderVersions?: (workspace?: string) => {
     providerVersions?: Record<string, string>;
     daemonBuildVersion?: string;
-    /**
-     * Direction-B: the reporter node's OWN resolved capability slots
-     * (resolveNodeCapabilitySlots over its LOCAL policy for this workspace). Carried
-     * inside the unified reporterMemberState so a remote node's slot-cap chips
-     * self-heal on the coordinator the same way versions do. Best-effort; omitted
-     * when the reporter cannot resolve slots for the workspace.
-     */
-    slots?: unknown[];
   };
 }
 
@@ -135,11 +127,13 @@ type GitCommandSuccess =
   // node's userOverrides.platform/arch (the fields capability-tag routing reads).
   // reporterMachineNickname carries the responding daemon's config.machineNickname
   // so the coordinator can populate node.machineNickname → the friendly display label.
-  // reporterMemberState is the Direction-B unified envelope (versions + build + the
-  // reporter node's own resolved capability slots + lastReportedAt). The legacy flat
+  // reporterMemberState is the unified envelope carrying the reporter node's
+  // per-machine RUNTIME facts (provider versions + daemon build + lastReportedAt).
+  // Slots are NOT carried here — they are coordinator-owned config, not reported
+  // (REMOTE-NODE-SLOTS-COORDINATOR-LOCAL fix). The legacy flat
   // reporterProviderVersions/reporterDaemonBuildVersion fields are ALSO emitted for
   // back-compat during a mixed-version-mesh rollout.
-  | { success: true; status: GitRepoStatus; reporterPlatform?: string; reporterArch?: string; reporterMachineNickname?: string; reporterProviderVersions?: Record<string, string>; reporterDaemonBuildVersion?: string; reporterMemberState?: { providerVersions?: Record<string, string>; daemonBuildVersion?: string; slots?: unknown[]; lastReportedAt?: number } }
+  | { success: true; status: GitRepoStatus; reporterPlatform?: string; reporterArch?: string; reporterMachineNickname?: string; reporterProviderVersions?: Record<string, string>; reporterDaemonBuildVersion?: string; reporterMemberState?: { providerVersions?: Record<string, string>; daemonBuildVersion?: string; lastReportedAt?: number } }
   | { success: true; diffSummary: GitDiffSummary }
   | { success: true; diff: GitFileDiff }
   | { success: true; snapshot: GitSnapshot }
@@ -374,20 +368,17 @@ export async function handleGitCommand(
         typeof reporterVersions.daemonBuildVersion === 'string' && reporterVersions.daemonBuildVersion.trim()
           ? reporterVersions.daemonBuildVersion.trim()
           : undefined;
-      const reporterSlots =
-        Array.isArray(reporterVersions.slots) && reporterVersions.slots.length > 0
-          ? reporterVersions.slots
-          : undefined;
-      // Direction-B unified envelope: fold versions/build/slots into ONE object the
-      // coordinator ingests wholesale. Emitted only when at least one field is
-      // present so a fully-cold reporter doesn't ship an empty stub. The legacy flat
-      // fields above ride alongside for back-compat during rollout.
+      // Unified envelope: fold the reporter's per-machine RUNTIME facts
+      // (versions/build) into ONE object the coordinator ingests wholesale. Slots are
+      // NOT carried — they are coordinator-owned config, not reported
+      // (REMOTE-NODE-SLOTS-COORDINATOR-LOCAL fix). Emitted only when at least one
+      // field is present so a fully-cold reporter doesn't ship an empty stub. The
+      // legacy flat fields above ride alongside for back-compat during rollout.
       const reporterMemberState =
-        reporterProviderVersions || reporterDaemonBuildVersion || reporterSlots
+        reporterProviderVersions || reporterDaemonBuildVersion
           ? {
               ...(reporterProviderVersions ? { providerVersions: reporterProviderVersions } : {}),
               ...(reporterDaemonBuildVersion ? { daemonBuildVersion: reporterDaemonBuildVersion } : {}),
-              ...(reporterSlots ? { slots: reporterSlots } : {}),
               lastReportedAt: Date.now(),
             }
           : undefined;

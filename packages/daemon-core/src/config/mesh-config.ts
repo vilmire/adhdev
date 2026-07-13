@@ -644,10 +644,12 @@ export function updateNode(
          *  is overwritten by the next report. */
         reportedProviderVersions?: Record<string, string>;
         reportedDaemonBuildVersion?: string;
-        /** Direction-B unified mirrored member state (versions + build + own resolved
-         *  slots + lastReportedAt) self-reported by the owning daemon on the git_status
-         *  envelope. Persisted wholesale so a remote node's slot-cap chips survive a
-         *  coordinator restart, mirroring the per-field reported* self-heal. */
+        /** Unified mirrored member state (per-machine runtime facts: provider versions
+         *  + daemon build + lastReportedAt) self-reported by the owning daemon on the
+         *  git_status envelope. Persisted wholesale so a remote node's version chips
+         *  survive a coordinator restart, mirroring the per-field reported* self-heal.
+         *  Slots are NOT carried — they are coordinator-owned config
+         *  (REMOTE-NODE-SLOTS-COORDINATOR-LOCAL fix). */
         reportedMemberState?: MeshReportedMemberState;
     },
 ): LocalMeshNodeEntry | undefined {
