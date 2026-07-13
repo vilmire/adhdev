@@ -196,6 +196,40 @@ export class CliProviderInstance implements ProviderInstance {
     private static readonly AUTO_APPROVE_MASK_STALL_MS = 10500;
 
     /**
+     * AUTOAPPROVE-FLAP-INBOX-MISSING: sticky-approval overlay window. Same time-tick
+     * hold idea as the FALSE-IDLE completion gate — an approval signal that was
+     * DOMINANT within this recent window is re-presented across a momentary busy blip
+     * instead of collapsing.
+     *
+     * RCA (live 2026-07-13): a claude-cli worker sitting at a Bash approval modal
+     * ("Do you want to proceed? ❯1.Yes") flaps waiting_approval↔busy on a ~2-3s period.
+     * The spec `approval→busy` transition fires whenever the footer/modal approval
+     * markers momentarily drop out of their parsed sections while the PRIOR command's
+     * residual spinner text ("✳ Checking vendor drift…") still matches the busy regex.
+     * On the busy frame the adapter reports status='generating', activeModal=null. That
+     * corrupts THREE consumers at once: (1) mesh_active_work samples 'generating' →
+     * collectPendingApprovals never sees 'awaiting_approval' → mesh_list_pending_approvals
+     * count:0 (inbox miss); (2) the auto-approve settle gate is torn down each busy phase
+     * so the 600ms settle never accrues → auto-approve never fires; (3) a mesh_approve
+     * landing on a busy frame hits "Not in approval state". The existing FLAP machinery
+     * (AUTO_APPROVE_FLAP_CONTINUITY_MS) only keeps the settle gate warm while status is
+     * STILL waiting_approval (buttons scrolled out) — it does nothing once the FSM fully
+     * commits to 'busy', and it never stabilises the status the inbox samples.
+     *
+     * Fix: when the raw adapter status flaps to generating/busy/idle but a
+     * waiting_approval WITH a concrete modal was observed within this window, overlay
+     * the cached modal and report status='waiting_approval'. This stabilized status
+     * feeds getState (→ inbox), detectStatusTransition (→ event emission), and
+     * maybeAutoApproveStatus (→ settle gate) uniformly, so the approval both registers
+     * in the inbox and settles for auto-approve across the flap. Bounded (a genuine
+     * resume that never returns to approval unmasks after this window) and scoped at the
+     * call site to autonomous mesh sessions. 4000ms bridges the observed ~2-3s flap with
+     * margin while staying well under AUTO_APPROVE_MASK_STALL_MS (a truly stalled/absent
+     * approval still surfaces).
+     */
+    private static readonly APPROVAL_STICKY_FLAP_MS = 4000;
+
+    /**
      * FALSE-IDLE (inter-approval quiet valley): grace window after an auto-approve
      * (or mesh_approve) RESOLVES a modal during which a subsequent generating→idle
      * quiet valley must NOT be treated as turn completion.
@@ -299,6 +333,14 @@ export class CliProviderInstance implements ProviderInstance {
     // signature) while a genuinely closed modal — buttons empty continuously past
     // the continuity window — is still recognised and resets the gate.
     private autoApproveLastModalSeenAt = 0;
+    // AUTOAPPROVE-FLAP-INBOX-MISSING sticky-approval overlay (see APPROVAL_STICKY_FLAP_MS).
+    // The wall-clock of the last frame where the RAW adapter reported waiting_approval with
+    // a CONCRETE modal (buttons present), the cached modal to re-present across a busy blip,
+    // and the approvalEntrySeq at that frame (so a stabilized frame carries the right seq to
+    // the emission-dedup fingerprint). All zero/null when no recent concrete approval.
+    private approvalStickyLastConcreteAt = 0;
+    private approvalStickyModal: { message?: string; buttons?: unknown[]; kind?: string | null } | null = null;
+    private approvalStickyEntrySeq = 0;
     // STATUS-MISMATCH: wall-clock when the CURRENT auto-approve episode (waiting_approval
     // + shouldAutoApprove) first began wanting to mask. Unlike pendingAutoApprovalSince it
     // is NOT reset when the modal signature changes (a still-streaming/flapping prompt) and
@@ -534,7 +576,11 @@ export class CliProviderInstance implements ProviderInstance {
         // in cli-script-runner.ts (CliScriptRunner.detectStatus / parseApproval /
         // parseSession), with provider-loader.ts updated to store script source strings
         // alongside the loaded function references for extended-legacy providers.
-        const adapterStatus = this.adapter.getStatus();
+        // AUTOAPPROVE-FLAP-INBOX-MISSING: apply the same sticky-approval overlay the
+        // FSM path uses so the status this getState() surfaces to the mesh probe (and
+        // thus mesh_active_work → the pending-approval inbox) stays waiting_approval
+        // across a busy flap frame, instead of momentarily reading generating (count:0).
+        const adapterStatus = this.stabilizeFlappingApprovalStatus(this.adapter.getStatus());
         if (Object.prototype.hasOwnProperty.call(adapterStatus, 'activeInteractivePrompt')) {
             this.activeInteractivePrompt = adapterStatus.activeInteractivePrompt ?? null;
         }
@@ -2397,6 +2443,72 @@ export class CliProviderInstance implements ProviderInstance {
         });
     }
 
+    /**
+     * AUTOAPPROVE-FLAP-INBOX-MISSING sticky-approval overlay. Returns the adapterStatus a
+     * flap-prone claude-cli approval SHOULD present this frame — either the raw status
+     * unchanged, or, when the raw status has momentarily flapped OFF a recently-dominant
+     * concrete approval, a synthetic `waiting_approval` re-presenting the cached modal.
+     *
+     * Records the concrete approval whenever the raw status is waiting_approval WITH
+     * buttons. On a subsequent non-approval frame (the spec `approval→busy` flap), if that
+     * concrete approval was seen within APPROVAL_STICKY_FLAP_MS AND the engine has NOT
+     * resolved a modal since (lastApprovalResolvedAt not advanced past the sticky start),
+     * overlay the cached modal + waiting_approval so the inbox / auto-approve / mesh_approve
+     * all see the stable approval. A genuine resolution (auto-approve or mesh_approve fires
+     * resolveModal → lastApprovalResolvedAt advances) clears the sticky immediately, so a
+     * legitimate post-approval resume is NEVER masked as a lingering approval. Bounded by the
+     * window, and scoped to autonomous mesh sessions (a foreground/attended or non-mesh
+     * session, where a human answers the prompt, is returned untouched).
+     */
+    private stabilizeFlappingApprovalStatus(adapterStatus: any, now = Date.now()): any {
+        // Only autonomous auto-approving mesh sessions are subject to the delegated flap;
+        // never overlay for attended/foreground/non-mesh sessions.
+        if (!this.isAutonomousMeshSession() || !this.shouldAutoApprove()) return adapterStatus;
+
+        const rawStatus = adapterStatus?.status;
+        const resolvedAt = typeof (this.adapter as any)?.lastApprovalResolvedAt === 'number'
+            ? (this.adapter as any).lastApprovalResolvedAt as number
+            : 0;
+
+        if (rawStatus === 'waiting_approval') {
+            // A concrete modal this frame refreshes the sticky anchor; an approval frame
+            // with buttons momentarily scrolled out is left to the existing settle-gate
+            // hysteresis (we do not touch it — status is already waiting_approval).
+            if (hasNonEmptyCliModalButtons(adapterStatus?.activeModal)) {
+                this.approvalStickyLastConcreteAt = now;
+                this.approvalStickyModal = adapterStatus.activeModal;
+                this.approvalStickyEntrySeq = typeof adapterStatus?.approvalEntrySeq === 'number'
+                    ? adapterStatus.approvalEntrySeq
+                    : this.approvalStickyEntrySeq;
+            }
+            return adapterStatus;
+        }
+
+        // Non-approval frame. Overlay only if a concrete approval was dominant within the
+        // window AND no resolution has happened since the sticky anchor (a resolveModal
+        // advances lastApprovalResolvedAt to at/after the anchor → the flap is really a
+        // genuine resume, so drop the sticky and report the raw status).
+        if (this.approvalStickyLastConcreteAt > 0 && this.approvalStickyModal) {
+            const withinWindow = (now - this.approvalStickyLastConcreteAt) < CliProviderInstance.APPROVAL_STICKY_FLAP_MS;
+            const resolvedSinceAnchor = resolvedAt >= this.approvalStickyLastConcreteAt;
+            if (withinWindow && !resolvedSinceAnchor) {
+                return {
+                    ...adapterStatus,
+                    status: 'waiting_approval',
+                    activeModal: this.approvalStickyModal,
+                    ...(this.approvalStickyEntrySeq ? { approvalEntrySeq: this.approvalStickyEntrySeq } : {}),
+                    approvalStickyOverlay: true,
+                };
+            }
+            // Window lapsed or a resolution landed — clear the sticky so a later approval
+            // re-anchors from scratch and a genuine resume surfaces immediately.
+            this.approvalStickyLastConcreteAt = 0;
+            this.approvalStickyModal = null;
+            this.approvalStickyEntrySeq = 0;
+        }
+        return adapterStatus;
+    }
+
     private maybeAutoApproveStatus(adapterStatus: any, now = Date.now()): boolean {
         // Manual-attendance suppression (provider-common): when a human is
         // Manual-attendance suppression (provider-common): when a human is
@@ -2832,7 +2944,12 @@ export class CliProviderInstance implements ProviderInstance {
         // Status-change handling is a hot path: PTY output can fire it many times
         // during long-running CLI sessions. Keep this path on adapter-owned light
         // state only; rich provider parsing is reserved for getState/read_chat.
-        const adapterStatus = this.adapter.getStatus({ allowParse: false });
+        // AUTOAPPROVE-FLAP-INBOX-MISSING: stabilize a flap-prone approval BEFORE it feeds
+        // maybeAutoApproveStatus / newStatus / the waiting_approval emission branch below,
+        // so a momentary busy blip during the flap re-presents the cached modal + status
+        // rather than emitting generating (which would corrupt the inbox and tear down the
+        // settle gate). No-op for non-mesh/foreground/non-approval frames.
+        const adapterStatus = this.stabilizeFlappingApprovalStatus(this.adapter.getStatus({ allowParse: false }), now);
         const adapterProviderSessionId = normalizeProviderSessionId(
             this.provider,
             typeof adapterStatus?.providerSessionId === 'string' ? adapterStatus.providerSessionId : '',

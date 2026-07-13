@@ -20,7 +20,10 @@ import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.j
 // native backend), mirroring the mask-stall + settle-gate suites. pushEvent is stubbed to
 // capture emissions.
 
-const MASK_STALL_MS = 9000
+// Kept in sync with CliProviderInstance.AUTO_APPROVE_MASK_STALL_MS (bumped 9000→10500 in
+// 8176db61 to satisfy the flap-continuity + busy-phase + settle invariant; this test's
+// constant had drifted, silently failing the stall-bound assertions).
+const MASK_STALL_MS = 10500
 // Worker flap-continuity window (AUTOAPPROVE-FLAP-RECUR Fix B): a delegated worker's
 // settle+mask episode survives a busy/generating blip for this long before a modal
 // that stays gone is treated as a genuine close. Kept in sync with
