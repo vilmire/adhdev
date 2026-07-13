@@ -13,11 +13,12 @@ function task(partial: Partial<MeshWorkQueueEntry>): MeshWorkQueueEntry {
 }
 
 describe('buildMeshSchedulingRuntime', () => {
-    it('resolves strategy + global caps, defaulting to first_eligible / max 2', () => {
+    it('resolves strategy + global caps, defaulting to first_eligible / high default cap', () => {
         const rt = buildMeshSchedulingRuntime({ policy: {}, nodes: [] }, []);
         expect(rt.strategy).toBe('first_eligible');
-        expect(rt.maxParallelTasks).toBe(2);
-        expect(rt.maxReadonlyParallelTasks).toBe(4); // max(2, 2*2)
+        // Mesh-level cap defaults high (real limits are per node/slot); see 729a2bf6.
+        expect(rt.maxParallelTasks).toBe(200);
+        expect(rt.maxReadonlyParallelTasks).toBe(400); // max(2, 200*2)
         expect(rt.activeWriteAssigned).toBe(0);
         expect(rt.globalWriteCapReached).toBe(false);
     });
@@ -83,6 +84,6 @@ describe('buildMeshSchedulingRuntime', () => {
     it('is empty-safe for missing mesh/queue', () => {
         const rt = buildMeshSchedulingRuntime(null, []);
         expect(rt.nodes).toEqual([]);
-        expect(rt.maxParallelTasks).toBe(2);
+        expect(rt.maxParallelTasks).toBe(200);
     });
 });

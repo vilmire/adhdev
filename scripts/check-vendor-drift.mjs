@@ -9,6 +9,13 @@
 // The vendored MCP server is a runtime artifact: the standalone package exposes
 // adhdev-mcp from vendor/mcp-server/index.js and the daemon points coordinators
 // at that entry. Keep the committed vendor output in sync with the source build.
+//
+// Sourcemap note: .map files are EXCLUDED from the drift comparison. Their
+// `mappings` VLQ stream is a runtime-irrelevant debug artifact whose byte layout
+// varies with the esbuild/tsup toolchain version, so a vendor re-sync on a
+// different node can regenerate a byte-different .map while the .js is identical.
+// That is not a source drift — a real source change always shows up in the emitted
+// .js — so comparing .map files only produces cross-machine false positives.
 
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -32,7 +39,12 @@ run(npm, ['run', 'build', '-w', 'packages/mcp-server']);
 run(npm, ['run', 'bundle:vendor', '-w', 'packages/daemon-standalone']);
 
 try {
-  execFileSync('git', ['diff', '--exit-code', '--ignore-cr-at-eol', '--', VENDOR_PATH], { stdio: 'inherit', cwd: root });
+  // Exclude *.map: sourcemaps are a non-reproducible debug artifact (see note above).
+  execFileSync(
+    'git',
+    ['diff', '--exit-code', '--ignore-cr-at-eol', '--', VENDOR_PATH, `:(exclude,glob)${VENDOR_PATH}/**/*.map`],
+    { stdio: 'inherit', cwd: root },
+  );
 } catch {
   console.error(
     `\n✗ ${VENDOR_PATH} is stale.\n` +

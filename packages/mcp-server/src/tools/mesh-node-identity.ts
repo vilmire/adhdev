@@ -284,7 +284,7 @@ function getLocalControlPlaneMatchReason(ctx: MeshContext, node: LocalMeshNodeEn
 function findClonedFromNode(ctx: MeshContext, node: LocalMeshNodeEntry): LocalMeshNodeEntry | undefined {
     const clonedFromNodeId = readString(node.clonedFromNodeId) || readString((node as any).cloned_from_node_id);
     if (!clonedFromNodeId) return undefined;
-    return ctx.mesh.nodes.find(n => meshNodeIdMatches(n, clonedFromNodeId));
+    return ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, clonedFromNodeId));
 }
 
 /**

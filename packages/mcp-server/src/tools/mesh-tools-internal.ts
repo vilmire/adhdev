@@ -495,7 +495,7 @@ export function buildDirectTaskPayload(
 }
 
 export function findNode(mesh: LocalMeshEntry, nodeId: string): LocalMeshNodeEntry {
-    const node = mesh.nodes.find(n => meshNodeIdMatches(n, nodeId));
+    const node = mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
     if (!node) throw new Error(`Node '${nodeId}' is not a member of mesh '${mesh.name}'`);
     return node;
 }
@@ -534,23 +534,23 @@ export async function syncCoordinatorDaemonMeshCache(ctx: MeshContext): Promise<
 }
 
 export async function findNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry> {
-    const hit = ctx.mesh.nodes.find(n => meshNodeIdMatches(n, nodeId));
+    const hit = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
     if (hit && !hit.isLocalWorktree) return hit;
 
     await refreshMeshFromDaemon(ctx);
 
-    const refreshed = ctx.mesh.nodes.find(n => meshNodeIdMatches(n, nodeId));
+    const refreshed = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
     if (!refreshed) throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
     return refreshed;
 }
 
 export async function findOptionalNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry | null> {
-    const hit = ctx.mesh.nodes.find(n => meshNodeIdMatches(n, nodeId));
+    const hit = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
     if (hit && !hit.isLocalWorktree) return hit;
 
     await refreshMeshFromDaemon(ctx);
 
-    return ctx.mesh.nodes.find(n => meshNodeIdMatches(n, nodeId)) ?? null;
+    return ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId)) ?? null;
 }
 
 export function hasRecentDuplicateDispatch(ctx: MeshContext, args: { node_id: string; session_id?: string; message: string }): { duplicate: boolean; entry?: any; source?: 'ledger' | 'queue' } {

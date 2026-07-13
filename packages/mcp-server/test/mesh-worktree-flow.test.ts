@@ -912,8 +912,8 @@ test('mesh_launch_session reports recoverable worktree launch failure when daemo
   assert.equal(launch.cleanup?.args?.node_id, 'node-worktree-failed');
   assert.equal(launch.transport, 'p2p');
   assert.equal(launch.retryRecommended, true);
-  assert.match(launch.nextAction, /bounded retry/i);
-  assert.match(launch.noFallbackReason, /WS\/REST command fallback/i);
+  assert.match(launch.nextAction, /wait a moment.*retry/i);
+  assert.match(launch.noFallbackReason, /no cloud\/WS relay fallback/i);
   assert.ok(launch.retryHint.includes('mesh_launch_session'));
 
   const statusText = await meshStatus(ctx);
@@ -973,7 +973,7 @@ test('mesh_git_status preserves P2P relay recovery payload for coordinator feedb
   assert.equal(status.code, 'p2p_timeout');
   assert.equal(status.transport, 'p2p');
   assert.equal(status.retryRecommended, true);
-  assert.match(status.noFallbackReason, /WS\/REST command fallback/i);
+  assert.match(status.noFallbackReason, /no cloud\/WS relay fallback/i);
   assert.equal(status.nodeId, 'node-remote-git');
   assert.equal(status.targetDaemonId, 'daemon-remote');
   assert.equal(status.command, 'git_status');
@@ -1136,7 +1136,7 @@ test('mesh_status marks git_status P2P timeout as recoverable degraded node meta
   assert.equal(nodeStatus.code, 'p2p_timeout');
   assert.equal(nodeStatus.transport, 'p2p');
   assert.equal(nodeStatus.retryRecommended, true);
-  assert.match(nodeStatus.noFallbackReason, /WS\/REST command fallback/i);
+  assert.match(nodeStatus.noFallbackReason, /no cloud\/WS relay fallback/i);
 });
 
 test('mesh_task_history backfills remote pending completion events into the coordinator ledger', async () => {
@@ -1381,8 +1381,8 @@ test('mesh_send_task preserves P2P relay recovery payload for coordinator feedba
   assert.equal(send.code, 'p2p_timeout');
   assert.equal(send.transport, 'p2p');
   assert.equal(send.retryRecommended, true);
-  assert.match(send.nextAction, /requeue/i);
-  assert.match(send.noFallbackReason, /WS\/REST command fallback/i);
+  assert.match(send.nextAction, /wait a moment.*retry/i);
+  assert.match(send.noFallbackReason, /no cloud\/WS relay fallback/i);
   assert.equal(send.nodeId, 'node-remote-worker');
   assert.equal(send.sessionId, 'session-remote');
 });
@@ -2000,8 +2000,8 @@ test('mesh_launch_session still does not use local fallback when non-local workt
   assert.equal(result.code, 'p2p_timeout');
   assert.equal(result.transport, 'p2p');
   assert.equal(result.retryRecommended, true);
-  assert.match(result.nextAction, /bounded retry/i);
-  assert.match(result.noFallbackReason, /WS\/REST command fallback/i);
+  assert.match(result.nextAction, /wait a moment.*retry/i);
+  assert.match(result.noFallbackReason, /no cloud\/WS relay fallback/i);
   assert.equal(directLaunchCalls, 0);
 });
 
