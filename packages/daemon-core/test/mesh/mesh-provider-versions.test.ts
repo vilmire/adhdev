@@ -77,12 +77,36 @@ describe('T7 recordInlineMeshDirectGitTruth self-heal', () => {
   })
 
   it('is backward compatible: a v1 envelope without provider fields leaves the node untouched', () => {
+    // Local-source path with a cold local version cache (no provider detection has
+    // run and no build stamp is injected in the test bundle) → the self-heal
+    // fallback yields nothing, so the node is left untouched exactly as before.
     const node: any = { id: 'node_1', userOverrides: {} }
     const reporter = recordInlineMeshDirectGitTruth(node, { ...baseGit }, 'selected_coordinator_local_git')
     expect(node.reportedProviderVersions).toBeUndefined()
     expect(node.reportedDaemonBuildVersion).toBeUndefined()
     expect(reporter.reporterProviderVersions).toBeNull()
     expect(reporter.reporterDaemonBuildVersion).toBeNull()
+  })
+
+  it('self node (local source): an explicit envelope value still wins over the local self-heal fallback', () => {
+    // The self/worktree probe path calls getGitRepoStatus() directly, so it normally
+    // carries no reporter* fields — the local-source fallback fills them from this
+    // daemon's own version cache. When a reporter value IS present on a local-source
+    // envelope it must take precedence (parity with the platform/arch self-heal).
+    const node: any = { id: 'node_self', userOverrides: {} }
+    const reporter = recordInlineMeshDirectGitTruth(
+      node,
+      {
+        ...baseGit,
+        reporterProviderVersions: { 'claude-cli': '3.2.57' },
+        reporterDaemonBuildVersion: '0.9.99',
+      },
+      'selected_coordinator_local_git',
+    )
+    expect(node.reportedProviderVersions).toEqual({ 'claude-cli': '3.2.57' })
+    expect(node.reportedDaemonBuildVersion).toBe('0.9.99')
+    expect(reporter.reporterProviderVersions).toEqual({ 'claude-cli': '3.2.57' })
+    expect(reporter.reporterDaemonBuildVersion).toBe('0.9.99')
   })
 })
 

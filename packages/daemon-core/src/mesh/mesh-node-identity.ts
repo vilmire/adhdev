@@ -12,7 +12,8 @@
  */
 
 import type { ProviderLoader } from '../providers/provider-loader.js';
-import { detectCLI } from '../detection/cli-detector.js';
+import { detectCLI, getCachedProviderVersions } from '../detection/cli-detector.js';
+import { getDaemonBuildInfo } from '../build-info.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, daemonIdsEquivalent, meshWorkspacesEquivalent, sessionIdsEquivalent, withStatusProbeMarker } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
@@ -382,9 +383,20 @@ export function recordInlineMeshDirectGitTruth(
     // envelope. These are best-effort observability (never routing), so the raw
     // reported map is stamped onto dedicated node fields and overwritten by the next
     // report — never merged with a stale value the way an operator override would be.
-    const reporterProviderVersions = readProviderVersionsRecord(git.reporterProviderVersions);
+    // For a remote member these ride the git_status envelope (git-commands.ts folds
+    // them in from getReporterProviderVersions). The local coordinator's own / worktree
+    // nodes probe getGitRepoStatus() directly, which bypasses handleGitCommand and so
+    // carries no reporter* versions — mirror the platform/arch self-heal above and read
+    // this daemon's own warm version cache directly, so the coordinator's self node gets
+    // the same provider/build chips a remote node does.
+    const reporterProviderVersions =
+        readProviderVersionsRecord(git.reporterProviderVersions)
+        ?? (isLocalSource ? readLocalReporterProviderVersions() : null);
     if (reporterProviderVersions) node.reportedProviderVersions = reporterProviderVersions;
-    const reporterDaemonBuildVersion = readStringValue(git.reporterDaemonBuildVersion) ?? null;
+    const reporterDaemonBuildVersion =
+        (readStringValue(git.reporterDaemonBuildVersion)
+            ?? (isLocalSource ? readLocalReporterDaemonBuildVersion() : null))
+        ?? null;
     if (reporterDaemonBuildVersion) node.reportedDaemonBuildVersion = reporterDaemonBuildVersion;
     return {
         reporterPlatform,
@@ -410,6 +422,35 @@ function readProviderVersionsRecord(value: unknown): Record<string, string> | nu
         out[key] = version;
     }
     return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
+ * This daemon's own provider-version map, read from the same warm cache the
+ * git_status envelope self-reports from (getReporterProviderVersions is wired to
+ * getCachedProviderVersions at boot). The local self/worktree probe path calls
+ * getGitRepoStatus() directly — bypassing handleGitCommand — so it never gets the
+ * reporter* envelope; reading the cache here is the local-source analogue of the
+ * process.platform/process.arch self-heal. Returns null on a cold cache so the
+ * stamp is skipped rather than clearing an existing value.
+ */
+function readLocalReporterProviderVersions(): Record<string, string> | null {
+    try {
+        return readProviderVersionsRecord(getCachedProviderVersions());
+    } catch {
+        return null;
+    }
+}
+
+/** This daemon's own build version (see readLocalReporterProviderVersions). */
+function readLocalReporterDaemonBuildVersion(): string | null {
+    try {
+        const version = getDaemonBuildInfo().version;
+        return typeof version === 'string' && version.trim() && version !== 'unknown'
+            ? version.trim()
+            : null;
+    } catch {
+        return null;
+    }
 }
 
 /**
