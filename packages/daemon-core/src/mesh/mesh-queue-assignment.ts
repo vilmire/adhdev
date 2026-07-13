@@ -1556,6 +1556,17 @@ function nodeHasLiveSessionPendingClaim(components: DaemonComponents, meshId: st
         const state = inst.getState();
         const settings = state.settings as Record<string, unknown> || {};
         if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
+        // DISPATCH-DEADLOCK-COORD-SESSION-SLOT: a coordinator session for THIS mesh
+        // (meshCoordinatorFor === meshId) is never a pending-claim worker — the idle→claim
+        // drain (drainMeshQueue, isIdleSessionState + worker role) never picks it up, because
+        // a coordinator is generating/non-idle and is the dispatcher, not a claimer. The claim
+        // path excludes it structurally; the skip gate must apply the SAME exclusion. Without
+        // this, a node whose only live mesh session is the coordinator makes this gate return
+        // true, so no worker auto-launches and no session ever claims → the task pends forever
+        // with no error/requeue (silent deadlock). The busy-set / non-idle guards below don't
+        // help because the coordinator holds no *assigned* queue task, so it is neither busy
+        // nor terminal here.
+        if (readNonEmptyString(settings.meshCoordinatorFor) === meshId) return false;
         const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
         // Canonical-form match (see nodeHasActiveMeshWork / liveSessionCountForNode): a
         // daemon-id form skew must not make a present session look absent and reopen the

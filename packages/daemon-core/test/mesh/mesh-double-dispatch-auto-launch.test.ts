@@ -59,6 +59,21 @@ function liveSession(meshId: string, sessionId: string, status: string) {
   return { category: 'cli', getState: () => state }
 }
 
+// A fake live COORDINATOR session on NODE_ID: it carries meshCoordinatorFor === meshId in
+// addition to the worker-node stamp (a coordinator runs on a mesh node). It is generating
+// and holds NO assigned queue task — the exact shape that used to make the skip gate think a
+// worker was pending-claim (DISPATCH-DEADLOCK-COORD-SESSION-SLOT).
+function coordinatorSession(meshId: string, sessionId: string, status = 'generating') {
+  const state = {
+    instanceId: sessionId,
+    status,
+    workspace: `/repo/${NODE_ID}`,
+    activeChat: null,
+    settings: { meshNodeFor: meshId, meshNodeId: NODE_ID, meshCoordinatorFor: meshId },
+  }
+  return { category: 'cli', getState: () => state }
+}
+
 function createComponents(cliInstances: any[] = []) {
   return {
     instanceManager: {
@@ -181,6 +196,26 @@ describe('DOUBLE-DISPATCH Layer (a) — auto-launch suppressed when node has a l
       await triggerMeshQueue(components, meshId)
 
       expect(autoLaunchReason(meshId, dependent.id)).not.toBe('dependencies_unsatisfied')
+      expect(launchCliCalls(components)).toBe(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('DISPATCH-DEADLOCK-COORD-SESSION-SLOT: a task targeting a node whose ONLY live session is the coordinator still auto-launches (coordinator is not a pending-claim worker)', async () => {
+    const meshId = `mesh_al_coord_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId)
+      // The node's only live mesh session is the coordinator (generating, no assigned task).
+      // The idle→claim drain never picks it up (it is the dispatcher, not an idle worker), so
+      // if the skip gate counted it as a pending claimer the task would pend forever with no
+      // worker ever launching (silent deadlock). The gate must exclude it → a worker launches.
+      const components = createComponents([coordinatorSession(meshId, 'coord-sess')])
+      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change' })
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(autoLaunchReason(meshId, task.id)).not.toBe('node_has_live_session_pending_claim')
       expect(launchCliCalls(components)).toBe(1)
     } finally {
       cleanup(meshId)
