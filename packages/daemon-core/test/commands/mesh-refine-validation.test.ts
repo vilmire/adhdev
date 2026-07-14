@@ -9,7 +9,7 @@ import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
 import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, runMeshReconcileTick } from '../../src/mesh/mesh-events'
 import { computeStaleInputsDigest } from '../../src/mesh/worktree-bootstrap-config'
 
-function createRouter(meshId?: string, messages?: string[]) {
+function createRouter(meshId?: string, messages?: string[], statusInstanceId?: string) {
   const coordinator = meshId && messages
     ? {
         // status: 'idle' so the reconcile loop will drain + inject queued events
@@ -33,6 +33,9 @@ function createRouter(meshId?: string, messages?: string[]) {
     sessionRegistry: {} as any,
     packageName: 'adhdev',
     statusVersion: '0.9.76',
+    // DS3: identify this daemon so requestCoordinatorLocalCatchup can resolve the
+    // coordinator base node as self-hosted and run the guarded local fast-forward.
+    ...(statusInstanceId ? { statusInstanceId } : {}),
   })
 }
 
@@ -52,6 +55,14 @@ function initGitRepo(repo: string) {
   writeFileSync(join(repo, 'typecheck.js'), 'process.exit(0)\n', 'utf-8')
   execFileSync('git', ['add', '.'], { cwd: repo })
   execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: repo })
+  // DS1/DS2: give the root repo a real `origin` remote so the auto-push path
+  // (merge → push → cleanup) and the base-movement CAS (fetch origin/<base>) have a
+  // real remote to talk to. Without it, the DS1 push fails and short-circuits before
+  // cleanup. A bare sibling repo mirrors production (Refinery always pushes to origin).
+  const originBare = `${repo}-origin.git`
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', originBare])
+  execFileSync('git', ['remote', 'add', 'origin', originBare], { cwd: repo })
+  execFileSync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repo })
 }
 
 function initSubmoduleOrigin(repo: string) {
@@ -72,17 +83,25 @@ function addSubmodule(repo: string, submoduleOrigin: string, path = 'oss') {
 function createMesh(repo: string, worktree: string, nodeId = 'node-worktree', commands: any = {
   test: [{ command: 'npm run test', sourcePath: 'package.json', confidence: 'high' }],
   typecheck: [{ command: 'npm run typecheck', sourcePath: 'package.json', confidence: 'high' }],
-}, includeRefineConfig = true) {
+}, includeRefineConfig = true, opts: { requireApprovalForPush?: boolean } = {}) {
   const refineCommands = ['typecheck', 'test', 'lint', 'build'].flatMap((category: any) => {
     const entries = commands[category]
     return Array.isArray(entries) ? entries.map((entry: any) => ({ command: entry.command, category })) : []
   })
+  // DS1: the auto-push path (merge → push → cleanup) needs requireApprovalForPush=false.
+  // Default the test mesh to auto-push so the convergence tests exercise the full path;
+  // the origin remote from initGitRepo makes the push succeed. Tests that specifically
+  // exercise the approval-gated path pass { requireApprovalForPush: true }.
+  const requireApprovalForPush = opts.requireApprovalForPush === true
+  const basePolicy: Record<string, unknown> = { requireApprovalForPush }
   return {
     id: `mesh-${nodeId}`,
     name: 'Validation Mesh',
     repoIdentity: 'example/repo',
     defaultBranch: 'main',
-    policy: includeRefineConfig ? { refineConfig: { version: 1, validation: { required: true, commands: refineCommands } } } : {},
+    policy: includeRefineConfig
+      ? { ...basePolicy, refineConfig: { version: 1, validation: { required: true, commands: refineCommands } } }
+      : basePolicy,
     coordinator: {},
     projectContext: {
       version: 1,
@@ -543,6 +562,9 @@ describe('refine_mesh_node validation gate', () => {
       writeFileSync(join(repo, 'SOURCE_ONLY.md'), 'source change\n', 'utf-8')
       execFileSync('git', ['add', 'SOURCE_ONLY.md'], { cwd: repo })
       execFileSync('git', ['commit', '-q', '-m', 'source-only change'], { cwd: repo })
+      // Keep origin/main current with the post-worktree base commit so resolve_refs
+      // (which prefers origin/<base>) sees SOURCE_ONLY as part of the base.
+      execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: repo })
       const mesh = createMesh(repo, worktree)
       const messages: string[] = []
       const router = createRouter(mesh.id, messages)
@@ -564,21 +586,21 @@ describe('refine_mesh_node validation gate', () => {
         'npm run typecheck',
         'npm run test',
       ])
-      expect(result.refineStages.map((entry: any) => entry.stage)).toEqual([
-        'resolve_refs',
-        'validation',
-        'patch_equivalence',
-        'submodule_reachability',
-        'effective_diff',
-        'merge',
-        'cleanup',
-        'ledger',
-      ])
+      // DS2 adds sync_base + base_cas; DS1 adds a push stage before cleanup and a
+      // coordinator_catchup after; assert the ordered CORE stages are present as a
+      // subsequence rather than an exact list.
+      const stageOrder: string[] = result.refineStages.map((entry: any) => entry.stage)
+      for (const s of ['resolve_refs', 'sync_base', 'validation', 'patch_equivalence', 'submodule_reachability', 'effective_diff', 'base_cas', 'merge', 'push', 'cleanup', 'ledger']) {
+        expect(stageOrder).toContain(s)
+      }
+      expect(stageOrder.indexOf('push')).toBeLessThan(stageOrder.indexOf('cleanup')) // DS1: push before cleanup
       expect(result.patchEquivalence).toMatchObject({ status: 'passed', equivalent: true })
+      // DS1: auto-push succeeded → the merge is on origin and the change on local base.
+      expect(result).toMatchObject({ pushed: true })
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\nfeature\n')
       expect(readFileSync(join(repo, 'SOURCE_ONLY.md'), 'utf-8')).toBe('source change\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-worktree')).toBe(false)
-      expect(result.finalBranchConvergenceState).toMatchObject({ branch: 'main', merged: true, validation: 'passed' })
+      expect(result.finalBranchConvergenceState).toMatchObject({ branch: 'main', merged: true, pushed: true, validation: 'passed', status: 'merged_pushed' })
       // Queue-only delivery: refine completion is persisted to the pending queue
       // (not pushed). Peek (non-destructive) to assert the queue carries the
       // completion and NOT the intermediate accepted event...
@@ -601,7 +623,8 @@ describe('refine_mesh_node validation gate', () => {
         && message.includes('validation=passed')
         && message.includes('patch_equivalence=passed')
         && message.includes('merge=merged')
-        && message.includes('final_convergence=merged')
+        // DS1: auto-push landed → convergence is merged_pushed.
+        && message.includes('final_convergence=merged_pushed')
         && message.includes('Next step: Continue from the updated mesh state.')
       )).toBe(true)
     } finally {
@@ -1047,6 +1070,9 @@ describe('refine_mesh_node validation gate', () => {
       const baseSideCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(repo, 'oss'), encoding: 'utf-8' }).trim()
       execFileSync('git', ['add', 'oss'], { cwd: repo })
       execFileSync('git', ['commit', '-q', '-m', 'point base at base-side submodule commit'], { cwd: repo })
+      // Keep origin/main current so resolve_refs sees the base-side submodule gitlink
+      // (otherwise the divergent-gitlink conflict is computed against a stale base).
+      execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: repo })
 
       execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', 'oss'], { cwd: worktree })
       execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: join(worktree, 'oss') })
@@ -1189,6 +1215,156 @@ describe('refine_mesh_node validation gate', () => {
       expect(result.finalBranchConvergenceState).toMatchObject({ status: 'merged_cleanup_failed', merged: true, removed: false })
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\nfeature\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-cleanup-fail')).toBe(true)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 90000)
+
+  // ── DS1: push-before-cleanup — a push failure withholds cleanup ─────────────
+  it('DS1: a push failure after merge is terminal blocked with cleanup WITHHELD (worktree + branch preserved, not counted as remote-merged)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-push-fail-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-push-fail')
+      // Break the push: repoint origin at a bare repo that rejects the push by removing
+      // it, so `git push origin main` fails (no such remote path). The merge still lands
+      // on local base; DS1 must NOT clean up the worktree and must report merged/pushed=false.
+      execFileSync('git', ['remote', 'set-url', 'origin', join(root, 'does-not-exist.git')], { cwd: repo })
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true, meshId: mesh.id, nodeId: 'node-push-fail', inlineMesh: mesh,
+      })
+      expectAccepted(accepted, 'node-push-fail')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_failed')
+      const result = (terminal.payload as any).result
+      // Merged locally, push failed → terminal blocked, retryable, NOT remote-converged.
+      expect(result).toMatchObject({ success: false, code: 'push_failed', merged: true, mergedLocal: true, pushed: false, retryable: true })
+      expect(result.finalBranchConvergenceState).toMatchObject({ status: 'merged_push_failed', merged: true, pushed: false, removed: false })
+      // Cleanup was WITHHELD — the worktree node is still in the mesh, no cleanup stage ran.
+      expect(mesh.nodes.some((node: any) => node.id === 'node-push-fail')).toBe(true)
+      const stageNames = result.refineStages.map((e: any) => `${e.stage}:${e.status}`)
+      expect(stageNames).toContain('push:failed')
+      expect(stageNames.some((s: string) => s.startsWith('cleanup'))).toBe(false)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 90000)
+
+  // ── DS1 approval path: merge lands locally, cleanup withheld (pending push) ──
+  it('DS1: requireApprovalForPush leaves the merge on local base with cleanup withheld (merged_local_pending_push)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-approval-pending-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-approval', undefined, true, { requireApprovalForPush: true })
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true, meshId: mesh.id, nodeId: 'node-approval', inlineMesh: mesh,
+      })
+      expectAccepted(accepted, 'node-approval')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      const result = (terminal.payload as any).result
+      expect(result).toMatchObject({ success: true, merged: true, mergedLocal: true, pushed: false, pushReady: true })
+      expect(result.finalBranchConvergenceState).toMatchObject({ status: 'merged_local_pending_push', merged: true, pushed: false, removed: false })
+      // Merge landed on local base but worktree cleanup is withheld until push is approved.
+      expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\nfeature\n')
+      expect(mesh.nodes.some((node: any) => node.id === 'node-approval')).toBe(true)
+      const stageNames = result.refineStages.map((e: any) => `${e.stage}:${e.status}`)
+      expect(stageNames.some((s: string) => s.startsWith('cleanup'))).toBe(false)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 90000)
+
+  // ── DS2: a diverged laggard is rebased in sync_base then merges cleanly ──────
+  it('DS2: a DIVERGED laggard (ahead>0 AND behind>0) is rebased in sync_base (patch_equivalence_after_auto_rebase) and then merges; branch ancestry is linear', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-diverged-laggard-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      const worktree = createWorktreeWithCommit(root, repo)
+      // Advance the BASE with a disjoint file AFTER the worktree branch was created, so the
+      // branch is DIVERGED: it has its own commit (ahead) AND base has a commit it lacks
+      // (behind). The old ancestor-only auto-rebase would have MISSED this (branch is not a
+      // strict ancestor of base). Push so resolve_refs sees the advanced base.
+      writeFileSync(join(repo, 'BASE_ADVANCE.md'), 'base advance\n', 'utf-8')
+      execFileSync('git', ['add', 'BASE_ADVANCE.md'], { cwd: repo })
+      execFileSync('git', ['commit', '-q', '-m', 'advance base disjointly'], { cwd: repo })
+      execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: repo })
+      const mesh = createMesh(repo, worktree, 'node-laggard')
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true, meshId: mesh.id, nodeId: 'node-laggard', inlineMesh: mesh,
+      })
+      expectAccepted(accepted, 'node-laggard')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      const result = (terminal.payload as any).result
+      expect(result).toMatchObject({ success: true, merged: true, pushed: true })
+      // sync_base rebased the diverged laggard and recorded the ancestry-visible stage.
+      const syncBase = result.refineStages.find((e: any) => e.stage === 'sync_base')
+      expect(syncBase).toMatchObject({ status: 'passed', rebased: true, diverged: true })
+      expect(result.refineStages.some((e: any) => e.stage === 'patch_equivalence_after_auto_rebase' && e.status === 'passed')).toBe(true)
+      // Both the base advance and the feature change are present after convergence.
+      expect(readFileSync(join(repo, 'BASE_ADVANCE.md'), 'utf-8')).toBe('base advance\n')
+      expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\nfeature\n')
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 90000)
+
+  // ── DS3: post-push coordinator local catch-up ───────────────────────────────
+  it('DS3: after auto-push, the local coordinator base checkout is fast-forwarded to the pushed commit (coordinator_catchup)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-coord-catchup-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-catchup')
+      // This daemon IS the coordinator (its status id matches the source node's daemonId),
+      // so requestCoordinatorLocalCatchup resolves the source node as the self-hosted
+      // coordinator base and runs the guarded local fast-forward.
+      const router = createRouter(undefined, undefined, 'daemon-source')
+
+      const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true, meshId: mesh.id, nodeId: 'node-catchup', inlineMesh: mesh, coordinatorDaemonId: 'daemon-source',
+      })
+      expectAccepted(accepted, 'node-catchup')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      expect(terminal.kind).toBe('task_completed')
+      const result = (terminal.payload as any).result
+      expect(result).toMatchObject({ success: true, merged: true, pushed: true })
+      // The coordinator base node is the source node (repoRoot === repo) hosted by this
+      // daemon; refine ran the guarded local fast-forward. Since repoRoot IS the base it
+      // just merged+pushed, the ff is a no-op (already_up_to_date) — the important assertion
+      // is that the catch-up path RAN and produced a local_fast_forward summary.
+      expect(result.coordinatorCatchup).toMatchObject({ mode: 'local_fast_forward' })
+      // Base checkout is at the pushed commit (has the feature merge).
+      expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\nfeature\n')
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir

@@ -118,6 +118,22 @@ describe('classifyBatchNodeConvergence (QW4)', () => {
       refineStages: [{ stage: 'validation', status: 'failed' }],
     })
     expect(out.convergence).toBe('blocked_review')
+    expect(out.retryable).toBe(false)
+  })
+
+  it('DS2: marks a base-movement blocker (base_moved / base_locked) retryable blocked_review, never not_mergeable', () => {
+    for (const code of ['base_moved', 'base_locked']) {
+      const out = classifyBatchNodeConvergence({ success: false, code, retryable: true })
+      expect(out.convergence).toBe('blocked_review')
+      expect(out.retryable).toBe(true)
+    }
+    // A conflict is NEVER retryable even if a stray retryable flag were present.
+    const conflict = classifyBatchNodeConvergence({
+      success: false, code: 'merge_failed', retryable: true,
+      refineStages: [{ stage: 'merge', status: 'failed' }],
+    })
+    expect(conflict.convergence).toBe('not_mergeable')
+    expect(conflict.retryable).toBe(false)
   })
 })
 
@@ -341,6 +357,48 @@ describe('batch_refine_mesh_nodes', () => {
       // Both changes are present on base after convergence.
       expect(readFileSync(join(repo, 'a.txt'), 'utf-8')).toBe('a-change\n')
       expect(readFileSync(join(repo, 'b.txt'), 'utf-8')).toBe('b-change\n')
+    } finally {
+      if (prev === undefined) delete process.env.ADHDEV_CONFIG_DIR; else process.env.ADHDEV_CONFIG_DIR = prev
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('DS2: the second batch node is a diverged laggard rebased in sync_base; the converged base has linear ancestry (both merges reachable)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-batch-ds2-laggard-'))
+    const prev = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      const repo = join(root, 'repo')
+      initRepo(repo)
+      // node-a and node-b both branch from the same base and each add a disjoint file.
+      // When node-a merges first, the base advances; node-b is then a DIVERGED laggard
+      // (it has its own commit AND base has node-a's merge it lacks). The DS2 sync_base
+      // stage rebases node-b onto the advanced base before it merges — the old
+      // ancestor-only auto-rebase would still catch this fast-forward case, but the
+      // important DS2 guarantee is the resulting linear ancestry.
+      const a = addWorktreeNode(root, repo, 'node-a', 'feat/a', wt => {
+        writeFileSync(join(wt, 'a.txt'), 'a-change\n', 'utf-8'); git(wt, 'add', '.'); git(wt, 'commit', '-q', '-m', 'a change')
+      })
+      const b = addWorktreeNode(root, repo, 'node-b', 'feat/b', wt => {
+        writeFileSync(join(wt, 'b.txt'), 'b-change\n', 'utf-8'); git(wt, 'add', '.'); git(wt, 'commit', '-q', '-m', 'b change')
+      })
+      const mesh = meshWith(repo, [a.node, b.node])
+      const router = createRouter()
+
+      const baseBefore = git(repo, 'rev-parse', 'HEAD').trim()
+      const { result } = await executeBatchAndAwait(router, mesh.id, { nodeIds: ['node-a', 'node-b'], inlineMesh: mesh }, ['node-a', 'node-b'])
+      expect(result.summary).toMatchObject({ merged: 2, blocked: 0, notMergeable: 0 })
+      const baseAfter = git(repo, 'rev-parse', 'HEAD').trim()
+      // Linear ancestry: the pre-batch base is a strict ancestor of the converged base,
+      // and both node changes are present (each merge landed, in order, no divergence).
+      expect(() => git(repo, 'merge-base', '--is-ancestor', baseBefore, baseAfter)).not.toThrow()
+      expect(baseAfter).not.toBe(baseBefore)
+      expect(readFileSync(join(repo, 'a.txt'), 'utf-8')).toBe('a-change\n')
+      expect(readFileSync(join(repo, 'b.txt'), 'utf-8')).toBe('b-change\n')
+      // The base HEAD linearly contains BOTH auto-merge commits.
+      const log = git(repo, 'log', '--oneline').trim()
+      expect(log).toContain("Auto-merge branch 'feat/a'")
+      expect(log).toContain("Auto-merge branch 'feat/b'")
     } finally {
       if (prev === undefined) delete process.env.ADHDEV_CONFIG_DIR; else process.env.ADHDEV_CONFIG_DIR = prev
       rmSync(root, { recursive: true, force: true })

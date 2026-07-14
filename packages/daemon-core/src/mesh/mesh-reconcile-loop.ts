@@ -61,7 +61,7 @@ import { readNonEmptyString, readMeshCompletionSummary, buildMeshSystemMessage }
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { expandDaemonIdForms, daemonIdsEquivalent, sessionIdsEquivalent, meshNodeIdMatches, withStatusProbeMarker } from '@adhdev/mesh-shared';
 import { getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-work-queue.js';
-import { resolveSessionBusyVerdict, runContinuousAutoFastForwardScan } from './mesh-queue-assignment.js';
+import { resolveSessionBusyVerdict, runContinuousAutoFastForwardScan, runPendingCoordinatorCatchupScan } from './mesh-queue-assignment.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerEntry } from './mesh-ledger.js';
 import { findTerminalLedgerEvidenceForTask } from './mesh-events-stale.js';
@@ -1079,6 +1079,23 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Assigned-zombie sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
+        }
+    }
+
+    // ── PHASE 2.6: DS3 coordinator local catch-up ──────────────────────────────
+    // Drain `coordinator_catchup` markers a remote node's Refinery queued after pushing
+    // the base to origin, and guarded-ff this daemon's own coordinator base checkout up to
+    // the pushed commit (busy → deferred to a later tick; ahead/diverged/dirty → the ff
+    // helper structured-blocks, never rebases). Runs for EVERY mesh this daemon hosts
+    // (not gated on continuous mode) and BEFORE PHASE 3 so a caught-up base is current
+    // before any new task is dispatched. No markers → immediate no-op.
+    for (const mesh of listMeshes()) {
+        const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+        if (!daemonHostsMesh(mesh, selfIds)) continue;
+        try {
+            await runPendingCoordinatorCatchupScan(components, mesh);
+        } catch (e: any) {
+            LOG.warn('MeshReconcile', `Coordinator catch-up scan failed for mesh ${mesh.id}: ${e?.message || e}`);
         }
     }
 

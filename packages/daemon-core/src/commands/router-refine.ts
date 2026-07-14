@@ -14,6 +14,8 @@ import { LOG } from '../logging/logger.js';
 import { createInteractionId } from '../logging/debug-trace.js';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
+import { resolveCoordinatorSelfIds, daemonIdListIncludes } from '../mesh/mesh-reconcile-identity.js';
+import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
@@ -344,6 +346,13 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
             if (resolved.kind === 'terminal') return resolved.result;
             const ctx = resolved.ctx;
 
+            // DS2: sync_base runs BEFORE validation. A branch that is behind base — whether
+            // strictly behind (fast-forwardable) or DIVERGED (ahead>0 AND behind>0, the
+            // laggard the old ancestor-only rebase missed) — is auto-rebased onto the pinned
+            // baseHead here, so validation and every later gate see the FINAL rebased tree.
+            const syncBase = await refineSyncBaseStage(self, ctx);
+            if (syncBase.kind === 'terminal') return syncBase.result;
+
             const validation = await refineValidationStage(self, ctx);
             if (validation.kind === 'terminal') return validation.result;
 
@@ -468,6 +477,213 @@ export async function refineResolveRefsStage(self: DaemonCommandRouter,
             };
     }
 
+/**
+ * DS2: compute the branch↔base divergence explicitly via merge-base + rev-list, so a
+ * DIVERGED laggard (ahead>0 AND behind>0) is identified — not just the strict-ancestor
+ * "simply behind" case the old auto-rebase handled. Returns ahead/behind counts and the
+ * merge-base; behind>0 means base has commits the branch lacks (rebase target), ahead>0
+ * means the branch has its own commits. All counts are best-effort (0 on any git error).
+ */
+async function computeBranchBaseDivergence(
+    execFileAsync: RefineExecFileAsync,
+    cwd: string,
+    baseHead: string,
+    branchHead: string,
+): Promise<{ mergeBase?: string; ahead: number; behind: number; diverged: boolean; isStrictlyBehind: boolean }> {
+    let mergeBase: string | undefined;
+    try {
+        const { stdout } = await execFileAsync('git', ['merge-base', baseHead, branchHead], { cwd, encoding: 'utf8' });
+        mergeBase = stdout.trim() || undefined;
+    } catch { /* unresolved base/branch — treat as no shared history */ }
+    let ahead = 0;
+    let behind = 0;
+    try {
+        // `--left-right --count base...branch` → "<behind>\t<ahead>": left (base-only) =
+        // commits the branch is BEHIND; right (branch-only) = commits the branch is AHEAD.
+        const { stdout } = await execFileAsync('git', ['rev-list', '--left-right', '--count', `${baseHead}...${branchHead}`], { cwd, encoding: 'utf8' });
+        const [left, right] = stdout.trim().split(/\s+/).map(n => Number.parseInt(n, 10));
+        behind = Number.isFinite(left) ? left : 0;
+        ahead = Number.isFinite(right) ? right : 0;
+    } catch { /* keep zero counts on error */ }
+    return {
+        mergeBase,
+        ahead,
+        behind,
+        diverged: ahead > 0 && behind > 0,
+        // Strictly behind = base is a descendant of branch (branch is an ancestor of base):
+        // behind>0 with ahead===0.
+        isStrictlyBehind: behind > 0 && ahead === 0,
+    };
+}
+
+    /**
+     * DS2 sync_base stage: bring the worktree branch up to the pinned baseHead BEFORE
+     * validation, so every later gate (validation, patch_equivalence, merge) sees the
+     * final rebased tree rather than a stale pre-rebase one.
+     *
+     * The old auto-rebase lived inside patch_equivalence and only fired when branchHead
+     * was a STRICT ANCESTOR of baseHead (`merge-base --is-ancestor`). A diverged laggard
+     * — the branch has its own commits AND base moved underneath it (ahead>0 AND behind>0)
+     * — failed that ancestor check, so it was never rebased and fell straight to
+     * patch_equivalence_failed / blocked_review even though a clean rebase would have
+     * converged it. Here we compute ahead/behind explicitly and rebase whenever behind>0
+     * (strictly-behind OR diverged), aborting to blocked_review only on a real conflict.
+     *
+     * On a successful rebase we recompute branchHead and re-derive changeImpact against
+     * the rebased tree (its baseHead..branchHead diff changed), and record the
+     * `patch_equivalence_after_auto_rebase` stage so the batch/ancestry assertions can see
+     * the rebase happened. When the branch is already up to date (behind===0), this is a
+     * no-op passed stage.
+     */
+export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
+            const { repoRoot, baseHead, node, branch, baseBranch, refineStages, execFileAsync } = ctx;
+            let branchHead = ctx.branchHead;
+            const syncStarted = Date.now();
+            const divergence = await computeBranchBaseDivergence(execFileAsync, node.workspace, baseHead, branchHead);
+
+            if (divergence.behind === 0) {
+                // Branch already contains baseHead — nothing to sync. (ahead>0 is fine; that
+                // is the normal "branch is ahead, ready to merge" case.)
+                recordMeshRefineStage(refineStages, 'sync_base', 'passed', syncStarted, {
+                    ahead: divergence.ahead,
+                    behind: divergence.behind,
+                    rebased: false,
+                    reason: 'branch_up_to_date_with_base',
+                });
+                return { kind: 'continue', ctx };
+            }
+
+            // Pre-rebase gate probe (MUST precede the rebase) — two cases where rebasing is
+            // the wrong move and we defer to the patch_equivalence stage with the branch
+            // intact:
+            //   (1) already-merged-via-another-path — the branch's changes are already in
+            //       base (merge-tree produces no diff: actualPatchId empty, expectedPatchId
+            //       non-empty). A rebase would drop every commit as empty and leave a
+            //       degenerate no-commit branch patch_equivalence can no longer recognize.
+            //   (2) submodule gitlink conflict — base and branch advanced the SAME submodule
+            //       to divergent commits. A blind root rebase would silently take the
+            //       branch-side gitlink and hide the conflict (surfacing it later, without
+            //       the actionable hint); the patch_equivalence gate instead describes it
+            //       richly (which submodule, base vs branch commit, how to resolve).
+            // In both cases skip the rebase and continue → patch_equivalence handles it.
+            try {
+                const preRebasePe = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
+                const alreadyMerged = !preRebasePe.actualPatchId && !!preRebasePe.expectedPatchId;
+                const submoduleConflict = preRebasePe.actionableHint?.kind === 'submodule_conflict';
+                if (alreadyMerged || submoduleConflict) {
+                    recordMeshRefineStage(refineStages, 'sync_base', 'passed', syncStarted, {
+                        ahead: divergence.ahead,
+                        behind: divergence.behind,
+                        rebased: false,
+                        reason: alreadyMerged ? 'already_merged_via_other_path_skip_rebase' : 'submodule_conflict_defer_to_patch_equivalence',
+                    });
+                    return { kind: 'continue', ctx };
+                }
+            } catch { /* fail-open: on gate error, fall through to the rebase */ }
+
+            // behind>0: strictly-behind OR diverged. Rebase the branch onto the pinned
+            // baseHead. A conflict aborts and terminates blocked_review (retryable=false —
+            // a real content conflict needs human resolution, not a base-movement retry).
+            const rebaseStarted = Date.now();
+            try {
+                execFileSync('git', ['rebase', baseHead], { cwd: node.workspace, stdio: ['ignore', 'pipe', 'pipe'] });
+            } catch (rebaseErr: any) {
+                try { execFileSync('git', ['rebase', '--abort'], { cwd: node.workspace, stdio: 'ignore' }); } catch { /* ignore */ }
+                // A rebase conflict on a submodule/gitlink divergence is a SPECIAL case the
+                // patch-equivalence gate describes with a rich actionable hint (which
+                // submodule, base vs branch commit, how to resolve). Run that gate against
+                // the original branchHead to recover the hint; when it IS a submodule
+                // conflict, surface the richer patch_equivalence_failed result (preserving
+                // the pre-DS2 UX) instead of the generic needs_rebase_with_conflicts.
+                let submoduleHintPatchEquivalence: Awaited<ReturnType<typeof runMeshRefinePatchEquivalenceGate>> | undefined;
+                try {
+                    submoduleHintPatchEquivalence = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, ctx.branchHead);
+                } catch { /* hint is best-effort */ }
+                const submoduleConflict = submoduleHintPatchEquivalence?.actionableHint?.kind === 'submodule_conflict';
+                recordMeshRefineStage(refineStages, 'sync_base', 'failed', syncStarted, {
+                    ahead: divergence.ahead,
+                    behind: divergence.behind,
+                    diverged: divergence.diverged,
+                    error: rebaseErr?.message || String(rebaseErr),
+                    ...(submoduleConflict ? { submoduleConflict: true } : {}),
+                });
+                if (submoduleConflict && submoduleHintPatchEquivalence) {
+                    // Mirror the pre-DS2 patch_equivalence_failed shape (code, hint, stage).
+                    recordMeshRefineStage(refineStages, 'patch_equivalence', 'failed', rebaseStarted, {
+                        equivalent: submoduleHintPatchEquivalence.equivalent,
+                        expectedPatchId: submoduleHintPatchEquivalence.expectedPatchId,
+                        actualPatchId: submoduleHintPatchEquivalence.actualPatchId,
+                        error: submoduleHintPatchEquivalence.error,
+                        actionableHint: submoduleHintPatchEquivalence.actionableHint,
+                    });
+                    return { kind: 'terminal', result: {
+                        success: false,
+                        code: 'patch_equivalence_failed',
+                        convergenceStatus: 'blocked_review',
+                        error: 'Refinery patch-equivalence preflight failed (submodule gitlink conflict); merge/refine was not attempted.',
+                        branch,
+                        into: baseBranch,
+                        patchEquivalence: submoduleHintPatchEquivalence,
+                        refineStages,
+                        finalBranchConvergenceState: {
+                            branch, baseBranch, merged: false, removed: false, patchEquivalence: 'failed', status: 'blocked_review',
+                        },
+                    } };
+                }
+                // Generic content conflict → record patch_equivalence_after_auto_rebase failed
+                // so the failing-stage classification and the ancestry regression see the
+                // rebase attempt.
+                recordMeshRefineStage(refineStages, 'patch_equivalence_after_auto_rebase', 'failed', rebaseStarted, {
+                    error: rebaseErr?.message || String(rebaseErr),
+                });
+                return { kind: 'terminal', result: {
+                    success: false,
+                    code: 'needs_rebase_with_conflicts',
+                    convergenceStatus: 'blocked_review',
+                    error: divergence.diverged
+                        ? `Branch has diverged from ${baseBranch} (ahead ${divergence.ahead}, behind ${divergence.behind}) and auto-rebase onto the fetched base hit conflicts; resolve conflicts manually and retry.`
+                        : `Branch is behind ${baseBranch} and auto-rebase failed due to conflicts; resolve conflicts manually and retry.`,
+                    branch,
+                    into: baseBranch,
+                    refineStages,
+                    finalBranchConvergenceState: {
+                        branch,
+                        baseBranch,
+                        merged: false,
+                        removed: false,
+                        status: 'blocked_review',
+                    },
+                } };
+            }
+
+            // Rebase succeeded — recompute branchHead and re-derive changeImpact against the
+            // rebased tree (baseHead..branchHead changed, so the change area may have too).
+            const { stdout: rebasedHeadStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: node.workspace, encoding: 'utf8' });
+            branchHead = rebasedHeadStdout.trim();
+            ctx.branchHead = branchHead;
+            let changeImpact: ChangedPackageClassification | undefined = ctx.changeImpact;
+            try {
+                changeImpact = await classifyChangedPackages(node.workspace, baseHead, branchHead);
+                ctx.changeImpact = changeImpact;
+            } catch { /* fail-open: keep the prior changeImpact (or undefined → full validation) */ }
+
+            recordMeshRefineStage(refineStages, 'sync_base', 'passed', syncStarted, {
+                ahead: divergence.ahead,
+                behind: divergence.behind,
+                diverged: divergence.diverged,
+                rebased: true,
+                rebasedBranchHead: branchHead,
+                ...(changeImpact ? { changeImpact } : {}),
+            });
+            // Mirror the historical stage name so downstream (batch ancestry regression,
+            // failing-stage classification) can observe that a rebase-to-base happened.
+            recordMeshRefineStage(refineStages, 'patch_equivalence_after_auto_rebase', 'passed', rebaseStarted, {
+                rebasedBranchHead: branchHead,
+                rebasedOnto: baseHead,
+            });
+            return { kind: 'continue', ctx };
+    }
+
     /**
      * validation stage: run the refinery validation gate (typecheck / test /
      * lint / build per node config) and block on failure or when no allowlisted
@@ -576,17 +792,19 @@ export async function refineValidationStage(self: DaemonCommandRouter, ctx: Refi
     }
 
     /**
-     * patch_equivalence stage: preflight that the worktree branch's cumulative
-     * patch is equivalent to base+branch. On a "behind base" branch, auto-rebase
-     * once and re-check; on an empty merge-tree with real branch changes, treat as
-     * already-merged-via-another-path and short-circuit to cleanup. Mutates the
-     * context's branchHead (after rebase) and patchEquivalence (rebased gate).
+     * patch_equivalence stage: preflight that the worktree branch's cumulative patch is
+     * equivalent to base+branch. The DS2 sync_base stage already rebased any behind/diverged
+     * branch onto the pinned baseHead, so this is now a pure check: equivalent → continue;
+     * empty merge-tree with real branch changes → already-merged-via-another-path
+     * short-circuit to cleanup; otherwise → patch_equivalence_failed / blocked_review.
      */
 export async function refinePatchEquivalenceStage(self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
-            const { meshId, nodeId, args, repoRoot, baseHead, node, branch, baseBranch, validationSummary, refineStages, execFileAsync } = ctx;
-            let branchHead = ctx.branchHead;
+            // DS2: node/execFileAsync are no longer needed here — the rebase moved to
+            // sync_base — and branchHead/patchEquivalence are no longer mutated in-stage.
+            const { meshId, nodeId, args, repoRoot, baseHead, branch, baseBranch, validationSummary, refineStages } = ctx;
+            const branchHead = ctx.branchHead;
             const patchEquivalenceStarted = Date.now();
-            let patchEquivalence = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
+            const patchEquivalence = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
             recordMeshRefineStage(refineStages, 'patch_equivalence', patchEquivalence.status, patchEquivalenceStarted, {
                 equivalent: patchEquivalence.equivalent,
                 expectedPatchId: patchEquivalence.expectedPatchId,
@@ -595,99 +813,19 @@ export async function refinePatchEquivalenceStage(self: DaemonCommandRouter, ctx
                 actionableHint: patchEquivalence.actionableHint,
             });
             if (!patchEquivalence.equivalent) {
-                // Auto-rebase: if branch is simply behind base, attempt rebase automatically before failing.
-                let didAutoRebase = false;
-                let isBehindBase = false;
-                try {
-                    execFileSync('git', ['merge-base', '--is-ancestor', branchHead, baseHead], {
-                        cwd: node.workspace,
-                        stdio: 'ignore',
-                    });
-                    isBehindBase = true;
-                } catch { /* non-zero exit means branchHead is not an ancestor of baseHead */ }
-
-                if (isBehindBase) {
-                    const autoRebaseStarted = Date.now();
-                    try {
-                        execFileSync('git', ['rebase', baseHead], {
-                            cwd: node.workspace,
-                            stdio: ['ignore', 'pipe', 'pipe'],
-                        });
-                        const { stdout: rebasedHeadStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: node.workspace, encoding: 'utf8' });
-                        branchHead = rebasedHeadStdout.trim();
-                        const rebasedPatchEquivalence = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
-                        recordMeshRefineStage(refineStages, 'patch_equivalence_after_auto_rebase', rebasedPatchEquivalence.status, autoRebaseStarted, {
-                            equivalent: rebasedPatchEquivalence.equivalent,
-                            expectedPatchId: rebasedPatchEquivalence.expectedPatchId,
-                            actualPatchId: rebasedPatchEquivalence.actualPatchId,
-                            error: rebasedPatchEquivalence.error,
-                            rebasedBranchHead: branchHead,
-                        });
-                        if (rebasedPatchEquivalence.equivalent) {
-                            patchEquivalence = rebasedPatchEquivalence;
-                            didAutoRebase = true;
-                        } else {
-                            return { kind: 'terminal', result: {
-                                success: false,
-                                code: 'needs_rebase',
-                                convergenceStatus: 'blocked_review',
-                                error: 'Branch was rebased onto base but patch equivalence still failed; manual intervention required.',
-                                branch,
-                                into: baseBranch,
-                                validationSummary,
-                                patchEquivalence: rebasedPatchEquivalence,
-                                refineStages,
-                                finalBranchConvergenceState: {
-                                    branch,
-                                    baseBranch,
-                                    merged: false,
-                                    removed: false,
-                                    validation: 'passed',
-                                    patchEquivalence: 'failed',
-                                    status: 'blocked_review',
-                                },
-                            } };
-                        }
-                    } catch (rebaseErr: any) {
-                        try { execFileSync('git', ['rebase', '--abort'], { cwd: node.workspace, stdio: 'ignore' }); } catch { /* ignore */ }
-                        recordMeshRefineStage(refineStages, 'patch_equivalence_after_auto_rebase', 'failed', autoRebaseStarted, {
-                            error: rebaseErr?.message || String(rebaseErr),
-                        });
-                        return { kind: 'terminal', result: {
-                            success: false,
-                            code: 'needs_rebase_with_conflicts',
-                            convergenceStatus: 'blocked_review',
-                            error: 'Branch is behind base and auto-rebase failed due to conflicts; resolve conflicts manually and retry.',
-                            branch,
-                            into: baseBranch,
-                            validationSummary,
-                            patchEquivalence,
-                            refineStages,
-                            finalBranchConvergenceState: {
-                                branch,
-                                baseBranch,
-                                merged: false,
-                                removed: false,
-                                validation: 'passed',
-                                patchEquivalence: 'failed',
-                                status: 'blocked_review',
-                            },
-                        } };
-                    }
-                }
-
-                // If the actual patch-id is empty, the merge-tree produces no diff vs base —
-                // meaning the branch content is already present in base (landed via a different
-                // path, e.g. cherry-pick or direct commit).  Treat this as "already merged":
-                // skip the merge step but still run cleanup so the worktree node is removed.
-                // "already merged via another path": the branch has real changes
-                // (expectedPatchId non-empty) but the merge-tree produces no diff
-                // against base (actualPatchId empty) — meaning every change in the
-                // branch is already present in base via a cherry-pick or direct commit.
-                // If both patch-ids are empty, the branch itself has no changes; that
-                // is a degenerate worktree case, not an "already merged" scenario.
+                // DS2: the sync_base stage already rebased a behind/diverged branch onto
+                // the pinned baseHead BEFORE validation, so by here the branch is either
+                // equivalent (handled above) or genuinely non-equivalent for a reason a
+                // rebase cannot fix. The old in-stage auto-rebase (ancestor-only) is gone.
+                //
+                // The one benign non-equivalent case that remains is "already merged via
+                // another path": the branch has real changes (expectedPatchId non-empty)
+                // but the merge-tree produces no diff against base (actualPatchId empty) —
+                // every change is already present in base via a cherry-pick or direct
+                // commit. Short-circuit merge → cleanup. If both patch-ids are empty the
+                // branch itself has no changes (degenerate), which is NOT already-merged.
                 const alreadyMergedViaOtherPath = !patchEquivalence.actualPatchId && !!patchEquivalence.expectedPatchId;
-                if (!didAutoRebase && !alreadyMergedViaOtherPath) {
+                if (!alreadyMergedViaOtherPath) {
                     return { kind: 'terminal', result: {
                         success: false,
                         code: 'patch_equivalence_failed',
@@ -710,7 +848,7 @@ export async function refinePatchEquivalenceStage(self: DaemonCommandRouter, ctx
                     } };
                 }
 
-                if (!didAutoRebase && alreadyMergedViaOtherPath) {
+                {
                     // Content already in base — skip merge, go straight to cleanup.
                     recordMeshRefineStage(refineStages, 'merge', 'skipped', Date.now(), {
                         reason: 'already_merged_via_other_path',
@@ -944,6 +1082,105 @@ export async function refineEffectiveDiffStage(self: DaemonCommandRouter, ctx: R
             return { kind: 'continue', ctx };
     }
 
+/**
+ * DS3: after a successful Refinery push advanced origin/<baseBranch>, bring the
+ * ORIGINATING COORDINATOR daemon's own local base checkout up to the pushed commit so
+ * the coordinator isn't silently left behind (the "merged to main but my local main is
+ * stale" gap). Guarded and NON-destructive:
+ *
+ *   - If the coordinator's base node is hosted by THIS daemon and is reachable locally,
+ *     run fastForwardMeshNode(mode:'merge') on it directly. That helper is itself the
+ *     guard: it only ff-only-merges when the workspace is clean, ahead=0 and behind>0;
+ *     an ahead/diverged/dirty coordinator returns a structured block (never a rebase).
+ *   - If the coordinator is a DIFFERENT daemon (remote), we cannot touch its checkout
+ *     from here, so we queue a `coordinator_catchup` pending event targeted at that
+ *     coordinator daemon; its reconcile loop / next mesh-tool call drains it and runs the
+ *     same guarded fast-forward locally (busy → naturally deferred to the next idle edge).
+ *
+ * Best-effort and advisory: the caller never fails the refine on a catch-up problem. The
+ * refine's own repoRoot IS the base it just merged+pushed, so when the coordinator IS this
+ * daemon and IS repoRoot the ff is a no-op `already_up_to_date` — correct and harmless.
+ * Returns a compact summary for the stage record, or undefined when there's nothing to do.
+ */
+export async function requestCoordinatorLocalCatchup(
+    self: DaemonCommandRouter,
+    params: { meshId: string; ctx: RefineContext; mesh: any; baseBranch: string; repoRoot: string },
+): Promise<Record<string, unknown> | undefined> {
+    const { meshId, ctx, mesh, baseBranch, repoRoot } = params;
+    // Originating coordinator daemon id: explicit arg wins, else this daemon's own id.
+    const coordinatorDaemonId = (typeof ctx.args?.coordinatorDaemonId === 'string' && ctx.args.coordinatorDaemonId.trim())
+        ? ctx.args.coordinatorDaemonId.trim()
+        : (self.deps.statusInstanceId || undefined);
+    if (!coordinatorDaemonId) return undefined;
+    if (!Array.isArray(mesh?.nodes)) return undefined;
+
+    // The coordinator's base checkout is the non-worktree node owned by the coordinator
+    // daemon. Prefer an exact daemon-id match; the coordinator is a base (non-worktree) node.
+    const coordinatorBaseNode = mesh.nodes.find((n: any) =>
+        !n?.isLocalWorktree && daemonIdListIncludes([coordinatorDaemonId], readStringValue(n?.daemonId)));
+    if (!coordinatorBaseNode) return undefined;
+    const coordinatorWorkspace = readStringValue(coordinatorBaseNode.repoRoot) || readStringValue(coordinatorBaseNode.workspace);
+    if (!coordinatorWorkspace) return undefined;
+
+    // Is the coordinator base node hosted by THIS daemon? Resolve this daemon's self ids
+    // for the mesh (status id + machineId forms + config-form node ids) and check the node.
+    const drainIds = [self.deps.statusInstanceId].filter((v): v is string => typeof v === 'string' && v.length > 0);
+    const selfIds = resolveCoordinatorSelfIds(mesh as any, drainIds);
+    const coordinatorIsSelf = daemonIdListIncludes(selfIds, readStringValue(coordinatorBaseNode.daemonId));
+
+    if (coordinatorIsSelf) {
+        // Run the guarded ff-only catch-up directly on the local coordinator base checkout.
+        // fastForwardMeshNode gates on clean/ahead=0/behind>0 internally and never rebases.
+        try {
+            const ff = await fastForwardMeshNode({
+                meshId,
+                nodeId: readStringValue(coordinatorBaseNode.id),
+                workspace: coordinatorWorkspace,
+                branch: baseBranch,
+                mode: 'merge',
+                execute: true,
+                trigger: 'refine_post_push_catchup',
+                allowAutoPublishSubmoduleMainCommits: mesh?.policy?.allowAutoPublishSubmoduleMainCommits === true,
+            });
+            return {
+                mode: 'local_fast_forward',
+                coordinatorWorkspace,
+                sameAsRepoRoot: coordinatorWorkspace === repoRoot,
+                code: ff.code,
+                executed: ff.executed,
+                success: ff.success,
+                ...(ff.blockingReasons?.length ? { blockingReasons: ff.blockingReasons } : {}),
+            };
+        } catch (e: any) {
+            return { mode: 'local_fast_forward', coordinatorWorkspace, error: e?.message || String(e) };
+        }
+    }
+
+    // Remote coordinator: queue a targeted pending marker for its reconcile loop / next
+    // mesh-tool call to pick up and fast-forward locally (guarded, deferrable when busy).
+    try {
+        queuePendingMeshCoordinatorEvent({
+            event: 'coordinator_catchup',
+            meshId,
+            nodeLabel: readStringValue(coordinatorBaseNode.id) || 'coordinator-base',
+            nodeId: readStringValue(coordinatorBaseNode.id),
+            workspace: coordinatorWorkspace,
+            metadataEvent: {
+                source: 'refine_post_push_coordinator_catchup',
+                operation: 'coordinator_catchup',
+                baseBranch,
+                coordinatorDaemonId,
+                reason: 'post_push_base_advanced',
+            },
+            queuedAt: Date.now(),
+            targetCoordinatorDaemonId: coordinatorDaemonId,
+        });
+        return { mode: 'pending_marker_queued', coordinatorDaemonId, coordinatorWorkspace, baseBranch };
+    } catch (e: any) {
+        return { mode: 'pending_marker_queued', coordinatorDaemonId, error: e?.message || String(e) };
+    }
+}
+
     /**
      * merge + finalize stage: perform the --no-ff merge, align submodule
      * checkouts after merge, clean up (remove) the worktree node per policy,
@@ -952,6 +1189,96 @@ export async function refineEffectiveDiffStage(self: DaemonCommandRouter, ctx: R
      */
 export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
             const { meshId, nodeId, args, repoRoot, baseHead, node, branch, baseBranch, sourceNode, validationSummary, patchEquivalence, submoduleReachability, mesh, refineStages, execFileAsync } = ctx;
+
+            // DS2: acquire the repoRoot+baseBranch refinement lease for the base-mutating
+            // window (CAS → merge → push → cleanup). Serializes overlapping single-node
+            // async refines targeting the same base so they cannot both validate against one
+            // baseHead and then race their merges. The batch path is already sequential, so
+            // this only contends across independent async jobs. If another refine holds it,
+            // terminate retryable (base_locked) — the coordinator/batch retries after it
+            // frees. Released in the finally below.
+            const leaseKey = `${repoRoot}::${baseBranch}`;
+            const leaseHolder = buildRefineJobKey(self, meshId, nodeId);
+            if (self.refineBaseLeases.has(leaseKey) && self.refineBaseLeases.get(leaseKey) !== leaseHolder) {
+                recordMeshRefineStage(refineStages, 'base_lease', 'skipped', Date.now(), {
+                    leaseKey, heldBy: self.refineBaseLeases.get(leaseKey), retryable: true,
+                });
+                return { kind: 'terminal', result: {
+                    success: false,
+                    code: 'base_locked',
+                    convergenceStatus: 'blocked_review',
+                    retryable: true,
+                    error: `Another refine holds the base lease for ${baseBranch} in this repo; retry after it completes.`,
+                    branch,
+                    into: baseBranch,
+                    validationSummary,
+                    patchEquivalence,
+                    submoduleReachability,
+                    refineStages,
+                    finalBranchConvergenceState: {
+                        branch, baseBranch, merged: false, removed: false, status: 'blocked_review',
+                    },
+                } };
+            }
+            self.refineBaseLeases.set(leaseKey, leaseHolder);
+            try {
+                return await runRefineMergeAndFinalizeLocked(self, ctx);
+            } finally {
+                if (self.refineBaseLeases.get(leaseKey) === leaseHolder) self.refineBaseLeases.delete(leaseKey);
+            }
+    }
+
+    /**
+     * DS2 CAS + DS1 order: the base-lease-protected core of merge/finalize. Before the
+     * merge it re-fetches origin/<baseBranch> and compare-and-swaps the live origin SHA
+     * against the pinned baseHead from resolve_refs; if the base moved, it terminates
+     * retryable (base_moved) WITHOUT merging so a re-run rebases onto and validates the
+     * new base. DS1: on the auto-push path the order is merge → push → cleanup, so a push
+     * failure leaves the worktree/branch intact (cleanup withheld) and is reported as a
+     * terminal blocked state — the batch never counts an un-pushed node as merged.
+     */
+export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
+            const { meshId, nodeId, args, repoRoot, baseHead, node, branch, baseBranch, sourceNode, validationSummary, patchEquivalence, submoduleReachability, mesh, refineStages, execFileAsync } = ctx;
+
+            // DS2 base-movement CAS: re-fetch origin/<baseBranch> and compare its live SHA
+            // against the baseHead pinned in resolve_refs. If it advanced (a sibling/peer
+            // pushed while this node validated), the merge would be onto a stale base — bail
+            // retryable so the re-run rebases onto and re-validates the NEW base. Fail-open:
+            // a fetch/parse error skips the check (proceed with the merge as before).
+            const casStarted = Date.now();
+            let baseMoved = false;
+            let liveBaseHead: string | undefined;
+            try {
+                await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8' });
+                const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8' });
+                liveBaseHead = stdout.trim();
+                baseMoved = !!liveBaseHead && liveBaseHead !== baseHead;
+            } catch { /* fail-open: cannot verify → proceed (merge itself still guards) */ }
+            if (baseMoved) {
+                recordMeshRefineStage(refineStages, 'base_cas', 'failed', casStarted, {
+                    pinnedBaseHead: baseHead, liveBaseHead, retryable: true,
+                });
+                return { kind: 'terminal', result: {
+                    success: false,
+                    code: 'base_moved',
+                    convergenceStatus: 'blocked_review',
+                    retryable: true,
+                    error: `Base ${baseBranch} advanced from ${baseHead.slice(0, 7)} to ${(liveBaseHead || '').slice(0, 7)} after this node was validated; re-run refine to rebase onto and re-validate the new base.`,
+                    branch,
+                    into: baseBranch,
+                    pinnedBaseHead: baseHead,
+                    liveBaseHead,
+                    validationSummary,
+                    patchEquivalence,
+                    submoduleReachability,
+                    refineStages,
+                    finalBranchConvergenceState: {
+                        branch, baseBranch, merged: false, removed: false, status: 'blocked_review',
+                    },
+                } };
+            }
+            recordMeshRefineStage(refineStages, 'base_cas', 'passed', casStarted, { pinnedBaseHead: baseHead });
+
             let mergeResult: Record<string, unknown> | undefined;
             const mergeStarted = Date.now();
             try {
@@ -1057,6 +1384,115 @@ export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx
                 } };
             }
 
+            // ── DS1: push BEFORE cleanup ──────────────────────────────────────────
+            // The merge has landed on the local base. The contract is "success ⇒ the
+            // change is on origin (or, for the approval path, on local base awaiting an
+            // approved push)". So push (or defer for approval) FIRST, and only run the
+            // destructive worktree/branch cleanup once the push is proven — a push failure
+            // must leave the worktree + branch ref intact so a retry can re-push without
+            // reconstructing anything, and the batch must NOT count the node as merged.
+            const requireApprovalForPush: boolean = (mesh as any)?.policy?.requireApprovalForPush ?? DEFAULT_MESH_POLICY.requireApprovalForPush;
+
+            let pushResult: Record<string, unknown> | undefined;
+            if (!requireApprovalForPush) {
+                const pushStarted = Date.now();
+                try {
+                    await execFileAsync('git', ['push', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8' });
+                    pushResult = { pushed: true, remote: 'origin', branch: baseBranch, durationMs: Date.now() - pushStarted };
+                    recordMeshRefineStage(refineStages, 'push', 'passed', pushStarted, pushResult);
+                } catch (e: any) {
+                    pushResult = {
+                        pushed: false,
+                        remote: 'origin',
+                        branch: baseBranch,
+                        error: e?.message || String(e),
+                        stderr: e?.stderr,
+                        durationMs: Date.now() - pushStarted,
+                    };
+                    recordMeshRefineStage(refineStages, 'push', 'failed', pushStarted, pushResult);
+                    // DS1: push failed AFTER a good merge. Do NOT clean up — leave the
+                    // worktree + branch ref intact so the coordinator can retry the push.
+                    // Terminal blocked (retryable); the batch counts this as NOT merged.
+                    // The local base HAS the merge commit, so a bare `git push origin
+                    // <base>` from repoRoot converges it; the branch ref is preserved as a
+                    // safety net.
+                    return { kind: 'terminal', result: {
+                        success: false,
+                        code: 'push_failed',
+                        convergenceStatus: 'blocked_review',
+                        retryable: true,
+                        merged: true,
+                        mergedLocal: true,
+                        pushed: false,
+                        error: `Refinery merged '${branch}' into local ${baseBranch} but the push to origin failed; the worktree and branch ref were preserved (NOT cleaned up) so the push can be retried. Run: git -C ${repoRoot} push origin ${baseBranch}`,
+                        branch,
+                        into: baseBranch,
+                        pushResult,
+                        pushCommand: `git push origin ${baseBranch}`,
+                        validationSummary,
+                        patchEquivalence,
+                        submoduleReachability,
+                        submoduleAlignment,
+                        mergeResult,
+                        refineStages,
+                        finalBranchConvergenceState: {
+                            branch: baseBranch,
+                            mergedBranch: branch,
+                            baseBranch,
+                            merged: true,
+                            pushed: false,
+                            removed: false,
+                            validation: 'passed',
+                            patchEquivalence: 'passed',
+                            submoduleAlignment: submoduleAlignment.status,
+                            status: 'merged_push_failed',
+                            nextStep: `Retry the push (git -C ${repoRoot} push origin ${baseBranch}); then the worktree can be cleaned up.`,
+                        },
+                    } };
+                }
+            } else {
+                // DS1 approval path: the merge is on local base but must NOT be pushed
+                // without approval, and cleanup is WITHHELD until the push is approved and
+                // proven to reach origin (removing the worktree now would drop the branch
+                // ref before the push is authorized). Distinct convergence state so the
+                // batch/coordinator treats it as "landed locally, remote pending" — never
+                // as remote-converged.
+                recordMeshRefineStage(refineStages, 'push', 'skipped', Date.now(), {
+                    reason: 'require_approval_for_push',
+                });
+                return { kind: 'terminal', result: {
+                    success: true,
+                    merged: true,
+                    mergedLocal: true,
+                    pushed: false,
+                    branch,
+                    into: baseBranch,
+                    validationSummary,
+                    patchEquivalence,
+                    submoduleReachability,
+                    submoduleAlignment,
+                    mergeResult,
+                    refineStages,
+                    pushReady: true,
+                    pushCommand: `git push origin ${baseBranch}`,
+                    pushNote: 'requireApprovalForPush is enabled — the merge landed on the local base but was NOT pushed and the worktree was NOT cleaned up. Run the push (or approve it), then re-run refine/cleanup to remove the worktree.',
+                    finalBranchConvergenceState: {
+                        branch: baseBranch,
+                        mergedBranch: branch,
+                        baseBranch,
+                        merged: true,
+                        pushed: false,
+                        removed: false,
+                        validation: 'passed',
+                        patchEquivalence: 'passed',
+                        submoduleAlignment: submoduleAlignment.status,
+                        status: 'merged_local_pending_push',
+                        nextStep: `Approve and run the push (git -C ${repoRoot} push origin ${baseBranch}); the worktree is retained until then.`,
+                    },
+                } };
+            }
+
+            // ── Push succeeded (auto-push path) → now run cleanup ─────────────────
             const cleanupStarted = Date.now();
             // Honor the mesh policy for delegated-session cleanup on the auto-removed
             // worktree node (previously hardcoded to 'preserve', which orphaned the
@@ -1099,10 +1535,10 @@ export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx
                 sessionCleanupMode: refineSessionCleanupMode,
                 ...(refineSessionIds && refineSessionIds.length > 0 ? { sessionIds: refineSessionIds } : {}),
                 inlineMesh: args?.inlineMesh,
-                // REFINE-CLEANUP: refine reaches cleanup only AFTER a verified merge
-                // convergence, so any residual worktree dirtiness here is incidental
-                // (e.g. a bootstrap lockfile rewrite) — never unmerged work. `force`
-                // sets requireClean=false so a plain-dirty worktree no longer aborts
+                // REFINE-CLEANUP: refine reaches cleanup only AFTER a verified merge AND a
+                // successful push (DS1), so any residual worktree dirtiness here is
+                // incidental (e.g. a bootstrap lockfile rewrite) — never unmerged work.
+                // `force` sets requireClean=false so a plain-dirty worktree no longer aborts
                 // removal with merged_cleanup_failed. Branch-ref deletion still keys off
                 // mergeConvergence (NOT the force flag), so no merged work can be lost.
                 force: true,
@@ -1120,7 +1556,7 @@ export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx
                 appendLedgerEntry(meshId, {
                     kind: 'node_removed',
                     nodeId,
-                    payload: { refined: true, mergedBranch: branch, into: baseBranch, validationSummary, patchEquivalence, submoduleReachability, submoduleAlignment },
+                    payload: { refined: true, mergedBranch: branch, into: baseBranch, pushed: true, validationSummary, patchEquivalence, submoduleReachability, submoduleAlignment },
                 });
                 recordMeshRefineStage(refineStages, 'ledger', 'passed', ledgerStarted);
             } catch (e: any) {
@@ -1133,22 +1569,27 @@ export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx
                 mergedBranch: branch,
                 baseBranch,
                 merged: true,
+                pushed: true,
                 removed: removeResult?.success !== false,
                 validation: 'passed',
                 patchEquivalence: 'passed',
                 submoduleAlignment: submoduleAlignment.status,
-                status: removeResult?.success === false ? 'merged_cleanup_failed' : 'merged',
+                status: removeResult?.success === false ? 'merged_cleanup_failed' : 'merged_pushed',
             };
 
             if (removeResult?.success === false) {
+                // Push already succeeded — the change IS on origin; only the local worktree
+                // cleanup failed. Report cleanup_failed but note remote convergence is done.
                 return { kind: 'terminal', result: {
                     success: false,
                     code: 'cleanup_failed',
-                    error: 'Refinery merge completed but worktree cleanup failed; manual cleanup/retry is required.',
+                    error: 'Refinery merge + push completed but worktree cleanup failed; the change is on origin — manual worktree cleanup/retry is required.',
                     merged: true,
+                    pushed: true,
                     branch,
                     into: baseBranch,
                     removeResult,
+                    pushResult,
                     validationSummary,
                     patchEquivalence,
                     submoduleReachability,
@@ -1160,29 +1601,19 @@ export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx
                 } };
             }
 
-            // Push logic: after a successful merge, either auto-push or surface push info
-            // so coordinators don't need manual discovery after each refine.
-            const requireApprovalForPush: boolean = (mesh as any)?.policy?.requireApprovalForPush ?? DEFAULT_MESH_POLICY.requireApprovalForPush;
-            let pushResult: Record<string, unknown> | undefined;
-            if (!requireApprovalForPush) {
-                const pushStarted = Date.now();
-                try {
-                    await execFileAsync('git', ['push', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8' });
-                    pushResult = { pushed: true, remote: 'origin', branch: baseBranch, durationMs: Date.now() - pushStarted };
-                    recordMeshRefineStage(refineStages, 'push', 'passed', pushStarted, pushResult);
-                    finalBranchConvergenceState.status = 'merged_pushed';
-                } catch (e: any) {
-                    pushResult = {
-                        pushed: false,
-                        remote: 'origin',
-                        branch: baseBranch,
-                        error: e?.message || String(e),
-                        stderr: e?.stderr,
-                        durationMs: Date.now() - pushStarted,
-                    };
-                    recordMeshRefineStage(refineStages, 'push', 'failed', pushStarted, pushResult);
+            // DS3: the push advanced origin/<baseBranch>. Request a guarded catch-up so the
+            // originating coordinator daemon's own local base checkout fast-forwards to the
+            // pushed commit (never auto-rebase; a diverged coordinator gets a structured
+            // blocker instead). Best-effort — a catch-up failure never fails the refine.
+            let coordinatorCatchup: Record<string, unknown> | undefined;
+            try {
+                coordinatorCatchup = await requestCoordinatorLocalCatchup(self, {
+                    meshId, ctx, mesh, baseBranch, repoRoot,
+                });
+                if (coordinatorCatchup) {
+                    recordMeshRefineStage(refineStages, 'coordinator_catchup', 'passed', Date.now(), coordinatorCatchup);
                 }
-            }
+            } catch { /* catch-up is advisory; never gate refine success on it */ }
 
             // QW5: promote the worktree-cleanup warnings from inside removeResult to the
             // top level so a coordinator sees them without descending into removeResult:
@@ -1201,9 +1632,12 @@ export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx
             return { kind: 'terminal', result: {
                 success: true,
                 merged: true,
+                pushed: true,
                 branch,
                 into: baseBranch,
                 removeResult,
+                pushResult,
+                ...(coordinatorCatchup ? { coordinatorCatchup } : {}),
                 ...(cleanupBranchRefWarning ? { branchRefWarning: cleanupBranchRefWarning } : {}),
                 ...(cleanupResidueWarning ? { residueWarning: cleanupResidueWarning } : {}),
                 ...(cleanupBranchRefDeleted !== undefined ? { branchRefDeleted: cleanupBranchRefDeleted } : {}),
@@ -1215,14 +1649,6 @@ export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx
                 refineStages,
                 ...(ledgerError ? { ledgerError } : {}),
                 finalBranchConvergenceState,
-                // Push outcome or readiness info for coordinator.
-                ...(pushResult
-                    ? { pushResult }
-                    : {
-                        pushReady: true,
-                        pushCommand: `git push origin ${baseBranch}`,
-                        pushNote: 'requireApprovalForPush is enabled — run the push command or obtain user approval before pushing.',
-                    }),
             } };
     }
 
@@ -1412,8 +1838,15 @@ export type BatchNodeConvergence = 'merged_to_main' | 'blocked_review' | 'skippe
  *     were ever dropped. (A rebase conflict fails at patch_equivalence_after_auto_rebase,
  *     NOT merge, so it correctly stays blocked_review.)
  *   everything else that failed                   → blocked_review.
+ *
+ * DS2: `retryable` is set for a base-movement family blocker (base_moved / base_locked)
+ * — the node did NOT converge because the base advanced or was locked WHILE it ran, not
+ * because of its own content. The batch gives ONLY these a second pass (they may succeed
+ * once the base settles / the lease frees); a real conflict is never retried.
  */
-export function classifyBatchNodeConvergence(result: Record<string, unknown>): { convergence: BatchNodeConvergence; code: string; stage?: string } {
+const RETRYABLE_BASE_MOVEMENT_CODES = new Set(['base_moved', 'base_locked']);
+
+export function classifyBatchNodeConvergence(result: Record<string, unknown>): { convergence: BatchNodeConvergence; code: string; stage?: string; retryable: boolean } {
     const code = typeof result.code === 'string' ? result.code : '';
     // The last failed refine stage (undefined on success). Computed BEFORE the
     // classification so it can back-stop the code-based verdict.
@@ -1430,7 +1863,11 @@ export function classifyBatchNodeConvergence(result: Record<string, unknown>): {
     } else {
         convergence = 'blocked_review';
     }
-    return { convergence, code, ...(stage ? { stage } : {}) };
+    // Retryable only for a base-movement blocker that left the node blocked_review — a
+    // not_mergeable conflict is never retried.
+    const retryable = convergence === 'blocked_review'
+        && (result.retryable === true || RETRYABLE_BASE_MOVEMENT_CODES.has(code));
+    return { convergence, code, retryable, ...(stage ? { stage } : {}) };
 }
 
     /**
@@ -1455,21 +1892,22 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
             reason?: string;
             stage?: string;
             error?: string;
+            retryable?: boolean;
+            retried?: boolean;
             finalBranchConvergenceState?: Record<string, unknown>;
         };
-        const results: BatchNodeOutcome[] = [];
-        for (const node of orderedNodes) {
+        const refineOne = async (node: any): Promise<BatchNodeOutcome> => {
             let result: Record<string, unknown>;
             try {
                 result = await executeMeshRefineNodeSynchronously(self, meshId, node.id, args) as Record<string, unknown>;
             } catch (e: any) {
                 result = { success: false, error: e?.message || String(e) };
             }
-            const { convergence, code, stage } = classifyBatchNodeConvergence(result);
+            const { convergence, code, stage, retryable } = classifyBatchNodeConvergence(result);
             const fbcs = (result.finalBranchConvergenceState && typeof result.finalBranchConvergenceState === 'object')
                 ? result.finalBranchConvergenceState as Record<string, unknown>
                 : undefined;
-            results.push({
+            return {
                 nodeId: node.id,
                 workspace: node.workspace,
                 convergence,
@@ -1477,8 +1915,29 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
                 ...(typeof result.blockedReason === 'string' ? { reason: result.blockedReason } : {}),
                 ...(stage ? { stage } : {}),
                 ...(typeof result.error === 'string' ? { error: result.error } : {}),
+                ...(retryable ? { retryable: true } : {}),
                 ...(fbcs ? { finalBranchConvergenceState: fbcs } : {}),
-            });
+            };
+        };
+
+        const results: BatchNodeOutcome[] = [];
+        const retryQueue: any[] = [];
+        for (const node of orderedNodes) {
+            const outcome = await refineOne(node);
+            results.push(outcome);
+            // DS2: a base-movement blocker (base_moved / base_locked) did not converge for a
+            // reason the earlier merges in THIS batch may have caused (base advanced / lease
+            // held). Defer it to a single second pass AFTER the first pass finishes, when the
+            // base has settled — but never retry a real conflict.
+            if (outcome.retryable) retryQueue.push(node);
+        }
+
+        // ── DS2 second pass: retry ONLY the base-movement retryable nodes, once ─────
+        for (const node of retryQueue) {
+            const idx = results.findIndex(r => r.nodeId === node.id);
+            const retried = await refineOne(node);
+            retried.retried = true;
+            if (idx >= 0) results[idx] = retried; else results.push(retried);
         }
 
         const summary = {
@@ -1486,6 +1945,7 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
             skipped: results.filter(r => r.convergence === 'skipped_patch_equivalent').length,
             blocked: results.filter(r => r.convergence === 'blocked_review').length,
             notMergeable: results.filter(r => r.convergence === 'not_mergeable').length,
+            ...(retryQueue.length ? { retried: retryQueue.length } : {}),
         };
         const allConverged = summary.blocked === 0 && summary.notMergeable === 0;
         return {

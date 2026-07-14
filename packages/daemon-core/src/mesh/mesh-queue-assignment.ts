@@ -15,12 +15,12 @@ import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
 import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
-import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable } from './mesh-node-identity.js';
-import { queuePendingMeshCoordinatorEvent, retractPendingDispatchBlockedEvent } from './mesh-events-pending.js';
+import { queuePendingMeshCoordinatorEvent, retractPendingDispatchBlockedEvent, drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
 import { isWorktreeBootstrapStaleRunning, shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
 import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
@@ -2743,6 +2743,68 @@ export async function runContinuousAutoFastForwardScan(components: DaemonCompone
         if (now - lastScan < CONTINUOUS_AUTO_FAST_FORWARD_SCAN_COOLDOWN_MS) continue;
         continuousAutoFastForwardLastScan.set(cooldownKey, now);
         await delegateRemoteAutoFastForward(components, { meshId, nodeId, node, daemonId, workspace, policy, trigger: 'reconcile_auto' });
+    }
+}
+
+/**
+ * DS3: drain and act on `coordinator_catchup` markers queued by a remote node's Refinery
+ * after it pushed the base branch to origin. The originating coordinator is THIS daemon;
+ * its local base checkout is now behind origin. Bring it up to date with a guarded ff-only
+ * merge — but ONLY when the coordinator base node has no active mesh work (busy → leave the
+ * marker for the next idle tick) and fastForwardMeshNode's own clean/ahead=0/behind>0 gate
+ * is satisfied (ahead/diverged/dirty → it returns a structured block, never a rebase).
+ *
+ * These markers are drained on a DEDICATED event-name filter so they never reach the
+ * coordinator chat-injection path (they are actions, not messages). A busy/blocked node
+ * re-queues the marker so a later idle tick retries; a successful/no-op ff consumes it.
+ */
+export async function runPendingCoordinatorCatchupScan(components: DaemonComponents, mesh: any): Promise<void> {
+    const meshId = readNonEmptyString(mesh?.id);
+    if (!meshId) return;
+    const localIds = expandDaemonIdForms([
+        readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId),
+        readNonEmptyString(loadConfig().machineId),
+    ]);
+    let markers: Awaited<ReturnType<typeof drainPendingMeshCoordinatorEvents>> = [];
+    try {
+        markers = drainPendingMeshCoordinatorEvents(
+            meshId,
+            localIds.length > 0 ? localIds : undefined,
+            { onlyEvents: new Set(['coordinator_catchup']) },
+        );
+    } catch (e: any) {
+        LOG.warn('MeshReconcile', `Coordinator-catchup drain failed for mesh ${meshId}: ${e?.message || e}`);
+        return;
+    }
+    if (markers.length === 0) return;
+    const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
+    for (const marker of markers) {
+        const meta = (marker.metadataEvent || {}) as Record<string, unknown>;
+        const nodeId = readNonEmptyString(marker.nodeId) || readNonEmptyString(meta.nodeId as string);
+        const workspace = readNonEmptyString(marker.workspace) || readNonEmptyString(meta.workspace as string);
+        const baseBranch = readNonEmptyString(meta.baseBranch as string);
+        if (!workspace) continue;
+        // Busy node → re-queue and defer to the next idle tick (never advance a base a
+        // session is actively working on).
+        if (nodeId && nodeHasActiveMeshWork(components, meshId, nodeId)) {
+            try { queuePendingMeshCoordinatorEvent(marker); } catch { /* best-effort re-queue */ }
+            continue;
+        }
+        try {
+            const ff = await fastForwardMeshNode({
+                meshId,
+                ...(nodeId ? { nodeId } : {}),
+                workspace,
+                ...(baseBranch ? { branch: baseBranch } : {}),
+                mode: 'merge',
+                execute: true,
+                trigger: 'refine_post_push_catchup',
+                allowAutoPublishSubmoduleMainCommits: mesh?.policy?.allowAutoPublishSubmoduleMainCommits === true,
+            });
+            LOG.info('MeshReconcile', `Coordinator catch-up ff for ${meshId}/${nodeId || workspace}: ${ff.code} (executed=${ff.executed})`);
+        } catch (e: any) {
+            LOG.warn('MeshReconcile', `Coordinator catch-up ff failed for ${meshId}/${nodeId || workspace}: ${e?.message || e}`);
+        }
     }
 }
 

@@ -316,6 +316,15 @@ export class DaemonCommandRouter {
     runningRefineBatchJobs = new Map<string, MeshRefineBatchJobHandle>();
     /** Terminal async batch Refinery jobs preserve the last batch outcome for late readers. */
     terminalRefineBatchJobs = new Map<string, MeshRefineBatchTerminalJob>();
+    /**
+     * DS2: in-process refinement leases keyed by `${repoRoot}::${baseBranch}`. Serialize
+     * the base-mutating window (candidate-SHA pin → merge → push) of concurrent single-node
+     * refines that target the SAME base branch in the same repo, so two refines cannot both
+     * validate against one baseHead and then race their merges (the base-movement race). The
+     * batch path is already sequential, so this only matters for overlapping single-node
+     * async jobs. Value = the meshId:nodeId job key holding the lease (for diagnostics).
+     */
+    refineBaseLeases = new Map<string, string>();
 
     constructor(deps: CommandRouterDeps) {
         this.deps = deps;
