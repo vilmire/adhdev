@@ -5,7 +5,7 @@
  */
 import { useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { AppShell, type AppShellNavItem, IconDashboard, IconServer, IconInfo, IconSettings, IconBook, IconPlug } from '@adhdev/web-core'
+import { AppShell, type AppShellNavItem, IconDashboard, IconServer, IconInfo, IconSettings, IconBook, IconMesh } from '@adhdev/web-core'
 
 interface LayoutProps {
     children: React.ReactNode
@@ -14,7 +14,7 @@ interface LayoutProps {
 const NAV_ITEMS = [
     { id: 'dashboard', path: '/dashboard', icon: <IconDashboard />, label: 'Dashboard' },
     { id: 'machine', path: '/machines', icon: <IconServer />, label: 'Burrow' },
-    { id: 'mesh', path: '/mesh', icon: <IconPlug />, label: 'Mesh' },
+    { id: 'mesh', path: '/mesh', icon: <IconMesh />, label: 'Mesh' },
     { id: 'settings', path: '/settings', icon: <IconSettings />, label: 'Settings' },
 ]
 

@@ -424,7 +424,9 @@ export function MeshNodeList({
                                         className={`transition-colors bg-transparent border-none cursor-pointer ${features.addNodeDaemonPicker ? 'btn btn-sm text-text-muted hover:text-red-400' : 'text-text-muted hover:text-red-400'}`}
                                         onClick={e => { e.stopPropagation(); onRemoveNode(node.id) }}
                                         title="Remove node">
-                                        {features.addNodeDaemonPicker ? <IconTrash size={14} /> : <IconX size={14} />}
+                                        {/* Both modes use the trash icon — standalone (addNodeDaemonPicker=false)
+                                            previously showed IconX; unified with cloud per the icon-consistency pass. */}
+                                        <IconTrash size={14} />
                                     </button>
                                 </div>
 
