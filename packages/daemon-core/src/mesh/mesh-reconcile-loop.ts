@@ -61,7 +61,7 @@ import { readNonEmptyString, readMeshCompletionSummary, buildMeshSystemMessage }
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { expandDaemonIdForms, daemonIdsEquivalent, sessionIdsEquivalent, meshNodeIdMatches, withStatusProbeMarker } from '@adhdev/mesh-shared';
 import { getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-work-queue.js';
-import { resolveSessionBusyVerdict } from './mesh-queue-assignment.js';
+import { resolveSessionBusyVerdict, runContinuousAutoFastForwardScan } from './mesh-queue-assignment.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerEntry } from './mesh-ledger.js';
 import { findTerminalLedgerEvidenceForTask } from './mesh-events-stale.js';
@@ -1078,6 +1078,26 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                 reconcileZombieAssignedTasks(components, mesh, selfIds);
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Assigned-zombie sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
+        }
+    }
+
+    // ── PHASE 2.7: continuous remote auto fast-forward (opt-in, default OFF) ────
+    // mode:"continuous" + remoteNodes:true only. Catch up an online/clean/behind
+    // REMOTE base node that emits no fresh idle edge (e.g. a long-idle base node while
+    // upstream advanced). Runs BEFORE PHASE 3's queue claim so a node it advances is
+    // caught up before any new task is dispatched onto it. Cloud-only (dispatchMeshCommand);
+    // a per-node cooldown + workspace lease inside the scan keep the 4s cadence from
+    // hammering peers. No-op for every mesh that has not opted into continuous mode, so
+    // the default (idle-edge only) path is byte-for-byte unchanged.
+    if (dispatchMeshCommand) {
+        for (const mesh of listMeshes()) {
+            const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+            if (!daemonHostsMesh(mesh, selfIds)) continue;
+            try {
+                await runContinuousAutoFastForwardScan(components, mesh);
+            } catch (e: any) {
+                LOG.warn('MeshReconcile', `Continuous auto fast-forward scan failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
         }
     }

@@ -504,6 +504,45 @@ export function MeshDetailView({
                         </FormField>
                     ))}
                 </div>
+                {(() => {
+                    // Auto fast-forward is a NESTED policy object (autoFastForward.*), so its
+                    // toggles patch the whole sub-object (spread current + the changed field)
+                    // rather than a flat policy key. Defaults mirror the daemon normalizer:
+                    // enabled=true, remoteNodes=false, mode='idle'.
+                    const aff = (policy.autoFastForward && typeof policy.autoFastForward === 'object' ? policy.autoFastForward : {}) as {
+                        enabled?: boolean; remoteNodes?: boolean; mode?: string;
+                    };
+                    const affEnabled = aff.enabled !== false;
+                    const affRemote = aff.remoteNodes === true;
+                    const affMode = aff.mode === 'continuous' ? 'continuous' : 'idle';
+                    const patchAff = (change: Record<string, unknown>) =>
+                        onUpdatePolicy({ autoFastForward: { ...aff, ...change } });
+                    return (
+                        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                            <FormField label="Auto fast-forward idle nodes">
+                                <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                                    value={affEnabled ? 'enabled' : 'disabled'} onChange={e => patchAff({ enabled: e.target.value === 'enabled' })} disabled={savingPolicy}>
+                                    <option value="enabled">Enabled (catch up online, clean, behind nodes)</option>
+                                    <option value="disabled">Disabled</option>
+                                </select>
+                            </FormField>
+                            <FormField label="Include remote nodes" hint="Off = only the coordinator's local workspace is auto fast-forwarded.">
+                                <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                                    value={affRemote ? 'yes' : 'no'} onChange={e => patchAff({ remoteNodes: e.target.value === 'yes' })} disabled={savingPolicy || !affEnabled}>
+                                    <option value="no">No (local workspace only)</option>
+                                    <option value="yes">Yes (delegate to remote owning daemons)</option>
+                                </select>
+                            </FormField>
+                            <FormField label="Detection mode" hint="Idle = on a node's idle edge. Continuous = also scan periodically (base nodes only).">
+                                <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                                    value={affMode} onChange={e => patchAff({ mode: e.target.value === 'continuous' ? 'continuous' : 'idle' })} disabled={savingPolicy || !affEnabled || !affRemote}>
+                                    <option value="idle">Idle edge only</option>
+                                    <option value="continuous">Continuous (periodic scan)</option>
+                                </select>
+                            </FormField>
+                        </div>
+                    );
+                })()}
                 <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-4">
                     <FormField label="When removing a node, its sessions…" hint="Separate transcript cleanup from runtime/process cleanup.">
                         <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"

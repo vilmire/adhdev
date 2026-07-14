@@ -161,6 +161,35 @@ describe('mesh-json-config — operating notes merge (ledger wins)', () => {
     });
 });
 
+describe('mergeAndNormalizePolicy — autoFastForward remoteNodes/mode', () => {
+    it('defaults preserve historical shape (no remoteNodes/mode keys emitted)', () => {
+        const policy = mergeAndNormalizePolicy(undefined, undefined);
+        expect(policy.autoFastForward).toEqual({ enabled: true, requireCleanSubmodules: true });
+        expect(policy.autoFastForward).not.toHaveProperty('remoteNodes');
+        expect(policy.autoFastForward).not.toHaveProperty('mode');
+    });
+
+    it('emits remoteNodes only when explicitly true', () => {
+        expect(mergeAndNormalizePolicy(undefined, { autoFastForward: { enabled: true, remoteNodes: false } as any }).autoFastForward)
+            .not.toHaveProperty('remoteNodes');
+        expect(mergeAndNormalizePolicy(undefined, { autoFastForward: { enabled: true, remoteNodes: true } as any }).autoFastForward)
+            .toMatchObject({ remoteNodes: true });
+    });
+
+    it('emits mode only when continuous; idle stays the implicit default', () => {
+        expect(mergeAndNormalizePolicy(undefined, { autoFastForward: { enabled: true, mode: 'idle' } as any }).autoFastForward)
+            .not.toHaveProperty('mode');
+        expect(mergeAndNormalizePolicy(undefined, { autoFastForward: { enabled: true, mode: 'continuous' } as any }).autoFastForward)
+            .toMatchObject({ mode: 'continuous' });
+    });
+
+    it('layers a patch over an existing autoFastForward base (remoteNodes carried, mode added)', () => {
+        const base = mergeAndNormalizePolicy(undefined, { autoFastForward: { enabled: true, remoteNodes: true } as any });
+        const merged = mergeAndNormalizePolicy(base, { autoFastForward: { mode: 'continuous' } as any });
+        expect(merged.autoFastForward).toMatchObject({ enabled: true, remoteNodes: true, mode: 'continuous' });
+    });
+});
+
 describe('mesh-json-config — applyRepoMeshConfig (coordinator-only)', () => {
     it('layers the repo coordinator zone under local without mutating inputs; policy untouched', () => {
         const mesh = {

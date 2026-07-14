@@ -278,6 +278,25 @@ export interface RepoMeshAutoFastForwardPolicy {
     maxBehind?: number;
     /** Defaults to true. Require submodule status to be clean before automatic fast-forward. */
     requireCleanSubmodules?: boolean;
+    /**
+     * Opt-in: extend auto fast-forward to REMOTE owning-daemon nodes (not just the
+     * coordinator's local workspace). Defaults to **false** so the historical
+     * self-only behavior is preserved byte-for-byte. When true, the coordinator
+     * delegates the ff to the node's owning daemon via dispatchMeshCommand
+     * (fast_forward_mesh_node), which runs the same git safety gates on the machine
+     * that actually holds the workspace.
+     */
+    remoteNodes?: boolean;
+    /**
+     * When to run remote auto fast-forward detection. Defaults to **"idle"** — the
+     * historical behavior where the ff is only attempted on a node's idle edge
+     * (agent:ready / genuine generating_completed). "continuous" adds a periodic
+     * scan inside the reconcile tick so an online/clean/behind remote node is caught
+     * up even when it emits no fresh idle edge (e.g. a base node that has been idle
+     * for a while while upstream advanced). Only governs remote-node detection;
+     * local idle-edge ff is unchanged either way.
+     */
+    mode?: 'idle' | 'continuous';
 }
 
 export interface RepoMeshPolicy {
@@ -625,10 +644,16 @@ export function normalizeAutoFastForwardPolicy(value: unknown): NonNullable<Repo
         ? value as Record<string, unknown>
         : {};
     const maxBehind = Number(record.maxBehind);
+    // Persistence economy: remoteNodes is emitted only when explicitly true and mode
+    // only when explicitly 'continuous', so an untouched autoFastForward stays
+    // byte-for-byte { enabled, requireCleanSubmodules, [maxBehind] } — the historical
+    // self-only / idle-edge default shape.
     return {
         enabled: record.enabled !== false,
         ...(Number.isFinite(maxBehind) && maxBehind >= 0 ? { maxBehind: Math.floor(maxBehind) } : {}),
         requireCleanSubmodules: record.requireCleanSubmodules !== false,
+        ...(record.remoteNodes === true ? { remoteNodes: true } : {}),
+        ...(record.mode === 'continuous' ? { mode: 'continuous' as const } : {}),
     };
 }
 
