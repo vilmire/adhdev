@@ -16,7 +16,7 @@ import { getGitRepoStatus } from '../git/git-status.js';
 import type { ChangedPackageClassification } from '../git/git-status.js';
 import * as yaml from 'js-yaml';
 import { loadMeshRefineConfig, resolveMeshRefineValidationPlan } from '../mesh/refine-config.js';
-import type { MeshRefineValidationCommandPlan } from '../mesh/refine-config.js';
+import type { MeshRefineValidationCommandPlan, MeshRefineValidationScope } from '../mesh/refine-config.js';
 import { evaluateWorktreeBootstrapState, loadMeshWorktreeBootstrapConfig, runMeshWorktreeBootstrap, resolveSubmoduleDefaultBranch } from '../mesh/worktree-bootstrap-config.js';
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { basename as pathBasename, join as pathJoin, resolve as pathResolve } from 'path';
@@ -85,8 +85,12 @@ type MeshRefineValidationSummary = {
     changeImpact?: {
         isDaemonAffecting: boolean;
         affectedPackages: string[];
+        /** DOCS-ROOT: three-way change area ('none' | 'web' | 'daemon') when known. */
+        changeArea?: MeshRefineValidationScope;
         /** displayCommands skipped because the daemon scope is unaffected. */
         skippedDaemonCommands?: string[];
+        /** DOCS-ROOT: displayCommands skipped because the change-area scope excluded them. */
+        skippedScopeCommands?: string[];
     };
 };
 
@@ -1474,6 +1478,9 @@ export function buildMeshRefineValidationPlan(mesh: any, workspace: string): Rec
         source: command.source,
         cwd: command.cwd,
         timeoutMs: command.timeoutMs,
+        // DOCS-ROOT: surface the change-impact scopes so `mesh_refine_config` shows which
+        // area(s) each command runs in (absent → every area).
+        ...(command.scopes ? { scopes: command.scopes } : {}),
     });
     return {
         source: plan.source,
@@ -1633,9 +1640,48 @@ export async function runMeshRefineValidationGate(
     };
 
     const scopeUnaffectedDaemon = opts?.changeImpact?.isDaemonAffecting === false;
+    // DOCS-ROOT: the branch's three-way change area ('none' | 'web' | 'daemon'), when
+    // known. `none` (docs-only) is the case this scoping exists for: a docs-only branch
+    // must skip every code validation command and run ONLY commands explicitly scoped
+    // ['none'] (e.g. a light docs:verify profile). Fail-open: an unknown change area
+    // (changeImpact undefined) leaves changeArea undefined → no scope filtering, the full
+    // command set runs exactly as before.
+    const changeArea: MeshRefineValidationScope | undefined = opts?.changeImpact?.changeArea;
+    // A command runs in the current change area when: the branch area is unknown (run
+    // everything), OR the command declared no scopes (runs everywhere), OR the command's
+    // scopes include the current area. When the branch is docs-only ('none'), an
+    // un-scoped command does NOT run — only commands that explicitly opted into 'none'.
+    const commandRunsInArea = (candidate: MeshRefineValidationCommand): boolean => {
+        if (!changeArea) return true; // fail-open on unknown area
+        const scopes = candidate.scopes;
+        if (scopes && scopes.length) return scopes.includes(changeArea);
+        // Un-scoped command: runs in web/daemon (code areas) but NOT on a docs-only
+        // branch — there is nothing for a code command to validate when only docs changed.
+        return changeArea !== 'none';
+    };
     const skippedDaemonCommands: string[] = [];
+    const skippedScopeCommands: string[] = [];
     const commandsToRun: MeshRefineValidationCommand[] = [];
     for (const candidate of selection.commands) {
+        // DOCS-ROOT scope filter runs first: it is the explicit, config-declared signal
+        // and supersedes the coarse daemon heuristic. A command excluded by change-area
+        // scope is recorded skipped with `unaffected_change_scope`.
+        if (!commandRunsInArea(candidate)) {
+            skippedScopeCommands.push(candidate.displayCommand);
+            summary.commandsRun.push({
+                command: candidate.command,
+                args: candidate.args,
+                displayCommand: candidate.displayCommand,
+                category: candidate.category,
+                source: candidate.source,
+                passed: true,
+                skipped: true,
+                skipReason: 'unaffected_change_scope',
+                changeArea,
+                ...(candidate.scopes ? { scopes: candidate.scopes } : {}),
+            });
+            continue;
+        }
         if (scopeUnaffectedDaemon && isDaemonScopedCommand(candidate)) {
             skippedDaemonCommands.push(candidate.displayCommand);
             // Record the skip so it's visible in the summary, never silently dropped.
@@ -1657,7 +1703,9 @@ export async function runMeshRefineValidationGate(
         summary.changeImpact = {
             isDaemonAffecting: opts.changeImpact.isDaemonAffecting,
             affectedPackages: opts.changeImpact.affectedPackages,
+            ...(changeArea ? { changeArea } : {}),
             ...(skippedDaemonCommands.length ? { skippedDaemonCommands } : {}),
+            ...(skippedScopeCommands.length ? { skippedScopeCommands } : {}),
         };
     }
 

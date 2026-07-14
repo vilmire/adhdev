@@ -5,6 +5,22 @@ import * as yaml from 'js-yaml';
 export const MESH_REFINE_VALIDATION_CATEGORIES = ['typecheck', 'test', 'lint', 'build'] as const;
 export type MeshRefineValidationCategory = typeof MESH_REFINE_VALIDATION_CATEGORIES[number];
 
+/**
+ * DOCS-ROOT: change-impact scope for a validation command. Mirrors ChangeImpactKind
+ * (git-status) so a command can declare WHICH change areas it should run in:
+ *   'daemon' — run when a daemon-runtime package changed,
+ *   'web'    — run when a web package changed,
+ *   'none'   — run when ONLY docs/markers changed (a docs-only branch).
+ * A command with NO `scopes` runs in every area (backward-compatible: the full set
+ * runs as before). This lets a repo declare a light docs-only profile — e.g. a
+ * `docs:verify` command scoped `['none']` — that runs on a docs-only branch while the
+ * heavy typecheck/test commands (implicitly all-areas, or scoped ['web','daemon'])
+ * are skipped. The scoping is applied only when the branch's changeArea is known;
+ * fail-open (unknown change area → every command runs).
+ */
+export const MESH_REFINE_VALIDATION_SCOPES = ['none', 'web', 'daemon'] as const;
+export type MeshRefineValidationScope = typeof MESH_REFINE_VALIDATION_SCOPES[number];
+
 export interface RepoMeshRefineValidationCommandConfig {
     /** Executable name or a whitespace-tokenized command string. Never executed through a shell. */
     command: string;
@@ -15,6 +31,12 @@ export interface RepoMeshRefineValidationCommandConfig {
     timeoutMs?: number;
     outputLimitBytes?: number;
     env?: Record<string, string>;
+    /**
+     * DOCS-ROOT: change-impact scopes this command runs in ('none' | 'web' | 'daemon').
+     * Omitted → runs in every area (backward-compatible). Empty array is treated the
+     * same as omitted (runs everywhere) rather than "runs nowhere".
+     */
+    scopes?: MeshRefineValidationScope[];
 }
 
 export interface RepoMeshRefineConfig {
@@ -57,6 +79,8 @@ export interface MeshRefineValidationCommandPlan {
     timeoutMs?: number;
     outputLimitBytes?: number;
     env?: Record<string, string>;
+    /** DOCS-ROOT: normalized change-impact scopes; absent → runs in every area. */
+    scopes?: MeshRefineValidationScope[];
 }
 
 export interface MeshRefineConfigLoadResult {
@@ -133,6 +157,11 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
                             timeoutMs: { type: 'number', minimum: 1000, maximum: 600000 },
                             outputLimitBytes: { type: 'number', minimum: 1024, maximum: 1048576 },
                             env: { type: 'object', additionalProperties: { type: 'string' } },
+                            scopes: {
+                                type: 'array',
+                                items: { enum: [...MESH_REFINE_VALIDATION_SCOPES] },
+                                description: "DOCS-ROOT: change-impact scopes this command runs in ('none'=docs-only, 'web', 'daemon'). Omitted/empty → runs in every area.",
+                            },
                         },
                     },
                 },
@@ -152,6 +181,10 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
                             timeoutMs: { type: 'number', minimum: 1000, maximum: 600000 },
                             outputLimitBytes: { type: 'number', minimum: 1024, maximum: 1048576 },
                             env: { type: 'object', additionalProperties: { type: 'string' } },
+                            scopes: {
+                                type: 'array',
+                                items: { enum: [...MESH_REFINE_VALIDATION_SCOPES] },
+                            },
                         },
                     },
                 },
@@ -239,6 +272,16 @@ export function normalizeMeshCommandConfig(entry: unknown, source: string): { co
     if (entry.env !== undefined && (!isMeshConfigRecord(entry.env) || !Object.values(entry.env).every(value => typeof value === 'string'))) {
         return { rejected: { source, command: commandText, reason: 'env must be an object of string values' } };
     }
+    // DOCS-ROOT: validate + normalize the optional change-impact scopes.
+    let scopes: MeshRefineValidationScope[] | undefined;
+    if (entry.scopes !== undefined) {
+        if (!Array.isArray(entry.scopes) || !entry.scopes.every(s => (MESH_REFINE_VALIDATION_SCOPES as readonly string[]).includes(s as string))) {
+            return { rejected: { source, command: commandText, reason: `scopes must be an array of ${MESH_REFINE_VALIDATION_SCOPES.join(' | ')}` } };
+        }
+        // De-dupe; an empty array means "no restriction" (runs everywhere), so drop it.
+        const deduped = [...new Set(entry.scopes as MeshRefineValidationScope[])];
+        scopes = deduped.length ? deduped : undefined;
+    }
 
     return {
         command: {
@@ -251,6 +294,7 @@ export function normalizeMeshCommandConfig(entry: unknown, source: string): { co
             ...(typeof entry.timeoutMs === 'number' ? { timeoutMs: entry.timeoutMs } : {}),
             ...(typeof entry.outputLimitBytes === 'number' ? { outputLimitBytes: entry.outputLimitBytes } : {}),
             ...(isMeshConfigRecord(entry.env) ? { env: entry.env as Record<string, string> } : {}),
+            ...(scopes ? { scopes } : {}),
         },
     };
 }

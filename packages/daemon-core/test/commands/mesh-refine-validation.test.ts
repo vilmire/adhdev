@@ -106,8 +106,15 @@ function createMesh(repo: string, worktree: string, nodeId = 'node-worktree', co
 function createWorktreeWithCommit(root: string, repo: string) {
   const worktree = join(root, '.adhdev-worktrees', 'Validation Mesh', 'feat-refine')
   execFileSync('git', ['worktree', 'add', '-q', '-b', 'feat/refine', worktree], { cwd: repo })
+  // DOCS-ROOT: change a daemon-runtime package file (not just README) so the branch
+  // is code-affecting (changeArea 'daemon') and the validation gate actually runs its
+  // commands. A README-only branch is now classified docs-only ('none'), which skips
+  // all un-scoped code validation — these tests exercise validation, so they need a
+  // code change. mkdirSync recursively creates packages/daemon-core/src.
+  mkdirSync(join(worktree, 'packages', 'daemon-core', 'src'), { recursive: true })
+  writeFileSync(join(worktree, 'packages', 'daemon-core', 'src', 'feature.ts'), 'export const feature = 1\n', 'utf-8')
   writeFileSync(join(worktree, 'README.md'), 'base\nfeature\n', 'utf-8')
-  execFileSync('git', ['add', 'README.md'], { cwd: worktree })
+  execFileSync('git', ['add', '.'], { cwd: worktree })
   execFileSync('git', ['commit', '-q', '-m', 'feature change'], { cwd: worktree })
   return worktree
 }
@@ -284,7 +291,20 @@ describe('refine_mesh_node validation gate', () => {
       expect((terminal.payload as any).result.validationSummary.commandsRun[0]).toMatchObject({ command: 'npm', args: ['run', 'test'], exitCode: 7, passed: false })
       expect((terminal.payload as any).result.validationSummary.commandsRun[0].stderr).toContain('validation failed')
       const events = drainPendingMeshCoordinatorEvents(mesh.id)
-      expect(events.some(event => event.event === 'refine:failed' && (event.metadataEvent as any).jobId === result.jobId)).toBe(true)
+      const failedEvent = events.find(event => event.event === 'refine:failed' && (event.metadataEvent as any).jobId === result.jobId)
+      expect(failedEvent).toBeTruthy()
+      // QW2: the slim terminal event carries compact failure diagnostics so the
+      // coordinator can decide next-step without pulling the full ledger record —
+      // the first failing command, its exit code, and a bounded output tail.
+      const slimResult = (failedEvent!.metadataEvent as any).result
+      expect(slimResult).toMatchObject({ code: 'validation_failed', terminalKind: 'validation_failed' })
+      expect(slimResult.validationSummary.failure).toMatchObject({
+        firstFailedCommand: 'npm run test',
+        exitCode: 7,
+      })
+      expect(slimResult.validationSummary.failure.outputTail).toContain('validation failed')
+      // ...and the slim event does NOT carry the heavy per-command detail.
+      expect(slimResult.validationSummary.commandsRun).toBeUndefined()
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
       expect(mesh.nodes.some((node: any) => node.id === 'node-fail')).toBe(true)
     } finally {

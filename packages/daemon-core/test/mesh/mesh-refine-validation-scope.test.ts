@@ -152,4 +152,101 @@ describe('runMeshRefineValidationGate change-impact scoping', () => {
         expect(summary.commandsRun.every((c: any) => !c.skipped)).toBe(true);
         expect(summary.changeImpact).toBeUndefined();
     });
+
+    // ── DOCS-ROOT: change-area (none|web|daemon) scoping ──────────────────────────
+
+    it('DOCS-ROOT: a docs-only branch (changeArea=none) skips every un-scoped code command and runs only the docs-scoped profile', async () => {
+        const ws = workspace({ withNodeModules: true });
+        // Add a docs:verify script scoped to 'none' (docs-only). The code commands carry
+        // no scopes → they run in web/daemon but NOT on a docs-only branch.
+        writeFileSync(join(ws, 'package.json'), JSON.stringify({
+            scripts: {
+                typecheck: 'node ok.js',
+                'test:web-core': 'node ok.js',
+                'docs:verify': 'node ok.js',
+            },
+        }, null, 2), 'utf-8');
+        const mesh = meshWith([
+            { command: 'npm', args: ['run', 'typecheck'], category: 'typecheck' },
+            { command: 'npm', args: ['run', 'test:web-core'], category: 'test' },
+            { command: 'npm', args: ['run', 'docs:verify'], category: 'custom', scopes: ['none'] } as any,
+        ]);
+
+        const summary = await runMeshRefineValidationGate(mesh, ws, {
+            changeImpact: { isDaemonAffecting: false, affectedPackages: [], changeArea: 'none' },
+        });
+
+        expect(summary.status).toBe('passed');
+        const byCommand = new Map(summary.commandsRun.map((c: any) => [c.displayCommand, c]));
+        // The docs-scoped command ran; the two un-scoped code commands were skipped.
+        expect(byCommand.get('npm run docs:verify')).toMatchObject({ passed: true });
+        expect(byCommand.get('npm run docs:verify')?.skipped).toBeUndefined();
+        expect(byCommand.get('npm run typecheck')).toMatchObject({ skipped: true, skipReason: 'unaffected_change_scope', changeArea: 'none' });
+        expect(byCommand.get('npm run test:web-core')).toMatchObject({ skipped: true, skipReason: 'unaffected_change_scope', changeArea: 'none' });
+        expect(summary.changeImpact).toMatchObject({
+            changeArea: 'none',
+            skippedScopeCommands: ['npm run typecheck', 'npm run test:web-core'],
+        });
+    });
+
+    it('DOCS-ROOT: a docs-only branch with no docs-scoped command runs nothing and passes trivially (no code validation)', async () => {
+        const ws = workspace({ withNodeModules: true });
+        const mesh = meshWith([
+            { command: 'npm', args: ['run', 'typecheck'], category: 'typecheck' },
+            { command: 'npm', args: ['run', 'test:web-core'], category: 'test' },
+        ]);
+
+        const summary = await runMeshRefineValidationGate(mesh, ws, {
+            changeImpact: { isDaemonAffecting: false, affectedPackages: [], changeArea: 'none' },
+        });
+
+        // Nothing to validate on a docs-only branch → all commands skipped, gate passes.
+        expect(summary.status).toBe('passed');
+        expect(summary.commandsRun.every((c: any) => c.skipped === true && c.skipReason === 'unaffected_change_scope')).toBe(true);
+    });
+
+    it('DOCS-ROOT: an explicit scope excludes a command on a web branch, and a none-scoped docs command does not run on a web branch', async () => {
+        const ws = workspace({ withNodeModules: true });
+        writeFileSync(join(ws, 'package.json'), JSON.stringify({
+            scripts: {
+                typecheck: 'node ok.js',
+                'docs:verify': 'node ok.js',
+            },
+        }, null, 2), 'utf-8');
+        const mesh = meshWith([
+            // Runs on web + daemon, never docs-only.
+            { command: 'npm', args: ['run', 'typecheck'], category: 'typecheck', scopes: ['web', 'daemon'] } as any,
+            // Docs-only command must NOT run on a web branch.
+            { command: 'npm', args: ['run', 'docs:verify'], category: 'custom', scopes: ['none'] } as any,
+        ]);
+
+        const summary = await runMeshRefineValidationGate(mesh, ws, {
+            changeImpact: { isDaemonAffecting: false, affectedPackages: ['web-core'], changeArea: 'web' },
+        });
+
+        expect(summary.status).toBe('passed');
+        const byCommand = new Map(summary.commandsRun.map((c: any) => [c.displayCommand, c]));
+        expect(byCommand.get('npm run typecheck')).toMatchObject({ passed: true });
+        expect(byCommand.get('npm run typecheck')?.skipped).toBeUndefined();
+        expect(byCommand.get('npm run docs:verify')).toMatchObject({ skipped: true, skipReason: 'unaffected_change_scope', changeArea: 'web' });
+    });
+
+    it('DOCS-ROOT: fail-open — unknown change area (no changeArea) runs the full set even with scopes present', async () => {
+        const ws = workspace({ withNodeModules: true });
+        writeFileSync(join(ws, 'package.json'), JSON.stringify({
+            scripts: { typecheck: 'node ok.js', 'docs:verify': 'node ok.js' },
+        }, null, 2), 'utf-8');
+        const mesh = meshWith([
+            { command: 'npm', args: ['run', 'typecheck'], category: 'typecheck', scopes: ['web', 'daemon'] } as any,
+            { command: 'npm', args: ['run', 'docs:verify'], category: 'custom', scopes: ['none'] } as any,
+        ]);
+
+        // changeImpact provided WITHOUT changeArea → scope filtering is disabled (fail-open).
+        const summary = await runMeshRefineValidationGate(mesh, ws, {
+            changeImpact: { isDaemonAffecting: false, affectedPackages: [] } as any,
+        });
+
+        expect(summary.status).toBe('passed');
+        expect(summary.commandsRun.every((c: any) => !c.skipped)).toBe(true);
+    });
 });

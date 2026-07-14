@@ -1047,6 +1047,8 @@ describe('git repo status parser', () => {
       const result = await classifyChangedPackages(repo, from, to);
       expect(result.isDaemonAffecting).toBe(false);
       expect(result.affectedPackages).toEqual(['web-core']);
+      // DOCS-ROOT: a web-package change is changeArea 'web'.
+      expect(result.changeArea).toBe('web');
     });
 
     it('isDaemonAffecting:true when a daemon-runtime package changed', async () => {
@@ -1057,6 +1059,21 @@ describe('git repo status parser', () => {
       const result = await classifyChangedPackages(repo, from, to);
       expect(result.isDaemonAffecting).toBe(true);
       expect(result.affectedPackages).toContain('daemon-core');
+      // DOCS-ROOT: a daemon-package change is changeArea 'daemon'.
+      expect(result.changeArea).toBe('daemon');
+    });
+
+    it("DOCS-ROOT: changeArea 'none' when only docs / a marker changed (no package touched)", async () => {
+      const { repo, from, to } = seedAndChange('classify-docs-only', (r) => {
+        mkdirSync(join(r, 'docs'), { recursive: true });
+        writeFileSync(join(r, 'docs', 'guide.md'), '# guide\n');
+        writeFileSync(join(r, 'README.md'), 'readme update\n');
+      });
+      const result = await classifyChangedPackages(repo, from, to);
+      // Only benign non-runtime root files changed → no package, no daemon impact.
+      expect(result.isDaemonAffecting).toBe(false);
+      expect(result.affectedPackages).toEqual([]);
+      expect(result.changeArea).toBe('none');
     });
 
     it('isDaemonAffecting:true (fail-safe) for an unlisted / new package', async () => {

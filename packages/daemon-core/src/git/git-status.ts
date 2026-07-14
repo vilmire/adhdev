@@ -443,6 +443,29 @@ function isNonRuntimeRootFile(file: string, policy: ResolvedChangeImpactPolicy):
 export interface ChangedPackageClassification {
   isDaemonAffecting: boolean;
   affectedPackages: string[];
+  /**
+   * DOCS-ROOT: three-way change area, refining the binary isDaemonAffecting so a
+   * docs-only branch is distinguishable from a code (web) branch:
+   *   'daemon' — a daemon-runtime package (or an unknown/ambiguous path) changed;
+   *              full validation + daemon rebuild/restart required.
+   *   'web'    — only web-only packages changed; web validation but no daemon restart.
+   *   'none'   — no package changed at all; every changed file is a benign non-runtime
+   *              root file (docs/markers). No code validation is meaningful — only an
+   *              explicit docs-scoped profile (e.g. docs:verify) should run.
+   * Derived from the same facts as isDaemonAffecting, so it never contradicts it
+   * (changeArea === 'daemon' ⇔ isDaemonAffecting === true).
+   */
+  changeArea: ChangeImpactKind;
+}
+
+/**
+ * Derive the three-way {@link ChangeImpactKind} from the binary daemon verdict and the
+ * affected-package set, using the exact rule the stale-build warning layer already
+ * applies: daemon-affecting → 'daemon'; else any package changed → 'web'; else (only
+ * benign non-runtime files, no package) → 'none'.
+ */
+function deriveChangeArea(isDaemonAffecting: boolean, affectedPackages: string[]): ChangeImpactKind {
+  return isDaemonAffecting ? 'daemon' : affectedPackages.length > 0 ? 'web' : 'none';
 }
 
 /**
@@ -452,7 +475,10 @@ export interface ChangedPackageClassification {
  * gitlinks — a bare submodule path (e.g. `oss`) is runtime-ambiguous from the root's
  * point of view, but its *content* diff may be entirely web-only.
  */
-interface ChangedFileListClassification extends ChangedPackageClassification {
+// Intermediate verdict: carries the binary daemon signal + ambiguous paths, but NOT
+// the derived `changeArea` — that is computed once at the final classifyChangedPackages
+// boundary (`strip` / the submodule folds) so the file-list bucketer stays area-agnostic.
+interface ChangedFileListClassification extends Omit<ChangedPackageClassification, 'changeArea'> {
   /** Non-package paths that were not recognized as benign root files. */
   ambiguousNonPackageFiles: string[];
 }
@@ -517,10 +543,11 @@ async function classifyDaemonBuildChange(
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean);
-    return classifyChangedFileList(files, policy);
+    const { isDaemonAffecting, affectedPackages } = classifyChangedFileList(files, policy);
+    return { isDaemonAffecting, affectedPackages, changeArea: deriveChangeArea(isDaemonAffecting, affectedPackages) };
   } catch {
     // diff probe failed → can't prove web-only; stay conservative.
-    return { isDaemonAffecting: true, affectedPackages: [] };
+    return { isDaemonAffecting: true, affectedPackages: [], changeArea: 'daemon' };
   }
 }
 
@@ -584,7 +611,8 @@ async function refineVerdictThroughSubmodules(
   policy: ResolvedChangeImpactPolicy,
   rootVerdict: ChangedFileListClassification,
 ): Promise<ChangedPackageClassification> {
-  const strip = ({ isDaemonAffecting, affectedPackages }: ChangedPackageClassification) => ({ isDaemonAffecting, affectedPackages });
+  const strip = ({ isDaemonAffecting, affectedPackages }: ChangedFileListClassification): ChangedPackageClassification =>
+    ({ isDaemonAffecting, affectedPackages, changeArea: deriveChangeArea(isDaemonAffecting, affectedPackages) });
   const ambiguous = rootVerdict.ambiguousNonPackageFiles;
   // Fast path: nothing to descend into, or the root is daemon-affecting for a reason
   // other than an ambiguous path (an unknown/daemon package). Submodule descent only
@@ -628,9 +656,11 @@ async function refineVerdictThroughSubmodules(
     if (subVerdict.isDaemonAffecting) {
       // The submodule content really does touch daemon runtime → keep daemon-affecting,
       // surfacing the submodule packages so the reason is visible.
+      const affectedPackages = [...new Set([...rootVerdict.affectedPackages, ...subVerdict.affectedPackages])].sort();
       return {
         isDaemonAffecting: true,
-        affectedPackages: [...new Set([...rootVerdict.affectedPackages, ...subVerdict.affectedPackages])].sort(),
+        affectedPackages,
+        changeArea: deriveChangeArea(true, affectedPackages),
       };
     }
     submoduleAffectedPackages.push(...subVerdict.affectedPackages);
@@ -642,9 +672,11 @@ async function refineVerdictThroughSubmodules(
   const rootPackagesBenign = rootVerdict.affectedPackages.every(
     (p) => policy.webOnlyPackages.has(p) && !policy.daemonRuntimePackages.has(p),
   );
+  const affectedPackages = [...new Set([...rootVerdict.affectedPackages, ...submoduleAffectedPackages])].sort();
   return {
     isDaemonAffecting: !rootPackagesBenign,
-    affectedPackages: [...new Set([...rootVerdict.affectedPackages, ...submoduleAffectedPackages])].sort(),
+    affectedPackages,
+    changeArea: deriveChangeArea(!rootPackagesBenign, affectedPackages),
   };
 }
 
