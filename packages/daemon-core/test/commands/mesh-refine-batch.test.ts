@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { DaemonCommandRouter } from '../../src/commands/router'
 import { orderMeshRefineBatchNodes } from '../../src/mesh/mesh-refine-batch'
 import type { MeshRefineBatchNodeChangeArea } from '../../src/mesh/mesh-refine-batch'
+import { classifyBatchNodeConvergence } from '../../src/commands/router-refine'
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
 import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events'
 
@@ -55,6 +56,68 @@ describe('orderMeshRefineBatchNodes', () => {
     ])
     expect(result.order).toContain('bad')
     expect(result.rationale.join(' ')).toContain('change-area analysis degraded')
+  })
+})
+
+// ── QW4: batch node convergence classification (pure) ──────────────────────
+
+describe('classifyBatchNodeConvergence (QW4)', () => {
+  it('classifies a merge_failed code as not_mergeable (not blocked_review)', () => {
+    const out = classifyBatchNodeConvergence({
+      success: false,
+      code: 'merge_failed',
+      conflictPaths: ['conflict.txt'],
+      refineStages: [
+        { stage: 'validation', status: 'passed' },
+        { stage: 'patch_equivalence', status: 'passed' },
+        { stage: 'merge', status: 'failed' },
+      ],
+    })
+    expect(out.convergence).toBe('not_mergeable')
+    expect(out.code).toBe('merge_failed')
+    expect(out.stage).toBe('merge')
+  })
+
+  it('classifies a failing merge STAGE as not_mergeable even if the code is absent (back-stop)', () => {
+    const out = classifyBatchNodeConvergence({
+      success: false,
+      // no code — only the failing stage identifies the merge failure
+      refineStages: [
+        { stage: 'validation', status: 'passed' },
+        { stage: 'merge', status: 'failed' },
+      ],
+    })
+    expect(out.convergence).toBe('not_mergeable')
+    expect(out.stage).toBe('merge')
+  })
+
+  it('keeps a rebase (patch_equivalence) conflict as blocked_review, NOT not_mergeable', () => {
+    const out = classifyBatchNodeConvergence({
+      success: false,
+      code: 'needs_rebase_with_conflicts',
+      refineStages: [
+        { stage: 'validation', status: 'passed' },
+        { stage: 'patch_equivalence', status: 'failed' },
+        { stage: 'patch_equivalence_after_auto_rebase', status: 'failed' },
+      ],
+    })
+    expect(out.convergence).toBe('blocked_review')
+  })
+
+  it('classifies success as merged_to_main and already_merged-via-other-path as skipped_patch_equivalent', () => {
+    expect(classifyBatchNodeConvergence({ success: true }).convergence).toBe('merged_to_main')
+    expect(classifyBatchNodeConvergence({
+      success: false, code: 'already_merged', alreadyMergedViaOtherPath: true,
+    }).convergence).toBe('skipped_patch_equivalent')
+  })
+
+  it('classifies any other failure (e.g. validation_failed) as blocked_review', () => {
+    const out = classifyBatchNodeConvergence({
+      success: false,
+      code: 'validation_failed',
+      refineStages: [{ stage: 'validation', status: 'failed' }],
+    })
+    expect(out.convergence).toBe('blocked_review')
   })
 })
 

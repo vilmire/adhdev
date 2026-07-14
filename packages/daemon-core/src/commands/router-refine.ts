@@ -83,6 +83,49 @@ export function buildRefineJobHandle(self: DaemonCommandRouter, args: {
     }
 
 /**
+ * QW2: extract a compact failure diagnostic from a validation summary — the first
+ * failing command's name, its exit code, its failureKind, and a bounded output tail.
+ * Surfaced in BOTH the slim coordinator event and the ledger blockerContext so a
+ * coordinator can decide next-step without pulling and parsing the full ledger record.
+ *
+ * A command record carries `passed` (boolean), never `success` (see QW1) — the first
+ * record with passed===false is the gate's failing command. Returns undefined when the
+ * summary did not fail on a command (e.g. bootstrap-stage failure with no commandsRun
+ * entry), in which case the top-level failureCode/failureKind still describe the cause.
+ */
+export function extractValidationFailureDiagnostics(
+    validationSummary: Record<string, unknown> | undefined,
+): { firstFailedCommand?: string; exitCode?: unknown; failureKind?: unknown; outputTail?: string } | undefined {
+    if (!validationSummary || typeof validationSummary !== 'object') return undefined;
+    const commandsRun = Array.isArray(validationSummary.commandsRun)
+        ? (validationSummary.commandsRun as Array<Record<string, unknown>>)
+        : [];
+    const failed = commandsRun.find(c => c.passed === false);
+    const summaryFailureKind = validationSummary.failureKind;
+    if (!failed) {
+        // No per-command failure (bootstrap failure, spawn resolution before any
+        // command ran, etc.) — still surface the summary-level failureKind so the
+        // event isn't blank.
+        return summaryFailureKind !== undefined ? { failureKind: summaryFailureKind } : undefined;
+    }
+    const firstFailedCommand = typeof failed.displayCommand === 'string' ? failed.displayCommand
+        : typeof failed.command === 'string'
+            ? [failed.command, ...(Array.isArray(failed.args) ? failed.args : [])].join(' ').trim()
+            : undefined;
+    const rawOutput = [failed.stderr, failed.stdout, failed.output]
+        .filter(s => typeof s === 'string' && (s as string).length > 0)
+        .join('\n');
+    const outputTail = rawOutput.length > 600 ? rawOutput.slice(-600) : rawOutput;
+    return {
+        ...(firstFailedCommand ? { firstFailedCommand } : {}),
+        ...(failed.exitCode !== undefined ? { exitCode: failed.exitCode } : {}),
+        ...(failed.failureKind !== undefined ? { failureKind: failed.failureKind }
+            : summaryFailureKind !== undefined ? { failureKind: summaryFailureKind } : {}),
+        ...(outputTail ? { outputTail } : {}),
+    };
+}
+
+/**
  * Slim the terminal-stage refine result down to the fields a coordinator needs to
  * decide next-step, dropping the heavy per-command / per-entry detail.
  *
@@ -101,6 +144,8 @@ export function slimRefineEventResult(result: Record<string, unknown>): Record<s
         for (const key of [
             'success', 'code', 'error', 'convergenceStatus', 'blockedReason',
             'branch', 'into', 'terminalKind', 'nextStep', 'finalBranchConvergenceState',
+            // QW4: merge conflict paths; QW5: cleanup branch-ref / residue warnings.
+            'conflictPaths', 'branchRefWarning', 'residueWarning', 'branchRefDeleted',
         ] as const) {
             if (result[key] !== undefined) slim[key] = result[key];
         }
@@ -115,12 +160,20 @@ export function slimRefineEventResult(result: Record<string, unknown>): Record<s
         // suggestions/suggestedConfig detail).
         if (result.validationSummary && typeof result.validationSummary === 'object') {
             const vs = result.validationSummary as Record<string, unknown>;
+            // QW2: attach compact failure diagnostics (first failing command + exit code
+            // + failureKind + bounded output tail) so a coordinator can decide next-step
+            // straight from the event without pulling the full ledger record.
+            const diagnostics = vs.status === 'failed'
+                ? extractValidationFailureDiagnostics(vs)
+                : undefined;
             slim.validationSummary = {
                 status: vs.status,
                 failureCode: vs.failureCode,
+                failureKind: vs.failureKind,
                 configSource: vs.configSource,
                 configSourceType: vs.configSourceType,
                 commandsRunCount: Array.isArray(vs.commandsRun) ? vs.commandsRun.length : undefined,
+                ...(diagnostics ? { failure: diagnostics } : {}),
             };
         }
         // Reduce patch-equivalence to just its verdict.
@@ -445,8 +498,13 @@ export async function refineValidationStage(self: DaemonCommandRouter, ctx: Refi
                 { validationStatus: validationSummary.status, commandsRun: validationSummary.commandsRun.length },
             );
             if (validationSummary.status === 'failed') {
+                // QW1: command records carry `passed` (boolean), NOT `success`. The old
+                // `c.success === false` predicate never matched any entry, so the first
+                // failing command's name/output was always dropped from the error. The
+                // failing command is the one with passed===false (skipped-but-passed=true
+                // entries never fail the gate, so passed===false uniquely identifies it).
                 const firstFailedCmd = Array.isArray(validationSummary.commandsRun)
-                    ? (validationSummary.commandsRun as Array<Record<string, unknown>>).find(c => c.success === false)
+                    ? (validationSummary.commandsRun as Array<Record<string, unknown>>).find(c => c.passed === false)
                     : undefined;
                 const buildValidationFailedError = (): string => {
                     const base = validationSummary.failureCode === 'missing_dependencies'
@@ -905,16 +963,41 @@ export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx
                 };
                 recordMeshRefineStage(refineStages, 'merge', 'passed', mergeStarted, mergeResult);
             } catch (e: any) {
+                // QW4: a `git merge` conflict is a distinct, structured terminal state —
+                // stamp a stable code='merge_failed' (batch keys not_mergeable off it) and
+                // surface the conflicting paths so a coordinator can classify + report
+                // without abort-and-reparse. git writes "CONFLICT (...): Merge conflict in
+                // <path>" to stdout; abort the half-applied merge so the base workspace is
+                // left clean for the next sibling in a batch.
+                const mergeOutput = `${e?.stdout || ''}\n${e?.stderr || ''}`;
+                const conflictPaths = [...mergeOutput.matchAll(/Merge conflict in (.+)/g)]
+                    .map(m => m[1].trim())
+                    .filter(Boolean);
+                try {
+                    await execFileAsync('git', ['merge', '--abort'], { cwd: repoRoot, encoding: 'utf8' });
+                } catch { /* nothing to abort (e.g. merge never started) — best-effort */ }
                 recordMeshRefineStage(refineStages, 'merge', 'failed', mergeStarted, {
                     error: e?.message || String(e),
                     stdout: truncateValidationOutput(e?.stdout),
                     stderr: truncateValidationOutput(e?.stderr),
+                    ...(conflictPaths.length ? { conflictPaths } : {}),
                 });
                 return { kind: 'terminal', result: {
                     success: false,
-                    error: `Merge failed (conflicts?): ${e.message}`,
+                    code: 'merge_failed',
+                    convergenceStatus: 'not_mergeable',
+                    error: conflictPaths.length
+                        ? `Merge failed — conflicts in ${conflictPaths.length} path(s): ${conflictPaths.join(', ')}. The branch cannot fast-forward-merge onto ${baseBranch}; resolve conflicts (rebase the branch onto the fetched base) and retry.`
+                        : `Merge failed (conflicts?): ${e?.message || String(e)}`,
+                    branch,
+                    into: baseBranch,
+                    ...(conflictPaths.length ? { conflictPaths } : {}),
                     validationSummary,
                     patchEquivalence,
+                    mergeResult: {
+                        stdout: truncateValidationOutput(e?.stdout),
+                        stderr: truncateValidationOutput(e?.stderr),
+                    },
                     refineStages,
                     finalBranchConvergenceState: {
                 branch,
@@ -1101,12 +1184,29 @@ export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx
                 }
             }
 
+            // QW5: promote the worktree-cleanup warnings from inside removeResult to the
+            // top level so a coordinator sees them without descending into removeResult:
+            //   branchRefWarning — the feature branch ref was preserved (not merged-proof),
+            //   residueWarning   — the worktree dir couldn't be fully removed,
+            //   branchRefDeleted — whether the branch ref was deleted (from the nested
+            //                      worktreeCleanup record).
+            // All are best-effort/non-gating; refine still reports success:true.
+            const cleanupBranchRefWarning = typeof (removeResult as any)?.branchRefWarning === 'string'
+                ? (removeResult as any).branchRefWarning : undefined;
+            const cleanupResidueWarning = typeof (removeResult as any)?.residueWarning === 'string'
+                ? (removeResult as any).residueWarning : undefined;
+            const cleanupBranchRefDeleted = typeof (removeResult as any)?.worktreeCleanup?.branchRefDeleted === 'boolean'
+                ? (removeResult as any).worktreeCleanup.branchRefDeleted : undefined;
+
             return { kind: 'terminal', result: {
                 success: true,
                 merged: true,
                 branch,
                 into: baseBranch,
                 removeResult,
+                ...(cleanupBranchRefWarning ? { branchRefWarning: cleanupBranchRefWarning } : {}),
+                ...(cleanupResidueWarning ? { residueWarning: cleanupResidueWarning } : {}),
+                ...(cleanupBranchRefDeleted !== undefined ? { branchRefDeleted: cleanupBranchRefDeleted } : {}),
                 validationSummary,
                 patchEquivalence,
                 submoduleReachability,
@@ -1297,6 +1397,42 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
         return runMeshRefineBatchConvergence(self, meshId, orderedNodes, ordering, args);
     }
 
+export type BatchNodeConvergence = 'merged_to_main' | 'blocked_review' | 'skipped_patch_equivalent' | 'not_mergeable';
+
+/**
+ * QW4: classify one node's per-node refine result into a batch convergence bucket.
+ * Pure (a function of the result shape alone) so the not_mergeable-vs-blocked_review
+ * decision is unit-testable without the whole async refine pipeline.
+ *
+ *   already_merged (+ alreadyMergedViaOtherPath) → skipped_patch_equivalent (non-error).
+ *   success                                       → merged_to_main.
+ *   merge_failed code OR the failing stage IS 'merge' → not_mergeable. A real `git merge`
+ *     conflict is a distinct, structured state; classifying on the STAGE as well as the
+ *     code means a merge conflict is never mislabeled blocked_review even if the code
+ *     were ever dropped. (A rebase conflict fails at patch_equivalence_after_auto_rebase,
+ *     NOT merge, so it correctly stays blocked_review.)
+ *   everything else that failed                   → blocked_review.
+ */
+export function classifyBatchNodeConvergence(result: Record<string, unknown>): { convergence: BatchNodeConvergence; code: string; stage?: string } {
+    const code = typeof result.code === 'string' ? result.code : '';
+    // The last failed refine stage (undefined on success). Computed BEFORE the
+    // classification so it can back-stop the code-based verdict.
+    const stage = Array.isArray(result.refineStages)
+        ? (result.refineStages as Array<Record<string, unknown>>).filter(s => s.status === 'failed').map(s => s.stage).filter(Boolean).pop() as string | undefined
+        : undefined;
+    let convergence: BatchNodeConvergence;
+    if (code === 'already_merged' && result.alreadyMergedViaOtherPath) {
+        convergence = 'skipped_patch_equivalent';
+    } else if (result.success === true) {
+        convergence = 'merged_to_main';
+    } else if (code === 'merge_failed' || stage === 'merge') {
+        convergence = 'not_mergeable';
+    } else {
+        convergence = 'blocked_review';
+    }
+    return { convergence, code, ...(stage ? { stage } : {}) };
+}
+
     /**
      * Convergence core shared by the synchronous batch entry and the async batch job.
      * Refines each node in order: the per-node refine pipeline fetches origin/<base>
@@ -1305,7 +1441,7 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
      * continues with the remaining nodes. Does NOT touch the per-node merge logic — it
      * only sequences calls to executeMeshRefineNodeSynchronously and aggregates outcomes.
      */
-export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter, 
+export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
         meshId: string,
         orderedNodes: any[],
         ordering: { order: string[]; rationale?: unknown },
@@ -1314,7 +1450,7 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
         type BatchNodeOutcome = {
             nodeId: string;
             workspace: string;
-            convergence: 'merged_to_main' | 'blocked_review' | 'skipped_patch_equivalent' | 'not_mergeable';
+            convergence: BatchNodeConvergence;
             code?: string;
             reason?: string;
             stage?: string;
@@ -1329,26 +1465,9 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
             } catch (e: any) {
                 result = { success: false, error: e?.message || String(e) };
             }
-            const code = typeof result.code === 'string' ? result.code : '';
-            // already_merged (branch content already on base via another path) is a
-            // non-error skip regardless of success flag — the worktree converges with
-            // no new merge. A real `git merge` conflict surfaces as merge_failed →
-            // not_mergeable. Everything else that failed is isolated as blocked_review.
-            let convergence: BatchNodeOutcome['convergence'];
-            if (code === 'already_merged' && result.alreadyMergedViaOtherPath) {
-                convergence = 'skipped_patch_equivalent';
-            } else if (result.success === true) {
-                convergence = 'merged_to_main';
-            } else if (code === 'merge_failed') {
-                convergence = 'not_mergeable';
-            } else {
-                convergence = 'blocked_review';
-            }
+            const { convergence, code, stage } = classifyBatchNodeConvergence(result);
             const fbcs = (result.finalBranchConvergenceState && typeof result.finalBranchConvergenceState === 'object')
                 ? result.finalBranchConvergenceState as Record<string, unknown>
-                : undefined;
-            const stage = Array.isArray(result.refineStages)
-                ? (result.refineStages as Array<Record<string, unknown>>).filter(s => s.status === 'failed').map(s => s.stage).filter(Boolean).pop() as string | undefined
                 : undefined;
             results.push({
                 nodeId: node.id,
@@ -1663,7 +1782,14 @@ export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: Mes
             ? 'completed'
             : refineCode === 'blocked_review'
                 ? 'blocked_review'
+                // QW3: the validation stage returns `code: validationSummary.failureCode`,
+                // so a dependency/spawn failure surfaces as one of these codes — NOT the
+                // literal 'validation_failed'. They must map to the validation_failed
+                // terminal kind too, otherwise they fell through to the merge_failed
+                // fallback and coordinators saw a merge failure for a missing-deps block.
                 : refineCode === 'validation_failed' || refineCode === 'validation_dependencies_missing'
+                    || refineCode === 'missing_dependencies' || refineCode === 'dependency_bootstrap_failed'
+                    || refineCode === 'spawn_resolution_failed' || refineCode === 'validation_unavailable'
                     ? 'validation_failed'
                     : refineCode === 'submodule_reachability_failed'
                         ? 'submodule_reachability_failed'
@@ -1714,9 +1840,15 @@ export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: Mes
             // Validation details
             if (stage === 'validation' && result.validationSummary) {
                 const vs = result.validationSummary as Record<string, unknown>;
+                // QW2: same compact failure diagnostics the slim event carries, so the
+                // ledger blockerContext is self-describing (first failing command + exit
+                // code + failureKind + output tail) without a second commandsRun lookup.
+                const diagnostics = extractValidationFailureDiagnostics(vs);
                 ctx.details = {
                     failureCode: vs.failureCode,
+                    failureKind: vs.failureKind,
                     commandsRun: Array.isArray(vs.commandsRun) ? vs.commandsRun.length : undefined,
+                    ...(diagnostics ? { failure: diagnostics } : {}),
                 };
             }
             return ctx;
