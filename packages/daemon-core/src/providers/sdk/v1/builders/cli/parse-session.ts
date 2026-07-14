@@ -132,13 +132,26 @@ export function normalizeMessageIdentity<T extends { role?: string; kind?: strin
 }> {
     const list = Array.isArray(messages) ? messages : []
     let turnIndex = -1
+    // (CHAT-FLAP-LONG-CONVO root fix) The PTY-parsed providerUnitKey must be
+    // position-independent for the same reason as the native-history path: the
+    // transcript is re-parsed on every read, so a `index`-embedded key changes
+    // for every pre-existing bubble whenever the tail grows, causing web-core to
+    // remount the bubble (a visible flash). Identity = (role, kind, content-hash)
+    // plus a stable occurrence ordinal that disambiguates identical repeated
+    // lines without renumbering earlier occurrences when the tail grows.
+    const signatureOccurrences = new Map<string, number>()
     return list.map((message, index) => {
         const role = message?.role || 'assistant'
         const kind = message?.kind || 'standard'
         const content = typeof message?.content === 'string' ? message.content : ''
         if (role === 'user' || turnIndex < 0) turnIndex += 1
-        const seed = [role, kind, '', index, content].join('\n')
-        const providerUnitKey = `v2-pty:${role}:${kind}:${index}:${stableHash(seed)}`
+        // Seed is position-independent: no array index. The occurrence ordinal is
+        // appended separately so identical repeated lines still get distinct keys.
+        const seed = [role, kind, '', content].join('\n')
+        const contentHash = stableHash(seed)
+        const occurrence = signatureOccurrences.get(contentHash) ?? 0
+        signatureOccurrences.set(contentHash, occurrence + 1)
+        const providerUnitKey = `v2-pty:${role}:${kind}:${contentHash}:#${occurrence}`
         const bubbleId = `bubble:${providerUnitKey}`
         const turnKey = `turn:${turnIndex}`
         const isStreamingTail = status === 'generating' && role === 'assistant' && index === list.length - 1

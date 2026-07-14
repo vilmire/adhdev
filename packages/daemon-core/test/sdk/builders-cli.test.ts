@@ -230,4 +230,52 @@ describe('normalizeMessageIdentity', () => {
     it('returns an empty array unchanged', () => {
         expect(normalizeMessageIdentity([], 'idle')).toEqual([]);
     });
+
+    // CHAT-FLAP-LONG-CONVO root-fix invariant: appending a message to the tail
+    // must NOT change the providerUnitKey / bubbleId of any pre-existing message.
+    // A `index`-embedded key breaks this — every earlier bubble shifts, web-core
+    // sees a new React key, and the bubble remounts (a visible flash).
+    it('keeps providerUnitKey/bubbleId stable for existing messages when the tail grows', () => {
+        const base = [
+            { role: 'user', content: 'question one' },
+            { role: 'assistant', content: 'answer one' },
+        ];
+        const grown = [
+            ...base,
+            { role: 'user', content: 'question two' },
+        ];
+        const before = normalizeMessageIdentity(base, 'idle');
+        const after = normalizeMessageIdentity(grown, 'idle');
+        for (let i = 0; i < before.length; i += 1) {
+            expect((after[i] as any).providerUnitKey).toBe((before[i] as any).providerUnitKey);
+            expect((after[i] as any).bubbleId).toBe((before[i] as any).bubbleId);
+        }
+        // The new message must get its own distinct key.
+        expect((after[2] as any).providerUnitKey).not.toBe((after[1] as any).providerUnitKey);
+    });
+
+    it('gives identical repeated lines distinct keys via occurrence ordinal', () => {
+        const stamped = normalizeMessageIdentity([
+            { role: 'assistant', content: 'ok' },
+            { role: 'assistant', content: 'ok' },
+        ], 'idle');
+        expect((stamped[0] as any).providerUnitKey).not.toBe((stamped[1] as any).providerUnitKey);
+        // …but appending does not renumber the earlier duplicate.
+        const grown = normalizeMessageIdentity([
+            { role: 'assistant', content: 'ok' },
+            { role: 'assistant', content: 'ok' },
+            { role: 'assistant', content: 'ok' },
+        ], 'idle');
+        expect((grown[0] as any).providerUnitKey).toBe((stamped[0] as any).providerUnitKey);
+        expect((grown[1] as any).providerUnitKey).toBe((stamped[1] as any).providerUnitKey);
+    });
+
+    it('does not embed the array index in the v2-pty providerUnitKey', () => {
+        const stamped = normalizeMessageIdentity([
+            { role: 'user', content: 'q' },
+            { role: 'assistant', content: 'a' },
+        ], 'idle');
+        // Old format was v2-pty:role:kind:INDEX:hash — the index segment is gone.
+        expect((stamped[1] as any).providerUnitKey).toMatch(/^v2-pty:assistant:standard:[0-9a-f]+:#0$/);
+    });
 });
