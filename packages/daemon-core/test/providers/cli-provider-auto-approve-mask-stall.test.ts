@@ -17,8 +17,11 @@ import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.j
 // waiting_approval surfaces. These drive maybeAutoApproveStatus() directly with a manual
 // `now` (Object.create skips the native backend), mirroring the settle-gate suite.
 
-const SETTLE_MS = 600
-const MASK_STALL_MS = 9000
+// Derive from the source constants so a deliberate timing retune (e.g. the
+// AUTOAPPROVE-FLAP-RECUR invariant bump 9000→10500) can't silently regress these
+// expectations — the test tracks whatever the production bound currently is.
+const SETTLE_MS = (CliProviderInstance as any).AUTO_APPROVE_SETTLE_MS
+const MASK_STALL_MS = (CliProviderInstance as any).AUTO_APPROVE_MASK_STALL_MS
 
 const liveInstances: any[] = []
 

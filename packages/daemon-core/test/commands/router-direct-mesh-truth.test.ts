@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { withStatusProbeMarker } from '@adhdev/mesh-shared'
 import { DaemonCommandRouter } from '../../src/commands/router.js'
 import { LOG } from '../../src/logging/logger.js'
 
@@ -151,10 +152,12 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
         peerConfirmedCount: 1,
       },
     })
-    expect(dispatchMeshCommand).toHaveBeenCalledWith('daemon-remote', 'git_status', {
+    // A status-origin probe carries the _statusProbe marker (withStatusProbeMarker,
+    // af1ce39e) so the short connect-wait is scoped to it.
+    expect(dispatchMeshCommand).toHaveBeenCalledWith('daemon-remote', 'git_status', withStatusProbeMarker({
       workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
       refreshUpstream: true,
-    })
+    }))
     const remoteNode = result.mesh.nodes.find((node: any) => node.id === 'node_303')
     expect(remoteNode.lastGit.status.submodules).toMatchObject([
       {
@@ -582,10 +585,10 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       refresh: true,
     })
 
-    expect(dispatchMeshCommand).toHaveBeenCalledWith('daemon-remote', 'git_status', {
+    expect(dispatchMeshCommand).toHaveBeenCalledWith('daemon-remote', 'git_status', withStatusProbeMarker({
       workspace: '/Users/moltbot/Documents/Work/adhdev',
       refreshUpstream: true,
-    })
+    }))
     const debugMessage = logInfo.mock.calls
       .filter(([category]) => category === 'MeshStatusDebug')
       .map(([, message]) => String(message))

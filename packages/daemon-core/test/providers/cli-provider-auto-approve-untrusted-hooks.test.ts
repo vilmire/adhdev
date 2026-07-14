@@ -102,11 +102,20 @@ describe('APPROVESTUCK — maybeAutoApproveStatus fires for the cd/untrusted-hoo
     expect(h.resolves).toEqual([0])
   })
 
-  it('does NOT fire when the modal is a picker (kind gate excludes it)', () => {
+  // APPROVAL-PICKER-MISROUTE: even under an explicit kind='picker' label this
+  // modal still auto-approves, because it carries genuine consent structure
+  // ("do you want to proceed?" + a "don't ask again" grant + a decline). The
+  // kind gate now bails ONLY on a real SELECTION picker (/model, /mode) with no
+  // consent structure — a consent modal mis-routed to kind='picker' by a stale
+  // spec must not wedge a delegated worker (see modal-kind-autoapprove-gate for
+  // the genuine /model picker that DOES bail).
+  it('still fires for a consent modal mis-routed to kind=picker (APPROVAL-PICKER-MISROUTE)', async () => {
     const h = makeHarness('picker')
     h.call(1, 1000)
-    h.call(1, 1000 + SETTLE_MS + 1)
     expect(h.fires.length).toBe(0)
-    expect(h.resolves.length).toBe(0)
+    h.call(1, 1000 + SETTLE_MS + 1)
+    expect(h.fires.length).toBe(1)
+    await new Promise((r) => setTimeout(r, 10))
+    expect(h.resolves).toEqual([0])
   })
 })

@@ -3667,19 +3667,30 @@ describe('atomic drain — concurrent safety', () => {
 })
 
 describe('pending events file size guard', () => {
+  // These pin the JSONL trim behaviour of the append path. A queued event is now
+  // v2-stamped (stampPendingEventV2), and an ownerless broadcast picks up a
+  // targetCoordinatorDaemonId so it lands in the COORDINATOR-SCOPED pending file
+  // (`<meshId>-<daemon>.pending-events.jsonl`), not the legacy shared
+  // `<meshId>.pending-events.jsonl`. Address the event to an explicit coordinator
+  // daemon so the target path is deterministic, seed THAT file, and assert on it —
+  // otherwise the seed and the append land in different files and no trim fires.
+  const coordinatorDaemonId = 'coord-trim-guard'
+  const scopedPendingPath = (meshId: string) =>
+    path.join(getLedgerDir(), `${meshId}-${coordinatorDaemonId}.pending-events.jsonl`)
+
   it('trims pending events file to last 50 events when it exceeds 100KB', () => {
     const meshId = 'mesh-pending-trim-' + randomUUID().slice(0, 8)
-    const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
+    const pendingPath = scopedPendingPath(meshId)
     try {
       // Write 100 large event lines (~1200 chars each) so total > 100KB.
       // Each line has a unique timestamp so duplicate detection does not suppress any of them.
       const base = Date.now()
       const lines = Array.from({ length: 100 }, (_, i) =>
-        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', metadataEvent: { data: 'x'.repeat(1100), timestamp: base + i }, queuedAt: base + i })
+        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', targetCoordinatorDaemonId: coordinatorDaemonId, metadataEvent: { data: 'x'.repeat(1100), timestamp: base + i }, queuedAt: base + i })
       )
       fs.writeFileSync(pendingPath, lines.join('\n') + '\n', 'utf-8')
 
-      queuePendingMeshCoordinatorEvent({ event: 'agent:ready', meshId, nodeLabel: 'node', metadataEvent: { timestamp: base + 200 }, queuedAt: base + 200 })
+      queuePendingMeshCoordinatorEvent({ event: 'agent:ready', meshId, nodeLabel: 'node', targetCoordinatorDaemonId: coordinatorDaemonId, metadataEvent: { timestamp: base + 200 }, queuedAt: base + 200 })
 
       const result = fs.readFileSync(pendingPath, 'utf-8').split('\n').filter(Boolean)
       expect(result.length).toBeLessThanOrEqual(51)
@@ -3691,17 +3702,17 @@ describe('pending events file size guard', () => {
 
   it('does not trim file that is under 100KB', () => {
     const meshId = 'mesh-pending-notrim-' + randomUUID().slice(0, 8)
-    const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
+    const pendingPath = scopedPendingPath(meshId)
     try {
       // Write 10 small event lines (~50 chars each, well under 100KB total).
       // Each line has a unique timestamp so duplicate detection does not suppress any of them.
       const base = Date.now()
       const lines = Array.from({ length: 10 }, (_, i) =>
-        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base + i }, queuedAt: base + i })
+        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', targetCoordinatorDaemonId: coordinatorDaemonId, metadataEvent: { timestamp: base + i }, queuedAt: base + i })
       )
       fs.writeFileSync(pendingPath, lines.join('\n') + '\n', 'utf-8')
 
-      queuePendingMeshCoordinatorEvent({ event: 'agent:ready', meshId, nodeLabel: 'node', metadataEvent: { timestamp: base + 100 }, queuedAt: base + 100 })
+      queuePendingMeshCoordinatorEvent({ event: 'agent:ready', meshId, nodeLabel: 'node', targetCoordinatorDaemonId: coordinatorDaemonId, metadataEvent: { timestamp: base + 100 }, queuedAt: base + 100 })
 
       const result = fs.readFileSync(pendingPath, 'utf-8').split('\n').filter(Boolean)
       expect(result.length).toBe(11)
