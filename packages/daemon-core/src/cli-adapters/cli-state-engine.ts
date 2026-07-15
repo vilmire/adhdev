@@ -175,6 +175,7 @@ export class CliStateEngine {
      * paint and made the engine type "1" repeatedly into the prompt.
      */
     modalLostAt = 0;
+    private modalLostRecheckTimer: NodeJS.Timeout | null = null;
     private approvalExitTimeout: NodeJS.Timeout | null = null;
 
     // ── Response tracking ────────────────────────────
@@ -243,6 +244,12 @@ export class CliStateEngine {
     setStatus(status: CliSessionStatus['status'], trigger?: string): void {
         const prev = this.currentStatus;
         if (prev === status) return;
+        // Leaving waiting_approval — cancel any pending modal-lost recheck; it
+        // only exists to wake a quiescent PTY still pinned to waiting_approval.
+        if (prev === 'waiting_approval' && this.modalLostRecheckTimer) {
+            clearTimeout(this.modalLostRecheckTimer);
+            this.modalLostRecheckTimer = null;
+        }
         this.currentStatus = status;
         this.statusHistory.push({ status, at: Date.now(), trigger });
         if (this.statusHistory.length > 50) this.statusHistory.shift();
@@ -456,6 +463,7 @@ export class CliStateEngine {
         if (this.settleTimer) { clearTimeout(this.settleTimer); this.settleTimer = null; }
         if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
         if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
+        if (this.modalLostRecheckTimer) { clearTimeout(this.modalLostRecheckTimer); this.modalLostRecheckTimer = null; }
         if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
         if (this.pendingScriptStatusTimer) { clearTimeout(this.pendingScriptStatusTimer); this.pendingScriptStatusTimer = null; }
         if (this.providerErrorRetryTimer) { clearTimeout(this.providerErrorRetryTimer); this.providerErrorRetryTimer = null; }
@@ -822,7 +830,23 @@ export class CliStateEngine {
                 // signature each time, which typed the approval key
                 // ("1") into the prompt repeatedly. Wait for the modal to
                 // stay gone for `approvalCooldown` before clearing.
-                if (this.currentStatus === 'waiting_approval' && this.activeModal) {
+                //
+                // (fix: kimi approve-resolve-stuck) The recovery used to require
+                // `this.activeModal` to be non-null. But a provider can be pinned
+                // to `waiting_approval` with `activeModal === null`: kimi's
+                // questionPattern (`run.*command`) false-positive-matches the
+                // user's echoed prompt ("✨ Run the shell command: …"), so
+                // detectStatus reports `waiting_approval` from the question cue
+                // alone while parseApproval extracts zero buttons (→ null modal,
+                // never captured). After the real approval resolves and kimi goes
+                // quiet, no further PTY output arrives, so this is the LAST
+                // settled evaluation — with the old `&& this.activeModal` guard it
+                // bare-returned and the FSM latched `waiting_approval` forever
+                // (the approval appears never to resolve). Recover whenever we are
+                // pinned to waiting_approval with no actionable modal, captured or
+                // not, and arm a re-check so a quiescent PTY still gets one more
+                // evaluation pass to reach the hysteresis deadline.
+                if (this.currentStatus === 'waiting_approval') {
                     const lostAt = this.modalLostAt || Date.now();
                     if (!this.modalLostAt) this.modalLostAt = lostAt;
                     if (Date.now() - lostAt >= this.timeouts.approvalCooldown) {
@@ -830,6 +854,12 @@ export class CliStateEngine {
                         this.modalLostAt = 0;
                         this.setStatus('generating', 'approval_lost_modal');
                         this.callbacks.onStatusChange();
+                    } else {
+                        // Not yet past the hysteresis window. The PTY may be
+                        // quiescent (kimi emits nothing once idle), so schedule an
+                        // explicit re-evaluation — otherwise no settle tick ever
+                        // fires again and the recovery above is never reached.
+                        this.armModalLostRecheck();
                     }
                 }
                 return;
@@ -1150,6 +1180,26 @@ export class CliStateEngine {
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
+
+    /**
+     * Schedule one more settled evaluation while pinned to `waiting_approval`
+     * with no actionable modal. The settled FSM normally only re-runs on new
+     * PTY output; a provider whose modal cue lingers in a form detectStatus
+     * still matches (e.g. kimi's questionPattern hitting the user echo) but
+     * whose PTY has gone quiet would never get another evaluation, latching
+     * `waiting_approval` forever. This timer guarantees the modal-lost recovery
+     * in `applyWaitingApproval` is reached even against a silent PTY. It is a
+     * no-op once the FSM leaves `waiting_approval` (the re-evaluation itself
+     * takes the recovery branch and clears the state).
+     */
+    private armModalLostRecheck(): void {
+        if (this.modalLostRecheckTimer) return;
+        this.modalLostRecheckTimer = setTimeout(() => {
+            this.modalLostRecheckTimer = null;
+            if (this.currentStatus !== 'waiting_approval') return;
+            this.evaluateSettled(this.transport.getSnapshot());
+        }, this.timeouts.approvalCooldown);
+    }
 
     private armApprovalExitTimeout(): void {
         if (this.approvalExitTimeout) clearTimeout(this.approvalExitTimeout);
