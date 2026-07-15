@@ -70,6 +70,7 @@ import {
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';
+import { normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared';
 
 
 /**
@@ -814,7 +815,31 @@ export async function meshLaunchSession(
     if (bootstrapBlock) return JSON.stringify(bootstrapBlock, null, 2);
 
     {
-        let resolvedProviderType = typeof args.type === 'string' && args.type.trim() ? args.type : '';
+        const requestedType = typeof args.type === 'string' && args.type.trim() ? args.type.trim() : '';
+        let resolvedProviderType = requestedType;
+        if (requestedType) {
+            // PROVIDER-TYPE-HONORED: an explicit type is validated ONLY against the node's
+            // capability slots (policy.slots) — the single authoritative capability list
+            // (ORCHESTRATION_NODE_SLOTS.md). When the node declares slots and none names the
+            // requested provider, fail closed instead of proceeding: silently resolving to
+            // providerPriority[0] was the exact bug (mesh_launch_session(type:"cursor-cli")
+            // spawned claude-cli). providerPriority is deliberately NOT consulted here — it is
+            // an ordered PREFERENCE hint, not a capability whitelist, so a legacy node that
+            // declares only providerPriority (no slots) keeps the pre-existing contract that an
+            // explicit type may name any provider (the daemon-side launch is the real gate).
+            // Provider names are compared raw — slots store canonical provider types.
+            const slotProviders = normalizeNodeCapabilitySlots((node.policy as any)?.slots).map(s => s.provider);
+            if (slotProviders.length && !slotProviders.includes(requestedType)) {
+                return JSON.stringify({
+                    success: false,
+                    code: 'mesh_provider_type_unsupported',
+                    error: `Node '${args.node_id}' does not support provider '${requestedType}'. Its capability slots (policy.slots) declare: ${slotProviders.join(', ')}. Configure a slot for '${requestedType}' via mesh_node_slots_set, or launch with one of the supported types.`,
+                    nodeId: args.node_id,
+                    requestedType,
+                    supportedProviders: slotProviders,
+                }, null, 2);
+            }
+        }
         if (!resolvedProviderType) {
             const providerPriority = readProviderPriority(node.policy);
             if (!providerPriority.length) {

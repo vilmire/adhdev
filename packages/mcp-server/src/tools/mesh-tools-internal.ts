@@ -33,7 +33,7 @@ import { IpcTransport } from '../transports/ipc.js';
 import type { CommandTransport } from '../transports/mode.js';
 import { compactChatPayload, isCoordinatorVisibleMessage, messageContent } from './chat-compact.js';
 import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
-import { withStatusProbeMarker } from '@adhdev/mesh-shared';
+import { withStatusProbeMarker, normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared';
 import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
 import {
     daemonIdsEquivalent,
@@ -1692,6 +1692,28 @@ export function readProviderPriority(policy: unknown): string[] {
         : [];
 }
 
+/**
+ * Ordered, de-duplicated provider types a node can launch — every provider it could
+ * be asked to run. Reads `policy.slots` (the SSOT — ORCHESTRATION_NODE_SLOTS.md),
+ * unioned with the legacy `policy.providerPriority`. Used to ENUMERATE per-provider
+ * capability-tag sets for observability (buildNodeCapabilityExposure). Note: the
+ * mesh_launch_session fail-closed GATE deliberately checks slots ALONE (not this
+ * union) — providerPriority is a preference hint, not a capability whitelist.
+ */
+export function readNodeSupportedProviders(policy: unknown): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    const push = (type: unknown) => {
+        const trimmed = typeof type === 'string' ? type.trim() : '';
+        if (!trimmed || seen.has(trimmed)) return;
+        seen.add(trimmed);
+        out.push(trimmed);
+    };
+    for (const slot of normalizeNodeCapabilitySlots((policy as any)?.slots)) push(slot.provider);
+    for (const type of readProviderPriority(policy)) push(type);
+    return out;
+}
+
 
 /**
  * Surface the capability tags a node can match against required_tags routing,
@@ -1721,7 +1743,12 @@ export function buildNodeCapabilityExposure(node: LocalMeshNodeEntry): {
     capabilityTagsByProvider?: Record<string, string[]>;
     capabilities?: string[];
 } {
-    const providers = readProviderPriority(node.policy);
+    // Enumerate EVERY provider the node can launch (policy.slots is the single source
+    // of truth, else legacy providerPriority) — not just providerPriority — so the
+    // per-provider tag sets cover a provider that lives in slots but is not the first
+    // priority entry (e.g. cursor-cli). The representative capabilityTags already
+    // advertises a provider= tag for each of these (buildMeshNodeCapabilityTags).
+    const providers = readNodeSupportedProviders(node.policy);
     const capabilityTags = buildMeshNodeCapabilityTags(node);
     const exposure: {
         capabilityTags: string[];

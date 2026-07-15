@@ -9,7 +9,7 @@ import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshLedgerKind } from './mesh-ledger.js';
 import { createSessionDelivery } from './mesh-delivery-policy.js';
 import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
-import { sessionIdsEquivalent, isMeshTaskDifficulty, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
+import { sessionIdsEquivalent, isMeshTaskDifficulty, normalizeNodeCapabilitySlots, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -692,6 +692,37 @@ function firstProviderPriority(policy: unknown): string | undefined {
     return raw.find(type => typeof type === 'string' && type.trim())?.trim();
 }
 
+/**
+ * Ordered, de-duplicated provider types a node can launch, resolved from
+ * `policy.slots` (the single source of truth — ORCHESTRATION_NODE_SLOTS.md) with a
+ * fallback to the legacy `policy.providerPriority`. Used to advertise a
+ * `provider=<type>` capability tag for EVERY provider the node supports, not just
+ * providerPriority[0], so required_tags: ["provider=cursor-cli"] is satisfiable on a
+ * node whose slots include cursor-cli even when it is not the first priority entry.
+ *
+ * Only provider NAMES are needed here, so slots are read via the dependency-light
+ * normalizeNodeCapabilitySlots rather than resolveNodeCapabilitySlots (which pulls in
+ * difficultyBrains) — keeping tag derivation free of scheduling-config imports.
+ */
+function readNodeProviderTypes(policy: unknown): string[] {
+    const record = policy && typeof policy === 'object' && !Array.isArray(policy)
+        ? policy as Record<string, unknown>
+        : {};
+    const seen = new Set<string>();
+    const out: string[] = [];
+    const push = (type: unknown) => {
+        const trimmed = typeof type === 'string' ? type.trim() : '';
+        if (!trimmed || seen.has(trimmed)) return;
+        seen.add(trimmed);
+        out.push(trimmed);
+    };
+    for (const slot of normalizeNodeCapabilitySlots(record.slots)) push(slot.provider);
+    if (Array.isArray(record.providerPriority)) {
+        for (const type of record.providerPriority) push(type);
+    }
+    return out;
+}
+
 function readNodeOverride(node: { userOverrides?: unknown } | undefined, key: 'platform' | 'arch'): string | null {
     const overrides = node?.userOverrides;
     if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) return null;
@@ -715,9 +746,20 @@ export function buildMeshNodeCapabilityTags(
     node: { capabilities?: unknown; policy?: unknown; isLocalWorktree?: unknown; worktreeBranch?: unknown; userOverrides?: unknown; reportedPlatform?: unknown; reportedArch?: unknown } | undefined,
     providerType?: string,
 ): string[] {
-    const provider = typeof providerType === 'string' && providerType.trim()
+    // When an explicit providerType is pinned (per-provider tag set used by the
+    // queue slot matcher), advertise ONLY that provider's tag — so
+    // provider=codex-cli matches only when codex-cli is the launched provider.
+    // When no provider is pinned (the representative tag set consulted by
+    // nodeSatisfiesRequiredTags), advertise a provider= tag for EVERY provider the
+    // node can launch (all policy.slots, else providerPriority), so
+    // required_tags: ["provider=cursor-cli"] is satisfiable on a node whose slots
+    // include cursor-cli even when it is not the first priority entry.
+    const pinnedProvider = typeof providerType === 'string' && providerType.trim()
         ? providerType.trim()
-        : firstProviderPriority(node?.policy);
+        : undefined;
+    const providerTags = pinnedProvider
+        ? [pinnedProvider]
+        : readNodeProviderTypes(node?.policy);
     const worktreeBranch = typeof node?.worktreeBranch === 'string' && node.worktreeBranch.trim()
         ? node.worktreeBranch.trim()
         : null;
@@ -744,7 +786,7 @@ export function buildMeshNodeCapabilityTags(
         ...(Array.isArray(node?.capabilities) ? node.capabilities : []),
         `os=${os}`,
         `arch=${arch}`,
-        ...(provider ? [`provider=${provider}`] : []),
+        ...providerTags.map(p => `provider=${p}`),
         // Worktree nodes automatically expose a "worktree=<branch>" tag so that
         // mesh_enqueue_task with required_tags: ["worktree=<branch>"] routes
         // only to the matching worktree node.

@@ -1967,10 +1967,14 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 // a launch that can never claim. Mirrors claimNextQueueTask's convergence gate.
                 if (task.taskMode === 'convergence' && node?.isLocalWorktree === true) return false;
                 // Skip nodes that can never satisfy requiredTags regardless of which provider
-                // from providerPriority is selected. A node satisfies tags if at least one
-                // provider in its priority list would produce matching capability tags.
+                // is selected. A node satisfies tags if at least one provider it can launch
+                // would produce matching capability tags. Enumerate providers from the node's
+                // capability slots (the single source of truth — a provider that lives only in
+                // slots, e.g. cursor-cli, is otherwise invisible to providerPriority-keyed
+                // enumeration), falling back to the legacy providerPriority.
                 if (task.requiredTags?.length) {
-                    const priorities = normalizeProviderPriority(node?.policy);
+                    const slotProviders = resolveNodeCapabilitySlots(node).map(s => s.provider).filter(Boolean);
+                    const priorities = slotProviders.length ? slotProviders : normalizeProviderPriority(node?.policy);
                     const providerCandidates = priorities.length ? priorities : [undefined as unknown as string];
                     return providerCandidates.some(p =>
                         nodeSatisfiesRequiredTags(task.requiredTags, buildMeshNodeCapabilityTags(node, p))
