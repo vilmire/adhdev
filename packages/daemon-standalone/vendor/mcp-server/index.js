@@ -2784,8 +2784,21 @@ function readProviderPriority(policy) {
   const raw = policy?.providerPriority;
   return Array.isArray(raw) ? raw.map((type) => typeof type === "string" ? type.trim() : "").filter(Boolean) : [];
 }
+function readNodeSupportedProviders(policy) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  const push = (type) => {
+    const trimmed = typeof type === "string" ? type.trim() : "";
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    out.push(trimmed);
+  };
+  for (const slot of normalizeNodeCapabilitySlots(policy?.slots)) push(slot.provider);
+  for (const type of readProviderPriority(policy)) push(type);
+  return out;
+}
 function buildNodeCapabilityExposure(node) {
-  const providers = readProviderPriority(node.policy);
+  const providers = readNodeSupportedProviders(node.policy);
   const capabilityTags = (0, import_daemon_core3.buildMeshNodeCapabilityTags)(node);
   const exposure = { capabilityTags };
   if (providers.length) {
@@ -6699,7 +6712,21 @@ async function meshLaunchSession(ctx, args) {
   const bootstrapBlock = getWorktreeBootstrapLaunchBlock(node, ctx.mesh.policy);
   if (bootstrapBlock) return JSON.stringify(bootstrapBlock, null, 2);
   {
-    let resolvedProviderType = typeof args.type === "string" && args.type.trim() ? args.type : "";
+    const requestedType = typeof args.type === "string" && args.type.trim() ? args.type.trim() : "";
+    let resolvedProviderType = requestedType;
+    if (requestedType) {
+      const slotProviders = normalizeNodeCapabilitySlots(node.policy?.slots).map((s) => s.provider);
+      if (slotProviders.length && !slotProviders.includes(requestedType)) {
+        return JSON.stringify({
+          success: false,
+          code: "mesh_provider_type_unsupported",
+          error: `Node '${args.node_id}' does not support provider '${requestedType}'. Its capability slots (policy.slots) declare: ${slotProviders.join(", ")}. Configure a slot for '${requestedType}' via mesh_node_slots_set, or launch with one of the supported types.`,
+          nodeId: args.node_id,
+          requestedType,
+          supportedProviders: slotProviders
+        }, null, 2);
+      }
+    }
     if (!resolvedProviderType) {
       const providerPriority = readProviderPriority(node.policy);
       if (!providerPriority.length) {
