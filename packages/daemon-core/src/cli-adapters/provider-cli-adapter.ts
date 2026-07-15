@@ -421,6 +421,49 @@ export class ProviderCliAdapter implements CliAdapter {
         return this.providerOwnsTranscript() && this.provider.transcriptContext === 'full';
     }
 
+    /**
+     * MULTI-TURN TRANSCRIPT FLICKER (kimi): whether this provider reconstructs
+     * its ENTIRE transcript from the rendered PTY buffer on every read and so
+     * must be fed the full accumulated buffer rather than the current-turn slice.
+     *
+     * The turn-scope slice (buildCliParseInput → sliceFromOffset(accumulatedBuffer,
+     * scope.bufferStart)) exists so a mid-turn parse only sees the fresh output of
+     * the CURRENT turn — correct for status/streaming detection and for providers
+     * that reassemble prior history elsewhere (native-history on disk, or a
+     * provider-owned full-context parser). But a pure-PTY provider with NO native
+     * history and NO provider transcript authority, whose tui parser walks the
+     * whole buffer for its per-turn bubble markers (kimi's `●`/`✨` bullets),
+     * loses every prior turn's bubbles the instant a new turn starts: bufferStart
+     * jumps to the new turn's offset, the slice drops turns 1..n-1, and until the
+     * new turn emits its first bullet parseSession returns zero messages — so
+     * read_chat momentarily goes EMPTY and the dashboard clears every bubble,
+     * then restores them once output arrives (the observed flicker).
+     *
+     * accumulatedBuffer is the terminal-EMULATED rendered scrollback (overwritten
+     * cells collapsed), not raw PTY append, so parsing it in full yields the clean
+     * cumulative transcript with no repaint duplication. Scope to exactly this
+     * class (tui transcriptPty scope 'buffer' + no native history + not
+     * provider-owned) so no other provider's turn-scoped parse changes.
+     */
+    private parsesFullPtyTranscriptFromBuffer(): boolean {
+        if (this.providerOwnsTranscript()) return false;
+        // nativeHistory is a top-level provider field not surfaced on
+        // CliProviderModule; read it via the same structural cast used for `tui`.
+        if ((this.provider as { nativeHistory?: unknown }).nativeHistory) return false;
+        const transcriptPty = (this.provider.tui as { transcriptPty?: { scope?: unknown } } | undefined)?.transcriptPty;
+        return transcriptPty?.scope === 'buffer';
+    }
+
+    /**
+     * The turn scope to feed the transcript parser. Normally the live turn scope
+     * (so a mid-turn parse is current-turn-only), but null (= full accumulated
+     * buffer) for pure-PTY full-transcript providers so prior turns never drop.
+     * See {@link parsesFullPtyTranscriptFromBuffer}.
+     */
+    private transcriptParseScope(): TurnParseScope | null {
+        return this.parsesFullPtyTranscriptFromBuffer() ? null : this.engine.currentTurnScope;
+    }
+
     private getIdleFinishConfirmMs(): number {
         return this.timeouts.idleFinishConfirm;
     }
@@ -918,7 +961,10 @@ export class ProviderCliAdapter implements CliAdapter {
             baseMessages: [],
             partialResponse: this.responseBuffer,
             isWaitingForResponse: this.engine.isWaitingForResponse,
-            scope: this.engine.currentTurnScope,
+            // Full accumulated buffer (scope null) for pure-PTY full-transcript
+            // providers so prior turns' bubbles never drop when a new turn starts;
+            // the current-turn slice otherwise. See parsesFullPtyTranscriptFromBuffer.
+            scope: this.transcriptParseScope(),
             runtimeSettings: this.runtimeSettings,
             spawnAt: this.spawnAt,
         });
