@@ -61,9 +61,38 @@ describe('build conversations shared context', () => {
         })
     })
 
-    it('prefers a native conversation title over workspace name when the title is meaningful', () => {
+    // Owner UX (title=folder, subtitle=model for ALL providers): the workspace
+    // folder name is the primary tab label whenever a workspace exists — the
+    // meaningful chat title is only a fallback for workspace-less sessions.
+    it('uses the workspace folder as the primary tab label even when a meaningful chat title exists', () => {
         const ide = createIdeEntry({
             workspace: '/repo',
+            activeChat: {
+                id: 'chat-1',
+                title: 'Fix reconnect race',
+                status: 'idle',
+                messages: [],
+                activeModal: null,
+            },
+        })
+
+        const conversations = buildScopedIdeConversations(ide, {
+            machineNames: { 'machine-1': 'Studio Mac' },
+            connectionStates: { 'machine-1': 'connected' },
+            defaultConnectionState: 'new',
+        })
+
+        expect(conversations[0]).toMatchObject({
+            // title still carries the (non-generic) chat title for other surfaces…
+            title: 'Fix reconnect race',
+            // …but the tab primary is the folder name.
+            displayPrimary: 'repo',
+        })
+    })
+
+    it('falls back to the meaningful chat title as primary when there is no workspace', () => {
+        const ide = createIdeEntry({
+            workspace: null,
             activeChat: {
                 id: 'chat-1',
                 title: 'Fix reconnect race',
@@ -122,7 +151,10 @@ describe('build conversations shared context', () => {
         expect(conversations[0].displayPrimary).toBe('Opencode Code')
     })
 
-    it('prefers an extension conversation title over workspace or parent file title', () => {
+    // Owner UX: for an extension/agent-stream tab the workspace folder is still
+    // the primary label; the extension conversation title stays on `title` for
+    // other surfaces but no longer drives the tab primary when a workspace exists.
+    it('uses the workspace folder as primary for an extension stream while keeping its conversation title', () => {
         const ide = createIdeEntry({
             type: 'antigravity',
             activeChat: {
@@ -163,7 +195,9 @@ describe('build conversations shared context', () => {
         expect(conversations[1]).toMatchObject({
             agentName: 'Claude Code (VS Code)',
             title: 'Actual Conversation Title',
-            displayPrimary: 'Actual Conversation Title',
+            displayPrimary: 'repo',
+            // no model reported → subtitle falls back to "<host> · <agent>".
+            displaySecondary: 'Antigravity · Claude Code (VS Code)',
             sessionCapabilities: ['read_chat', 'open_panel'],
         })
     })
@@ -241,7 +275,81 @@ describe('build conversations shared context', () => {
         expect(conversations[0]).toMatchObject({
             agentName: 'Codex CLI',
             displayPrimary: 'repo',
+            // no model reported → subtitle falls back to the provider label.
             displaySecondary: 'Codex CLI',
+        })
+    })
+
+    // Owner UX: subtitle = active model. Prefer the provider's own display label
+    // from summaryMetadata (id='model'), else the raw controlValues.model, else
+    // the provider label (never blank).
+    it('renders the model name as the subtitle from summaryMetadata', () => {
+        const cli = createIdeEntry({
+            id: 'machine-1:cli:kimi-1',
+            sessionId: 'kimi-1',
+            type: 'kimi',
+            transport: 'pty',
+            cliName: 'Kimi Code',
+            mode: 'chat',
+            workspace: '/adhdev',
+            activeChat: { id: 'chat-1', title: '', status: 'idle', messages: [], activeModal: null },
+            summaryMetadata: {
+                items: [
+                    { id: 'model', label: 'Model', value: 'Kimi K2.7', shortValue: 'k2.7', order: 10 },
+                    { id: 'mode', label: 'Mode', value: 'Build', order: 20 },
+                ],
+            },
+        })
+
+        const conversations = buildScopedIdeConversations(cli)
+
+        expect(conversations).toHaveLength(1)
+        expect(conversations[0]).toMatchObject({
+            displayPrimary: 'adhdev',
+            displaySecondary: 'Kimi K2.7',
+        })
+    })
+
+    it('falls back to controlValues.model for the subtitle when no summary model label exists', () => {
+        const cli = createIdeEntry({
+            id: 'machine-1:cli:cursor-1',
+            sessionId: 'cursor-1',
+            type: 'cursor-cli',
+            transport: 'pty',
+            cliName: 'Cursor Agent',
+            mode: 'chat',
+            workspace: '/fix-opencode-cursor-startup-gate-sgr',
+            activeChat: { id: 'chat-1', title: '', status: 'idle', messages: [], activeModal: null },
+            controlValues: { model: 'gpt-5.3-codex' },
+        })
+
+        const conversations = buildScopedIdeConversations(cli)
+
+        expect(conversations).toHaveLength(1)
+        expect(conversations[0]).toMatchObject({
+            displayPrimary: 'fix-opencode-cursor-startup-gate-sgr',
+            displaySecondary: 'gpt-5.3-codex',
+        })
+    })
+
+    it('falls back to the provider label for the subtitle when no model is reported', () => {
+        const cli = createIdeEntry({
+            id: 'machine-1:cli:opencode-1',
+            sessionId: 'opencode-1',
+            type: 'opencode',
+            transport: 'pty',
+            cliName: 'Opencode Code',
+            mode: 'chat',
+            workspace: '/adhdev',
+            activeChat: { id: 'chat-1', title: '', status: 'idle', messages: [], activeModal: null },
+        })
+
+        const conversations = buildScopedIdeConversations(cli)
+
+        expect(conversations).toHaveLength(1)
+        expect(conversations[0]).toMatchObject({
+            displayPrimary: 'adhdev',
+            displaySecondary: 'Opencode Code',
         })
     })
 

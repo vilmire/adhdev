@@ -40,6 +40,49 @@ export function getWorkspaceName(ide: DaemonData): string {
     return parts.length > 0 ? parts[parts.length - 1] : ws;
 }
 
+/**
+ * Resolve the tab SUBTITLE = the session's active model name (owner UX:
+ * title=folder, subtitle=model, for every provider).
+ *
+ * Model source priority (best available first):
+ *   1. summaryMetadata item id='model' — the provider's own display label for
+ *      its running model (e.g. "Kimi K2.7", "Sonnet 4.6"). Prefer the human
+ *      `value`, fall back to the compact `shortValue`.
+ *   2. controlValues.model — the raw selected model id (e.g. "gpt-5-codex",
+ *      "claude-opus-4-8") when no summary label was published.
+ * When no model is reliably known we do NOT leave the subtitle blank: fall back
+ * to the caller-supplied provider label (getAgentDisplayName / formatIdeType),
+ * so a model-less session still shows "Claude Code" / "Opencode Code" / the type.
+ */
+export function resolveModelSubtitle(ide: DaemonData, providerFallback: string): string {
+    return resolveModelName(ide) || providerFallback;
+}
+
+/**
+ * Extract just the model name (no provider fallback) from any session-shaped
+ * entry that carries summaryMetadata / controlValues. Returns '' when no model
+ * is reliably reported. Shared by the ide-level subtitle and per-stream subtitle.
+ */
+function resolveModelName(entry: {
+    summaryMetadata?: DaemonData['summaryMetadata'];
+    controlValues?: DaemonData['controlValues'];
+}): string {
+    const modelItem = entry.summaryMetadata?.items?.find(item => item?.id === 'model');
+    const summaryModel = (modelItem?.value || modelItem?.shortValue || '').trim();
+    if (summaryModel) return summaryModel;
+    const rawModel = entry.controlValues?.model;
+    if (typeof rawModel === 'string' && rawModel.trim()) return rawModel.trim();
+    return '';
+}
+
+/** Per-child-session model name (child SessionEntry) or '' when absent. */
+function resolveChildModel(child: {
+    summaryMetadata?: DaemonData['summaryMetadata'];
+    controlValues?: DaemonData['controlValues'];
+}): string | undefined {
+    return resolveModelName(child) || undefined;
+}
+
 function getStreamKey(stream: { sessionId?: string; instanceId?: string; agentType: string }): string {
     return stream.sessionId || stream.instanceId || stream.agentType;
 }
@@ -123,6 +166,10 @@ export function buildIdeConversations(
     const workspacePath = ide.workspace || '';
     const providerLabel = getAgentDisplayName(ide.type, { agentName: ide.cliName });
     const ideLabel = (isCliConv(ide) || isAcpConv(ide)) ? providerLabel : formatIdeType(ide.type);
+    // Owner UX: tab title = workspace/folder name, subtitle = model name for ALL
+    // providers. modelSubtitle falls back to the provider label when no model is
+    // reliably reported, so the subtitle is never blank.
+    const modelSubtitle = resolveModelSubtitle(ide, ideLabel);
     const streams: {
         sessionId?: string;
         instanceId?: string;
@@ -132,6 +179,7 @@ export function buildIdeConversations(
         sessionCapabilities?: string[];
         agentType: string;
         agentName: string;
+        model?: string;
         status: string;
         title?: string;
         lastMessagePreview?: string;
@@ -161,6 +209,7 @@ export function buildIdeConversations(
             sessionCapabilities: child.capabilities,
             agentType: child.providerType,
             agentName: child.providerName || formatIdeType(child.providerType),
+            model: resolveChildModel(child),
             status: child.status,
             title: child.title,
             lastMessagePreview: child.lastMessagePreview,
@@ -248,12 +297,16 @@ export function buildIdeConversations(
             workspaceName,
             workspacePath,
             git: ide.git,
-            displayPrimary: effectiveNativeTitle
-                || workspaceName
+            // Owner UX: folder name is the primary tab label for every provider.
+            // Fall back to an explicit chat title, then the provider label, so a
+            // workspace-less session still renders something meaningful.
+            displayPrimary: workspaceName
+                || effectiveNativeTitle
                 || (isCliConv(ide)
                     ? ((ide.mode === 'chat') ? agentName : `Terminal${roleSuffix}`)
                     : agentName),
-            displaySecondary: isCliConv(ide) && workspaceName ? agentName : ideLabel,
+            // Subtitle = active model (falls back to provider label via resolveModelSubtitle).
+            displaySecondary: modelSubtitle,
             cdpConnected: ide.cdpConnected,
             lastMessagePreview: ide.lastMessagePreview,
             lastMessageRole: ide.lastMessageRole,
@@ -318,8 +371,12 @@ export function buildIdeConversations(
             workspaceName,
             workspacePath,
             git: stream.git || ide.git,
-            displayPrimary: effectiveStreamTitle || workspaceName || stream.agentName || ideLabel,
-            displaySecondary: `${ideLabel} · ${stream.agentName}`,
+            // Owner UX: folder name primary. Subtitle = the stream's model when
+            // reported, else the agent identity ("<host> · <agent>").
+            displayPrimary: workspaceName || effectiveStreamTitle || stream.agentName || ideLabel,
+            displaySecondary: stream.model && stream.model.trim()
+                ? stream.model.trim()
+                : `${ideLabel} · ${stream.agentName}`,
             cdpConnected: ide.cdpConnected,
             lastMessagePreview: stream.lastMessagePreview,
             lastMessageRole: stream.lastMessageRole,
@@ -361,7 +418,7 @@ export function buildIdeConversations(
             workspacePath,
             git: ide.git,
             displayPrimary: workspaceName || ideLabel,
-            displaySecondary: ideLabel,
+            displaySecondary: modelSubtitle,
             cdpConnected: ide.cdpConnected,
             lastUpdated: ide.lastUpdated,
             streamSource: 'native',
