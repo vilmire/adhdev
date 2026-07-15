@@ -85,6 +85,43 @@ describe('build conversations shared context', () => {
         })
     })
 
+    // OPENCODE-TITLE: when a CLI/ACP provider has no meaningful chat title AND no
+    // workspace, the tab must fall back to the provider label (agentName). The
+    // provider display name must be distinct from formatIdeType(type) — otherwise
+    // isGenericAgentTitle treats a name-only title as generic. opencode's original
+    // name/displayName was the lowercase "opencode" (== its type); "Opencode Code"
+    // (spec fix) is distinct from both the type and formatIdeType('opencode')=
+    // "Opencode", so it renders as a clean provider label like kimi ("Kimi Code")
+    // and cursor ("Cursor Agent") rather than collapsing to the bare type.
+    it('renders the provider label for a workspace-less CLI session using the fixed opencode display name', () => {
+        const ide = createIdeEntry({
+            id: 'machine-1:ide:opencode-1',
+            sessionId: 'opencode-1',
+            type: 'opencode',
+            transport: 'pty',
+            mode: 'chat',
+            workspace: null,
+            cliName: 'Opencode Code',
+            activeChat: {
+                id: 'chat-1',
+                title: '',
+                status: 'idle',
+                messages: [],
+                activeModal: null,
+            },
+        })
+
+        const conversations = buildScopedIdeConversations(ide, {
+            machineNames: { 'machine-1': 'Studio Mac' },
+            connectionStates: { 'machine-1': 'connected' },
+            defaultConnectionState: 'new',
+        })
+
+        // No workspace + no chat title → falls to agentName = provider label.
+        expect(conversations[0].agentName).toBe('Opencode Code')
+        expect(conversations[0].displayPrimary).toBe('Opencode Code')
+    })
+
     it('prefers an extension conversation title over workspace or parent file title', () => {
         const ide = createIdeEntry({
             type: 'antigravity',
