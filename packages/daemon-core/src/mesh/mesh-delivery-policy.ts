@@ -254,6 +254,25 @@ export function getActiveSessionDeliveries(meshId: string, sessionId?: string) {
     }
 }
 
+/**
+ * DELIVERED-NOT-CONSUMED-REDRIVE consume path. Advance a task's delivery record(s) to a
+ * CONSUMED status ('acked'/'completed') by (mesh, session[, task]), INCLUDING rows already in
+ * 'delivered' — unlike getActiveSessionDeliveries which excludes 'delivered'. The store's
+ * monotonic guard only ever advances the row. Returns the number of rows advanced.
+ */
+export function consumeSessionDelivery(
+    meshId: string,
+    sessionId: string,
+    status: 'acked' | 'completed',
+    taskId?: string,
+): number {
+    try {
+        return MeshRuntimeStore.getInstance().consumeSessionDelivery(meshId, sessionId, status, taskId);
+    } catch {
+        return 0;
+    }
+}
+
 // MESH-COMPLEXITY-AUDIT Part 8-2: the completion-conflict diagnostic
 // (recordCompletionConflict / getRecentCompletionConflicts, backed by
 // mesh_completion_conflicts) was dropped. It recorded WHICH task lost a
@@ -276,9 +295,10 @@ export function markSessionDeliveriesTerminal(
     terminalStatus: 'completed' | 'failed',
 ): void {
     try {
-        const active = MeshRuntimeStore.getInstance().getActiveSessionDeliveries(meshId, sessionId);
-        for (const delivery of active) {
-            MeshRuntimeStore.getInstance().updateSessionDeliveryStatus(delivery.id, terminalStatus);
-        }
+        // Route through markOpenSessionDeliveriesTerminal, which matches OPEN rows including
+        // 'delivered' — getActiveSessionDeliveries EXCLUDES 'delivered' and would silently
+        // leave the common (already-delivered) row un-terminated, keeping taskDeliveryConsumed()
+        // false and feeding the delivered_not_consumed_redrive false re-drive.
+        MeshRuntimeStore.getInstance().markOpenSessionDeliveriesTerminal(meshId, sessionId, terminalStatus);
     } catch { /* best-effort */ }
 }

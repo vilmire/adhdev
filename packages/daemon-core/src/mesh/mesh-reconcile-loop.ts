@@ -710,9 +710,19 @@ const RECLAIM_UNKNOWN_GRACE_TICKS = 3;
 // completed/reclaimed/claimed-elsewhere row's counter is dropped (no unbounded growth).
 const deliveredNoTurnUnknownStreak = new Map<string, number>();
 
-// Test hook: clear the delivered-no-turn UNKNOWN streak between cases.
+// DELIVERED-NOT-CONSUMED-REDRIVE (fix d): the SHORT-grace re-drive (delivered-but-unconsumed,
+// 25s window) previously reclaimed on a SINGLE non-GENERATING tick — and a REMOTE worker's local
+// busy verdict is UNKNOWN, not GENERATING, so a genuinely-mid-turn remote worker whose ack merely
+// hadn't propagated yet was torn off its task and the SAME prompt re-injected. Give the short path
+// the same bounded consecutive-UNKNOWN grace the long delivered-no-turn path uses: only an
+// IDLE_CONFIRMED verdict (positive LOCAL evidence the session is present-and-idle) re-drives
+// immediately; UNKNOWN accrues a streak and re-drives only after RECLAIM_UNKNOWN_GRACE_TICKS.
+const deliveredUnconsumedUnknownStreak = new Map<string, number>();
+
+// Test hook: clear the delivered-no-turn UNKNOWN streaks between cases.
 export function __resetReclaimUnknownStreakForTests(): void {
     deliveredNoTurnUnknownStreak.clear();
+    deliveredUnconsumedUnknownStreak.clear();
 }
 
 // PHASE 2.5 — assigned-stranded dispatch watchdog (Bug B). claimNextTask atomically
@@ -738,6 +748,9 @@ function recoverStrandedAssignedDispatches(components: DaemonComponents, meshId:
     const meshKeyPrefix = `${meshId}::`;
     for (const key of [...deliveredNoTurnUnknownStreak.keys()]) {
         if (key.startsWith(meshKeyPrefix) && !assignedKeys.has(key)) deliveredNoTurnUnknownStreak.delete(key);
+    }
+    for (const key of [...deliveredUnconsumedUnknownStreak.keys()]) {
+        if (key.startsWith(meshKeyPrefix) && !assignedKeys.has(key)) deliveredUnconsumedUnknownStreak.delete(key);
     }
     for (const row of assigned) {
         const dispatchedAtMs = Date.parse(row.dispatchTimestamp ?? '');
@@ -774,15 +787,42 @@ function recoverStrandedAssignedDispatches(components: DaemonComponents, meshId:
                 updateTaskStatus(meshId, row.id, status);
                 continue;
             }
+            const shortStreakKey = `${meshId}::${row.id}`;
             const verdict = row.assignedSessionId
                 ? resolveSessionBusyVerdict(components, row.assignedSessionId)
                 : 'IDLE_CONFIRMED'; // no session bound → nothing live generating to protect
-            if (verdict !== 'GENERATING') {
+            // GENERATING → demonstrably alive: never re-drive, reset the grace.
+            // IDLE_CONFIRMED → positive LOCAL evidence the session is present-and-idle: re-drive now.
+            // UNKNOWN → remote / gone / id-form-skewed session: DEFER. A remote worker whose ack
+            //   merely hasn't propagated reads UNKNOWN here — reclaiming on a single UNKNOWN tick
+            //   tears a live remote worker off its task and re-injects the same prompt (the exact
+            //   delivered_not_consumed_redrive symptom). Accrue a bounded consecutive-UNKNOWN streak
+            //   and only re-drive after RECLAIM_UNKNOWN_GRACE_TICKS, matching the long path.
+            if (verdict === 'GENERATING') {
+                deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
+            } else {
+                if (verdict === 'IDLE_CONFIRMED') {
+                    deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
+                } else {
+                    const streak = (deliveredUnconsumedUnknownStreak.get(shortStreakKey) ?? 0) + 1;
+                    deliveredUnconsumedUnknownStreak.set(shortStreakKey, streak);
+                    if (streak < RECLAIM_UNKNOWN_GRACE_TICKS) {
+                        traceMeshEventDrop('short_redrive_deferred_unknown_verdict', {
+                            taskId: row.id,
+                            sessionId: row.assignedSessionId,
+                            nodeId: row.assignedNodeId,
+                            meshId,
+                            event: 'agent:generating_started',
+                        }, `unknown ${streak}/${RECLAIM_UNKNOWN_GRACE_TICKS}`);
+                        continue;
+                    }
+                }
                 const redriven = reclaimStrandedAssignedTask(meshId, row.id, {
                     reason: 'delivered_not_consumed_redrive',
                     ageMs,
                 });
                 if (redriven) {
+                    deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
                     LOG.warn('MeshReconcile', `Re-drove delivered-but-unconsumed task ${row.id} on mesh ${meshId} `
                         + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}, delivered but no `
                         + `generating_started in ${Math.round(ageMs / 1000)}s, verdict ${verdict} → ${redriven.status})`);

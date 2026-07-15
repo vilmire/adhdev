@@ -5,7 +5,7 @@ import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { SessionRecoveryContext } from './mesh-ledger.js';
 import { updateSessionTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue } from './mesh-work-queue.js';
-import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus } from './mesh-delivery-policy.js';
+import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus, consumeSessionDelivery } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore, pruneMeshRuntimeRetention } from './mesh-runtime-store.js';
 import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, prunePendingMeshCoordinatorEventsRetention, readV2EnvelopeFromWire, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
@@ -1273,16 +1273,14 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     updateDirectDispatchStatus(args.meshId, sessionId, 'acked', soleTaskId);
                 }
             }
-            const activeDeliveries = ((): { id: string; taskId: string | null }[] => {
-                try { return MeshRuntimeStore.getInstance().getActiveSessionDeliveries(args.meshId, sessionId); }
-                catch { return []; }
-            })();
-            const deliveriesToAck = startedTaskId
-                ? activeDeliveries.filter(d => d.taskId === startedTaskId)
-                : activeDeliveries;
-            for (const d of deliveriesToAck) {
-                updateSessionDeliveryStatus(d.id, 'acked');
-            }
+            // DELIVERED-NOT-CONSUMED-REDRIVE: ack the delivery via consumeSessionDelivery, which
+            // matches rows INCLUDING 'delivered'. The prior path filtered getActiveSessionDeliveries
+            // — whose SQL EXCLUDES 'delivered' — so in the normal event order (transport confirm
+            // flips 'delivered' BEFORE generating_started fires) the ack matched zero rows and the
+            // delivery was stranded 'delivered', never reaching the 'acked' consume signal that
+            // taskDeliveryConsumed() keys on. The store's monotonic guard only advances the row.
+            // With a named taskId, key on (mesh, task); otherwise fall back to the whole session.
+            consumeSessionDelivery(args.meshId, sessionId, 'acked', startedTaskId);
         }
     } else if (args.event === 'agent:stopped') {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);

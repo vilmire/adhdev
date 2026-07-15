@@ -28,7 +28,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
   getMeshByRepo: meshConfigMocks.getMeshByRepo,
 }))
 
-import { runMeshReconcileTick, __resetReconcileInFlightSynthDebounceForTests, getMeshV2BackstopCounters, __resetMeshV2BackstopCountersForTests } from '../../src/mesh/mesh-reconcile-loop.js'
+import { runMeshReconcileTick, __resetReconcileInFlightSynthDebounceForTests, getMeshV2BackstopCounters, __resetMeshV2BackstopCountersForTests, __resetReclaimUnknownStreakForTests } from '../../src/mesh/mesh-reconcile-loop.js'
 import { setLogLevel, getRecentLogs } from '../../src/logging/logger.js'
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
 import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, claimNextTask, reclaimStrandedAssignedTask } from '../../src/mesh/mesh-work-queue.js'
@@ -40,6 +40,7 @@ function cleanup(meshId: string) {
   try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }
   __resetMeshRuntimeStoreForTests()
   __resetReconcileInFlightSynthDebounceForTests()
+  __resetReclaimUnknownStreakForTests()
   meshConfigMocks.listMeshes.mockReturnValue([])
   meshConfigMocks.getMesh.mockReset()
   const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
@@ -2948,7 +2949,7 @@ describe('runMeshReconcileTick', () => {
     // provably inside the short-grace re-drive window and well before the 5min confirm gate.
     const UNCONSUMED_MS = 40_000
 
-    it('re-drives a delivered-but-unconsumed row inside the short grace (delivered, never acked, not generating)', async () => {
+    it('re-drives a delivered-but-unconsumed REMOTE (UNKNOWN) row only after the UNKNOWN grace (delivered, never acked, not generating)', async () => {
       const meshId = `mesh_phase25_unconsumed_${Date.now()}`
       const nodeId = 'node_w'
       try {
@@ -2959,13 +2960,24 @@ describe('runMeshReconcileTick', () => {
         const claimed = claimNextTask(meshId, nodeId, 'sess-remote-gone', [])!
         backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
         createSessionDelivery({ meshId, nodeId, sessionId: 'sess-remote-gone', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
-        // No local instance for the session → busy verdict UNKNOWN (a remote worker), which the
-        // delivered-not-acked signal must still recover.
+        // No local instance for the session → busy verdict UNKNOWN (a remote worker). Fix (d):
+        // an UNKNOWN session is a remote worker whose ack may merely not have propagated, so the
+        // short re-drive DEFERS on a single UNKNOWN tick and only re-drives after the bounded
+        // consecutive-UNKNOWN grace (RECLAIM_UNKNOWN_GRACE_TICKS = 3) — never tearing a live
+        // remote worker off its turn on one absent observation.
         hostMesh(meshId, nodeId)
 
+        // Ticks 1..(grace-1): deferred, no reclaim yet.
         await runMeshReconcileTick(makeNoWorkerComponents())
+        await runMeshReconcileTick(makeNoWorkerComponents())
+        let row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe('sess-remote-gone')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
 
-        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        // Tick 3 (grace met): now re-driven.
+        await runMeshReconcileTick(makeNoWorkerComponents())
+        row = getQueue(meshId).find(t => t.id === claimed.id)!
         expect(row.status).toBe('pending')
         expect(row.assignedSessionId).toBeUndefined()
         expect(row.dispatchTimestamp).toBeUndefined()
@@ -3060,13 +3072,13 @@ describe('runMeshReconcileTick', () => {
       }
     })
 
-    it('re-driven delivered-but-unconsumed task is re-dispatched onto a now-idle worker the same tick', async () => {
+    it('re-driven delivered-but-unconsumed task (UNKNOWN, past grace) is re-dispatched onto a now-idle worker the same tick', async () => {
       const meshId = `mesh_phase25_unconsumed_redispatch_${Date.now()}`
       const nodeId = 'node_w'
       const sessionId = 'sess-idle-worker'
       try {
         enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
-        // Stranded delivered-but-unconsumed on a gone session; an idle worker can re-claim.
+        // Stranded delivered-but-unconsumed on a gone (UNKNOWN) session; an idle worker can re-claim.
         const claimed = claimNextTask(meshId, nodeId, 'sess-gone', [])!
         backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
         createSessionDelivery({ meshId, nodeId, sessionId: 'sess-gone', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -3076,8 +3088,14 @@ describe('runMeshReconcileTick', () => {
         meshConfigMocks.listMeshes.mockReturnValue([mesh])
         meshConfigMocks.getMesh.mockReturnValue(mesh)
 
+        // Fix (d): UNKNOWN 'sess-gone' verdict must clear the consecutive-UNKNOWN grace before the
+        // re-drive fires. The first two ticks defer; the third both reclaims AND (PHASE 3) re-dispatches
+        // onto the idle worker in the SAME tick.
         await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        expect(handleCliCommand).not.toHaveBeenCalled()
 
+        await runMeshReconcileTick(components)
         expect(handleCliCommand).toHaveBeenCalledWith('agent_command', expect.objectContaining({
           targetSessionId: sessionId,
           action: 'send_chat',

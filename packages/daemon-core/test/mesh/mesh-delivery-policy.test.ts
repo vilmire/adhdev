@@ -20,6 +20,8 @@ import {
     createSessionDelivery,
     updateSessionDeliveryStatus,
     getActiveSessionDeliveries,
+    consumeSessionDelivery,
+    markSessionDeliveriesTerminal,
     __clearSessionDeliveriesForTests,
 } from '../../src/mesh/mesh-delivery-policy.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
@@ -227,6 +229,99 @@ describe('mesh-delivery-policy', () => {
             const active = getActiveSessionDeliveries(meshId, 'sess-y');
             expect(active[0].attemptCount).toBe(1);
             expect(active[0].lastError).toBe('send failed');
+        });
+    });
+
+    // ── DELIVERED-NOT-CONSUMED-REDRIVE: monotonic delivery FSM ───────────────
+    // Regression for the delivered_not_consumed_redrive bug: a delivery stuck at
+    // 'delivered' kept taskDeliveryConsumed() false forever, so an already-completed
+    // worker's task was re-driven (same prompt re-injected). The FSM must reach 'acked'
+    // in BOTH event orders and never regress.
+    describe('monotonic delivery FSM (delivered_not_consumed_redrive regression)', () => {
+        const store = () => MeshRuntimeStore.getInstance();
+
+        it('NORMAL order: transport confirm (delivered) THEN generating_started (acked) — reaches acked, consumed=true', () => {
+            const meshId = `mesh-fsm-normal-${randomUUID().slice(0, 8)}`;
+            const taskId = `task-${randomUUID().slice(0, 8)}`;
+            const sessionId = 'sess-normal';
+            const d = createSessionDelivery({ meshId, sessionId, taskId, kind: 'task', message: 'm', status: 'delivering' });
+            // 1) transport confirm lands first → 'delivered' (the common order).
+            updateSessionDeliveryStatus(d.id, 'delivered');
+            // Pre-fix: the ack path filtered getActiveSessionDeliveries, which EXCLUDES 'delivered',
+            // so acked was never written and consumed stayed false forever. consumeSessionDelivery
+            // includes 'delivered'.
+            expect(store().taskDeliveryConsumed(meshId, taskId)).toBe(false);
+            const advanced = consumeSessionDelivery(meshId, sessionId, 'acked', taskId);
+            expect(advanced).toBe(1);
+            expect(store().taskDeliveryConsumed(meshId, taskId)).toBe(true);
+        });
+
+        it('REVERSE order: generating_started (acked) THEN late transport confirm (delivered) — acked SURVIVES (no clobber)', () => {
+            const meshId = `mesh-fsm-reverse-${randomUUID().slice(0, 8)}`;
+            const taskId = `task-${randomUUID().slice(0, 8)}`;
+            const sessionId = 'sess-reverse';
+            const d = createSessionDelivery({ meshId, sessionId, taskId, kind: 'task', message: 'm', status: 'delivering' });
+            // 1) generating_started wins the race → 'acked' before the confirm.
+            expect(consumeSessionDelivery(meshId, sessionId, 'acked', taskId)).toBe(1);
+            expect(store().taskDeliveryConsumed(meshId, taskId)).toBe(true);
+            // 2) the LATE transport confirm fires and tries to write 'delivered' by PK. Pre-fix this
+            // clobbered 'acked'→'delivered'; the monotonic guard makes it a no-op (2 < 3).
+            updateSessionDeliveryStatus(d.id, 'delivered');
+            expect(store().taskDeliveryConsumed(meshId, taskId)).toBe(true);
+        });
+
+        it('monotonic guard: a plain status write never regresses rank (acked→delivered / delivered→delivering are no-ops)', () => {
+            const meshId = `mesh-fsm-guard-${randomUUID().slice(0, 8)}`;
+            const d = createSessionDelivery({ meshId, sessionId: 'sess-g', taskId: 't-g', kind: 'task', message: 'm', status: 'delivering' });
+            updateSessionDeliveryStatus(d.id, 'acked');
+            updateSessionDeliveryStatus(d.id, 'delivered');   // regress attempt — ignored
+            updateSessionDeliveryStatus(d.id, 'delivering');  // regress attempt — ignored
+            // consumed keys on 'acked'/'completed'; if either regress had applied it would be false.
+            expect(store().taskDeliveryConsumed(meshId, 't-g')).toBe(true);
+        });
+
+        it('monotonic guard: forward advance still applies (delivering→delivered→acked→completed)', () => {
+            const meshId = `mesh-fsm-fwd-${randomUUID().slice(0, 8)}`;
+            const d = createSessionDelivery({ meshId, sessionId: 'sess-f', taskId: 't-f', kind: 'task', message: 'm', status: 'delivering' });
+            updateSessionDeliveryStatus(d.id, 'delivered');
+            expect(store().taskDeliveryConsumed(meshId, 't-f')).toBe(false);
+            updateSessionDeliveryStatus(d.id, 'acked');
+            expect(store().taskDeliveryConsumed(meshId, 't-f')).toBe(true);
+            updateSessionDeliveryStatus(d.id, 'completed');
+            expect(store().taskDeliveryConsumed(meshId, 't-f')).toBe(true);
+        });
+
+        it('failure states are absorbing: a progress write never resurrects a failed delivery', () => {
+            const meshId = `mesh-fsm-fail-${randomUUID().slice(0, 8)}`;
+            const d = createSessionDelivery({ meshId, sessionId: 'sess-x', taskId: 't-x', kind: 'task', message: 'm', status: 'delivered' });
+            updateSessionDeliveryStatus(d.id, 'failed', { lastError: 'dispatch error', incrementAttempt: true });
+            // A stray late 'delivered'/'acked' must NOT revive the dead row.
+            updateSessionDeliveryStatus(d.id, 'delivered');
+            updateSessionDeliveryStatus(d.id, 'acked');
+            expect(store().taskDeliveryConsumed(meshId, 't-x')).toBe(false);
+            expect(store().taskHasConfirmedDelivery(meshId, 't-x')).toBe(false);
+        });
+
+        it('completion terminal marking includes a delivered row (markSessionDeliveriesTerminal → completed)', () => {
+            const meshId = `mesh-fsm-term-${randomUUID().slice(0, 8)}`;
+            const sessionId = 'sess-term';
+            const d = createSessionDelivery({ meshId, sessionId, taskId: 't-term', kind: 'task', message: 'm', status: 'delivering' });
+            updateSessionDeliveryStatus(d.id, 'delivered');
+            // Pre-fix: markSessionDeliveriesTerminal routed through getActiveSessionDeliveries which
+            // EXCLUDES 'delivered', so the delivered row was never marked terminal and stayed
+            // 'delivered'. Now it advances 'delivered'→'completed'.
+            markSessionDeliveriesTerminal(meshId, sessionId, 'completed');
+            expect(store().taskDeliveryConsumed(meshId, 't-term')).toBe(true);
+        });
+
+        it('consume matches by (mesh, task) even when the session id carries whitespace skew', () => {
+            const meshId = `mesh-fsm-skew-${randomUUID().slice(0, 8)}`;
+            const d = createSessionDelivery({ meshId, sessionId: 'sess-skew', taskId: 't-skew', kind: 'task', message: 'm', status: 'delivered' });
+            void d;
+            // generating_started reinterprets the session id with a trailing space — sessionIdsEquivalent
+            // trims both sides, so the (mesh, task) consume still lands on the right row.
+            expect(consumeSessionDelivery(meshId, ' sess-skew ', 'acked', 't-skew')).toBe(1);
+            expect(store().taskDeliveryConsumed(meshId, 't-skew')).toBe(true);
         });
     });
 

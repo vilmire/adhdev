@@ -1429,21 +1429,123 @@ export class MeshRuntimeStore {
         this.maybeCheckpointWal();
     }
 
+    // DELIVERED-NOT-CONSUMED-REDRIVE monotonic FSM: the forward-progress lifecycle of a
+    // delivery is a strictly increasing rank — a status may only advance, never regress.
+    // The redrive bug was a NON-monotonic FSM: the transport-confirm callback
+    // (mesh-queue-assignment :384) writes 'delivered' unconditionally by PK, so when the
+    // worker's agent:generating_started raced AHEAD of the confirm and already flipped the
+    // row 'delivering'→'acked', the late confirm CLOBBERED 'acked' back to 'delivered'.
+    // taskDeliveryConsumed() (which keys on 'acked'/'completed') then read false forever,
+    // and the short-grace re-drive re-opened an already-consumed task. Enforcing the rank
+    // ordering here makes the two event orders converge on the same monotone terminal state
+    // regardless of arrival order, so a late confirm can never demote a consumed delivery.
+    // 'failed'/'expired'/'cancelled' are absorbing OUTCOMES, not progress ranks — they are
+    // always allowed (a genuine dispatch failure must be recordable even from 'acked').
+    private static readonly DELIVERY_PROGRESS_RANK: Record<string, number> = {
+        queued: 0,
+        delivering: 1,
+        delivered: 2,
+        acked: 3,
+        completed: 4,
+    };
+
     updateSessionDeliveryStatus(id: string, status: string, opts?: { lastError?: string; incrementAttempt?: boolean }): void {
         const now = new Date().toISOString();
         if (opts?.incrementAttempt) {
+            // Retry/requeue path (transport failure → 'failed', or an explicit re-queue): this is
+            // the deliberate reset signal, NOT the racing progress writes that cause the clobber, so
+            // it is exempt from the monotonic guard and always applies (preserves attempt_count
+            // bookkeeping and the failure ledger). The clobber bug lives only in the plain
+            // progress write below.
             this.db.prepare(`
                 UPDATE mesh_session_delivery
                 SET status = @status, last_error = @lastError, attempt_count = attempt_count + 1, updated_at = @updatedAt
                 WHERE id = @id
             `).run({ id, status, lastError: opts?.lastError ?? null, updatedAt: now });
-        } else {
+            return;
+        }
+        // Monotonic guard for forward-progress statuses: a plain status write may ADVANCE or
+        // rewrite the SAME rank, but NEVER regress to a strictly-lower rank. This is what stops the
+        // late transport-confirm ('delivered', rank 2) from clobbering an already-consumed row
+        // ('acked', rank 3): the `@targetRank >= current` predicate fetches zero rows for 3→2, so
+        // 'acked' survives. Absorbing failure outcomes (failed/expired/cancelled) have no rank and
+        // are written unconditionally.
+        const targetRank = MeshRuntimeStore.DELIVERY_PROGRESS_RANK[status];
+        if (targetRank === undefined) {
             this.db.prepare(`
                 UPDATE mesh_session_delivery
                 SET status = @status, last_error = @lastError, updated_at = @updatedAt
                 WHERE id = @id
             `).run({ id, status, lastError: opts?.lastError ?? null, updatedAt: now });
+            return;
         }
+        // Absorbing failure states (failed/expired/cancelled) map to rank 99 so no progress write
+        // (max rank 4) can ever resurrect a dead delivery.
+        this.db.prepare(`
+            UPDATE mesh_session_delivery
+            SET status = @status, last_error = @lastError, updated_at = @updatedAt
+            WHERE id = @id AND (@targetRank >= CASE status
+                WHEN 'queued' THEN 0 WHEN 'delivering' THEN 1 WHEN 'delivered' THEN 2
+                WHEN 'acked' THEN 3 WHEN 'completed' THEN 4 ELSE 99 END)
+        `).run({ id, status, lastError: opts?.lastError ?? null, updatedAt: now, targetRank });
+    }
+
+    /**
+     * DELIVERED-NOT-CONSUMED-REDRIVE consume path. Advance a task's delivery record(s) to a
+     * CONSUMED status ('acked' or 'completed'), matching on mesh + session (+ taskId when the
+     * event names one) and INCLUDING rows already in 'delivered'/'acked'/'delivering'.
+     *
+     * The ack/terminal callers previously routed through getActiveSessionDeliveries(), whose SQL
+     * EXCLUDES 'delivered' — so in the normal event order (transport confirm flips 'delivered'
+     * BEFORE the worker's generating_started fires) the ack matched zero rows and the delivery
+     * was stranded 'delivered', never 'acked'. This finds the row by (mesh, session[, task])
+     * directly and relies on updateSessionDeliveryStatus's monotonic guard to only advance it.
+     * Returns the number of rows advanced.
+     */
+    consumeSessionDelivery(meshId: string, sessionId: string, status: 'acked' | 'completed', taskId?: string): number {
+        const rows = this.db.prepare(
+            taskId
+                ? `SELECT id, session_id FROM mesh_session_delivery
+                     WHERE mesh_id = ? AND task_id = ?
+                       AND status IN ('queued','delivering','delivered','acked')`
+                : `SELECT id, session_id FROM mesh_session_delivery
+                     WHERE mesh_id = ? AND session_id = ?
+                       AND status IN ('queued','delivering','delivered','acked')`,
+        ).all(meshId, taskId ?? sessionId) as Array<{ id: string; session_id: string | null }>;
+        // Filter session membership in JS with the trimming equivalence predicate (mirrors
+        // findAssignedBySession): a taskId match must still belong to this session, and the
+        // session-only match already selected by column may carry serialization skew.
+        let advanced = 0;
+        for (const r of rows) {
+            if (!sessionIdsEquivalent(r.session_id ?? undefined, sessionId)) continue;
+            this.updateSessionDeliveryStatus(r.id, status);
+            advanced++;
+        }
+        return advanced;
+    }
+
+    /**
+     * DELIVERED-NOT-CONSUMED-REDRIVE terminal path. Mark every OPEN delivery for a session
+     * (queued/delivering/delivered/acked) terminal on task completion/failure. The prior
+     * markSessionDeliveriesTerminal() routed through getActiveSessionDeliveries(), whose SQL
+     * EXCLUDES 'delivered'/'completed' — so a 'delivered' row (the common case, since the
+     * transport confirm flips it before the completion event) was never marked terminal and
+     * stayed 'delivered', keeping taskDeliveryConsumed() false and feeding the false re-drive.
+     * We match rows in OPEN states directly here. 'completed' advances monotonically (it is the
+     * top progress rank); 'failed' is an absorbing outcome written unconditionally.
+     */
+    markOpenSessionDeliveriesTerminal(meshId: string, sessionId: string, terminalStatus: 'completed' | 'failed'): number {
+        const rows = this.db.prepare(
+            `SELECT id, session_id FROM mesh_session_delivery
+               WHERE mesh_id = ? AND status IN ('queued','delivering','delivered','acked')`,
+        ).all(meshId) as Array<{ id: string; session_id: string | null }>;
+        let marked = 0;
+        for (const r of rows) {
+            if (!sessionIdsEquivalent(r.session_id ?? undefined, sessionId)) continue;
+            this.updateSessionDeliveryStatus(r.id, terminalStatus);
+            marked++;
+        }
+        return marked;
     }
 
     getActiveSessionDeliveries(meshId: string, sessionId?: string): Array<{
