@@ -58,6 +58,19 @@ export interface TranscriptPtySpec {
      * so the plain assistant answer is the only assistant bubble left. Matched
      * against the raw pre-strip line; the visible text is still ANSI-stripped
      * for the bubble content.
+     *
+     * Value-agnostic mode: the sentinel "*" (or "48;*" / "bg") matches ANY
+     * background-color SGR — 256-color `48;5;<n>` OR truecolor `48;2;<r>;<g>;<b>`
+     * — instead of an allowlist of exact color numbers. This is the robust form:
+     * the earlier allowlist bug recurred every time a TUI changed its exact box
+     * color (cursor `48;5;233` guess, opencode rc.531), because a hard-coded
+     * color that no longer matched let the boxed user echo fall through to the
+     * permissive assistantPrefix. The sentinel keys off the *presence* of a
+     * background-color param group — the structural signal of a boxed turn —
+     * so a genuine assistant line (no background SGR) is still classified
+     * assistant. Chrome patterns are filtered BEFORE this check, so bg-colored
+     * chrome (e.g. the "→ Add a follow-up" composer footer) is already excluded
+     * and does not become a spurious user bubble.
      */
     userBackgroundSgr?: string[]
 }
@@ -223,7 +236,16 @@ export function buildParseSessionFromTui(spec: ParseSessionTuiSpec): (input: any
     const userBgList = Array.isArray(spec.transcriptPty.userBackgroundSgr)
         ? spec.transcriptPty.userBackgroundSgr.map(s => String(s).trim()).filter(Boolean)
         : []
+    // Value-agnostic sentinel: "*" / "48;*" / "bg" matches ANY background-color
+    // SGR (256-color `48;5;<n>` OR truecolor `48;2;<r>;<g>;<b>`) as the boxed-user
+    // signal, instead of an allowlist of exact colors that breaks whenever a TUI
+    // changes its box color. The param group must sit inside an SGR run terminated
+    // by `m`; 3-digit color indices / channels are matched structurally.
+    const ANY_BG_SENTINELS = new Set(['*', '48;*', 'bg', '48'])
     const userBgRes = userBgList.map(code => {
+        if (ANY_BG_SENTINELS.has(code.toLowerCase())) {
+            return new RegExp('\\x1b\\[[0-9;]*\\b48;(?:5;\\d{1,3}|2;\\d{1,3};\\d{1,3};\\d{1,3})[0-9;]*m')
+        }
         // Match the code inside an SGR run: `\x1b[<...>48;5;233<...>m`. The code
         // (e.g. "48;5;233") appears somewhere in the `;`-separated parameter list
         // terminated by `m`. Escape regex-special chars in the code first.
