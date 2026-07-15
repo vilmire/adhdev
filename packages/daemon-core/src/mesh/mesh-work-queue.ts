@@ -1359,6 +1359,34 @@ export function requeueTask(
 const MAX_STRANDED_RECLAIMS = 3;
 
 /**
+ * TASK-PROMPT-REDRIVE-AFTER-COMPLETE: the reclaim reasons the assigned-stranded watchdog
+ * uses when it RE-DRIVES a delivered-but-not-terminal task (returns it to 'pending' so the
+ * SAME prompt is re-dispatched). These are distinct from `assigned_stranded_dispatch_unconfirmed`
+ * (a dispatch that was NEVER handed off — nothing ran, so a late completion is impossible).
+ *
+ * A re-drive assumes the worker never finished. But for an autoLaunch/worktree worker the
+ * turn-lifecycle events (agent:generating_started/completed) do NOT reliably reach the
+ * coordinator ledger, so the deadline can elapse and re-drive fire while the worker's genuine
+ * completion is merely LATE (observed live: it lands 0.9s–98s AFTER the reclaim). The late
+ * completion must then SUPERSEDE the re-drive rather than be dropped — the completion handler's
+ * flip-miss safety net checks a row reclaimed for one of these reasons within
+ * {@link REDRIVE_SUPERSEDE_WINDOW_MS} of its `requeuedAt`.
+ */
+export const REDRIVE_RECLAIM_REASONS: ReadonlySet<string> = new Set([
+    'delivered_no_turn_deadline',
+    'reclaim_after_unknown_grace',
+    'delivered_not_consumed_redrive',
+]);
+
+/**
+ * How long after a re-drive reclaim's `requeuedAt` a late completion still supersedes the
+ * re-dispatch. Comfortably covers the observed 0.9s–98s completion-vs-reclaim race with margin,
+ * while staying far short of the time it would take a genuinely fresh re-dispatched turn to
+ * produce its OWN completion — so a real second turn is never mistaken for the superseded one.
+ */
+export const REDRIVE_SUPERSEDE_WINDOW_MS = 5 * 60_000;
+
+/**
  * Bug B: reclaim a task stuck in 'assigned' because its dispatch was never confirmed.
  *
  * claimNextTask atomically marks a row 'assigned' BEFORE the fire-and-forget dispatch

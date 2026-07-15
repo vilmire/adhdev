@@ -3108,6 +3108,124 @@ describe('runMeshReconcileTick', () => {
         cleanup(meshId)
       }
     })
+
+    // ── TASK-PROMPT-REDRIVE-AFTER-COMPLETE (Fix A-i) ────────────────────────────
+    // The long DELIVERED_NO_TURN_DEADLINE (15min) reclaim must NOT re-drive a task the worker
+    // actually finished when its completion event never reached the coordinator ledger. Past
+    // 15min so the F3 long-deadline branch is reached (well beyond the 5min short-grace window).
+    const DELIVERED_NO_TURN_MS = 16 * 60_000
+
+    it('Fix A-i: does NOT re-drive a delivered-no-turn task whose worker transcript proves it finished (idle + post-dispatch final assistant)', async () => {
+      const meshId = `mesh_phase25_redrive_transcript_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-finished-late'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        backdateDispatch(meshId, claimed.id, DELIVERED_NO_TURN_MS)
+        // Confirmed delivery (delivered) but never 'acked' — the autoLaunch/worktree gap where
+        // generating_started never reached the coordinator, so the ledger has no terminal evidence.
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+
+        // A LOCAL idle worker instance for this session → verdict IDLE_CONFIRMED (reclaim would
+        // otherwise fire immediately). read_chat returns idle WITH a final assistant message dated
+        // AFTER the (16-min-old) dispatch — the transcript evidence the poll short-circuits on.
+        const idleInstance = {
+          category: 'cli',
+          getState: () => ({ instanceId: sessionId, status: 'idle', type: 'claude-cli', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
+        }
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status: 'idle',
+            providerSessionId: 'claude-history-late',
+            messages: [
+              { role: 'user', content: 'do work', timestamp: Date.now() - DELIVERED_NO_TURN_MS + 1_000 },
+              { role: 'assistant', content: 'All done — implemented and tests pass.', timestamp: Date.now() - 60_000 },
+            ],
+          }
+        })
+        const components = {
+          instanceManager: {
+            getByCategory: (category: string) => (category === 'cli' ? [idleInstance] : []),
+            getInstance: (id: string) => (id === sessionId ? idleInstance : undefined),
+          },
+          commandHandler: { handle: readChat },
+        } as any
+        // Local node (no daemonId) so the poll reads via the local commandHandler.
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+
+        // The transcript poll ran and the task was flipped 'completed' — NOT reclaimed/re-driven.
+        expect(readChat).toHaveBeenCalledWith('read_chat', expect.objectContaining({ targetSessionId: sessionId }))
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('completed')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+        const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed')
+        expect(completed).toBeTruthy()
+        expect((completed?.payload as any)?.source).toBe('redrive_deadline_transcript_evidence')
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('Fix A-i: STILL re-drives a delivered-no-turn task when the transcript shows NO turn-end (idle but no final assistant)', async () => {
+      const meshId = `mesh_phase25_redrive_no_evidence_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-never-produced'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        backdateDispatch(meshId, claimed.id, DELIVERED_NO_TURN_MS)
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+
+        const idleInstance = {
+          category: 'cli',
+          getState: () => ({ instanceId: sessionId, status: 'idle', type: 'claude-cli', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
+        }
+        // Idle but only the user prompt — no assistant result → NOT a turn-end → poll returns null
+        // → the re-drive proceeds (a genuinely never-started worker is still recovered).
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status: 'idle',
+            messages: [
+              { role: 'user', content: 'do work', timestamp: Date.now() - DELIVERED_NO_TURN_MS + 1_000 },
+            ],
+          }
+        })
+        const components = {
+          instanceManager: {
+            getByCategory: (category: string) => (category === 'cli' ? [idleInstance] : []),
+            getInstance: (id: string) => (id === sessionId ? idleInstance : undefined),
+          },
+          commandHandler: { handle: readChat },
+        } as any
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+
+        // The re-drive fired (no transcript turn-end evidence to short-circuit on): a
+        // task_reclaimed with the delivered-no-turn reason is recorded, and NO transcript-evidence
+        // completion was synthesized. (PHASE 3 may re-dispatch the reclaimed row the same tick, so
+        // the row itself is not asserted here — only that the reclaim happened.)
+        const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
+        expect(reclaimed).toHaveLength(1)
+        expect((reclaimed[0].payload as any).reason).toBe('delivered_no_turn_deadline')
+        expect(readLedgerEntries(meshId).some(
+          e => (e.payload as any)?.source === 'redrive_deadline_transcript_evidence',
+        )).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
   })
 })
 

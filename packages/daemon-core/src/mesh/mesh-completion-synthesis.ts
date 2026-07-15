@@ -414,3 +414,88 @@ export async function autoPruneStaleDirectDispatches(
         LOG.info('MeshReconcile', `Auto-pruned ${result.prunedCount} orphaned direct dispatch record(s) for mesh ${mesh.id}`);
     }
 }
+
+// TASK-PROMPT-REDRIVE-AFTER-COMPLETE (Fix A-i). Single-shot transcript poll for a CLAIM-PATH
+// (queue-assigned) row that PHASE 2.5's long delivered-no-turn deadline is about to RE-DRIVE.
+//
+// PHASE 4 (reconcileUnterminatedDirectDispatches) recovers a lost completion by re-reading the
+// worker transcript, but it is bound to DIRECT-dispatch ledger rows — it never touches a
+// claim-path queue row. So the F3 long-deadline reclaim reaches its 15-min deadline with an empty
+// ledger for an autoLaunch/worktree worker whose generating_started/completed events never
+// propagated, and re-drives a task the worker actually FINISHED (the owner's symptom). This poll
+// gives that reclaim the SAME transcript evidence PHASE 4 uses, for the queue row: if the worker
+// session is idle with a final assistant summary dated at/after this task's dispatch, the task is
+// done — return its terminal outcome so the caller short-circuits to that status instead of
+// reclaiming. Unlike PHASE 4 there is no acked-hold/grace machinery: the caller only invokes this
+// AFTER the full 15-min deadline, so a single idle-with-final-assistant read is decisive.
+//
+// Conservative: a non-idle read, a read failure, no final summary, or a summary provably BEFORE
+// dispatch all yield null (fall through to the caller's normal reclaim decision) — the poll can
+// only PREVENT a wrong re-drive, never invent a completion.
+export async function pollAssignedTaskTerminalEvidence(
+    components: DaemonComponents,
+    mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
+    row: { id: string; assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string; dispatchTimestamp?: string },
+): Promise<'completed' | null> {
+    const sessionId = readNonEmptyString(row.assignedSessionId);
+    const nodeId = readNonEmptyString(row.assignedNodeId);
+    if (!sessionId || !nodeId) return null; // no worker to read
+
+    const node = (mesh.nodes ?? []).find(n => n.id === nodeId);
+    const nodeDaemonId = readNonEmptyString(node?.daemonId);
+    const localDaemonId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
+    const isLocalNode = !nodeDaemonId
+        || daemonIdsEquivalent(nodeDaemonId, localDaemonId)
+        || !!components.instanceManager.getInstance(sessionId);
+
+    const providerType = readNonEmptyString(row.assignedProviderType);
+    const readArgs: Record<string, unknown> = {
+        sessionId,
+        targetSessionId: sessionId,
+        tailLimit: 10,
+        ...(node?.workspace ? { workspace: node.workspace } : {}),
+        ...(providerType ? { agentType: providerType, providerType } : {}),
+    };
+
+    let payload: Record<string, unknown> | null = null;
+    try {
+        if (isLocalNode) {
+            const result = await components.commandHandler?.handle('read_chat', readArgs);
+            if (result && (result as { success?: boolean }).success === false) return null;
+            payload = unwrapReadChatPayload(result);
+        } else if (components.dispatchMeshCommand) {
+            const result = await components.dispatchMeshCommand(nodeDaemonId, 'read_chat', readArgs);
+            payload = unwrapReadChatPayload(result);
+            if (payload && (payload as { success?: boolean }).success === false) return null;
+        } else {
+            return null; // remote node, no P2P transport — can't read this tick
+        }
+    } catch {
+        return null; // transport error / session gone → inconclusive, let the caller decide
+    }
+    if (!payload) return null;
+
+    // Only a settled-idle session is a turn-end; a generating/waiting session is mid-turn and
+    // must NEVER be short-circuited to completed.
+    if (readChatPayloadStatus(payload) !== 'idle') return null;
+
+    const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
+    const evidence = extractFinalAssistantSummaryEvidence(messages);
+    if (!evidence.finalSummary) return null; // idle but no assistant result yet → not a turn-end
+
+    // Stale-summary guard (same bar as PHASE 4): a reused session's transcript tail may hold a
+    // PRIOR task's summary. Require the final assistant message to be dated at/after THIS task's
+    // dispatch. When either timestamp is unusable, do NOT short-circuit — fall through so we never
+    // synthesize a completion off a possibly-stale tail (the reclaim path is the safe default).
+    const dispatchedAtMs = Date.parse(readNonEmptyString(row.dispatchTimestamp));
+    const transcriptAtMs = Date.parse(evidence.transcriptMessageAt ?? '');
+    if (!(Number.isFinite(dispatchedAtMs) && Number.isFinite(transcriptAtMs) && transcriptAtMs >= dispatchedAtMs)) {
+        return null;
+    }
+
+    // Idle + a final assistant message dated after dispatch = the worker finished this turn. We
+    // cannot distinguish a self-reported failure from the plain transcript tail here (that lives
+    // in buildTaskCompletionEvidence's structured-result path), and the alternative — re-driving a
+    // finished worker — is strictly worse, so a proven turn-end short-circuits to 'completed'.
+    return 'completed';
+}

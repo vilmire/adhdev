@@ -4,7 +4,8 @@ import { getMesh, getMeshByRepo, listMeshes } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { SessionRecoveryContext } from './mesh-ledger.js';
-import { updateSessionTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue } from './mesh-work-queue.js';
+import { updateSessionTaskStatus, updateTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue, REDRIVE_RECLAIM_REASONS, REDRIVE_SUPERSEDE_WINDOW_MS } from './mesh-work-queue.js';
+import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus, consumeSessionDelivery } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore, pruneMeshRuntimeRetention } from './mesh-runtime-store.js';
 import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
@@ -810,6 +811,93 @@ function stopStaleMeshWorker(
     }
 }
 
+/**
+ * TASK-PROMPT-REDRIVE-AFTER-COMPLETE (Fix C): a genuine completion echoed a taskId whose queue
+ * row is NOT 'assigned' anymore — because the assigned-stranded watchdog RE-DROVE it (long
+ * delivered-no-turn deadline / unknown-grace) while this very completion was still in flight.
+ * For an autoLaunch/worktree worker the turn-lifecycle events don't reliably reach the
+ * coordinator ledger, so the deadline fires before the completion propagates (observed live at
+ * 0.9s–98s late). The re-drive re-injects the SAME prompt into the already-finished worker (the
+ * owner's symptom). This late completion PROVES the original turn finished, so it SUPERSEDES the
+ * re-drive: flip the row terminal and stop any duplicate re-dispatch.
+ *
+ * Bounded to a row reclaimed for a RE-DRIVE reason within {@link REDRIVE_SUPERSEDE_WINDOW_MS} of
+ * its `requeuedAt` — outside that window a `pending` row is an unrelated retry (or a fresh
+ * re-dispatched turn whose own completion this is not), and is left untouched. Returns true when
+ * it superseded the re-drive (row flipped terminal), false to fall through to normal handling.
+ */
+function supersedeRedriveReclaimForLateCompletion(
+    components: DaemonComponents,
+    meshId: string,
+    row: MeshWorkQueueEntry,
+    completingSessionId: string,
+    outcome: 'completed' | 'failed',
+    args: { nodeId?: string; event: string; metadataEvent: Record<string, unknown> },
+): boolean {
+    // Only a re-drive reclaim is superseded. A row reclaimed as never-delivered
+    // (assigned_stranded_dispatch_unconfirmed) never ran, so a completion for it is not a
+    // late race — leave it to the normal path. A row already terminal is a no-op.
+    if (!row.requeueReason || !REDRIVE_RECLAIM_REASONS.has(row.requeueReason)) return false;
+    if (row.status === 'completed' || row.status === 'failed' || row.status === 'cancelled') return false;
+    const requeuedAtMs = Date.parse(row.requeuedAt ?? '');
+    if (!Number.isFinite(requeuedAtMs)) return false;
+    if (Date.now() - requeuedAtMs > REDRIVE_SUPERSEDE_WINDOW_MS) return false;
+
+    // The re-drive may have already re-dispatched the SAME prompt onto a FRESH session (row is
+    // 'assigned' again to a different session). That duplicate is executing work the original
+    // worker already finished — stop it so the prompt is not run twice. (When the row is still
+    // 'pending' there is no duplicate yet; flipping it terminal below prevents PHASE 3 from ever
+    // re-dispatching it.)
+    const reDispatchedSessionId = row.assignedSessionId;
+    if (
+        row.status === 'assigned'
+        && reDispatchedSessionId
+        && !sessionIdsEquivalent(reDispatchedSessionId, completingSessionId)
+    ) {
+        stopStaleMeshWorker(components, {
+            meshId,
+            sessionId: reDispatchedSessionId,
+            nodeId: row.assignedNodeId,
+            providerType: row.assignedProviderType,
+        });
+    }
+
+    // Flip the row terminal by its exact id (immune to the cleared session ownership) and record
+    // the terminal ledger evidence, so the reconcile watchdog's terminal-ledger branch also sees
+    // it and no further reclaim fires.
+    endTaskDispatchInFlight(meshId, row.id);
+    updateTaskStatus(meshId, row.id, outcome === 'completed' ? 'completed' : 'failed');
+    if (!findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id })) {
+        try {
+            appendLedgerEntry(meshId, {
+                kind: outcome === 'completed' ? 'task_completed' : 'task_failed',
+                sessionId: completingSessionId,
+                nodeId: readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
+                providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+                payload: {
+                    taskId: row.id,
+                    event: args.event,
+                    source: 'redrive_late_completion_supersede',
+                    reclaimReason: row.requeueReason,
+                    reclaimAgeMs: Date.now() - requeuedAtMs,
+                    finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+                },
+            });
+        } catch { /* best-effort ledger write */ }
+    }
+    LOG.warn('MeshQueue', `Late completion superseded re-drive for task ${row.id} on mesh ${meshId} `
+        + `(reclaimed '${row.requeueReason}' ${Math.round((Date.now() - requeuedAtMs) / 1000)}s ago; completing session ${completingSessionId}) `
+        + `→ flipped ${outcome}${(row.status === 'assigned' && reDispatchedSessionId && !sessionIdsEquivalent(reDispatchedSessionId, completingSessionId)) ? `, stopped duplicate re-dispatch on ${reDispatchedSessionId}` : ''}`);
+    traceMeshEventDrop('redrive_late_completion_supersede', {
+        taskId: row.id,
+        sessionId: completingSessionId,
+        nodeId: row.assignedNodeId ?? args.nodeId,
+        meshId,
+        event: args.event,
+    }, `${row.requeueReason} ${Math.round((Date.now() - requeuedAtMs) / 1000)}s → ${outcome}`);
+    return true;
+}
+
 function injectMeshSystemMessage(components: DaemonComponents, args: {
     meshId: string;
     sourceInstanceId?: string;
@@ -1022,6 +1110,13 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                             },
                         });
                     }
+                } else if (strandedRow && supersedeRedriveReclaimForLateCompletion(components, args.meshId, strandedRow, sessionId, outcome, args)) {
+                    // TASK-PROMPT-REDRIVE-AFTER-COMPLETE (Fix C, late-completion supersede): the row
+                    // is NOT 'assigned' — it was re-driven (reclaimed → 'pending', or already
+                    // re-dispatched to a fresh session) because the long delivered-no-turn deadline
+                    // fired before this genuine completion propagated. The completion proves the
+                    // ORIGINAL worker finished, so it SUPERSEDES the re-drive: the helper flipped the
+                    // row terminal and stopped any duplicate re-dispatch (handled inside).
                 }
             } catch { /* best-effort safety net — never fail the completion path */ }
         }

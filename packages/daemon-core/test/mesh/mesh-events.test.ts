@@ -51,7 +51,7 @@ vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({
 }))
 
 import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, reconcileDirectDispatchCompletionFromTranscript, runMeshReconcileTick, setupMeshEventForwarding, triggerMeshQueue, tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
-import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch, getActiveDirectDispatches, recordTaskAutoLaunch } from '../../src/mesh/mesh-work-queue.js'
+import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch, getActiveDirectDispatches, recordTaskAutoLaunch, reclaimStrandedAssignedTask } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { computeMeshTaskStats } from '../../src/mesh/mesh-task-stats.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
@@ -184,6 +184,104 @@ describe('setupMeshEventForwarding', () => {
       expect(text).toContain('status event path')
       expect(text).toContain('mesh_read_chat once')
       expect(text).toContain('do not poll repeatedly')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  // ── TASK-PROMPT-REDRIVE-AFTER-COMPLETE (Fix C) ──────────────────────────────
+  // A genuine completion that lands SHORTLY AFTER the long delivered-no-turn deadline re-drove
+  // the task (reclaim → pending) must SUPERSEDE the re-drive: flip the row terminal, not drop the
+  // late completion and let the re-injected prompt run on the already-finished worker.
+  it('Fix C: a task_completed landing just after a delivered-no-turn re-drive supersedes it (row flips completed, not re-driven)', async () => {
+    const meshId = `mesh_redrive_supersede_${Date.now()}`
+    try {
+      const mesh = { id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }] }
+      meshConfigMocks.getMesh.mockReturnValue(mesh)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(mesh)
+      meshConfigMocks.listMeshes.mockReturnValue([mesh])
+
+      // A task claimed by the worker session, then RE-DRIVEN by the assigned-stranded watchdog's
+      // long delivered-no-turn deadline (reclaim → pending, requeueReason set, requeuedAt = now).
+      enqueueTask(meshId, 'do work', { targetNodeId: 'node_child_1' })
+      const claimed = claimNextTask(meshId, 'node_child_1', 'runtime-session-1', [])!
+      const reclaimed = reclaimStrandedAssignedTask(meshId, claimed.id, { reason: 'delivered_no_turn_deadline' })!
+      expect(reclaimed.status).toBe('pending')
+      expect(reclaimed.requeueReason).toBe('delivered_no_turn_deadline')
+
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+      })
+      setupMeshEventForwarding(components)
+
+      // The ORIGINAL worker's genuine completion arrives late, echoing the reclaimed taskId.
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        meshNodeId: 'node_child_1',
+        taskId: claimed.id,
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-history-1',
+        finalSummary: 'All done — implemented and tests pass.',
+        timestamp: Date.now(),
+      })
+
+      // The late completion superseded the re-drive: the row is terminal, and a supersede
+      // ledger entry records why (never a fresh re-dispatch of the same prompt).
+      const row = getQueue(meshId).find(t => t.id === claimed.id)!
+      expect(row.status).toBe('completed')
+      const supersede = readLedgerEntries(meshId).find(
+        e => (e.kind === 'task_completed' || e.kind === 'task_failed')
+          && (e.payload as any)?.source === 'redrive_late_completion_supersede',
+      )
+      expect(supersede).toBeTruthy()
+      expect((supersede?.payload as any)?.taskId).toBe(claimed.id)
+      expect((supersede?.payload as any)?.reclaimReason).toBe('delivered_no_turn_deadline')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('Fix C: does NOT supersede a completion for a NON-redrive requeue (e.g. dispatch-unconfirmed reclaim)', async () => {
+    const meshId = `mesh_redrive_no_supersede_${Date.now()}`
+    try {
+      const mesh = { id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }] }
+      meshConfigMocks.getMesh.mockReturnValue(mesh)
+      meshConfigMocks.getMeshByRepo.mockReturnValue(mesh)
+      meshConfigMocks.listMeshes.mockReturnValue([mesh])
+
+      enqueueTask(meshId, 'do work', { targetNodeId: 'node_child_1' })
+      const claimed = claimNextTask(meshId, 'node_child_1', 'runtime-session-1', [])!
+      // Reclaimed as NEVER-delivered (nothing ran) — a completion for it is not a late race and
+      // must NOT be superseded into a terminal flip by this path.
+      const reclaimed = reclaimStrandedAssignedTask(meshId, claimed.id, { reason: 'assigned_stranded_dispatch_unconfirmed' })!
+      expect(reclaimed.status).toBe('pending')
+
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+      })
+      setupMeshEventForwarding(components)
+
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        meshNodeId: 'node_child_1',
+        taskId: claimed.id,
+        providerType: 'claude-cli',
+        finalSummary: 'All done.',
+        timestamp: Date.now(),
+      })
+
+      // No supersede: the non-redrive reason is left to the normal path (row stays pending).
+      const row = getQueue(meshId).find(t => t.id === claimed.id)!
+      expect(row.status).toBe('pending')
+      expect(readLedgerEntries(meshId).some(
+        e => (e.payload as any)?.source === 'redrive_late_completion_supersede',
+      )).toBe(false)
     } finally {
       cleanupMeshFiles(meshId)
     }

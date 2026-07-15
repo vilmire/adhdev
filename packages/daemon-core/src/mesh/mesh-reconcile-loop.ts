@@ -79,6 +79,7 @@ import { pullRemoteNodeQueues } from './mesh-remote-event-pull.js';
 import {
     reconcileUnterminatedDirectDispatches,
     autoPruneStaleDirectDispatches,
+    pollAssignedTaskTerminalEvidence,
 } from './mesh-completion-synthesis.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
@@ -737,7 +738,12 @@ export function __resetReclaimUnknownStreakForTests(): void {
 // never reclaimed here. And the deadline is generous so a slow-but-live dispatch still in
 // its normal confirm window is never reclaimed early. Reclaimed rows return to 'pending'
 // with ownership cleared, so the PHASE 3 trigger below re-dispatches them this same tick.
-function recoverStrandedAssignedDispatches(components: DaemonComponents, meshId: string, store: MeshRuntimeStore): void {
+async function recoverStrandedAssignedDispatches(
+    components: DaemonComponents,
+    mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
+    store: MeshRuntimeStore,
+): Promise<void> {
+    const meshId = mesh.id;
     const assigned = getQueue(meshId, { status: ['assigned'] });
     if (!assigned.length) return;
     const nowMs = Date.now();
@@ -909,6 +915,51 @@ function recoverStrandedAssignedDispatches(components: DaemonComponents, meshId:
                     continue;
                 }
                 reclaimReason = 'reclaim_after_unknown_grace';
+            }
+            // TASK-PROMPT-REDRIVE-AFTER-COMPLETE (Fix A-i): before re-driving, poll the worker
+            // transcript for terminal evidence — the SAME check PHASE 4 does for direct dispatches,
+            // now for this claim-path queue row. An autoLaunch/worktree worker's
+            // generating_started/completed events don't reliably reach the coordinator ledger, so
+            // the ledger check above (findTerminalLedgerEvidenceForTask) can be empty at the 15-min
+            // deadline for a task the worker actually FINISHED — and re-driving then re-injects the
+            // same prompt into the already-idle worker (the owner's symptom). If the worker is idle
+            // with a final assistant summary dated after dispatch, the task is done: flip it
+            // 'completed' instead of reclaiming. Conservative by construction (mid-turn / no
+            // summary / stale summary / unreadable → null → fall through to the reclaim below), so
+            // this can only PREVENT a wrong re-drive, never invent a completion. Runs only at the
+            // deadline (rare), so the extra read is not a hot-path cost.
+            const terminalEvidence = await pollAssignedTaskTerminalEvidence(components, mesh, row);
+            if (terminalEvidence) {
+                deliveredNoTurnUnknownStreak.delete(streakKey);
+                // updateTaskStatus ends the single-flight dispatch window on any transition off
+                // 'assigned', so a later requeue/re-dispatch is never blocked by a stale mark.
+                updateTaskStatus(meshId, row.id, terminalEvidence);
+                if (!findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id })) {
+                    try {
+                        appendLedgerEntry(meshId, {
+                            kind: terminalEvidence === 'completed' ? 'task_completed' : 'task_failed',
+                            nodeId: row.assignedNodeId,
+                            sessionId: row.assignedSessionId,
+                            providerType: row.assignedProviderType,
+                            payload: {
+                                taskId: row.id,
+                                event: 'agent:generating_completed',
+                                source: 'redrive_deadline_transcript_evidence',
+                            },
+                        });
+                    } catch { /* best-effort ledger write */ }
+                }
+                LOG.warn('MeshReconcile', `Skipped delivered-no-turn re-drive for task ${row.id} on mesh ${meshId} `
+                    + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}): worker transcript is idle with a `
+                    + `final assistant message after dispatch — the completion event was lost/late, task is ${terminalEvidence}, NOT re-driving`);
+                traceMeshEventDrop('redrive_deadline_transcript_completed', {
+                    taskId: row.id,
+                    sessionId: row.assignedSessionId,
+                    nodeId: row.assignedNodeId,
+                    meshId,
+                    event: 'agent:generating_completed',
+                }, `${reclaimReason} → transcript ${terminalEvidence}`);
+                continue;
             }
             const reclaimedLost = reclaimStrandedAssignedTask(meshId, row.id, {
                 reason: reclaimReason,
@@ -1108,7 +1159,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
-                recoverStrandedAssignedDispatches(components, mesh.id, store);
+                await recoverStrandedAssignedDispatches(components, mesh, store);
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Assigned-stranded watchdog failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
