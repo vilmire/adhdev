@@ -83,7 +83,39 @@ function findQuestionLineIndex(
   lines: string[],
 ): { index: number; matchedSource: 'primary' | string } | null {
   const primary = compile(spec.questionPattern, spec.questionFlags ?? 'i');
-  // Search bottom-up to prefer the most recent modal.
+  // A question keyword frequently ALSO appears inside a button label:
+  // cursor-agent's Workspace-Trust modal renders `▶ [a] Trust this workspace`
+  // and its questionPattern matches the bare word `Trust`; the git-command
+  // prompt offers an `Approve`/`Allow`/`Run` button while the pattern lists
+  // `approve|Approve|Allow`. A bottom-up scan therefore lands on the BUTTON
+  // line (lower on screen) instead of the real prose question above it, and
+  // extractButtons (which starts at question.index + 1) then scopes the
+  // affirmative button OUT — leaving fewer than minButtons → parseApproval
+  // returns null → the approval never surfaces and the session wedges in
+  // `starting`/`generating`. Skip lines that are themselves button lines so
+  // the search resolves to the prose question, not a button label that merely
+  // shares a keyword. This is the general form of the kimi defect-C fix.
+  const buttonFlags = spec.buttonFlags && spec.buttonFlags.includes('m')
+    ? spec.buttonFlags
+    : `${spec.buttonFlags ?? ''}m`;
+  const buttonRe = compile(spec.buttonPattern, buttonFlags);
+  const isButtonLine = (line: string): boolean => {
+    buttonRe.lastIndex = 0;
+    return buttonRe.test(line);
+  };
+  // First pass: prefer a question line that is NOT itself a button line.
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (primary.test(lines[i]) && !isButtonLine(lines[i])) return { index: i, matchedSource: 'primary' };
+  }
+  for (const variant of spec.questionVariants ?? []) {
+    const re = compile(variant.regex, variant.flags ?? 'i');
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      if (re.test(lines[i]) && !isButtonLine(lines[i])) return { index: i, matchedSource: variant.label ?? 'variant' };
+    }
+  }
+  // Fallback: no non-button question line found. Accept a button-line match so
+  // providers whose question genuinely renders on the button row (rare) still
+  // work — behaviour identical to the pre-fix scan.
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     if (primary.test(lines[i])) return { index: i, matchedSource: 'primary' };
   }

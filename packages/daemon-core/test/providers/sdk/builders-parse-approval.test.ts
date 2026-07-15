@@ -122,6 +122,84 @@ describe('buildParseApprovalFromTui — codex-cli-style modal', () => {
   });
 });
 
+describe('buildParseApprovalFromTui — question keyword inside a button label (cursor-cli)', () => {
+  // cursor-cli's questionPattern lists bare keywords (`Trust`, `Approve`,
+  // `approve`, `Allow`) that ALSO appear in its button labels. A bottom-up
+  // question scan would otherwise land on the BUTTON row and scope the
+  // affirmative option out (→ fewer than minButtons → null → the approval
+  // never surfaces and the session wedges in `starting`). This is the general
+  // form of the kimi defect-C fix. The real cursor spec patterns are used.
+  const spec: ModalTuiSpec = {
+    $schema: 'adhdev:tui/modal@1',
+    questionPattern: 'Run this command|Allow|Do you want to|Do you trust|Trust|approve|Approve|permission',
+    questionFlags: 'i',
+    // Real cursor spec buttonPattern: matches numbered / bracket-letter options
+    // (group 1) AND `→ Label (keyhint)` options like `→ Run (once) (y)` (group 2).
+    buttonPattern: '^[\\s│┃|]*(?:[❯›>▶●→]\\s*)?(?:(?:\\d+[.)]|\\[[A-Za-z]\\])\\s+([^│┃|]+?)|(\\S[^│┃|]*?)\\s*\\((?:y|n|tab|shift\\+tab|esc(?:\\s+or\\s+n)?)\\))\\s*[│┃|]?\\s*$',
+    buttonLabelGroup: 1,
+    buttonFlags: 'm',
+    scope: 'window-around-question',
+    scopeWindowLines: 20,
+  };
+  const parse = buildParseApprovalFromTui(spec);
+
+  it('surfaces the Workspace-Trust modal even though the Trust BUTTON label matches the question pattern', () => {
+    // Verbatim cursor-agent v2026.07 "Workspace Trust Required" box.
+    const screen = [
+      '  ╭────────────────╮',
+      '  │                                                    │',
+      '  │  ⚠ Workspace Trust Required                        │',
+      '  │                                                    │',
+      '  │  Cursor Agent can execute code and access files.   │',
+      '  │                                                    │',
+      '  │  Do you trust the contents of this directory?      │',
+      '  │                                                    │',
+      '  │    /private/tmp/cursor-flip-test                   │',
+      '  │                                                    │',
+      '  │  ▶ [a] Trust this workspace                        │',
+      '  │    [q] Quit                                        │',
+      '  │                                                    │',
+      '  ╰────────────────╯',
+    ].join('\n');
+
+    const modal = parse(input(screen));
+    expect(modal).not.toBeNull();
+    // The question resolves to the prose line, NOT the "Trust this workspace"
+    // button row, so BOTH options survive with the affirmative one first.
+    // (message retains the box borders — the point is that it is the prose
+    // question line, not a button label.)
+    expect(modal!.message).toContain('Do you trust the contents of this directory?');
+    expect(modal!.buttons).toEqual(['Trust this workspace', 'Quit']);
+  });
+
+  it('surfaces the "Run this command?" git-status approval whose buttons use `→ Label (keyhint)` rows', () => {
+    // Verbatim cursor-agent v2026.07 allowlist prompt. The buttons carry NO
+    // number / bracket-letter — they are `→ Run (once) (y)` etc. The pre-fix
+    // buttonPattern matched none → parseApproval null → session wedged in
+    // `generating` forever (Symptom 2). The label may itself contain parens.
+    const screen = [
+      '  $ git status Waiting for approval...',
+      '  ────────────────────────────────────',
+      '   $  git status in .',
+      '',
+      '   Run this command?',
+      '   Not in allowlist: git status',
+      '    → Run (once) (y)',
+      '      Add Shell(git status) to allowlist? (tab)',
+      '      Run Everything (shift+tab)',
+      '      Skip (esc or n)',
+    ].join('\n');
+    const modal = parse(input(screen));
+    expect(modal).not.toBeNull();
+    expect(modal!.buttons).toEqual([
+      'Run (once)',
+      'Add Shell(git status) to allowlist?',
+      'Run Everything',
+      'Skip',
+    ]);
+  });
+});
+
 describe('buildParseApprovalFromTui — claude-cli marker group labels', () => {
   const parse = buildParseApprovalFromTui({
     $schema: 'adhdev:tui/modal@1',

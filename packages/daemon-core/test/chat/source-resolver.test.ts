@@ -65,6 +65,40 @@ describe('ChatSourceRegistry — per-session state', () => {
     expect(registry.getTransitions(key).length).toBe(2);
   });
 
+  it('snapshotRecord/restoreRecord roundtrips a NativeLocked state (STICKY-NATIVE rollback)', () => {
+    // Models the STICKY-NATIVE hold in decideCliReadChatSource: snapshot a
+    // native-committed session, speculatively observe an empty/regressed read
+    // that flips it to pty-parser, then roll back so provenance stays native.
+    const key = chatSourceSessionKey('cursor-cli', 'sticky');
+    registry.observe(key, buildV2NativePresentObservation({
+      messages: [{ providerUnitKey: 'u1', sequence: 1 }, { providerUnitKey: 'a1', sequence: 2 }],
+      coverage: 'full',
+      safeMapping: true,
+    }));
+    expect(registry.getState(key).name).toBe('NativeLocked');
+
+    const snap = registry.snapshotRecord(key);
+    expect(snap).toBeDefined();
+
+    // A transient empty read flips the machine to PtyOnly/Recovering.
+    const decision = registry.observe(key, { kind: 'native_unavailable', reason: 'empty' });
+    expect(decision.selected).toBe('pty-parser');
+    expect(registry.getState(key).name).not.toBe('NativeLocked');
+
+    // Roll back: the session is native-committed again, exactly as before.
+    registry.restoreRecord(key, snap);
+    expect(registry.getState(key).name).toBe('NativeLocked');
+    expect(registry.getState(key).committedUnitKeys.has('a1')).toBe(true);
+  });
+
+  it('restoreRecord(undefined) clears a key that had no prior record', () => {
+    const key = chatSourceSessionKey('cursor-cli', 'noprior');
+    expect(registry.snapshotRecord(key)).toBeUndefined();
+    registry.observe(key, { kind: 'native_unavailable', reason: 'empty' });
+    registry.restoreRecord(key, undefined);
+    expect(registry.getState(key).name).toBe('Booting');
+  });
+
   it('clear() removes a single session, clearAll() removes all', () => {
     const a = chatSourceSessionKey('p', 'a');
     const b = chatSourceSessionKey('p', 'b');

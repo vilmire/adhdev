@@ -745,7 +745,89 @@ function decideCliReadChatSource(args: {
     const supportsNative = supportsCliNativeTranscript(args.providerType, args.provider);
     const observation = buildObservationForCli(args, supportsNative);
     const sessionKey = chatSourceSessionKey(args.providerType, args.sessionId);
+
+    // STICKY-NATIVE: once a session's transcript is bound to native-history via
+    // a TRUSTED EXACT provider-session identity (the on-disk uuid == this
+    // session's own transcript file, not a recency/mtime guess), a single read
+    // that momentarily fails to reproduce the full native slice is a TRANSIENT
+    // gap, NOT evidence native regressed or vanished. Concretely, cursor-agent
+    // rewrites its JSONL tail mid-turn — the file is briefly empty, or exposes a
+    // SHRUNK slice (old assistant row dropped while the new turn is streamed) —
+    // so a per-read observation sees either `native_unavailable/empty` or a
+    // `native_regressed_shrunk`. Either one flips a NativeLocked machine to
+    // `pty-parser` for that read (and, after enough misses, permanently to
+    // PtyOnly). That is exactly the reported symptom: cursor chat provenance
+    // "flips back and forth between PTY and native-history".
+    //
+    // Fix: for a session that (a) resolved via a trusted EXACT identity and
+    // (b) is already committed to native (NativeLocked/Recovering), speculatively
+    // observe, and if the machine WOULD flip to pty-parser, roll the machine
+    // state back and HOLD native-history as authoritative for this read. Exact
+    // identity means the read is provably against THIS session's own transcript
+    // file, so a transient gap on it can only be a mid-write artifact — never a
+    // genuine session switch or data loss (cursor's file is cumulative). A
+    // workspace-heuristic (non-exact) read is never eligible, so a real session
+    // switch still flips normally.
+    const priorSnapshot = CHAT_SOURCE_REGISTRY.snapshotRecord(sessionKey);
+    const priorState = priorSnapshot?.state ?? CHAT_SOURCE_REGISTRY.getState(sessionKey);
+    const eligibleForStickyHold = args.trustedExactNativeIdentity === true
+        && (priorState.name === 'NativeLocked' || priorState.name === 'Recovering');
+
     let decision = CHAT_SOURCE_REGISTRY.observe(sessionKey, observation);
+
+    if (eligibleForStickyHold && decision.selected === 'pty-parser') {
+        // The machine flipped a native-committed, exact-identity session to PTY
+        // on this read. Treat it as a transient native gap: undo the observe and
+        // report native-history held. We surface whatever native rows this read
+        // DID map (empty on a true gap, a shrunk slice on a mid-write rewrite);
+        // the streaming/tail delivery layer already suppresses an empty tail from
+        // clobbering the last real tail, so holding native with a thin slice is
+        // strictly safer than emitting PTY under a native-authority session.
+        CHAT_SOURCE_REGISTRY.restoreRecord(sessionKey, priorSnapshot);
+        const heldNativeMessages: ChatMessage[] = observation.kind === 'native_present'
+            ? extractNativeMessagesFromResult(args.providerType, args.nativeHistoryResult)
+            : [];
+        const messageSource = buildCliMessageSourceProvenance({
+            selected: 'native-history',
+            provider: args.providerType,
+            nativeHandle: typeof args.nativeHistoryResult?.providerSessionId === 'string'
+                ? args.nativeHistoryResult.providerSessionId
+                : undefined,
+            sessionWorkspace: args.sessionWorkspace,
+            intendedWorkspace: args.intendedWorkspace,
+            transcriptWorkspace: undefined,
+            fallbackReason: 'native_history_transient_gap_held',
+            nativeSource: 'provider-native',
+            sourcePath: typeof args.nativeHistoryResult?.sourcePath === 'string' ? args.nativeHistoryResult.sourcePath : undefined,
+            sourceMtimeMs: typeof args.nativeHistoryResult?.sourceMtimeMs === 'number' ? args.nativeHistoryResult.sourceMtimeMs : undefined,
+            nativeHistoryCoverage: undefined,
+            partialReason: undefined,
+            unavailableReason: observation.kind === 'native_unavailable' ? observation.reason : undefined,
+            nativeMessages: heldNativeMessages,
+            ptyMessages: args.ptyMessages,
+            returnedMessages: heldNativeMessages,
+            safeMapping: args.safeMapping,
+            freshEnough: true,
+            ptyStatusApprovalOnly: true,
+        });
+        return {
+            decision: {
+                selected: 'native-history',
+                nextState: priorState,
+                transition: {
+                    fromState: priorState.name,
+                    toState: priorState.name,
+                    event: 'NoOp',
+                    cause: decision.transition.cause,
+                    at: Date.now(),
+                },
+                lockState: { locked: priorState.name === 'NativeLocked' },
+            },
+            messageSource,
+            nativeMessages: heldNativeMessages,
+            nativeSelected: true,
+        };
+    }
 
     // A restored runtime can briefly expose different native slices while the
     // provider transcript settles (for example, startup/system rows may be
@@ -1335,13 +1417,27 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     const pinnedProviderSessionId = typeof args.pinnedProviderSessionId === 'string'
         ? args.pinnedProviderSessionId.trim()
         : '';
-    // Pin reuse (PRIMARY): a later read whose live binding is gone
-    // (historySessionId empty, no live spawnedAtMs) can still resolve to the
-    // session it was last bound to. Read THAT session directly by threading the
-    // pin through as historySessionId — same code path an explicit session read
-    // takes — instead of fail-closing. Never overrides a caller-supplied
-    // historySessionId; only kicks in when there is none.
-    const effectiveHistorySessionId = args.historySessionId || (!canBindFromLiveSession ? pinnedProviderSessionId : '');
+    // Pin reuse (PRIMARY): a read with no caller-supplied historySessionId can
+    // still resolve to the session it was last bound to. Read THAT session
+    // directly by threading the pin through as historySessionId — same code path
+    // an explicit session read takes — instead of relying on the live spawn/cwd/
+    // mtime heuristic. Never overrides a caller-supplied historySessionId; only
+    // kicks in when there is none.
+    //
+    // The pin is preferred EVEN FOR A LIVE SESSION (canBindFromLiveSession).
+    // The pin is keyed on this session's own mesh id (getBoundProviderSessionIdPin
+    // (targetSessionId)) and holds the provider-native uuid proven in a prior
+    // read, so it can only ever resolve to THIS session's own transcript — it
+    // cannot alias a concurrent session sharing the cwd. Bypassing the pin while
+    // a session is live (the old behaviour) forced the FIRST read of every new
+    // turn back onto the spawn/mtime heuristic: cursor's native tail is briefly
+    // stale (previous turn) versus the just-echoed PTY user line, so the
+    // workspace-overlap safe-mapping gate fails and the read flips to PTY
+    // (native_history_not_safely_mapped) before native re-locks. Preferring the
+    // pin makes that first read an EXACT-identity lookup (trustedExactNativeIdentity
+    // = true), which reads the correct cumulative file AND lets the STICKY-NATIVE
+    // hold cover the turn boundary. This is the pin-bypass class fix.
+    const effectiveHistorySessionId = args.historySessionId || pinnedProviderSessionId || '';
     // Last-resort workspace-latest (b): only when nothing above resolved a
     // session id AND no pin exists AND the caller opted in with a workspace.
     // Strictly behind pin reuse — pinnedProviderSessionId being set disables it.
