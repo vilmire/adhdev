@@ -1,0 +1,4 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Wednesday, Jul 15, 2026, 7:33 PM (UTC+9)</timestamp>\n<user_query>\n커서 테스트\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"테스트를 확인하겠습니다. 파일을 하나 만들겠습니다."},{"type":"tool_use","name":"ApplyPatch","input":"*** Begin Patch\n*** Add File: /tmp/x.txt\n+hello\n*** End Patch"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"완료했습니다. CURSOR OK 2+2=4"}]}}
+{"type":"turn_ended","status":"success"}

@@ -95,6 +95,23 @@ export interface NativeHistoryJsonlSource {
     session_id_from?: 'filename_uuid' | 'first_record';
     session_id_path?: string;
     message_filter?: { where: string };
+    /**
+     * Fallback workspace attribution when the transcript carries no
+     * `session_meta` cwd record. Some stores (cursor-agent) do NOT write a
+     * session_meta line and keep the workspace only in the on-disk project-slug
+     * directory (`~/.cursor/projects/<slug>/…`), which is a lossy, sometimes
+     * truncated+hashed transform of the real path and cannot be reversed. When
+     * this flag is set and no session_meta workspace was found, the executor
+     * stamps `input.workspace` onto each message — but ONLY after confirming the
+     * resolved file actually lives under that workspace's project slug (a path
+     * segment matches the input workspace's cursor/claude slug, allowing for
+     * cursor's length-truncation). This closes the first-turn read gap (before a
+     * provider session id is pinned, the downstream hasSafeNativeHistoryMapping
+     * guard needs a per-message workspace) without risking cross-workspace
+     * aliasing: a slug mismatch leaves the workspace unset and the read fails
+     * closed as before.
+     */
+    workspace_from_input?: boolean;
     message_map: NativeHistoryMessageMap;
 }
 

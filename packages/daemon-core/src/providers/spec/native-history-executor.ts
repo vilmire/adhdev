@@ -106,7 +106,12 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
     const mtime = safeMtimeMs(sourcePath);
     const lines = readJsonlLines(sourcePath);
     if (lines.length === 0) return null;
-    const transcriptWorkspace = readSessionMetaWorkspace(lines);
+    // Prefer an in-transcript session_meta cwd; fall back to the input workspace
+    // only when the spec opts in AND the resolved file lives under that
+    // workspace's project slug (cursor-agent writes no session_meta and hides the
+    // workspace in the lossy on-disk slug — see workspace_from_input).
+    const transcriptWorkspace = readSessionMetaWorkspace(lines)
+        ?? (src.workspace_from_input ? workspaceFromInputIfSlugMatches(sourcePath, input) : undefined);
 
     // session id: filename uuid or extracted from first record
     let providerSessionId: string | undefined;
@@ -244,6 +249,50 @@ function readSessionMetaWorkspace(lines: any[]): string | undefined {
         if (String(record?.type ?? '') !== 'session_meta') continue;
         const cwd = typeof record?.payload?.cwd === 'string' ? record.payload.cwd.trim() : '';
         if (cwd) return cwd;
+    }
+    return undefined;
+}
+
+/**
+ * Return `input.workspace` when the resolved transcript file provably lives
+ * under that workspace's project-slug directory, else undefined.
+ *
+ * cursor-agent stores transcripts at `~/.cursor/projects/<slug>/…` where
+ * `<slug>` is the workspace realpath with every non-`[A-Za-z0-9_-]` char turned
+ * into `-` (the same transform claude uses, minus the leading dash from the root
+ * `/`). Long slugs are truncated and suffixed with a short hash
+ * (`<prefix>-<7hex>`). The transform is lossy, so we cannot reconstruct the real
+ * path from the slug — but we CAN verify a candidate workspace matches it. We
+ * compute the workspace's slug (both the claude form and the leading-`/`-stripped
+ * cursor form) and accept when a path segment of the file equals it OR is a
+ * truncated `<prefix>-<hash>` of it. On match the caller stamps the KNOWN real
+ * `input.workspace`, so downstream workspace comparison (path.resolve-based)
+ * still works; on mismatch we return undefined and the read fails closed rather
+ * than aliasing another workspace's transcript.
+ */
+function workspaceFromInputIfSlugMatches(sourcePath: string, input: NativeHistoryInput): string | undefined {
+    const wsRaw = typeof input.workspace === 'string' ? input.workspace.trim() : '';
+    if (!wsRaw) return undefined;
+    let wsReal = wsRaw;
+    try { wsReal = fs.realpathSync(wsRaw); } catch { /* keep raw */ }
+    const slugs = new Set<string>();
+    for (const w of [wsReal, wsRaw]) {
+        if (!w) continue;
+        slugs.add(claudeProjectDirName(w));            // "-Users-…" (leading dash)
+        slugs.add(claudeProjectDirName(w.replace(/^\/+/, ''))); // cursor form, no leading dash
+    }
+    const segments = sourcePath.split(path.sep);
+    for (const seg of segments) {
+        if (!seg) continue;
+        for (const slug of slugs) {
+            if (!slug) continue;
+            if (seg === slug) return wsRaw;
+            // Truncated+hashed cursor slug: `<prefix>-<7+hex>` where prefix is a
+            // leading portion of the full slug. Require a non-trivial prefix so a
+            // short common head can't false-match an unrelated workspace.
+            const m = seg.match(/^(.*)-[0-9a-f]{6,}$/);
+            if (m && m[1] && m[1].length >= 8 && slug.startsWith(m[1])) return wsRaw;
+        }
     }
     return undefined;
 }
