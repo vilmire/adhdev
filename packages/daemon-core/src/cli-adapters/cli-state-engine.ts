@@ -1206,7 +1206,19 @@ export class CliStateEngine {
         const detectFn = typeof this.transport.runDetectStatus === 'function'
             ? () => this.transport.runDetectStatus!(snap.recentOutputBuffer)
             : () => this.runDetectStatus(snap);
-        const latestStatus = detectFn() || this.currentStatus;
+        // Only a POSITIVE `generating` verdict from the live detector defers the
+        // finish. A null verdict is "no cue matched", NOT "still generating" — for
+        // a provider whose only idle cue is a composer placeholder (opencode's
+        // `Ask anything`) that can momentarily fall out of the captured frame while
+        // the TUI redraws its status chip, detectStatus returns null under the
+        // manifest's `onNoMatch: preserve-last` policy. Collapsing that null to
+        // `this.currentStatus` (which is `generating` while the hold is armed) made
+        // the finish defer on EVERY tick, so the completion never fired and the
+        // session wedged in `generating` forever even though its assistant reply had
+        // already landed in native-history. Treat null as "no evidence to defer" and
+        // let the idle-finish proceed; a real in-flight turn still re-reports a
+        // positive `generating` here and defers as before.
+        const latestStatus = detectFn();
         if (latestStatus === 'generating') {
             this.evaluateSettled(snap);
             return true;

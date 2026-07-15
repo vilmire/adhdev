@@ -634,6 +634,62 @@ describe('CliStateEngine', () => {
         })
     })
 
+    // ── recent_activity_hold idle-finish: null detect verdict must not defer ──
+    describe('applyHoldGenerating idle-finish — null detectStatus verdict', () => {
+        beforeEach(() => { vi.useFakeTimers() })
+        afterEach(() => { vi.useRealTimers() })
+
+        // Regression (opencode generating→idle wedge): a native-source provider
+        // whose PTY parser owns no messages (transcriptAuthority: provider →
+        // parsed.messages === []) enters recent_activity_hold on every settle
+        // because there is no PTY assistant to release the hold. Its idle cue is a
+        // composer placeholder that momentarily falls out of frame, so
+        // runDetectStatus returns NULL (onNoMatch: preserve-last) rather than a
+        // positive verdict. shouldDeferIdleTimeoutFinish must treat that null as
+        // "no evidence to defer" and let the hold's idle-finish timer run —
+        // otherwise (the old `detect() || currentStatus` collapse to the held
+        // 'generating') the finish deferred on every tick and the turn wedged in
+        // generating forever even though its assistant reply had already landed.
+        function armHold(detectVerdict: string | null) {
+            const { engine, transport, callbacks } = buildEngine({
+                requiresFinalAssistantBeforeIdle: true,
+                transcriptAuthority: 'provider',
+            })
+            const stalePast = Date.now() - 5000
+            transport.getSnapshot = () => makeSnap({
+                lastNonEmptyOutputAt: stalePast,
+                lastScreenChangeAt: stalePast,
+                isWaitingForResponse: true,
+            })
+            // Native-source parser: idle status, NO messages (provider owns transcript).
+            transport.runParseSession = vi.fn(() => ({ status: 'idle', messages: [], activeModal: null }))
+            transport.runDetectStatus = vi.fn(() => detectVerdict)
+
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = { prompt: 'hi', startedAt: Date.now() - 3000, bufferStart: 0, rawBufferStart: 0 }
+            engine.setStatus('generating')
+            // Enters applyHoldGenerating (empty parsed messages → shouldHoldGenerating true),
+            // which arms the generatingIdle idle-finish timer.
+            engine.evaluateSettled(transport.getSnapshot())
+            return { engine, callbacks }
+        }
+
+        it('runs finishResponse when the live detector returns null (no cue matched)', () => {
+            const { engine, callbacks } = armHold(null)
+            expect(engine.currentStatus).toBe('generating')
+            // Advance past generatingIdle so the hold's idle-finish timer fires.
+            vi.advanceTimersByTime(DEFAULT_TIMEOUTS.generatingIdle + 50)
+            expect(callbacks.onTurnCompleted).toHaveBeenCalled()
+        })
+
+        it('still DEFERS when the live detector positively returns generating', () => {
+            const { engine, callbacks } = armHold('generating')
+            vi.advanceTimersByTime(DEFAULT_TIMEOUTS.generatingIdle + 50)
+            // A real in-flight turn keeps deferring — the turn is not completed.
+            expect(callbacks.onTurnCompleted).not.toHaveBeenCalled()
+        })
+    })
+
     // ── resetActiveTurnState ────────────────────────────────────────────────
 
     describe('resetActiveTurnState', () => {

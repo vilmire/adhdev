@@ -1339,13 +1339,24 @@ export class ProviderLoader {
         candidates.push(path.join(providerDir, 'specs', 'default.json'));
         candidates.push(path.join(providerDir, 'spec.json'));
         const specPath = candidates.find((p: string) => fs.existsSync(p));
+        // native_history block, resolved from either the separate spec file
+        // (snake_case `native_history`) or — for v1-manifest-only providers that
+        // ship no specs/*.json — the inline camelCase `nativeHistory` on the
+        // manifest itself. The separate spec file wins when both exist. Without
+        // the v1-manifest fallback, a provider whose ONLY declaration is an
+        // inline `nativeHistory.source` (e.g. opencode's sqlite source) never got
+        // its `scripts.readNativeHistory` wired: the whole block was gated on
+        // `specPath`, so read_chat returned native-unavailable, the assistant
+        // reply (only in the on-disk store, never in the PTY snapshot) was
+        // dropped, providerSessionId stayed null, and the session wedged in
+        // `generating` because no native completion evidence ever arrived.
+        let nh: any | undefined;
         if (specPath) {
           // Hand the resolved spec path off to route.ts via a hidden field
           // so the routing layer doesn't have to repeat the candidate walk.
           (resolved as any)._resolvedSpecPath = specPath;
           // Extract control_bar + native_history directly from the JSON header.
           let specControls: any[] | undefined;
-          let nh: any | undefined;
           try {
             const rawSpec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
             specControls = rawSpec.control_bar;
@@ -1382,44 +1393,56 @@ export class ProviderLoader {
               }
             }
           }
-          if (nh) {
-            let reader: ((input: any) => any) | null = null;
-            let format = 'spec';
+        }
+        // Fall back to the v1 manifest's inline `nativeHistory` (camelCase) when
+        // no separate spec file provided a `native_history` block. Only treat it
+        // as a declarative reader source when it actually carries source/
+        // override_path/reader — a bare `nativeHistory` marker that only names
+        // `scripts.readSession` (claude/codex/antigravity, whose real reader is
+        // wired from their specs/*.json) must not be mistaken for one.
+        if (!nh) {
+          const inlineNh = (base as any)?.nativeHistory || (resolved as any)?.nativeHistory;
+          if (inlineNh && (inlineNh.source || inlineNh.override_path || inlineNh.reader)) {
+            nh = inlineNh;
+          }
+        }
+        if (nh) {
+          let reader: ((input: any) => any) | null = null;
+          let format = 'spec';
 
-            if (nh.source) {
-              format = `spec-${nh.source.kind}`;
-              reader = (input: any) => executeNativeHistory(nh, input);
-            } else if (nh.override_path) {
-              const overrideFile = path.resolve(providerDir, nh.override_path);
-              if (fs.existsSync(overrideFile)) {
-                try {
-                  registerProviderScriptRootSafely(path.dirname(path.dirname(providerDir)));
-                  delete require.cache[require.resolve(overrideFile)];
-                  // eslint-disable-next-line @typescript-eslint/no-var-requires
-                  const mod = require(overrideFile);
-                  const fn = typeof mod === 'function' ? mod : (mod && typeof mod.default === 'function' ? mod.default : null);
-                  if (fn) {
-                    format = 'spec-override';
-                    reader = (input: any) => fn(input);
-                  }
-                } catch { /* fall through — leave native unavailable */ }
-              }
-            } else if (nh.reader) {
-              const dispatch = createNativeHistoryDispatcher(nh.reader as ReaderId);
-              format = nh.reader;
-              reader = (input: any) => dispatch(input);
+          if (nh.source) {
+            format = `spec-${nh.source.kind}`;
+            reader = (input: any) => executeNativeHistory(nh, input);
+          } else if (nh.override_path) {
+            const overrideFile = path.resolve(providerDir, nh.override_path);
+            if (fs.existsSync(overrideFile)) {
+              try {
+                registerProviderScriptRootSafely(path.dirname(path.dirname(providerDir)));
+                delete require.cache[require.resolve(overrideFile)];
+                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                const mod = require(overrideFile);
+                const fn = typeof mod === 'function' ? mod : (mod && typeof mod.default === 'function' ? mod.default : null);
+                if (fn) {
+                  format = 'spec-override';
+                  reader = (input: any) => fn(input);
+                }
+              } catch { /* fall through — leave native unavailable */ }
             }
+          } else if (nh.reader) {
+            const dispatch = createNativeHistoryDispatcher(nh.reader as ReaderId);
+            format = nh.reader;
+            reader = (input: any) => dispatch(input);
+          }
 
-            if (reader) {
-              resolved.scripts = { ...(resolved.scripts || {}) };
-              (resolved.scripts as any).readNativeHistory = reader;
-              (resolved as any).nativeHistory = {
-                format,
-                watchPath: undefined,
-                scripts: { readSession: 'readNativeHistory' },
-                mode: 'native-source',
-              };
-            }
+          if (reader) {
+            resolved.scripts = { ...(resolved.scripts || {}) };
+            (resolved.scripts as any).readNativeHistory = reader;
+            (resolved as any).nativeHistory = {
+              format,
+              watchPath: undefined,
+              scripts: { readSession: 'readNativeHistory' },
+              mode: 'native-source',
+            };
           }
         }
       } catch {

@@ -23,6 +23,12 @@ function writeSpecJson(root: string, category: string, type: string, spec: Recor
   writeFileSync(join(dir, 'spec.json'), JSON.stringify(spec, null, 2), 'utf-8');
 }
 
+function writeV1Provider(root: string, category: string, type: string, data: Record<string, unknown>) {
+  const dir = join(root, category, type);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'provider.v1.json'), JSON.stringify(data, null, 2), 'utf-8');
+}
+
 function byKey(settings: Array<{ key: string } & Record<string, unknown>>) {
   return Object.fromEntries(settings.map((setting) => [setting.key, setting]));
 }
@@ -788,5 +794,82 @@ describe('ProviderLoader spec control_bar → web controls translation', () => {
     const resolved = loader.resolve('hermes-cli');
     // The declared controls win — no synthesized set_model is injected.
     expect((resolved?.controls ?? []).map((c) => c.id)).toEqual(['provider']);
+  });
+});
+
+describe('ProviderLoader v1-manifest inline nativeHistory.source wiring', () => {
+  let userDir = '';
+  let testConfig: { providerSettings?: Record<string, Record<string, unknown>> };
+
+  beforeEach(() => {
+    userDir = mkdtempSync(join(tmpdir(), 'adhdev-provider-v1nh-'));
+    testConfig = { providerSettings: {} };
+  });
+
+  afterEach(() => {
+    if (userDir) rmSync(userDir, { recursive: true, force: true });
+    userDir = '';
+    testConfig = { providerSettings: {} };
+  });
+
+  // Regression: a v1-manifest-only provider (provider.v1.json, no specs/*.json)
+  // that declares its native history INLINE via the camelCase `nativeHistory`
+  // block with a `source` (opencode's sqlite source) must get its declarative
+  // executor wired to scripts.readNativeHistory. The wiring used to be gated on
+  // a separate spec file whose snake_case `native_history` block it read, so a
+  // v1-inline nativeHistory.source was silently ignored → read_chat returned
+  // native-unavailable, the assistant reply was dropped and the session wedged.
+  it('wires readNativeHistory from an inline nativeHistory.source when no spec.json exists', () => {
+    writeV1Provider(userDir, 'cli', 'opencode-fixture', {
+      type: 'opencode-fixture',
+      name: 'Opencode Fixture',
+      displayName: 'Opencode Fixture',
+      category: 'cli',
+      spawn: { command: 'opencode' },
+      transcriptAuthority: 'provider',
+      nativeHistory: {
+        mode: 'native-source',
+        source: {
+          kind: 'sqlite',
+          path: '~/.local/share/opencode/opencode.db',
+          session_query: 'SELECT id FROM session LIMIT 1',
+          message_query: 'SELECT role, content FROM message WHERE session_id = ?',
+          message_map: { role: '$.role', content: '$.content' },
+        },
+      },
+    });
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    const resolved = loader.resolve('opencode-fixture');
+    expect(typeof (resolved?.scripts as any)?.readNativeHistory).toBe('function');
+    expect((resolved as any)?.nativeHistory?.mode).toBe('native-source');
+    expect((resolved as any)?.nativeHistory?.format).toBe('spec-sqlite');
+    expect((resolved as any)?.nativeHistory?.scripts?.readSession).toBe('readNativeHistory');
+  });
+
+  // A v1 manifest whose nativeHistory only names scripts.readSession (the shape
+  // claude/codex/antigravity ship, with the real reader wired from their
+  // specs/*.json) must NOT be mistaken for a declarative source and get a
+  // no-op executor bound over it.
+  it('does not wire a source reader for a bare nativeHistory marker (no source/reader/override_path)', () => {
+    writeV1Provider(userDir, 'cli', 'bare-nh-fixture', {
+      type: 'bare-nh-fixture',
+      name: 'Bare NH Fixture',
+      displayName: 'Bare NH Fixture',
+      category: 'cli',
+      spawn: { command: 'bare' },
+      nativeHistory: {
+        mode: 'native-source',
+        scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
+      },
+    });
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    const resolved = loader.resolve('bare-nh-fixture');
+    expect(typeof (resolved?.scripts as any)?.readNativeHistory).not.toBe('function');
   });
 });
