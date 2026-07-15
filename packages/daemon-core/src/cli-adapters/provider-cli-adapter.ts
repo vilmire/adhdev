@@ -787,8 +787,8 @@ export class ProviderCliAdapter implements CliAdapter {
         if (stableMs < 2000) return;
 
         const startupModal = this.runParseApproval(this.recentOutputBuffer);
-        const startupStatus = this.runDetectStatus(screenText || this.recentOutputBuffer);
-        if (!startupModal && startupStatus !== 'idle') {
+        const startupIdle = this.detectIdleHonoringOnNoMatch(screenText || this.recentOutputBuffer);
+        if (!startupModal && !startupIdle) {
             this.scheduleStartupSettleCheck();
             return;
         }
@@ -935,6 +935,43 @@ export class ProviderCliAdapter implements CliAdapter {
             screen: buildCliScreenSnapshot(screenText),
             tailScreen: buildCliScreenSnapshot(tail),
         });
+    }
+
+    /**
+     * WRITE-READINESS ONNOMATCH (opencode): resolve whether the session is
+     * genuinely idle *for the purpose of opening the PTY write gate*, honoring
+     * the manifest's `dispatchOrder.onNoMatch` policy.
+     *
+     * The split-brain this closes: the engine's settled evaluation runs
+     * detectStatus through parseSession, whose builder collapses a null verdict
+     * to `'idle'` (buildParseSessionFromTui: `detectStatus(input) ?? 'idle'`),
+     * so the dashboard status flips to idle via `script_detect`. But the
+     * write-readiness gates (resolveStartupState / sendMessage recovery) call
+     * `runDetectStatus` *directly* and require the literal `=== 'idle'` return —
+     * they never apply the `onNoMatch` policy. opencode's only idle cue is the
+     * `Ask anything` composer placeholder in the last-8-lines scope with
+     * `onNoMatch: preserve-last`; when that placeholder is momentarily out of
+     * frame the raw detector returns null, the gate stays shut, `this.ready`
+     * never flips, and the first queued prompt sits in `not_ready_pending_prompt`
+     * forever (no turn ever starts, so no turn-completion drain fires).
+     *
+     * The fix keeps the raw detector as the primary signal (unchanged behavior
+     * for providers whose detector returns a literal idle) and only falls back
+     * when BOTH (a) the manifest policy is idle-preserving (`preserve-last` or
+     * `idle`) AND (b) the engine has *durably* settled to idle (no in-flight
+     * turn, no modal, no parse error). That guard makes the fallback safe: it
+     * cannot open the gate mid-turn or while a modal is up.
+     */
+    private detectIdleHonoringOnNoMatch(text: string): boolean {
+        if (this.runDetectStatus(text) === 'idle') return true;
+        const dispatchOrder = (this.provider.tui as { dispatchOrder?: { onNoMatch?: unknown } } | undefined)?.dispatchOrder;
+        const onNoMatch = dispatchOrder?.onNoMatch;
+        if (onNoMatch !== 'preserve-last' && onNoMatch !== 'idle') return false;
+        return this.engine.currentStatus === 'idle'
+            && !this.engine.isWaitingForResponse
+            && !this.engine.currentTurnScope
+            && !this.engine.activeModal
+            && !this.parseErrorMessage;
     }
 
     runParseApproval(tail: string): { message: string; buttons: string[] } | null {
@@ -1706,7 +1743,7 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         if (!this.ready) {
             this.resolveStartupState('send_precheck');
-            if (this.runDetectStatus(this.recentOutputBuffer) === 'idle') {
+            if (!this.ready && this.detectIdleHonoringOnNoMatch(this.recentOutputBuffer)) {
                 this.ready = true;
                 this.startupParseGate = false;
                 this.engine.setStatus('idle', 'send_message_idle_prompt_recovery');
