@@ -193,6 +193,90 @@ describe('buildDetectStatusFromTui — fixB ① button-block cue with a GENERIC 
   });
 });
 
+describe('buildDetectStatusFromTui — stale modal box supersession (cursor-cli)', () => {
+  // cursor-agent's "Workspace Trust Required" box lingers in the terminal grid
+  // after the user answers: the redraw that paints the idle composer is shorter
+  // than the box, so the top modal rows are never cleared. The unscoped
+  // whole-screen modal cue kept firing waiting_approval forever, so the startup
+  // gate never released and the session wedged in `starting`/generating.
+  const spec: DetectStatusTuiSpec = {
+    spinner: {
+      $schema: 'adhdev:tui/spinner@1',
+      patterns: [{ regex: '\\bWorking\\b' }],
+      scope: 'live-frame-tail',
+      scopeWindowLines: 12,
+    },
+    settledPrompt: {
+      $schema: 'adhdev:tui/settled-prompt@1',
+      regex: '^\\s*(?:Auto|Plan|Ask)\\b[^\\n]*\\n\\s*(?:~|/)[^\\n]+$',
+      flags: 'm',
+      scope: 'last-n-lines',
+      scopeWindowLines: 8,
+    },
+    modal: {
+      $schema: 'adhdev:tui/modal@1',
+      questionPattern: 'Do you want to|Do you trust|Trust|approve|Allow',
+      questionFlags: 'i',
+      buttonPattern:
+        '^[\\s│┃|]*(?:[❯›>▶●]\\s*)?(?:\\d+[.)]|\\[[A-Za-z]\\])\\s+([^│┃|]+?)\\s*[│┃|]?\\s*$',
+      buttonLabelGroup: 1,
+      buttonFlags: 'm',
+    },
+    dispatchOrder: {
+      $schema: 'adhdev:tui/dispatch-order@1',
+      order: ['modal', 'spinner', 'settled-prompt'],
+      onNoMatch: 'preserve-last',
+    },
+  };
+  const detect = buildDetectStatusFromTui(spec);
+
+  it('yields idle when a stale trust-modal box sits above the repainted composer', () => {
+    const screen = [
+      '  ╭─────╮',
+      '  │  ⚠ Workspace Trust Required',
+      '  │  Do you trust the contents of this directory?',
+      '  │    /private/tmp/adhdev-selfhost-cursor',
+      '  │    [a] Trust this workspace',
+      '  │    [q] Quit',
+      '  │  ⏳ Trusting workspace...',
+      '  ╰─────╯',
+      '',
+      '  Cursor Agent',
+      '  v2026.07.09-a3815c0',
+      '  Tip: Use /run-everything to skip all approvals.',
+      '',
+      '  → Plan, search, build anything',
+      '',
+      '  Auto',
+      '  /private/tmp/adhdev-selfhost-cursor · main',
+    ].join('\n');
+    expect(detect(statusInput(screen))).toBe('idle');
+  });
+
+  it('still fires waiting_approval for a live trust modal (no composer below)', () => {
+    const screen = [
+      '  ╭─────╮',
+      '  │  ⚠ Workspace Trust Required',
+      '  │  Do you trust the contents of this directory?',
+      '  │    /private/tmp/x',
+      '  │  ▶ [a] Trust this workspace',
+      '  │    [q] Quit',
+      '  ╰─────╯',
+    ].join('\n');
+    expect(detect(statusInput(screen))).toBe('waiting_approval');
+  });
+
+  it('still fires waiting_approval for a live approval modal flush against its buttons', () => {
+    const screen = [
+      '  Run this command?',
+      '    ls -la',
+      '  ❯ 1. Yes',
+      '    2. No, and tell Cursor what to do differently',
+    ].join('\n');
+    expect(detect(statusInput(screen))).toBe('waiting_approval');
+  });
+});
+
 describe('buildDetectStatusFromTui — spec validation', () => {
   it('rejects an invalid spinner regex with a helpful error', () => {
     const spec: DetectStatusTuiSpec = {

@@ -227,6 +227,108 @@ function modalMatches(spec: ModalSpec, input: CliStatusInput): boolean {
   return false;
 }
 
+/**
+ * Index (line number) of the last line in `screenText` that carries a modal
+ * cue — question line, question variant, or a button-block label line — or -1
+ * if none. Used to detect a *stale* modal box: some CLIs (e.g. cursor-agent's
+ * "Workspace Trust Required" prompt) never clear their box rows after the user
+ * answers. The redraw that replaces the modal with the idle composer is shorter
+ * than the box, so the top modal rows linger in the terminal grid. Without a
+ * spatial check, the unscoped whole-screen `modalMatches` keeps firing
+ * `waiting_approval` forever and the session wedges in `starting` — the
+ * startup gate never releases because `detectStatus` never returns `idle`.
+ */
+function lastModalCueLine(spec: ModalSpec, screenText: string): number {
+  if (!screenText) return -1;
+  const lines = screenText.split('\n');
+  const question = compile(spec.questionPattern, spec.questionFlags ?? 'i');
+  const variants = (spec.questionVariants ?? []).map((v) => compile(v.regex, v.flags ?? 'i'));
+  const buttonFlags = spec.buttonFlags && spec.buttonFlags.includes('m')
+    ? spec.buttonFlags
+    : `${spec.buttonFlags ?? ''}m`;
+  const buttonRe = compile(spec.buttonPattern, buttonFlags);
+  let last = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    question.lastIndex = 0;
+    if (question.test(line)) { last = i; continue; }
+    if (variants.some((re) => { re.lastIndex = 0; return re.test(line); })) { last = i; continue; }
+    buttonRe.lastIndex = 0;
+    if (buttonRe.test(line)) { last = i; continue; }
+  }
+  return last;
+}
+
+/**
+ * True when the modal cue is *stale* — a leftover box the CLI failed to clear —
+ * because the live idle composer has repainted BELOW it.
+ *
+ * The discriminator is spatial, so a live modal (whose own selection cursor /
+ * button block can incidentally match a settled-prompt regex) is NOT mistaken
+ * for stale:
+ *
+ *   - A settled-prompt cue must match strictly BELOW the last modal cue line.
+ *   - AND at least one non-blank line between them is neither a modal cue nor
+ *     part of the settled-prompt match itself (the separator prose).
+ *
+ * A live modal renders its question + button block FLUSH against its own
+ * composer/selection cursor (no intervening prose). A stale box, by contrast,
+ * has the CLI's welcome banner / follow-up hint / mode footer repainted between
+ * the leftover box rows and the live composer. So the discriminator is: a
+ * settled-prompt cue matches strictly BELOW the last modal cue line AND at least
+ * one non-blank, non-modal line separates them. That separator is exactly the
+ * content a live modal never has between its buttons and its cursor, and it is
+ * robust to the terminal-snapshot append that can shuffle the tail window.
+ */
+function modalSupersededBySettledPrompt(
+  modalSpec: ModalSpec,
+  settledSpec: SettledPromptSpec | undefined,
+  settled: ReturnType<typeof compileSettledPromptMatchers> | null,
+  input: CliStatusInput,
+): boolean {
+  if (!settled || !settledSpec) return false;
+  if (settledSpec.scope === 'whole-screen') return false;
+  const screenText = input.screenText ?? '';
+  if (!screenText) return false;
+  const modalLine = lastModalCueLine(modalSpec, screenText);
+  if (modalLine < 0) return false;
+  const lines = screenText.split('\n');
+  const below = lines.slice(modalLine + 1);
+  if (below.length === 0) return false;
+  // A settled prompt (composer) must render somewhere below the modal box.
+  const belowText = below.join('\n');
+  if (!settled.prompt.test(belowText)) return false;
+  if (settled.footers.length > 0 && !settled.footers.every((f) => f.test(belowText))) return false;
+  // Require a real separator between the leftover box and the composer: a
+  // non-blank line that is neither a modal cue NOR part of the settled-prompt
+  // match itself. That separator is the CLI's welcome banner / follow-up hint /
+  // mode footer a stale box shows above the repainted composer. A live modal's
+  // selection cursor sits flush against its buttons with no such prose between
+  // them (and the cursor line, even if it matches the settled regex, is not a
+  // separator), so an active modal is never misread as stale.
+  const question = compile(modalSpec.questionPattern, modalSpec.questionFlags ?? 'i');
+  const variants = (modalSpec.questionVariants ?? []).map((v) => compile(v.regex, v.flags ?? 'i'));
+  const buttonFlags = modalSpec.buttonFlags && modalSpec.buttonFlags.includes('m')
+    ? modalSpec.buttonFlags
+    : `${modalSpec.buttonFlags ?? ''}m`;
+  const buttonRe = compile(modalSpec.buttonPattern, buttonFlags);
+  const isModalCueLine = (line: string): boolean => {
+    question.lastIndex = 0;
+    if (question.test(line)) return true;
+    if (variants.some((re) => { re.lastIndex = 0; return re.test(line); })) return true;
+    buttonRe.lastIndex = 0;
+    return buttonRe.test(line);
+  };
+  // A single-line settled regex would let a lone match count as its own line;
+  // test each below-line against the prompt regex on that line alone.
+  const settledPromptLineRe = compile(settledSpec.regex, (settledSpec.flags ?? 'm').includes('m') ? (settledSpec.flags ?? 'm') : `${settledSpec.flags ?? ''}m`);
+  const isSettledLine = (line: string): boolean => {
+    settledPromptLineRe.lastIndex = 0;
+    return settledPromptLineRe.test(line);
+  };
+  return below.some((line) => line.trim() !== '' && !isModalCueLine(line) && !isSettledLine(line));
+}
+
 // ─── Public builder ────────────────────────────────────────────────────
 
 const DEFAULT_ORDER: DispatchGroup[] = ['spinner', 'modal', 'settled-prompt'];
@@ -248,7 +350,12 @@ function evaluateGroup(
     }
     case 'modal': {
       if (!spec.modal) return null;
-      return modalMatches(spec.modal, input) ? 'waiting_approval' : null;
+      if (!modalMatches(spec.modal, input)) return null;
+      // A modal cue with the live composer repainted below it (in the settled
+      // prompt's own tail scope) is a stale box the CLI failed to clear — yield
+      // so settled-prompt/idle can win.
+      if (modalSupersededBySettledPrompt(spec.modal, spec.settledPrompt, compiled.settled, input)) return null;
+      return 'waiting_approval';
     }
     case 'settled-prompt': {
       if (!spec.settledPrompt || !compiled.settled) return null;

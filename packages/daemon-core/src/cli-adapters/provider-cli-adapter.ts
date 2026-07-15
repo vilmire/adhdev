@@ -356,6 +356,13 @@ export class ProviderCliAdapter implements CliAdapter {
         const currentScreenLooksIdle = /(?:^|\n|\r)\s*[❯›>]\s*(?:Try\s+["“][^\n\r"”]+["”])?\s*(?:\n|\r|$)/.test(screenText)
             && !activeScreenPattern.test(screenText);
         if (staleSnapshotLooksActive && currentScreenLooksIdle) return screenText;
+        // When the current frame already resolves to a settled/idle prompt via the
+        // provider's own detector, do NOT graft an older snapshot onto it: the
+        // older frame can carry a dead modal box (e.g. cursor-agent's leftover
+        // "Workspace Trust Required" rows) that re-fires `waiting_approval` at the
+        // appended tail and wedges the turn in `generating`. A truly idle current
+        // screen needs no historical supplement.
+        if (this.runDetectStatus(screenText) === 'idle') return screenText;
         if (currentSnapshot.length >= lastSnapshot.length) return screenText;
         // Terminal screen reads can miss a just-rendered completed Hermes box while
         // the normalized snapshot captured during output still has it. Feed both
