@@ -357,11 +357,28 @@ function executeSqlite(src: NativeHistorySqliteSource, input: NativeHistoryInput
                 const sessionFloorSeconds = typeof input.sessionStartedAtMs === 'number'
                     ? Math.floor(input.sessionStartedAtMs / 1000)
                     : 0;
+                // Workspace the daemon spawned this CLI in. A store that keeps
+                // the session directory as a column (opencode's
+                // `session.directory`) can scope the newest-session pick to this
+                // workspace so two concurrent sessions in different workspaces
+                // don't cross-bind — the time floor alone can't disambiguate
+                // when the OTHER workspace's session was touched more recently.
+                const workspaceHint = typeof input.workspace === 'string' ? input.workspace : '';
                 const stmt = db.prepare(src.session_query);
+                // Binding tiers, tried in order (better-sqlite3 throws when the
+                // statement declares params the bind object/args don't satisfy,
+                // so each tier is guarded):
+                //   1. named { floor, workspace } — spec references @floor/@workspace
+                //   2. positional (floor) — legacy single-`?` floor specs
+                //   3. no-arg — specs with no bound params
                 try {
-                    sessionRow = stmt.get(sessionFloorSeconds);
+                    sessionRow = stmt.get({ floor: sessionFloorSeconds, workspace: workspaceHint });
                 } catch {
-                    sessionRow = stmt.get();
+                    try {
+                        sessionRow = stmt.get(sessionFloorSeconds);
+                    } catch {
+                        sessionRow = stmt.get();
+                    }
                 }
             } catch { return ''; }
             if (!sessionRow) return '';
@@ -406,12 +423,18 @@ function executeSqlite(src: NativeHistorySqliteSource, input: NativeHistoryInput
         }
         if (messages.length === 0) return null;
 
+        // Surface the workspace at the result level too (mirrors the jsonl
+        // session_meta path) so callers that read result.workspace — not just
+        // per-message workspace — see the session directory.
+        const resultWorkspace = messages.find(m => m.workspace)?.workspace;
+
         return {
             messages,
             providerSessionId: sessionId,
             sourcePath: resolved,
             sourceMtimeMs: mtime,
             nativeHistoryCoverage: 'full',
+            ...(resultWorkspace ? { workspace: resultWorkspace } : {}),
         };
     } finally {
         try { db.close(); } catch { /* ignore */ }
@@ -1015,9 +1038,17 @@ function projectMessages(record: any, map: NativeHistoryMessageMap, index: numbe
         }
     }
 
+    // Per-message workspace: sqlite sources have no `session_meta` record to
+    // carry the cwd (jsonl-only), so a spec can SELECT the session directory
+    // into each row and map it here. The downstream hasSafeNativeHistoryMapping
+    // guard needs it to accept a workspace-scoped read (no provider session id
+    // captured from the TUI); without it every assistant bubble is dropped.
+    const workspaceRaw = map.workspace ? jsonPathGet(record, map.workspace) : undefined;
+    const workspace = typeof workspaceRaw === 'string' && workspaceRaw.trim() ? workspaceRaw.trim() : undefined;
+
     const contentRaw = jsonPathGet(record, map.content);
     const content = cleanContent(stringifyContent(contentRaw), map);
-    if (content) out.push({ role, content, receivedAt, kind });
+    if (content) out.push(workspace ? { role, content, receivedAt, kind, workspace } : { role, content, receivedAt, kind });
 
     // Block-nested tool bubbles are ordered just after the text bubble of the
     // same record by nudging receivedAt forward a millisecond per bubble, so a

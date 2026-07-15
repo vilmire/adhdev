@@ -46,6 +46,20 @@ export interface TranscriptPtySpec {
     chromePatterns?: ChromePatternSpec[]
     stripLeadingChrome?: boolean
     scope?: 'screen' | 'buffer' | 'tail'
+    /**
+     * Optional SGR background-color codes that mark a USER turn. Some TUIs
+     * (cursor-agent) render the user's submitted message and the composer echo
+     * inside a colored box but render the assistant answer as a plain line with
+     * no background. After ANSI stripping both look like bare 2-space lines, so
+     * a bg-less assistant answer and a boxed user echo are indistinguishable by
+     * text prefix alone — the user echo then leaks into an assistant bubble.
+     * When set, a raw line whose ANSI carries any of these background SGRs (e.g.
+     * "48;5;233") is classified as a user turn regardless of its stripped text,
+     * so the plain assistant answer is the only assistant bubble left. Matched
+     * against the raw pre-strip line; the visible text is still ANSI-stripped
+     * for the bubble content.
+     */
+    userBackgroundSgr?: string[]
 }
 
 export interface SessionIdExtractionSpec {
@@ -105,6 +119,22 @@ function splitLines(text: string): string[] {
         .replace(//g, '')
         .split(/\r?\n/)
         .map(l => l.replace(/\s+$/, ''))
+}
+
+/**
+ * Split into raw (pre-strip) lines paired with their stripped visible text so
+ * per-line ANSI (e.g. a user-turn background SGR) can be inspected before the
+ * color is discarded. The stripped column matches splitLines() line for line:
+ * same newline split, same trailing-space trim — only the ANSI is retained on
+ * the `raw` side. Splitting on newline keeps any leading SGR of a line attached
+ * to that line (cursor-agent writes `<bg-sgr> <text>` on one raw line), so a
+ * per-line background test is exact.
+ */
+function splitRawLines(text: string): Array<{ raw: string; text: string }> {
+    return String(text || '')
+        .split(/\r?\n/)
+        // eslint-disable-next-line no-control-regex
+        .map(rawLine => ({ raw: rawLine, text: stripAnsi(rawLine).replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').replace(/\s+$/, '') }))
 }
 
 function pickInputText(input: any, scope: TranscriptPtySpec['scope']): string {
@@ -187,6 +217,19 @@ export function buildParseSessionFromTui(spec: ParseSessionTuiSpec): (input: any
     const requireIndentForContinuation = spec.transcriptPty.continuationLine?.indented ?? false
     const stripLeadingChrome = spec.transcriptPty.stripLeadingChrome ?? true
     const scope = spec.transcriptPty.scope ?? 'buffer'
+    // Background-SGR user-turn markers. A raw line whose ANSI carries one of
+    // these `48;5;NNN`-style background codes is a user turn even when its
+    // stripped text is a bare line the assistantPrefix would otherwise grab.
+    const userBgList = Array.isArray(spec.transcriptPty.userBackgroundSgr)
+        ? spec.transcriptPty.userBackgroundSgr.map(s => String(s).trim()).filter(Boolean)
+        : []
+    const userBgRes = userBgList.map(code => {
+        // Match the code inside an SGR run: `\x1b[<...>48;5;233<...>m`. The code
+        // (e.g. "48;5;233") appears somewhere in the `;`-separated parameter list
+        // terminated by `m`. Escape regex-special chars in the code first.
+        const esc = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        return new RegExp(`\\x1b\\[[0-9;]*${esc}[0-9;]*m`)
+    })
 
     // Compose detect + approval helpers if their inputs are present.
     const detectStatus = (spec.spinner || spec.settledPrompt || spec.modal || spec.dispatchOrder)
@@ -215,13 +258,16 @@ export function buildParseSessionFromTui(spec: ParseSessionTuiSpec): (input: any
         const modal = parseApproval(input as any)
 
         const text = pickInputText(input, scope)
-        const lines = splitLines(text)
+        // When a bg-SGR user marker is configured we need the raw (pre-strip)
+        // line to test the background color; otherwise the cheaper stripped
+        // split is enough. Both yield the same stripped `text` per line.
+        const rawLines = userBgRes.length > 0 ? splitRawLines(text) : splitLines(text).map(t => ({ raw: '', text: t }))
 
         const messages: SynthesizedMessage[] = []
         let seenFirstRoleLine = !stripLeadingChrome
 
-        for (const raw of lines) {
-            const line = raw
+        for (const entry of rawLines) {
+            const line = entry.text
             if (line.trim() === '') {
                 // Blank line: ends streaming continuation but doesn't add a message.
                 continue
@@ -233,6 +279,19 @@ export function buildParseSessionFromTui(spec: ParseSessionTuiSpec): (input: any
                 if (cre.test(line)) { isChrome = true; break }
             }
             if (isChrome) continue
+
+            // Background-SGR user classification. Checked before prefix matching
+            // so a user turn rendered as a bg-boxed plain line (no distinctive
+            // glyph — cursor-agent) is attributed to the user instead of being
+            // grabbed by a permissive assistantPrefix. The visible text is the
+            // ANSI-stripped `line`.
+            if (userBgRes.length > 0 && entry.raw && userBgRes.some(re => re.test(entry.raw))) {
+                seenFirstRoleLine = true
+                // Strip a leading composer glyph (e.g. "→ ") the boxed echo may carry.
+                const content = line.replace(/^\s*[→>›❯]\s*/, '').trim()
+                if (content) messages.push({ role: 'user', kind: 'standard', content })
+                continue
+            }
 
             // Role detection
             const userMatch = userRe ? line.match(userRe) : null

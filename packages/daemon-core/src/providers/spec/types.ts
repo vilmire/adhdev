@@ -136,6 +136,19 @@ export interface NativeHistoryMessageMap {
     timestamp_ms?: string;
     kind?: string;
     /**
+     * Optional jsonpath-lite path to a per-message workspace/cwd value. sqlite
+     * sources have no `session_meta` record to carry the workspace (that's a
+     * jsonl-only convention), so a native-source provider whose store keeps the
+     * session directory as a column (e.g. opencode's `session.directory`) can
+     * SELECT it into each message row and map it here. The read pipeline's
+     * `hasSafeNativeHistoryMapping` guard requires each message to declare a
+     * workspace when the read is workspace-scoped (no provider session id was
+     * captured from the TUI); without it a workspace-only lookup fails closed
+     * and every assistant bubble is dropped. Absent → messages carry no
+     * workspace (jsonl still fills it from session_meta).
+     */
+    workspace?: string;
+    /**
      * Declarative tool-bubble extraction. Without it the executor only emits
      * the text-bearing parts of each record, so a turn that is purely a tool
      * call or tool result (no prose) is dropped — the restored transcript

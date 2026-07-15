@@ -9,6 +9,7 @@
  * instead of dropping the maintainer into a 100-line stack trace.
  */
 
+import * as fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
     buildDetectStatusFromTui,
@@ -197,6 +198,63 @@ describe('buildParseSessionFromTui', () => {
         const r = codexParse({ buffer, rawBuffer: buffer, screenText: buffer, tail: buffer });
         expect(r.providerSessionId).toBeUndefined();
         expect(Object.prototype.hasOwnProperty.call(r, 'providerSessionId')).toBe(false);
+    });
+
+    // ─── tui/transcript-pty userBackgroundSgr (cursor-agent bubble fix) ─────
+    // cursor-agent renders the user's submitted turn + composer echo inside a
+    // colored box (SGR 48;5;233 / 48;5;235) but the assistant answer as a plain
+    // no-background line. With a permissive assistantPrefix, the ANSI-stripped
+    // user echo would leak into an assistant bubble. userBackgroundSgr classifies
+    // bg-boxed lines as user turns before the assistant rule runs.
+    const cursorTui = {
+        transcriptPty: {
+            $schema: 'adhdev:tui/transcript-pty@1' as const,
+            // Same permissive prefix cursor-cli ships: grabs any non-empty line.
+            assistantPrefix: { regex: '^\\s*(\\S.*)$' },
+            userBackgroundSgr: ['48;5;233', '48;5;235'],
+            chromePatterns: [
+                { regex: '\\bWorking\\b' },
+                { regex: '^\\s*(?:Auto|Plan|Ask)\\s*$' },
+                { regex: '^\\s*→\\s+Add a follow-up', flags: 'i' },
+                { regex: '^\\s*Tip:', flags: 'i' },
+                { regex: '^\\s*(?:~|/)[^\\n]*$' },
+            ],
+            scope: 'buffer' as const,
+        },
+    };
+    const cursorParse = buildParseSessionFromTui(cursorTui as any);
+
+    it('classifies a bg-boxed user turn as user and leaves the plain answer as the only assistant bubble', () => {
+        // Minimal synthetic frame: boxed user turn (bg 235) + wrapped
+        // continuation (bg 233) + plain assistant answer (no bg).
+        const buffer = [
+            ' \x1b[48;5;235m Provider smoke test. Reply with one line:\x1b[49m',
+            ' \x1b[48;5;233m   do not run tools.\x1b[49m',
+            ' \x1b[G  CURSOR OK 2+2=4',
+        ].join('\n');
+        const r = cursorParse({ buffer, rawBuffer: buffer, screenText: buffer, tail: buffer });
+        const assistant = r.messages.filter((m) => m.role === 'assistant');
+        const user = r.messages.filter((m) => m.role === 'user');
+        // The only assistant bubble is the real answer.
+        expect(assistant.map((m) => m.content)).toEqual(['CURSOR OK 2+2=4']);
+        // The prompt echo + its wrapped continuation are attributed to the user.
+        expect(user.some((m) => m.content.includes('Provider smoke test'))).toBe(true);
+        // No assistant bubble contains the user's prompt text.
+        expect(assistant.some((m) => m.content.includes('Provider smoke test'))).toBe(false);
+    });
+
+    it('does not leak the user prompt echo into an assistant bubble on a real cursor-agent buffer', () => {
+        // Real PTY capture from cursor-agent v2026.07.09 (Provider smoke test →
+        // "CURSOR OK 2+2=4"). See fixtures/cursor-agent-buffer-raw.bin.
+        const fixturePath = new URL('./fixtures/cursor-agent-buffer-raw.bin', import.meta.url);
+        const buffer = fs.readFileSync(fixturePath, 'utf8');
+        const r = cursorParse({ buffer, rawBuffer: buffer, screenText: buffer, tail: buffer });
+        const assistant = r.messages.filter((m) => m.role === 'assistant');
+        // The real answer is present as an assistant bubble.
+        expect(assistant.some((m) => m.content.includes('CURSOR OK 2+2=4'))).toBe(true);
+        // The user's prompt never appears in an assistant bubble.
+        expect(assistant.some((m) => m.content.includes('Provider smoke test'))).toBe(false);
+        expect(assistant.some((m) => m.content.includes('tools or read files'))).toBe(false);
     });
 });
 

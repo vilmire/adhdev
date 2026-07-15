@@ -78,6 +78,11 @@
       "enum": ["screen", "buffer", "tail"],
       "default": "buffer",
       "description": "Which input field to parse: rendered screen text, full buffer (default), or tail string. Most providers use buffer because the screen alone loses scrollback."
+    },
+    "userBackgroundSgr": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional SGR background-color codes (e.g. \"48;5;233\") that mark a USER turn. Some TUIs (cursor-agent) render the user's submitted message and composer echo inside a colored box while rendering the assistant answer as a plain no-background line. After ANSI stripping both are bare lines, so a permissive assistantPrefix grabs the user echo as an assistant bubble. When set, a raw line whose ANSI carries any of these background codes is classified as a user turn regardless of its stripped text, leaving the plain assistant answer as the only assistant bubble. Checked against the raw pre-strip line before prefix matching."
     }
   }
 }
