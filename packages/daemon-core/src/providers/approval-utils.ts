@@ -24,7 +24,7 @@ export function normalizeApprovalLabel(value: string): string {
         .trim();
 }
 
-function isNegativeApprovalLabel(value: string): boolean {
+export function isNegativeApprovalLabel(value: string): boolean {
     const label = normalizeApprovalLabel(value);
     return /^(no|deny|reject|cancel|skip|exit|stop)\b/.test(label)
         || /\bwithout\b/.test(label)
@@ -104,18 +104,45 @@ export function pickApprovalButton(
     const normalizedButtons = labels.map((label) => normalizeApprovalLabel(label));
     const hints = getApprovalPositiveHints(provider);
 
-    for (const hint of hints) {
-        const exactIndex = normalizedButtons.findIndex((label, index) => label === hint && !isNegativeApprovalLabel(labels[index]));
-        if (exactIndex >= 0) return { index: exactIndex, label: labels[exactIndex] };
+    // Match QUALITY dominates hint ORDER: try the strongest tier (exact) across
+    // ALL hints before falling to prefix, and prefix before the weakest tier
+    // (substring). The old code exhausted all three tiers per-hint, so a weak
+    // substring hit on an early hint beat a strong prefix hit on a later hint.
+    //
+    // Live cursor defect: the 'Not in allowlist: git status' modal offers
+    //   ["Run (once)", "Add Shell(git status) to allowlist?", "Run Everything", "Skip"]
+    // with hints ["trust","allow",…,"run","yes"]. `allow` (earlier) substring-hit
+    // "add shell … to allow-LIST" → index 1 (a scope-broadening grant that does
+    // NOT execute the command) before `run` (later) prefix-hit "run once" → the
+    // correct least-permissive affirmative at index 0. Approve then wedged.
+    //
+    // Substring is further constrained to WHOLE-WORD hits so `allow` matches
+    // "allow all edits" but never "allowlist" — a hint buried inside a larger
+    // word (allowlist, disallow, runtime) is almost never the intended button.
+    const includesWord = (label: string, hint: string): boolean => {
+        if (!label.includes(hint)) return false;
+        const re = new RegExp(`(?:^|\\s)${hint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`);
+        return re.test(label);
+    };
 
-        const prefixIndex = normalizedButtons.findIndex((label, index) => label.startsWith(hint) && !isNegativeApprovalLabel(labels[index]));
-        if (prefixIndex >= 0) return { index: prefixIndex, label: labels[prefixIndex] };
+    const findMatch = (
+        predicate: (label: string, hint: string) => boolean,
+    ): { index: number; label: string } | null => {
+        for (const hint of hints) {
+            const idx = normalizedButtons.findIndex(
+                (label, index) => predicate(label, hint) && !isNegativeApprovalLabel(labels[index]),
+            );
+            if (idx >= 0) return { index: idx, label: labels[idx] };
+        }
+        return null;
+    };
 
-        const includeIndex = normalizedButtons.findIndex((label, index) => label.includes(hint) && !isNegativeApprovalLabel(labels[index]));
-        if (includeIndex >= 0) return { index: includeIndex, label: labels[includeIndex] };
-    }
-
-    return { index: -1, label: '' };
+    return (
+        findMatch((label, hint) => label === hint)
+        ?? findMatch((label, hint) => label.startsWith(hint))
+        ?? findMatch((label, hint) => includesWord(label, hint))
+        ?? { index: -1, label: '' }
+    );
 }
 
 export function pickAutoApprovalButton(

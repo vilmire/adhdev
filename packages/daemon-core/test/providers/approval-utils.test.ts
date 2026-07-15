@@ -4,6 +4,7 @@ import {
   pickAutoApprovalButton,
   hasNegativeApprovalOption,
   hasReliableApprovalAffirmative,
+  isNegativeApprovalLabel,
 } from '../../src/providers/approval-utils.js'
 
 describe('approval-utils', () => {
@@ -21,6 +22,50 @@ describe('approval-utils', () => {
       'Always allow',
       'Deny',
     ])).toEqual({ index: 0, label: 'Allow once' })
+  })
+
+  it('picks the run-once affirmative over an allowlist-grant on cursor Not-in-allowlist modal', () => {
+    // Live cursor-cli defect (rc.539): the 'Not in allowlist: git status' modal
+    // rendered ["Run (once)", "Add Shell(git status) to allowlist?",
+    // "Run Everything", "Skip"] with cursor's custom hints. Approve landed on
+    // index 1 ("Add … to allowlist?") — a scope-broadening grant that does NOT
+    // execute the command — because the earlier `allow` hint substring-hit
+    // "allow-LIST" before the later `run` hint prefix-hit "run once". Match
+    // quality must dominate hint order, and substring hits must be whole-word.
+    expect(pickApprovalButton([
+      'Run (once)',
+      'Add Shell(git status) to allowlist?',
+      'Run Everything',
+      'Skip',
+    ], {
+      approvalPositiveHints: ['trust', 'trust this workspace', 'allow', 'approve', 'accept', 'run', 'yes'],
+    })).toEqual({ index: 0, label: 'Run (once)' })
+  })
+
+  it('recognizes cursor "Skip" as a decline so reject can find it', () => {
+    // Live cursor-cli reject defect: the decline button is "Skip", which the
+    // old reject matcher (/deny|reject|no/) missed → resolve_action(reject)
+    // returned "did not match any visible button" and left the modal wedged.
+    expect(isNegativeApprovalLabel('Skip')).toBe(true)
+    expect(isNegativeApprovalLabel('Skip (esc or n)')).toBe(true)
+    // The cursor allowlist modal's decline is index 3 among the four buttons.
+    const buttons = ['Run (once)', 'Add Shell(git status) to allowlist?', 'Run Everything', 'Skip']
+    expect(buttons.findIndex((b) => isNegativeApprovalLabel(b))).toBe(3)
+    // And the positive buttons are NOT misread as declines.
+    expect(isNegativeApprovalLabel('Run (once)')).toBe(false)
+    expect(isNegativeApprovalLabel('Add Shell(git status) to allowlist?')).toBe(false)
+  })
+
+  it('does not let a substring buried in a word (allow → allowlist) win a match', () => {
+    // Even when the allowlist grant sits FIRST, the whole-word include guard
+    // must skip it so a real affirmative (run once) is still selected.
+    expect(pickApprovalButton([
+      'Add to allowlist?',
+      'Run once',
+      'Skip',
+    ], {
+      approvalPositiveHints: ['allow', 'run', 'yes'],
+    })).toEqual({ index: 1, label: 'Run once' })
   })
 
   it('respects provider-specific positive hint ordering', () => {

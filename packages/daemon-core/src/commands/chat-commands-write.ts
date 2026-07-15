@@ -8,7 +8,7 @@ import type { CommandResult, CommandHelpers } from './handler.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import { normalizeInputEnvelope, type InputEnvelope, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
 import { assertProviderSupportsDeclaredInput, assertTextOnlyInput } from '../providers/provider-input-support.js';
-import { pickApprovalButton } from '../providers/approval-utils.js';
+import { pickApprovalButton, isNegativeApprovalLabel } from '../providers/approval-utils.js';
 import { LOG } from '../logging/logger.js';
 import {
     READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS,
@@ -773,7 +773,12 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
             buttonIndex = buttons.findIndex(b => b.toLowerCase().includes(btnLower));
         }
         if (buttonIndex < 0 && (action === 'reject' || action === 'deny')) {
-            buttonIndex = buttons.findIndex(b => /deny|reject|no/i.test(b));
+            // Use the canonical negative detector (no|deny|reject|cancel|skip|exit|stop)
+            // rather than a narrow /deny|reject|no/ — cursor's decline button is
+            // "Skip", which the old regex missed, so reject reported "did not match
+            // any visible button" and left the modal wedged. This mirrors the
+            // negative guard pickApprovalButton already applies on the approve side.
+            buttonIndex = buttons.findIndex(b => isNegativeApprovalLabel(b));
         }
         if (buttonIndex < 0 && (action === 'always' || /always/i.test(button))) {
             buttonIndex = buttons.findIndex(b => /always/i.test(b));
