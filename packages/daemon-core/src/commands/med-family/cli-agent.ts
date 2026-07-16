@@ -8,7 +8,7 @@
  * + ctx.launchIde — no executeDaemonCommand recursion) or CLI/ACP restarts.
  * Extracted verbatim from executeDaemonCommand.
  */
-import { meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { supportsExplicitSessionResume } from '../cli-manager.js';
 import { loadState } from '../../config/state-store.js';
 import { getRecentActivity } from '../../config/recent-activity.js';
@@ -19,8 +19,13 @@ import { LOG } from '../../logging/logger.js';
 import { readStringValue } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 
-/** Outcome of the coordinator-mirror refresh: not a mesh worker (no-op), refreshed, or failed. */
-type MirrorForwardOutcome = 'skipped' | 'refreshed' | 'failed';
+/**
+ * Outcome of the coordinator-mirror refresh: not a mesh worker (no-op), refreshed via the remote
+ * relay, refreshed locally (self-hosted coordinator == this daemon — no P2P dial), or failed.
+ * 'refreshed-local' and 'refreshed' both mean the mirror is now fresh; the caller reports them
+ * identically (mirrorRefreshed, no mirrorStale) so a self-hosted toggle never rolls back.
+ */
+type MirrorForwardOutcome = 'skipped' | 'refreshed' | 'refreshed-local' | 'failed';
 
 /**
  * MESH-WORKER-PREFS Fix B: when a mesh WORKER session's per-conversation Hide/Mute is toggled
@@ -41,6 +46,17 @@ type MirrorForwardOutcome = 'skipped' | 'refreshed' | 'failed';
  * once on failure, and reports the outcome so the handler can flag a stale mirror to the caller
  * instead of returning an unqualified success. It never rejects — a failure is reported, not thrown,
  * so the local write (already applied) still returns success with a mirrorStale marker.
+ *
+ * SELF-DIAL (mission fix/cloud-local-hide-self-dial): a self-hosted mesh session — one this daemon
+ * both coordinates AND hosts — carries a meshCoordinatorDaemonId equal to this daemon's own id.
+ * Dispatching the mirror refresh over P2P to that id self-dials, which the mesh manager REFUSES
+ * (SELF_DIAL) → the old code reported that refusal as 'failed' → mirrorStale → the dashboard
+ * dropped its optimistic overlay and the toggle appeared to do nothing (the exact CLOUD-local
+ * hide/mute "무반응" defect). The remote-worker relay path (coordinatorDaemonId != this daemon)
+ * is unchanged. When the coordinator IS this daemon we skip the dial entirely and refresh the
+ * local coordinator mirror directly via updateLocalMeshOwnedSession (the cloud runtime wires it to
+ * the same updateMeshOwnedSession + dashboard flush the remote mesh_forward_event consumer runs),
+ * reporting 'refreshed-local' so no rollback occurs.
  */
 async function forwardConversationPrefsToCoordinator(
     ctx: MedFamilyContext,
@@ -73,6 +89,29 @@ async function forwardConversationPrefsToCoordinator(
         ...(nodeId ? { nodeId } : {}),
         sessionSettings: { ...patch },
     };
+
+    // SELF-DIAL guard: the coordinator anchor resolves to THIS daemon. Refresh the local mirror
+    // in-process instead of dispatching a P2P command to our own id (which the mesh manager
+    // refuses as SELF_DIAL, formerly surfacing as mirrorStale → a false rollback). Uses the
+    // machine-core-canonicalizing daemonIdsEquivalent — a raw === would miss a same-machine anchor
+    // that arrives in a different id form (daemon_mach_X vs mach_X), the repeatedly-regressed
+    // daemon-id form-mismatch class in this repo, and self-dial anyway.
+    const selfDaemonId = readNonEmptyString((ctx.deps as any).statusInstanceId);
+    if (selfDaemonId && daemonIdsEquivalent(coordinatorDaemonId, selfDaemonId)) {
+        const refreshLocal = ctx.deps.updateLocalMeshOwnedSession;
+        if (refreshLocal) {
+            try {
+                refreshLocal(payload);
+                return 'refreshed-local';
+            } catch (e: any) {
+                LOG.warn('Mesh', `[Mesh] set_conversation_prefs local coordinator-mirror refresh failed: ${e?.message || e}`);
+                return 'failed';
+            }
+        }
+        // No local mirror hook (e.g. standalone) — the live instance write already applied is the
+        // single source of truth, so treat the self-hosted case as refreshed rather than dialing.
+        return 'refreshed-local';
+    }
 
     // Await the mirror refresh (Fix 4). One retry: a transient P2P blip on the coordinator
     // channel shouldn't strand the mirror stale when the worker's own state already moved.
@@ -174,10 +213,12 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
             success: true,
             sessionId,
             ...patch,
-            // Only surface the mirror status for a genuine mesh worker session (refreshed/failed);
+            // Only surface the mirror status for a genuine mesh session (refreshed/failed);
             // a non-mesh session ('skipped') carries no mirror field, so nothing changes for it.
+            // A self-hosted session ('refreshed-local' — coordinator == this daemon) refreshed its
+            // own mirror in-process and is reported as fresh so the dashboard never rolls back.
             ...(mirror === 'failed' ? { mirrorStale: true } : {}),
-            ...(mirror === 'refreshed' ? { mirrorRefreshed: true } : {}),
+            ...(mirror === 'refreshed' || mirror === 'refreshed-local' ? { mirrorRefreshed: true } : {}),
         };
     },
 

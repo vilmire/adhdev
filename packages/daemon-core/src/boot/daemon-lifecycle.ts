@@ -96,6 +96,14 @@ export interface DaemonInitConfig {
     getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null;
     /** Cloud-only: P2P dashboard metadata sync after the core forwarder handles a mesh event. */
     onMeshCoordinatorEventForwarded?: (payload: Record<string, unknown>) => void;
+    /**
+     * Cloud-only: refresh THIS daemon's own coordinator mirror for a self-hosted mesh session
+     * (coordinator == this daemon), used by the SELF-DIAL branch of set_conversation_prefs so a
+     * locally coordinated session updates its mirror in-process instead of P2P-dialing its own id
+     * (refused as SELF_DIAL). Injected by daemon-cloud (updateMeshOwnedSession + dashboard flush);
+     * absent on standalone (no coordinator mirror).
+     */
+    updateLocalMeshOwnedSession?: (payload: Record<string, unknown>) => void;
 }
 
 // ─── Result ───
@@ -378,6 +386,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         statusVersion: config.statusVersion,
         getMeshPeerConnectionStatus: config.getMeshPeerConnectionStatus,
         dispatchMeshCommand: config.dispatchMeshCommand,
+        updateLocalMeshOwnedSession: config.updateLocalMeshOwnedSession,
         getCdpLogFn: config.getCdpLogFn || ((ideType: string) => LOG.forComponent(`CDP:${ideType}`).asLogFn()),
     });
 

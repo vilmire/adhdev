@@ -27,6 +27,8 @@ function makeCtx(opts: {
     settings: Record<string, unknown>;
     dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
     onStatusChange?: () => void;
+    statusInstanceId?: string;
+    updateLocalMeshOwnedSession?: (payload: Record<string, unknown>) => void;
 }): MedFamilyContext {
     const updateSettings = vi.fn();
     const instance = {
@@ -40,6 +42,8 @@ function makeCtx(opts: {
             },
             dispatchMeshCommand: opts.dispatchMeshCommand,
             onStatusChange: opts.onStatusChange,
+            statusInstanceId: opts.statusInstanceId,
+            updateLocalMeshOwnedSession: opts.updateLocalMeshOwnedSession,
         },
     } as unknown as MedFamilyContext;
 }
@@ -157,5 +161,138 @@ describe('set_conversation_prefs — coordinator mirror forward (Fix B)', () => 
         expect(dispatch).toHaveBeenCalledTimes(2);
         expect(result).toMatchObject({ success: true, userMuted: true, mirrorRefreshed: true });
         expect(result.mirrorStale).toBeUndefined();
+    });
+});
+
+/**
+ * SELF-DIAL (mission fix/cloud-local-hide-self-dial): a self-hosted mesh session — coordinated AND
+ * hosted by this same daemon — carries meshCoordinatorDaemonId == this daemon's own id. The old
+ * code dispatched the mirror refresh over P2P to that id; the mesh manager refuses a self-dial
+ * (SELF_DIAL) and the refusal surfaced as mirrorStale → the dashboard dropped its optimistic
+ * overlay and the CLOUD hide/mute appeared to do nothing. The self-hosted case must NOT dial and
+ * must refresh the local coordinator mirror in-process, reporting mirrorRefreshed (no rollback).
+ */
+describe('set_conversation_prefs — SELF-DIAL local mirror refresh (self-hosted coordinator)', () => {
+    // The coordinator anchor equals THIS daemon's own id — canonicalizes to the same machine core.
+    const SELF_DAEMON = 'daemon_mach_selfhost';
+    const SELF_HOSTED_SETTINGS = {
+        meshNodeFor: MESH_ID,
+        meshNodeId: NODE_ID,
+        meshCoordinatorDaemonId: SELF_DAEMON,
+    };
+
+    it('refreshes the local mirror in-process instead of self-dialing; reports mirrorRefreshed', async () => {
+        const dispatch = vi.fn(async () => ({ success: true }));
+        const updateLocalMeshOwnedSession = vi.fn();
+        const ctx = makeCtx({
+            settings: SELF_HOSTED_SETTINGS,
+            dispatchMeshCommand: dispatch,
+            statusInstanceId: SELF_DAEMON,
+            updateLocalMeshOwnedSession,
+        });
+
+        const result: any = await cliAgentHandlers.set_conversation_prefs(ctx, {
+            targetSessionId: SESSION_ID,
+            hidden: true,
+            muted: true,
+        });
+
+        // No P2P self-dial — the mirror refresh went through the local hook.
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(updateLocalMeshOwnedSession).toHaveBeenCalledTimes(1);
+        const payload = updateLocalMeshOwnedSession.mock.calls[0][0];
+        expect(payload).toMatchObject({
+            meshId: MESH_ID,
+            targetSessionId: SESSION_ID,
+            nodeId: NODE_ID,
+            sessionSettings: { userHidden: true, userMuted: true },
+        });
+        // Reported as fresh so useConversationPrefs keeps the toggle (no rollback).
+        expect(result).toMatchObject({ success: true, userHidden: true, userMuted: true, mirrorRefreshed: true });
+        expect(result.mirrorStale).toBeUndefined();
+    });
+
+    it('treats a form-mismatched coordinator id (bare mach_ vs daemon_mach_) as self — no self-dial', async () => {
+        const dispatch = vi.fn(async () => ({ success: true }));
+        const updateLocalMeshOwnedSession = vi.fn();
+        const ctx = makeCtx({
+            // Anchor arrives in the bare `mach_` form; this daemon's id is `daemon_mach_` — the
+            // exact daemon-id form-mismatch class that a raw === would miss and then self-dial.
+            settings: { ...SELF_HOSTED_SETTINGS, meshCoordinatorDaemonId: 'mach_selfhost' },
+            dispatchMeshCommand: dispatch,
+            statusInstanceId: 'daemon_mach_selfhost',
+            updateLocalMeshOwnedSession,
+        });
+
+        const result: any = await cliAgentHandlers.set_conversation_prefs(ctx, {
+            targetSessionId: SESSION_ID,
+            hidden: false,
+        });
+
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(updateLocalMeshOwnedSession).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject({ success: true, userHidden: false, mirrorRefreshed: true });
+        expect(result.mirrorStale).toBeUndefined();
+    });
+
+    it('a genuinely REMOTE worker (coordinator != this daemon) still uses the P2P relay — no regression', async () => {
+        const dispatch = vi.fn(async () => ({ success: true }));
+        const updateLocalMeshOwnedSession = vi.fn();
+        const ctx = makeCtx({
+            settings: WORKER_SETTINGS, // meshCoordinatorDaemonId = 'daemon-coordinator'
+            dispatchMeshCommand: dispatch,
+            statusInstanceId: 'daemon_mach_selfhost', // different machine → NOT self
+            updateLocalMeshOwnedSession,
+        });
+
+        const result: any = await cliAgentHandlers.set_conversation_prefs(ctx, {
+            targetSessionId: SESSION_ID,
+            muted: true,
+        });
+
+        // Remote path: dispatched over P2P, local mirror hook untouched.
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(dispatch.mock.calls[0][0]).toBe(COORDINATOR_DAEMON);
+        expect(updateLocalMeshOwnedSession).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ success: true, userMuted: true, mirrorRefreshed: true });
+    });
+
+    it('self-hosted with NO local mirror hook (standalone) still reports fresh — never self-dials', async () => {
+        const dispatch = vi.fn(async () => ({ success: true }));
+        const ctx = makeCtx({
+            settings: SELF_HOSTED_SETTINGS,
+            dispatchMeshCommand: dispatch,
+            statusInstanceId: SELF_DAEMON,
+            // updateLocalMeshOwnedSession intentionally absent
+        });
+
+        const result: any = await cliAgentHandlers.set_conversation_prefs(ctx, {
+            targetSessionId: SESSION_ID,
+            hidden: true,
+        });
+
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ success: true, userHidden: true, mirrorRefreshed: true });
+        expect(result.mirrorStale).toBeUndefined();
+    });
+
+    it('reports mirrorStale (not a false success) when the local mirror hook throws', async () => {
+        const dispatch = vi.fn(async () => ({ success: true }));
+        const updateLocalMeshOwnedSession = vi.fn(() => { throw new Error('mirror boom'); });
+        const ctx = makeCtx({
+            settings: SELF_HOSTED_SETTINGS,
+            dispatchMeshCommand: dispatch,
+            statusInstanceId: SELF_DAEMON,
+            updateLocalMeshOwnedSession,
+        });
+
+        const result: any = await cliAgentHandlers.set_conversation_prefs(ctx, {
+            targetSessionId: SESSION_ID,
+            muted: true,
+        });
+
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ success: true, userMuted: true, mirrorStale: true });
+        expect(result.mirrorRefreshed).toBeUndefined();
     });
 });

@@ -158,6 +158,16 @@ export interface CommandRouterDeps {
     getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null;
     /** Dispatch a command to a remote mesh node via P2P/relay. Injected by cloud runtime; absent in standalone. */
     dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    /**
+     * Refresh THIS daemon's own coordinator mirror (adhdev-daemon meshOwnedSessions) for a
+     * self-hosted mesh session, applying the same `mesh_forward_event`-shaped payload the remote
+     * relay would carry — used by the SELF-DIAL branch of set_conversation_prefs so a locally
+     * coordinated session (coordinatorDaemonId == this daemon) updates its mirror directly instead
+     * of dispatching a P2P command to its own id (which the mesh manager refuses as SELF_DIAL).
+     * Injected by the cloud runtime (calls updateMeshOwnedSession + flushes the dashboard
+     * subscription); absent in standalone (no coordinator mirror there).
+     */
+    updateLocalMeshOwnedSession?: (payload: Record<string, unknown>) => void;
 }
 
 export interface CommandRouterResult {
