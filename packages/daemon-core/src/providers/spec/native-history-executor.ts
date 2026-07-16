@@ -109,29 +109,40 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
     // Prefer an in-transcript session_meta cwd; fall back to the input workspace
     // only when the spec opts in AND the resolved file lives under that
     // workspace's project slug (cursor-agent writes no session_meta and hides the
-    // workspace in the lossy on-disk slug — see workspace_from_input).
+    // workspace in the lossy on-disk slug — see workspace_from_input). A store
+    // whose workspace lives in a per-session sidecar json (kimi's state.json,
+    // whose `wd_<slug>_<sha12>` dir is irreversible) reads it from there.
     const transcriptWorkspace = readSessionMetaWorkspace(lines)
+        ?? (src.workspace_from_sidecar ? readSidecarWorkspace(sourcePath, src.workspace_from_sidecar) : undefined)
         ?? (src.workspace_from_input ? workspaceFromInputIfSlugMatches(sourcePath, input) : undefined);
 
-    // session id: filename uuid or extracted from first record
+    // session id: filename uuid, a parent directory uuid, or extracted from the
+    // first record.
     let providerSessionId: string | undefined;
     if (src.session_id_from === 'first_record' && src.session_id_path) {
         const v = jsonPathGet(lines[0], src.session_id_path);
         if (typeof v === 'string' && v) providerSessionId = v;
+    } else if (src.session_id_from === 'dir_uuid') {
+        providerSessionId = dirUuid(sourcePath) || undefined;
     } else if (src.session_id_from === 'filename_uuid' || !src.session_id_from) {
         const m = path.basename(sourcePath).match(UUID_RE);
         if (m) providerSessionId = m[1];
     }
 
+    // Compare requested vs resolved by embedded uuid so a `session_<uuid>` pin
+    // (kimi's on-disk session id carries a `session_` prefix) still matches the
+    // bare uuid the executor extracts from the directory segment.
     const requested = readRequestedSessionId(input) || '';
-    if (requested && providerSessionId && providerSessionId !== requested) return null;
+    if (requested && providerSessionId && !sameSessionUuid(providerSessionId, requested)) return null;
 
-    const filter = src.message_filter ? compileWhere(src.message_filter.where) : null;
+    // Multi-shape (records[]) vs single-shape (message_map) projection.
+    const shapes = compileRecordShapes(src);
     const messages: NativeHistoryMessage[] = [];
     for (let i = 0; i < lines.length; i += 1) {
         const rec = lines[i];
-        if (filter && !filter(rec)) continue;
-        for (const msg of projectMessages(rec, src.message_map, i, lines.length, mtime)) {
+        const shape = shapes.pick(rec);
+        if (!shape) continue;
+        for (const msg of projectMessages(rec, shape.map, i, lines.length, mtime)) {
             if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
             messages.push(msg);
         }
@@ -188,9 +199,31 @@ export function resolveJsonlSourcePath(src: NativeHistoryJsonlSource, input: Nat
     const workspaceHint = typeof input.workspace === 'string' && input.workspace.trim() ? input.workspace.trim() : '';
     let sourcePath: string | null = null;
     if (resolved.includes('*')) {
-        sourcePath = pickExactSessionFileAcrossGlob(resolved, filePat, requestedSessionId)
-            || pickSessionBoundFileAcrossGlob(resolved, filePat, windowMs, sessionFloor, workspaceHint)
-            || newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
+        // dir_uuid + sidecar-workspace stores (kimi): the session id lives in a
+        // parent directory segment (not the fixed leaf filename) and the
+        // workspace lives in a per-session sidecar json (not the irreversible
+        // `wd_<slug>_<sha12>` dir, not the transcript). The filename-uuid pickers
+        // can't match here, so select by the directory uuid when pinned, else by
+        // the sidecar workDir + recency when workspace-scoped.
+        if (src.session_id_from === 'dir_uuid' || src.workspace_from_sidecar) {
+            // Pinned → match by directory uuid. Unpinned + a workspace hint →
+            // scope to the sidecar workDir and FAIL CLOSED (no workspace-blind
+            // newest-file fallback) so another workspace's session is never
+            // aliased. Only when there is neither a pin nor a workspace hint do
+            // we fall back to newest-recent (single-session dev/test case).
+            sourcePath = pickDirUuidFileAcrossGlob(resolved, filePat, requestedSessionId);
+            if (!sourcePath && !requestedSessionId) {
+                if (src.workspace_from_sidecar && workspaceHint) {
+                    sourcePath = pickSidecarWorkspaceFileAcrossGlob(resolved, filePat, windowMs, sessionFloor, workspaceHint, src.workspace_from_sidecar);
+                } else {
+                    sourcePath = newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
+                }
+            }
+        } else {
+            sourcePath = pickExactSessionFileAcrossGlob(resolved, filePat, requestedSessionId)
+                || pickSessionBoundFileAcrossGlob(resolved, filePat, windowMs, sessionFloor, workspaceHint)
+                || newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
+        }
     } else {
         let stat: fs.Stats | null = null;
         try { stat = fs.statSync(resolved); } catch { /* fall through to date-walk fallback */ }
@@ -251,6 +284,82 @@ function readSessionMetaWorkspace(lines: any[]): string | undefined {
         if (cwd) return cwd;
     }
     return undefined;
+}
+
+/**
+ * Read the workspace from a per-session sidecar json file (kimi's state.json).
+ * `rel_path` is resolved relative to the wire file's directory and the workspace
+ * is pulled out via `workspace_path` (jsonpath-lite). Returns undefined on any
+ * miss so the caller falls through to the next attribution strategy.
+ */
+function readSidecarWorkspace(
+    sourcePath: string,
+    cfg: { rel_path: string; workspace_path: string },
+): string | undefined {
+    try {
+        const sidecar = path.resolve(path.dirname(sourcePath), cfg.rel_path);
+        const parsed = JSON.parse(fs.readFileSync(sidecar, 'utf8'));
+        const v = jsonPathGet(parsed, cfg.workspace_path);
+        return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Extract a uuid from the nearest ancestor DIRECTORY segment of a file path
+ * (kimi's `.../session_<uuid>/agents/main/wire.jsonl`). Walks from the leaf's
+ * parent upward and returns the first uuid found, or '' when none.
+ */
+function dirUuid(filePath: string): string {
+    const segs = path.dirname(filePath).split(path.sep);
+    for (let i = segs.length - 1; i >= 0; i -= 1) {
+        const m = segs[i].match(UUID_RE);
+        if (m) return m[1];
+    }
+    return '';
+}
+
+/** Compare two session ids by their embedded uuid, ignoring any prefix/suffix
+ *  (kimi's `session_<uuid>` pin vs the bare `<uuid>` the executor extracts). */
+function sameSessionUuid(a: string, b: string): boolean {
+    if (a === b) return true;
+    const ua = a.match(UUID_RE)?.[1]?.toLowerCase();
+    const ub = b.match(UUID_RE)?.[1]?.toLowerCase();
+    return !!ua && !!ub && ua === ub;
+}
+
+/**
+ * Resolve the projection strategy for a jsonl source. Multi-shape (`records[]`)
+ * picks the first entry whose `where` matches a record; single-shape falls back
+ * to the top-level `message_map` gated by the optional `message_filter`.
+ */
+function compileRecordShapes(src: NativeHistoryJsonlSource): {
+    pick: (record: any) => { map: NativeHistoryMessageMap } | null;
+} {
+    if (Array.isArray(src.records) && src.records.length > 0) {
+        const compiled = src.records.map((r) => ({
+            where: r.where ? compileWhere(r.where) : null,
+            map: r.message_map,
+        }));
+        return {
+            pick: (record: any) => {
+                for (const shape of compiled) {
+                    if (!shape.where || shape.where(record)) return { map: shape.map };
+                }
+                return null;
+            },
+        };
+    }
+    const filter = src.message_filter ? compileWhere(src.message_filter.where) : null;
+    const map = src.message_map;
+    return {
+        pick: (record: any) => {
+            if (!map) return null;
+            if (filter && !filter(record)) return null;
+            return { map };
+        },
+    };
 }
 
 /**
@@ -833,6 +942,62 @@ function pickExactSessionFileAcrossGlob(template: string, pattern: RegExp, reque
     }
     matches.sort((a, b) => safeMtimeMs(b) - safeMtimeMs(a));
     return matches[0] || null;
+}
+
+/**
+ * dir_uuid exact pick across a glob: the requested session uuid is embedded in a
+ * parent DIRECTORY segment (kimi's `session_<uuid>/…/wire.jsonl`), not the leaf
+ * filename. Match the file whose ancestor path carries the requested uuid.
+ */
+function pickDirUuidFileAcrossGlob(template: string, pattern: RegExp, requestedSessionId: string): string | null {
+    if (!requestedSessionId) return null;
+    const wantUuid = requestedSessionId.match(UUID_RE)?.[1]?.toLowerCase();
+    if (!wantUuid) return null;
+    const dirs = expandDirGlob(template);
+    const matches: string[] = [];
+    for (const d of dirs) {
+        for (const p of listMatchingFiles(d, pattern)) {
+            if (dirUuid(p).toLowerCase() === wantUuid) matches.push(p);
+        }
+    }
+    matches.sort((a, b) => safeMtimeMs(b) - safeMtimeMs(a));
+    return matches[0] || null;
+}
+
+/**
+ * Workspace-scoped pick across a glob for a sidecar-workspace store (kimi's
+ * first read, before a session id is pinned): among candidate wire files within
+ * the recency window, keep only those whose sidecar `state.json` workDir matches
+ * the input workspace, then take the newest. Fails closed (null) when no sidecar
+ * matches so an unrelated workspace's session is never aliased.
+ */
+function pickSidecarWorkspaceFileAcrossGlob(
+    template: string,
+    pattern: RegExp,
+    windowMs: number,
+    sessionFloorMs: number,
+    workspaceHint: string,
+    sidecar?: { rel_path: string; workspace_path: string },
+): string | null {
+    if (!sidecar || !workspaceHint) return null;
+    let wsResolved = workspaceHint;
+    try { wsResolved = fs.realpathSync(workspaceHint); } catch { /* keep raw */ }
+    const dirs = expandDirGlob(template);
+    const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
+    let best: { p: string; mtime: number } | null = null;
+    for (const d of dirs) {
+        for (const p of listMatchingFiles(d, pattern)) {
+            const mtime = safeMtimeMs(p);
+            if (mtime < cutoff) continue;
+            const ws = readSidecarWorkspace(p, sidecar);
+            if (!ws) continue;
+            let wsReal = ws;
+            try { wsReal = fs.realpathSync(ws); } catch { /* keep raw */ }
+            if (ws !== workspaceHint && wsReal !== wsResolved) continue;
+            if (!best || mtime > best.mtime) best = { p, mtime };
+        }
+    }
+    return best ? best.p : null;
 }
 
 function pickExactSessionFileAcrossDateWindow(

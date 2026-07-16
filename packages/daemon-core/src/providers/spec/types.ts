@@ -92,8 +92,59 @@ export interface NativeHistoryJsonlSource {
     path: string;
     file_pattern?: string;
     recent_window_ms?: number;
-    session_id_from?: 'filename_uuid' | 'first_record';
+    /**
+     * Where to read the provider session id from.
+     *   'filename_uuid' (default) — the transcript FILE basename embeds the
+     *     uuid (`<uuid>.jsonl`, cursor-agent).
+     *   'first_record'  — jsonpath (`session_id_path`) into the first record.
+     *   'dir_uuid'      — a PARENT DIRECTORY segment embeds the uuid, and the
+     *     leaf file has a fixed name. kimi persists every session at
+     *     `~/.kimi-code/sessions/<wdKey>/session_<uuid>/agents/main/wire.jsonl`
+     *     — the file is always `wire.jsonl`, so the uuid can only come from the
+     *     `session_<uuid>` directory segment. The nearest ancestor segment
+     *     containing a uuid wins.
+     */
+    session_id_from?: 'filename_uuid' | 'first_record' | 'dir_uuid';
     session_id_path?: string;
+    /**
+     * Fallback workspace attribution from a per-session SIDECAR json file when
+     * the transcript itself carries no `session_meta` cwd record AND the on-disk
+     * directory slug is irreversible. kimi's `wire.jsonl` has no cwd line and the
+     * `wd_<slug>_<sha12>` directory segment is a lossy slug + hash that cannot be
+     * reversed to the real workspace. But kimi writes a sibling `state.json` next
+     * to the session dir carrying the authoritative `workDir`. This option names
+     * that sidecar (relative to the resolved wire file's directory) and the json
+     * path to the workspace inside it; the executor reads it, stamps the value as
+     * the transcript workspace on every message, and — for workspace-scoped file
+     * selection (no pinned session id yet, the antigravity/opencode first-read
+     * case) — only accepts a candidate wire file whose sidecar workDir matches the
+     * input workspace. Mirrors cursor's `workspace_from_input` and opencode's
+     * per-row `message_map.workspace`, for a jsonl store whose workspace lives in
+     * a sidecar rather than in the transcript or a reversible slug.
+     */
+    workspace_from_sidecar?: {
+        /** Path to the sidecar json, relative to the resolved wire file's
+         *  directory. e.g. `../../state.json` for
+         *  `session_<uuid>/agents/main/wire.jsonl` → `session_<uuid>/state.json`. */
+        rel_path: string;
+        /** jsonpath-lite to the workspace string inside the sidecar. e.g.
+         *  `$.workDir`. */
+        workspace_path: string;
+    };
+    /**
+     * Multi-shape record projection. A jsonl store whose user turns and
+     * assistant turns are DIFFERENT record types (so a single `message_map`
+     * can't extract both roles) declares one matcher per shape here. For each
+     * on-disk record the executor picks the FIRST entry whose `where` matches
+     * and projects the record with that entry's `message_map`; a record that
+     * matches no entry is dropped. kimi stores user turns as
+     * `type=="turn.prompt"` (`$.input[*].text`, role=user) and assistant text as
+     * `type=="context.append_loop_event"` content.part events
+     * (`$.event.part.text`, role=assistant) — two shapes with different role and
+     * content paths. Absent → the top-level single `message_map` (+ optional
+     * `message_filter`) path is used unchanged.
+     */
+    records?: Array<{ where?: string; message_map: NativeHistoryMessageMap }>;
     message_filter?: { where: string };
     /**
      * Fallback workspace attribution when the transcript carries no
@@ -112,7 +163,8 @@ export interface NativeHistoryJsonlSource {
      * closed as before.
      */
     workspace_from_input?: boolean;
-    message_map: NativeHistoryMessageMap;
+    /** Single-shape projection. Required unless `records` (multi-shape) is set. */
+    message_map?: NativeHistoryMessageMap;
 }
 
 export interface NativeHistorySqliteSource {
