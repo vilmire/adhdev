@@ -1243,11 +1243,24 @@ describe('claude-cli v4 FSM — FALSEBUSY B: footer pushed out of viewport (Cody
         const stable = (spec.transitions.find(t => t.label === 'busy→idle-quiet')!.when as any)
             .all.find((c: any) => typeof c.stable_ms === 'number');
         const re = new RegExp(stable.ignore_lines, 'm');
-        // benign residual animation that must be filtered (would otherwise wedge):
-        expect(re.test('✻ Worked for 29s')).toBe(true);            // frozen/ticking elapsed line
-        expect(re.test('✻ Compacting conversation for 12s')).toBe(true);
+        // COMPLETIONMARKER-FALSEIDLE fix: the ignore only covers the ACTIVE ✻ ticker
+        // (a bare `✻ Word…` progress line with NO `for <dur>`), never the completion
+        // marker `✻ Word for Ns`. A live PTY capture (claude 2.1.170) confirms the
+        // completion marker renders exactly once and freezes (`✻Worked for 5s` seen at
+        // t=10.49s, unchanged through t=55s) — it is STATIC, so leaving it in the
+        // change comparison never re-wedges busy, but DOES let the spinner→marker
+        // transition reset the stable clock so idle no longer false-fires off the
+        // stale spinner clock. The bare token counter line is still masked.
         expect(re.test('  ↑ 6.1k tokens')).toBe(true);             // bare token counter line
         expect(re.test('↓ 12.3k tokens · 4 files')).toBe(true);
+        // active ✻ ticker (no `for <dur>`) is still masked — repaint must not reset:
+        expect(re.test('✻ Polling…')).toBe(true);
+        expect(re.test('✻ Churning')).toBe(true);
+        // completion markers (`✻ … for Ns`) are NOT masked — their first appearance is
+        // the change that must reset the stable clock (the whole point of the fix):
+        expect(re.test('✻ Worked for 29s')).toBe(false);
+        expect(re.test('✻ Compacting conversation for 12s')).toBe(false);
+        expect(re.test('✻ Baked for 1m 54s')).toBe(false);
         // active spinners must NOT be filtered — a real tick must still hold busy:
         expect(re.test('✽ Ebbing (3m · ↑10k tokens)')).toBe(false);
         expect(re.test('✢ Spelunking… (1m 37s · ↓ 6.1k tokens)')).toBe(false);
@@ -1267,17 +1280,68 @@ describe('claude-cli v4 FSM — FALSEBUSY B: footer pushed out of viewport (Cody
         const re = new RegExp(stable.ignore_lines, 'm');
         const join = (ls: string[]) => filterIgnoredLines(ls, re).join('\n');
 
-        // Frame N and N+1 differ only on a ticking ✻-elapsed line and a token
-        // counter — both ignored. Post-filter the two frames are identical.
-        const frameA = ['⏺ Done.', '✻ Worked for 7s', '  ↑ 1.1k tokens', '❯ '];
-        const frameB = ['⏺ Done.', '✻ Worked for 8s', '  ↑ 1.3k tokens', '❯ '];
-        expect(join(frameA)).toBe(join(frameB));
+        // A bare token counter repainting frame-to-frame is still masked — the two
+        // frames post-filter compare equal, so a post-completion token blink does
+        // not reset the clock (the original SESSION-STATE-WEDGE recovery, preserved).
+        const tokA = ['⏺ Done.', '  ↑ 1.1k tokens', '❯ '];
+        const tokB = ['⏺ Done.', '  ↑ 1.3k tokens', '❯ '];
+        expect(join(tokA)).toBe(join(tokB));
+
+        // COMPLETIONMARKER-FALSEIDLE: the moment the active ticker (`✻ Polling…`)
+        // is REPLACED by the completion marker (`✻ Worked for 7s`), the frames must
+        // compare UNEQUAL — the marker is NOT masked, so trackRegionChanges records a
+        // change and the stable clock restarts from the marker's appearance. Pre-fix
+        // both lines were masked → the transition was invisible → idle false-fired off
+        // the stale spinner clock. (The marker is static thereafter, so this reset
+        // happens once and does not re-wedge — confirmed by live PTY capture.)
+        const tickFrame  = ['⏺ Done.', '✻ Polling…', '❯ '];
+        const markerFrame = ['⏺ Done.', '✻ Worked for 7s', '❯ '];
+        expect(join(tickFrame)).not.toBe(join(markerFrame));
+
+        // Two consecutive frames of the SAME static completion marker compare equal —
+        // the marker does not tick, so once it appears the clock is free to settle.
+        const markerA = ['⏺ Done.', '✻ Worked for 7s', '❯ '];
+        const markerB = ['⏺ Done.', '✻ Worked for 7s', '❯ '];
+        expect(join(markerA)).toBe(join(markerB));
 
         // But when the active spinner line itself changes frame-to-frame, the
         // filter leaves it in → the frames differ → the clock resets (busy held).
         const spinA = ['⏺ Working', '⣾ Running the test suite… (esc to interrupt)', '❯ '];
         const spinB = ['⏺ Working', '⣿ Running the test suite… (esc to interrupt)', '❯ '];
         expect(join(spinA)).not.toBe(join(spinB));
+    });
+
+    // ── COMPLETIONMARKER-FALSEIDLE: idle must not fire off a stale spinner clock ──
+    // Live root cause (coordinator self-session + worker T4): during a long multi-tool
+    // turn the active spinner ticks and keeps the whole-screen stable key fresh. When
+    // the turn ends the spinner is replaced by the completion marker `✻ … for Ns`. If
+    // the ignore filter masks BOTH the ticker and the marker, the spinner→marker swap
+    // is invisible to trackRegionChanges → the stable key keeps its LAST spinner-tick
+    // timestamp. Between tools the PTY can be quiet ≥8s, so busy→idle's stable_ms:8000
+    // clause reads TRUE the instant the marker appears → false idle mid-turn.
+    //
+    // With the fix the marker is NOT masked, so its appearance resets the key. These
+    // two evaluator cases pin the timing gate the reset must produce.
+    const markerFrame = [
+        '▗ ▗   ▖ ▖  Claude Code v2.1.153', '  ▘▘ ▝▝    ~/Work/adhdev', '',
+        '⏺ Ran the tool.', '', '✻ Worked for 12s', '',
+        '─'.repeat(64), '❯ ', '─'.repeat(64), '  ⏵⏵ accept edits on (shift+tab to cycle)',
+    ].join('\n');
+
+    it('(falseidle) completion marker JUST appeared (key reset 2s ago) → NOT idle yet', () => {
+        // The marker replaced the spinner 2s ago; the fix reset the busy→idle stable
+        // key to that moment. 2s < 8000ms → busy→idle must NOT fire. Pre-fix the key
+        // still held the old spinner-tick time (>8s ago) and idle false-fired here.
+        const key = stableKeyOf(spec, 'busy→idle');
+        const ev = evaluateFsm(spec, 'busy', markerFrame, undefined, undefined, clk(30000, 0, [[key, 28000]]));
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('(falseidle) completion marker stable ≥8s (key reset 9s ago) → idle fires', () => {
+        // Same marker, now genuinely settled for 9s → the completion is real → idle.
+        const key = stableKeyOf(spec, 'busy→idle');
+        const ev = evaluateFsm(spec, 'busy', markerFrame, undefined, undefined, clk(30000, 0, [[key, 21000]]));
+        expect(ev.fired?.to).toBe('idle');
     });
 
     it('(wedge) a settled Cody frame with the ignore-key never marked changed → recovers idle', () => {
