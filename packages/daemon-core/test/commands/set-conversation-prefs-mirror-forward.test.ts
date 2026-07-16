@@ -9,8 +9,13 @@ import type { MedFamilyContext } from '../../src/commands/med-family/types.js';
  * own live-session userHidden/userMuted, but the COORDINATOR's meshOwnedSessions mirror is only
  * refreshed by a `mesh_forward_event` carrying `sessionSettings`. Without one the mirror stays
  * stale, so the coordinator re-emits the OLD surfaceHidden/muted and the dashboard toggle reverts
- * after the 8s optimistic overlay. The handler must push a best-effort mesh_forward_event to the
- * coordinator daemon with the fresh prefs. A non-mesh (no coordinator anchor) session must NOT.
+ * after the 8s optimistic overlay. The handler must push a mesh_forward_event to the coordinator
+ * daemon with the fresh prefs. A non-mesh (no coordinator anchor) session must NOT.
+ *
+ * Fix (4) — atomicity: the mirror forward is now AWAITED (with one retry) and its outcome is
+ * reported on the result (`mirrorRefreshed` / `mirrorStale`) so a dropped refresh no longer
+ * silently strands the coordinator's stale copy (the "restore does nothing" revert). The local
+ * write still returns success; only the mirror status is surfaced.
  */
 
 const SESSION_ID = 'sess_worker_1';
@@ -58,10 +63,10 @@ describe('set_conversation_prefs — coordinator mirror forward (Fix B)', () => 
             muted: true,
         });
 
-        expect(result).toMatchObject({ success: true, sessionId: SESSION_ID, userHidden: true, userMuted: true });
+        // Fix (4): awaited forward succeeded → mirrorRefreshed marker, no mirrorStale.
+        expect(result).toMatchObject({ success: true, sessionId: SESSION_ID, userHidden: true, userMuted: true, mirrorRefreshed: true });
+        expect(result.mirrorStale).toBeUndefined();
 
-        // Fire-and-forget: give the microtask a tick to run.
-        await Promise.resolve();
         expect(dispatch).toHaveBeenCalledTimes(1);
         const [daemonId, cmd, payload] = dispatch.mock.calls[0];
         expect(daemonId).toBe(COORDINATOR_DAEMON);
@@ -83,7 +88,6 @@ describe('set_conversation_prefs — coordinator mirror forward (Fix B)', () => 
             hidden: false,
         });
 
-        await Promise.resolve();
         expect(dispatch).toHaveBeenCalledTimes(1);
         const [, , payload] = dispatch.mock.calls[0];
         expect(payload.sessionSettings).toEqual({ userHidden: false });
@@ -98,8 +102,10 @@ describe('set_conversation_prefs — coordinator mirror forward (Fix B)', () => 
             muted: true,
         });
 
+        // 'skipped' outcome for a non-mesh session → no mirror marker at all.
         expect(result).toMatchObject({ success: true, userMuted: true });
-        await Promise.resolve();
+        expect(result.mirrorRefreshed).toBeUndefined();
+        expect(result.mirrorStale).toBeUndefined();
         expect(dispatch).not.toHaveBeenCalled();
     });
 
@@ -113,7 +119,7 @@ describe('set_conversation_prefs — coordinator mirror forward (Fix B)', () => 
         expect(result).toMatchObject({ success: true, userHidden: true });
     });
 
-    it('still fires the local status snapshot even when the coordinator forward rejects', async () => {
+    it('still fires the local status snapshot AND flags mirrorStale when the coordinator forward rejects (Fix 4)', async () => {
         const onStatusChange = vi.fn();
         const dispatch = vi.fn(async () => { throw new Error('coordinator unreachable'); });
         const ctx = makeCtx({ settings: WORKER_SETTINGS, dispatchMeshCommand: dispatch, onStatusChange });
@@ -123,11 +129,33 @@ describe('set_conversation_prefs — coordinator mirror forward (Fix B)', () => 
             hidden: true,
         });
 
-        // Local status snapshot fired regardless (the forward is a best-effort mirror refresh).
+        // Local status snapshot fired BEFORE the awaited forward, so the local write is visible.
         expect(onStatusChange).toHaveBeenCalledTimes(1);
-        expect(result).toMatchObject({ success: true, userHidden: true });
-        // The rejected forward must not surface as an unhandled rejection.
-        await Promise.resolve();
-        expect(dispatch).toHaveBeenCalledTimes(1);
+        // The local write succeeded, but the mirror could not be refreshed → mirrorStale so the
+        // dashboard drops its optimistic overlay instead of trusting a state the coordinator will
+        // re-stamp. Must NOT throw (the reject is caught, reported, not propagated).
+        expect(result).toMatchObject({ success: true, userHidden: true, mirrorStale: true });
+        expect(result.mirrorRefreshed).toBeUndefined();
+        // Retried once before giving up.
+        expect(dispatch).toHaveBeenCalledTimes(2);
+    });
+
+    it('recovers on the retry: a transient first-attempt failure still reports mirrorRefreshed (Fix 4)', async () => {
+        let calls = 0;
+        const dispatch = vi.fn(async () => {
+            calls += 1;
+            if (calls === 1) throw new Error('transient blip');
+            return { success: true };
+        });
+        const ctx = makeCtx({ settings: WORKER_SETTINGS, dispatchMeshCommand: dispatch });
+
+        const result: any = await cliAgentHandlers.set_conversation_prefs(ctx, {
+            targetSessionId: SESSION_ID,
+            muted: true,
+        });
+
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(result).toMatchObject({ success: true, userMuted: true, mirrorRefreshed: true });
+        expect(result.mirrorStale).toBeUndefined();
     });
 });

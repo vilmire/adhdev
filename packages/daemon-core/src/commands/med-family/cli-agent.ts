@@ -19,6 +19,9 @@ import { LOG } from '../../logging/logger.js';
 import { readStringValue } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 
+/** Outcome of the coordinator-mirror refresh: not a mesh worker (no-op), refreshed, or failed. */
+type MirrorForwardOutcome = 'skipped' | 'refreshed' | 'failed';
+
 /**
  * MESH-WORKER-PREFS Fix B: when a mesh WORKER session's per-conversation Hide/Mute is toggled
  * (set_conversation_prefs, forwarded to the worker daemon by the coordinator's
@@ -27,19 +30,25 @@ import type { MedFamilyContext, MedFamilyHandler } from './types.js';
  * meshOwnedSessions) is only refreshed by a `mesh_forward_event` carrying `sessionSettings`.
  * Without one the mirror stays stale, so when the coordinator re-emits the session metadata to
  * the dashboard the old surfaceHidden/muted comes back and the toggle reverts after the 8s
- * optimistic overlay expires. Push a best-effort `mesh_forward_event` to the coordinator daemon
- * with the fresh prefs so its mirror updates immediately. Fire-and-forget: the coordinator's
- * mesh_forward_event command consumer calls updateMeshOwnedSession(args) BEFORE routing, so the
- * mirror is refreshed even though the (non coordinator-event) event name is otherwise ignored;
- * a self-addressed or failed dispatch is harmless (the local status snapshot already fired).
+ * optimistic overlay expires. Push a `mesh_forward_event` to the coordinator daemon with the
+ * fresh prefs so its mirror updates immediately. The coordinator's mesh_forward_event command
+ * consumer calls updateMeshOwnedSession(args) BEFORE routing, so the mirror is refreshed even
+ * though the (non coordinator-event) event name is otherwise ignored.
+ *
+ * Fix (4) — atomicity: the worker's local updateSettings and the coordinator mirror refresh were
+ * fire-and-forget, so a dropped/rejected forward left the mirror stale and the dashboard toggle
+ * silently reverted (the exact "restore does nothing" defect). This now AWAITS the dispatch, retries
+ * once on failure, and reports the outcome so the handler can flag a stale mirror to the caller
+ * instead of returning an unqualified success. It never rejects — a failure is reported, not thrown,
+ * so the local write (already applied) still returns success with a mirrorStale marker.
  */
-function forwardConversationPrefsToCoordinator(
+async function forwardConversationPrefsToCoordinator(
     ctx: MedFamilyContext,
     sessionId: string,
     patch: Record<string, unknown>,
-): void {
+): Promise<MirrorForwardOutcome> {
     const dispatch = ctx.deps.dispatchMeshCommand;
-    if (!dispatch) return;
+    if (!dispatch) return 'skipped';
     let settings: Record<string, unknown> = {};
     try {
         const state = ctx.deps.instanceManager.getInstance(sessionId)?.getState?.();
@@ -51,7 +60,7 @@ function forwardConversationPrefsToCoordinator(
     const coordinatorDaemonId = readNonEmptyString(settings.meshCoordinatorDaemonId);
     const meshId = readNonEmptyString(settings.meshNodeFor);
     // A non-delegated (non-mesh) session has no coordinator anchor — nothing to mirror.
-    if (!coordinatorDaemonId || !meshId) return;
+    if (!coordinatorDaemonId || !meshId) return 'skipped';
     const nodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.meshLastNodeId);
 
     // sessionSettings mirrors the exact keys updateMeshOwnedSession merges onto the mirror's
@@ -64,8 +73,20 @@ function forwardConversationPrefsToCoordinator(
         ...(nodeId ? { nodeId } : {}),
         sessionSettings: { ...patch },
     };
-    Promise.resolve(dispatch(coordinatorDaemonId, 'mesh_forward_event', payload))
-        .catch((e: any) => LOG.warn('Mesh', `[Mesh] set_conversation_prefs mirror forward to coordinator ${coordinatorDaemonId.slice(0, 12)} failed: ${e?.message || e}`));
+
+    // Await the mirror refresh (Fix 4). One retry: a transient P2P blip on the coordinator
+    // channel shouldn't strand the mirror stale when the worker's own state already moved.
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            await dispatch(coordinatorDaemonId, 'mesh_forward_event', payload);
+            return 'refreshed';
+        } catch (e: any) {
+            if (attempt === 0) continue;
+            LOG.warn('Mesh', `[Mesh] set_conversation_prefs mirror forward to coordinator ${coordinatorDaemonId.slice(0, 12)} failed after retry: ${e?.message || e}`);
+            return 'failed';
+        }
+    }
+    return 'failed';
 }
 
 export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
@@ -139,12 +160,25 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
         // Push a fresh status snapshot so all clients see the updated
         // surfaceHidden/muted immediately (cloud path). The standalone server has a
         // parallel broadcast gate keyed on the command name (see daemon-standalone).
+        // Fired BEFORE the awaited mirror refresh so the local write is visible even if
+        // the coordinator mirror dispatch is slow or fails.
         ctx.deps.onStatusChange?.();
-        // MESH-WORKER-PREFS Fix B: if this is a mesh worker session, mirror the fresh prefs onto
-        // the coordinator so its stale meshOwnedSessions copy can't revert the toggle when it
-        // re-emits the dashboard metadata. Best-effort / no-op for non-mesh sessions.
-        forwardConversationPrefsToCoordinator(ctx, sessionId, patch);
-        return { success: true, sessionId, ...patch };
+        // MESH-WORKER-PREFS Fix B + Fix (4): if this is a mesh worker session, mirror the fresh
+        // prefs onto the coordinator so its stale meshOwnedSessions copy can't revert the toggle
+        // when it re-emits the dashboard metadata. AWAITED (with one retry) so a dropped mirror
+        // refresh is reported to the caller (mirrorStale) instead of silently leaving the
+        // coordinator to re-stamp the old value — the "restore does nothing" revert. No-op for
+        // non-mesh sessions. Never throws: the local write already succeeded.
+        const mirror = await forwardConversationPrefsToCoordinator(ctx, sessionId, patch);
+        return {
+            success: true,
+            sessionId,
+            ...patch,
+            // Only surface the mirror status for a genuine mesh worker session (refreshed/failed);
+            // a non-mesh session ('skipped') carries no mirror field, so nothing changes for it.
+            ...(mirror === 'failed' ? { mirrorStale: true } : {}),
+            ...(mirror === 'refreshed' ? { mirrorRefreshed: true } : {}),
+        };
     },
 
     agent_command: async (ctx: MedFamilyContext, args: any) => {

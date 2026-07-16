@@ -25,6 +25,32 @@ type PendingPref = { muted?: boolean; hidden?: boolean; at: number }
 // never leaves the UI stuck showing a state the daemon never adopted.
 const PENDING_TTL_MS = 8000
 
+/**
+ * Judge a set_conversation_prefs response for the overlay reconcile. Pure + exported so the
+ * cloud double-envelope + mirrorStale handling is unit-testable without a DOM.
+ *
+ * Fix (3) — cloud double-envelope: the cloud transport wraps the daemon response once
+ * (`{ success: true, result: <daemon body> }`), so the worker's own `success:false` / `mirrorStale`
+ * lives on `result.result`, not the outer object. Inspecting only the outer envelope missed every
+ * remote-worker rejection (the outer wrapper is always success:true). Unwrap the inner body first.
+ * Fix (4): a local write that succeeded but whose coordinator mirror refresh failed reports
+ * `mirrorStale:true` — treat it as not-confirmed so the optimistic overlay is dropped rather than
+ * left showing a value the coordinator will re-stamp back.
+ */
+export function evaluateConversationPrefsResult(result: unknown): { confirmed: boolean; reason?: string } {
+    const body = (result && typeof result === 'object' && 'result' in (result as any))
+        ? (result as any).result
+        : result
+    const isObj = body && typeof body === 'object'
+    const failed = isObj && (body as any).success === false
+    const mirrorStale = isObj && (body as any).mirrorStale === true
+    if (!failed && !mirrorStale) return { confirmed: true }
+    const reason = failed && typeof (body as any).error === 'string'
+        ? (body as any).error
+        : (mirrorStale ? 'the coordinator did not confirm the change' : 'command was rejected')
+    return { confirmed: false, reason }
+}
+
 export interface ConversationPrefsController {
     isMuted: (conversation: ActiveConversation) => boolean
     isHidden: (conversation: ActiveConversation) => boolean
@@ -109,18 +135,33 @@ export function useConversationPrefs(
         const daemonId = getConversationMachineId(conversation)
         const sessionId = conversation.sessionId
         if (!daemonId || !sessionId) return
+        // MESH-WORKER-PREFS Fix (1)+(2): for a REMOTE mesh worker session the dashboard holds no
+        // direct channel to `daemonId` (the worker), so the command must relay through the session's
+        // coordinator. The coordinator stamps its own id onto the mirrored session settings
+        // (meshCoordinatorDaemonId), so pass it as a routing hint. web-cloud's sendDaemonCommand
+        // relays to THAT coordinator (identity-verified) even when several command-channel daemons
+        // are connected — instead of refusing unless exactly one exists. Absent for local sessions.
+        const coordinatorDaemonId = typeof conversation.settings?.meshCoordinatorDaemonId === 'string'
+            ? conversation.settings.meshCoordinatorDaemonId
+            : undefined
         setPending(sessionId, prefs)
-        void sendDaemonCommand(daemonId, 'set_conversation_prefs', { sessionId, ...prefs })
+        void sendDaemonCommand(daemonId, 'set_conversation_prefs', {
+            sessionId,
+            ...prefs,
+            ...(coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {}),
+        })
             .then((result) => {
-                // A daemon-level failure (e.g. remote worker returned success:false, or an
-                // unforwardable session) resolves rather than rejects — treat it as a failure
-                // too so the optimistic overlay doesn't stick on a state the daemon rejected.
-                if (result && typeof result === 'object' && (result as any).success === false) {
-                    const reason = typeof (result as any).error === 'string' ? (result as any).error : 'command was rejected'
-                    console.warn('[conversation-prefs] set_conversation_prefs rejected', reason)
+                // A daemon-level failure (remote worker success:false / unforwardable session) or a
+                // failed coordinator mirror refresh (mirrorStale) resolves rather than rejects —
+                // treat it as not-confirmed so the optimistic overlay doesn't stick on a state the
+                // daemon never adopted. evaluateConversationPrefsResult unwraps the cloud
+                // double-envelope (Fix 3) and honors mirrorStale (Fix 4).
+                const verdict = evaluateConversationPrefsResult(result)
+                if (!verdict.confirmed) {
+                    console.warn('[conversation-prefs] set_conversation_prefs not confirmed', verdict.reason)
                     pendingRef.current.delete(sessionId)
                     rerender()
-                    onError?.(`Couldn't update conversation — ${reason}`)
+                    onError?.(`Couldn't update conversation — ${verdict.reason}`)
                 }
             })
             .catch((error) => {
