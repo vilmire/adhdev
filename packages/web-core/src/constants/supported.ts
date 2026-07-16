@@ -114,6 +114,11 @@ export const BUILTIN_CLI_AGENTS: readonly SupportedEntry[] = [
     "id": "kimi",
     "name": "Kimi",
     "icon": "🌙"
+  },
+  {
+    "id": "opencode",
+    "name": "OpenCode CLI",
+    "icon": "◆"
   }
 ]
 
@@ -140,7 +145,7 @@ export const BUILTIN_EXTENSIONS: readonly SupportedEntry[] = [
   }
 ]
 
-export const BUILTIN_ACP_COUNT = 35
+export const BUILTIN_ACP_COUNT = 34
 
 export const DEFAULT_PROVIDER_VERIFICATION: ProviderVerification = {
   "status": "unverified",
@@ -353,6 +358,17 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "kimi": {
+    "status": "unverified",
+    "testedOn": [],
+    "testedVersions": [],
+    "validatedFlows": [],
+    "lastValidated": null,
+    "notes": "",
+    "evidence": "",
+    "owner": "community",
+    "source": "docs/site/data/provider-catalog.mjs"
+  },
+  "opencode": {
     "status": "unverified",
     "testedOn": [],
     "testedVersions": [],
@@ -740,17 +756,6 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "owner": "community",
     "source": "docs/site/data/provider-catalog.mjs"
   },
-  "opencode-acp": {
-    "status": "unverified",
-    "testedOn": [],
-    "testedVersions": [],
-    "validatedFlows": [],
-    "lastValidated": null,
-    "notes": "",
-    "evidence": "",
-    "owner": "community",
-    "source": "docs/site/data/provider-catalog.mjs"
-  },
   "openhands-acp": {
     "status": "unverified",
     "testedOn": [],
@@ -834,6 +839,7 @@ export const PROVIDER_VERIFICATION_STATUS: Record<string, ProviderVerificationSt
   "cursor-cli": "partial",
   "hermes-cli": "unverified",
   "kimi": "unverified",
+  "opencode": "unverified",
   "cline": "unverified",
   "codex": "partial",
   "roo-code": "unverified",
@@ -866,7 +872,6 @@ export const PROVIDER_VERIFICATION_STATUS: Record<string, ProviderVerificationSt
   "mistral-vibe-acp": "unverified",
   "nova-acp": "unverified",
   "openclaw-acp": "unverified",
-  "opencode-acp": "unverified",
   "openhands-acp": "unverified",
   "pi-acp": "unverified",
   "qoder-acp": "unverified",
