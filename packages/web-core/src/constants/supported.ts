@@ -86,9 +86,9 @@ export const BUILTIN_IDES: readonly SupportedEntry[] = [
 
 export const BUILTIN_CLI_AGENTS: readonly SupportedEntry[] = [
   {
-    "id": "aider-cli",
-    "name": "Aider",
-    "icon": "🛠️"
+    "id": "antigravity-cli",
+    "name": "Antigravity CLI",
+    "icon": "🪐"
   },
   {
     "id": "claude-cli",
@@ -106,24 +106,14 @@ export const BUILTIN_CLI_AGENTS: readonly SupportedEntry[] = [
     "icon": "⚡"
   },
   {
-    "id": "gemini-cli",
-    "name": "Gemini CLI",
-    "icon": "✨"
+    "id": "hermes-cli",
+    "name": "Hermes",
+    "icon": "⚕️"
   },
   {
-    "id": "github-copilot-cli",
-    "name": "GitHub Copilot CLI",
-    "icon": "🤖"
-  },
-  {
-    "id": "goose-cli",
-    "name": "Goose",
-    "icon": "🪿"
-  },
-  {
-    "id": "opencode-cli",
-    "name": "OpenCode CLI",
-    "icon": "🧩"
+    "id": "kimi",
+    "name": "Kimi",
+    "icon": "🌙"
   }
 ]
 
@@ -274,7 +264,7 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "owner": "community",
     "source": "docs/site/data/provider-catalog.mjs"
   },
-  "aider-cli": {
+  "antigravity-cli": {
     "status": "unverified",
     "testedOn": [],
     "testedVersions": [],
@@ -351,7 +341,7 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "owner": "core",
     "source": "docs/site/data/provider-catalog.mjs"
   },
-  "gemini-cli": {
+  "hermes-cli": {
     "status": "unverified",
     "testedOn": [],
     "testedVersions": [],
@@ -362,29 +352,7 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "owner": "community",
     "source": "docs/site/data/provider-catalog.mjs"
   },
-  "github-copilot-cli": {
-    "status": "unverified",
-    "testedOn": [],
-    "testedVersions": [],
-    "validatedFlows": [],
-    "lastValidated": null,
-    "notes": "",
-    "evidence": "",
-    "owner": "community",
-    "source": "docs/site/data/provider-catalog.mjs"
-  },
-  "goose-cli": {
-    "status": "unverified",
-    "testedOn": [],
-    "testedVersions": [],
-    "validatedFlows": [],
-    "lastValidated": null,
-    "notes": "",
-    "evidence": "",
-    "owner": "community",
-    "source": "docs/site/data/provider-catalog.mjs"
-  },
-  "opencode-cli": {
+  "kimi": {
     "status": "unverified",
     "testedOn": [],
     "testedVersions": [],
@@ -860,14 +828,12 @@ export const PROVIDER_VERIFICATION_STATUS: Record<string, ProviderVerificationSt
   "vscode": "unverified",
   "vscodium": "unverified",
   "windsurf": "unverified",
-  "aider-cli": "unverified",
+  "antigravity-cli": "unverified",
   "claude-cli": "partial",
   "codex-cli": "partial",
   "cursor-cli": "partial",
-  "gemini-cli": "unverified",
-  "github-copilot-cli": "unverified",
-  "goose-cli": "unverified",
-  "opencode-cli": "unverified",
+  "hermes-cli": "unverified",
+  "kimi": "unverified",
   "cline": "unverified",
   "codex": "partial",
   "roo-code": "unverified",
