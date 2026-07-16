@@ -889,4 +889,116 @@ describe('CliStateEngine', () => {
             expect(callbacks.onTurnCompleted).toHaveBeenCalled()
         })
     })
+
+    // ── FALSE-IDLE (screen-quiet gate): generating→idle requires ≥5s screen quiet ──
+    //
+    // A claude-cli mesh worker WAITING on a long-running foreground command (e.g. it
+    // launched `npm run dev:standalone` then a `curl :3847/health` poll loop) is STILL
+    // busy(generating): the spinner + streaming command output keep repainting the
+    // screen. `lastScreenChangeAt` is bumped by the adapter on every visible screen
+    // change, so the screen-diff quiet age never reaches SCREEN_QUIET_IDLE_MS (5000ms)
+    // and the FSM must NOT arm idle / emit a weak completion. Only when the screen has
+    // been byte-identical for ≥5s continuously may generating→idle finish.
+    //
+    // The mock uses a mutable `screenChangeAt` so the test can move the "last screen
+    // change" forward in real (fake-timer) time — modelling a still-repainting screen —
+    // and then hold it fixed to model a genuinely static screen.
+    describe('generating→idle screen-quiet gate (false-idle fix)', () => {
+        beforeEach(() => { vi.useFakeTimers() })
+        afterEach(() => { vi.useRealTimers() })
+
+        // parsedStatus='idle' but NO assistant / streaming so the primary applyGenerating
+        // idle-finish timeout path (generatingIdle) is the one that would false-finish.
+        function armGeneratingWaitOnCommand(screenChangeGetter: () => number) {
+            const { engine, transport, callbacks } = buildEngine()
+            transport.getSnapshot = () => makeSnap({
+                lastNonEmptyOutputAt: Date.now(),
+                lastScreenChangeAt: screenChangeGetter(),
+                isWaitingForResponse: true,
+            })
+            // Parser reports 'generating' (worker is mid-turn running the command).
+            transport.runParseSession = vi.fn(() => ({
+                status: 'generating',
+                messages: [{ role: 'user', content: 'run the health poll' }],
+                activeModal: null,
+                parsedStatus: 'generating',
+            }))
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = { prompt: 'run the health poll', startedAt: Date.now() - 3000, bufferStart: 0, rawBufferStart: 0 }
+            engine.setStatus('generating')
+            engine.evaluateSettled(transport.getSnapshot()) // enters applyGenerating, arms generatingIdle timer
+            return { engine, transport, callbacks }
+        }
+
+        it('does NOT finish while the screen keeps changing (spinner + streaming command output)', () => {
+            // Screen last changed "just now" on every read — a live, repainting screen.
+            const { engine, callbacks } = armGeneratingWaitOnCommand(() => Date.now())
+
+            // Advance well past the generatingIdle idle-finish timeout. On a static-screen
+            // FSM this would have finished the turn — here it must NOT, because the screen
+            // quiet age is always ~0ms (< 5000ms).
+            vi.advanceTimersByTime(DEFAULT_TIMEOUTS.generatingIdle + 5000)
+
+            expect(engine.currentStatus).toBe('generating')
+            expect(engine.isWaitingForResponse).toBe(true)
+            expect(engine.currentTurnScope).not.toBe(null)
+            expect(callbacks.onTurnCompleted).not.toHaveBeenCalled()
+        })
+
+        it('a screen change RESETS the quiet timer — 4s quiet then a repaint must not settle', () => {
+            let screenChangeAt = Date.now()
+            const { engine, callbacks } = armGeneratingWaitOnCommand(() => screenChangeAt)
+
+            // 4s of quiet — not yet 5s.
+            vi.advanceTimersByTime(4000)
+            engine.evaluateSettled(engine['transport'].getSnapshot())
+            expect(callbacks.onTurnCompleted).not.toHaveBeenCalled()
+
+            // A repaint lands (new curl output) → quiet timer resets.
+            screenChangeAt = Date.now()
+            vi.advanceTimersByTime(4000) // another 4s — still < 5s since the reset
+            engine.evaluateSettled(engine['transport'].getSnapshot())
+
+            expect(engine.currentStatus).toBe('generating')
+            expect(callbacks.onTurnCompleted).not.toHaveBeenCalled()
+        })
+
+        it('DOES finish once the screen has been static ≥5s (genuine completion)', () => {
+            // Screen (and output) changed once, then went permanently static. A single
+            // pinned snapshot models "nothing changed since": lastScreenChangeAt and
+            // lastOutputAt stay fixed across the candidate arm+confirm passes so the
+            // idleFinishCandidate can confirm (mirrors the Fix-2 settleToFinish helper).
+            const staticSince = Date.now() - 6000 // already >5s of screen quiet
+            const { engine, transport, callbacks } = buildEngine()
+            const snap = makeSnap({
+                lastOutputAt: staticSince,
+                lastNonEmptyOutputAt: staticSince,
+                lastScreenChangeAt: staticSince, // never changes again
+                isWaitingForResponse: true,
+            })
+            transport.getSnapshot = () => snap
+            transport.runParseSession = vi.fn(() => ({
+                status: 'idle',
+                messages: [
+                    { role: 'user', content: 'run the health poll' },
+                    { role: 'assistant', kind: 'standard', content: 'Health check passed.', meta: {} },
+                ],
+                activeModal: null,
+                parsedStatus: 'idle',
+            }))
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = { prompt: 'run the health poll', startedAt: Date.now() - 3000, bufferStart: 0, rawBufferStart: 0 }
+            engine.setStatus('generating')
+
+            // Screen quiet is already ≥5s; run the candidate arm + confirm passes.
+            engine.evaluateSettled(snap)           // arm idleFinishCandidate (screen quiet ≥5s)
+            vi.advanceTimersByTime(DEFAULT_TIMEOUTS.idleFinishConfirm + 50)
+            engine.evaluateSettled(snap)           // confirm → finishResponse
+
+            expect(engine.isWaitingForResponse).toBe(false)
+            expect(engine.currentTurnScope).toBe(null)
+            expect(engine.currentStatus).toBe('idle')
+            expect(callbacks.onTurnCompleted).toHaveBeenCalled()
+        })
+    })
 })

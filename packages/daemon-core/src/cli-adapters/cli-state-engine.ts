@@ -112,6 +112,21 @@ const IDLE_CONFIRMATION_GRACE_MS = 2_000;
 // so a genuinely-finished turn can never be held past this bound (no infinite defer).
 const APPROVAL_RESUME_IDLE_DEFER_CAP_MS = 18_000;
 
+// FALSE-IDLE (screen-quiet gate): the generating→idle transition (both the
+// candidate-confirmed finish AND the idleFinish timeout finish) requires the
+// VISIBLE TERMINAL SCREEN CONTENT to have been byte-identical for at least this
+// long, continuously. `snap.lastScreenChangeAt` is bumped by the adapter every
+// time the normalized screen snapshot changes (a spinner frame, streaming
+// command output, etc.), so `now - lastScreenChangeAt` is the real screen-diff
+// quiet age. A worker that is WAITING on a long-running foreground command
+// (e.g. a `curl :3847/health` poll loop) keeps repainting the screen, so its
+// quiet age never reaches this threshold and it can never be declared idle.
+// This is a NECESSARY gate layered on top of the existing settle conditions —
+// it only ever prevents a finish, never forces one. Owner-chosen at 5s (8s felt
+// too long). Screen snapshots are read at most every 250ms
+// (SCREEN_SNAPSHOT_MIN_INTERVAL_MS), so the granularity is well under 5s.
+const SCREEN_QUIET_IDLE_MS = 5_000;
+
 // ─── Engine ────────────────────────────────────────────────────────────────
 
 export class CliStateEngine {
@@ -773,6 +788,13 @@ export class CliStateEngine {
         this.idleTimeout = setTimeout(() => {
             if (this.isWaitingForResponse && !this.hasActionableApproval()) {
                 if (this.shouldDeferIdleTimeoutFinish()) return;
+                // FALSE-IDLE (screen-quiet gate): a recent_activity_hold worker still
+                // repainting (spinner + streaming command output) must NOT be finished
+                // by this timeout. Re-arm and re-evaluate until the screen is quiet.
+                if (!this.hasScreenBeenQuietForIdle(Date.now())) {
+                    this.evaluateSettled(this.transport.getSnapshot());
+                    return;
+                }
                 this.finishResponse();
             }
         }, this.timeouts.generatingIdle);
@@ -794,6 +816,12 @@ export class CliStateEngine {
                 this.idleTimeout = setTimeout(() => {
                     if (this.isWaitingForResponse && !this.hasActionableApproval()) {
                         if (this.shouldDeferIdleTimeoutFinish()) return;
+                        // FALSE-IDLE (screen-quiet gate): do not finish while the screen
+                        // is still repainting (see applyHoldGenerating).
+                        if (!this.hasScreenBeenQuietForIdle(Date.now())) {
+                            this.evaluateSettled(this.transport.getSnapshot());
+                            return;
+                        }
                         this.finishResponse();
                     }
                 }, this.timeouts.generatingIdle);
@@ -922,6 +950,15 @@ export class CliStateEngine {
         this.idleTimeout = setTimeout(() => {
             if (this.isWaitingForResponse) {
                 if (this.shouldDeferIdleTimeoutFinish()) return;
+                // FALSE-IDLE (screen-quiet gate): the generating→idle timeout must NOT
+                // finish while the visible screen is still changing (spinner + streaming
+                // command output). This is the primary false-idle path — a worker WAITING
+                // on a long-running foreground command sits in generating with a live,
+                // repainting screen. Re-evaluate until the screen has been quiet >= 5s.
+                if (!this.hasScreenBeenQuietForIdle(Date.now())) {
+                    this.evaluateSettled(this.transport.getSnapshot());
+                    return;
+                }
                 this.finishResponse();
             }
         }, this.timeouts.generatingIdle);
@@ -1007,7 +1044,15 @@ export class CliStateEngine {
         const assistantLength = (lastParsedAssistant as any)?.content?.length || 0;
         const idleFinishConfirmMs = this.timeouts.idleFinishConfirm;
         const idleQuietThresholdMs = Math.max(idleFinishConfirmMs, this.timeouts.outputSettle);
-        const idleReady = !modal && hasAssistantTurn && quietForMs >= idleQuietThresholdMs && screenStableMs >= idleFinishConfirmMs;
+        // FALSE-IDLE (screen-quiet gate): NECESSARY condition — the visible screen
+        // content must have been byte-identical for >= SCREEN_QUIET_IDLE_MS. A worker
+        // still repainting (spinner frame, streaming command output) resets
+        // lastScreenChangeAt on every change, so its quiet age never reaches the
+        // threshold and it can never arm/confirm idle. Layered on top of the existing
+        // conditions — it only ever prevents a finish, never forces one.
+        const screenQuietForIdle = screenStableMs >= SCREEN_QUIET_IDLE_MS;
+        const idleReady = !modal && hasAssistantTurn && quietForMs >= idleQuietThresholdMs
+            && screenStableMs >= idleFinishConfirmMs && screenQuietForIdle;
         const candidate = this.idleFinishCandidate;
         const candidateQuiet = !!candidate && candidate.responseEpoch === this.responseEpoch
             && candidate.lastOutputAt === snap.lastOutputAt
@@ -1060,6 +1105,19 @@ export class CliStateEngine {
                     return;
                 }
                 if (this.shouldDeferIdleTimeoutFinish()) return;
+                // FALSE-IDLE (screen-quiet gate): the idleFinish timeout must NOT
+                // finish while the visible screen is still changing. A worker
+                // WAITING on a long-running foreground command keeps repainting the
+                // screen (spinner + streaming output), so lastScreenChangeAt stays
+                // fresh and the quiet age never reaches SCREEN_QUIET_IDLE_MS. Re-arm
+                // and re-evaluate instead of emitting a weak/false completion.
+                if (!this.hasScreenBeenQuietForIdle(Date.now())) {
+                    if (this.idleTimeout) clearTimeout(this.idleTimeout);
+                    this.idleTimeout = setTimeout(() => {
+                        if (this.isWaitingForResponse) this.evaluateSettled(this.transport.getSnapshot());
+                    }, this.timeouts.idleFinish);
+                    return;
+                }
                 const parsed = this.runParseSession(this.transport.getSnapshot());
                 if (this.shouldDeferFinishForTranscript(parsed)) {
                     this.rescheduleTranscriptFinishCheck('transcript_idle_timeout_not_final');
@@ -1069,6 +1127,23 @@ export class CliStateEngine {
                 this.finishResponse();
             }
         }, this.timeouts.idleFinish);
+    }
+
+    /**
+     * FALSE-IDLE (screen-quiet gate): has the visible terminal screen content been
+     * byte-identical for at least SCREEN_QUIET_IDLE_MS continuously?
+     *
+     * `lastScreenChangeAt` is bumped by the adapter every time the normalized screen
+     * snapshot changes (spinner frame, streaming command output, etc.), so
+     * `now - lastScreenChangeAt` is the real screen-diff quiet age. Reads the LIVE
+     * transport snapshot so the deferred idleFinish timeout re-checks current screen
+     * state, not the stale snapshot from when the timer was armed. A never-changed
+     * screen (lastScreenChangeAt === 0) is treated as quiet.
+     */
+    private hasScreenBeenQuietForIdle(now: number): boolean {
+        const lastChange = this.transport.getSnapshot().lastScreenChangeAt;
+        if (!lastChange) return true;
+        return (now - lastChange) >= SCREEN_QUIET_IDLE_MS;
     }
 
     /**
