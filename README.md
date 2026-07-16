@@ -1,45 +1,30 @@
-# ADHDev Self-Hosted
+# ADHDev
 
-[![npm](https://img.shields.io/npm/v/@adhdev/daemon-standalone?label=npm)](https://www.npmjs.com/package/@adhdev/daemon-standalone)
+**Control your AI coding agents from the web — and let them land on `main` on their own.**
+
+[![npm](https://img.shields.io/npm/v/adhdev?label=npm%20i%20-g%20adhdev)](https://www.npmjs.com/package/adhdev)
+[![npm standalone](https://img.shields.io/npm/v/@adhdev/daemon-standalone?label=%40adhdev%2Fdaemon-standalone)](https://www.npmjs.com/package/@adhdev/daemon-standalone)
 [![CI](https://github.com/vilmire/adhdev/actions/workflows/ci.yml/badge.svg)](https://github.com/vilmire/adhdev/actions)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-ADHDev Self-Hosted is a self-hosted control plane for AI coding agent sessions. As agents become long-running background workers, ADHDev gives you one local dashboard to see which session is still running, waiting for approval, finished, stuck, or ready for the next instruction.
+AI coding agents have become long-running background workers. ADHDev is the control plane for them: launch, watch, approve, and steer agent sessions from a web or mobile dashboard — across every machine you own — and hand off convergence to an unattended pipeline that merges finished work into `main`.
 
-It is not trying to replace the underlying IDEs or agents. The goal is to give them a dedicated control surface: inspect active sessions, review chat and terminal state, approve or interrupt work, reopen the right history, and send the next instruction from one place.
+**They parallelize. We land.** Fan out a task across worktrees and machines, then let the Refinery gate, verify, and fast-forward the results home — no merge-day hangover.
 
-For the standalone path, everything runs on your machine as a local daemon with an embedded web dashboard. No cloud account or hosted control plane is required.
+Website: **[adhf.dev](https://adhf.dev)** · Docs: **[docs.adhf.dev](https://docs.adhf.dev)**
 
-Website: https://adhf.dev
-Docs: https://docs.adhf.dev
-
-This repo contains the open-source, self-hosted edition:
-
-- the standalone local server and dashboard
-- the shared daemon/runtime packages used by both standalone and cloud
-- the session-host and terminal-mux stack for hosted CLI runtimes
-
-Hosted cloud operations are not part of this repository.
-
-## Currently Working / Tested
-
-These are the integrations currently working or explicitly tested enough to call out near the top:
-
-- IDEs: Cursor, Google Antigravity, VS Code, Kiro
-- IDE extension integrations: Codex, Claude Code
-- CLI agents: Hermes Agent, Codex CLI, Claude Code CLI
-
-Other providers and adapters ship in the inventory as community-supported. They work but have not all been verified end-to-end, so support levels vary. For the current support policy and caveats, see:
-
-- [Supported Providers](https://docs.adhf.dev/reference/supported-providers)
-- [Supported IDEs](https://docs.adhf.dev/reference/supported-ides)
-- [Compatibility & Caveats](https://docs.adhf.dev/guide/compatibility)
-
-## Screenshots
+<!-- HERO: Refinery convergence demo GIF (assets pending, see LAUNCH-ASSETS-PREP) -->
 
 <p align="center">
   <img src="docs/assets/readme/landing-command-center-demo-poster.jpg" alt="ADHDev desktop dashboard switching between chat and terminal views, floating a panel, and splitting the workspace" width="100%" />
 </p>
+
+---
+
+## Why ADHDev
+
+### 🌐 Web-first control
+Your agents run locally; you drive them from anywhere. The dashboard is a real control surface — inspect active sessions, read chat and terminal state, approve or interrupt work, reopen the right history, and send the next instruction from a browser or your phone. No terminal babysitting.
 
 <table>
   <tr>
@@ -52,80 +37,58 @@ Other providers and adapters ship in the inventory as community-supported. They 
   </tr>
 </table>
 
+### 🕸️ Repo Mesh — true multi-machine parallelism
+Enqueue tasks with dependencies and let a coordinator dispatch them to whichever node has spare capacity — your laptop, a desktop, a build box. This is genuine multi-machine orchestration over a P2P mesh, **not** SSH into one host. Each task runs in its own worktree so agents never step on each other. The mesh and Refinery engine ships in this repo; cross-machine dispatch runs on the cloud edition.
+<!-- SCREENSHOT: Repo Mesh node/task board (assets pending, see LAUNCH-ASSETS-PREP) -->
+
+### 🚢 Refinery — unattended landing on `main`
+Parallelism only pays off if the work actually merges. The Refinery converges finished tasks with per-repo validation gates, patch-equivalence checks, submodule-aware fast-forward merges, and automatic worktree cleanup — unattended. Agents finish; the Refinery lands them.
+<!-- SCREENSHOT: Refinery convergence view (assets pending, see LAUNCH-ASSETS-PREP) -->
+
+### 🔺 MAGI — cross-verified results
+Run a task through independent agent perspectives and cross-check their output before it counts as done, so a single confident-but-wrong answer doesn't slip through. Higher-stakes changes get more than one set of eyes.
+
+### 🔐 P2P transport (trust, not a paywall)
+Chat, commands, screenshots, and remote input travel over an encrypted WebRTC data channel directly between your dashboard and your daemon. The server only handles signaling and lightweight metadata — your working data doesn't sit on someone else's box. It's a trust property of the design, not an upsell.
+
 <p align="center">
   <img src="docs/assets/readme/landing-mobile-resume-demo-poster.jpg" alt="ADHDev mobile resume flow reopening a saved session from a phone" width="320" />
 </p>
 
-## What It Runs
+---
 
-ADHDev Self-Hosted is built around three local layers:
+## Install
 
-1. `daemon-standalone` exposes a local HTTP/WebSocket server and serves the web UI.
-2. `daemon-core` manages IDE, CLI, extension, and ACP integrations.
-3. `session-host-daemon` (`adhdev-sessiond`) owns long-lived PTY runtimes so CLI sessions can survive daemon restarts.
-
-Everything runs on your machine by default. There is no cloud account requirement for the standalone path.
-
-### Repo Mesh: parallel agents that actually land
-
-Repo Mesh coordinates agent sessions across worktrees and machines: enqueue tasks with dependencies, let a coordinator dispatch them to whichever node has capacity, and converge the results through the Refinery — per-repo validation gates, patch-equivalence checks, submodule-aware fast-forward merges, automatic worktree cleanup. Parallelism without the merge-day hangover.
-
-## Quick Start
-
-Recommended path:
+**Recommended — the `adhdev` CLI:**
 
 ```bash
 npm install -g adhdev
 adhdev standalone
 ```
 
-Direct standalone package:
+Open **`http://localhost:3847`**.
+
+**Self-host directly with the standalone package:**
 
 ```bash
 npm install -g @adhdev/daemon-standalone
 adhdev-standalone
 ```
 
-Open `http://localhost:3847`.
+Everything runs on your machine as a local daemon with an embedded dashboard — no cloud account required for the standalone path.
 
 Useful flags:
 
 ```bash
-adhdev standalone --host
-adhdev standalone --port 8080
-adhdev standalone --token mysecret
-adhdev standalone --no-open
-adhdev standalone --dev
+adhdev standalone --host          # allow other devices on the same LAN
+adhdev standalone --port 8080     # custom port
+adhdev standalone --token mysecret # token auth for scripts / operator access
+adhdev standalone --no-open       # don't auto-open the browser
 ```
-
-What those choices mean in practice:
-
-- plain `adhdev standalone` = localhost-only dashboard on this machine
-- `--host` = other devices on the same LAN can open it too
-- `--token` = best for scripts, curl, and operator-style access
-- dashboard password = best for normal browser users who should see a login prompt
-- `--host` with no token and no password = warning-first LAN exposure, not a hard block
 
 Standalone stays localhost-only by default. If you bind to `0.0.0.0` for LAN access, the dashboard warns when neither token auth nor a dashboard password is configured.
 
-The standalone UI already includes both settings surfaces:
-
-- `Settings` → `Dashboard Security`
-  - enable password
-  - update/change password
-  - disable password
-- `Settings` → `Network Access`
-  - save default localhost-only vs all-interfaces bind mode for future launches
-- `Settings` → `Appearance` → `Fonts`
-  - standalone-only overrides for chat text, markdown/code blocks, and terminal/tool rows
-  - saved alongside standalone network preferences under `~/.adhdev/standalone-network.json`
-
-Current standalone UX defaults:
-
-- ordinary CLI and ACP launches start fresh by default
-- use `Open saved history` when you want continuity in the same provider conversation
-- hosted runtime recovery is a separate interruption flow, not part of the ordinary new-session CTA
-- if the local dashboard drops its websocket connection, the banner now exposes `Reconnect now`
+> **Windows note:** Windows + Node.js 24+ is currently blocked for normal startup/install paths. Use Node.js 22.x, or the PowerShell installer path described in the docs.
 
 Canonical self-hosted docs:
 
@@ -133,12 +96,62 @@ Canonical self-hosted docs:
 - [Self-hosted configuration](docs/self-hosted/configuration.md)
 - [Self-hosted local API](docs/self-hosted/local-api.md)
 
-Windows note:
+---
 
-- Windows + Node.js 24+ is currently blocked for normal startup/install paths.
-- Use Node.js 22.x, or use the PowerShell installer path described in the docs.
+## Supported Agents
 
-## Repository Layout
+ADHDev talks to coding agents through four provider categories — `ide` (CDP), `extension` (CDP webview), `cli` (PTY), and `acp` (Agent Client Protocol over stdio).
+
+**CLI agents** (PTY-driven, launched and controlled from the dashboard):
+
+| Agent | Provider |
+| --- | --- |
+| Claude Code | `cli/claude-cli` |
+| Codex CLI | `cli/codex-cli` |
+| Cursor Agent | `cli/cursor-cli` |
+| Google Antigravity CLI | `cli/antigravity-cli` |
+| Hermes Agent | `cli/hermes-cli` |
+| Kimi Code | `cli/kimi` |
+| Opencode | `cli/opencode` |
+
+**IDEs** (via Chrome DevTools Protocol): Cursor, Google Antigravity, VS Code, VSCodium, Kiro, Windsurf, Trae, PearAI.
+
+**IDE extensions** (CDP webview): Claude Code (VS Code), Codex, Cline, Roo Code.
+
+**ACP agents** (stdio, Agent Client Protocol): 35 built-in adapters, including Gemini CLI, Qwen Code, Goose, GitHub Copilot, Cursor (ACP), Claude Agent, Codex CLI, Kimi CLI, Cline, Kilo, Junie, OpenHands, and more.
+
+> **Built-in ≠ verified.** ADHDev ships a broad inventory; presence in the catalog means the integration exists, not that every one has been validated end-to-end. Support levels vary. See the live policy:
+>
+> - [Supported Providers](https://docs.adhf.dev/reference/supported-providers)
+> - [Supported IDEs](https://docs.adhf.dev/reference/supported-ides)
+> - [Compatibility & Caveats](https://docs.adhf.dev/guide/compatibility)
+
+ADHDev does **not** manage API keys for your agents — each tool handles its own auth. ADHDev detects install status and surfaces errors.
+
+---
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=vilmire/adhdev&type=Date)](https://star-history.com/#vilmire/adhdev&Date)
+
+---
+
+## Community
+
+- 💬 **Discord** — <!-- COMMUNITY: Discord invite link (pending, see LAUNCH-ASSETS-PREP) --> _(invite coming soon)_
+- 🐛 [Issues](https://github.com/vilmire/adhdev/issues)
+- 🤝 [Contributing](CONTRIBUTING.md)
+- 📋 [Changelog](CHANGELOG.md)
+
+---
+
+## What's in This Repo
+
+This is the open-source, self-hosted edition (AGPL-3.0). Hosted cloud operations are not part of this repository. Self-hosted is built around three local layers:
+
+1. `daemon-standalone` exposes a local HTTP/WebSocket server and serves the web UI.
+2. `daemon-core` manages IDE, CLI, extension, and ACP integrations.
+3. `session-host-daemon` (`adhdev-sessiond`) owns long-lived PTY runtimes so CLI sessions survive daemon restarts.
 
 | Path | Purpose |
 | --- | --- |
@@ -153,67 +166,21 @@ Windows note:
 | `packages/terminal-render-web` | Browser-side terminal rendering support |
 | `packages/ghostty-vt-node` | Ghostty VT bindings used by runtime/mux layers |
 
-## Provider Inventory
+### Standalone API surface
 
-ADHDev ships a broad built-in inventory of IDE, extension, CLI, and ACP integrations, including 35 ACP adapters.
-
-Important distinction:
-
-- built-in means the integration exists in the shipped inventory
-- verified means it has explicit validation evidence
-
-Do not treat inventory presence as blanket support. Current verification policy lives here:
-
-- [Supported Providers](https://docs.adhf.dev/reference/supported-providers)
-- [Supported IDEs](https://docs.adhf.dev/reference/supported-ides)
-- [Compatibility & Caveats](https://docs.adhf.dev/guide/compatibility)
-
-## Standalone API Surface
-
-The standalone server currently exposes:
-
-- `GET /api/v1/status`
+- `GET /api/v1/status` — sessions[] array is the source of truth
 - `POST /api/v1/command`
 - `GET /api/v1/runtime/:sessionId/snapshot`
 - `GET /api/v1/runtime/:sessionId/events`
 - `GET /api/v1/mux/:workspace/state`
-- `GET /api/v1/mux/:workspace/socket-info`
 - `POST /api/v1/mux/:workspace/control`
-- `GET /api/v1/mux/:workspace/events`
 - `ws://localhost:3847/ws`
 
-Canonical runtime contract:
+Reference: [docs/openapi.yml](docs/openapi.yml) · [Self-hosted API docs](docs/self-hosted/local-api.md)
 
-- `GET /api/v1/status` and its `sessions[]` array are the source of truth
-- runtime targeting should use raw `targetSessionId`
-- older per-surface projections should be treated as convenience views, not the canonical model
+---
 
-Reference:
-
-- [docs/openapi.yml](docs/openapi.yml)
-- [Self-hosted API docs](docs/self-hosted/local-api.md)
-
-## Session Host
-
-Hosted CLI runtimes are managed through `adhdev-sessiond`.
-
-Key properties of the current design:
-
-- PTY ownership is separated from the main daemon process
-- CLI sessions can reconnect after daemon restarts
-- write ownership is explicit and single-owner
-- diagnostics and recovery actions are exposed through the daemon control plane and standalone UI
-
-See:
-
-- [Self-hosted setup](docs/self-hosted/setup.md)
-- [Self-hosted local API](docs/self-hosted/local-api.md)
-- [Self-hosted session host](docs/self-hosted/session-host.md)
-- [Compatibility & caveats](https://docs.adhf.dev/guide/compatibility)
-
-## Development
-
-From source:
+## Develop from source
 
 ```bash
 git clone https://github.com/vilmire/adhdev.git
@@ -231,25 +198,22 @@ npm run dev:web
 npm run dev -w packages/web-devconsole
 ```
 
-## Documentation
+---
 
-- [Self-hosted setup](docs/self-hosted/setup.md)
-- [Self-hosted local API](docs/self-hosted/local-api.md)
-- [Supported providers](https://docs.adhf.dev/reference/supported-providers)
-- [Contributing](CONTRIBUTING.md)
-- [Changelog](CHANGELOG.md)
+## OSS vs Cloud
 
-## Cloud Comparison
-
-| Feature | OSS | Cloud |
+| Feature | OSS (self-hosted) | Cloud |
 | --- | :--: | :--: |
 | Local-only dashboard | ✅ | ✅ |
+| Repo Mesh + Refinery engine | ✅ | ✅ |
 | Remote access outside LAN | ❌ | ✅ |
-| Multi-machine management | ❌ | ✅ |
+| Cross-machine mesh (P2P, no SSH) | ❌ | ✅ |
 | API keys and hosted webhooks | ❌ | ✅ |
 | OAuth / account system | ❌ | ✅ |
 | Push notifications | ❌ | ✅ |
 | Team / sharing features | ❌ | ✅ |
+
+---
 
 ## License
 
