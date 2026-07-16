@@ -384,7 +384,7 @@ export type {
 
 // ── Status ──
 export { DaemonStatusReporter } from './status/reporter.js';
-export { buildSessionEntries, findCdpManager, hasCdpManager, isCdpConnected } from './status/builders.js';
+export { buildSessionEntries, findCdpManager, hasCdpManager, isCdpConnected, isCoordinatorSpawnedHiddenWorker, resolveSurfaceHidden, resolveMuted, resolveSpawnedSessionHideMute } from './status/builders.js';
 export { buildStatusSnapshot, buildMachineInfo, buildAvailableProviders, getLastDisplayMessage } from './status/snapshot.js';
 export { getDaemonBuildInfo } from './build-info.js';
 export type { DaemonBuildInfo } from './build-info.js';

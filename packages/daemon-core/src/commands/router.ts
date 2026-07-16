@@ -34,7 +34,7 @@ import { buildMeshHostRequiredFailure, resolveMeshHostStatus } from '../mesh/mes
 import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
-import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
+import type { RepoMeshSessionCleanupMode, RepoMeshSpawnedSessionVisibility } from '../repo-mesh-types.js';
 import { DEFAULT_MESH_POLICY, magiAutoLaunchedSessionCleanupDecision } from '../repo-mesh-types.js';
 import { resolve as pathResolve } from 'path';
 import * as fs from 'fs';
@@ -360,6 +360,30 @@ export class DaemonCommandRouter {
             }
         }
         return nodes;
+    }
+
+    /**
+     * Same flattened node list as getCachedInlineMeshNodes(), but each node is
+     * paired with the `spawnedSessionVisibility` from its OWNING mesh's policy.
+     * The flat node list loses the mesh→node association, yet the cloud daemon's
+     * synthetic mesh-session mirror needs the mesh-level visibility policy to
+     * decide whether a coordinator-spawned worker session should be hidden+muted
+     * on the dashboard (the cached inline-mesh session entry carries no settings
+     * of its own). Falls back to DEFAULT_MESH_POLICY.spawnedSessionVisibility when
+     * the mesh policy is absent, matching the worker-launch stamp.
+     */
+    public getCachedInlineMeshNodesWithVisibility(): Array<{ node: any; spawnedSessionVisibility: RepoMeshSpawnedSessionVisibility }> {
+        const out: Array<{ node: any; spawnedSessionVisibility: RepoMeshSpawnedSessionVisibility }> = [];
+        for (const mesh of this.inlineMeshCache.values()) {
+            const spawnedSessionVisibility: RepoMeshSpawnedSessionVisibility =
+                mesh?.policy?.spawnedSessionVisibility === 'visible' ? 'visible' : 'hidden';
+            if (Array.isArray(mesh?.nodes)) {
+                for (const node of mesh.nodes) {
+                    out.push({ node, spawnedSessionVisibility });
+                }
+            }
+        }
+        return out;
     }
 
     // ─── Remote mesh-session owner resolution ───────────────────────────

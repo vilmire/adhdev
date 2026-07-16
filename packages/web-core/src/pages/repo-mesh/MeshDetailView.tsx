@@ -395,6 +395,25 @@ export function MeshDetailView({
                     back-compat; this page just no longer offers a second place to set it. */}
             </Section>
 
+            {/* ── Dashboard visibility ──
+                 Surfaced as a primary (non-advanced) control: it decides whether the
+                 worker sessions the coordinator spawns clutter the operator's dashboard
+                 inbox + notifications, which most operators want to control. Same
+                 policy.spawnedSessionVisibility binding as before (moved out of the
+                 collapsed "Safety & Git" advanced accordion for discoverability). */}
+            <Section title="Dashboard visibility" description="Whether the worker sessions this coordinator spawns show up in your dashboard inbox and raise notifications.">
+                <FormField label="Coordinator-spawned worker sessions"
+                    hint="Hidden = keep the inbox quiet and mute their notifications; you interact through the coordinator session. Visible = show every spawned worker as its own conversation.">
+                    <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                        value={policy.spawnedSessionVisibility === 'visible' ? 'visible' : 'hidden'}
+                        onChange={e => onUpdatePolicy({ spawnedSessionVisibility: e.target.value === 'visible' ? 'visible' : 'hidden' })}
+                        disabled={savingPolicy}>
+                        <option value="hidden">Hidden (no notifications, keep inbox quiet)</option>
+                        <option value="visible">Visible (show every worker in the dashboard)</option>
+                    </select>
+                </FormField>
+            </Section>
+
             {/* ── MAGI task_kind → panel binding editor ──
                  Placed after Nodes & Scheduling: MAGI panels reference the nodes/providers
                  configured above. The sole MAGI panel surface — the named-panel CRUD
@@ -494,7 +513,6 @@ export function MeshDetailView({
                         { label: 'Destructive git approval', key: 'requireApprovalForDestructiveGit', opts: [['required', 'Require approval'], ['not_required', 'Do not require approval']], val: (v: any) => v ? 'required' : 'not_required', parse: (v: string) => v === 'required' },
                         { label: 'When the workspace has uncommitted changes', key: 'dirtyWorkspaceBehavior', opts: [['warn', 'Warn and continue'], ['block', 'Block task'], ['checkpoint_then_continue', 'Checkpoint then continue']], val: (v: any) => v || 'warn', parse: (v: string) => v },
                         { label: 'Auto-publish submodule commits (advanced)', key: 'allowAutoPublishSubmoduleMainCommits', opts: [['disabled', 'Require explicit approval'], ['enabled', 'Allow Refinery non-force publish']], val: (v: any) => v ? 'enabled' : 'disabled', parse: (v: string) => v === 'enabled' },
-                        { label: 'Coordinator-spawned worker sessions', key: 'spawnedSessionVisibility', opts: [['hidden', 'Hidden (no notifications, keep inbox quiet)'], ['visible', 'Visible (show every worker in the dashboard)']], val: (v: any) => (v === 'visible' ? 'visible' : 'hidden'), parse: (v: string) => (v === 'visible' ? 'visible' : 'hidden') },
                     ].map(({ label, key, opts, val, parse }) => (
                         <FormField key={key} label={label}>
                             <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"

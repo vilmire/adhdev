@@ -42,7 +42,7 @@ import { TEXT_ONLY_MESSAGE_INPUT_SUPPORT } from '../providers/provider-input-sup
  * coordinator↔worker mesh data/completion path (mesh-event-forwarding) is
  * unaffected.
  */
-function isCoordinatorSpawnedHiddenWorker(settings: Record<string, any> | undefined): boolean {
+export function isCoordinatorSpawnedHiddenWorker(settings: Record<string, any> | undefined): boolean {
     if (!settings) return false;
     return settings.launchedByCoordinator === true
         && typeof settings.meshNodeFor === 'string'
@@ -56,7 +56,7 @@ function isCoordinatorSpawnedHiddenWorker(settings: Record<string, any> | undefi
  * hidden, OR when the user manually hid it (userHidden). userHidden === false is an
  * explicit un-hide that overrides the policy/worker default until daemon restart.
  */
-function resolveSurfaceHidden(settings: Record<string, any> | undefined): boolean {
+export function resolveSurfaceHidden(settings: Record<string, any> | undefined): boolean {
     if (!settings) return false;
     if (settings.userHidden === true) return true;
     if (settings.userHidden === false) return false;
@@ -68,11 +68,35 @@ function resolveSurfaceHidden(settings: Record<string, any> | undefined): boolea
  * list) when the user muted it, OR a coordinator-spawned worker defaults muted.
  * userMuted === false is an explicit un-mute overriding the worker default.
  */
-function resolveMuted(settings: Record<string, any> | undefined): boolean {
+export function resolveMuted(settings: Record<string, any> | undefined): boolean {
     if (!settings) return false;
     if (settings.userMuted === true) return true;
     if (settings.userMuted === false) return false;
     return isCoordinatorSpawnedHiddenWorker(settings);
+}
+
+/**
+ * Pure resolver for a mesh-spawned worker session's dashboard hide+mute state,
+ * shared by the standalone/local `buildSessionEntries` path (via the wrappers
+ * above, which read the values off a full settings object) AND the cloud daemon's
+ * synthetic remote-mesh-session mirror path in daemon-cloud
+ * (`appendMeshOwnedSessionsToSnapshot`), which has no full ProviderState — only
+ * the mesh attribution fields. Keeping both paths on this ONE helper guarantees a
+ * remote worker surfaced on the cloud dashboard hides+mutes identically to a local
+ * worker on standalone. A valid `userHidden`/`userMuted` boolean is an explicit
+ * per-session override and wins over the policy/worker default.
+ */
+export function resolveSpawnedSessionHideMute(input: {
+    launchedByCoordinator?: unknown;
+    meshNodeFor?: unknown;
+    spawnedSessionVisibility?: unknown;
+    userHidden?: unknown;
+    userMuted?: unknown;
+}): { surfaceHidden: boolean; muted: boolean } {
+    return {
+        surfaceHidden: resolveSurfaceHidden(input as Record<string, any>),
+        muted: resolveMuted(input as Record<string, any>),
+    };
 }
 
 export type SessionEntryProfile = 'full' | 'live' | 'metadata';
