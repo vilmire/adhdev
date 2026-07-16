@@ -1102,6 +1102,11 @@ describe('setupMeshEventForwarding', () => {
           dryRun: true,
           willRun: false,
           executed: false,
+          // A real fast_forward_available dry-run always carries `current` with a
+          // positive `behind` (ahead=0). dryRunSatisfiesAutoFastForwardPolicy
+          // defensively re-asserts behind>0, so the execute step only fires when
+          // the dry-run reports a real ff-only gap.
+          current: { ahead: 0, behind: 2, submodules: [] },
         })
         .mockResolvedValueOnce({
           success: true,

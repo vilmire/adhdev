@@ -470,7 +470,65 @@ describe('handleResolveAction for CLI approval state', () => {
     expect(resolveModal).not.toHaveBeenCalled()
   })
 
-  it('fails closed when action mapping cannot identify a matching button', async () => {
+  it('fails closed when a deny/reject action maps to no negative-labeled button', async () => {
+    // No button reads as a decline (no|deny|reject|cancel|skip|exit|stop / without / do not),
+    // so a deny action must refuse rather than click an arbitrary affirmative. (A modal
+    // whose decline IS spelled "Exit"/"Skip" is a legitimate match — see the cursor
+    // decline coverage — so this fixture uses two affirmative-only choices.)
+    const resolveModal = vi.fn()
+    const adapter = {
+      getStatus: () => ({
+        status: 'waiting_approval',
+        messages: [],
+        activeModal: {
+          message: 'Choose access level',
+          buttons: ['Trust this workspace', 'Trust this folder'],
+        },
+      }),
+      resolveModal,
+      writeRaw: vi.fn(),
+    }
+
+    const result = await handleResolveAction({
+      getProvider: () => ({ type: 'menu-cli', category: 'cli' }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'menu-cli', sessionId: 'sess-1' },
+      currentProviderType: 'menu-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: {
+        instanceManager: {
+          getInstance: () => ({
+            getState: () => ({
+              activeChat: {
+                status: 'waiting_approval',
+                activeModal: {
+                  message: 'Choose access level',
+                  buttons: ['Trust this workspace', 'Trust this folder'],
+                },
+              },
+            }),
+          }),
+        },
+      },
+    } as any, {
+      targetSessionId: 'sess-1',
+      agentType: 'menu-cli',
+      action: 'deny',
+    })
+
+    expect(result).toEqual({ success: false, error: 'Approval action did not match any visible button' })
+    expect(resolveModal).not.toHaveBeenCalled()
+  })
+
+  it('resolves a deny action to an "Exit" decline on a trust modal', async () => {
+    // "Exit" is a canonical decline label (isNegativeApprovalLabel: no|deny|reject|
+    // cancel|skip|exit|stop). Declining a "Choose access level" trust modal by pressing
+    // "Exit" is the correct, least-surprising mapping — same lineage as cursor's "Skip"
+    // decline (oss 2c487068). This is NOT clicking an arbitrary button.
     const resolveModal = vi.fn()
     const adapter = {
       getStatus: () => ({
@@ -516,7 +574,7 @@ describe('handleResolveAction for CLI approval state', () => {
       action: 'deny',
     })
 
-    expect(result).toEqual({ success: false, error: 'Approval action did not match any visible button' })
-    expect(resolveModal).not.toHaveBeenCalled()
+    expect(result).toEqual({ success: true, buttonIndex: 1, button: 'Exit' })
+    expect(resolveModal).toHaveBeenCalledWith(1)
   })
 })

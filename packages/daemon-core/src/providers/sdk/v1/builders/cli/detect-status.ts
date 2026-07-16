@@ -301,11 +301,19 @@ function modalSupersededBySettledPrompt(
   if (settled.footers.length > 0 && !settled.footers.every((f) => f.test(belowText))) return false;
   // Require a real separator between the leftover box and the composer: a
   // non-blank line that is neither a modal cue NOR part of the settled-prompt
-  // match itself. That separator is the CLI's welcome banner / follow-up hint /
-  // mode footer a stale box shows above the repainted composer. A live modal's
-  // selection cursor sits flush against its buttons with no such prose between
-  // them (and the cursor line, even if it matches the settled regex, is not a
-  // separator), so an active modal is never misread as stale.
+  // match itself (its bare-prompt line OR one of its declared footer lines).
+  // That separator is the CLI's welcome banner / follow-up hint a stale box
+  // shows above the repainted composer. A live modal's selection cursor sits
+  // flush against its buttons with no such prose between them (and neither the
+  // cursor line nor the composer's own footer — e.g. claude's "? for shortcuts"
+  // — is a separator), so an active modal is never misread as stale.
+  //
+  // Footer exclusion is load-bearing: without it, a live approval modal whose
+  // frame also carries the settled composer's footer (question + buttons +
+  // "? for shortcuts" + "❯") gets misread as a stale box — the footer line
+  // counts as fake "separator prose" — and waiting_approval flips to idle, so
+  // the modal is missed and the worker wedges. The footer belongs to the
+  // composer, not to any leftover box.
   const question = compile(modalSpec.questionPattern, modalSpec.questionFlags ?? 'i');
   const variants = (modalSpec.questionVariants ?? []).map((v) => compile(v.regex, v.flags ?? 'i'));
   const buttonFlags = modalSpec.buttonFlags && modalSpec.buttonFlags.includes('m')
@@ -324,7 +332,12 @@ function modalSupersededBySettledPrompt(
   const settledPromptLineRe = compile(settledSpec.regex, (settledSpec.flags ?? 'm').includes('m') ? (settledSpec.flags ?? 'm') : `${settledSpec.flags ?? ''}m`);
   const isSettledLine = (line: string): boolean => {
     settledPromptLineRe.lastIndex = 0;
-    return settledPromptLineRe.test(line);
+    if (settledPromptLineRe.test(line)) return true;
+    // The composer's own declared footer (e.g. claude's "? for shortcuts") is
+    // part of the settled prompt block, not separator prose. Excluding it keeps
+    // a live approval modal that also renders the composer footer from being
+    // misread as a stale box.
+    return settled.footers.some((f) => f.test(line));
   };
   return below.some((line) => line.trim() !== '' && !isModalCueLine(line) && !isSettledLine(line));
 }
