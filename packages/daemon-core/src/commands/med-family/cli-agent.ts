@@ -14,9 +14,59 @@ import { loadState } from '../../config/state-store.js';
 import { getRecentActivity } from '../../config/recent-activity.js';
 import { getSavedProviderSessions } from '../../config/saved-sessions.js';
 import { listProviderHistorySessions } from '../../config/chat-history.js';
-import { buildMeshWorkerRelayStamp } from '../../mesh/mesh-events-utils.js';
+import { buildMeshWorkerRelayStamp, readNonEmptyString } from '../../mesh/mesh-events-utils.js';
+import { LOG } from '../../logging/logger.js';
 import { readStringValue } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
+
+/**
+ * MESH-WORKER-PREFS Fix B: when a mesh WORKER session's per-conversation Hide/Mute is toggled
+ * (set_conversation_prefs, forwarded to the worker daemon by the coordinator's
+ * MESH_FORWARDABLE_SESSION_COMMANDS router), the worker updates its own live-session
+ * userHidden/userMuted but the COORDINATOR's mirror of that session (adhdev-daemon
+ * meshOwnedSessions) is only refreshed by a `mesh_forward_event` carrying `sessionSettings`.
+ * Without one the mirror stays stale, so when the coordinator re-emits the session metadata to
+ * the dashboard the old surfaceHidden/muted comes back and the toggle reverts after the 8s
+ * optimistic overlay expires. Push a best-effort `mesh_forward_event` to the coordinator daemon
+ * with the fresh prefs so its mirror updates immediately. Fire-and-forget: the coordinator's
+ * mesh_forward_event command consumer calls updateMeshOwnedSession(args) BEFORE routing, so the
+ * mirror is refreshed even though the (non coordinator-event) event name is otherwise ignored;
+ * a self-addressed or failed dispatch is harmless (the local status snapshot already fired).
+ */
+function forwardConversationPrefsToCoordinator(
+    ctx: MedFamilyContext,
+    sessionId: string,
+    patch: Record<string, unknown>,
+): void {
+    const dispatch = ctx.deps.dispatchMeshCommand;
+    if (!dispatch) return;
+    let settings: Record<string, unknown> = {};
+    try {
+        const state = ctx.deps.instanceManager.getInstance(sessionId)?.getState?.();
+        if (state?.settings && typeof state.settings === 'object') {
+            settings = state.settings as Record<string, unknown>;
+        }
+    } catch { /* best-effort — no session settings, nothing to forward */ }
+
+    const coordinatorDaemonId = readNonEmptyString(settings.meshCoordinatorDaemonId);
+    const meshId = readNonEmptyString(settings.meshNodeFor);
+    // A non-delegated (non-mesh) session has no coordinator anchor — nothing to mirror.
+    if (!coordinatorDaemonId || !meshId) return;
+    const nodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.meshLastNodeId);
+
+    // sessionSettings mirrors the exact keys updateMeshOwnedSession merges onto the mirror's
+    // settings (userHidden / userMuted). The coordinator's mirror resolver reads these to derive
+    // surfaceHidden/muted, so the dashboard sees the fresh value on the next metadata flush.
+    const payload: Record<string, unknown> = {
+        event: 'session:settings_changed',
+        meshId,
+        targetSessionId: sessionId,
+        ...(nodeId ? { nodeId } : {}),
+        sessionSettings: { ...patch },
+    };
+    Promise.resolve(dispatch(coordinatorDaemonId, 'mesh_forward_event', payload))
+        .catch((e: any) => LOG.warn('Mesh', `[Mesh] set_conversation_prefs mirror forward to coordinator ${coordinatorDaemonId.slice(0, 12)} failed: ${e?.message || e}`));
+}
 
 export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
     launch_cli: async (ctx: MedFamilyContext, args: any) => {
@@ -90,6 +140,10 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
         // surfaceHidden/muted immediately (cloud path). The standalone server has a
         // parallel broadcast gate keyed on the command name (see daemon-standalone).
         ctx.deps.onStatusChange?.();
+        // MESH-WORKER-PREFS Fix B: if this is a mesh worker session, mirror the fresh prefs onto
+        // the coordinator so its stale meshOwnedSessions copy can't revert the toggle when it
+        // re-emits the dashboard metadata. Best-effort / no-op for non-mesh sessions.
+        forwardConversationPrefsToCoordinator(ctx, sessionId, patch);
         return { success: true, sessionId, ...patch };
     },
 
