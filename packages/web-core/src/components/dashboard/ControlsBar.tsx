@@ -276,6 +276,12 @@ export interface ControlsBarProps {
     /** Current dashboard status of the session (idle/generating/...). Used to
      *  gate controls by their `visibleWhenState`. */
     currentStatus?: string;
+    /** Gate B coordinator routing hint (meshCoordinatorDaemonId) for a remote mesh-worker
+     *  session. Spread into every ControlsBar command so web-cloud relays set_mode /
+     *  change_model / invoke_provider_script / set_thought_level through the owning
+     *  coordinator even with multiple command-channel daemons connected. Empty for local
+     *  sessions. Produced by getCoordinatorRoutingHint(conversation). */
+    coordinatorHint?: { meshCoordinatorDaemonId?: string };
 }
 
 const AGENT_COLORS: Record<string, string> = {
@@ -286,7 +292,7 @@ const AGENT_COLORS: Record<string, string> = {
 
 export default function ControlsBar({
     routeId, sessionId, hostIdeType, providerType, displayLabel,
-    controls, controlValues, currentStatus,
+    controls, controlValues, currentStatus, coordinatorHint,
 }: ControlsBarProps) {
     const { sendCommand } = useTransport();
     const cacheKey = `${routeId}:${sessionId || providerType}`;
@@ -337,9 +343,12 @@ export default function ControlsBar({
         const enriched: Record<string, unknown> = {
             ...data,
             ...(sessionId && { targetSessionId: sessionId }),
+            // Gate B: relay session-scoped ControlsBar commands through the owning
+            // coordinator for a remote mesh worker (empty spread for local sessions).
+            ...(coordinatorHint ?? {}),
         };
         return await sendCommand(routeId, cmd, enriched);
-    }, [routeId, sessionId, sendCommand]);
+    }, [routeId, sessionId, sendCommand, coordinatorHint]);
 
     const invokeProviderScript = useCallback(async (
         scriptName: string,

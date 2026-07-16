@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
 import { getConversationLiveInboxState, type LiveSessionInboxState } from '../components/dashboard/DashboardMobileChatShared'
-import { getConversationMachineId } from '../components/dashboard/conversation-selectors'
+import { getConversationMachineId, getCoordinatorRoutingHint } from '../components/dashboard/conversation-selectors'
 
 type PendingPref = { muted?: boolean; hidden?: boolean; at: number }
 
@@ -137,18 +137,15 @@ export function useConversationPrefs(
         if (!daemonId || !sessionId) return
         // MESH-WORKER-PREFS Fix (1)+(2): for a REMOTE mesh worker session the dashboard holds no
         // direct channel to `daemonId` (the worker), so the command must relay through the session's
-        // coordinator. The coordinator stamps its own id onto the mirrored session settings
-        // (meshCoordinatorDaemonId), so pass it as a routing hint. web-cloud's sendDaemonCommand
-        // relays to THAT coordinator (identity-verified) even when several command-channel daemons
-        // are connected — instead of refusing unless exactly one exists. Absent for local sessions.
-        const coordinatorDaemonId = typeof conversation.settings?.meshCoordinatorDaemonId === 'string'
-            ? conversation.settings.meshCoordinatorDaemonId
-            : undefined
+        // coordinator. getCoordinatorRoutingHint reads the coordinator id the coordinator stamped
+        // onto the mirrored session settings (meshCoordinatorDaemonId) so web-cloud relays to THAT
+        // coordinator (identity-verified) even when several command-channel daemons are connected —
+        // instead of refusing unless exactly one exists. Empty (spreads nothing) for local sessions.
         setPending(sessionId, prefs)
         void sendDaemonCommand(daemonId, 'set_conversation_prefs', {
             sessionId,
             ...prefs,
-            ...(coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {}),
+            ...getCoordinatorRoutingHint(conversation),
         })
             .then((result) => {
                 // A daemon-level failure (remote worker success:false / unforwardable session) or a

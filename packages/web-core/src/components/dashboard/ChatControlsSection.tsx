@@ -17,6 +17,7 @@ export default function ChatControlsSection({
     controls,
     controlValues,
     currentStatus,
+    coordinatorHint,
 }: ChatControlsSectionProps) {
     const { isVisible } = useControlsBarVisibility()
     const visibleBarControls = getVisibleBarControls(controls, {
@@ -40,6 +41,7 @@ export default function ChatControlsSection({
                 controls={visibleBarControls}
                 controlValues={controlValues}
                 currentStatus={currentStatus}
+                coordinatorHint={coordinatorHint}
             />
         </div>
     )

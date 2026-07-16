@@ -3,7 +3,7 @@ import type { NavigateFunction, Location } from 'react-router-dom'
 
 import type { DaemonData } from '../types'
 import type { ActiveConversation } from '../components/dashboard/types'
-import { getConversationProviderType } from '../components/dashboard/conversation-selectors'
+import { getConversationProviderType, getCoordinatorRoutingHint } from '../components/dashboard/conversation-selectors'
 import { isAcpConv, isCliConv } from '../components/dashboard/types'
 import { useDashboardRemoteDialogState } from './useDashboardRemoteDialogState'
 
@@ -80,6 +80,10 @@ export function useDashboardOverlayDialogsState({
         cliType,
         targetSessionId: targetConv.sessionId,
         mode,
+        // Gate B: a remote mesh-worker stop must relay through the session's coordinator.
+        // Carry the coordinator routing hint so web-cloud picks it even with multiple
+        // command-channel daemons connected (empty for local sessions).
+        ...getCoordinatorRoutingHint(targetConv),
       })
     } catch (error) {
       console.error('Stop CLI failed:', error)

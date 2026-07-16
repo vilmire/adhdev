@@ -13,6 +13,7 @@ import {
     getConversationProviderLabel,
     getConversationProviderType,
     getConversationRemoteTabKey,
+    getCoordinatorRoutingHint,
 } from '../../../src/components/dashboard/conversation-selectors'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
 import type { DaemonData } from '../../../src/types'
@@ -169,5 +170,35 @@ describe('conversation selectors', () => {
             displayLabel: 'Codex',
         })
         expect(context.targetEntry?.providerControls).toEqual([{ id: 'model', type: 'select', label: 'Model', placement: 'bar' }])
+    })
+
+    describe('getCoordinatorRoutingHint', () => {
+        it('returns the coordinator id for a remote mesh worker session', () => {
+            const conversation = createConversation({
+                settings: { meshCoordinatorDaemonId: 'coordinator-daemon-9' },
+            })
+            expect(getCoordinatorRoutingHint(conversation)).toEqual({
+                meshCoordinatorDaemonId: 'coordinator-daemon-9',
+            })
+        })
+
+        it('returns an empty hint for a local session with no coordinator stamp', () => {
+            expect(getCoordinatorRoutingHint(createConversation())).toEqual({})
+        })
+
+        it('returns an empty hint when meshCoordinatorDaemonId is not a string', () => {
+            expect(getCoordinatorRoutingHint(createConversation({
+                settings: { meshCoordinatorDaemonId: 12345 as unknown as string },
+            }))).toEqual({})
+            expect(getCoordinatorRoutingHint(createConversation({
+                settings: { meshCoordinatorDaemonId: '' },
+            }))).toEqual({})
+        })
+
+        it('spreads nothing into a payload for a local session', () => {
+            const payload = { sessionId: 's1', ...getCoordinatorRoutingHint(createConversation()) }
+            expect(payload).toEqual({ sessionId: 's1' })
+            expect('meshCoordinatorDaemonId' in payload).toBe(false)
+        })
     })
 })

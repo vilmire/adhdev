@@ -28,6 +28,7 @@ import {
     getConversationDaemonRouteId,
     getConversationDisplayLabel,
     getConversationProviderLabel,
+    getCoordinatorRoutingHint,
 } from './conversation-selectors';
 import { getConversationSendBlockMessage } from '../../hooks/dashboardCommandUtils'
 import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages } from './chat-visibility';
@@ -447,6 +448,7 @@ export default function ChatPane({
                 controls={controlsContext.targetEntry?.providerControls}
                 controlValues={controlsContext.targetEntry?.controlValues}
                 currentStatus={activeConv.status}
+                coordinatorHint={getCoordinatorRoutingHint(activeConv)}
                 isActive={isInputActive}
                 isCliTerminal={controlsContext.isCliTerminal}
             />

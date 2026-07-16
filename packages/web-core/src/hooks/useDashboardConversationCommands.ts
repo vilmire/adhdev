@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateA
 import type { ActiveConversation } from '../components/dashboard/types'
 import type { ImageAttachment } from '../components/dashboard/ChatInputBar'
 import { getProviderArgs, getRouteTarget, getConversationSendBlockMessage, getInlineSendFailureMessage } from './dashboardCommandUtils'
+import { getCoordinatorRoutingHint } from '../components/dashboard/conversation-selectors'
 import { getExplicitSessionRevealCommand } from '../components/dashboard/dashboardSessionCommands'
 
 interface UseDashboardConversationCommandsOptions {
@@ -286,6 +287,10 @@ export function useDashboardConversationCommands({
                 action: isApprove ? 'approve' : 'reject',
                 ...(buttonIndex >= 0 && { buttonIndex }),
                 ...getProviderArgs(activeConv),
+                // Gate B: a remote mesh-worker approval must relay through the session's
+                // coordinator. Carry the coordinator routing hint so web-cloud picks it
+                // even with multiple command-channel daemons connected (empty for local).
+                ...getCoordinatorRoutingHint(activeConv),
             })
             const res = unwrapCommandResult(raw)
 
