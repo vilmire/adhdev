@@ -3822,6 +3822,14 @@ function findInFlightDuplicate(ctx, message, targetNodeId) {
   return null;
 }
 async function meshEnqueueTask(ctx, args) {
+  const message = readString(args.message);
+  if (!message) {
+    return JSON.stringify({
+      success: false,
+      code: "invalid_message",
+      error: "mesh_enqueue_task requires a non-empty string `message`."
+    });
+  }
   const taskMode = readString(args.task_mode) || readString(args.taskMode);
   const readonly = args.readonly === true || args.read_only === true;
   const requiredTags = (0, import_daemon_core4.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
@@ -3855,7 +3863,7 @@ async function meshEnqueueTask(ctx, args) {
   } else if (preferWorktree) {
     targetNodeId = resolvePreferredWorktreeNodeId(ctx) || void 0;
   }
-  const duplicateSuspect = allowDuplicate ? null : findInFlightDuplicate(ctx, args.message, targetNodeId);
+  const duplicateSuspect = allowDuplicate ? null : findInFlightDuplicate(ctx, message, targetNodeId);
   if (duplicateSuspect && blockDuplicate) {
     return JSON.stringify({
       success: false,
@@ -3865,7 +3873,7 @@ async function meshEnqueueTask(ctx, args) {
     });
   }
   try {
-    const task = (0, import_daemon_core4.enqueueTask)(ctx.mesh.id, args.message, {
+    const task = (0, import_daemon_core4.enqueueTask)(ctx.mesh.id, message, {
       taskMode,
       ...readonly ? { readonly: true } : {},
       requiredTags,
@@ -3919,7 +3927,7 @@ async function meshEnqueueTask(ctx, args) {
         if (!(0, import_daemon_core4.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core4.buildMeshNodeCapabilityTags)(node))) continue;
         dispatchPromises.push(
           ipcDispatchToRemoteAgent(ctx, node, {
-            message: args.message,
+            message,
             meshContext: {
               meshId: ctx.mesh.id,
               nodeId: node.id,
@@ -3930,7 +3938,7 @@ async function meshEnqueueTask(ctx, args) {
             if (result.success) {
               try {
                 const providerType = result.providerType;
-                const descriptor = summarizeTaskMessage(args.message);
+                const descriptor = summarizeTaskMessage(message);
                 (0, import_daemon_core4.appendLedgerEntry)(ctx.mesh.id, {
                   kind: "task_dispatched",
                   nodeId: node.id,
@@ -3940,7 +3948,7 @@ async function meshEnqueueTask(ctx, args) {
                     source: "queue",
                     via: "p2p_direct",
                     taskId: task.id,
-                    message: args.message,
+                    message,
                     taskTitle: descriptor.taskTitle,
                     taskSummary: descriptor.taskSummary,
                     ...task.taskMode ? { taskMode: task.taskMode } : {},
@@ -3988,14 +3996,14 @@ async function meshEnqueueTask(ctx, args) {
       });
     }
   } catch (e) {
-    const message = e?.message || String(e);
-    if (message.includes("live_debug_readonly_guardrail_violation")) {
-      return JSON.stringify({ success: false, code: "live_debug_readonly_guardrail_violation", taskMode, error: message });
+    const message2 = e?.message || String(e);
+    if (message2.includes("live_debug_readonly_guardrail_violation")) {
+      return JSON.stringify({ success: false, code: "live_debug_readonly_guardrail_violation", taskMode, error: message2 });
     }
-    if (message.includes("dependency_cycle_detected")) {
-      return JSON.stringify({ success: false, code: "dependency_cycle_detected", dependsOn, error: message });
+    if (message2.includes("dependency_cycle_detected")) {
+      return JSON.stringify({ success: false, code: "dependency_cycle_detected", dependsOn, error: message2 });
     }
-    return JSON.stringify({ success: false, error: message });
+    return JSON.stringify({ success: false, error: message2 });
   }
 }
 async function meshViewQueue(ctx, args) {
@@ -6234,10 +6242,18 @@ async function meshPruneStaleDirect(ctx, args = {}) {
   }, null, 2);
 }
 async function meshSendTask(ctx, args) {
+  const message = readString(args.message);
+  if (!message) {
+    return JSON.stringify({
+      success: false,
+      code: "invalid_message",
+      error: "mesh_send_task requires a non-empty string `message`."
+    });
+  }
   const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
   const readonly = args.readonly === true || args.read_only === true;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
-  const modeValidation = (0, import_daemon_core4.validateMeshTaskModeRequest)(requestedTaskMode, args.message, readonly);
+  const modeValidation = (0, import_daemon_core4.validateMeshTaskModeRequest)(requestedTaskMode, message, readonly);
   if (!modeValidation.valid) {
     return JSON.stringify({
       success: false,
@@ -6329,7 +6345,7 @@ async function meshSendTask(ctx, args) {
       const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
       const result2 = await ipcDispatchToRemoteAgent(ctx, node, {
         session_id: args.session_id,
-        message: args.message,
+        message,
         providerType: cached?.providerType,
         verifiedSession: explicitTargetSession,
         meshContext: {
@@ -6354,7 +6370,7 @@ async function meshSendTask(ctx, args) {
             nodeId: args.node_id,
             sessionId: dispatchedSessionId,
             providerType,
-            payload: buildDirectTaskPayload(args.message, "p2p_direct", {
+            payload: buildDirectTaskPayload(message, "p2p_direct", {
               taskId,
               taskMode,
               providerType,
@@ -6371,13 +6387,13 @@ async function meshSendTask(ctx, args) {
             nodeId: args.node_id,
             sessionId: dispatchedSessionId,
             providerType: providerType || void 0,
-            message: args.message,
+            message,
             taskMode: taskMode || void 0,
             via: "p2p_direct",
             dispatchedAt
           });
           if (missionId) {
-            (0, import_daemon_core4.recordDirectDispatchTask)(ctx.mesh.id, args.message, {
+            (0, import_daemon_core4.recordDirectDispatchTask)(ctx.mesh.id, message, {
               id: taskId,
               missionId,
               assignedNodeId: args.node_id,
@@ -6487,7 +6503,7 @@ async function meshSendTask(ctx, args) {
             sessionId: args.session_id,
             providerType: resolvedProviderType,
             kind: "task",
-            message: args.message,
+            message,
             status: "queued"
           });
           return JSON.stringify({
@@ -6515,7 +6531,7 @@ async function meshSendTask(ctx, args) {
           nodeId: args.node_id,
           sessionId: args.session_id,
           providerType: resolvedProviderType,
-          payload: buildDirectTaskPayload(args.message, "local_direct", {
+          payload: buildDirectTaskPayload(message, "local_direct", {
             taskId,
             taskMode,
             providerType: resolvedProviderType,
@@ -6535,7 +6551,7 @@ async function meshSendTask(ctx, args) {
         nodeId: args.node_id,
         sessionId: args.session_id,
         providerType: resolvedProviderType || void 0,
-        message: args.message,
+        message,
         taskMode: taskMode || void 0,
         via: "local_direct",
         dispatchedToIdleSession: sessionWasIdle,
@@ -6552,7 +6568,7 @@ async function meshSendTask(ctx, args) {
         cliType: resolvedProviderType,
         providerType: resolvedProviderType,
         action: "send_chat",
-        message: args.message,
+        message,
         meshContext: {
           meshId: ctx.mesh.id,
           nodeId: args.node_id,
@@ -6580,7 +6596,7 @@ async function meshSendTask(ctx, args) {
       }
       if (missionId) {
         try {
-          (0, import_daemon_core4.recordDirectDispatchTask)(ctx.mesh.id, args.message, {
+          (0, import_daemon_core4.recordDirectDispatchTask)(ctx.mesh.id, message, {
             id: taskId,
             missionId,
             assignedNodeId: args.node_id,
@@ -6602,7 +6618,7 @@ async function meshSendTask(ctx, args) {
           providerType: resolvedProviderType || void 0,
           taskId,
           kind: "task",
-          message: args.message,
+          message,
           status: sessionWasIdle ? "delivered" : "delivering"
         });
         deliveryId = delivery.id;
@@ -6625,7 +6641,7 @@ async function meshSendTask(ctx, args) {
         ...computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, args.session_id)
       });
     }
-    const task = (0, import_daemon_core4.enqueueTask)(ctx.mesh.id, args.message, {
+    const task = (0, import_daemon_core4.enqueueTask)(ctx.mesh.id, message, {
       targetNodeId: args.node_id,
       targetSessionId: args.session_id,
       taskMode,
