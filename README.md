@@ -45,6 +45,13 @@ Enqueue tasks with dependencies and let a coordinator dispatch them to whichever
 Parallelism only pays off if the work actually merges. The Refinery converges finished tasks with per-repo validation gates, patch-equivalence checks, submodule-aware fast-forward merges, and automatic worktree cleanup — unattended. Agents finish; the Refinery lands them.
 <!-- SCREENSHOT: Refinery convergence view (assets pending, see LAUNCH-ASSETS-PREP) -->
 
+### 🧩 Submodule-aware convergence — works on real monorepos
+Parallel worktrees and unattended merges get fragile the moment git submodules enter the picture. ADHDev handles that case head-on — this very project is a submodule monorepo (a root repo plus the AGPL engine and provider catalog as submodules), and we dogfood the mesh and Refinery on it every day. The Refinery treats submodules as first-class during convergence:
+
+- **Reachability gate** — before a root branch lands on `main`, it verifies the referenced submodule commits are reachable from the submodule's `origin/main`; if not, the task is held as blocked until those commits are published.
+- **Patch-equivalence detection** — when a submodule commit is rebased or squashed and its SHA changes, the Refinery still determines whether the *content* already landed, so it won't double-merge or falsely flag a divergence.
+- **Atomic pointer bumps** — the submodule pointer bump converges together with the root change, so an unattended merge never leaves the root pointing at a broken or dangling submodule commit.
+
 ### 🔺 MAGI — cross-verified results
 Run a task through independent agent perspectives and cross-check their output before it counts as done, so a single confident-but-wrong answer doesn't slip through. Higher-stakes changes get more than one set of eyes.
 
