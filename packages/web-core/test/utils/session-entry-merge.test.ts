@@ -236,6 +236,29 @@ describe('session entry merge helpers', () => {
     })
   })
 
+  it('lets an explicit false surfaceHidden/muted clear a previously-true value (un-hide / un-mute)', () => {
+    // The daemon status builder now emits these booleans explicitly (including false).
+    // Prior to the fix the field was absent when false, so `false ?? existing` never fired
+    // and the toggle-off direction silently stuck at the previous true.
+    const merged = mergeSessionEntrySummary(
+      createSession({ surfaceHidden: false, muted: false }),
+      { surfaceHidden: true, muted: true } as ExistingSessionLike,
+    )
+
+    expect(merged.surfaceHidden).toBe(false)
+    expect(merged.muted).toBe(false)
+  })
+
+  it('preserves an existing surfaceHidden/muted when the incoming update omits them', () => {
+    const merged = mergeSessionEntrySummary(
+      createSession({ surfaceHidden: undefined, muted: undefined }),
+      { surfaceHidden: true, muted: true } as ExistingSessionLike,
+    )
+
+    expect(merged.surfaceHidden).toBe(true)
+    expect(merged.muted).toBe(true)
+  })
+
   it('merges child session arrays through the same sparse-preserving contract', () => {
     const merged = mergeSessionEntryChildren(
       [createSession()],

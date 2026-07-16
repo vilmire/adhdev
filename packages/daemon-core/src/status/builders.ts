@@ -383,8 +383,12 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         settings: state.settings,
         ...(coordinator && { coordinator }),
         ...(meshQueueStats && { meshQueueStats }),
-        ...(resolveSurfaceHidden(state.settings) && { surfaceHidden: true }),
-        ...(resolveMuted(state.settings) && { muted: true }),
+        // Emit these booleans explicitly (including false) so an un-hide/un-mute clears a
+        // previously-true value downstream. Consumers merge with `?? existing` and copy only
+        // `!== undefined` fields, so an absent field on false never overwrote a prior true —
+        // the toggle-off direction silently stuck. See session-entry-merge.ts.
+        surfaceHidden: resolveSurfaceHidden(state.settings),
+        muted: resolveMuted(state.settings),
     };
 }
 
@@ -426,8 +430,10 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
         settings: state.settings,
         ...(coordinator && { coordinator }),
         ...(meshQueueStats && { meshQueueStats }),
-        ...(resolveSurfaceHidden(state.settings) && { surfaceHidden: true }),
-        ...(resolveMuted(state.settings) && { muted: true }),
+        // Emit explicitly (including false) so un-hide/un-mute clears a prior true downstream —
+        // see buildCliSession above and session-entry-merge.ts.
+        surfaceHidden: resolveSurfaceHidden(state.settings),
+        muted: resolveMuted(state.settings),
     };
 }
 
