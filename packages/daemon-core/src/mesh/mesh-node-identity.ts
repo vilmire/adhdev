@@ -1205,6 +1205,21 @@ export function readCachedInlineMeshActiveSessionDetails(node: any): Array<Recor
             ? { lastMessageRole: readStringValue(fallbackSession.lastMessageRole, fallbackSession.last_message_role) } : {}),
         ...(readNumberValue(fallbackSession.lastMessageAt, fallbackSession.last_message_at) !== undefined
             ? { lastMessageAt: readNumberValue(fallbackSession.lastMessageAt, fallbackSession.last_message_at) } : {}),
+        // RESTORE-STICK: carry the worker's AUTHORITATIVE dashboard hide/mute state and the
+        // raw per-session user override (userHidden/userMuted) through the cached inline-mesh
+        // active-session entry. The worker's mesh_status slim (mcp-server mesh-tools-status.ts)
+        // now ships these from its own status/builders resolution, which already honors a
+        // manual restore/un-mute. Without carrying them here, the coordinator's cloud snapshot
+        // append re-derives hide/mute purely from mesh policy and overwrites the user's manual
+        // un-hide every snapshot — the restore flickered visible then re-hid.
+        ...(readBooleanValue(fallbackSession.surfaceHidden) !== undefined
+            ? { surfaceHidden: readBooleanValue(fallbackSession.surfaceHidden) } : {}),
+        ...(readBooleanValue(fallbackSession.muted) !== undefined
+            ? { muted: readBooleanValue(fallbackSession.muted) } : {}),
+        ...(readBooleanValue(fallbackSession.userHidden, fallbackSession.user_hidden) !== undefined
+            ? { userHidden: readBooleanValue(fallbackSession.userHidden, fallbackSession.user_hidden) } : {}),
+        ...(readBooleanValue(fallbackSession.userMuted, fallbackSession.user_muted) !== undefined
+            ? { userMuted: readBooleanValue(fallbackSession.userMuted, fallbackSession.user_muted) } : {}),
         isCached: true,
     }];
 }

@@ -334,6 +334,18 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
                             ? { lastMessageRole: s.lastMessageRole } : {}),
                         ...(typeof s.lastMessageAt === 'number' && Number.isFinite(s.lastMessageAt)
                             ? { lastMessageAt: s.lastMessageAt } : {}),
+                        // RESTORE-STICK: carry the worker's AUTHORITATIVE dashboard hide/mute
+                        // state (already resolved by the worker's status/builders honoring any
+                        // per-session user override) plus the raw userHidden/userMuted overrides.
+                        // The coordinator's cloud snapshot append (daemon-cloud
+                        // appendMeshOwnedSessionsToSnapshot) otherwise re-derives hide/mute purely
+                        // from mesh policy and clobbers a user's manual restore/un-mute every
+                        // snapshot — the un-hide flickered visible then re-hid. Dropping these
+                        // here is exactly what starved the coordinator of the worker's real state.
+                        ...(typeof s.surfaceHidden === 'boolean' ? { surfaceHidden: s.surfaceHidden } : {}),
+                        ...(typeof s.muted === 'boolean' ? { muted: s.muted } : {}),
+                        ...(typeof s.settings?.userHidden === 'boolean' ? { userHidden: s.settings.userHidden } : {}),
+                        ...(typeof s.settings?.userMuted === 'boolean' ? { userMuted: s.settings.userMuted } : {}),
                     };
                 })
                 // Exclude sessions with no resolvable id (malformed or custom provider response).
