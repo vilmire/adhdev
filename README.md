@@ -41,6 +41,9 @@ Your agents run locally; you drive them from anywhere. The dashboard is a real c
 Enqueue tasks with dependencies and let a coordinator dispatch them to whichever node has spare capacity — your laptop, a desktop, a build box. This is genuine multi-machine orchestration over a P2P mesh, **not** SSH into one host. Each task runs in its own worktree so agents never step on each other. The mesh and Refinery engine ships in this repo; cross-machine dispatch runs on the cloud edition.
 <!-- SCREENSHOT: Repo Mesh node/task board (assets pending, see LAUNCH-ASSETS-PREP) -->
 
+### ⚡ Async by design — you talk to one place
+You talk to one place. The coordinator orchestrates every worker and machine asynchronously — it waits on events, you don't. No session babysitting. Instead of sitting in front of each agent window watching for it to finish, you hand work to a single coordinator that drives all the workers in parallel and reacts only when a completion, approval, or status event actually arrives — no polling, no blocking waits. One conversation for you; a non-blocking event loop underneath.
+
 ### 🚢 Refinery — unattended landing on `main`
 Parallelism only pays off if the work actually merges. The Refinery converges finished tasks with per-repo validation gates, patch-equivalence checks, submodule-aware fast-forward merges, and automatic worktree cleanup — unattended. Agents finish; the Refinery lands them.
 <!-- SCREENSHOT: Refinery convergence view (assets pending, see LAUNCH-ASSETS-PREP) -->
