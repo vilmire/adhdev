@@ -116,6 +116,19 @@ export async function meshEnqueueTask(
         blockDuplicate?: boolean; block_duplicate?: boolean;
     },
 ): Promise<string> {
+    // DELIVERY-MSG-GUARD: make the schema's nominal `required: ['message']` real. The
+    // tool dispatcher forwards raw args without runtime schema validation, so a caller
+    // that omits message (or passes a non-string) would otherwise hand undefined to
+    // enqueueTask → a message-less queue payload that crashes insertSessionDelivery's
+    // NOT NULL at claim/dispatch. Reject at the tool boundary with a clear error.
+    const message = readString(args.message);
+    if (!message) {
+        return JSON.stringify({
+            success: false,
+            code: 'invalid_message',
+            error: 'mesh_enqueue_task requires a non-empty string `message`.',
+        });
+    }
     const taskMode = readString(args.task_mode) || readString(args.taskMode);
     const readonly = args.readonly === true || args.read_only === true;
     const requiredTags = normalizeMeshCapabilityTags(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
@@ -190,7 +203,7 @@ export async function meshEnqueueTask(
     // response carries duplicateSuspect so the coordinator can notice and cancel one.
     // Blocking is opt-in (block_duplicate=true); allow_duplicate=true suppresses even the
     // warning for an intentional re-enqueue.
-    const duplicateSuspect = allowDuplicate ? null : findInFlightDuplicate(ctx, args.message, targetNodeId);
+    const duplicateSuspect = allowDuplicate ? null : findInFlightDuplicate(ctx, message, targetNodeId);
     if (duplicateSuspect && blockDuplicate) {
         return JSON.stringify({
             success: false,
@@ -201,7 +214,7 @@ export async function meshEnqueueTask(
     }
 
     try {
-        const task = enqueueTask(ctx.mesh.id, args.message, {
+        const task = enqueueTask(ctx.mesh.id, message, {
             taskMode, ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, missionId, targetNodeId,
             ...(priority ? { priority } : {}),
             ...(model ? { model } : {}),
@@ -282,7 +295,7 @@ export async function meshEnqueueTask(
                 // carries this context; the enqueue-and-push path was the only dispatch missing it.
                 dispatchPromises.push(
                     ipcDispatchToRemoteAgent(ctx, node, {
-                        message: args.message,
+                        message,
                         meshContext: {
                             meshId: ctx.mesh.id,
                             nodeId: node.id,
@@ -294,7 +307,7 @@ export async function meshEnqueueTask(
                             if (result.success) {
                                 try {
                                     const providerType = result.providerType;
-                                    const descriptor = summarizeTaskMessage(args.message);
+                                    const descriptor = summarizeTaskMessage(message);
                                     appendLedgerEntry(ctx.mesh.id, {
                                         kind: 'task_dispatched',
                                         nodeId: node.id,
@@ -304,7 +317,7 @@ export async function meshEnqueueTask(
                                             source: 'queue',
                                             via: 'p2p_direct',
                                             taskId: task.id,
-                                            message: args.message,
+                                            message,
                                             taskTitle: descriptor.taskTitle,
                                             taskSummary: descriptor.taskSummary,
                                             ...(task.taskMode ? { taskMode: task.taskMode } : {}),

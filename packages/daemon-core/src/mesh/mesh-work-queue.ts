@@ -948,6 +948,17 @@ export function enqueueTask(
     } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry {
     requireMeshHostQueueOwner(opts);
+    // DELIVERY-MSG-GUARD (upstream defence): a task whose message is undefined /
+    // non-string / blank must never reach the queue. Left unchecked it persists a
+    // message-less payload that later crashes insertSessionDelivery's NOT NULL at
+    // claim/dispatch time (the DB-level `message ?? ''` fallback still exists as
+    // depth-in-defence, but silently dispatching an empty prompt is itself a bug).
+    // Normalise and hard-reject at the single entry point so no caller can slip a
+    // blank task past the schema's nominal `required`.
+    message = String(message ?? '').trim();
+    if (!message) {
+        throw new Error('mesh task message must be a non-empty string');
+    }
     const readonly = opts?.readonly === true;
     const modeValidation = validateMeshTaskModeRequest(opts?.taskMode, message, readonly);
     if (!modeValidation.valid) {
@@ -1069,6 +1080,14 @@ export function recordDirectDispatchTask(
     if (!missionId) return null;
     const taskId = typeof opts.id === 'string' ? opts.id.trim() : '';
     if (!taskId) return null;
+    // DELIVERY-MSG-GUARD (upstream defence): the direct-dispatch path materialises the
+    // same message-carrying queue entry AND writes a session delivery (createSessionDelivery
+    // below), so a blank/undefined message would hit the same NOT NULL crash. Normalise and
+    // hard-reject before we record anything — consistent with enqueueTask.
+    message = String(message ?? '').trim();
+    if (!message) {
+        throw new Error('mesh task message must be a non-empty string');
+    }
     const readonly = opts.readonly === true;
     const modeValidation = validateMeshTaskModeRequest(opts.taskMode, message, readonly);
     if (!modeValidation.valid) {

@@ -190,6 +190,19 @@ export async function meshSendTask(
         mission_id?: string; missionId?: string;
     },
 ): Promise<string> {
+    // DELIVERY-MSG-GUARD: make the schema's nominal `required: ['message']` real. The
+    // tool dispatcher forwards raw args without runtime schema validation, so a caller
+    // omitting message (or passing a non-string) would hand undefined down the direct-
+    // dispatch path — buildDirectTaskPayload / recordDirectDispatchTask / createSessionDelivery —
+    // and crash insertSessionDelivery's NOT NULL. Reject at the tool boundary.
+    const message = readString(args.message);
+    if (!message) {
+        return JSON.stringify({
+            success: false,
+            code: 'invalid_message',
+            error: 'mesh_send_task requires a non-empty string `message`.',
+        });
+    }
     const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
     const readonly = args.readonly === true || args.read_only === true;
     // Optional mission attribution. When set, the direct-dispatched task is also
@@ -197,7 +210,7 @@ export async function meshSendTask(
     // task aggregates — see recordDirectDispatchTask. Absent → unattributed
     // direct dispatch as before (backward compatible).
     const missionId = readString(args.missionId) || readString(args.mission_id) || undefined;
-    const modeValidation = validateMeshTaskModeRequest(requestedTaskMode, args.message, readonly);
+    const modeValidation = validateMeshTaskModeRequest(requestedTaskMode, message, readonly);
     if (!modeValidation.valid) {
         return JSON.stringify({
             success: false,
@@ -322,7 +335,7 @@ export async function meshSendTask(
             const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
             const result = await ipcDispatchToRemoteAgent(ctx, node, {
                 session_id: args.session_id,
-                message: args.message,
+                message: message,
                 providerType: cached?.providerType,
                 verifiedSession: explicitTargetSession,
                 meshContext: {
@@ -357,7 +370,7 @@ export async function meshSendTask(
                         nodeId: args.node_id,
                         sessionId: dispatchedSessionId,
                         providerType,
-                        payload: buildDirectTaskPayload(args.message, 'p2p_direct', {
+                        payload: buildDirectTaskPayload(message, 'p2p_direct', {
                             taskId,
                             taskMode,
                             providerType,
@@ -374,13 +387,13 @@ export async function meshSendTask(
                         nodeId: args.node_id,
                         sessionId: dispatchedSessionId,
                         providerType: providerType || undefined,
-                        message: args.message,
+                        message: message,
                         taskMode: taskMode || undefined,
                         via: 'p2p_direct',
                         dispatchedAt,
                     });
                     if (missionId) {
-                        recordDirectDispatchTask(ctx.mesh.id, args.message, {
+                        recordDirectDispatchTask(ctx.mesh.id, message, {
                             id: taskId,
                             missionId,
                             assignedNodeId: args.node_id,
@@ -503,7 +516,7 @@ export async function meshSendTask(
                         sessionId: args.session_id,
                         providerType: resolvedProviderType,
                         kind: 'task',
-                        message: args.message,
+                        message: message,
                         status: 'queued',
                     });
                     return JSON.stringify({
@@ -548,7 +561,7 @@ export async function meshSendTask(
                     nodeId: args.node_id,
                     sessionId: args.session_id,
                     providerType: resolvedProviderType,
-                    payload: buildDirectTaskPayload(args.message, 'local_direct', {
+                    payload: buildDirectTaskPayload(message, 'local_direct', {
                         taskId,
                         taskMode,
                         providerType: resolvedProviderType,
@@ -574,7 +587,7 @@ export async function meshSendTask(
                 nodeId: args.node_id,
                 sessionId: args.session_id,
                 providerType: resolvedProviderType || undefined,
-                message: args.message,
+                message: message,
                 taskMode: taskMode || undefined,
                 via: 'local_direct',
                 dispatchedToIdleSession: sessionWasIdle,
@@ -603,7 +616,7 @@ export async function meshSendTask(
                 cliType: resolvedProviderType,
                 providerType: resolvedProviderType,
                 action: 'send_chat',
-                message: args.message,
+                message: message,
                 meshContext: {
                     meshId: ctx.mesh.id,
                     nodeId: args.node_id,
@@ -632,7 +645,7 @@ export async function meshSendTask(
             }
             if (missionId) {
                 try {
-                    recordDirectDispatchTask(ctx.mesh.id, args.message, {
+                    recordDirectDispatchTask(ctx.mesh.id, message, {
                         id: taskId,
                         missionId,
                         assignedNodeId: args.node_id,
@@ -654,7 +667,7 @@ export async function meshSendTask(
                     providerType: resolvedProviderType || undefined,
                     taskId,
                     kind: 'task',
-                    message: args.message,
+                    message: message,
                     status: sessionWasIdle ? 'delivered' : 'delivering',
                 });
                 deliveryId = delivery.id;
@@ -684,7 +697,7 @@ export async function meshSendTask(
         // targetCoordinatorSessionId is empty (mesh-queue-assignment.ts) and the completion
         // loses its session anchor — falling back to daemon-level fan-out across every local
         // coordinator instead of routing back to the coordinator session that issued the task.
-        const task = enqueueTask(ctx.mesh.id, args.message, {
+        const task = enqueueTask(ctx.mesh.id, message, {
             targetNodeId: args.node_id,
             targetSessionId: args.session_id,
             taskMode,

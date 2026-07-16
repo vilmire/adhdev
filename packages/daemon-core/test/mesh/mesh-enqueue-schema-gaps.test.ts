@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import {
     enqueueTask,
+    recordDirectDispatchTask,
     getQueue,
     claimNextTask,
     updateSessionTaskStatus,
@@ -152,6 +153,47 @@ describe('mesh enqueue schema gaps (WT-C: G6/G7/P3)', () => {
             expect(enqueueTask(meshId, 't2', { maxRetries: -1 }).maxRetries).to.equal(undefined);
             expect(enqueueTask(meshId, 't3', { maxRetries: NaN }).maxRetries).to.equal(undefined);
             expect(enqueueTask(meshId, 't4', { maxRetries: 0 }).maxRetries).to.equal(0);
+        });
+    });
+
+    // DELIVERY-MSG-GUARD: upstream defence against a message-less task reaching the
+    // queue/ledger and later crashing insertSessionDelivery's NOT NULL at claim/dispatch.
+    // enqueueTask + recordDirectDispatchTask both normalize + hard-reject a blank message.
+    describe('DELIVERY-MSG-GUARD — non-empty message required', () => {
+        it('enqueueTask rejects undefined / null / blank messages', () => {
+            expect(() => enqueueTask(meshId, undefined as unknown as string)).to.throw(/non-empty string/);
+            expect(() => enqueueTask(meshId, null as unknown as string)).to.throw(/non-empty string/);
+            expect(() => enqueueTask(meshId, '' as string)).to.throw(/non-empty string/);
+            expect(() => enqueueTask(meshId, '   ' as string)).to.throw(/non-empty string/);
+            // The crash class is undefined/blank; a non-string that stringifies to a
+            // non-empty value (e.g. a number) is coerced to that string rather than rejected —
+            // it never reaches insertSessionDelivery as a NULL, which is the invariant we protect.
+            expect(getQueue(meshId).length).to.equal(0);
+        });
+
+        it('enqueueTask accepts a valid message and trims surrounding whitespace', () => {
+            const t = enqueueTask(meshId, '  real work  ');
+            expect(t.message).to.equal('real work');
+            expect(getQueue(meshId).find(e => e.id === t.id)?.message).to.equal('real work');
+        });
+
+        it('recordDirectDispatchTask rejects blank/undefined messages', () => {
+            expect(() => recordDirectDispatchTask(meshId, undefined as unknown as string, {
+                id: `dd_${Date.now()}_a`, missionId: 'mission_x',
+            })).to.throw(/non-empty string/);
+            expect(() => recordDirectDispatchTask(meshId, '   ' as string, {
+                id: `dd_${Date.now()}_b`, missionId: 'mission_x',
+            })).to.throw(/non-empty string/);
+            expect(getQueue(meshId).length).to.equal(0);
+        });
+
+        it('recordDirectDispatchTask accepts and trims a valid message', () => {
+            const taskId = `dd_${Date.now()}_ok`;
+            const entry = recordDirectDispatchTask(meshId, '  direct dispatch  ', {
+                id: taskId, missionId: 'mission_y', assignedNodeId: 'node1', assignedSessionId: 'session1',
+            });
+            expect(entry?.message).to.equal('direct dispatch');
+            expect(getQueue(meshId).find(e => e.id === taskId)?.message).to.equal('direct dispatch');
         });
     });
 });
