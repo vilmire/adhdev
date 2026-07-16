@@ -3,6 +3,7 @@
  * native-history / source-resolution / normalization helpers they use.
  */
 
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CommandResult, CommandHelpers } from './handler.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
@@ -1151,7 +1152,33 @@ function readExactRuntimeMirrorMessages(args: {
 function normalizeComparableWorkspace(value: unknown): string {
     const text = typeof value === 'string' ? value.trim() : '';
     if (!text) return '';
-    return path.resolve(text);
+    // Canonicalize via realpath so symlink aliases compare equal. On macOS
+    // `/tmp` is a symlink to `/private/tmp`: a provider whose on-disk workspace
+    // record is stored realpath'd (kimi's state.json workDir → `/private/tmp/…`)
+    // must still match an ADHDev session workspace passed as `/tmp/…`. Without
+    // this the native-history workspace-safety gate (workspace_from_sidecar) saw
+    // a false mismatch, marked the read unsafe, and fell back to the PTY parser.
+    // realpath throws when the path doesn't exist (e.g. a stale/never-created
+    // workspace) — fall back to the lexical resolve then, never crash the read
+    // path. Fail-closed cross-workspace safety is preserved: two genuinely
+    // different directories still realpath to different paths, and the lexical
+    // fallback is unchanged from the prior behaviour.
+    const lexical = path.resolve(text);
+    try {
+        return fs.realpathSync.native(lexical);
+    } catch {
+        try {
+            return fs.realpathSync(lexical);
+        } catch {
+            return lexical;
+        }
+    }
+}
+
+/** Test hook for the symlink-safe workspace comparison used by the
+ *  native-history workspace-safety gate. */
+export function __normalizeComparableWorkspaceForTest(value: unknown): string {
+    return normalizeComparableWorkspace(value);
 }
 function isCurrentRuntimePtySafelyAttributed(args: {
     adapter: CliAdapter;
