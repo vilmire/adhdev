@@ -1147,6 +1147,34 @@ describe('mesh-runtime-store', () => {
             expect(active[0].sessionId).toBe('sess-1');
         });
 
+        it('MESH-DELIVERY-MESSAGE-NOTNULL: an undefined message does not throw and stores as empty string', () => {
+            // A re-dispatch / reclaim / idle-assign path can reach insertSessionDelivery with an
+            // undefined message (a claimed task whose payload predates the message field). The
+            // `message` column is NOT NULL, so a bare bind threw 'NOT NULL constraint failed' —
+            // and because this insert runs inside triggerMeshQueue it took down the entire queue
+            // drain (fresh enqueue, pending-claim recovery, idle-assign, MAGI replica launch),
+            // stranding all delegation. The insert must coerce an absent message to '' and persist.
+            const meshId = `mesh-sdel-nomsg-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            const id = randomUUID();
+            const now = new Date().toISOString();
+            expect(() => db.insertSessionDelivery({
+                id,
+                meshId,
+                kind: 'task',
+                // message intentionally omitted — undefined at the call site.
+                message: undefined as unknown as string,
+                status: 'queued',
+                createdAt: now,
+                updatedAt: now,
+            })).not.toThrow();
+
+            const active = db.getActiveSessionDeliveries(meshId);
+            expect(active).toHaveLength(1);
+            expect(active[0].id).toBe(id);
+            expect(active[0].message).toBe('');
+        });
+
         it('updateSessionDeliveryStatus transitions to terminal and removes from active list', () => {
             const meshId = `mesh-sdel-update-${randomUUID().slice(0, 8)}`;
             const db = MeshRuntimeStore.getInstance();

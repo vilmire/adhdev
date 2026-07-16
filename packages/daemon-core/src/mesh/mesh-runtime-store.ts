@@ -1417,7 +1417,18 @@ export class MeshRuntimeStore {
             taskId: entry.taskId ?? null,
             kind: entry.kind,
             priority: entry.priority ?? 0,
-            message: entry.message,
+            // MESH-DELIVERY-MESSAGE-NOTNULL: the `message` column is NOT NULL, but a
+            // re-dispatch / reclaim / idle-assign path can reach here with an undefined
+            // message (a claimed task whose payload predates the message field, or a
+            // slimmed re-drive entry). better-sqlite3 binds undefined as NULL, so the
+            // bare `entry.message` threw 'NOT NULL constraint failed' and — because this
+            // insert runs inside triggerMeshQueue — took down the ENTIRE queue drain
+            // (fresh enqueue, pending-claim recovery, idle-assign, MAGI replica launch),
+            // stranding all delegation. A delivery record's message is informational
+            // ack-tracking, so coercing an absent message to '' preserves the row and the
+            // drain instead of crashing. Matches the `?? null` defensive coercion every
+            // other optional column here already uses.
+            message: entry.message ?? '',
             status: entry.status,
             deliverAfter: entry.deliverAfter ?? null,
             expiresAt: entry.expiresAt ?? null,
