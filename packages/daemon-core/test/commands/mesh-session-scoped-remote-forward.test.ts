@@ -64,7 +64,7 @@ function meshWithRemoteWorkerSession(daemonId: string) {
 }
 
 describe('session-scoped command — remote mesh worker forward ([Z])', () => {
-    for (const cmd of ['invoke_provider_script', 'resolve_action', 'set_mode', 'change_model', 'set_thought_level']) {
+    for (const cmd of ['invoke_provider_script', 'resolve_action', 'set_mode', 'change_model', 'set_thought_level', 'set_conversation_prefs']) {
         it(`forwards ${cmd} for a remote worker session to the owning worker daemon`, async () => {
             const dispatch = vi.fn(async () => ({ success: true, forwarded: true }));
             const router = createRouter({ statusInstanceId: 'daemon-coordinator', dispatchMeshCommand: dispatch });
@@ -87,6 +87,35 @@ describe('session-scoped command — remote mesh worker forward ([Z])', () => {
             expect(result).toMatchObject({ success: true, forwarded: true });
         });
     }
+
+    // RESTORE-STICK / mission 6938892f: the specific defect was that a Hide/Mute RESTORE
+    // ({hidden:false} / {muted:false}) for a remote worker session hit the coordinator's
+    // local-only set_conversation_prefs handler, returned 'Session not found', and the
+    // dashboard silently rolled back (restore appeared to do nothing + re-hide flicker).
+    // Forwarding carries the user override to the owning worker so it clears userHidden/
+    // userMuted and reports a fresh surfaceHidden=false.
+    it('forwards a set_conversation_prefs restore ({hidden:false, muted:false}) to the owning worker verbatim', async () => {
+        const dispatch = vi.fn(async () => ({ success: true, sessionId: REMOTE_SESSION_ID, userHidden: false, userMuted: false }));
+        const router = createRouter({ statusInstanceId: 'daemon-coordinator', dispatchMeshCommand: dispatch });
+        router.getCachedInlineMesh('mesh-session-forward', meshWithRemoteWorkerSession('daemon-remote-worker'));
+
+        const result: any = await router.execute('set_conversation_prefs', {
+            targetSessionId: REMOTE_SESSION_ID,
+            hidden: false,
+            muted: false,
+        });
+
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        const [daemonId, forwardedCmd, args] = dispatch.mock.calls[0];
+        expect(daemonId).toBe('daemon-remote-worker');
+        expect(forwardedCmd).toBe('set_conversation_prefs');
+        expect(args._meshDirectDispatch).toBe(true);
+        expect(args.targetSessionId).toBe(REMOTE_SESSION_ID);
+        // The user override must survive the forward so the worker can clear it.
+        expect(args.hidden).toBe(false);
+        expect(args.muted).toBe(false);
+        expect(result).toMatchObject({ success: true, userHidden: false, userMuted: false });
+    });
 
     it('does NOT forward when the session is hosted LOCALLY on this coordinator (regression guard)', async () => {
         const dispatch = vi.fn(async () => ({ success: true }));

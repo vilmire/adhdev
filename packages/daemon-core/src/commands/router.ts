@@ -186,6 +186,15 @@ const MESH_FORWARDABLE_SESSION_COMMANDS = new Set([
     'set_mode',
     'change_model',
     'set_thought_level',
+    // set_conversation_prefs (per-session user Hide/Mute) is session-scoped: the daemon-owned
+    // userHidden/userMuted lives on the OWNING session's live instance (med-family handler
+    // getInstance → updateSettings). When the target is a REMOTE worker session the coordinator
+    // has no local instance, so without forwarding the handler returns 'Session not found', the
+    // dashboard's useConversationPrefs silently rolls back, and the stale worker surfaceHidden is
+    // re-stamped every snapshot tick (the "restore does nothing + flicker" defect, mission
+    // 6938892f). Forwarding to the owning worker lets it actually clear userHidden/userMuted and
+    // report a fresh surfaceHidden=false — which also resolves the re-stamp flicker at the source.
+    'set_conversation_prefs',
     // agent_command (send_chat / clear_history / stop) is session-scoped too: a command
     // explicitly naming a targetSessionId MUST reach that session wherever it lives, never a
     // different local session. Without forwarding, a misrouted/relayed send_chat for a REMOTE

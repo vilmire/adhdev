@@ -40,6 +40,7 @@ import { getMobileDashboardMode, subscribeMobileDashboardMode } from '../compone
 import { getDashboardWarmChatTailOptions } from '../utils/dashboard-warm-chat-tail'
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
 import { useConversationPrefs } from '../hooks/useConversationPrefs'
+import { appendWarningToast } from '../hooks/dashboardCommandUtils'
 import { compareMachineEntries } from '../utils/daemon-utils'
 import { getDashboardMachineRefreshTargets } from '../utils/dashboard-machine-refresh'
 
@@ -171,7 +172,11 @@ export default function Dashboard() {
     // Daemon-owned Hide/Mute with an optimistic overlay (instant UI, reconciles
     // with the status snapshot). Defined here so the notification/meta hooks below
     // can read conversationPrefs.isMuted.
-    const conversationPrefs = useConversationPrefs(liveSessionInboxState, sendDaemonCommand)
+    const conversationPrefs = useConversationPrefs(
+        liveSessionInboxState,
+        sendDaemonCommand,
+        useCallback((message: string) => appendWarningToast(setToasts, `⚠️ ${message}`), [setToasts]),
+    )
     const {
         notifications,
         unreadCount: notificationUnreadCount,

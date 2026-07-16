@@ -36,6 +36,12 @@ export interface ConversationPrefsController {
 export function useConversationPrefs(
     liveSessionInboxState: Map<string, LiveSessionInboxState>,
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>,
+    // RESTORE-STICK / mission 6938892f: surface a user-visible error when the toggle
+    // fails. Before this the .catch only console.warn'd, so a Hide/Mute (or restore)
+    // that never reached the owning worker — 'Session not found' before the command was
+    // forwarded, or 'P2P not connected' — silently rolled back and the user saw the row
+    // "not respond". Optional so standalone/simpler callers can omit it.
+    onError?: (message: string) => void,
 ): ConversationPrefsController {
     // sessionId → optimistic pending prefs. A ref holds the source of truth; a
     // version counter forces re-render when it changes (the ref itself is stable).
@@ -105,14 +111,28 @@ export function useConversationPrefs(
         if (!daemonId || !sessionId) return
         setPending(sessionId, prefs)
         void sendDaemonCommand(daemonId, 'set_conversation_prefs', { sessionId, ...prefs })
+            .then((result) => {
+                // A daemon-level failure (e.g. remote worker returned success:false, or an
+                // unforwardable session) resolves rather than rejects — treat it as a failure
+                // too so the optimistic overlay doesn't stick on a state the daemon rejected.
+                if (result && typeof result === 'object' && (result as any).success === false) {
+                    const reason = typeof (result as any).error === 'string' ? (result as any).error : 'command was rejected'
+                    console.warn('[conversation-prefs] set_conversation_prefs rejected', reason)
+                    pendingRef.current.delete(sessionId)
+                    rerender()
+                    onError?.(`Couldn't update conversation — ${reason}`)
+                }
+            })
             .catch((error) => {
                 console.warn('[conversation-prefs] set_conversation_prefs failed', error)
                 // Roll the optimistic entry back on failure so the UI snaps to the
                 // real (unchanged) daemon state instead of lying.
                 pendingRef.current.delete(sessionId)
                 rerender()
+                const reason = error instanceof Error ? error.message : String(error ?? 'the daemon is unreachable')
+                onError?.(`Couldn't update conversation — ${reason}`)
             })
-    }, [sendDaemonCommand, setPending, rerender])
+    }, [sendDaemonCommand, setPending, rerender, onError])
 
     const toggleMute = useCallback((conversation: ActiveConversation) => {
         send(conversation, { muted: !isMuted(conversation) })
