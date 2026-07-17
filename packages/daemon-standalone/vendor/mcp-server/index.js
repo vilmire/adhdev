@@ -382,6 +382,8 @@ var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_send_task",
   "mesh_read_chat",
   "mesh_read_debug",
+  "mesh_read_terminal",
+  "mesh_send_keys",
   "mesh_launch_session",
   "mesh_git_status",
   "mesh_read_node_logs",
@@ -897,6 +899,44 @@ var MESH_READ_DEBUG_TOOL = {
       delivery: { type: "string", enum: ["daemon_file", "inline"], description: "daemon_file saves the full sanitized bundle on the daemon; inline returns it directly. Default: daemon_file." }
     },
     required: ["node_id", "session_id"]
+  }
+};
+var MESH_READ_TERMINAL_TOOL = {
+  name: "mesh_read_terminal",
+  description: "Read the CURRENT raw terminal screen (the rendered PTY viewport \u2014 what a human would see on screen right now) of a delegated agent session on a mesh node. This is the LIVE screen, not the parsed chat transcript: use it to see exactly what the worker is showing \u2014 a prompt it is parked on, a modal, a spinner, or unparsed output that mesh_read_chat does not surface. For the conversation transcript use mesh_read_chat instead. The reply is byte-bounded (default 32KiB, max 64KiB; the BOTTOM of the screen \u2014 prompt/modal/recent output \u2014 is kept when truncated) and returns truncated/original_bytes/returned_bytes plus the cursor position and viewport size. Scoped to coordinator-spawned mesh worker sessions only. NOTE: the raw screen can contain tokens / command args / env values, so treat the returned text as sensitive.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Target node ID." },
+      session_id: { type: "string", description: "Agent session ID whose live terminal viewport to read." },
+      max_bytes: { type: "number", description: "Optional UTF-8 byte cap for the returned screen text (default 32768, clamped to [1024, 65536]). When the screen exceeds it, the bottom (most recent) lines are kept." }
+    },
+    required: ["node_id", "session_id"]
+  }
+};
+var MESH_SEND_KEYS_TOOL = {
+  name: "mesh_send_keys",
+  description: `Inject a STRUCTURED key sequence into a delegated worker session's live PTY (keystrokes a human would type). Use for interactions mesh_send_task cannot express: dismiss/answer a non-approval prompt, navigate a picker (arrows/TAB), submit an already-typed line (ENTER), correct input (BACKSPACE), or interrupt a runaway command (CTRL_C). For sending a task/message, use mesh_send_task; for an APPROVAL modal, use mesh_approve (send_keys is refused on an actionable approval modal by design). Each sequence item is either {"text":"literal"} or {"key":NAME} where NAME \u2208 ENTER|ESC|CTRL_C|UP|DOWN|LEFT|RIGHT|TAB|BACKSPACE. text+ENTER is submitted atomically. DESTRUCTIVE keys (CTRL_C, ESC) can kill/derail the worker and require BOTH confirm_destructive=true AND mesh policy allowSendKeysDestructive \u2014 otherwise refused. The injection is refused if the session has a pending submit/echo race, or (for non-destructive keys) an actionable approval modal. Scoped to coordinator-spawned mesh worker sessions. Each injection is audited (key enums + result; the literal text body is NOT recorded).`,
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Target node ID." },
+      session_id: { type: "string", description: "Agent session ID whose PTY to inject into." },
+      sequence: {
+        type: "array",
+        description: 'Ordered key sequence. Each item is {"text":"literal UTF-8"} OR {"key":"ENTER|ESC|CTRL_C|UP|DOWN|LEFT|RIGHT|TAB|BACKSPACE"}. Max 64 items, 4096 total text bytes.',
+        items: {
+          type: "object",
+          properties: {
+            text: { type: "string", description: "Literal UTF-8 text to type." },
+            key: { type: "string", enum: ["ENTER", "ESC", "CTRL_C", "UP", "DOWN", "LEFT", "RIGHT", "TAB", "BACKSPACE"], description: "Named key." }
+          }
+        }
+      },
+      confirm_destructive: { type: "boolean", description: "Required true when the sequence contains a destructive key (CTRL_C/ESC). Also requires mesh policy allowSendKeysDestructive." },
+      allow_modal_override: { type: "boolean", description: "Override the actionable-approval-modal fail-closed refusal for NON-destructive keys. Use only when you deliberately need to inject into a modal-parked session that is NOT an approval you should route through mesh_approve." }
+    },
+    required: ["node_id", "session_id", "sequence"]
   }
 };
 var MESH_LAUNCH_SESSION_TOOL = {
@@ -1443,6 +1483,8 @@ var ALL_MESH_TOOLS = [
   MESH_SEND_TASK_TOOL,
   MESH_READ_CHAT_TOOL,
   MESH_READ_DEBUG_TOOL,
+  MESH_READ_TERMINAL_TOOL,
+  MESH_SEND_KEYS_TOOL,
   MESH_LAUNCH_SESSION_TOOL,
   MESH_GIT_STATUS_TOOL,
   MESH_READ_NODE_LOGS_TOOL,
@@ -6735,6 +6777,98 @@ async function meshReadDebug(ctx, args) {
   const payload = unwrapCommandPayload(result);
   return JSON.stringify(payload, null, 2);
 }
+async function meshReadTerminal(ctx, args) {
+  const node = await findNodeWithRefresh(ctx, args.node_id);
+  const liveSessions = await collectLiveStatusSessions(ctx, node);
+  const record = liveSessions.find((s) => readSessionRecordId(s) === args.session_id);
+  if (record && !isMeshOwnedDelegateSession(record, ctx.mesh.id, args.node_id)) {
+    return JSON.stringify({
+      success: false,
+      error: "session is not a mesh-owned delegate of this mesh/node \u2014 mesh_read_terminal is scoped to sessions this coordinator spawned",
+      nodeId: args.node_id,
+      sessionId: args.session_id
+    }, null, 2);
+  }
+  const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
+  const result = await commandForNode(ctx, node, "read_terminal", {
+    sessionId: args.session_id,
+    targetSessionId: args.session_id,
+    workspace: node.workspace,
+    ...cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {},
+    ...typeof args.max_bytes === "number" && Number.isFinite(args.max_bytes) ? { maxBytes: args.max_bytes } : {}
+  });
+  const payload = unwrapCommandPayload(result);
+  return JSON.stringify(payload, null, 2);
+}
+var MESH_SEND_KEYS_DESTRUCTIVE = /* @__PURE__ */ new Set(["CTRL_C", "ESC"]);
+async function meshSendKeys(ctx, args) {
+  const node = await findNodeWithRefresh(ctx, args.node_id);
+  const items = Array.isArray(args.sequence) ? args.sequence : [];
+  if (items.length === 0) {
+    return JSON.stringify({ success: false, error: "sequence (non-empty array of {text}|{key}) required" }, null, 2);
+  }
+  const liveSessions = await collectLiveStatusSessions(ctx, node);
+  const record = liveSessions.find((s) => readSessionRecordId(s) === args.session_id);
+  if (record && !isMeshOwnedDelegateSession(record, ctx.mesh.id, args.node_id)) {
+    return JSON.stringify({
+      success: false,
+      error: "session is not a mesh-owned delegate of this mesh/node \u2014 mesh_send_keys is scoped to sessions this coordinator spawned",
+      nodeId: args.node_id,
+      sessionId: args.session_id
+    }, null, 2);
+  }
+  const requestedKeys = items.map((it) => it && typeof it.key === "string" ? it.key : "").filter(Boolean);
+  const hasDestructive = requestedKeys.some((k) => MESH_SEND_KEYS_DESTRUCTIVE.has(k));
+  const auditKeys = requestedKeys.slice(0, 64);
+  const recordAudit = (result2, extra = {}) => {
+    try {
+      (0, import_daemon_core4.appendLedgerEntry)(ctx.mesh.id, {
+        kind: "key_injection",
+        nodeId: args.node_id,
+        sessionId: args.session_id,
+        payload: {
+          keys: auditKeys,
+          // key ENUMS only — never the literal text body
+          hasDestructive,
+          confirmDestructive: args.confirm_destructive === true,
+          result: result2,
+          ...extra
+        }
+      });
+    } catch {
+    }
+  };
+  if (hasDestructive) {
+    const policyAllows = (0, import_daemon_core4.resolveAllowSendKeysDestructive)(ctx.mesh.policy, node.policy);
+    if (args.confirm_destructive !== true || !policyAllows) {
+      recordAudit("refused", { refused: "destructive_gate", policyAllows });
+      return JSON.stringify({
+        success: false,
+        error: "destructive key (CTRL_C/ESC) requires BOTH confirm_destructive=true AND mesh policy allowSendKeysDestructive=true",
+        refused: "destructive_gate",
+        confirmDestructive: args.confirm_destructive === true,
+        policyAllowsDestructive: policyAllows
+      }, null, 2);
+    }
+  }
+  const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
+  const result = await commandForNode(ctx, node, "send_keys", {
+    sessionId: args.session_id,
+    targetSessionId: args.session_id,
+    workspace: node.workspace,
+    ...cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {},
+    sequence: items,
+    confirm_destructive: args.confirm_destructive === true,
+    allow_modal_override: args.allow_modal_override === true
+  });
+  const payload = unwrapCommandPayload(result);
+  if (payload?.success === true) {
+    recordAudit("injected", { submits: payload.submits === true });
+  } else {
+    recordAudit("refused", { refused: readString(payload?.refused) || "error" });
+  }
+  return JSON.stringify(payload, null, 2);
+}
 async function meshLaunchSession(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
   const bootstrapBlock = getWorktreeBootstrapLaunchBlock(node, ctx.mesh.policy);
@@ -8484,6 +8618,12 @@ async function startMcpServer(opts) {
             break;
           case "mesh_read_debug":
             text = await meshReadDebug(meshCtx, a);
+            break;
+          case "mesh_read_terminal":
+            text = await meshReadTerminal(meshCtx, a);
+            break;
+          case "mesh_send_keys":
+            text = await meshSendKeys(meshCtx, a);
             break;
           case "mesh_launch_session":
             text = await meshLaunchSession(meshCtx, a);
