@@ -9,6 +9,7 @@
  * longer an invisible choice.
  */
 import { useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface Props {
     daemonId: string
@@ -18,6 +19,7 @@ interface Props {
 }
 
 export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliType, sendCommand }: Props) {
+    const { t } = useTranslation()
     const [open, setOpen] = useState(false)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -25,14 +27,14 @@ export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliT
     const [bytes, setBytes] = useState<number | null>(null)
 
     const load = useCallback(async () => {
-        if (!daemonId || !meshId) { setError('Connect a daemon to preview the default.'); return }
+        if (!daemonId || !meshId) { setError(t('repoMesh.promptPreview.connectPrompt')); return }
         setLoading(true)
         setError(null)
         try {
             const raw: any = await sendCommand(daemonId, 'coordinator_prompt_preview', { meshId, cliType })
             // Cloud transport wraps once; standalone returns the daemon body directly.
             const result = (raw?.result && typeof raw.result === 'object') ? raw.result : raw
-            if (!result?.success) { setError(result?.error || 'Failed to render the default prompt'); return }
+            if (!result?.success) { setError(result?.error || t('repoMesh.promptPreview.errorRender')); return }
             setPrompt(typeof result.prompt === 'string' ? result.prompt : '')
             setBytes(typeof result.bytes === 'number' ? result.bytes : null)
         } catch (e: any) {
@@ -40,7 +42,7 @@ export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliT
         } finally {
             setLoading(false)
         }
-    }, [daemonId, meshId, cliType, sendCommand])
+    }, [daemonId, meshId, cliType, sendCommand, t])
 
     const toggle = useCallback(() => {
         const next = !open
@@ -56,7 +58,7 @@ export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliT
                 className="inline-flex items-center gap-1 text-[12px] text-accent-primary bg-transparent border-none cursor-pointer p-0"
             >
                 <span className={`transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden>▸</span>
-                {open ? 'Hide the default prompt' : 'View the default prompt'}
+                {open ? t('repoMesh.promptPreview.hide') : t('repoMesh.promptPreview.view')}
                 <span className="text-text-muted">({cliType})</span>
             </button>
 

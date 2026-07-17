@@ -30,8 +30,8 @@ describe('dashboard mobile/touch regressions', () => {
   it('keeps mobile inbox reconnect empty-state copy compact and single-owned', () => {
     const source = readSource('components/dashboard/DashboardMobileChatInbox.tsx')
 
-    expect(source).toContain("'Reconnecting'")
-    expect(source).toContain("'Restoring the server connection…'")
+    expect(source).toContain("t('mobileInbox.reconnecting')")
+    expect(source).toContain("t('mobileInbox.restoringConnection')")
     expect(source).not.toContain('Connecting to server')
     expect(source).not.toContain('Establishing connection to the server')
     expect(source).not.toContain('MobileSpinner label=')
@@ -77,7 +77,7 @@ describe('dashboard mobile/touch regressions', () => {
     const mainViewSource = readSource('components/dashboard/DashboardMainView.tsx')
 
     expect(inboxSource).toContain('mobile-inbox-mesh-button')
-    expect(inboxSource).toContain('title="Open live repo mesh graph"')
+    expect(inboxSource).toContain("title={t('mobileInbox.openLiveMeshGraph')}")
     expect(inboxSource).toContain('onOpenMeshGraph?: (conversation: ActiveConversation) => void')
     expect(roomSource).toContain('const meshGraphAvailable = !!selectedConversation.daemonId')
     expect(roomSource).toContain('title="Open live repo mesh graph"')
@@ -97,14 +97,14 @@ describe('dashboard mobile/touch regressions', () => {
     expect(inboxSource).toContain('HideConversationConfirmDialog')
     // Hide confirm dialog now matches the CliStopDialog style (title "Hide {name}?",
     // card fade-in mobile-compact-dialog, no top-right X, stacked full-width buttons).
-    expect(inboxSource).toContain('Hide {title}?')
+    expect(inboxSource).toContain("t('mobileInbox.hideTitle', { title })")
     expect(inboxSource).toContain('card fade-in mobile-compact-dialog')
     expect(inboxSource).toContain('max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] flex flex-col')
     expect(inboxSource).toContain('onHideConversation?.(hideConfirmConversation)')
     expect(inboxSource).not.toContain('onHideConversation(item.conversation)')
     expect(inboxSource).not.toContain('className="flex justify-end px-4 pb-3 -mt-1"')
-    expect(inboxSource).toContain('Hidden tabs')
-    expect(inboxSource).toContain('collapsed')
+    expect(inboxSource).toContain("t('mobileInbox.hideDescription')")
+    expect(inboxSource).toContain("t('mobileInbox.collapsedCount', { count: hiddenConversations.length })")
     expect(inboxSource).not.toContain('hiddenConversations.map((conversation')
     expect(inboxSource).not.toContain('Tap to restore and open')
     expect(modeSource).toContain('onHideConversation={onHideConversation}')

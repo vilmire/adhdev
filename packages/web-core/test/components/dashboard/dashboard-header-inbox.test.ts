@@ -97,8 +97,8 @@ describe('DashboardHeader inbox notifications', () => {
       p2pStates: {},
     })).toEqual({
       tone: 'disconnected',
-      title: 'Disconnected',
-      subtitle: null,
+      titleKey: 'connection.disconnected',
+      subtitleKey: null,
     })
 
     expect(getDashboardHeaderConnectionState({
@@ -108,8 +108,8 @@ describe('DashboardHeader inbox notifications', () => {
       p2pStates: {},
     })).toEqual({
       tone: 'limited',
-      title: 'Connected to dashboard',
-      subtitle: null,
+      titleKey: 'connection.connectedToDashboard',
+      subtitleKey: null,
     })
 
     expect(getDashboardHeaderConnectionState({
@@ -119,8 +119,8 @@ describe('DashboardHeader inbox notifications', () => {
       p2pStates: {},
     })).toEqual({
       tone: 'connected',
-      title: 'Connected',
-      subtitle: null,
+      titleKey: 'connection.connected',
+      subtitleKey: null,
     })
 
     expect(getDashboardHeaderConnectionState({
@@ -130,8 +130,8 @@ describe('DashboardHeader inbox notifications', () => {
       p2pStates: { 'machine-1': 'connecting' },
     })).toEqual({
       tone: 'limited',
-      title: 'Connected to dashboard',
-      subtitle: 'Connecting to machine...',
+      titleKey: 'connection.connectedToDashboard',
+      subtitleKey: 'connection.connectingToMachine',
     })
 
     expect(getDashboardHeaderConnectionState({
@@ -141,8 +141,8 @@ describe('DashboardHeader inbox notifications', () => {
       p2pStates: { 'machine-1': 'connected' },
     })).toEqual({
       tone: 'connected',
-      title: 'Connected',
-      subtitle: null,
+      titleKey: 'connection.connected',
+      subtitleKey: null,
     })
   })
 
@@ -152,21 +152,21 @@ describe('DashboardHeader inbox notifications', () => {
       isConnected: false,
       daemonCount: 1,
       p2pStates: { 'machine-1': 'connecting' },
-    }).subtitle).toBe('Connecting to machine...')
+    }).subtitleKey).toBe('connection.connectingToMachine')
 
     expect(getDashboardHeaderConnectionState({
       wsStatus: 'connected',
       isConnected: true,
       daemonCount: 1,
       p2pStates: { 'machine-1': 'connected' },
-    }).subtitle).toBeNull()
+    }).subtitleKey).toBeNull()
 
     expect(getDashboardHeaderConnectionState({
       wsStatus: 'connected',
       isConnected: false,
       daemonCount: 1,
       p2pStates: {},
-    }).subtitle).toBeNull()
+    }).subtitleKey).toBeNull()
   })
 
   it('renders the connection dot in the title row so it aligns with the Dashboard text baseline', () => {
