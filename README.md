@@ -1,3 +1,5 @@
+[English](README.md) | [한국어](README.ko.md)
+
 # ADHDev
 
 **Control your AI coding agents from the web — and let them land on `main` on their own.**
