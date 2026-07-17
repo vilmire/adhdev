@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   buildInteractivePromptResponse,
@@ -7,6 +7,12 @@ import {
 } from '../../interactive-prompt/interactive-prompt-utils'
 import type { InteractiveQuestion } from '../../interactive-prompt/types'
 import { IconCheckCircle, IconWarning, IconX } from '../Icons'
+
+// Ignore Submit clicks fired in this window right after a prompt renders. Without it, a
+// stray click/keypress left over from the previous view (or a just-dismissed prompt) can
+// land on the freshly-rendered question and submit it before the user has actually chosen
+// — one cause of a question being answered with garbage or resolving unexpectedly early.
+const SUBMIT_READY_DELAY_MS = 200
 
 interface InteractivePromptModalProps {
   promptSession: InteractivePromptSession | null
@@ -83,10 +89,22 @@ export default function InteractivePromptModal({
 }: InteractivePromptModalProps) {
   const [selection, setSelection] = useState<InteractivePromptSelection>(() => defaultSelection(promptSession))
   const [currentStep, setCurrentStep] = useState(0)
+  // Gate that blocks Submit for a short window right after a new prompt renders.
+  const [submitReady, setSubmitReady] = useState(false)
+  const submitReadyRef = useRef(false)
 
   useEffect(() => {
     setSelection(defaultSelection(promptSession))
     setCurrentStep(0)
+    setSubmitReady(false)
+    submitReadyRef.current = false
+    const promptId = promptSession?.prompt.promptId
+    if (!promptId) return
+    const timer = setTimeout(() => {
+      submitReadyRef.current = true
+      setSubmitReady(true)
+    }, SUBMIT_READY_DELAY_MS)
+    return () => clearTimeout(timer)
   }, [promptSession?.prompt.promptId])
 
   const questions = promptSession?.prompt.questions || []
@@ -143,7 +161,8 @@ export default function InteractivePromptModal({
   }
 
   const handleSubmit = () => {
-    if (!canSubmit || isSubmitting) return
+    // submitReadyRef guards the just-rendered window; isSubmitting guards in-flight.
+    if (!canSubmit || isSubmitting || !submitReadyRef.current) return
     void onSubmit(selection)
   }
 
@@ -272,7 +291,7 @@ export default function InteractivePromptModal({
                 type="button"
                 className="btn btn-primary btn-sm"
                 onClick={handleSubmit}
-                disabled={!canSubmit || isSubmitting}
+                disabled={!canSubmit || isSubmitting || !submitReady}
               >
                 {isSubmitting ? 'Submitting...' : 'Submit'}
               </button>
