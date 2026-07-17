@@ -1,11 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { DaemonData } from '../../types'
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader'
 import { compareMachineEntries, getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
-import {
-    getLaunchPrimaryActionLabel,
-    getLaunchPrimaryBusyLabel,
-} from '../../utils/dashboard-launch-copy'
 import { IconFolder, IconPlay, IconX } from '../Icons'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
 import { collectBrowsePathCandidates, getDefaultBrowseStartPath, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
@@ -91,11 +88,12 @@ export function LaunchCategorySelector({
     busy,
     onSelect,
 }: LaunchCategorySelectorProps) {
+    const { t } = useTranslation()
     if (workspaceMode === 'mesh') return null
 
     return (
         <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
-            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-2">Category</div>
+            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-2">{t('newSession.category')}</div>
             <div className="flex flex-wrap gap-2">
                 {([
                     { id: 'cli', label: LAUNCH_CATEGORY_LABELS.cli, enabled: cliEnabled },
@@ -147,6 +145,7 @@ export default function DashboardNewSessionDialog({
     onLaunchMeshCoordinator,
     onListSavedSessions,
 }: DashboardNewSessionDialogProps) {
+    const { t } = useTranslation()
     const loadDaemonMetadata = useDaemonMetadataLoader()
     const sortedMachines = useMemo(
         () => [...machines].sort(compareMachineEntries),
@@ -190,6 +189,10 @@ export default function DashboardNewSessionDialog({
     const [resumingSavedSessionId, setResumingSavedSessionId] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState('')
+    // Message tone drives the banner styling. Previously inferred by substring-
+    // matching the English message text; tracked explicitly now so the copy can be
+    // translated without breaking the success/error styling.
+    const [messageTone, setMessageTone] = useState<'info' | 'error'>('error')
     const [meshManualSetup, setMeshManualSetup] = useState<MeshCoordinatorManualSetup | null>(null)
     const [browseDialogOpen, setBrowseDialogOpen] = useState(false)
     const [browseCurrentPath, setBrowseCurrentPath] = useState('')
@@ -237,9 +240,9 @@ export default function DashboardNewSessionDialog({
         () => (selectedMachine?.detectedIdes || []).map(ide => ({
             id: ide.type,
             label: ide.name || ide.type,
-            meta: ide.running ? 'Detected locally' : 'Available to open',
+            meta: ide.running ? t('newSession.detectedLocally') : t('newSession.availableToOpen'),
         })),
-        [selectedMachine],
+        [selectedMachine, t],
     )
     const providerTargets = useMemo(
         () => activeKind === 'cli'
@@ -304,11 +307,11 @@ export default function DashboardNewSessionDialog({
             setMeshOptions([])
             setSelectedMeshId('')
             setMeshLoadedMachineId(machineId)
-            setMeshError(error instanceof Error ? error.message : 'Could not load meshes')
+            setMeshError(error instanceof Error ? error.message : t('newSession.errorLoadMeshes'))
         } finally {
             setMeshLoading(false)
         }
-    }, [onListMeshes])
+    }, [onListMeshes, t])
 
     useEffect(() => {
         if (!selectedMachine) return
@@ -397,14 +400,14 @@ export default function DashboardNewSessionDialog({
             .catch((error) => {
                 if (savedSessionsRequestSeqRef.current !== requestSeq) return
                 setSavedSessions([])
-                setSavedSessionsError(error instanceof Error ? error.message : 'Could not load saved sessions')
+                setSavedSessionsError(error instanceof Error ? error.message : t('newSession.errorLoadSavedSessions'))
             })
             .finally(() => {
                 if (savedSessionsRequestSeqRef.current !== requestSeq) return
                 setSavedSessionsLoading(false)
                 setSavedSessionsLoaded(true)
             })
-    }, [onListSavedSessions])
+    }, [onListSavedSessions, t])
 
     const loadRecentArgs = useCallback((machineId: string, providerType: string) => {
         setRecentArgsOptions(getRecentLaunchArgs(machineId, providerType))
@@ -539,7 +542,7 @@ export default function DashboardNewSessionDialog({
                 setBrowseDirectories(result.directories)
             })
             .catch(error => {
-                setBrowseError(error instanceof Error ? error.message : 'Could not load folder')
+                setBrowseError(error instanceof Error ? error.message : t('newSession.errorLoadFolder'))
             })
             .finally(() => setBrowseBusy(false))
     }, [
@@ -564,7 +567,7 @@ export default function DashboardNewSessionDialog({
                 setBrowseDirectories(result.directories)
             })
             .catch(error => {
-                setBrowseError(error instanceof Error ? error.message : 'Could not load folder')
+                setBrowseError(error instanceof Error ? error.message : t('newSession.errorLoadFolder'))
             })
             .finally(() => setBrowseBusy(false))
     }, [onBrowseDirectory, selectedMachine])
@@ -576,11 +579,13 @@ export default function DashboardNewSessionDialog({
         const result = await onSaveWorkspace(selectedMachine.id, resolvedWorkspacePath)
         setSavingWorkspace(false)
         if (!result.ok) {
-            setMessage(result.error || 'Could not save workspace')
+            setMessageTone('error')
+            setMessage(result.error || t('newSession.errorSaveWorkspace'))
             return
         }
-        setMessage('Workspace saved. It will appear in the list once the machine state refreshes.')
-    }, [onSaveWorkspace, resolvedWorkspacePath, selectedMachine])
+        setMessageTone('info')
+        setMessage(t('newSession.workspaceSaved'))
+    }, [onSaveWorkspace, resolvedWorkspacePath, selectedMachine, t])
 
     const handleLaunch = useCallback(async () => {
         if (!selectedMachine) return
@@ -597,10 +602,12 @@ export default function DashboardNewSessionDialog({
             if (!result.ok) {
                 if (result.code === 'mesh_coordinator_manual_mcp_setup_required' && result.manualSetup) {
                     setMeshManualSetup(result.manualSetup)
-                    setMessage('Manual MCP setup required before this provider can act as mesh coordinator.')
+                    setMessageTone('info')
+                    setMessage(t('newSession.errorManualMcpSetup'))
                     return
                 }
-                setMessage(result.error || 'Could not start mesh coordinator')
+                setMessageTone('error')
+                setMessage(result.error || t('newSession.errorStartMeshCoordinator'))
                 return
             }
             onClose()
@@ -626,7 +633,8 @@ export default function DashboardNewSessionDialog({
             })
         setBusy(false)
         if (!result.ok) {
-            setMessage(result.error || 'Could not start session')
+            setMessageTone('error')
+            setMessage(result.error || t('newSession.errorStartSession'))
             return
         }
         if (activeKind !== 'ide' && launchArgs.trim()) {
@@ -651,18 +659,28 @@ export default function DashboardNewSessionDialog({
         selectedTarget,
         workspaceChoice,
         workspaceMode,
+        t,
     ])
 
+    const isCliResume = activeKind === 'cli' && !!selectedResumeSessionId
     const primaryActionLabel = workspaceMode === 'mesh'
-        ? 'Start mesh coordinator'
-        : activeKind
-            ? getLaunchPrimaryActionLabel(activeKind, activeKind === 'cli' && !!selectedResumeSessionId)
-            : 'Start'
+        ? t('newSession.startMeshCoordinator')
+        : activeKind === 'cli'
+            ? (isCliResume ? t('newSession.resumeSavedHistory') : t('newSession.startFresh'))
+            : activeKind === 'ide'
+                ? t('newSession.startIde')
+                : activeKind === 'acp'
+                    ? t('newSession.startAcpSession')
+                    : t('newSession.start')
     const primaryBusyLabel = workspaceMode === 'mesh'
-        ? 'Starting coordinator…'
-        : activeKind
-            ? getLaunchPrimaryBusyLabel(activeKind, activeKind === 'cli' && !!selectedResumeSessionId)
-            : 'Starting…'
+        ? t('newSession.startingCoordinator')
+        : activeKind === 'cli'
+            ? (isCliResume ? t('newSession.resumingSavedHistory') : t('newSession.startingFresh'))
+            : activeKind === 'ide'
+                ? t('newSession.startingIde')
+                : activeKind === 'acp'
+                    ? t('newSession.startingAcpSession')
+                    : t('newSession.starting')
     const useMachineDropdown = sortedMachines.length > 5
 
     if (!selectedMachine) {
@@ -681,14 +699,14 @@ export default function DashboardNewSessionDialog({
                     <div className="flex items-start justify-between gap-3 px-4 py-4 sm:px-5 border-b border-border-subtle shrink-0">
                         <div className="min-w-0">
                             <h2 id="dashboard-new-title" className="m-0 text-base font-semibold text-text-primary">
-                                Start session
+                                {t('newSession.title')}
                             </h2>
                         </div>
                         <button
                             type="button"
                             className="inline-flex items-center justify-center w-8 h-8 rounded-full border border-border-subtle bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-surface-primary transition-colors shrink-0"
                             onClick={onClose}
-                            aria-label="Close new session dialog"
+                            aria-label={t('newSession.close')}
                         >
                             <IconX size={16} />
                         </button>
@@ -697,10 +715,10 @@ export default function DashboardNewSessionDialog({
                     <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 sm:px-5 sm:py-4 space-y-4">
                         {/* Machine picker only when more than one machine is connected. */}
                         {sortedMachines.length > 1 && (
-                            <LaunchSectionCard title="Machine">
+                            <LaunchSectionCard title={t('newSession.machine')}>
                                 {useMachineDropdown ? (
                                     <select
-                                        aria-label="Machine"
+                                        aria-label={t('newSession.machine')}
                                         value={selectedMachine.id}
                                         onChange={(event) => setSelectedMachineId(event.target.value)}
                                         onFocus={() => sortedMachines.forEach(machine => prefetchMachineMetadata(machine.id))}
@@ -714,7 +732,7 @@ export default function DashboardNewSessionDialog({
                                         ))}
                                     </select>
                                 ) : (
-                                    <div className="flex flex-wrap gap-2" role="group" aria-label="Machine">
+                                    <div className="flex flex-wrap gap-2" role="group" aria-label={t('newSession.machine')}>
                                         {sortedMachines.map(machine => {
                                             const label = getMachineDisplayName(machine, { fallbackId: machine.id })
                                             const selected = selectedMachine.id === machine.id
@@ -722,7 +740,7 @@ export default function DashboardNewSessionDialog({
                                                 <button
                                                     key={machine.id}
                                                     type="button"
-                                                    aria-label={`Select machine ${label}`}
+                                                    aria-label={t('newSession.selectMachine', { name: label })}
                                                     aria-pressed={selected}
                                                     className={`inline-flex min-w-0 items-center gap-2 rounded-full border px-3 py-2 text-sm transition-colors ${selected ? 'border-accent bg-accent/10 text-text-primary' : 'border-border-subtle bg-bg-secondary/60 text-text-secondary hover:bg-bg-secondary hover:text-text-primary'}`}
                                                     onClick={() => setSelectedMachineId(machine.id)}
@@ -742,7 +760,7 @@ export default function DashboardNewSessionDialog({
                         )}
 
                         <LaunchSectionCard
-                            title="Workspace"
+                            title={t('newSession.workspace')}
                             action={workspaceMode === 'workspace' ? (
                                 <button
                                     type="button"
@@ -750,14 +768,14 @@ export default function DashboardNewSessionDialog({
                                     onClick={openBrowseDialog}
                                     disabled={busy}
                                 >
-                                    Browse…
+                                    {t('newSession.browse')}
                                 </button>
                             ) : undefined}
                         >
-                            <div className="mb-3 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Launch target type">
+                            <div className="mb-3 grid grid-cols-2 gap-2" role="radiogroup" aria-label={t('newSession.launchTargetType')}>
                                 {([
-                                    { id: 'workspace', label: 'Workspace', desc: 'Normal session' },
-                                    { id: 'mesh', label: 'Mesh', desc: 'Coordinator session' },
+                                    { id: 'workspace', label: t('newSession.modeWorkspace'), desc: t('newSession.modeWorkspaceDesc') },
+                                    { id: 'mesh', label: t('newSession.modeMesh'), desc: t('newSession.modeMeshDesc') },
                                 ] as const).map(option => (
                                     <button
                                         key={option.id}
@@ -796,18 +814,18 @@ export default function DashboardNewSessionDialog({
                                         className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
                                         disabled={busy}
                                     >
-                                        <option value="__home__">Home directory</option>
+                                        <option value="__home__">{t('newSession.homeDirectory')}</option>
                                         {workspaceRows.map(workspace => (
                                             <option key={workspace.id} value={workspace.id}>
                                                 {workspace.id === defaultWorkspaceId ? '⭐ ' : ''}{getWorkspaceDisplayLabel(workspace.path, workspace.label) || workspace.path}
                                             </option>
                                         ))}
-                                        <option value="__custom__">Custom folder…</option>
+                                        <option value="__custom__">{t('newSession.customFolder')}</option>
                                     </select>
                                     <div className="mt-2 text-[11px] text-text-muted break-all">
                                         {workspaceChoice === '__home__'
-                                            ? 'Launch without a workspace.'
-                                            : resolvedWorkspacePath || 'Select a workspace folder.'}
+                                            ? t('newSession.launchWithoutWorkspace')
+                                            : resolvedWorkspacePath || t('newSession.selectWorkspaceFolder')}
                                     </div>
                                     {workspaceChoice === '__custom__' && resolvedWorkspacePath && (
                                         <div className="mt-3 flex flex-wrap gap-2">
@@ -818,7 +836,7 @@ export default function DashboardNewSessionDialog({
                                                 disabled={busy}
                                             >
                                                 <IconFolder size={14} />
-                                                Select folder
+                                                {t('newSession.selectFolder')}
                                             </button>
                                             <button
                                                 type="button"
@@ -826,7 +844,7 @@ export default function DashboardNewSessionDialog({
                                                 onClick={handleSaveCurrentWorkspace}
                                                 disabled={busy || savingWorkspace}
                                             >
-                                                {savingWorkspace ? 'Saving…' : 'Save workspace'}
+                                                {savingWorkspace ? t('newSession.saving') : t('newSession.saveWorkspace')}
                                             </button>
                                         </div>
                                     )}
@@ -834,7 +852,7 @@ export default function DashboardNewSessionDialog({
                             ) : (
                                 <div className="space-y-3">
                                     {meshLoading && (
-                                        <div className="text-sm text-text-muted">Loading meshes…</div>
+                                        <div className="text-sm text-text-muted">{t('newSession.loadingMeshes')}</div>
                                     )}
                                     {!meshLoading && meshError && (
                                         <div className="rounded-lg border border-status-error/25 bg-status-error/10 px-3 py-2 text-sm text-status-error">
@@ -843,11 +861,11 @@ export default function DashboardNewSessionDialog({
                                     )}
                                     {!meshLoading && !meshError && meshOptions.length === 0 && (
                                         <div className="rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2 text-sm text-text-muted">
-                                            No repo meshes are configured on this machine. Create or sync a mesh first, then reopen this picker.
+                                            {t('newSession.noMeshes')}
                                         </div>
                                     )}
                                     {meshOptions.length > 0 && (
-                                        <div className="grid grid-cols-1 gap-2" role="radiogroup" aria-label="Mesh">
+                                        <div className="grid grid-cols-1 gap-2" role="radiogroup" aria-label={t('newSession.mesh')}>
                                             {meshOptions.map(mesh => (
                                                 <button
                                                     key={mesh.id}
@@ -860,10 +878,10 @@ export default function DashboardNewSessionDialog({
                                                 >
                                                     <div className="text-sm font-semibold text-text-primary">{mesh.name}</div>
                                                     <div className="mt-1 text-xs text-text-secondary">
-                                                        {mesh.repoIdentity || 'Repo mesh'}{typeof mesh.nodesCount === 'number' ? ` · ${mesh.nodesCount} node${mesh.nodesCount === 1 ? '' : 's'}` : ''}
+                                                        {mesh.repoIdentity || t('newSession.repoMesh')}{typeof mesh.nodesCount === 'number' ? ` · ${t('newSession.nodeCount', { count: mesh.nodesCount })}` : ''}
                                                     </div>
                                                     {mesh.workspace && (
-                                                        <div className="mt-1 text-[11px] text-text-muted break-all">Coordinator workspace: {mesh.workspace}</div>
+                                                        <div className="mt-1 text-[11px] text-text-muted break-all">{t('newSession.coordinatorWorkspace', { path: mesh.workspace })}</div>
                                                     )}
                                                 </button>
                                             ))}
@@ -885,7 +903,7 @@ export default function DashboardNewSessionDialog({
 
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
                             <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-2">
-                                {activeKind === 'ide' ? 'Choose IDE' : activeKind === 'cli' ? 'Choose CLI provider' : 'Choose ACP provider'}
+                                {activeKind === 'ide' ? t('newSession.chooseIde') : activeKind === 'cli' ? t('newSession.chooseCliProvider') : t('newSession.chooseAcpProvider')}
                             </div>
                             <div className="grid grid-cols-1 gap-2">
                                 {providerTargets.map(target => (
@@ -902,7 +920,7 @@ export default function DashboardNewSessionDialog({
                                 ))}
                                 {providerTargets.length === 0 && (
                                     <div className="text-sm text-text-muted">
-                                        Nothing usable for this category on the selected machine. Set a custom executable path in Providers if the binary lives outside the default location.
+                                        {t('newSession.noProviders')}
                                     </div>
                                 )}
                             </div>
@@ -916,12 +934,12 @@ export default function DashboardNewSessionDialog({
                         )}
 
                         {workspaceMode !== 'mesh' && activeKind !== 'ide' && (
-                            <LaunchSectionCard title="Startup arguments">
+                            <LaunchSectionCard title={t('newSession.startupArguments')}>
                                 <input
                                     type="text"
                                     value={launchArgs}
                                     onChange={(event) => setLaunchArgs(event.target.value)}
-                                    placeholder="Optional flags..."
+                                    placeholder={t('newSession.optionalFlags')}
                                     className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
                                     disabled={busy}
                                 />
@@ -945,10 +963,10 @@ export default function DashboardNewSessionDialog({
                         )}
 
                         {((workspaceMode === 'mesh' && !!selectedTarget) || (workspaceMode !== 'mesh' && activeKind !== 'ide')) && (
-                            <LaunchSectionCard title="Model & thinking (optional)">
+                            <LaunchSectionCard title={t('newSession.modelAndThinking')}>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                     <label className="flex flex-col gap-1">
-                                        <span className="text-[11px] text-text-muted">Model</span>
+                                        <span className="text-[11px] text-text-muted">{t('newSession.model')}</span>
                                         {modelOptionsForTarget.length > 0 && !modelIsCustom ? (
                                             <select
                                                 value={modelOptionsForTarget.includes(initialModel) ? initialModel : ''}
@@ -963,9 +981,9 @@ export default function DashboardNewSessionDialog({
                                                 className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
                                                 disabled={busy}
                                             >
-                                                <option value="">(provider default)</option>
+                                                <option value="">{t('newSession.providerDefault')}</option>
                                                 {modelOptionsForTarget.map((m: string) => <option key={m} value={m}>{m}</option>)}
-                                                <option value="__custom__">Custom…</option>
+                                                <option value="__custom__">{t('newSession.custom')}</option>
                                             </select>
                                         ) : (
                                             <>
@@ -973,7 +991,7 @@ export default function DashboardNewSessionDialog({
                                                     type="text"
                                                     value={initialModel}
                                                     onChange={(event) => setInitialModel(event.target.value)}
-                                                    placeholder="Type a model name"
+                                                    placeholder={t('newSession.typeModelName')}
                                                     className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
                                                     disabled={busy}
                                                     autoFocus={modelIsCustom}
@@ -985,21 +1003,21 @@ export default function DashboardNewSessionDialog({
                                                         onClick={() => { setModelIsCustom(false); setInitialModel('') }}
                                                         disabled={busy}
                                                     >
-                                                        ← Back to model list
+                                                        {t('newSession.backToModelList')}
                                                     </button>
                                                 )}
                                             </>
                                         )}
                                     </label>
                                     <label className="flex flex-col gap-1">
-                                        <span className="text-[11px] text-text-muted">Thinking level</span>
+                                        <span className="text-[11px] text-text-muted">{t('newSession.thinkingLevel')}</span>
                                         <select
                                             value={initialThinkingLevel}
                                             onChange={(event) => setInitialThinkingLevel(event.target.value)}
                                             className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
                                             disabled={busy}
                                         >
-                                            <option value="">(provider default)</option>
+                                            <option value="">{t('newSession.providerDefault')}</option>
                                             {thinkingLevelOptionsForTarget.map((l: string) => <option key={l} value={l}>{l}</option>)}
                                         </select>
                                     </label>
@@ -1032,7 +1050,7 @@ export default function DashboardNewSessionDialog({
                         )}
 
                         {message && (
-                            <div className={`rounded-xl border px-4 py-3 text-sm ${message.includes('saved') || message.includes('requested') || message.includes('Manual MCP setup') ? 'border-accent/25 bg-accent/10 text-text-primary' : 'border-status-error/25 bg-status-error/10 text-status-error'}`}>
+                            <div className={`rounded-xl border px-4 py-3 text-sm ${messageTone === 'info' ? 'border-accent/25 bg-accent/10 text-text-primary' : 'border-status-error/25 bg-status-error/10 text-status-error'}`}>
                                 {message}
                             </div>
                         )}
@@ -1045,7 +1063,7 @@ export default function DashboardNewSessionDialog({
                             onClick={onClose}
                             disabled={busy}
                         >
-                            Cancel
+                            {t('common.cancel')}
                         </button>
                         <button
                             type="button"
@@ -1065,8 +1083,8 @@ export default function DashboardNewSessionDialog({
 
             {browseDialogOpen && (
                 <WorkspaceBrowseDialog
-                    title="Select workspace"
-                    description="Pick the folder that should be used for this new session."
+                    title={t('newSession.selectWorkspaceTitle')}
+                    description={t('newSession.selectWorkspaceDescription')}
                     currentPath={browseCurrentPath}
                     directories={browseDirectories}
                     busy={browseBusy}
@@ -1118,7 +1136,8 @@ export default function DashboardNewSessionDialog({
                             resumeSessionId: session.providerSessionId,
                         }).then((result) => {
                             if (!result.ok) {
-                                setMessage(result.error || 'Could not resume session')
+                                setMessageTone('error')
+                                setMessage(result.error || t('newSession.errorResumeSession'))
                                 return
                             }
                             onClose()

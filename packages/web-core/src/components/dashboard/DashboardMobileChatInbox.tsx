@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
 import type { MouseEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import { IconBell, IconBellOff, IconSettings, IconChat, IconEyeOff, IconMesh, IconX } from '../Icons'
 import InstallCommand from '../InstallCommand'
 import { formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
@@ -106,6 +107,7 @@ function HideConversationConfirmDialog({
     onCancel: () => void
     onConfirm: () => void
 }) {
+    const { t } = useTranslation()
     const title = getConversationTitle(conversation)
 
     return (
@@ -118,9 +120,9 @@ function HideConversationConfirmDialog({
                 className="card fade-in mobile-compact-dialog relative w-full sm:w-[min(92vw,420px)] md:w-[92%] md:max-w-[420px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] flex flex-col overflow-hidden rounded-[24px] sm:rounded-[18px] shadow-[0_20px_40px_rgba(0,0,0,0.4)]"
             >
                 <div className="px-4 py-4 md:px-6 md:py-5 border-b border-border-subtle bg-bg-primary">
-                    <h3 id="mobile-hide-confirm-title" className="m-0 text-base md:text-lg font-extrabold">Hide {title}?</h3>
+                    <h3 id="mobile-hide-confirm-title" className="m-0 text-base md:text-lg font-extrabold">{t('mobileInbox.hideTitle', { title })}</h3>
                     <div className="mt-1 text-[13px] md:text-sm text-text-muted leading-relaxed">
-                        This only collapses the chat locally. You can restore it from Hidden tabs.
+                        {t('mobileInbox.hideDescription')}
                     </div>
                 </div>
 
@@ -129,13 +131,13 @@ function HideConversationConfirmDialog({
                         onClick={onConfirm}
                         className="btn btn-primary w-full justify-center min-h-[42px]"
                     >
-                        Hide
+                        {t('mobileInbox.hide')}
                     </button>
                     <button
                         onClick={onCancel}
                         className="btn btn-secondary w-full justify-center min-h-[42px]"
                     >
-                        Cancel
+                        {t('common.cancel')}
                     </button>
                 </div>
             </div>
@@ -167,6 +169,7 @@ function DashboardMobileChatItem({
     isMuted?: boolean
     onToggleMute?: () => void
 }) {
+    const { t } = useTranslation()
     const isUnread = type === 'needs_attention' || type === 'task_complete'
     const isWorking = type === 'working'
     const isEarlier = type === 'earlier'
@@ -231,8 +234,8 @@ function DashboardMobileChatItem({
                                 event.stopPropagation()
                                 onOpenMeshGraph(item.conversation)
                             }}
-                            aria-label={`Open mesh graph for ${title}`}
-                            title="Open live repo mesh graph"
+                            aria-label={t('mobileInbox.openMeshGraphFor', { title })}
+                            title={t('mobileInbox.openLiveMeshGraph')}
                         >
                             <IconMesh size={13} />
                         </button>
@@ -253,17 +256,17 @@ function DashboardMobileChatItem({
                         {isReconnecting ? (
                             <>
                                 <span className="mx-1 opacity-50">·</span>
-                                <span className={`${warningTextClassName} animate-pulse`}>Reconnecting…</span>
+                                <span className={`${warningTextClassName} animate-pulse`}>{t('mobileInbox.reconnectingItem')}</span>
                             </>
                         ) : isConnecting ? (
                             <>
                                 <span className="mx-1 opacity-50">·</span>
-                                <span className="text-text-muted">Connecting…</span>
+                                <span className="text-text-muted">{t('mobileInbox.connectingItem')}</span>
                             </>
                         ) : statusHint === 'Action needed' && (
                             <>
                                 <span className="mx-1 opacity-50">·</span>
-                                <span className={warningTextClassName}>Action needed</span>
+                                <span className={warningTextClassName}>{t('mobileInbox.actionNeeded')}</span>
                             </>
                         )}
                     </div>
@@ -277,7 +280,7 @@ function DashboardMobileChatItem({
                     )}
                     {isTaskComplete && (
                         <span className="rounded-full border border-accent-primary/16 bg-accent-primary/10 px-2 py-0.5 text-[10px] font-bold text-accent-primary">
-                            Done
+                            {t('mobileInbox.done')}
                         </span>
                     )}
                     {onToggleMute && (
@@ -293,8 +296,8 @@ function DashboardMobileChatItem({
                                 event.stopPropagation()
                                 onToggleMute()
                             }}
-                            aria-label={isMuted ? `Unmute ${title}` : `Mute ${title}`}
-                            title={isMuted ? 'Muted — notifications silenced. Tap to unmute.' : 'Mute notifications'}
+                            aria-label={isMuted ? t('mobileInbox.unmute', { title }) : t('mobileInbox.mute', { title })}
+                            title={isMuted ? t('mobileInbox.mutedTitle') : t('mobileInbox.muteNotifications')}
                         >
                             {isMuted ? <IconBellOff size={13} /> : <IconBell size={13} />}
                         </button>
@@ -308,8 +311,8 @@ function DashboardMobileChatItem({
                                 event.stopPropagation()
                                 onRequestHideConversation()
                             }}
-                            aria-label={`Hide ${title}`}
-                            title="Hide conversation"
+                            aria-label={t('mobileInbox.hideConversationAria', { title })}
+                            title={t('mobileInbox.hideConversationTitle')}
                         >
                             <IconEyeOff size={13} />
                         </button>
@@ -323,8 +326,8 @@ function DashboardMobileChatItem({
                                 event.stopPropagation()
                                 onRequestStopCli()
                             }}
-                            aria-label={`Stop ${title} session`}
-                            title="Stop session (terminates the agent)"
+                            aria-label={t('mobileInbox.stopSessionAria', { title })}
+                            title={t('mobileInbox.stopSessionTitle')}
                         >
                             <IconX size={13} />
                         </button>
@@ -372,13 +375,14 @@ export default function DashboardMobileChatInbox({
     isConversationMuted,
     onToggleMuteConversation,
 }: DashboardMobileChatInboxProps) {
+    const { t } = useTranslation()
     const [hideConfirmConversation, setHideConfirmConversation] = useState<ActiveConversation | null>(null)
     const isDisconnected = wsStatus === 'disconnected' || wsStatus === 'reconnecting' || wsStatus === 'offline' || wsStatus === 'auth_failed'
     const hasMachines = machineCards.length > 0
     const hasAnyConversation = attentionItems.length > 0 || unreadItems.length > 0 || workingItems.length > 0 || completedItems.length > 0
     const inboxTitle = section === 'machines'
-        ? 'Machines'
-        : 'Chats'
+        ? t('mobileInbox.machines')
+        : t('mobileInbox.chats')
     const headerPaddingClass = isStandalone
         ? 'px-5 pt-4 pb-4'
         : 'px-5 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-4'
@@ -459,17 +463,17 @@ export default function DashboardMobileChatInbox({
                                 icon={<MobileSpinner />}
                                 title={
                                     wsStatus === 'offline'
-                                        ? 'Network offline'
+                                        ? t('mobileInbox.networkOffline')
                                         : wsStatus === 'auth_failed'
-                                            ? 'Session expired'
-                                            : 'Reconnecting'
+                                            ? t('mobileInbox.sessionExpired')
+                                            : t('mobileInbox.reconnecting')
                                 }
                                 subtitle={
                                     wsStatus === 'offline'
-                                        ? 'Waiting for network…'
+                                        ? t('mobileInbox.waitingForNetwork')
                                         : wsStatus === 'auth_failed'
-                                            ? 'Please log in again.'
-                                            : 'Restoring the server connection…'
+                                            ? t('mobileInbox.pleaseLogInAgain')
+                                            : t('mobileInbox.restoringConnection')
                                 }
                             />
                         ) : machineCards.length === 0 ? (
@@ -482,11 +486,11 @@ export default function DashboardMobileChatInbox({
                                         style={{ animationDuration: '3s' }}
                                     />
                                 }
-                                title={isStandalone ? 'Waiting for your daemon' : 'Connect your machines'}
+                                title={isStandalone ? t('mobileInbox.waitingForDaemon') : t('mobileInbox.connectYourMachines')}
                                 subtitle={
                                     isStandalone
-                                        ? 'Start the ADHDev daemon to connect this dashboard. Once it is online, you can launch sessions with any installed provider.'
-                                        : 'Install ADHDev on a machine, sign in, and it will show up here.'
+                                        ? t('mobileInbox.waitingForDaemonSubtitle')
+                                        : t('mobileInbox.connectYourMachinesSubtitle')
                                 }
                             >
                                 {!isStandalone && (
@@ -511,17 +515,17 @@ export default function DashboardMobileChatInbox({
                                             <div className="flex items-center justify-between gap-2">
                                                 <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{machine.label}</span>
                                                 <span className="text-[11px] font-medium text-text-muted shrink-0">
-                                                    {machine.unread > 0 ? <span className="text-accent-primary">{machine.unread} new</span> : machine.total > 0 ? `${machine.total} chats` : 'Idle'}
+                                                    {machine.unread > 0 ? <span className="text-accent-primary">{t('mobileInbox.newCount', { count: machine.unread })}</span> : machine.total > 0 ? t('mobileInbox.chatCount', { count: machine.total }) : t('mobileInbox.idle')}
                                                 </span>
                                             </div>
                                             <div className="text-[12px] font-medium text-text-secondary truncate">{machine.subtitle}</div>
                                             {machine.total > 0 ? (
                                                 <div className="text-[13px] text-text-muted mt-0.5">
-                                                    {machine.total} chat{machine.total !== 1 ? 's' : ''}{machine.unread > 0 ? ` · ${machine.unread} unread` : ''}
+                                                    {t('mobileInbox.chatCount', { count: machine.total })}{machine.unread > 0 ? t('mobileInbox.unreadSuffix', { count: machine.unread }) : ''}
                                                 </div>
                                             ) : (
                                                 <div className="text-[13px] text-text-muted mt-0.5 italic opacity-70">
-                                                    No active chats
+                                                    {t('mobileInbox.noActiveChats')}
                                                 </div>
                                             )}
                                         </div>
@@ -534,7 +538,7 @@ export default function DashboardMobileChatInbox({
 
                 {section === 'chats' && attentionItems.length > 0 && (
                     <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
-                        <InboxSectionHeader title="Needs attention" className="mb-0" />
+                        <InboxSectionHeader title={t('mobileInbox.needsAttention')} className="mb-0" />
                         <InboxListSection>
                             {attentionItems.map((item, index) => (
                                 <div key={item.conversation.tabKey} className={index > 0 ? 'border-t border-border-subtle/70' : ''}>
@@ -558,7 +562,7 @@ export default function DashboardMobileChatInbox({
 
                 {section === 'chats' && unreadItems.length > 0 && (
                     <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
-                        <InboxSectionHeader title="Task complete" className="mb-0 mt-2" />
+                        <InboxSectionHeader title={t('mobileInbox.taskComplete')} className="mb-0 mt-2" />
                         <InboxListSection>
                             {unreadItems.map((item, index) => (
                                 <div key={item.conversation.tabKey} className={index > 0 ? 'border-t border-border-subtle/70' : ''}>
@@ -582,7 +586,7 @@ export default function DashboardMobileChatInbox({
 
                 {section === 'chats' && workingItems.length > 0 && (
                     <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
-                        <InboxSectionHeader title="Working now" className="mb-0 mt-2" />
+                        <InboxSectionHeader title={t('mobileInbox.workingNow')} className="mb-0 mt-2" />
                         <InboxListSection>
                             {workingItems.map((item, index) => (
                                 <div key={item.conversation.tabKey} className={index > 0 ? 'border-t border-border-subtle/70' : ''}>
@@ -607,7 +611,7 @@ export default function DashboardMobileChatInbox({
                 {section === 'chats' && (
                     <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
                         {completedItems.length > 0 && (
-                            <InboxSectionHeader title="Earlier" className="mb-0 mt-2 border-border-subtle/80 bg-bg-secondary/35" />
+                            <InboxSectionHeader title={t('mobileInbox.earlier')} className="mb-0 mt-2 border-border-subtle/80 bg-bg-secondary/35" />
                         )}
                         {completedItems.length > 0 ? (
                             <InboxListSection>
@@ -632,8 +636,8 @@ export default function DashboardMobileChatInbox({
                             isDisconnected ? (
                                 <MobileEmptyHero
                                     icon={<MobileSpinner size={28} />}
-                                    title="Connecting…"
-                                    subtitle="Waiting for server connection before loading conversations."
+                                    title={t('mobileInbox.connecting')}
+                                    subtitle={t('mobileInbox.connectingSubtitle')}
                                 />
                             ) : !hasMachines ? (
                                 <MobileEmptyHero
@@ -644,8 +648,8 @@ export default function DashboardMobileChatInbox({
                                             className="w-10 h-10 object-contain opacity-70"
                                         />
                                     }
-                                    title="No machines connected"
-                                    subtitle="Switch to the Machines tab to connect your first machine and start chatting with AI agents."
+                                    title={t('mobileInbox.noMachinesConnected')}
+                                    subtitle={t('mobileInbox.noMachinesSubtitle')}
                                 />
                             ) : (
                                 <MobileEmptyHero
@@ -654,7 +658,7 @@ export default function DashboardMobileChatInbox({
                                             <IconChat size={20} />
                                         </div>
                                     }
-                                    title="No conversations yet"
+                                    title={t('mobileInbox.noConversations')}
                                     subtitle={DASHBOARD_NEW_SESSION_DESCRIPTION}
                                 >
                                     {onOpenNewSession && (
@@ -673,7 +677,7 @@ export default function DashboardMobileChatInbox({
                             )
                         ) : (
                             <div className="py-8 text-center text-sm font-medium text-text-muted">
-                                All caught up.
+                                {t('mobileInbox.allCaughtUp')}
                             </div>
                         )}
                     </section>
@@ -684,9 +688,9 @@ export default function DashboardMobileChatInbox({
                         <InboxListSection className="mt-4 border-dashed bg-bg-secondary/20">
                             <div className="flex items-center justify-between gap-3 px-4 py-3 text-left">
                                 <div className="min-w-0">
-                                    <div className="text-[12px] font-bold uppercase tracking-wider text-text-secondary">Hidden tabs</div>
+                                    <div className="text-[12px] font-bold uppercase tracking-wider text-text-secondary">{t('mobileInbox.hiddenTabs')}</div>
                                     <div className="mt-0.5 text-[13px] text-text-muted">
-                                        {hiddenConversations.length} collapsed {hiddenConversations.length === 1 ? 'conversation' : 'conversations'}
+                                        {t('mobileInbox.collapsedCount', { count: hiddenConversations.length })}
                                     </div>
                                 </div>
                                 <button
@@ -694,7 +698,7 @@ export default function DashboardMobileChatInbox({
                                     className="shrink-0 rounded-full border border-border-subtle bg-bg-primary/70 px-3 py-1.5 text-[12px] font-semibold text-accent-primary hover:border-border-default"
                                     onClick={onShowAllHidden}
                                 >
-                                    Restore all
+                                    {t('mobileInbox.restoreAll')}
                                 </button>
                             </div>
                         </InboxListSection>
