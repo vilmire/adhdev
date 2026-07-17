@@ -6930,7 +6930,15 @@ async function meshLaunchSession(ctx, args) {
       try {
         const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
         const sessions = extractStatusMetadataSessions(statusResult);
-        const existing = sessions.find((session) => !isTerminalSessionRecord(session) && isMeshOwnedDelegateSession(session, ctx.mesh.id, args.node_id));
+        const existing = sessions.find((session) => {
+          if (isTerminalSessionRecord(session)) return false;
+          if (!isMeshOwnedDelegateSession(session, ctx.mesh.id, args.node_id)) return false;
+          if (resolvedProviderType) {
+            const sessionProviderType = resolveSessionProviderType(session);
+            if (sessionProviderType && sessionProviderType !== resolvedProviderType) return false;
+          }
+          return true;
+        });
         if (existing) {
           const existingSessionId = readSessionRecordId(existing);
           if (existingSessionId) {
