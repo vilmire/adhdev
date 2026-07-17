@@ -1394,6 +1394,95 @@
       "colTime": "시간",
       "logCount": "로그 {{count}}개",
       "logCountFiltered": " ({{total}}개에서 필터됨)"
+    },
+    "inviteModal": {
+      "title": "팀원 초대",
+      "subtitle": "이메일로 초대 링크를 보내세요",
+      "manageSeats": "→ 결제에서 시트 관리",
+      "emailLabel": "이메일 주소",
+      "emailPlaceholder": "colleague@company.com",
+      "roleLabel": "역할",
+      "roleViewer": "뷰어",
+      "roleMember": "멤버",
+      "roleAdmin": "관리자",
+      "roleViewerDesc": "대시보드 및 채팅 기록을 볼 수 있습니다",
+      "roleMemberDesc": "에이전트를 제어하고 명령을 보낼 수 있습니다",
+      "roleAdminDesc": "멤버 및 설정을 관리할 수 있습니다",
+      "cancel": "취소",
+      "sending": "전송 중...",
+      "sendInvite": "초대 보내기",
+      "inviteSent": "초대를 보냈습니다!",
+      "shareWith": "이 링크를 공유하세요",
+      "copied": "복사됨!",
+      "copy": "복사",
+      "done": "완료"
+    },
+    "shareModal": {
+      "title": "세션 공유",
+      "chatLabel": "채팅",
+      "chatDesc": "AI 대화만",
+      "remoteLabel": "원격",
+      "remoteDesc": "스크린샷 + 데스크탑",
+      "permissionLabel": "권한 수준",
+      "authRequired": "계정 필요",
+      "expiresAfter": "만료 기간",
+      "maxViewers": "최대 시청자",
+      "hide": "숨기기",
+      "activeShares": "활성 공유",
+      "creating": "생성 중...",
+      "createChatLink": "채팅 링크 생성",
+      "createRemoteLink": "원격 링크 생성",
+      "expires": "만료",
+      "revoke": "취소",
+      "shareLinkCreated": "공유 링크가 생성되었습니다!",
+      "viewerMustLogin": "이 링크를 사용하려면 시청자가 로그인해야 합니다",
+      "copy": "복사",
+      "copied": "복사됨!",
+      "expiresAt": "만료:",
+      "done": "완료",
+      "failedToCreate": "공유 링크를 만들지 못했습니다",
+      "expiry1h": "1시간",
+      "expiry6h": "6시간",
+      "expiry24h": "24시간",
+      "expiry7d": "7일",
+      "chatView": {
+        "label": "보기 전용",
+        "desc": "AI 대화를 실시간으로 읽기"
+      },
+      "chatControl": {
+        "label": "제어",
+        "desc": "읽기 + 메시지 보내기 + 작업 승인/거부"
+      },
+      "remoteView": {
+        "label": "보기 전용",
+        "desc": "스크린샷 + 채팅을 실시간으로 보기"
+      },
+      "remoteControl": {
+        "label": "제어",
+        "desc": "스크린샷 + 메시지 보내기 + 승인/거부"
+      },
+      "remoteFull": {
+        "label": "전체 접근",
+        "desc": "데스크탑 입력을 포함한 전체 원격 제어"
+      }
+    },
+    "onboarding": {
+      "title": "첫 번째 머신을 연결하세요",
+      "subtitle": "머신에 ADHDev를 설치하고 로그인하면 자동으로 연결되어 여기에 표시됩니다. 그런 다음 이 대시보드에서 모든 에이전트를 제어하세요.",
+      "platformMac": "🍎🐧 macOS / Linux",
+      "platformWindows": "🪟 Windows",
+      "copyTitle": "클릭하여 복사",
+      "copiedLabel": "✓ 복사됨",
+      "copyLabel": "📋 복사",
+      "listeningLabel": "데몬을 기다리는 중 — 페이지를 열어두세요, 자동으로 나타납니다.",
+      "connectingLabel": "ADHDev에 연결 중…",
+      "step1Title": "데몬 설치",
+      "step1Desc": "제어하려는 머신에서 위 명령을 실행하세요. 데몬과 adhdev CLI가 함께 설치됩니다.",
+      "step2Title": "로그인 — 머신이 자동으로 연결됩니다",
+      "step2Desc": "데몬이 이 계정에 자동으로 연결됩니다. 토큰을 복사할 필요 없이 연결되는 순간 여기에 나타납니다.",
+      "step3Title": "첫 세션을 시작하세요",
+      "step3Desc": "머신이 온라인 상태가 되면 대시보드에서 Claude Code, Codex, Cursor 등을 바로 시작할 수 있습니다.",
+      "readDocs": "📚 문서 읽기 →"
     }
   },
   "historyModal": {

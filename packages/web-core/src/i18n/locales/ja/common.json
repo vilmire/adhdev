@@ -700,6 +700,95 @@
       "colTime": "時刻",
       "logCount": "ログ {{count}} 件",
       "logCountFiltered": " ({{total}} 件から絞り込み)"
+    },
+    "inviteModal": {
+      "title": "Invite Team Member",
+      "subtitle": "Send an invite link via email",
+      "manageSeats": "→ Manage seats in Billing",
+      "emailLabel": "Email Address",
+      "emailPlaceholder": "colleague@company.com",
+      "roleLabel": "Role",
+      "roleViewer": "Viewer",
+      "roleMember": "Member",
+      "roleAdmin": "Admin",
+      "roleViewerDesc": "Can view dashboards and chat history",
+      "roleMemberDesc": "Can control agents and send commands",
+      "roleAdminDesc": "Can manage members and settings",
+      "cancel": "Cancel",
+      "sending": "Sending...",
+      "sendInvite": "Send Invite",
+      "inviteSent": "Invite sent!",
+      "shareWith": "Share this link with",
+      "copied": "Copied!",
+      "copy": "Copy",
+      "done": "Done"
+    },
+    "shareModal": {
+      "title": "Share Session",
+      "chatLabel": "Chat",
+      "chatDesc": "AI conversation only",
+      "remoteLabel": "Remote",
+      "remoteDesc": "Screenshot + desktop",
+      "permissionLabel": "Permission Level",
+      "authRequired": "Account required",
+      "expiresAfter": "Expires After",
+      "maxViewers": "Max Viewers",
+      "hide": "Hide",
+      "activeShares": "Active Shares",
+      "creating": "Creating...",
+      "createChatLink": "Create Chat Link",
+      "createRemoteLink": "Create Remote Link",
+      "expires": "expires",
+      "revoke": "Revoke",
+      "shareLinkCreated": "Share link created!",
+      "viewerMustLogin": "Viewer must be logged in to use this link",
+      "copy": "Copy",
+      "copied": "Copied!",
+      "expiresAt": "Expires:",
+      "done": "Done",
+      "failedToCreate": "Failed to create share link",
+      "expiry1h": "1 hour",
+      "expiry6h": "6 hours",
+      "expiry24h": "24 hours",
+      "expiry7d": "7 days",
+      "chatView": {
+        "label": "View Only",
+        "desc": "Read AI conversation in real-time"
+      },
+      "chatControl": {
+        "label": "Control",
+        "desc": "Read + send messages + approve/reject actions"
+      },
+      "remoteView": {
+        "label": "View Only",
+        "desc": "Watch screenshots + chat in real-time"
+      },
+      "remoteControl": {
+        "label": "Control",
+        "desc": "Screenshots + send messages + approve/reject"
+      },
+      "remoteFull": {
+        "label": "Full Access",
+        "desc": "Full remote control including desktop input"
+      }
+    },
+    "onboarding": {
+      "title": "Connect your first machine",
+      "subtitle": "Install ADHDev on a machine and sign in — it pairs itself and shows up here. Then drive every agent on it from this dashboard.",
+      "platformMac": "🍎🐧 macOS / Linux",
+      "platformWindows": "🪟 Windows",
+      "copyTitle": "Click to copy",
+      "copiedLabel": "✓ Copied",
+      "copyLabel": "📋 Copy",
+      "listeningLabel": "Listening for your daemon — keep this page open, it will appear automatically.",
+      "connectingLabel": "Connecting to ADHDev…",
+      "step1Title": "Install the daemon",
+      "step1Desc": "Run the command above on any machine you want to drive. It installs the daemon plus the adhdev CLI.",
+      "step2Title": "Sign in — the machine pairs itself",
+      "step2Desc": "The daemon links to this account automatically. No token to copy; it appears here the moment it connects.",
+      "step3Title": "Launch your first session",
+      "step3Desc": "Once a machine is online, start Claude Code, Codex, Cursor, and other agents straight from the dashboard.",
+      "readDocs": "📚 Read the documentation →"
     }
   },
   "historyModal": {
