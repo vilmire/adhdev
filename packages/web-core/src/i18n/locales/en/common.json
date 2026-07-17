@@ -435,12 +435,9 @@
       "selectMachineFirst": "Select a machine first",
       "noRegisteredWorkspaces": "No registered workspaces",
       "name": "Name",
-      "namePlaceholder": "my-project-mesh",
       "remoteUrl": "Repo remote URL (optional)",
       "remoteUrlHint": "Provide a remote URL OR a stable identity.",
-      "remoteUrlPlaceholder": "https://github.com/user/repo",
       "repoIdentity": "Repo identity (optional)",
-      "repoIdentityPlaceholder": "github.com/user/repo",
       "create": "Create",
       "cancel": "Cancel",
       "loading": "Loading meshes...",
@@ -543,7 +540,6 @@
       "selectMachine": "Select a machine...",
       "workspacePath": "Workspace Path",
       "enterCustomPath": "Or enter a custom path →",
-      "pathPlaceholder": "/Users/dev/projects/myapp",
       "preferredTools": "Preferred AI tools (in order)",
       "preferredToolsHint": "Order used when launching without an explicit provider.",
       "add": "Add",
@@ -607,7 +603,6 @@
       "removeSlot": "Remove slot",
       "provider": "Provider",
       "select": "(select)",
-      "providerPlaceholder": "claude-cli",
       "model": "Model",
       "providerDefault": "(provider default)",
       "custom": "Custom…",
@@ -617,7 +612,6 @@
       "thinkingDefault": "(default)",
       "difficulty": "Difficulty (blank = all)",
       "capabilityTags": "Capability tags (comma-separated)",
-      "capabilityTagsPlaceholder": "worktree, os=darwin",
       "maxParallel": "Max parallel (per slot)",
       "maxParallelPlaceholder": "unlimited",
       "addSlot": "Add slot",
@@ -691,5 +685,8 @@
       "description": "Hermes does not auto-import repo-local .mcp.json. Add this YAML under mcp_servers in Hermes config, then start a fresh Hermes session.",
       "fallbackProvider": "Hermes CLI"
     }
+  },
+  "chat": {
+    "copyMessage": "Copy message"
   }
 }

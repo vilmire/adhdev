@@ -7,6 +7,7 @@
  */
 
 import { memo, useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkAlert from 'remark-github-blockquote-alert';
@@ -29,6 +30,7 @@ import {
 } from './chatMessageHelpers';
 
 function CopyButton({ text }: { text: string }) {
+    const { t } = useTranslation('common');
     const [copied, setCopied] = useState(false);
     const handleCopy = useCallback(() => {
         navigator.clipboard.writeText(text).catch(() => {});
@@ -39,7 +41,7 @@ function CopyButton({ text }: { text: string }) {
         <button
             type="button"
             onClick={handleCopy}
-            aria-label="메시지 복사"
+            aria-label={t('chat.copyMessage')}
             className="chat-copy-btn"
         >
             {copied ? <IconCheck size={11} /> : <IconClipboard size={11} />}

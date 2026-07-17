@@ -114,7 +114,7 @@
     "loadingMeshes": "메시 불러오는 중…",
     "noMeshes": "이 머신에 구성된 리포 메시가 없습니다. 먼저 메시를 생성하거나 동기화한 후 이 선택기를 다시 여세요.",
     "mesh": "메시",
-    "repoMesh": "리포 메시",
+    "repoMesh": "Repo Mesh",
     "nodeCount_one": "노드 {{count}}개",
     "nodeCount_other": "노드 {{count}}개",
     "coordinatorWorkspace": "코디네이터 워크스페이스: {{path}}",
@@ -416,17 +416,17 @@
   },
   "repoMesh": {
     "page": {
-      "title": "리포 메시",
+      "title": "Repo Mesh",
       "subtitle": "다중 워크스페이스 오케스트레이션",
       "waitingForDaemon": "데몬 연결 대기 중...",
       "observabilitySecondary": "메시 관측성"
     },
     "list": {
-      "title": "리포 메시",
+      "title": "Repo Meshes",
       "count_one": "메시 {{count}}개",
       "count_other": "메시 {{count}}개",
       "createMesh": "+ 메시 생성",
-      "createTitle": "리포 메시 생성",
+      "createTitle": "Create Repo Mesh",
       "createOnMachine": "생성할 머신",
       "createOnMachineHint": "메시 설정은 선택한 데몬에 저장됩니다.",
       "noConnectedDaemon": "연결된 데몬 없음",
@@ -435,21 +435,18 @@
       "selectMachineFirst": "머신을 먼저 선택하세요",
       "noRegisteredWorkspaces": "등록된 워크스페이스 없음",
       "name": "이름",
-      "namePlaceholder": "my-project-mesh",
       "remoteUrl": "리포 리모트 URL (선택)",
       "remoteUrlHint": "리모트 URL 또는 안정적인 식별자 중 하나를 제공하세요.",
-      "remoteUrlPlaceholder": "https://github.com/user/repo",
       "repoIdentity": "리포 식별자 (선택)",
-      "repoIdentityPlaceholder": "github.com/user/repo",
       "create": "생성",
       "cancel": "취소",
       "loading": "메시 불러오는 중...",
-      "emptyTitle": "리포 메시 없음",
+      "emptyTitle": "No Repo Meshes",
       "emptyWithDaemons": "메시를 생성하여 시작하세요.",
       "emptyNoDaemons": "먼저 ADHDev 데몬을 연결하세요.",
       "createFirst": "첫 메시 생성",
       "noRepoIdentity": "리포 식별자 없음",
-      "repoMeshFallback": "리포 메시",
+      "repoMeshFallback": "Repo Mesh",
       "nodesSuffix": "노드"
     },
     "detail": {
@@ -543,7 +540,6 @@
       "selectMachine": "머신을 선택하세요...",
       "workspacePath": "워크스페이스 경로",
       "enterCustomPath": "또는 사용자 지정 경로 입력 →",
-      "pathPlaceholder": "/Users/dev/projects/myapp",
       "preferredTools": "선호 AI 도구 (순서대로)",
       "preferredToolsHint": "명시적 프로바이더 없이 실행할 때 사용되는 순서.",
       "add": "추가",
@@ -607,7 +603,6 @@
       "removeSlot": "슬롯 제거",
       "provider": "프로바이더",
       "select": "(선택)",
-      "providerPlaceholder": "claude-cli",
       "model": "모델",
       "providerDefault": "(프로바이더 기본값)",
       "custom": "사용자 지정…",
@@ -617,7 +612,6 @@
       "thinkingDefault": "(기본값)",
       "difficulty": "난이도 (비우면 = 전체)",
       "capabilityTags": "역량 태그 (쉼표 구분)",
-      "capabilityTagsPlaceholder": "worktree, os=darwin",
       "maxParallel": "최대 병렬 (슬롯당)",
       "maxParallelPlaceholder": "무제한",
       "addSlot": "슬롯 추가",
@@ -691,5 +685,8 @@
       "description": "Hermes는 리포 로컬 .mcp.json을 자동 가져오지 않습니다. Hermes 구성의 mcp_servers 아래에 이 YAML을 추가한 뒤 새 Hermes 세션을 시작하세요.",
       "fallbackProvider": "Hermes CLI"
     }
+  },
+  "chat": {
+    "copyMessage": "메시지 복사"
   }
 }
