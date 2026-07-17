@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 
 import { useBaseDaemons } from '../context/BaseDaemonContext'
 import { useTransport } from '../context/TransportContext'
@@ -25,6 +25,11 @@ export function useInteractivePrompt(sessionId?: string | null): UseInteractiveP
   const [dismissedPromptId, setDismissedPromptId] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [responseError, setResponseError] = useState<string | null>(null)
+  // Synchronous in-flight guard: `isSubmitting` is React state and only reaches the
+  // modal on the next render, so two rapid clicks can both pass the state check before
+  // it flips. This ref rejects re-entrant submits in the same tick — the most common
+  // cause of an answered question staying "unresolved". See fix/interactive-question-submit-delay.
+  const submitInFlightRef = useRef(false)
 
   const foundSession = useMemo(() => findInteractivePromptSession(ides, sessionId), [ides, sessionId])
 
@@ -38,6 +43,9 @@ export function useInteractivePrompt(sessionId?: string | null): UseInteractiveP
 
   const submit = useCallback(async (selection: InteractivePromptSelection) => {
     if (!promptSession) return
+    // Reject re-entrant submits synchronously (before any await / state settle).
+    if (submitInFlightRef.current) return
+    submitInFlightRef.current = true
     const response = buildInteractivePromptResponse(promptSession.prompt, selection)
     setIsSubmitting(true)
     setResponseError(null)
@@ -55,6 +63,7 @@ export function useInteractivePrompt(sessionId?: string | null): UseInteractiveP
       throw error
     } finally {
       setIsSubmitting(false)
+      submitInFlightRef.current = false
     }
   }, [isP2PActive, p2pStates, promptSession, sendCommand])
 
