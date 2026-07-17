@@ -6,6 +6,7 @@
 
 import type { ChatMessage } from './types.js';
 import type { InteractivePrompt, InteractivePromptResponse } from './providers/types/interactive-prompt.js';
+import type { MeshSendKeyItem, MeshSendKeyName } from './cli-adapters/provider-cli-shared.js';
 
 export interface CliAdapterStatus {
     status?: string;
@@ -123,6 +124,29 @@ export interface CliAdapter {
     // MESH-STALL-WATCH watchdog must call it defensively (typeof guard) so a
     // missing implementation never throws in the 5s tick.
     isAlive?(): boolean;
+    // MESH-READ-TERMINAL (feature 2) / MESH-SEND-KEYS (feature 3). Optional
+    // because not every adapter implements the raw-terminal read / structured
+    // key-injection surface; callers (cli-provider-instance) MUST typeof-guard
+    // and return a clean unsupported result rather than throwing when absent.
+    // Both ProviderCliAdapter (PTY path) and SpecCliAdapter (native-source spec
+    // path — claude-cli / antigravity / codex-cli) implement them.
+    getTerminalScreenSnapshot?(maxBytes?: number): {
+        text: string;
+        cursor: { col: number; row: number };
+        cols: number;
+        rows: number;
+        truncated: boolean;
+        originalBytes: number;
+        returnedBytes: number;
+        hash: string;
+    };
+    injectKeys?(
+        items: MeshSendKeyItem[],
+        opts?: { allowModalOverride?: boolean },
+    ): Promise<
+        | { ok: true; keys: MeshSendKeyName[]; hasDestructive: boolean; submits: boolean; bytes: number }
+        | { ok: false; refused: 'submit_race' | 'actionable_modal'; keys: MeshSendKeyName[]; hasDestructive: boolean }
+    >;
     setOnStatusChange(callback: () => void): void;
     updateRuntimeSettings?(settings: Record<string, unknown>): void;
     setCliScripts?(scripts: Record<string, unknown>): void;

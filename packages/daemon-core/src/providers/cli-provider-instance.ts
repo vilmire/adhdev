@@ -2060,6 +2060,13 @@ export class CliProviderInstance implements ProviderInstance {
         hash: string;
     } | null {
         if (!this.isMeshWorkerSession()) return null;
+        // Defensive: not every CliAdapter implementation exposes the raw-terminal
+        // read (the surface is declared optional on CliAdapter). Returning null
+        // for an adapter that lacks it surfaces a clean unsupported refusal at
+        // the daemon command instead of "getTerminalScreenSnapshot is not a
+        // function" — the failure mode that broke mesh_read_terminal on the
+        // spec-driven path before SpecCliAdapter implemented it.
+        if (typeof this.adapter.getTerminalScreenSnapshot !== 'function') return null;
         return this.adapter.getTerminalScreenSnapshot(maxBytes);
     }
 
@@ -2080,10 +2087,17 @@ export class CliProviderInstance implements ProviderInstance {
         opts: { allowModalOverride?: boolean } = {},
     ): Promise<
         | { ok: true; keys: MeshSendKeyName[]; hasDestructive: boolean; submits: boolean; bytes: number }
-        | { ok: false; refused: 'submit_race' | 'actionable_modal' | 'not_mesh_worker'; keys: MeshSendKeyName[]; hasDestructive: boolean }
+        | { ok: false; refused: 'submit_race' | 'actionable_modal' | 'not_mesh_worker' | 'unsupported'; keys: MeshSendKeyName[]; hasDestructive: boolean }
     > {
         if (!this.isMeshWorkerSession()) {
             return { ok: false, refused: 'not_mesh_worker', keys: [], hasDestructive: false };
+        }
+        // Defensive: injectKeys is optional on CliAdapter. An adapter without it
+        // yields a clean 'unsupported' refusal instead of throwing
+        // "injectKeys is not a function" — the failure that broke mesh_send_keys
+        // on the spec-driven path before SpecCliAdapter implemented it.
+        if (typeof this.adapter.injectKeys !== 'function') {
+            return { ok: false, refused: 'unsupported', keys: [], hasDestructive: false };
         }
         return this.adapter.injectKeys(items, opts);
     }

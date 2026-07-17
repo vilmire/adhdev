@@ -120,4 +120,79 @@ maybe('claude-cli 4.0 approval ✻-spinner wedge', () => {
     const r = evaluateFsm(spec, 'approval', legacyScreen, { row: 5, col: 0 }, undefined, clock(5_000))
     expect(r.fired?.to).toBe('busy')
   })
+
+  /**
+   * APPROVAL-WEDGE (residual-spinner-while-modal-open, observed 2026-07-17):
+   * the INVERSE of the answered-resume wedge above. The approval modal is still
+   * fully open — the numbered choice block `❯ 1. Yes … 2. No` and the
+   * "Do you want to …" question are on screen — but a spinner line from the
+   * PRIOR turn (`✳ Tinkering…`) still lingers in the body. The unsectioned
+   * busy-spinner arm matched that stale spinner and (with the footer/modal
+   * section anchors momentarily flickering under repaint) the FSM left
+   * `approval` for `busy` within ~10s, so the modal never surfaced in
+   * mesh_list_pending_approvals and the worker wedged at the prompt.
+   *
+   * The numbered-choice-block NOT-guard keeps the FSM in `approval` while the
+   * `1. … 2. …` choices are on the raw screen, independent of section anchoring.
+   */
+  it('does NOT leave approval when the choice block is still on screen (stale prior-turn spinner)', () => {
+    const modalOpenWithResidualSpinner = [
+      '⏺ Reading the workflow file.',
+      '',
+      '✳ Tinkering… (1m 12s · ↓ 4.0k tokens)',
+      '',
+      '────────────────────────────────────────────────────────────────────────────────',
+      ' Do you want to run this command?',
+      '',
+      ' ❯ 1. Yes',
+      '   2. No, and tell Claude what to do differently',
+      '────────────────────────────────────────────────────────────────────────────────',
+      '  ➜ spec-notif-magi-manual git:(spec/notif-magi-manual)',
+    ].join('\n')
+    // Held well past approval→busy's min_hold; the choice block + question keep
+    // it parked in approval even though the residual ✳ spinner matches.
+    const r = evaluateFsm(spec, 'approval', modalOpenWithResidualSpinner, { row: 7, col: 0 }, undefined, clock(6_000))
+    expect(r.fired?.to).not.toBe('busy')
+  })
+
+  it('holds approval on the choice block alone when the question text has scrolled off (guard is load-bearing)', () => {
+    // Stricter than the case above: the "Do you want …" question has scrolled
+    // out of the captured frame (so the whole-screen + modal-section question
+    // NOT-guards no longer fire) and the footer section's last `❯` line is the
+    // shell prompt rather than the choice row — yet the numbered choice block
+    // `1. … 2. …` is still visible with a residual spinner. Only the new
+    // choice-block NOT-guard keeps this parked in approval.
+    const questionScrolledOff = [
+      ' ❯ 1. Yes',
+      '   2. No, and tell Claude what to do differently',
+      '',
+      '✳ Tinkering… (1m 12s · ↓ 4.0k tokens)',
+      '',
+      '────────────────────────────────────────────────────────────────────────────────',
+      '❯',
+      '────────────────────────────────────────────────────────────────────────────────',
+      '  ➜ spec-notif-magi-manual git:(spec/notif-magi-manual)',
+    ].join('\n')
+    const r = evaluateFsm(spec, 'approval', questionScrolledOff, { row: 6, col: 0 }, undefined, clock(6_000))
+    expect(r.fired?.to).not.toBe('busy')
+  })
+
+  it('leaves approval → busy once the choice block is gone even if a body numbered list remains', () => {
+    // Answered/resumed: the modal choice block is gone (footer is a bare ❯) and
+    // generation resumed with a live spinner. A lone `1.`-style numbered list in
+    // the transcript body without a following `2.` must NOT re-wedge approval —
+    // the guard requires BOTH `1.` and `2.` choice lines.
+    const answeredWithBodyList = [
+      '⏺ Step 1. checked the runs; the workflow re-triggered.',
+      '',
+      '✻ Moonwalking… (2m 03s · ↓ 6.0k tokens)',
+      '',
+      '────────────────────────────────────────────────────────────────────────────────',
+      '❯',
+      '────────────────────────────────────────────────────────────────────────────────',
+      '  ➜ spec-notif-magi-manual git:(spec/notif-magi-manual)',
+    ].join('\n')
+    const r = evaluateFsm(spec, 'approval', answeredWithBodyList, { row: 5, col: 0 }, undefined, clock(6_000))
+    expect(r.fired?.to).toBe('busy')
+  })
 })

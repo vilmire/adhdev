@@ -23,10 +23,17 @@ import { lastContiguousNumberedBlock } from './evaluator.js';
 import { executeNativeHistory } from './native-history-executor.js';
 import { detectBackgroundTaskActive } from './background-task-detector.js';
 import * as fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import type { NativeHistoryConfig, Control, ControlAction } from './types.js';
 import type { CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
 import type { ChatMessage } from '../../types.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
+import {
+    encodeMeshSendKeys,
+    truncateToByteTailByLine,
+    type MeshSendKeyItem,
+    type MeshSendKeyName,
+} from '../../cli-adapters/provider-cli-shared.js';
 import { LOG } from '../../logging/logger.js';
 import {
     buildClaudeInteractiveTuiAnswerSteps,
@@ -284,6 +291,112 @@ export class SpecCliAdapter implements CliAdapter {
     // session is alive. ProviderCliAdapter exposes the equivalent via `ptyProcess !== null`.
     isAlive(): boolean {
         return this.spawned && !this.exited;
+    }
+
+    // MESH-READ-TERMINAL / MESH-SEND-KEYS byte caps — same envelope as
+    // ProviderCliAdapter (32KiB default view, 64KiB absolute hard cap). Bytes,
+    // not chars: a multi-byte-glyph screen can exceed an MCP payload cap while
+    // the char count still looks safe.
+    private static readonly TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
+    private static readonly TERMINAL_SNAPSHOT_ABSOLUTE_MAX_BYTES = 64 * 1024;
+
+    /**
+     * MESH-READ-TERMINAL (feature 2: RAW terminal read). Least-privilege read
+     * of the CURRENT rendered viewport for mesh_read_terminal on the spec path
+     * (claude-cli / antigravity / codex-cli — the native-source providers that
+     * route through SpecCliAdapter). Mirrors ProviderCliAdapter.getTerminalScreenSnapshot:
+     *  - returns ONLY the driver's current viewport snapshot, the cursor
+     *    position and the terminal geometry — NO scrollback, NO parser/FSM
+     *    state, NO debug buffers;
+     *  - the payload is byte-bounded (UTF-8) with bottom-tail preservation so a
+     *    screen of multi-byte glyphs can never exceed the MCP payload cap;
+     *  - `hash` is over the FULL untruncated viewport so a caller can detect a
+     *    screen change across polls even when the returned text was truncated.
+     *
+     * SECURITY: the raw viewport can carry tokens / command args / env / user
+     * data. Callers MUST gate this on mesh ownership and MUST NOT log the text.
+     */
+    getTerminalScreenSnapshot(maxBytes = SpecCliAdapter.TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES): {
+        text: string;
+        cursor: { col: number; row: number };
+        cols: number;
+        rows: number;
+        truncated: boolean;
+        originalBytes: number;
+        returnedBytes: number;
+        hash: string;
+    } {
+        const cap = Math.min(
+            SpecCliAdapter.TERMINAL_SNAPSHOT_ABSOLUTE_MAX_BYTES,
+            Math.max(1024, Math.floor(maxBytes) || SpecCliAdapter.TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES),
+        );
+        let rawViewport = '';
+        try { rawViewport = this.driver.snapshot() || ''; } catch { rawViewport = ''; }
+        let cursor = { row: 0, col: 0 };
+        try { cursor = this.driver.getCursorPosition(); } catch { /* keep 0,0 */ }
+        // getScreenSize is optional on ISpecDriver; a test double may omit it.
+        let size = { cols: 0, rows: 0 };
+        try { size = this.driver.getScreenSize?.() ?? size; } catch { /* keep 0,0 */ }
+        const truncation = truncateToByteTailByLine(rawViewport, cap);
+        const hash = createHash('sha256').update(rawViewport, 'utf8').digest('hex').slice(0, 16);
+        return {
+            text: truncation.text,
+            cursor: { col: cursor.col, row: cursor.row },
+            cols: size.cols,
+            rows: size.rows,
+            truncated: truncation.truncated,
+            originalBytes: truncation.originalBytes,
+            returnedBytes: truncation.returnedBytes,
+            hash,
+        };
+    }
+
+    /**
+     * MESH-SEND-KEYS (feature 3: key injection). Inject a STRUCTURED key
+     * sequence into the spec-driven PTY for mesh_send_keys. Mirrors
+     * ProviderCliAdapter.injectKeys' modal fail-closed guard, then writes the
+     * whole encoded sequence in ONE pty_write dispatch (text+ENTER is a single
+     * contiguous string, so a submit key can never be separated from the text
+     * it submits).
+     *
+     * The spec path drives the child through the FsmDriver, not a directly-held
+     * ptyProcess — there is no adapter-level echo-gate/submit-retry FIFO to race
+     * against here (the driver serializes its own writes), so the only guard is
+     * the modal fail-closed: a NON-destructive injection into an actionable
+     * approval modal is refused (use mesh_approve) unless explicitly overridden.
+     * A destructive ESC/CTRL_C dismisses rather than confirms, so it is allowed
+     * past this gate (the tool layer owns the destructive double-gate + audit).
+     * This method NEVER logs the literal text — only key enums / byte length.
+     */
+    async injectKeys(
+        items: MeshSendKeyItem[],
+        opts: { allowModalOverride?: boolean } = {},
+    ): Promise<
+        | { ok: true; keys: MeshSendKeyName[]; hasDestructive: boolean; submits: boolean; bytes: number }
+        | { ok: false; refused: 'submit_race' | 'actionable_modal'; keys: MeshSendKeyName[]; hasDestructive: boolean }
+    > {
+        if (!this.spawned || this.exited) throw new Error(`${this.cliName} is not running`);
+        const encoded = encodeMeshSendKeys(items);
+
+        // Modal fail-closed — a NON-destructive injection while parked on an
+        // actionable approval modal is refused so a modal choice can't be
+        // confirmed via send_keys and bypass the approval policy.
+        const modalActive = this.latestState?.status === 'approval';
+        if (modalActive && !encoded.hasDestructive && !opts.allowModalOverride) {
+            LOG.warn('SpecAdapter', `[${this.cliType}] send_keys refused (actionable_modal): keys=${encoded.keys.join(',')} — use mesh_approve`);
+            return { ok: false, refused: 'actionable_modal', keys: encoded.keys, hasDestructive: encoded.hasDestructive };
+        }
+
+        // Atomic write: the full encoded sequence goes out in ONE pty_write.
+        this.driver.dispatch({ kind: 'pty_write', data: encoded.sequence });
+        LOG.info('SpecAdapter', `[${this.cliType}] send_keys injected keys=${encoded.keys.join(',') || '(text-only)'} bytes=${Buffer.byteLength(encoded.sequence, 'utf8')} destructive=${encoded.hasDestructive}`);
+        return {
+            ok: true,
+            keys: encoded.keys,
+            hasDestructive: encoded.hasDestructive,
+            submits: encoded.submits,
+            bytes: Buffer.byteLength(encoded.sequence, 'utf8'),
+        };
     }
 
     setOnStatusChange(cb: () => void): void {

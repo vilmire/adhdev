@@ -122,6 +122,10 @@ export interface ISpecDriver {
     snapshot(): string;
     getCursorPosition(): { row: number; col: number };
     getScreen(): string;
+    /** Current terminal geometry (columns × rows). Optional so a non-Fsm
+     *  ISpecDriver implementation (test doubles) need not provide it; the
+     *  mesh_read_terminal path falls back to a 0×0 geometry when absent. */
+    getScreenSize?(): { cols: number; rows: number };
     getSpecPath(): string;
     shutdown(): void;
     getStateHistory(): ReadonlyArray<DriverHistoryEntry>;
@@ -443,6 +447,7 @@ export class FsmDriver implements ISpecDriver {
     snapshot(): string { return this.adapter.snapshot(); }
     getCursorPosition(): { row: number; col: number } { return this.adapter.getCursorPosition(); }
     getScreen(): string { return this.adapter.snapshot(); }
+    getScreenSize(): { cols: number; rows: number } { return this.adapter.getScreenSize(); }
 
     /** Scrollback-inclusive screen as line array — used only for modal/button
      *  content extraction so a tall prompt's off-screen anchors stay matchable.

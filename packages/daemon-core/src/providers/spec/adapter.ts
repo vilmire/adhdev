@@ -175,6 +175,13 @@ export class TerminalAdapter {
         return { row: pos.row, col: pos.col };
     }
 
+    /** Current terminal geometry (columns × rows). Tracked here rather than
+     *  read off the screen buffer so a resize is reflected immediately, before
+     *  the next repaint. Consumed by the mesh_read_terminal viewport read. */
+    getScreenSize(): { cols: number; rows: number } {
+        return { cols: this.cols, rows: this.rows };
+    }
+
     send_keys(text: string): void {
         this.recordEvent('input', capPreview(escapeControl(text)), text.length);
         this.pty?.write(text);
