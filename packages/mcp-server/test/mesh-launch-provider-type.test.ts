@@ -11,15 +11,15 @@ import { buildMeshNodeCapabilityTags } from '@adhdev/daemon-core';
 // required_tags: ["provider=cursor-cli"] is satisfiable on a node whose slots include
 // cursor-cli even when providerPriority[0] is claude-cli.
 
-function makeCtx(nodePolicy: Record<string, unknown>) {
+function makeCtx(nodePolicy: Record<string, unknown>, existingSessions: any[] = []) {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const launchCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
-    // MESH-LAUNCH-DUP-GUARD probes live status before launch; no existing session here.
-    if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
+    // MESH-LAUNCH-DUP-GUARD probes live status before launch; tests may seed existing sessions.
+    if (command === 'get_status_metadata') return { success: true, status: { sessions: existingSessions } };
     if (command === 'get_mesh') return { success: true, mesh: (args as any).inlineMesh || mesh };
     if (command === 'trigger_mesh_queue') return { success: true, trigger: { success: true } };
     if (command === 'launch_cli') {
@@ -147,4 +147,76 @@ test('mesh_list_nodes capabilityTagsByProvider covers slot-only providers', asyn
   assert.ok(node, 'node-mac present');
   assert.deepEqual(Object.keys(node.capabilityTagsByProvider).sort(), ['claude-cli', 'cursor-cli']);
   assert.ok(node.capabilityTagsByProvider['cursor-cli'].includes('provider=cursor-cli'));
+});
+
+// PROVIDER-MISMATCH-REUSE dup-guard: mesh_launch_session(type:X, force=false) must NOT
+// reuse an existing idle session of a DIFFERENT provider. It previously returned any
+// non-terminal mesh-owned session, handing back the wrong provider (antigravity) for a
+// claude-cli request. The guard now compares the resolved provider before reusing.
+
+function idleMeshSession(meshId: string, nodeId: string, providerType: string, sessionId: string) {
+  // Minimal record that isMeshOwnedDelegateSession + isIdleSessionRecord accept.
+  return {
+    sessionId,
+    status: 'idle',
+    providerType,
+    settings: { meshNodeFor: meshId, meshNodeId: nodeId },
+  };
+}
+
+test('dup-guard: provider mismatch → launch a fresh session (no reuse)', async () => {
+  const { ctx, launchCalls } = makeCtx(
+    { providerPriority: ['claude-cli'], slots: [{ provider: 'claude-cli' }, { provider: 'antigravity' }] },
+    [idleMeshSession('mesh-cursor', 'node-mac', 'antigravity', 'antigravity-1')],
+  );
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'claude-cli' }));
+  // Must NOT be an idempotent reuse of the antigravity session.
+  assert.notEqual(result.reused, true, `should not reuse mismatched provider: ${JSON.stringify(result)}`);
+  const launch = launchCalls.find(c => c.command === 'launch_cli');
+  assert.ok(launch, 'a fresh launch_cli was issued for the requested provider');
+  assert.equal(launch!.args.cliType, 'claude-cli');
+});
+
+test('dup-guard: provider match → reuse the existing session (no duplicate launch)', async () => {
+  const { ctx, launchCalls } = makeCtx(
+    { providerPriority: ['claude-cli'], slots: [{ provider: 'claude-cli' }] },
+    [idleMeshSession('mesh-cursor', 'node-mac', 'claude-cli', 'claude-1')],
+  );
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'claude-cli' }));
+  assert.equal(result.reused, true, `matching provider should reuse: ${JSON.stringify(result)}`);
+  assert.equal(result.sessionId, 'claude-1');
+  // No new session spawned.
+  assert.equal(launchCalls.some(c => c.command === 'launch_cli'), false);
+});
+
+test('dup-guard: existing session with UNKNOWN provider is still reused (regression guard)', async () => {
+  // The provider filter only rejects on a DEFINITE mismatch — both sides known and unequal.
+  // A live session whose record carries no resolvable provider (older/partial status record)
+  // must keep the original "reuse the idle worker" behaviour so the guard never regresses into
+  // spawning a duplicate against a session it simply can't classify.
+  const unknownProviderSession = {
+    sessionId: 'unknown-1',
+    status: 'idle',
+    settings: { meshNodeFor: 'mesh-cursor', meshNodeId: 'node-mac' },
+  };
+  const { ctx, launchCalls } = makeCtx(
+    { providerPriority: ['claude-cli'], slots: [{ provider: 'claude-cli' }] },
+    [unknownProviderSession],
+  );
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'claude-cli' }));
+  assert.equal(result.reused, true, `unknown-provider session should still be reused: ${JSON.stringify(result)}`);
+  assert.equal(result.sessionId, 'unknown-1');
+  assert.equal(launchCalls.some(c => c.command === 'launch_cli'), false);
+});
+
+test('dup-guard: force=true bypasses the guard entirely (always launches)', async () => {
+  const { ctx, launchCalls } = makeCtx(
+    { providerPriority: ['claude-cli'], slots: [{ provider: 'claude-cli' }] },
+    [idleMeshSession('mesh-cursor', 'node-mac', 'claude-cli', 'claude-1')],
+  );
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'claude-cli', force: true }));
+  assert.notEqual(result.reused, true, `force=true must not reuse: ${JSON.stringify(result)}`);
+  const launch = launchCalls.find(c => c.command === 'launch_cli');
+  assert.ok(launch, 'force=true always issues a launch');
+  assert.equal(launch!.args.cliType, 'claude-cli');
 });

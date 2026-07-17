@@ -1087,9 +1087,24 @@ export async function meshLaunchSession(
             try {
                 const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {});
                 const sessions = extractStatusMetadataSessions(statusResult);
-                const existing = sessions.find(session =>
-                    !isTerminalSessionRecord(session)
-                    && isMeshOwnedDelegateSession(session, ctx.mesh.id, args.node_id));
+                // PROVIDER-MISMATCH-REUSE: only reuse a live session whose provider matches the
+                // resolved request. Without this the guard returned ANY non-terminal mesh-owned
+                // session — so mesh_launch_session(type:"claude-cli", force=false) against a node
+                // with an idle antigravity worker handed back the antigravity session (and the
+                // subsequent mesh_send_task ran the task on the wrong provider). Only enforce when
+                // a concrete provider was requested/resolved (resolvedProviderType truthy); an
+                // unconstrained launch keeps the original "reuse any idle worker" behaviour, and a
+                // definite mismatch (both sides known and unequal) falls through to a fresh launch.
+                // force=true still bypasses the whole guard above.
+                const existing = sessions.find(session => {
+                    if (isTerminalSessionRecord(session)) return false;
+                    if (!isMeshOwnedDelegateSession(session, ctx.mesh.id, args.node_id)) return false;
+                    if (resolvedProviderType) {
+                        const sessionProviderType = resolveSessionProviderType(session);
+                        if (sessionProviderType && sessionProviderType !== resolvedProviderType) return false;
+                    }
+                    return true;
+                });
                 if (existing) {
                     const existingSessionId = readSessionRecordId(existing);
                     if (existingSessionId) {
