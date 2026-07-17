@@ -4,6 +4,7 @@
  */
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 import type { DaemonData } from '../../types'
 import { EmptyState } from '../ui/EmptyState'
 import { StatusBadge } from '../ui/StatusBadge'
@@ -43,14 +44,15 @@ function getErrorMessage(error: unknown, fallback: string): string {
 }
 
 export function ConnectedMachinesSection({ ides, emptyMessage, sendDaemonCommand, onDisconnect, onRevokeToken }: ConnectedMachinesSectionProps) {
+    const { t } = useTranslation('common')
     const machines = ides.filter((i) => i.type === 'adhdev-daemon')
 
     if (machines.length === 0) {
         return (
             <EmptyState
                 icon={<img src="/otter-logo.png" alt="ADHDev" className="w-12 h-12 object-contain mx-auto opacity-90" />}
-                title="No machines connected"
-                description={emptyMessage || 'Install ADHDev on a machine and sign in to connect it here.'}
+                title={t('machine.connectedMachines.noMachines')}
+                description={emptyMessage || t('machine.connectedMachines.defaultDescription')}
             />
         )
     }
@@ -81,6 +83,7 @@ function ConfirmDialog({ title, message, confirmLabel, confirmColor, onConfirm, 
     onConfirm: () => void
     onCancel: () => void
 }) {
+    const { t } = useTranslation('common')
     const colorClass = confirmColor === 'red'
         ? 'bg-status-error/20 text-status-error border-status-error/40 hover:bg-status-error/30'
         : ''
@@ -101,7 +104,7 @@ function ConfirmDialog({ title, message, confirmLabel, confirmColor, onConfirm, 
                         onClick={onCancel}
                         className="text-xs px-3 py-1.5 rounded-lg font-medium bg-bg-secondary text-text-secondary border border-border-subtle hover:bg-bg-glass transition-colors"
                     >
-                        Cancel
+                        {t('common.cancel')}
                     </button>
                     <button
                         onClick={onConfirm}
@@ -147,6 +150,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
     onDisconnect?: (daemonId: string) => Promise<any>
     onRevokeToken?: (daemonId: string) => Promise<any>
 }) {
+    const { t } = useTranslation('common')
     const [upgradeState, setUpgradeState] = useState<'idle' | 'upgrading' | 'done' | 'error'>('idle')
     const [upgradeMsg, setUpgradeMsg] = useState('')
     const [confirmAction, setConfirmAction] = useState<'disconnect' | 'revoke' | null>(null)
@@ -170,7 +174,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
     const handleUpgrade = async () => {
         if (!sendDaemonCommand) return
         setUpgradeState('upgrading')
-        setUpgradeMsg('Starting upgrade...')
+        setUpgradeMsg(t('machine.connectedMachines.startingUpgrade'))
         try {
             const result = unwrapUpgradeResult(await sendDaemonCommand(ide.id, 'daemon_upgrade', {}))
             if (result.alreadyLatest) {
@@ -196,10 +200,10 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
         try {
             await onDisconnect(ide.id)
             setActionState('done')
-            setActionMsg('Machine disconnected.')
+            setActionMsg(t('machine.connectedMachines.machineDisconnected'))
         } catch (e) {
             setActionState('error')
-            setActionMsg(getErrorMessage(e, 'Failed to disconnect'))
+            setActionMsg(getErrorMessage(e, t('machine.connectedMachines.failedToDisconnect')))
         }
     }
 
@@ -210,10 +214,10 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
         try {
             await onRevokeToken(ide.id)
             setActionState('done')
-            setActionMsg('Token revoked. Restart ADHDev on that machine to reconnect.')
+            setActionMsg(t('machine.connectedMachines.tokenRevoked'))
         } catch (e) {
             setActionState('error')
-            setActionMsg(getErrorMessage(e, 'Failed to revoke token'))
+            setActionMsg(getErrorMessage(e, t('machine.connectedMachines.failedToRevokeToken')))
         }
     }
 
@@ -257,12 +261,12 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                             >
                                 {upgradeState === 'upgrading' ? (
                                     <span className="flex items-center gap-1">
-                                        <span className="animate-spin">⟳</span> Upgrading...
+                                        <span className="animate-spin">⟳</span> {t('machine.connectedMachines.upgrading')}
                                     </span>
                                 ) : upgradeState === 'done' ? (
-                                    '✓ Updated'
+                                    t('machine.connectedMachines.updated')
                                 ) : (
-                                    `${requiresUpdate ? '↑ Update now' : `↑ Update${appVersion ? ` to v${appVersion}` : ''}`}`
+                                    requiresUpdate ? t('machine.connectedMachines.updateNow') : (appVersion ? t('machine.connectedMachines.updateTo', { version: appVersion }) : t('machine.connectedMachines.updateNow'))
                                 )}
                             </button>
                         )}
@@ -273,7 +277,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                                 className="btn btn-sm btn-warning disabled:opacity-50 disabled:cursor-not-allowed"
                                 title="Disconnect this machine"
                             >
-                                Disconnect
+                                {t('machine.connectedMachines.disconnect')}
                             </button>
                         )}
                         {onRevokeToken && (
@@ -283,7 +287,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                                 className="btn btn-sm btn-danger disabled:opacity-50 disabled:cursor-not-allowed"
                                 title="Remove machine (requires re-setup)"
                             >
-                                Remove
+                                {t('machine.connectedMachines.remove')}
                             </button>
                         )}
                         <StatusBadge status={ide.status === 'online' ? 'online' : 'error'} />
@@ -304,7 +308,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                             />
                             <span className="text-text-muted">
                                 P2P {p2p.state === 'connected' ? 'connected' :
-                                     p2p.state === 'connecting' || p2p.state === 'new' ? 'connecting...' :
+                                     p2p.state === 'connecting' || p2p.state === 'new' ? t('machine.connectedMachines.connecting') :
                                      p2p.state || 'off'}
                             </span>
                             {p2p.peers !== undefined && p2p.peers > 0 && (
@@ -332,7 +336,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                                             <span
                                                 className={`w-1.5 h-1.5 rounded-full ${cdp ? 'bg-status-online' : 'animate-pulse'}`}
                                                 style={!cdp ? { background: 'var(--status-warning)' } : undefined}
-                                                title={cdp ? 'CDP connected' : 'CDP connecting...'} />
+                                                title={cdp ? t('machine.connectedMachines.cdpConnected') : t('machine.connectedMachines.cdpConnecting')} />
                                         )}
                                     </span>
                                 )
@@ -351,7 +355,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                             ))}
                         </div>
                     ) : (
-                        <span className="text-[11px] text-text-muted/60 italic">No IDEs connected</span>
+                        <span className="text-[11px] text-text-muted/60 italic">{t('machine.connectedMachines.noIdesConnected')}</span>
                     )}
                 </div>
 
@@ -370,9 +374,9 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
             {/* Confirmation Dialogs */}
             {confirmAction === 'disconnect' && (
                 <ConfirmDialog
-                    title="🔌 Disconnect Machine"
+                    title={t('machine.connectedMachines.disconnectTitle')}
                     message={`Disconnect "${nickname}" from ADHDev?\n\nThis will close the server connection. The daemon process will continue running on the machine and will automatically reconnect.\n\nUse this if you want to temporarily stop remote control.`}
-                    confirmLabel="Disconnect"
+                    confirmLabel={t('machine.connectedMachines.disconnect')}
                     confirmColor="amber"
                     onConfirm={handleDisconnect}
                     onCancel={() => setConfirmAction(null)}
@@ -380,9 +384,9 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
             )}
             {confirmAction === 'revoke' && (
                 <ConfirmDialog
-                    title="⚠️ Remove Machine"
+                    title={t('machine.connectedMachines.removeTitle')}
                     message={`Remove "${nickname}" from your dashboard?\n\nThis will:\n• Immediately disconnect the machine\n• Delete the machine registration\n• Require restarting ADHDev on that machine\n\nUse this if you want to permanently remove a machine.`}
-                    confirmLabel="Remove Machine"
+                    confirmLabel={t('machine.connectedMachines.remove')}
                     confirmColor="red"
                     onConfirm={handleRevoke}
                     onCancel={() => setConfirmAction(null)}

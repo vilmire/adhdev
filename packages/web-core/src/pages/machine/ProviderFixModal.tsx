@@ -9,18 +9,13 @@
  * - Cancel running task
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { ProviderInfo } from './types'
 
 const SCRIPTS = [
     'openPanel', 'sendMessage', 'readChat', 'newSession',
     'listSessions', 'switchSession', 'resolveAction',
     'listModels', 'setModel', 'listModes', 'setMode', 'focusEditor',
-]
-
-const AGENTS = [
-    { value: 'codex-cli', label: 'Codex CLI', desc: 'OpenAI o3/gpt-5.4', color: '#22c55e' },
-    { value: 'claude-cli', label: 'Claude Code', desc: 'Anthropic Claude', color: '#a855f7' },
-    { value: 'gemini-cli', label: 'Gemini CLI', desc: 'Google Gemini', color: '#3b82f6' },
 ]
 
 interface ProviderFixModalProps {
@@ -33,6 +28,12 @@ interface ProviderFixModalProps {
 type Phase = 'config' | 'running' | 'done' | 'error'
 
 export default function ProviderFixModal({ machineId, provider, sendDaemonCommand, onClose }: ProviderFixModalProps) {
+    const { t } = useTranslation('common')
+    const AGENTS_I18N = [
+        { value: 'codex-cli', label: 'Codex CLI', desc: t('machine.providerFix.descCodex'), color: '#22c55e' },
+        { value: 'claude-cli', label: 'Claude Code', desc: t('machine.providerFix.descClaude'), color: '#a855f7' },
+        { value: 'gemini-cli', label: 'Gemini CLI', desc: t('machine.providerFix.descGemini'), color: '#3b82f6' },
+    ]
     const [phase, setPhase] = useState<Phase>('config')
     const [agent, setAgent] = useState('codex-cli')
     const [selectedScripts, setSelectedScripts] = useState<string[]>([])
@@ -123,8 +124,8 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                     <div className="flex items-center gap-2.5">
                         <span className="text-lg">{provider.icon || '🔧'}</span>
                         <div>
-                            <h2 className="text-[15px] font-semibold text-text-primary">Auto-Fix: {provider.displayName}</h2>
-                            <p className="text-[11px] text-text-muted mt-0.5">AI agent will implement provider scripts</p>
+                            <h2 className="text-[15px] font-semibold text-text-primary">{t('machine.providerFix.titlePrefix', { name: provider.displayName })}</h2>
+                            <p className="text-[11px] text-text-muted mt-0.5">{t('machine.providerFix.footerHint')}</p>
                         </div>
                     </div>
                     <button onClick={onClose} className="text-text-muted hover:text-text-primary text-lg leading-none">×</button>
@@ -136,9 +137,9 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                         <div className="flex flex-col gap-4">
                             {/* Agent Selection */}
                             <div>
-                                <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">AI Agent</label>
+                                <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">{t('machine.providerFix.aiAgent')}</label>
                                 <div className="flex gap-2">
-                                    {AGENTS.map(a => (
+                                    {AGENTS_I18N.map(a => (
                                         <button
                                             key={a.value}
                                             onClick={() => setAgent(a.value)}
@@ -160,11 +161,11 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                             {/* Script Selection */}
                             <div>
                                 <div className="flex items-center justify-between mb-1.5">
-                                    <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider">Scripts to Fix</label>
+                                    <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider">{t('machine.providerFix.scriptsToFix')}</label>
                                     <div className="flex gap-1.5">
-                                        <button onClick={selectAll} className="text-[10px] text-violet-400 hover:text-violet-300">All</button>
+                                        <button onClick={selectAll} className="text-[10px] text-violet-400 hover:text-violet-300">{t('machine.providerFix.all')}</button>
                                         <span className="text-[10px] text-text-muted">|</span>
-                                        <button onClick={selectNone} className="text-[10px] text-text-muted hover:text-text-secondary">None</button>
+                                        <button onClick={selectNone} className="text-[10px] text-text-muted hover:text-text-secondary">{t('machine.providerFix.none')}</button>
                                     </div>
                                 </div>
                                 <div className="grid grid-cols-3 gap-1.5">
@@ -188,7 +189,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                             {/* Comment */}
                             <div>
                                 <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">
-                                    Additional Instructions <span className="text-text-muted font-normal">(optional)</span>
+                                    {t('machine.providerFix.additionalInstructions')} <span className="text-text-muted font-normal">{t('machine.providerFix.optional')}</span>
                                 </label>
                                 <textarea
                                     value={comment}
@@ -203,7 +204,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
 
                     {(phase === 'running' || phase === 'done' || phase === 'error') && (
                         <div>
-                            <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">Agent Output</label>
+                            <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">{t('machine.providerFix.agentOutput')}</label>
                             <div
                                 className="rounded-lg border border-border-subtle bg-bg-secondary p-3 font-mono text-[11px] leading-relaxed text-text-secondary overflow-y-auto"
                                 style={{ maxHeight: 320, minHeight: 200 }}
@@ -214,7 +215,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                                     </div>
                                 ))}
                                 {phase === 'running' && (
-                                    <div className="text-violet-400 animate-pulse mt-1">● Running...</div>
+                                    <div className="text-violet-400 animate-pulse mt-1">{t('machine.providerFix.running')}</div>
                                 )}
                                 <div ref={logsEndRef} />
                             </div>
@@ -230,14 +231,14 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                 {/* Footer */}
                 <div className="px-5 py-3.5 border-t border-border-subtle flex justify-between items-center">
                     <div className="text-[10px] text-text-muted">
-                        {phase === 'config' && selectedScripts.length > 0 && `${selectedScripts.length} script(s) selected`}
-                        {phase === 'running' && 'Agent is generating...'}
-                        {phase === 'done' && 'Run `adhdev provider verify` to validate'}
+                        {phase === 'config' && selectedScripts.length > 0 && t('machine.providerFix.scriptsSelected', { count: selectedScripts.length })}
+                        {phase === 'running' && t('machine.providerFix.agentGenerating')}
+                        {phase === 'done' && t('machine.providerFix.validateHint')}
                     </div>
                     <div className="flex gap-2">
                         {phase === 'config' && (
                             <>
-                                <button onClick={onClose} className="machine-btn">Cancel</button>
+                                <button onClick={onClose} className="machine-btn">{t('machine.providerFix.cancel')}</button>
                                 <button
                                     onClick={handleStart}
                                     disabled={selectedScripts.length === 0}
@@ -249,21 +250,21 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                                         opacity: selectedScripts.length === 0 ? 0.4 : 1,
                                     }}
                                 >
-                                    🚀 Start Fix
+                                    {t('machine.providerFix.startFix')}
                                 </button>
                             </>
                         )}
                         {phase === 'running' && (
                             <button onClick={handleCancel} className="machine-btn text-red-400 border-red-500/30">
-                                ⬛ Cancel
+                                {t('machine.providerFix.cancelRunning')}
                             </button>
                         )}
                         {(phase === 'done' || phase === 'error') && (
                             <>
                                 <button onClick={() => { setPhase('config'); setLogs([]); setError(''); }} className="machine-btn">
-                                    ← Back
+                                    {t('machine.providerFix.back')}
                                 </button>
-                                <button onClick={onClose} className="machine-btn">Close</button>
+                                <button onClick={onClose} className="machine-btn">{t('machine.providerFix.close')}</button>
                             </>
                         )}
                     </div>

@@ -5,6 +5,7 @@
  * Custom theme editor allows full app + chat color customization.
  */
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { getReadableAccentTextColor } from '../../utils/color-contrast'
 
 // ─── Theme Definitions ──────────────────────────
@@ -334,6 +335,7 @@ function EditorSection({ title, children }: { title: string; children: React.Rea
 
 // ─── Custom Theme Editor ────────────────────────
 function CustomThemeEditor({ dark: isDark, onColorsChange }: { dark: boolean; onColorsChange: (c: CustomThemeColors) => void }) {
+    const { t } = useTranslation('common')
     const mode = isDark ? 'dark' : 'light'
     const [colors, setColors] = useState(() => getCustomThemeColors(mode))
 
@@ -365,53 +367,53 @@ function CustomThemeEditor({ dark: isDark, onColorsChange }: { dark: boolean; on
                 color: 'var(--text-primary)', marginBottom: 14,
                 display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' as const,
             }}>
-                🎨 Custom Theme Editor
+                {t('settings.theme.customEditorTitle')}
                 <span style={{
                     fontSize: '0.65rem', fontWeight: 500,
                     color: 'var(--text-muted)', background: 'var(--bg-glass)',
                     padding: '2px 8px', borderRadius: 4,
                 }}>
-                    {isDark ? '🌙 Dark' : '☀️ Light'} mode
+                    {isDark ? t('settings.theme.darkMode') : t('settings.theme.lightMode')}
                 </span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {/* Left: App Colors */}
                 <div>
-                    <EditorSection title="App Background">
-                        <ColorRow label="Background" value={colors.bgPrimary} onChange={v => update('bgPrimary', v)} />
-                        <ColorRow label="Surface" value={colors.bgSecondary} onChange={v => update('bgSecondary', v)} />
-                        <ColorRow label="Card" value={colors.surfacePrimary} onChange={v => update('surfacePrimary', v)} />
+                    <EditorSection title={t('settings.theme.sectionAppBackground')}>
+                        <ColorRow label={t('settings.theme.colorBackground')} value={colors.bgPrimary} onChange={v => update('bgPrimary', v)} />
+                        <ColorRow label={t('settings.theme.colorSurface')} value={colors.bgSecondary} onChange={v => update('bgSecondary', v)} />
+                        <ColorRow label={t('settings.theme.colorCard')} value={colors.surfacePrimary} onChange={v => update('surfacePrimary', v)} />
                     </EditorSection>
 
-                    <EditorSection title="App Text">
-                        <ColorRow label="Primary" value={colors.textPrimary} onChange={v => update('textPrimary', v)} />
-                        <ColorRow label="Secondary" value={colors.textSecondary} onChange={v => update('textSecondary', v)} />
-                        <ColorRow label="Muted" value={colors.textMuted} onChange={v => update('textMuted', v)} />
+                    <EditorSection title={t('settings.theme.sectionAppText')}>
+                        <ColorRow label={t('settings.theme.colorPrimary')} value={colors.textPrimary} onChange={v => update('textPrimary', v)} />
+                        <ColorRow label={t('settings.theme.colorSecondary')} value={colors.textSecondary} onChange={v => update('textSecondary', v)} />
+                        <ColorRow label={t('settings.theme.colorMuted')} value={colors.textMuted} onChange={v => update('textMuted', v)} />
                     </EditorSection>
 
-                    <EditorSection title="Borders & Accent">
-                        <ColorRow label="Border subtle" value={colors.borderSubtle} onChange={v => update('borderSubtle', v)} />
-                        <ColorRow label="Border default" value={colors.borderDefault} onChange={v => update('borderDefault', v)} />
-                        <ColorRow label="Accent" value={colors.accentColor} onChange={v => update('accentColor', v)} />
+                    <EditorSection title={t('settings.theme.sectionBordersAccent')}>
+                        <ColorRow label={t('settings.theme.colorBorderSubtle')} value={colors.borderSubtle} onChange={v => update('borderSubtle', v)} />
+                        <ColorRow label={t('settings.theme.colorBorderDefault')} value={colors.borderDefault} onChange={v => update('borderDefault', v)} />
+                        <ColorRow label={t('settings.theme.colorAccent')} value={colors.accentColor} onChange={v => update('accentColor', v)} />
                     </EditorSection>
                 </div>
 
                 {/* Right: Chat Colors */}
                 <div>
-                    <EditorSection title="Chat Bubbles">
-                        <ColorRow label="User bubble" value={colors.userBubble} onChange={v => update('userBubble', v)} />
-                        <ColorRow label="User text" value={colors.userText} onChange={v => update('userText', v)} />
-                        <ColorRow label="Agent bubble" value={colors.assistantBubble} onChange={v => update('assistantBubble', v)} />
-                        <ColorRow label="Agent text" value={colors.assistantText} onChange={v => update('assistantText', v)} />
+                    <EditorSection title={t('settings.theme.sectionChatBubbles')}>
+                        <ColorRow label={t('settings.theme.colorUserBubble')} value={colors.userBubble} onChange={v => update('userBubble', v)} />
+                        <ColorRow label={t('settings.theme.colorUserText')} value={colors.userText} onChange={v => update('userText', v)} />
+                        <ColorRow label={t('settings.theme.colorAgentBubble')} value={colors.assistantBubble} onChange={v => update('assistantBubble', v)} />
+                        <ColorRow label={t('settings.theme.colorAgentText')} value={colors.assistantText} onChange={v => update('assistantText', v)} />
                     </EditorSection>
 
-                    <EditorSection title="Chat Layout">
-                        <ColorRow label="Chat BG" value={colors.containerBg} onChange={v => update('containerBg', v)} />
-                        <ColorRow label="Send button" value={colors.sendButton} onChange={v => update('sendButton', v)} />
-                        <ColorRow label="Input border" value={colors.inputBorder} onChange={v => update('inputBorder', v)} />
+                    <EditorSection title={t('settings.theme.sectionChatLayout')}>
+                        <ColorRow label={t('settings.theme.colorChatBg')} value={colors.containerBg} onChange={v => update('containerBg', v)} />
+                        <ColorRow label={t('settings.theme.colorSendButton')} value={colors.sendButton} onChange={v => update('sendButton', v)} />
+                        <ColorRow label={t('settings.theme.colorInputBorder')} value={colors.inputBorder} onChange={v => update('inputBorder', v)} />
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', flex: '1 1 0', minWidth: 0 }}>Bubble radius</span>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', flex: '1 1 0', minWidth: 0 }}>{t('settings.theme.labelBubbleRadius')}</span>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
                                 <input
                                     type="range" min={4} max={24} value={colors.bubbleRadius}
@@ -442,7 +444,7 @@ function CustomThemeEditor({ dark: isDark, onColorsChange }: { dark: boolean; on
                     borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
                 }}
             >
-                Reset to defaults
+                {t('settings.theme.resetToDefaults')}
             </button>
         </div>
     )
@@ -450,6 +452,7 @@ function CustomThemeEditor({ dark: isDark, onColorsChange }: { dark: boolean; on
 
 // ─── Component ──────────────────────────────────
 export function ChatThemeSection() {
+    const { t } = useTranslation('common')
     const [activeTheme, setActiveTheme] = useState(getChatTheme)
     const [dark, setDark] = useState(true)
     const [customColors, setCustomColors] = useState<CustomThemeColors>(() => getCustomThemeColors('dark'))
@@ -554,26 +557,26 @@ export function ChatThemeSection() {
                                     className="self-start rounded-xl px-3 py-1.5 text-[10px] max-w-[75%]"
                                     style={{ background: p.assistantBubble, border: p.assistantBorder, color: p.textColor }}
                                 >
-                                    Hello! How can I help?
+                                    {t('settings.theme.helloHelp')}
                                 </div>
                                 <div
                                     className="self-end rounded-xl px-3 py-1.5 text-[10px] max-w-[75%]"
                                     style={{ background: p.userBubble, color: userTextColor }}
                                 >
-                                    Fix the bug please
+                                    {t('settings.theme.fixBug')}
                                 </div>
                                 <div
                                     className="self-start rounded-xl px-3 py-1.5 text-[10px] max-w-[75%]"
                                     style={{ background: p.assistantBubble, border: p.assistantBorder, color: p.textColor }}
                                 >
-                                    On it! ✨
+                                    {t('settings.theme.onIt')}
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
                                 {isActive && <span className="w-2 h-2 rounded-full bg-accent shrink-0" />}
                                 <div>
                                     <div className="text-sm font-bold text-text-primary">
-                                        {theme.id === 'custom' ? '🎨 Custom' : theme.name}
+                                        {theme.id === 'custom' ? t('settings.theme.customLabel') : theme.name}
                                     </div>
                                     <div className="text-[10px] text-text-muted">{theme.description}</div>
                                 </div>

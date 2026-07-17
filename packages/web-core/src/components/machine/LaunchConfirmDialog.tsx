@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { IconPlay, IconX } from '../Icons'
 import type { LaunchWorkspaceOption } from '../../pages/machine/types'
 
@@ -29,8 +30,8 @@ export default function LaunchConfirmDialog({
     workspaceOptions,
     selectedWorkspaceKey,
     onWorkspaceChange,
-    confirmLabel = 'Launch',
-    busyLabel = 'Launching…',
+    confirmLabel,
+    busyLabel,
     busy = false,
     showArgsInput,
     argsValue,
@@ -42,6 +43,9 @@ export default function LaunchConfirmDialog({
     onConfirm,
     onCancel,
 }: LaunchConfirmDialogProps) {
+    const { t } = useTranslation('common')
+    const resolvedConfirmLabel = confirmLabel ?? t('machine.launchConfirm.launch')
+    const resolvedBusyLabel = busyLabel ?? t('machine.launchConfirm.launching')
     const selectedWorkspace = workspaceOptions?.find(option => option.key === selectedWorkspaceKey)
 
     return (
@@ -65,7 +69,7 @@ export default function LaunchConfirmDialog({
                         type="button"
                         className="inline-flex items-center justify-center w-8 h-8 rounded-full border border-border-subtle bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-surface-primary transition-colors shrink-0"
                         onClick={onCancel}
-                        aria-label="Close launch confirmation"
+                        aria-label={t('machine.launchConfirm.closeAria')}
                     >
                         <IconX size={16} />
                     </button>
@@ -75,7 +79,7 @@ export default function LaunchConfirmDialog({
                     {workspaceOptions && workspaceOptions.length > 0 && onWorkspaceChange && (
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
                             <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">
-                                Workspace
+                                {t('machine.launchConfirm.workspace')}
                             </div>
                             <select
                                 value={selectedWorkspaceKey || ''}
@@ -110,13 +114,13 @@ export default function LaunchConfirmDialog({
                     {showModelInput && onModelChange && (
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
                             <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">
-                                Language Model (Optional)
+                                {t('machine.launchConfirm.languageModel')}
                             </div>
                             <input
                                 type="text"
                                 value={modelValue || ''}
                                 onChange={(e) => onModelChange(e.target.value)}
-                                placeholder="Auto-detect or default"
+                                placeholder={t('machine.launchConfirm.autoDetect')}
                                 className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm placeholder:text-text-muted"
                                 disabled={busy}
                             />
@@ -125,13 +129,13 @@ export default function LaunchConfirmDialog({
                     {showArgsInput && onArgsChange && (
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
                             <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">
-                                CLI Arguments (Optional)
+                                {t('machine.launchConfirm.cliArgs')}
                             </div>
                             <input
                                 type="text"
                                 value={argsValue || ''}
                                 onChange={(e) => onArgsChange(e.target.value)}
-                                placeholder="e.g. --experimental"
+                                placeholder={t('machine.launchConfirm.cliArgsPlaceholder')}
                                 className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm placeholder:text-text-muted"
                                 disabled={busy}
                             />
@@ -146,7 +150,7 @@ export default function LaunchConfirmDialog({
                         onClick={onCancel}
                         disabled={busy}
                     >
-                        Cancel
+                        {t('machine.launchConfirm.cancel')}
                     </button>
                     <button
                         type="button"
@@ -155,7 +159,7 @@ export default function LaunchConfirmDialog({
                         disabled={busy}
                     >
                         <IconPlay size={14} />
-                        {busy ? busyLabel : confirmLabel}
+                        {busy ? resolvedBusyLabel : resolvedConfirmLabel}
                     </button>
                 </div>
             </div>

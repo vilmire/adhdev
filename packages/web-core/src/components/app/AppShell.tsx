@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { IconX } from '../Icons'
 import ThemeToggle from '../ThemeToggle'
 import LanguageSelector from '../LanguageSelector'
@@ -56,6 +57,7 @@ export default function AppShell({
     preMainContent,
     collapsedStorageKey = 'sidebar-collapsed',
 }: AppShellProps) {
+    const { t } = useTranslation('common')
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
     const [collapsed, setCollapsed] = useState(() => {
         try { return localStorage.getItem(collapsedStorageKey) === '1' } catch { return false }
@@ -103,7 +105,7 @@ export default function AppShell({
             <button
                 type="button"
                 className="mobile-menu-btn"
-                aria-label="Open menu"
+                aria-label={t('app.openMenu')}
                 onClick={openMobileMenu}
             >
                 <span className="mobile-menu-icon" />
@@ -116,7 +118,7 @@ export default function AppShell({
                     className="sidebar-overlay"
                     role="button"
                     tabIndex={0}
-                    aria-label="Close menu"
+                    aria-label={t('app.closeMenu')}
                     onClick={closeMobileMenu}
                     onKeyDown={(e) => e.key === 'Escape' && closeMobileMenu()}
                 />
@@ -130,7 +132,7 @@ export default function AppShell({
                     <button
                         type="button"
                         className="sidebar-close-btn"
-                        aria-label="Close menu"
+                        aria-label={t('app.closeMenu')}
                         onClick={closeMobileMenu}
                     >
                         <IconX size={16} />

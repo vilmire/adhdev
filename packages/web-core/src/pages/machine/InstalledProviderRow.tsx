@@ -10,6 +10,7 @@
  * can edit the manifest directly or use the Reset command + Detect cycle.
  */
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import Card from '../../components/Card'
 import type { ProviderInfo, ProviderSettingsEntry } from './types'
 import TrustBadge, { type ProviderTrust } from './TrustBadge'
@@ -31,13 +32,6 @@ function safeHttpHref(raw: unknown): string | null {
 }
 
 type ProviderMachineCheck = NonNullable<ProviderInfo['lastDetection']>
-
-const STATUS_LABEL: Record<string, string> = {
-    detected: 'Detected',
-    not_detected: 'Not detected',
-    enabled_unchecked: 'Enabled (unchecked)',
-    disabled: 'Disabled',
-}
 
 const STATUS_CLASS: Record<string, string> = {
     detected: 'bg-green-500/[0.10] border-green-500/25 text-green-400',
@@ -83,6 +77,13 @@ export default function InstalledProviderRow({
     onDetect,
     onResetCommand,
 }: InstalledProviderRowProps) {
+    const { t } = useTranslation('common')
+    const STATUS_LABEL_I18N: Record<string, string> = {
+        detected: t('machine.providerRow.statusDetected'),
+        not_detected: t('machine.providerRow.statusNotDetected'),
+        enabled_unchecked: t('machine.providerRow.statusEnabledUnchecked'),
+        disabled: t('machine.providerRow.statusDisabled'),
+    }
     const [expanded, setExpanded] = useState(false)
     const enabled = providerInfo?.enabled === true || prov.values.enabled === true
     // If we've just locally enabled the provider but the status broadcast
@@ -117,7 +118,7 @@ export default function InstalledProviderRow({
                 )}
                 {isRuntime && (
                     <span className={`text-[9px] font-semibold px-1.5 py-px rounded border ${STATUS_CLASS[machineStatus] ?? STATUS_CLASS.disabled}`}>
-                        {STATUS_LABEL[machineStatus] ?? machineStatus}
+                        {STATUS_LABEL_I18N[machineStatus] ?? machineStatus}
                     </span>
                 )}
                 <div className="ml-auto flex items-center gap-1.5">
@@ -126,7 +127,7 @@ export default function InstalledProviderRow({
                             onClick={(e) => { e.stopPropagation(); void onEnableToggle(prov.type, !enabled) }}
                             disabled={savingKey === `${prov.type}.enabled`}
                             className={`machine-btn text-[10px] px-2 py-0.5 ${enabled ? 'text-red-400 border-red-500/25' : 'text-green-400 border-green-500/25'}`}
-                        >{enabled ? 'Disable' : 'Enable'}</button>
+                        >{enabled ? t('machine.providerRow.disable') : t('machine.providerRow.enable')}</button>
                     )}
                     <span className="text-text-muted text-xs">{expanded ? '▾' : '▸'}</span>
                 </div>
@@ -138,28 +139,28 @@ export default function InstalledProviderRow({
                     {/* Details: manifest metadata + source identity. Pulled
                         from the daemon's status broadcast — no extra round-trip. */}
                     <div className="grid gap-1 text-[10px] text-text-muted">
-                        <div><span className="text-text-secondary font-medium">Type:</span> <span className="font-mono">{prov.type}</span></div>
+                        <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelType')}</span> <span className="font-mono">{prov.type}</span></div>
                         {(providerInfo as any)?.providerVersion && (
-                            <div><span className="text-text-secondary font-medium">Version:</span> {(providerInfo as any).providerVersion}</div>
+                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelVersion')}</span> {(providerInfo as any).providerVersion}</div>
                         )}
                         {(providerInfo as any)?.binary && (
-                            <div><span className="text-text-secondary font-medium">Binary:</span> <span className="font-mono">{(providerInfo as any).binary}</span></div>
+                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelBinary')}</span> <span className="font-mono">{(providerInfo as any).binary}</span></div>
                         )}
                         {(providerInfo as any)?.status && (
-                            <div><span className="text-text-secondary font-medium">Status:</span> {(providerInfo as any).status}</div>
+                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelStatus')}</span> {(providerInfo as any).status}</div>
                         )}
                         {(providerInfo as any)?.details && (
-                            <div><span className="text-text-secondary font-medium">Details:</span> {(providerInfo as any).details}</div>
+                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelDetails')}</span> {(providerInfo as any).details}</div>
                         )}
                         {(providerInfo as any)?.sourceLayer && (
                             <div>
-                                <span className="text-text-secondary font-medium">Source:</span>{' '}
+                                <span className="text-text-secondary font-medium">{t('machine.providerRow.labelSource')}</span>{' '}
                                 {(providerInfo as any).sourceLayer}
                                 {(providerInfo as any).sourceName ? ` · ${(providerInfo as any).sourceName}` : ''}
                             </div>
                         )}
                         {(providerInfo as any)?.trust && (providerInfo as any)?.trustDescription && (
-                            <div><span className="text-text-secondary font-medium">Trust:</span> {(providerInfo as any).trustDescription}</div>
+                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelTrust')}</span> {(providerInfo as any).trustDescription}</div>
                         )}
                         {(() => {
                             const links = (providerInfo as any)?.links as Record<string, unknown> | undefined
@@ -170,7 +171,7 @@ export default function InstalledProviderRow({
                             if (safe.length === 0) return null
                             return (
                                 <div>
-                                    <span className="text-text-secondary font-medium">Links:</span>{' '}
+                                    <span className="text-text-secondary font-medium">{t('machine.providerRow.labelLinks')}</span>{' '}
                                     {safe.map(({ k, href }) => (
                                         <a
                                             key={k}
@@ -186,8 +187,8 @@ export default function InstalledProviderRow({
                     </div>
                     {isRuntime && (
                         <div className="grid gap-1 text-[10px] text-text-muted">
-                            <div><span className="text-text-secondary font-medium">Detection:</span> {formatCheck(providerInfo?.lastDetection)}</div>
-                            <div><span className="text-text-secondary font-medium">Verification:</span> {formatCheck(providerInfo?.lastVerification)}</div>
+                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelDetection')}</span> {formatCheck(providerInfo?.lastDetection)}</div>
+                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelVerification')}</span> {formatCheck(providerInfo?.lastVerification)}</div>
                         </div>
                     )}
 
@@ -200,7 +201,7 @@ export default function InstalledProviderRow({
                                         <div className="text-[11px] font-medium text-text-primary">
                                             {s.label || s.key}
                                             {savingKey === `${prov.type}.${s.key}` && (
-                                                <span className="ml-1.5 text-[9px] text-violet-500">saving…</span>
+                                                <span className="ml-1.5 text-[9px] text-violet-500">{t('machine.providerRow.saving')}</span>
                                             )}
                                         </div>
                                         {s.description && (
@@ -264,11 +265,11 @@ export default function InstalledProviderRow({
                                     disabled={!enabled || savingKey === `${prov.type}.detect`}
                                     className={`machine-btn text-[10px] px-2 py-0.5 text-blue-400 border-blue-500/25 ${enabled ? '' : 'opacity-40 cursor-not-allowed'}`}
                                     title={enabled ? 'Run detection for the configured executable' : 'Enable provider before detection'}
-                                >Detect</button>
+                                >{t('machine.providerRow.detect')}</button>
                                 <button
                                     onClick={() => void onResetCommand(prov.type)}
                                     className="machine-btn text-[10px] px-2 py-0.5"
-                                >Reset command</button>
+                                >{t('machine.providerRow.resetCommand')}</button>
                             </>
                         )}
                     </div>

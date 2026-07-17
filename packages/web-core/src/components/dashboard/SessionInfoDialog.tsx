@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useTransport } from '../../context/TransportContext'
 import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
 import {
@@ -100,6 +101,7 @@ function formatRelative(ms?: number): string {
 }
 
 export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }: Props) {
+    const { t } = useTranslation('common')
     const { sendCommand } = useTransport()
     const meshOverrides = useDashboardMeshOverrides()
     const [loading, setLoading] = useState(true)
@@ -125,7 +127,7 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
             const envelope = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
             const inner = (envelope.result && typeof envelope.result === 'object' ? envelope.result : envelope) as SessionInfoResponse
             if (!inner?.success) {
-                setError(inner?.error || 'Failed to load session info')
+                setError(inner?.error || t('sessionInfo.failedToLoad'))
                 setData(null)
             } else {
                 setData(inner)
@@ -152,7 +154,7 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
             const raw = await meshOverrides.loadMeshStatus(daemonId, meshId, { refresh: false })
             const node = joinMeshNodeForSession(raw, meshNodeId)
             if (!node) {
-                setMeshNodeError('This session is stamped to a mesh node that the coordinator no longer reports.')
+                setMeshNodeError(t('sessionInfo.stampedToNode'))
                 return
             }
             setMeshNode(node)
@@ -169,12 +171,12 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                 type="button"
                 onClick={() => void load()}
                 className="px-3 py-1 text-sm rounded border border-border-default hover:bg-surface-secondary"
-            >Refresh</button>
+            >{t('sessionInfo.refresh')}</button>
             <button
                 type="button"
                 onClick={onClose}
                 className="px-3 py-1 text-sm rounded bg-accent text-white hover:opacity-90"
-            >Close</button>
+            >{t('sessionInfo.close')}</button>
         </>
     )
 
@@ -183,18 +185,18 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
            pointer-events: none so the bar doesn't steal clicks from the
            chat body. Dialog portals into <body> which is outside that
            subtree, so pointer events work correctly. */
-        <Dialog open onClose={onClose} title="Session info" size="lg" footer={footer}>
+        <Dialog open onClose={onClose} title={t('sessionInfo.title')} size="lg" footer={footer}>
             <div className="text-sm space-y-4">
-                    {loading && <div className="text-text-secondary">Loading…</div>}
+                    {loading && <div className="text-text-secondary">{t('sessionInfo.loading')}</div>}
                     {error && <div className="text-red-500">{error}</div>}
                     {data?.session && (
-                        <Section title="Session">
-                            <Row k="Session ID" v={<Mono>{data.session.sessionId}</Mono>} />
-                            <Row k="Provider" v={`${data.session.providerName || data.session.providerType} (${data.session.providerType})`} />
-                            {data.session.transport && <Row k="Transport" v={data.session.transport} />}
-                            {data.session.workspace && <Row k="Workspace" v={<Mono>{data.session.workspace}</Mono>} />}
+                        <Section title={t('sessionInfo.sectionSession')}>
+                            <Row k={t('sessionInfo.rowSessionId')} v={<Mono>{data.session.sessionId}</Mono>} />
+                            <Row k={t('sessionInfo.rowProvider')} v={`${data.session.providerName || data.session.providerType} (${data.session.providerType})`} />
+                            {data.session.transport && <Row k={t('sessionInfo.rowTransport')} v={data.session.transport} />}
+                            {data.session.workspace && <Row k={t('sessionInfo.rowWorkspace')} v={<Mono>{data.session.workspace}</Mono>} />}
                             <Row
-                                k="Spawned at"
+                                k={t('sessionInfo.rowSpawnedAt')}
                                 v={
                                     <>
                                         {formatTimestamp(data.session.spawnedAtMs)}
@@ -203,16 +205,16 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                 }
                             />
                             {data.session.providerSessionId && (
-                                <Row k="Provider session ID" v={<Mono>{data.session.providerSessionId}</Mono>} />
+                                <Row k={t('sessionInfo.rowProviderSessionId')} v={<Mono>{data.session.providerSessionId}</Mono>} />
                             )}
                             {!data.session.workspace && conv?.workspacePath && (
-                                <Row k="Workspace" v={<Mono>{conv.workspacePath}</Mono>} />
+                                <Row k={t('sessionInfo.rowWorkspace')} v={<Mono>{conv.workspacePath}</Mono>} />
                             )}
-                            {conv?.machineName && <Row k="Machine" v={conv.machineName} />}
-                            {conv?.connectionState && <Row k="Connection" v={conv.connectionState} />}
+                            {conv?.machineName && <Row k={t('sessionInfo.rowMachine')} v={conv.machineName} />}
+                            {conv?.connectionState && <Row k={t('sessionInfo.rowConnection')} v={conv.connectionState} />}
                             {conv?.git && (
                                 <Row
-                                    k="Workspace git"
+                                    k={t('sessionInfo.rowWorkspaceGit')}
                                     v={
                                         <span>
                                             {conv.git.branch || '(detached)'}
@@ -226,47 +228,47 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                         </Section>
                     )}
                     {data?.session?.launch && (
-                        <Section title="Launch">
+                        <Section title={t('sessionInfo.sectionLaunch')}>
                             {data.session.launch.command && (
-                                <Row k="Command" v={<Mono>{data.session.launch.command}</Mono>} />
+                                <Row k={t('sessionInfo.rowCommand')} v={<Mono>{data.session.launch.command}</Mono>} />
                             )}
                             {data.session.launch.cwd && (
-                                <Row k="Working directory" v={<Mono>{data.session.launch.cwd}</Mono>} />
+                                <Row k={t('sessionInfo.rowWorkingDirectory')} v={<Mono>{data.session.launch.cwd}</Mono>} />
                             )}
                             {Array.isArray(data.session.launch.args) && data.session.launch.args.length > 0 && (
-                                <Row k="Args" v={<Mono>{data.session.launch.args.join(' ')}</Mono>} />
+                                <Row k={t('sessionInfo.rowArgs')} v={<Mono>{data.session.launch.args.join(' ')}</Mono>} />
                             )}
                             {Array.isArray(data.session.launch.extraArgs) && data.session.launch.extraArgs.length > 0 && (
-                                <Row k="Extra args" v={<Mono>{data.session.launch.extraArgs.join(' ')}</Mono>} />
+                                <Row k={t('sessionInfo.rowExtraArgs')} v={<Mono>{data.session.launch.extraArgs.join(' ')}</Mono>} />
                             )}
                             {Array.isArray(data.session.launch.extraEnvKeys) && data.session.launch.extraEnvKeys.length > 0 && (
                                 <Row
-                                    k="Extra env"
+                                    k={t('sessionInfo.rowExtraEnv')}
                                     v={<Mono>{data.session.launch.extraEnvKeys.join(', ')}</Mono>}
                                 />
                             )}
                         </Section>
                     )}
                     {meshNode && (
-                        <Section title="Mesh node">
-                            {meshNode.nodeId && <Row k="Node ID" v={<Mono>{meshNode.nodeId}</Mono>} />}
-                            {meshNode.workspace && <Row k="Workspace" v={<Mono>{meshNode.workspace}</Mono>} />}
+                        <Section title={t('sessionInfo.sectionMeshNode')}>
+                            {meshNode.nodeId && <Row k={t('sessionInfo.rowNodeId')} v={<Mono>{meshNode.nodeId}</Mono>} />}
+                            {meshNode.workspace && <Row k={t('sessionInfo.rowWorkspace')} v={<Mono>{meshNode.workspace}</Mono>} />}
                             {meshNode.repoRoot && meshNode.repoRoot !== meshNode.workspace && (
-                                <Row k="Repo root" v={<Mono>{meshNode.repoRoot}</Mono>} />
+                                <Row k={t('sessionInfo.rowRepoRoot')} v={<Mono>{meshNode.repoRoot}</Mono>} />
                             )}
-                            {meshNode.daemonId && <Row k="Daemon ID" v={<Mono>{meshNode.daemonId}</Mono>} />}
-                            {meshNode.role && <Row k="Role" v={meshNode.role} />}
-                            {meshNode.machineStatus && <Row k="Machine status" v={meshNode.machineStatus} />}
-                            {meshNode.health && <Row k="Health" v={meshNode.health} />}
+                            {meshNode.daemonId && <Row k={t('sessionInfo.rowDaemonId')} v={<Mono>{meshNode.daemonId}</Mono>} />}
+                            {meshNode.role && <Row k={t('sessionInfo.rowRole')} v={meshNode.role} />}
+                            {meshNode.machineStatus && <Row k={t('sessionInfo.rowMachineStatus')} v={meshNode.machineStatus} />}
+                            {meshNode.health && <Row k={t('sessionInfo.rowHealth')} v={meshNode.health} />}
                             {meshNode.isLocalWorktree && (
-                                <Row k="Worktree" v={meshNode.worktreeBranch ? <Mono>{meshNode.worktreeBranch}</Mono> : 'yes'} />
+                                <Row k={t('sessionInfo.rowWorktree')} v={meshNode.worktreeBranch ? <Mono>{meshNode.worktreeBranch}</Mono> : 'yes'} />
                             )}
                             {typeof meshNode.launchReady === 'boolean' && (
-                                <Row k="Launch ready" v={meshNode.launchReady ? 'yes' : 'no'} />
+                                <Row k={t('sessionInfo.rowLaunchReady')} v={meshNode.launchReady ? 'yes' : 'no'} />
                             )}
                             {meshNode.git && (
                                 <Row
-                                    k="Git"
+                                    k={t('sessionInfo.rowGit')}
                                     v={
                                         <span>
                                             {meshNode.git.branch || '(detached)'}
@@ -292,24 +294,24 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                 />
                             )}
                             {Array.isArray(meshNode.providers) && meshNode.providers.length > 0 && (
-                                <Row k="Providers" v={<Mono>{meshNode.providers.join(', ')}</Mono>} />
+                                <Row k={t('sessionInfo.rowProviders')} v={<Mono>{meshNode.providers.join(', ')}</Mono>} />
                             )}
                             {Array.isArray(meshNode.providerPriority) && meshNode.providerPriority.length > 0 && (
-                                <Row k="Provider priority" v={<Mono>{meshNode.providerPriority.join(' › ')}</Mono>} />
+                                <Row k={t('sessionInfo.rowProviderPriority')} v={<Mono>{meshNode.providerPriority.join(' › ')}</Mono>} />
                             )}
                         </Section>
                     )}
                     {!meshNode && meshNodeError && (meshId || meshNodeId) && (
-                        <Section title="Mesh node">
+                        <Section title={t('sessionInfo.sectionMeshNode')}>
                             <div className="text-text-secondary italic">{meshNodeError}</div>
                         </Section>
                     )}
                     {data?.coordinator && (
-                        <Section title="Mesh coordinator">
-                            <Row k="Mesh ID" v={<Mono>{data.coordinator.meshId}</Mono>} />
-                            {data.coordinator.cliType && <Row k="Coordinator CLI" v={data.coordinator.cliType} />}
+                        <Section title={t('sessionInfo.sectionMeshCoordinator')}>
+                            <Row k={t('sessionInfo.rowMeshId')} v={<Mono>{data.coordinator.meshId}</Mono>} />
+                            {data.coordinator.cliType && <Row k={t('sessionInfo.rowCoordinatorCli')} v={data.coordinator.cliType} />}
                             <Row
-                                k="Started at"
+                                k={t('sessionInfo.rowStartedAt')}
                                 v={
                                     <>
                                         {formatTimestamp(data.coordinator.startedAt)}
@@ -319,12 +321,12 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                             />
                             {data.coordinator.injection && (
                                 <Row
-                                    k="Prompt injection"
+                                    k={t('sessionInfo.rowPromptInjection')}
                                     v={`${data.coordinator.injection.mode}${data.coordinator.injection.target ? ` → ${data.coordinator.injection.target}` : ''}`}
                                 />
                             )}
                             {data.coordinator.mcpConfigPath && (
-                                <Row k="MCP config" v={<Mono>{data.coordinator.mcpConfigPath}</Mono>} />
+                                <Row k={t('sessionInfo.rowMcpConfig')} v={<Mono>{data.coordinator.mcpConfigPath}</Mono>} />
                             )}
                             {data.coordinator.extraSystemPrompt && (
                                 <Block title="Per-launch extra prompt" body={data.coordinator.extraSystemPrompt} defaultOpen />
@@ -339,9 +341,7 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                     )}
                     {data && !data.coordinator && (
                         <div className="text-text-secondary italic">
-                            This isn't a mesh coordinator session, so no coordinator-specific
-                            prompt was injected. The agent runs with whatever defaults its CLI
-                            ships with.
+                            {t('sessionInfo.notCoordinatorSession')}
                         </div>
                     )}
                 </div>
@@ -377,6 +377,7 @@ function Mono({ children }: { children: React.ReactNode }) {
  * panel stays useful even as the metadata shape evolves.
  */
 function RuntimeMetadataSection({ meta }: { meta: unknown }) {
+    const { t } = useTranslation('common')
     if (!meta || typeof meta !== 'object') return null
     const m = meta as Record<string, unknown>
     const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null)
@@ -386,15 +387,15 @@ function RuntimeMetadataSection({ meta }: { meta: unknown }) {
     const recoveryState = str(m.recoveryState)
     const attached = Array.isArray(m.attachedClients) ? m.attachedClients.length : null
     return (
-        <Section title="Runtime">
-            {runtimeId && <Row k="Runtime ID" v={<Mono>{runtimeId}</Mono>} />}
-            {lifecycle && <Row k="Lifecycle" v={lifecycle} />}
-            {surfaceKind && <Row k="Surface" v={surfaceKind} />}
-            {recoveryState && <Row k="Recovery state" v={recoveryState} />}
+        <Section title={t('sessionInfo.sectionRuntime')}>
+            {runtimeId && <Row k={t('sessionInfo.rowRuntimeId')} v={<Mono>{runtimeId}</Mono>} />}
+            {lifecycle && <Row k={t('sessionInfo.rowLifecycle')} v={lifecycle} />}
+            {surfaceKind && <Row k={t('sessionInfo.rowSurface')} v={surfaceKind} />}
+            {recoveryState && <Row k={t('sessionInfo.rowRecoveryState')} v={recoveryState} />}
             {typeof m.restoredFromStorage === 'boolean' && (
-                <Row k="Restored from storage" v={m.restoredFromStorage ? 'yes' : 'no'} />
+                <Row k={t('sessionInfo.rowRestoredFromStorage')} v={m.restoredFromStorage ? 'yes' : 'no'} />
             )}
-            {attached != null && <Row k="Attached clients" v={String(attached)} />}
+            {attached != null && <Row k={t('sessionInfo.rowAttachedClients')} v={String(attached)} />}
             <Block title="Raw runtime metadata (click to expand)" body={safeJson(meta)} />
         </Section>
     )

@@ -7,6 +7,7 @@
  * - Calls scaffold API to create the user provider
  */
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { ProviderInfo } from './types'
 
 interface ProviderCloneModalProps {
@@ -18,6 +19,7 @@ interface ProviderCloneModalProps {
 }
 
 export default function ProviderCloneModal({ machineId, providers, sendDaemonCommand, onClose, onCreated }: ProviderCloneModalProps) {
+    const { t } = useTranslation('common')
     const ideProviders = providers.filter(p => p.category === 'ide')
     const [baseType, setBaseType] = useState(ideProviders[0]?.type || '')
     const [customType, setCustomType] = useState('')
@@ -75,8 +77,8 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
             >
                 {/* Header */}
                 <div className="px-5 py-4 border-b border-border-subtle">
-                    <h2 className="text-[15px] font-semibold text-text-primary">✨ Create User Provider</h2>
-                    <p className="text-[11px] text-text-muted mt-0.5">Clone an upstream IDE provider to customize</p>
+                    <h2 className="text-[15px] font-semibold text-text-primary">{t('machine.providerClone.title')}</h2>
+                    <p className="text-[11px] text-text-muted mt-0.5">{t('machine.providerClone.subtitle')}</p>
                 </div>
 
                 {/* Body */}
@@ -86,7 +88,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                             {/* Base Provider */}
                             <div>
                                 <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">
-                                    Base Provider
+                                    {t('machine.providerClone.baseProvider')}
                                 </label>
                                 <div className="grid grid-cols-3 gap-1.5">
                                     {ideProviders.map(p => (
@@ -111,28 +113,28 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                             {/* Custom Type */}
                             <div>
                                 <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">
-                                    Provider Type (ID)
+                                    {t('machine.providerClone.providerTypeId')}
                                 </label>
                                 <input
                                     value={customType}
                                     onChange={e => handleTypeChange(e.target.value)}
-                                    placeholder="my-cursor, custom-windsurf..."
+                                    placeholder={t('machine.providerClone.typeIdPlaceholder')}
                                     className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-bg-secondary text-text-primary text-[12px] placeholder:text-text-muted/50 focus:outline-none focus:border-violet-500/40"
                                 />
                                 <p className="text-[10px] text-text-muted mt-1">
-                                    Lowercase, alphanumeric + hyphens only. Will be created at <code className="text-violet-400">~/.adhdev/providers/{customType || '...'}/</code>
+                                    {t('machine.providerClone.typeIdHint')} <code className="text-violet-400">~/.adhdev/providers/{customType || '...'}/</code>
                                 </p>
                             </div>
 
                             {/* Display Name */}
                             <div>
                                 <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">
-                                    Display Name
+                                    {t('machine.providerClone.displayName')}
                                 </label>
                                 <input
                                     value={displayName}
                                     onChange={e => setDisplayName(e.target.value)}
-                                    placeholder="My Custom IDE"
+                                    placeholder={t('machine.providerClone.displayNamePlaceholder')}
                                     className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-bg-secondary text-text-primary text-[12px] placeholder:text-text-muted/50 focus:outline-none focus:border-violet-500/40"
                                 />
                             </div>
@@ -146,12 +148,12 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                     ) : (
                         <div className="text-center py-6">
                             <div className="text-3xl mb-2">🎉</div>
-                            <h3 className="text-[14px] font-semibold text-text-primary">Provider Created!</h3>
+                            <h3 className="text-[14px] font-semibold text-text-primary">{t('machine.providerClone.createdTitle')}</h3>
                             <p className="text-[11px] text-text-muted mt-1">
-                                <code className="text-violet-400">{customType}</code> has been created at <code className="text-green-400">~/.adhdev/providers/{customType}/</code>
+                                {t('machine.providerClone.createdDesc', { type: customType })} <code className="text-green-400">~/.adhdev/providers/{customType}/</code>
                             </p>
                             <p className="text-[11px] text-text-muted mt-2">
-                                Run <code className="text-violet-400">adhdev provider fix {customType}</code> or use Auto-Fix to implement scripts.
+                                {t('machine.providerClone.createdRunHint', { type: customType })}
                             </p>
                         </div>
                     )}
@@ -161,7 +163,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                 <div className="px-4 py-[calc(12px+env(safe-area-inset-bottom,0px))] sm:px-5 sm:py-3.5 border-t border-border-subtle flex justify-end gap-2 shrink-0">
                     {!created ? (
                         <>
-                            <button onClick={onClose} className="machine-btn">Cancel</button>
+                            <button onClick={onClose} className="machine-btn">{t('machine.providerClone.cancel')}</button>
                             <button
                                 onClick={handleCreate}
                                 disabled={!customType || !displayName || creating}
@@ -173,11 +175,11 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                                     opacity: !customType || !displayName || creating ? 0.4 : 1,
                                 }}
                             >
-                                {creating ? '⏳ Creating...' : '✨ Create Provider'}
+                                {creating ? t('machine.providerClone.creating') : t('machine.providerClone.createProvider')}
                             </button>
                         </>
                     ) : (
-                        <button onClick={onClose} className="machine-btn">Close</button>
+                        <button onClick={onClose} className="machine-btn">{t('machine.providerClone.close')}</button>
                     )}
                 </div>
             </div>

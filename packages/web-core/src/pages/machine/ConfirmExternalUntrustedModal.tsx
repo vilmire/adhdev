@@ -10,6 +10,7 @@
  * true`. Cancel just dismisses.
  */
 import { useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface ConfirmExternalUntrustedModalProps {
     /** Provider type the user is trying to activate. */
@@ -29,6 +30,7 @@ export default function ConfirmExternalUntrustedModal({
     onConfirm,
     onCancel,
 }: ConfirmExternalUntrustedModalProps) {
+    const { t } = useTranslation('common')
     const cancelRef = useRef<HTMLButtonElement | null>(null)
 
     useEffect(() => { cancelRef.current?.focus() }, [])
@@ -42,7 +44,7 @@ export default function ConfirmExternalUntrustedModal({
         <div
             role="dialog"
             aria-modal="true"
-            aria-label="Confirm untrusted external provider"
+            aria-label={t('machine.confirmExternal.dialogAria')}
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
             onClick={onCancel}
             style={{ pointerEvents: 'auto' }}
@@ -53,7 +55,7 @@ export default function ConfirmExternalUntrustedModal({
             >
                 <div className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
                     <span aria-hidden className="text-amber-400 text-base">⚠</span>
-                    <h2 className="text-sm font-semibold">Activate untrusted external provider?</h2>
+                    <h2 className="text-sm font-semibold">{t('machine.confirmExternal.title')}</h2>
                 </div>
                 <div className="px-4 py-3 text-[12px] flex flex-col gap-3">
                     <p>
@@ -61,10 +63,10 @@ export default function ConfirmExternalUntrustedModal({
                         {sourceName ? <> from <span className="font-mono">{sourceName}</span></> : null}.
                     </p>
                     <p className="text-text-secondary">
-                        {description ?? 'This manifest ships JavaScript that the daemon will execute. Treat as untrusted code — review the source before enabling.'}
+                        {description ?? t('machine.confirmExternal.description')}
                     </p>
                     <p className="text-text-secondary">
-                        Only proceed if you trust the source URL you added and have reviewed the manifest.
+                        {t('machine.confirmExternal.proceedWarning')}
                     </p>
                 </div>
                 <div className="px-4 py-2 border-t border-border-subtle flex justify-end gap-2">
@@ -73,12 +75,12 @@ export default function ConfirmExternalUntrustedModal({
                         type="button"
                         onClick={onCancel}
                         className="px-3 py-1 text-sm rounded border border-border-default hover:bg-surface-secondary"
-                    >Cancel</button>
+                    >{t('machine.confirmExternal.cancel')}</button>
                     <button
                         type="button"
                         onClick={onConfirm}
                         className="px-3 py-1 text-sm rounded bg-amber-500 text-black font-semibold hover:opacity-90"
-                    >Activate</button>
+                    >{t('machine.confirmExternal.activate')}</button>
                 </div>
             </div>
         </div>

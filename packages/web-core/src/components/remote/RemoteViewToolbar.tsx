@@ -1,4 +1,5 @@
 import type { Dispatch, KeyboardEvent, SetStateAction } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface RemoteViewToolbarProps {
     inputMode: 'touch' | 'mouse'
@@ -43,6 +44,7 @@ export default function RemoteViewToolbar({
     screenshotUsage,
     lastActionStatus,
 }: RemoteViewToolbarProps) {
+    const { t } = useTranslation('common')
     return (
         <>
             <div
@@ -57,7 +59,7 @@ export default function RemoteViewToolbar({
                 >
                     <span className="text-sm">{inputMode === 'mouse' ? '🖱️' : '👆'}</span>
                     <span className={`text-[10px] font-bold ${inputMode === 'mouse' ? 'text-blue-400' : 'text-slate-400'}`}>
-                        {inputMode === 'mouse' ? 'Mouse' : 'Touch'}
+                        {inputMode === 'mouse' ? t('remote.mouse') : t('remote.touch')}
                     </span>
                 </div>
 
@@ -74,7 +76,7 @@ export default function RemoteViewToolbar({
                         <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-[220px] bg-neutral-950/[0.98] backdrop-blur-[30px] rounded-xl border border-white/20 p-[10px_12px] shadow-[0_10px_30px_rgba(0,0,0,0.8)] flex flex-col gap-2 z-20" style={{ animation: 'slideUp 0.15s ease-out' }}>
                             <input
                                 type="text"
-                                placeholder="Type & Enter..."
+                                placeholder={t('remote.typeAndEnter')}
                                 value={imeText}
                                 autoFocus
                                 onTouchStart={e => e.stopPropagation()}
@@ -106,7 +108,7 @@ export default function RemoteViewToolbar({
                     >
                         <div className="w-1 h-1 rounded-full" style={{ background: isConnActive ? '#22c55e' : '#eab308', boxShadow: isConnActive ? '0 0 4px #22c55e80' : '0 0 4px #eab30880' }} />
                         <span className="text-[8px] font-extrabold" style={{ color: isConnActive ? '#22c55e' : '#eab308' }}>
-                            {isConnActive ? 'Connected' : 'WS'}
+                            {isConnActive ? t('remote.connected') : t('remote.ws')}
                         </span>
                     </div>
                     {zoom > 1.0 && (
@@ -116,18 +118,18 @@ export default function RemoteViewToolbar({
                         <span
                             className="text-[8px] font-bold px-1 py-0.5 rounded"
                             style={{ color: '#22c55e', background: 'rgba(34,197,94,0.12)' }}
-                            title="Direct P2P connection"
+                            title={t('remote.directP2PTitle')}
                         >
-                            Direct
+                            {t('remote.direct')}
                         </span>
                     )}
                     {transportType === 'relay' && (
                         <span
                             className="text-[8px] font-bold px-1 py-0.5 rounded"
                             style={{ color: 'var(--status-warning)', background: 'color-mix(in srgb, var(--status-warning) 12%, transparent)' }}
-                            title="TURN relay in use"
+                            title={t('remote.turnRelayTitle')}
                         >
-                            Relay
+                            {t('remote.relay')}
                         </span>
                     )}
                     {screenshotUsage && screenshotUsage.dailyBudgetMinutes > 0 && (
@@ -137,11 +139,11 @@ export default function RemoteViewToolbar({
                                 color: screenshotUsage.budgetExhausted ? '#ef4444' : '#c4b5fd',
                                 background: screenshotUsage.budgetExhausted ? 'rgba(239,68,68,0.1)' : 'rgba(139,92,246,0.14)',
                             }}
-                            title="Daily TURN relay usage"
+                            title={t('remote.dailyTurnTitle')}
                         >
                             {screenshotUsage.budgetExhausted
-                                ? 'TURN blocked'
-                                : `TURN ${screenshotUsage.dailyUsedMinutes}/${screenshotUsage.dailyBudgetMinutes}m`}
+                                ? t('remote.turnBlocked')
+                                : t('remote.turnUsage', { used: screenshotUsage.dailyUsedMinutes, budget: screenshotUsage.dailyBudgetMinutes })}
                         </span>
                     )}
                     {lastActionStatus && (
@@ -173,14 +175,14 @@ export default function RemoteViewToolbar({
                         animation: 'slideUpSidebar 0.15s ease-out',
                     }}
                 >
-                    <div style={{ fontSize: 9, fontWeight: 900, color: '#3b82f6', letterSpacing: 1.5 }}>SETTINGS</div>
+                    <div style={{ fontSize: 9, fontWeight: 900, color: '#3b82f6', letterSpacing: 1.5 }}>{t('remote.settings')}</div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         <div style={{ fontSize: 10, color: '#888', fontWeight: 700 }}>
-                            ZOOM: {zoom <= (isMobile ? mobileFillZoom : 1.0) + 0.01 ? (isMobile ? 'FILL' : 'FIT') : `${Math.round(zoom * 100)}%`}
+                            {t('remote.zoom')} {zoom <= (isMobile ? mobileFillZoom : 1.0) + 0.01 ? (isMobile ? t('remote.fill') : t('remote.fit')) : `${Math.round(zoom * 100)}%`}
                         </div>
                         <div style={{ display: 'flex', gap: 4 }}>
                             <button onClick={e => { e.stopPropagation(); onZoomOut() }} style={{ flex: 1, background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', padding: '6px', borderRadius: 6, fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>−</button>
-                            <button onClick={e => { e.stopPropagation(); onZoomReset() }} style={{ flex: 1, background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', padding: '6px', borderRadius: 6, fontSize: 9, fontWeight: 800, cursor: 'pointer' }}>{isMobile ? 'FILL' : 'FIT'}</button>
+                            <button onClick={e => { e.stopPropagation(); onZoomReset() }} style={{ flex: 1, background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', padding: '6px', borderRadius: 6, fontSize: 9, fontWeight: 800, cursor: 'pointer' }}>{isMobile ? t('remote.fill') : t('remote.fit')}</button>
                             <button onClick={e => { e.stopPropagation(); onZoomIn() }} style={{ flex: 1, background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', padding: '6px', borderRadius: 6, fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>+</button>
                         </div>
                     </div>

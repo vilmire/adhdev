@@ -3,6 +3,7 @@
  * Now includes Auto-Fix (AI agent script implementation) and Clone Provider modals.
  */
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { ProviderSettingsEntry, ProviderInfo } from './types'
 import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './providerSettings'
 import { extractProviderSourceConfigPayload, normalizeProviderDirInput, type ProviderSourceConfigPayload } from './providerSourceConfig'
@@ -18,6 +19,7 @@ interface ProvidersTabProps {
 }
 
 export default function ProvidersTab({ machineId, providers, sendDaemonCommand }: ProvidersTabProps) {
+    const { t } = useTranslation('common')
     const [settings, setSettings] = useState<ProviderSettingsEntry[]>([])
     const [loading, setLoading] = useState(false)
     const [savingKey, setSavingKey] = useState<string | null>(null)
@@ -130,7 +132,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
             {/* Toolbar: filter + create + refresh + advanced toggle */}
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex gap-1 items-center">
-                    <span className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mr-2">Filter</span>
+                    <span className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mr-2">{t('machine.providers.filter')}</span>
                     {(['all', 'acp', 'cli', 'ide', 'extension'] as const).map(cat => (
                         <button
                             key={cat}
@@ -146,20 +148,20 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                         onClick={() => setShowSources(v => !v)}
                         className={`machine-btn text-[10px] ${showSources ? 'bg-sky-500/[0.10] border-sky-500/30 text-sky-300' : ''}`}
                         title="Manage 3rd-party provider sources"
-                    >🌐 Sources</button>
+                    >{t('machine.providers.sources')}</button>
                     <button
                         onClick={() => setShowClone(true)}
                         className="machine-btn text-[10px]"
                         title="Create a new provider from an existing one"
-                    >✨ Create</button>
+                    >{t('machine.providers.create')}</button>
                     <button onClick={fetchSettings} disabled={loading} className="machine-btn text-[10px]">
-                        {loading ? '⏳' : '↻'} Refresh
+                        {loading ? '⏳' : '↻'} {t('machine.providers.refresh')}
                     </button>
                     <button
                         onClick={() => setShowSourceConfig(v => !v)}
                         className="machine-btn text-[10px]"
                         title="Show source configuration (advanced)"
-                    >⚙ Advanced</button>
+                    >{t('machine.providers.advanced')}</button>
                 </div>
             </div>
 
@@ -177,14 +179,14 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                 <Card padding="none" className="px-4.5 py-3.5">
                     <div className="flex items-center justify-between gap-3 mb-3">
                         <div>
-                            <div className="text-[11px] font-semibold uppercase tracking-wider text-violet-400">Provider source config</div>
-                            <div className="text-[11px] text-text-muted mt-1">Where the daemon looks for provider manifests. Affects resolution and reloads.</div>
+                            <div className="text-[11px] font-semibold uppercase tracking-wider text-violet-400">{t('machine.providers.sourceConfigTitle')}</div>
+                            <div className="text-[11px] text-text-muted mt-1">{t('machine.providers.sourceConfigDesc')}</div>
                         </div>
                         <button onClick={fetchSourceConfig} className="machine-btn text-[10px]">↻ Refresh</button>
                     </div>
                     <div className="grid md:grid-cols-[180px_1fr_auto] gap-3 items-end">
                         <label className="flex flex-col gap-1 text-[11px] text-text-secondary">
-                            <span className="font-medium text-text-primary">Source mode</span>
+                            <span className="font-medium text-text-primary">{t('machine.providers.sourceMode')}</span>
                             <select
                                 value={sourceModeInput}
                                 onChange={e => setSourceModeInput(e.target.value as 'normal' | 'no-upstream')}
@@ -195,12 +197,12 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                             </select>
                         </label>
                         <label className="flex flex-col gap-1 text-[11px] text-text-secondary">
-                            <span className="font-medium text-text-primary">Explicit providerDir</span>
+                            <span className="font-medium text-text-primary">{t('machine.providers.explicitProviderDir')}</span>
                             <input
                                 type="text"
                                 value={providerDirInput}
                                 onChange={e => setProviderDirInput(e.target.value)}
-                                placeholder="Leave blank to use ~/.adhdev/providers"
+                                placeholder={t('machine.providers.providerDirPlaceholder')}
                                 className="machine-input text-[11px]"
                             />
                         </label>
@@ -208,25 +210,25 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                             onClick={() => void handleApplySourceConfig()}
                             disabled={sourceSaving}
                             className="machine-btn text-[10px] bg-violet-500/[0.08] border-violet-500/20 text-violet-300 hover:bg-violet-500/[0.14]"
-                        >{sourceSaving ? 'Applying…' : 'Apply + Reload'}</button>
+                        >{sourceSaving ? t('machine.providers.applying') : t('machine.providers.applyReload')}</button>
                     </div>
                     <div className="mt-3 grid gap-1 text-[10px] text-text-muted">
-                        <div><span className="text-text-secondary font-medium">User root:</span> {sourceConfig?.userDir || '—'}</div>
-                        <div><span className="text-text-secondary font-medium">Upstream root:</span> {sourceConfig?.upstreamDir || '—'}</div>
-                        <div><span className="text-text-secondary font-medium">Provider roots:</span> {sourceConfig?.providerRoots?.join(' → ') || '—'}</div>
+                        <div><span className="text-text-secondary font-medium">{t('machine.providers.userRoot')}</span> {sourceConfig?.userDir || '—'}</div>
+                        <div><span className="text-text-secondary font-medium">{t('machine.providers.upstreamRoot')}</span> {sourceConfig?.upstreamDir || '—'}</div>
+                        <div><span className="text-text-secondary font-medium">{t('machine.providers.providerRoots')}</span> {sourceConfig?.providerRoots?.join(' → ') || '—'}</div>
                     </div>
                 </Card>
             )}
 
             {/* Installed providers list */}
             {loading && settings.length === 0 ? (
-                <div className="p-10 text-center text-text-muted">Loading provider settings…</div>
+                <div className="p-10 text-center text-text-muted">{t('machine.providers.loadingSettings')}</div>
             ) : filteredSettings.length === 0 ? (
                 <Card padding="none" className="px-4.5 py-8 text-center">
                     <div className="text-[12px] text-text-muted">
                         {filter === 'all'
-                            ? 'No providers installed yet. Open "Add provider" above to install one.'
-                            : `No ${filter.toUpperCase()} providers installed.`}
+                            ? t('machine.providers.noProviders')
+                            : t('machine.providers.noFilteredProviders', { filter: filter.toUpperCase() })}
                     </div>
                 </Card>
             ) : (

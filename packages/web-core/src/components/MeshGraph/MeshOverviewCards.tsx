@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { describeQueueTaskMessage } from '../../utils/queue-task-label'
 import type {
     MeshMissionStatus,
@@ -431,6 +432,7 @@ function MoreToggle({ meshTheme, expanded, hiddenCount, onToggle }: {
     hiddenCount: number
     onToggle: () => void
 }) {
+    const { t } = useTranslation('common')
     if (hiddenCount <= 0) return null
     return (
         <button
@@ -438,7 +440,7 @@ function MoreToggle({ meshTheme, expanded, hiddenCount, onToggle }: {
             onClick={onToggle}
             className={`mt-1 self-start rounded-md px-1.5 py-0.5 text-[11px] font-medium ${meshTheme.textSecondary} hover:underline`}
         >
-            {expanded ? 'Show fewer' : `+${hiddenCount} more`}
+            {expanded ? t('mesh.overview.showFewer') : t('mesh.overview.showMore', { count: hiddenCount })}
         </button>
     )
 }
@@ -465,12 +467,12 @@ function ModalRow({ meshTheme, label, value }: { meshTheme: MeshGraphTheme; labe
     )
 }
 
-function detailTitle(detail: DetailSelection): { kicker: string; title: string } {
+function detailTitle(detail: DetailSelection, t: (key: string) => string): { kicker: string; title: string } {
     switch (detail.kind) {
-        case 'mission': return { kicker: 'Mission', title: detail.mission.title }
-        case 'ledger': return { kicker: 'Ledger entry', title: ledgerKindLabel(detail.entry.kind) }
-        case 'queue': return { kicker: 'Queue task', title: detail.task.id }
-        case 'session': return { kicker: 'Session', title: shortSessionId(detail.session.sessionId) }
+        case 'mission': return { kicker: t('mesh.overview.detailKickerMission'), title: detail.mission.title }
+        case 'ledger': return { kicker: t('mesh.overview.detailKickerLedger'), title: ledgerKindLabel(detail.entry.kind) }
+        case 'queue': return { kicker: t('mesh.overview.detailKickerQueue'), title: detail.task.id }
+        case 'session': return { kicker: t('mesh.overview.detailKickerSession'), title: shortSessionId(detail.session.sessionId) }
     }
 }
 
@@ -480,6 +482,7 @@ function DetailModal({ meshTheme, detail, onClose, daemonId, meshId, sendDaemonC
     onClose: () => void
     resolveNodeLabel: (nodeId: string | undefined | null) => string
 } & MeshCommandSeam) {
+    const { t } = useTranslation('common')
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') onClose()
@@ -489,7 +492,7 @@ function DetailModal({ meshTheme, detail, onClose, daemonId, meshId, sendDaemonC
     }, [onClose])
 
     const dk = meshTheme.isDark
-    const { kicker, title } = detailTitle(detail)
+    const { kicker, title } = detailTitle(detail, t)
     const overlayClass = dk ? 'bg-[#030617]/[0.92]' : 'bg-[rgba(15,23,42,0.82)]'
     const shellClass = dk
         ? 'border-white/10 bg-slate-950 md:bg-slate-950/98 shadow-[0_28px_120px_rgba(2,6,23,0.5)]'
@@ -514,7 +517,7 @@ function DetailModal({ meshTheme, detail, onClose, daemonId, meshId, sendDaemonC
                     <button
                         type="button"
                         onClick={onClose}
-                        aria-label="Close detail"
+                        aria-label={t('mesh.overview.closeDetail')}
                         className={dk ? 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white' : 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900'}
                     >
                         ✕
@@ -552,7 +555,8 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
     meshTheme: MeshGraphTheme
     mission: MeshMissionDisplay
 } & MeshCommandSeam) {
-    const t = mission.tasks
+    const { t } = useTranslation('common')
+    const t_tasks = mission.tasks
     // Compact (slim) status payloads send `goalPreview`/`goalTruncated` instead of
     // the full `goal`, so the previous `mission.goal`-only read rendered blank.
     const slimGoal = ('goal' in mission && typeof mission.goal === 'string' && mission.goal)
@@ -595,7 +599,7 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
                 <StatusBadge meshTheme={meshTheme} label={mission.status} tone={missionStatusTone(mission.status)} />
-                <StatusBadge meshTheme={meshTheme} label={`${t.total} tasks`} tone="muted" />
+                <StatusBadge meshTheme={meshTheme} label={`${t_tasks.total} tasks`} tone="muted" />
             </div>
             {goalText && (
                 <div className={`max-h-64 overflow-y-auto whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>
@@ -611,36 +615,36 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
                     onClick={fetchFullGoal}
                     disabled={fetching}
                 >
-                    {fetching ? 'Loading…' : 'Show full goal'}
+                    {fetching ? t('mesh.overview.loadingGoal') : t('mesh.overview.showFullGoal')}
                 </button>
             )}
             <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
-                <StatTile meshTheme={meshTheme} label="Completed" value={t.completed} tone="emerald" />
-                <StatTile meshTheme={meshTheme} label="Assigned" value={t.assigned} tone={t.assigned > 0 ? 'sky' : undefined} />
-                <StatTile meshTheme={meshTheme} label="Pending" value={t.pending} />
-                <StatTile meshTheme={meshTheme} label="Failed" value={t.failed} tone={t.failed > 0 ? 'rose' : undefined} />
-                <StatTile meshTheme={meshTheme} label="Blocked" value={t.blocked} tone={t.blocked > 0 ? 'amber' : undefined} />
-                <StatTile meshTheme={meshTheme} label="Cancelled" value={t.cancelled} tone="muted" />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statCompleted')} value={t_tasks.completed} tone="emerald" />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statAssigned')} value={t_tasks.assigned} tone={t_tasks.assigned > 0 ? 'sky' : undefined} />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statPending')} value={t_tasks.pending} />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statFailed')} value={t_tasks.failed} tone={t_tasks.failed > 0 ? 'rose' : undefined} />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statBlocked')} value={t_tasks.blocked} tone={t_tasks.blocked > 0 ? 'amber' : undefined} />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statCancelled')} value={t_tasks.cancelled} tone="muted" />
             </div>
             {stats && (
                 <div className="grid grid-cols-3 gap-1.5">
-                    <StatTile meshTheme={meshTheme} label="Wall clock" value={formatDuration(stats.wallClockMs) ?? '—'} />
-                    <StatTile meshTheme={meshTheme} label="Total runtime" value={formatDuration(stats.totalDurationMs) ?? '—'} />
-                    <StatTile meshTheme={meshTheme} label="Retries" value={stats.retries} tone={stats.retries > 0 ? 'amber' : undefined} />
+                    <StatTile meshTheme={meshTheme} label={t('mesh.overview.statWallClock')} value={formatDuration(stats.wallClockMs) ?? '—'} />
+                    <StatTile meshTheme={meshTheme} label={t('mesh.overview.statTotalRuntime')} value={formatDuration(stats.totalDurationMs) ?? '—'} />
+                    <StatTile meshTheme={meshTheme} label={t('mesh.overview.statRetries')} value={stats.retries} tone={stats.retries > 0 ? 'amber' : undefined} />
                 </div>
             )}
             <div className="grid gap-1.5 text-xs">
-                <ModalRow meshTheme={meshTheme} label="Mission id" value={mission.id} />
-                <ModalRow meshTheme={meshTheme} label="Created" value={relativeTime(mission.createdAt) ?? mission.createdAt} />
-                <ModalRow meshTheme={meshTheme} label="Updated" value={relativeTime(mission.updatedAt) ?? mission.updatedAt} />
-                {t.lastActivityAt && <ModalRow meshTheme={meshTheme} label="Last task activity" value={relativeTime(t.lastActivityAt) ?? t.lastActivityAt} />}
+                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelMissionId')} value={mission.id} />
+                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelCreated')} value={relativeTime(mission.createdAt) ?? mission.createdAt} />
+                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelUpdated')} value={relativeTime(mission.updatedAt) ?? mission.updatedAt} />
+                {t_tasks.lastActivityAt && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelLastActivity')} value={relativeTime(t_tasks.lastActivityAt) ?? t_tasks.lastActivityAt} />}
                 {incompleteCount > 0 && stats && (
                     <ModalRow
                         meshTheme={meshTheme}
-                        label="Incomplete evidence"
+                        label={t('mesh.overview.detailLabelIncompleteEvidence')}
                         value={
                             <details>
-                                <summary className="cursor-pointer select-none">{incompleteCount} task{incompleteCount === 1 ? '' : 's'}</summary>
+                                <summary className="cursor-pointer select-none">{t('mesh.overview.incompleteTaskCount_other', { count: incompleteCount })}</summary>
                                 <div className="mt-1 flex flex-col gap-0.5 break-all">
                                     {stats.incompleteTaskIds.map(id => (
                                         <span key={id} className={`font-mono text-[10px] ${meshTheme.textMuted}`}>{id}</span>
@@ -656,6 +660,7 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
 }
 
 function LedgerDetail({ meshTheme, entry, resolveNodeLabel }: { meshTheme: MeshGraphTheme; entry: RepoMeshLedgerEntryStatus; resolveNodeLabel: (nodeId: string | undefined | null) => string }) {
+    const { t } = useTranslation('common')
     const summary = payloadSummary(entry.payload)
     let payloadJson = ''
     try {
@@ -670,15 +675,15 @@ function LedgerDetail({ meshTheme, entry, resolveNodeLabel }: { meshTheme: MeshG
             </div>
             {summary && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{summary}</div>}
             <div className="grid gap-1.5 text-xs">
-                <ModalRow meshTheme={meshTheme} label="Entry id" value={entry.id} />
-                <ModalRow meshTheme={meshTheme} label="When" value={relativeTime(entry.timestamp) ?? entry.timestamp} />
-                {entry.nodeId && <ModalRow meshTheme={meshTheme} label="Node" value={resolveNodeLabel(entry.nodeId)} />}
-                {entry.sessionId && <ModalRow meshTheme={meshTheme} label="Session" value={shortSessionId(entry.sessionId)} />}
-                {entry.providerType && <ModalRow meshTheme={meshTheme} label="Provider" value={entry.providerType} />}
+                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelEntryId')} value={entry.id} />
+                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelWhen')} value={relativeTime(entry.timestamp) ?? entry.timestamp} />
+                {entry.nodeId && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelNode')} value={resolveNodeLabel(entry.nodeId)} />}
+                {entry.sessionId && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelSession')} value={shortSessionId(entry.sessionId)} />}
+                {entry.providerType && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelProvider')} value={entry.providerType} />}
             </div>
             {payloadJson && payloadJson !== '{}' && (
                 <div>
-                    <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Payload</div>
+                    <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelPayload')}</div>
                     <pre className={`max-h-60 max-w-full overflow-auto rounded-lg border p-2 text-[10px] leading-4 ${meshTheme.isDark ? 'border-white/8 bg-black/30 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{payloadJson}</pre>
                 </div>
             )}
@@ -687,32 +692,34 @@ function LedgerDetail({ meshTheme, entry, resolveNodeLabel }: { meshTheme: MeshG
 }
 
 function QueueDetail({ meshTheme, task }: { meshTheme: MeshGraphTheme; task: RepoMeshQueueTask }) {
+    const { t } = useTranslation('common')
     return (
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
                 <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
-                {(task.requeueCount ?? 0) > 0 && <StatusBadge meshTheme={meshTheme} label={`requeued ${task.requeueCount}`} tone="amber" />}
+                {(task.requeueCount ?? 0) > 0 && <StatusBadge meshTheme={meshTheme} label={t('mesh.overview.detailLabelRequeued', { count: task.requeueCount })} tone="amber" />}
             </div>
             {task.message && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{task.message}</div>}
             <div className="grid gap-1.5 text-xs">
-                <ModalRow meshTheme={meshTheme} label="Task id" value={task.id} />
-                <ModalRow meshTheme={meshTheme} label="Created" value={relativeTime(task.createdAt) ?? task.createdAt} />
-                <ModalRow meshTheme={meshTheme} label="Updated" value={relativeTime(task.updatedAt) ?? task.updatedAt} />
+                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelTaskId')} value={task.id} />
+                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelCreated')} value={relativeTime(task.createdAt) ?? task.createdAt} />
+                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelUpdated')} value={relativeTime(task.updatedAt) ?? task.updatedAt} />
                 {(task.assignedNodeId || task.targetNodeId) && (
-                    <ModalRow meshTheme={meshTheme} label="Node" value={task.assignedNodeId || task.targetNodeId!} />
+                    <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelNode')} value={task.assignedNodeId || task.targetNodeId!} />
                 )}
                 {(task.assignedSessionId || task.targetSessionId) && (
-                    <ModalRow meshTheme={meshTheme} label="Session" value={shortSessionId(task.assignedSessionId || task.targetSessionId!)} />
+                    <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelSession')} value={shortSessionId(task.assignedSessionId || task.targetSessionId!)} />
                 )}
-                {task.cancelReason && <ModalRow meshTheme={meshTheme} label="Cancel reason" value={task.cancelReason} />}
-                {task.requeueReason && <ModalRow meshTheme={meshTheme} label="Requeue reason" value={task.requeueReason} />}
-                {task.autoLaunch && <ModalRow meshTheme={meshTheme} label="Auto launch" value={`${task.autoLaunch.status}${task.autoLaunch.reason ? ` · ${task.autoLaunch.reason}` : ''}`} />}
+                {task.cancelReason && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelCancelReason')} value={task.cancelReason} />}
+                {task.requeueReason && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelRequeueReason')} value={task.requeueReason} />}
+                {task.autoLaunch && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelAutoLaunch')} value={`${task.autoLaunch.status}${task.autoLaunch.reason ? ` · ${task.autoLaunch.reason}` : ''}`} />}
             </div>
         </div>
     )
 }
 
 function SessionDetail({ meshTheme, node, session }: { meshTheme: MeshGraphTheme; node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }) {
+    const { t } = useTranslation('common')
     const label = sessionStatusLabel(session)
     return (
         <div className="flex flex-col gap-3">
@@ -722,15 +729,15 @@ function SessionDetail({ meshTheme, node, session }: { meshTheme: MeshGraphTheme
             </div>
             {session.statusNote && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{session.statusNote}</div>}
             <div className="grid gap-1.5 text-xs">
-                <ModalRow meshTheme={meshTheme} label="Session id" value={session.sessionId} />
-                <ModalRow meshTheme={meshTheme} label="Node" value={node.machineLabel} />
-                <ModalRow meshTheme={meshTheme} label="Workspace" value={session.workspace || node.workspace} />
+                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelSessionId')} value={session.sessionId} />
+                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelNode')} value={node.machineLabel} />
+                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelWorkspace')} value={session.workspace || node.workspace} />
                 {(node.git?.branch ?? node.worktreeBranch) && (
-                    <ModalRow meshTheme={meshTheme} label="Branch" value={node.git?.branch ?? node.worktreeBranch!} />
+                    <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelBranch')} value={node.git?.branch ?? node.worktreeBranch!} />
                 )}
-                {typeof session.role === 'string' && session.role && <ModalRow meshTheme={meshTheme} label="Role" value={session.role} />}
+                {typeof session.role === 'string' && session.role && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelRole')} value={session.role} />}
                 {(session.startedAt || session.createdAt) && (
-                    <ModalRow meshTheme={meshTheme} label="Started" value={relativeTime(session.startedAt || session.createdAt) ?? (session.startedAt || session.createdAt)!} />
+                    <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelStarted')} value={relativeTime(session.startedAt || session.createdAt) ?? (session.startedAt || session.createdAt)!} />
                 )}
             </div>
         </div>
@@ -763,13 +770,14 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
     hasMissionField: boolean
     onSelect: (mission: MeshMissionDisplay) => void
 }) {
+    const { t } = useTranslation('common')
     const [showHistory, setShowHistory] = useState(false)
     const dk = meshTheme.isDark
     const live = useRecentList(liveMissions)
     return (
         <Card
             meshTheme={meshTheme}
-            title="Missions"
+            title={t('mesh.overview.missionCard')}
             count={liveMissions.length || undefined}
         >
             {liveMissions.length > 0 ? (
@@ -780,8 +788,8 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
             ) : (
                 <EmptyHint meshTheme={meshTheme}>
                     {hasMissionField
-                        ? 'No active missions. The coordinator creates a mission for multi-task work.'
-                        : 'Mission data unavailable from this daemon — update the daemon to see missions.'}
+                        ? t('mesh.overview.noActiveMissions')
+                        : t('mesh.overview.missionDataUnavailable')}
                 </EmptyHint>
             )}
 
@@ -793,7 +801,7 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
                         className={`flex w-full items-center gap-1.5 text-[11px] font-medium ${meshTheme.textSecondary}`}
                     >
                         <span className={`inline-block transition-transform ${showHistory ? 'rotate-90' : ''}`}>▸</span>
-                        <span>Completed / abandoned history</span>
+                        <span>{t('mesh.overview.completedHistory')}</span>
                         <span className={`tabular-nums ${meshTheme.textMuted}`}>{historyMissions.length}</span>
                     </button>
                     {showHistory && (
@@ -816,23 +824,24 @@ function LedgerCard({ meshTheme, ledgerSummary, entries, resolveNodeLabel, onSel
     resolveNodeLabel: (nodeId: string | undefined | null) => string
     onSelect: (entry: RepoMeshLedgerEntryStatus) => void
 }) {
+    const { t } = useTranslation('common')
     const lastActivity = relativeTime(ledgerSummary.lastActivityAt)
     // Newest-first; ledger entries arrive oldest→newest from the daemon.
     const recent = useMemo(() => [...entries].reverse(), [entries])
     const list = useRecentList(recent)
     return (
-        <Card meshTheme={meshTheme} title="Ledger">
+        <Card meshTheme={meshTheme} title={t('mesh.overview.ledgerCard')}>
             <div className="grid grid-cols-3 gap-1.5">
-                <StatTile meshTheme={meshTheme} label="Dispatched" value={ledgerSummary.taskDispatched} />
-                <StatTile meshTheme={meshTheme} label="Completed" value={ledgerSummary.taskCompleted} tone="emerald" />
-                <StatTile meshTheme={meshTheme} label="Failed" value={ledgerSummary.taskFailed} tone={ledgerSummary.taskFailed > 0 ? 'rose' : undefined} />
-                <StatTile meshTheme={meshTheme} label="Stalled" value={ledgerSummary.taskStalled} tone={ledgerSummary.taskStalled > 0 ? 'amber' : undefined} />
-                <StatTile meshTheme={meshTheme} label="Sessions" value={ledgerSummary.sessionLaunched} />
-                <StatTile meshTheme={meshTheme} label="Checkpoints" value={ledgerSummary.checkpointCreated} />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statDispatched')} value={ledgerSummary.taskDispatched} />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statCompleted')} value={ledgerSummary.taskCompleted} tone="emerald" />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statFailed')} value={ledgerSummary.taskFailed} tone={ledgerSummary.taskFailed > 0 ? 'rose' : undefined} />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statStalled')} value={ledgerSummary.taskStalled} tone={ledgerSummary.taskStalled > 0 ? 'amber' : undefined} />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statSessions')} value={ledgerSummary.sessionLaunched} />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statCheckpoints')} value={ledgerSummary.checkpointCreated} />
             </div>
             {recent.length > 0 && (
                 <div className={`mt-3 border-t pt-2 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
-                    <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Recent activity</div>
+                    <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.recentActivity')}</div>
                     <div className="flex flex-col gap-0.5">
                         {list.visible.map(entry => {
                             const summary = payloadSummary(entry.payload)
@@ -851,7 +860,7 @@ function LedgerCard({ meshTheme, ledgerSummary, entries, resolveNodeLabel, onSel
             {(ledgerSummary.recentFailures > 0 || (lastActivity && recent.length === 0)) && (
                 <div className={`mt-2 flex items-center justify-between text-[11px] ${meshTheme.textMuted}`}>
                     {ledgerSummary.recentFailures > 0
-                        ? <span className={meshTheme.isDark ? 'text-amber-300' : 'text-amber-600'}>{ledgerSummary.recentFailures} recent failures</span>
+                        ? <span className={meshTheme.isDark ? 'text-amber-300' : 'text-amber-600'}>{t('mesh.overview.recentFailures', { count: ledgerSummary.recentFailures })}</span>
                         : <span />}
                     {lastActivity && recent.length === 0 && <span>{lastActivity}</span>}
                 </div>
@@ -878,26 +887,27 @@ function QueueCard({ meshTheme, queueSummary, tasks, onSelect }: {
     }, [tasks])
     const list = useRecentList(recent)
 
+    const { t } = useTranslation('common')
     if (!queueSummary) {
         return (
-            <Card meshTheme={meshTheme} title="Queue">
-                <EmptyHint meshTheme={meshTheme}>No queue activity.</EmptyHint>
+            <Card meshTheme={meshTheme} title={t('mesh.overview.queueCard')}>
+                <EmptyHint meshTheme={meshTheme}>{t('mesh.overview.noQueueActivity')}</EmptyHint>
             </Card>
         )
     }
     return (
-        <Card meshTheme={meshTheme} title="Queue" count={queueSummary.active > 0 ? `${queueSummary.active} active` : undefined}>
+        <Card meshTheme={meshTheme} title={t('mesh.overview.queueCard')} count={queueSummary.active > 0 ? t('mesh.overview.activeCount', { count: queueSummary.active }) : undefined}>
             <div className="grid grid-cols-3 gap-1.5">
-                <StatTile meshTheme={meshTheme} label="Pending" value={queueSummary.pending} />
-                <StatTile meshTheme={meshTheme} label="Assigned" value={queueSummary.assigned} tone={queueSummary.assigned > 0 ? 'sky' : undefined} />
-                <StatTile meshTheme={meshTheme} label="Active" value={queueSummary.active} tone={queueSummary.active > 0 ? 'sky' : undefined} />
-                <StatTile meshTheme={meshTheme} label="Completed" value={queueSummary.completed} tone="emerald" />
-                <StatTile meshTheme={meshTheme} label="Failed" value={queueSummary.failed} tone={queueSummary.failed > 0 ? 'rose' : undefined} />
-                <StatTile meshTheme={meshTheme} label="Cancelled" value={queueSummary.cancelled} tone="muted" />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statPending')} value={queueSummary.pending} />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statAssigned')} value={queueSummary.assigned} tone={queueSummary.assigned > 0 ? 'sky' : undefined} />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statActive')} value={queueSummary.active} tone={queueSummary.active > 0 ? 'sky' : undefined} />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statCompleted')} value={queueSummary.completed} tone="emerald" />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statFailed')} value={queueSummary.failed} tone={queueSummary.failed > 0 ? 'rose' : undefined} />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statCancelled')} value={queueSummary.cancelled} tone="muted" />
             </div>
             {recent.length > 0 && (
                 <div className={`mt-3 border-t pt-2 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
-                    <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>Recent tasks</div>
+                    <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.recentTasks')}</div>
                     <div className="flex flex-col gap-0.5">
                         {list.visible.map(task => (
                             <ListRow key={task.id} meshTheme={meshTheme} onClick={() => onSelect(task)}>
@@ -923,11 +933,12 @@ function convergenceBadge(node: RepoMeshNodeStatus): { label: string; tone: Tone
 }
 
 function NodesCard({ meshTheme, nodes }: { meshTheme: MeshGraphTheme; nodes: RepoMeshNodeStatus[] }) {
+    const { t } = useTranslation('common')
     const dk = meshTheme.isDark
     return (
-        <Card meshTheme={meshTheme} title="Nodes" count={nodes.length}>
+        <Card meshTheme={meshTheme} title={t('mesh.overview.nodesCard')} count={nodes.length}>
             {nodes.length === 0 ? (
-                <EmptyHint meshTheme={meshTheme}>No nodes in this mesh yet.</EmptyHint>
+                <EmptyHint meshTheme={meshTheme}>{t('mesh.overview.noNodes')}</EmptyHint>
             ) : (
                 <div className="flex flex-col gap-1.5">
                     {nodes.map(node => {
@@ -961,11 +972,12 @@ function SessionsCard({ meshTheme, entries, onSelect }: {
     entries: { node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }[]
     onSelect: (node: RepoMeshNodeStatus, session: MeshGraphSessionDetail) => void
 }) {
+    const { t } = useTranslation('common')
     const list = useRecentList(entries)
     return (
-        <Card meshTheme={meshTheme} title="Active sessions" count={entries.length || undefined}>
+        <Card meshTheme={meshTheme} title={t('mesh.overview.sessionsCard')} count={entries.length || undefined}>
             {entries.length === 0 ? (
-                <EmptyHint meshTheme={meshTheme}>No active sessions.</EmptyHint>
+                <EmptyHint meshTheme={meshTheme}>{t('mesh.overview.noActiveSessions')}</EmptyHint>
             ) : (
                 <div className="flex flex-col gap-0.5">
                     {list.visible.map(({ node, session }) => {
@@ -986,17 +998,18 @@ function SessionsCard({ meshTheme, entries, onSelect }: {
 }
 
 function RefineJobsCard({ meshTheme, jobs }: { meshTheme: MeshGraphTheme; jobs: AsyncRefineJob[] }) {
+    const { t } = useTranslation('common')
     const dk = meshTheme.isDark
     const failed = jobs.filter(j => j.status === 'failed').length
     return (
         <Card
             meshTheme={meshTheme}
-            title="Refine jobs"
+            title={t('mesh.overview.refineCard')}
             count={jobs.length || undefined}
-            action={failed > 0 ? <StatusBadge meshTheme={meshTheme} label={`${failed} failed`} tone="rose" /> : undefined}
+            action={failed > 0 ? <StatusBadge meshTheme={meshTheme} label={t('mesh.overview.failedCount', { count: failed })} tone="rose" /> : undefined}
         >
             {jobs.length === 0 ? (
-                <EmptyHint meshTheme={meshTheme}>No refine jobs.</EmptyHint>
+                <EmptyHint meshTheme={meshTheme}>{t('mesh.overview.noRefineJobs')}</EmptyHint>
             ) : (
                 <div className="flex flex-col gap-1">
                     {jobs.slice(0, 8).map(job => (

@@ -1,4 +1,5 @@
 import { useContext } from 'react'
+import { useTranslation } from 'react-i18next'
 import type {
     RepoMeshNodeSchedulingStatus,
     RepoMeshNodeStatus,
@@ -23,12 +24,12 @@ import {
 // helpers as the graph detail panel so the visual language stays consistent.
 
 function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingStatus }) {
+    const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
     if (!scheduling) {
         return (
             <div className={`${meshTheme.cardClass} rounded-2xl p-4 text-[12px] ${meshTheme.textSecondary}`}>
-                Scheduling runtime not reported by this daemon (older build). Update the
-                coordinator daemon to surface distribution, parallel caps, and per-node load.
+                {t('mesh.status.schedulingNotReported')}
             </div>
         )
     }
@@ -36,7 +37,7 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
     return (
         <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
             <div className="flex flex-wrap items-center gap-2">
-                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>Scheduling</span>
+                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>{t('mesh.status.schedulingTitle')}</span>
                 <Badge label={SCHEDULING_STRATEGY_LABELS[scheduling.strategy] ?? scheduling.strategy} tone="info" />
                 <Badge
                     label={`write ${scheduling.activeWriteAssigned}/${scheduling.maxParallelTasks}`}
@@ -50,8 +51,7 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
                 />
             </div>
             <p className={`mt-2 text-[11px] ${meshTheme.textSecondary}`}>
-                Distribution only governs how untargeted work is spread across eligible
-                nodes. Per-node load, priority, and provider caps are below.
+                {t('mesh.status.distributionTitle')}
             </p>
         </div>
     )
@@ -135,6 +135,7 @@ function MeshNodeRuntimeRow({ node }: { node: RepoMeshNodeStatus }) {
 // Renders only when the daemon surfaced either signal (both are omitted by
 // daemons predating the exposure), so it self-hides on older meshes.
 function MeshProtocolVisibilityCard({ status }: { status: RepoMeshStatus }) {
+    const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
     const metrics = status.meshProtocolMetrics
     const skew = Array.isArray(status.providerVersionSkew) ? status.providerVersionSkew : []
@@ -142,7 +143,7 @@ function MeshProtocolVisibilityCard({ status }: { status: RepoMeshStatus }) {
     return (
         <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
             <div className="flex flex-wrap items-center gap-2">
-                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>Protocol & provider versions</span>
+                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>{t('mesh.status.protocolTitle')}</span>
                 {metrics && (
                     <Badge
                         label={`v2 ${Math.round(metrics.v2Ratio * 100)}% (${metrics.v2}/${metrics.total})`}
@@ -189,6 +190,7 @@ function MeshProtocolVisibilityCard({ status }: { status: RepoMeshStatus }) {
 // single boundary canonicalize), so `nodes` is guaranteed an array and no
 // re-guard / re-canonicalize is needed here.
 export function MeshStatusTab({ canonicalStatus }: { canonicalStatus: RepoMeshStatus }) {
+    const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
     return (
         <div className="flex flex-col gap-3 p-1">
@@ -196,11 +198,11 @@ export function MeshStatusTab({ canonicalStatus }: { canonicalStatus: RepoMeshSt
             <MeshProtocolVisibilityCard status={canonicalStatus} />
             <div className="flex flex-col gap-2">
                 <span className={`px-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
-                    Nodes — runtime
+                    {t('mesh.status.nodesRuntime')}
                 </span>
                 {canonicalStatus.nodes.length === 0 ? (
                     <div className={`rounded-xl border p-3 text-[12px] ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10' : 'border-slate-200'}`}>
-                        No nodes reporting runtime yet.
+                        {t('mesh.status.noNodesReporting')}
                     </div>
                 ) : (
                     canonicalStatus.nodes.map(node => <MeshNodeRuntimeRow key={node.nodeId} node={node} />)

@@ -12,6 +12,7 @@
  *   - CLI: Simplest — just the base
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import {
@@ -95,6 +96,7 @@ export default function AgentTab({
     initialWorkspacePath,
     onOpenGitDialog,
 }: AgentTabProps) {
+    const { t } = useTranslation('common')
     const navigate = useNavigate()
     const {
         handleLaunchIde, handleStopCli, handleRestartIde, handleStopIde,
@@ -537,16 +539,16 @@ export default function AgentTab({
             workspaceOptions: options,
             selectedWorkspaceKey: selectedKey,
             details: [
-                { label: 'Mode', value: config.label },
-                { label: 'Provider', value: providerName },
+                { label: t('machine.agentTab.detailMode'), value: config.label },
+                { label: t('machine.agentTab.detailProvider'), value: providerName },
                 ...(!isIde && category === 'cli' && selectedResumeSessionId
                     ? [{
-                        label: 'Resume',
+                        label: t('machine.agentTab.detailResume'),
                         value: savedSessions.find(session => session.providerSessionId === selectedResumeSessionId)?.title || selectedResumeSessionId,
                     }]
                     : []),
-                ...(!isIde && launchArgs.trim() ? [{ label: 'Arguments', value: launchArgs.trim() }] : []),
-                ...(isAcp && launchModel.trim() ? [{ label: 'Model', value: launchModel.trim() }] : []),
+                ...(!isIde && launchArgs.trim() ? [{ label: t('machine.agentTab.detailArguments'), value: launchArgs.trim() }] : []),
+                ...(isAcp && launchModel.trim() ? [{ label: t('machine.agentTab.detailModel'), value: launchModel.trim() }] : []),
             ],
         }, async () => {
             const selectedOption = options.find(option => option.key === launchConfirmWorkspaceKeyRef.current)
@@ -618,7 +620,7 @@ export default function AgentTab({
                 <div className="absolute top-0 left-0 w-full height-[1px] bg-gradient-to-r from-transparent via-border-default to-transparent" />
                 <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-4 flex items-center gap-2">
                     <span className="w-1.5 h-1.5 rounded-full bg-accent-primary/60" />
-                    Select {config.label} to Launch
+                    {t('machine.agentTab.selectToLaunch', { label: config.label })}
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
@@ -662,15 +664,15 @@ export default function AgentTab({
                                             {d.name || formatIdeType(d.type)}
                                         </span>
                                         <span className={`text-[9px] mt-0.5 uppercase tracking-wider font-medium ${isReady ? 'text-green-400' : isPending ? 'text-orange-400' : isSelected ? 'text-accent-primary' : 'text-text-muted'}`}>
-                                            {isReady ? 'Open Session' : isPending ? 'Starting...' : isSelected ? 'Configure' : 'Select'}
+                                            {isReady ? t('machine.agentTab.openSession') : isPending ? t('machine.agentTab.starting') : isSelected ? t('machine.agentTab.configure') : t('machine.agentTab.select')}
                                         </span>
                                     </div>
                                 </button>
                             )
                         }) : (
                             <div className="col-span-full py-6 flex flex-col items-center justify-center bg-bg-primary/50 border border-dashed border-border-default rounded-xl text-xs text-text-muted italic gap-2">
-                                No IDEs detected.
-                                <button onClick={handleDetectIdes} className="btn bg-bg-glass hover:bg-bg-glass-hover text-text-muted hover:text-text-primary px-3 py-1.5 rounded-lg flex items-center gap-1.5"><IconSearch size={14} /> Scan System</button>
+                                {t('machine.agentTab.noIdesDetected')}
+                                <button onClick={handleDetectIdes} className="btn bg-bg-glass hover:bg-bg-glass-hover text-text-muted hover:text-text-primary px-3 py-1.5 rounded-lg flex items-center gap-1.5"><IconSearch size={14} /> {t('machine.agentTab.scanSystem')}</button>
                             </div>
                         )
                     ) : (
@@ -697,16 +699,16 @@ export default function AgentTab({
                                             {p.displayName}
                                         </span>
                                         <span className={`text-[9px] mt-0.5 uppercase tracking-wider font-medium ${isPending ? 'text-orange-400' : isSelected ? 'text-accent-primary' : 'text-text-muted'}`}>
-                                            {isPending ? 'Starting...' : isSelected ? 'Configure' : 'Select'}
+                                            {isPending ? t('machine.agentTab.starting') : isSelected ? t('machine.agentTab.configure') : t('machine.agentTab.select')}
                                         </span>
                                     </div>
                                 </button>
                             )
                         }) : (
                             <div className="col-span-full py-6 text-center bg-bg-primary/50 border border-dashed border-border-default rounded-xl text-xs text-text-muted">
-                                No usable {category.toUpperCase()} providers available.
+                                {t('machine.agentTab.noProviders', { category: category.toUpperCase() })}
                                 <div className="mt-1 text-[11px] text-text-muted">
-                                    Set a custom executable path in Providers if the binary is installed outside the default location.
+                                    {t('machine.agentTab.noProvidersHint')}
                                 </div>
                             </div>
                         )
@@ -717,7 +719,7 @@ export default function AgentTab({
                 {selectedType && (isIde ? launchableIdes.find(d => d.type === selectedType) : categoryProviders.find(p => p.type === selectedType)) && (
                     <div className="mt-5 pt-5 border-t border-border-default flex flex-col gap-4 animate-in slide-in-from-top-2 fade-in duration-200">
                         <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider flex items-center justify-between">
-                            <span>Launch Settings</span>
+                            <span>{t('machine.agentTab.launchSettings')}</span>
                             <span className="text-accent-primary font-bold">{isIde ? formatIdeType(selectedType) : providerLabelMap.get(selectedType) || selectedType}</span>
                         </div>
                         
@@ -760,10 +762,10 @@ export default function AgentTab({
                                 <div className="flex flex-col sm:flex-row gap-3">
                                     {isAcp && (
                                         <div className="flex flex-col gap-1.5 flex-1">
-                                            <span className="text-[10px] font-semibold text-text-secondary uppercase">Target Model</span>
+                                            <span className="text-[10px] font-semibold text-text-secondary uppercase">{t('machine.agentTab.targetModel')}</span>
                                             <input
                                                 type="text"
-                                                placeholder="Leave empty for default"
+                                                placeholder={t('machine.agentTab.leaveEmptyDefault')}
                                                 value={launchModel}
                                                 onChange={e => setLaunchModel(e.target.value)}
                                                 className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-border-default focus:border-accent-primary focus:outline-none transition-colors w-full"
@@ -771,10 +773,10 @@ export default function AgentTab({
                                         </div>
                                     )}
                                     <div className="flex flex-col gap-1.5 flex-1">
-                                        <span className="text-[10px] font-semibold text-text-secondary uppercase">Startup Arguments</span>
+                                        <span className="text-[10px] font-semibold text-text-secondary uppercase">{t('machine.agentTab.startupArguments')}</span>
                                         <input
                                             type="text"
-                                            placeholder="Optional flags..."
+                                            placeholder={t('machine.agentTab.optionalFlags')}
                                             value={launchArgs}
                                             onChange={e => setLaunchArgs(e.target.value)}
                                             className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-border-default focus:border-accent-primary focus:outline-none transition-colors w-full"
@@ -818,7 +820,7 @@ export default function AgentTab({
                                 disabled={!!launchingAgentType || !!launchingIde || pendingLaunchTypes.includes(selectedType)}
                                 className="btn btn-primary h-9 px-6 font-bold transition-all flex items-center gap-2 hover:shadow-glow hover:-translate-y-px"
                             >
-                                {launchingAgentType === selectedType || launchingIde === selectedType ? '⏳ Launching...' : '▶ Launch'}
+                                {launchingAgentType === selectedType || launchingIde === selectedType ? t('machine.agentTab.launching') : t('machine.agentTab.launchBtn')}
                             </button>
                         </div>
                     </div>
@@ -827,12 +829,12 @@ export default function AgentTab({
 
             {/* ═══ Running Agents ═══ */}
             <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-2.5">
-                Running ({managedEntries.length + pendingLaunchTypes.filter(type => !managedEntries.some(entry => entry.type === type && normalizeManagedStatus(entry.status) !== 'stopped')).length})
+                {t('machine.agentTab.running', { count: managedEntries.length + pendingLaunchTypes.filter(type => !managedEntries.some(entry => entry.type === type && normalizeManagedStatus(entry.status) !== 'stopped')).length })}
             </div>
 
             {managedEntries.length === 0 && visiblePendingLaunches.length === 0 ? (
                 <div className="py-7.5 px-5 text-center rounded-xl bg-bg-secondary border border-dashed border-border-subtle text-text-muted text-[13px] mb-5">
-                    No {config.plural} running
+                    {t('machine.agentTab.noRunning', { plural: config.plural })}
                 </div>
             ) : (
                 <div className="flex flex-col gap-2.5 mb-5">
@@ -847,8 +849,8 @@ export default function AgentTab({
                                             </div>
                                             <div className="text-[11px] text-text-muted">
                                                 {launchingAgentType === type
-                                                    ? 'Launching process...'
-                                                    : 'Waiting for process and session to register...'}
+                                                    ? t('machine.agentTab.launchingProcess')
+                                                    : t('machine.agentTab.waitingProcess')}
                                             </div>
                                         </div>
                                     </div>
@@ -856,7 +858,7 @@ export default function AgentTab({
                                         className="px-2 py-0.5 rounded-md text-[10px] font-semibold"
                                         style={{ background: 'color-mix(in srgb, var(--status-warning) 8%, transparent)', color: 'var(--status-warning)' }}
                                     >
-                                        starting
+                                        {t('machine.agentTab.startingBadge')}
                                     </span>
                                 </div>
                             </div>
@@ -892,7 +894,7 @@ export default function AgentTab({
                                                 )}
                                                 {cli?.mode && (
                                                     <span className={cli.mode === 'chat' ? 'text-violet-400' : 'text-text-secondary'}>
-                                                        {cli.mode === 'chat' ? 'Chat view' : 'Terminal view'}
+                                                        {cli.mode === 'chat' ? t('machine.agentTab.chatView') : t('machine.agentTab.terminalView')}
                                                     </span>
                                                 )}
                                             </div>
@@ -900,7 +902,7 @@ export default function AgentTab({
                                                 <div className="text-[10px] text-text-muted flex gap-2 mt-0.5 flex-wrap">
                                                     {cli.runtimeKey && (
                                                         <>
-                                                            <span className="text-text-secondary">Local terminal:</span>
+                                                            <span className="text-text-secondary">{t('machine.agentTab.localTerminal')}</span>
                                                             <span className="font-mono text-text-secondary">adhdev attach {cli.runtimeKey}</span>
                                                             <button
                                                                 type="button"
@@ -913,7 +915,7 @@ export default function AgentTab({
                                                                     }, 1200)
                                                                 }}
                                                             >
-                                                                {copiedRuntimeKey === cli.runtimeKey ? 'Copied' : 'Copy'}
+                                                                {copiedRuntimeKey === cli.runtimeKey ? t('machine.agentTab.copied') : t('machine.agentTab.copy')}
                                                             </button>
                                                         </>
                                                     )}
@@ -949,7 +951,7 @@ export default function AgentTab({
                                                         })
                                                     }}
                                                     className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-bg-glass-hover text-text-primary transition-colors cursor-pointer"
-                                                    title="Open remote control"
+                                                    title={t('machine.agentTab.openRemoteControl')}
                                                 >
                                                     <IconMonitor size={13} />
                                                 </button>
@@ -968,8 +970,8 @@ export default function AgentTab({
                                                             workspaceOptions: options,
                                                             selectedWorkspaceKey: selectedKey,
                                                             details: [
-                                                                { label: 'Mode', value: 'IDE' },
-                                                                { label: 'Provider', value: formatIdeType(entry.type) },
+                                                                { label: t('machine.agentTab.detailMode'), value: t('machine.agentTab.categoryIde') },
+                                                                { label: t('machine.agentTab.detailProvider'), value: formatIdeType(entry.type) },
                                                             ],
                                                         }, async () => {
                                                             const selectedOption = options.find(option => option.key === launchConfirmWorkspaceKeyRef.current)
@@ -985,7 +987,7 @@ export default function AgentTab({
                                                         })
                                                     }}
                                                     className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-orange-500/20 text-orange-400 transition-colors cursor-pointer"
-                                                    title="Restart"
+                                                    title={t('machine.agentTab.restart')}
                                                 >
                                                     <IconRefresh size={14} />
                                                 </button>
@@ -999,7 +1001,7 @@ export default function AgentTab({
                                                     if (targetSessionId) openSessionInDashboard(targetSessionId)
                                                 }}
                                                 className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-bg-glass-hover disabled:opacity-50 disabled:cursor-not-allowed text-text-primary transition-colors cursor-pointer"
-                                                title="View chat"
+                                                title={t('machine.agentTab.viewChat')}
                                                 disabled={!(entry as AcpSessionEntry).sessionId}
                                             ><IconChat size={14} /></button>
                                         )}
@@ -1018,7 +1020,7 @@ export default function AgentTab({
                                                         if (targetSessionId) openSessionInDashboard(targetSessionId)
                                                     }}
                                                     className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-bg-glass-hover disabled:opacity-50 disabled:cursor-not-allowed text-text-primary transition-colors cursor-pointer"
-                                                    title="Open current view in dashboard"
+                                                    title={t('machine.agentTab.openInDashboard')}
                                                     disabled={!(entry as CliSessionEntry).sessionId}
                                                 >
                                                     {cli.mode === 'chat' ? <IconChat size={14} /> : <IconMonitor size={13} />}
@@ -1045,8 +1047,8 @@ export default function AgentTab({
                                                         workspaceOptions: options,
                                                         selectedWorkspaceKey: selectedKey,
                                                         details: [
-                                                            { label: 'Mode', value: config.label },
-                                                            { label: 'Provider', value: providerName },
+                                                            { label: t('machine.agentTab.detailMode'), value: config.label },
+                                                            { label: t('machine.agentTab.detailProvider'), value: providerName },
                                                         ],
                                                     }, async () => {
                                                         const selectedOption = options.find(option => option.key === launchConfirmWorkspaceKeyRef.current)
@@ -1060,12 +1062,12 @@ export default function AgentTab({
                                                 }}
                                                 disabled={pendingLaunchTypes.includes(entry.type)}
                                                 className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-green-500/20 text-green-400 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                                                title="Restart"
+                                                title={t('machine.agentTab.restart')}
                                             >
                                                 {pendingLaunchTypes.includes(entry.type) ? '⏳' : <IconPlay size={14} />}
                                             </button>
                                         ) : (
-                                            <button onClick={() => handleStop(entry)} className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer" title="Stop">
+                                            <button onClick={() => handleStop(entry)} className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer" title={t('machine.agentTab.stop')}>
                                                 <IconX size={14} />
                                             </button>
                                         )}
@@ -1086,7 +1088,7 @@ export default function AgentTab({
                                 {/* IDE: Extension Toggles */}
                                 {ide && (ideExtensions[ide.type] || []).length > 0 && sendDaemonCommand && (
                                     <div className="mt-2 pt-2 border-t border-border-subtle">
-                                        <div className="text-[10px] text-text-muted font-semibold uppercase tracking-wider mb-1.5">Extensions</div>
+                                        <div className="text-[10px] text-text-muted font-semibold uppercase tracking-wider mb-1.5">{t('machine.agentTab.extensions')}</div>
                                         <div className="flex flex-wrap gap-2">
                                             {(ideExtensions[ide.type] || []).map(ext => (
                                                 <button
@@ -1136,13 +1138,13 @@ export default function AgentTab({
             )}
             {browseDialogOpen && sendDaemonCommand && (
                 <WorkspaceBrowseDialog
-                    title="Select workspace"
-                    description="Choose a folder in a regular explorer-style dialog, then use it as the launch target."
+                    title={t('machine.agentTab.browseFolderTitle')}
+                    description={t('machine.agentTab.browseFolderDesc')}
                     currentPath={browseCurrentPath}
                     directories={browseDirectories}
                     busy={browseBusy}
                     error={browseError}
-                    confirmLabel="Use this folder"
+                    confirmLabel={t('machine.agentTab.browseFolderConfirm')}
                     onClose={() => setBrowseDialogOpen(false)}
                     onNavigate={(path) => { void loadBrowsePath(path) }}
                     onConfirm={(path) => {

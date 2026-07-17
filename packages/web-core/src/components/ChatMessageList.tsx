@@ -18,6 +18,7 @@
  */
 
 import { memo, useState, useRef, useEffect, useMemo, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
     getRenderableTimestamp,
     getChatMessageStableKey,
@@ -111,6 +112,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true },
     ref
 ) {
+    const { t } = useTranslation('common');
     const containerRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const endRef = useRef<HTMLDivElement>(null);
@@ -488,8 +490,10 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     }, [visibleMessages, actionLogs, receivedAtMap]);
     const hasMoreVisibleContent = hiddenLiveCount > 0 || !!hasMoreHistory;
     const loadMoreLabel = hiddenLiveCount > 0
-        ? `↑ Show ${Math.min(hiddenLiveCount, 80)} earlier messages${hiddenLiveCount > 80 ? ` (${hiddenLiveCount} hidden)` : ''}`
-        : (loadError ? `↻ ${loadError}` : '↑ Load older messages');
+        ? (hiddenLiveCount > 80
+            ? t('chatList.showEarlierMessagesHidden', { count: Math.min(hiddenLiveCount, 80), total: hiddenLiveCount })
+            : t('chatList.showEarlierMessages', { count: Math.min(hiddenLiveCount, 80) }))
+        : (loadError ? t('chatList.loadErrorRetry', { error: loadError }) : t('chatList.loadOlderMessages'));
 
     return (
         <div className="chat-scroll-frame">
@@ -502,7 +506,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             {/* Load more button — shown at top when there's history available */}
             {isLoadingMore && (
                 <div className="text-center py-3 text-text-muted text-xs opacity-60 animate-pulse">
-                    Loading older messages...
+                    {t('chatList.loadingOlderMessages')}
                 </div>
             )}
             {hasMoreVisibleContent && !isLoadingMore && (
@@ -524,7 +528,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             {items.length === 0 && !hasMoreVisibleContent && (
                 emptyState || (
                     <div className="text-center mt-16 opacity-20 text-[13px]">
-                        Waiting for messages...
+                        {t('chatList.waitingForMessages')}
                     </div>
                 )
             )}
@@ -591,7 +595,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                         <div className="dot" />
                         <div className="dot" />
                         <div className="dot" />
-                        <span className="text-[11px] text-text-muted ml-1">Agent generating...</span>
+                        <span className="text-[11px] text-text-muted ml-1">{t('chatList.agentGenerating')}</span>
                     </div>
                 </div>
             )}
@@ -600,16 +604,16 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                 </div>
             </div>
             {(jumpButtons.showTop || jumpButtons.showBottom) && (
-                <div className="chat-scroll-jump-controls" aria-label="Chat scroll shortcuts">
+                <div className="chat-scroll-jump-controls" aria-label={t('chatList.jumpToTop')}>
                     {jumpButtons.showTop && (
                         <button
                             type="button"
                             className="chat-scroll-jump-button"
                             onClick={handleJumpToTop}
-                            aria-label="Jump to oldest messages"
-                            title="Jump to top"
+                            aria-label={t('chatList.jumpToOldestMessages')}
+                            title={t('chatList.jumpToTop')}
                         >
-                            ↑ Top
+                            {t('chatList.top')}
                         </button>
                     )}
                     {jumpButtons.showBottom && (
@@ -617,10 +621,10 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                             type="button"
                             className="chat-scroll-jump-button chat-scroll-jump-button-primary"
                             onClick={handleJumpToBottom}
-                            aria-label="Jump to latest messages"
-                            title="Jump to bottom"
+                            aria-label={t('chatList.jumpToLatestMessages')}
+                            title={t('chatList.jumpToBottom')}
                         >
-                            ↓ Latest
+                            {t('chatList.latest')}
                         </button>
                     )}
                 </div>
