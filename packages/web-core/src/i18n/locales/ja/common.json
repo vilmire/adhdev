@@ -586,5 +586,227 @@
     "noRecentChats": "最近のチャットセッションが見つかりません。",
     "refreshHistory": "履歴を更新",
     "refreshing": "⌛ 更新中..."
+  },
+  "landing": {
+    "nav": {
+      "home": "ADHDev Home",
+      "mesh": "Mesh",
+      "what": "What",
+      "agents": "Agents",
+      "pricing": "Pricing",
+      "install": "Install",
+      "github": "GitHub",
+      "docs": "Docs",
+      "getStarted": "Get started",
+      "toggleMenu": "Toggle menu"
+    },
+    "hero": {
+      "badge": "The multi-vendor, multi-machine agent control plane",
+      "title": "Anyone can run ten agents. ADHDev lands the work on main.",
+      "subtitle": "Drive any local coding agent — Claude Code, Codex, Cursor — from your browser, then let the Refinery merge finished work back to main <em>unattended</em>: your repo's own gates, patch-equivalence checks, fast-forward only, no force-push. You talk to one coordinator; it runs parallel agents across your own machines asynchronously — no sessions to babysit. Code stays on your machine — P2P, end to end.",
+      "selectOs": "Select OS",
+      "osUnix": "macOS / Linux",
+      "osWindows": "Windows",
+      "copyInstall": "Copy install command: {{cmd}}",
+      "copied": "Copied",
+      "copy": "Copy",
+      "getStarted": "Get started",
+      "openSource": "Open source on GitHub",
+      "joinDiscord": "Join Discord",
+      "selfHost": "Self-host it yourself",
+      "demoDesktop": "ADHDev command center driving live agent sessions across multiple machines",
+      "demoPush": "ADHDev mobile push notification and one-tap approval"
+    },
+    "mesh": {
+      "sectionTitle": "They parallelize. We land.",
+      "sectionSubtitle": "Spawning parallel agents is the easy part — every tool does it now. The hard part is what happens after: ten branches that still have to be verified and merged. The Refinery does that for you, unattended, so finished work arrives on main instead of in your review queue.",
+      "refineryHighlight": "The Refinery",
+      "refineryTitle": "Finished work lands on main — unattended",
+      "refineryDesc": "Anyone can spawn ten parallel agents. The Refinery validates each worktree against your repo's own gates (typecheck, tests, lint), verifies patch equivalence, publishes submodule commits, fast-forwards main, and cleans up — automatically. No force-push, ever. Anything ambiguous is kicked back for review instead of merged.",
+      "asyncHighlight": "Async orchestration",
+      "asyncTitle": "You talk to one place. It runs the rest.",
+      "asyncDesc": "You give work to one coordinator; it drives many workers across many machines on an event loop — reacting only when a completion, approval, or status event arrives. No polling, no window-per-agent to babysit. Unlike a desktop app where you watch each agent session, here the coordinator waits on events, so you don't have to sit synchronously in front of anything.",
+      "monoHighlight": "Monorepo-aware",
+      "monoTitle": "Safe even with git submodules",
+      "monoDesc": "Real production repos nest submodules — and that's exactly where naive auto-merge breaks. The Refinery is submodule-aware: it gates on submodule-commit reachability, judges patch equivalence, and bumps the pointer atomically. This project is itself a root + two-submodule monorepo, converged this way every day.",
+      "crossHighlight": "Cross-check",
+      "crossTitle": "Consensus over a single opinion",
+      "crossDesc": "Fan the same read-only investigation out to several machine × provider replicas and synthesize where they agree and diverge (MAGI). More trustworthy than one agent's take.",
+      "tryMesh": "Try Repo Mesh →",
+      "seePlans": "See plans",
+      "availableOn": "Available on Pro and above. Drive it from the <strong>Repo Mesh</strong> page once connected.",
+      "readGuide": "Read the guide"
+    },
+    "compare": {
+      "sectionTitle": "Parallel agents are everywhere now. Where does the work actually land?",
+      "sectionSubtitle": "A fair question. Local CLIs spawn subagents; desktop orchestrators fan work across worktrees with a slick native UI. Both stop at the branch. Here's the honest line — including where each of them beats us — with no hand-waving.",
+      "colLocalCli": "Local CLI + subagents",
+      "colDesktop": "Desktop orchestrator",
+      "colAdhdev": "ADHDev Repo Mesh",
+      "rowLandsMain": "Lands finished work on main",
+      "rowLandsMainLocalCli": "You run the gates and merge by hand",
+      "rowLandsMainDesktop": "Parallelizes the work, then hands you the branches to review",
+      "rowLandsMainAdhdev": "The Refinery runs your repo's gates, checks patch equivalence, and fast-forwards main — unattended, no force-push",
+      "rowSubmodules": "Safe with git submodules",
+      "rowSubmodulesLocalCli": "No merge automation to be aware of them",
+      "rowSubmodulesDesktop": "Worktree parallelism, but the merge is yours to get right",
+      "rowSubmodulesAdhdev": "Submodule-aware convergence: reachability gate, patch-equivalence check, atomic pointer bump — dogfooded on this monorepo daily",
+      "rowAsync": "Talk to one place, async",
+      "rowAsyncLocalCli": "One session at a time, synchronously",
+      "rowAsyncDesktop": "You supervise each agent window yourself",
+      "rowAsyncAdhdev": "One coordinator drives every worker on an event loop — it waits on completion/approval events, you don't poll or babysit",
+      "rowMultiMachine": "Multiple physical machines",
+      "rowMultiMachineLocalCli": "One host's processes only",
+      "rowMultiMachineDesktop": "Bound to the one machine it runs on",
+      "rowMultiMachineAdhdev": "Remote daemons over P2P — dispatch across every machine you own (no SSH plumbing)",
+      "rowParallelBranch": "Parallel isolated-branch work",
+      "rowParallelBranchLocalCli": "Subagents share one working tree — concurrent writes collide",
+      "rowParallelBranchDesktop": "One git worktree per task — a core strength",
+      "rowParallelBranchAdhdev": "One git worktree per node — parallel across machines, not just cores",
+      "rowBrowser": "Drive it from a browser or phone",
+      "rowBrowserLocalCli": "You have to be at the terminal",
+      "rowBrowserDesktop": "Native desktop app — you're at that desk",
+      "rowBrowserAdhdev": "Web-first: control sessions and approve from any browser or phone",
+      "rowNativeApp": "Native desktop app",
+      "rowNativeAppLocalCli": "Terminal only",
+      "rowNativeAppDesktop": "Polished native window — genuinely nicer to sit in front of",
+      "rowNativeAppAdhdev": "We're web-first — a browser tab, not a native app",
+      "rowRestarts": "Survives restarts & context loss",
+      "rowRestartsLocalCli": "State lives in a session — close it and it's gone",
+      "rowRestartsDesktop": "State tied to the app process",
+      "rowRestartsAdhdev": "Missions persist to disk and resume after a coordinator or daemon restart — append-only, tamper-evident audit trail",
+      "rowCrossCheck": "Cross-check the answer",
+      "rowCrossCheckLocalCli": "One agent's take, no second opinion",
+      "rowCrossCheckDesktop": "Parallel work, single verdict",
+      "rowCrossCheckAdhdev": "MAGI fans the same read-only question to independent machine × provider agents and surfaces where they diverge",
+      "footnote": "For a single machine, a single branch, a one-shot task — a local CLI with subagents is lighter and works great, and a native desktop orchestrator is a nicer place to sit. Repo Mesh earns its keep when work fans out across machines and branches, needs to survive restarts, and should land on main automatically — controlled from wherever you are."
+    },
+    "what": {
+      "sectionTitle": "Any agent, mixed freely",
+      "sectionSubtitle": "Vendor-neutral by design. Run Claude Code on the Mac, Codex on the Windows GPU box, Gemini for review passes — in the same mesh, under the same policies. Switch vendors without switching platforms.",
+      "cliHighlight": "CLI agents",
+      "cliTitle": "Drive any terminal agent from the web",
+      "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi, and OpenCode — attached on your machine through a PTY adapter with proper resume and reconnect, driven from your browser. Send prompts and provide visual context instantly (paste, drag & drop, or upload multiple images at once, up to 5 images / 10MB each). Aider, Gemini CLI, Goose, and other ACP agents connect over stdio.",
+      "uiHighlight": "One UI",
+      "uiTitle": "Same dashboard, any device",
+      "uiDesc": "Cloud-hosted at adhf.dev — drive every agent from a laptop or phone, whether you're at your desk or away from it.",
+      "ideHighlight": "IDE agents",
+      "ideTitle": "Also: attach to running editors",
+      "ideDesc": "Cursor, VS Code, VSCodium, Windsurf, Antigravity, Kiro, PearAI, Trae. Read live chat, send prompts, switch sessions, capture screenshots.",
+      "p2pHighlight": "Yours, end to end",
+      "p2pTitle": "P2P-first: your data stays yours",
+      "p2pDesc": "Chat, commands, and screenshots flow directly between your browser and your daemon over WebRTC. The cloud sees auth and signaling metadata, nothing else — your code never routes through the server."
+    },
+    "oss": {
+      "sectionTitle": "Open source & self-hostable",
+      "sectionSubtitle": "The daemon and dashboard are AGPL-3.0 and available on GitHub. Run them yourself on any machine or server — no account required.",
+      "github": "GitHub",
+      "selfHostDocs": "Self-hosting docs"
+    },
+    "agents": {
+      "sectionTitle": "Supported agents",
+      "sectionSubtitle": "{{ides}} built-in IDE integrations, {{clis}} built-in CLI agents, {{extensions}} IDE-resident extension agents, and {{acp}}+ ACP (stdio MCP) agents. Provider scripts live in <code>adhdev-providers/</code> — add your own under <code>~/.adhdev/providers/</code>.",
+      "tierTested": "Tested",
+      "tierTestedDesc": "validated against a real app + version",
+      "tierCommunity": "Community",
+      "tierCommunityDesc": "built-in and community-supported",
+      "groupIdes": "IDEs",
+      "hintIdes": "Attached via Chrome DevTools Protocol. Read chat, send prompts, switch sessions, screenshot.",
+      "groupCli": "CLI agents",
+      "hintCli": "Driven through a PTY adapter with resume and reconnect.",
+      "groupExtensions": "In-IDE extension agents",
+      "hintExtensions": "CDP webview attachment for agents that live inside another IDE.",
+      "acpFootnote": "Plus {{count}}+ ACP agents over stdio (Agent Client Protocol): Codex, Claude Agent, Gemini, Goose, Cline, OpenHands, and more."
+    },
+    "pricing": {
+      "sectionTitle": "Simple pricing as your agents grow",
+      "sectionSubtitle": "Start free on one machine. Go Pro for two, or Ultra for five. No per-seat math, no enterprise sales call — just the plans below.",
+      "mostPopular": "Most popular",
+      "upgradeToPro": "Upgrade to Pro",
+      "footnote": "Simple, transparent pricing — the prices above are what you'll pay. Prefer to self-host? The daemon and dashboard are open source. Prices in USD.",
+      "plans": {
+        "free": {
+          "period": "forever",
+          "tagline": "Everything you need to drive one machine from anywhere.",
+          "cta": "Start free",
+          "features": {
+            "machine": "One machine, paired in a single command",
+            "p2p": "P2P chat, commands, screenshots, remote input",
+            "providers": "Every provider — CLI, IDE, and ACP agents",
+            "push": "Push notifications for approvals & completions",
+            "share": "One shared session link"
+          }
+        },
+        "pro": {
+          "period": "/mo",
+          "tagline": "Run agents across a couple of machines, with the reliability paid plans need.",
+          "cta": "Start 7-day Pro trial",
+          "features": {
+            "machines": "2 machines — run agents on both",
+            "p2p": "More concurrent P2P sessions",
+            "push": "Unlimited push notifications",
+            "turn": "TURN relay for restrictive networks",
+            "mesh": "Repo Mesh — orchestrate agents across machines",
+            "share": "More shared sessions"
+          }
+        },
+        "ultra": {
+          "period": "/mo",
+          "tagline": "Everything in Pro, scaled up — more machines and higher limits for heavy parallel work.",
+          "cta": "Go Ultra",
+          "features": {
+            "machines": "5 machines — flat price, not per-seat",
+            "everything": "Everything in Pro",
+            "p2p": "Highest concurrent P2P sessions",
+            "screenshots": "Unlimited daily screenshot minutes",
+            "webhooks": "More webhooks & API calls",
+            "share": "More shared sessions"
+          }
+        }
+      }
+    },
+    "install": {
+      "sectionTitle": "Three steps to a working dashboard",
+      "sectionSubtitle": "No configuration files. No API keys to wire up. ADHDev does not manage agent auth — each tool keeps its own login.",
+      "selectOs": "Select OS",
+      "osUnix": "macOS / Linux",
+      "osWindows": "Windows",
+      "copyInstall": "Copy install command: {{cmd}}",
+      "copied": "Copied",
+      "copy": "Copy",
+      "platformNote": "macOS and Windows are the validated install paths. Linux runs the same Unix script and is community-tested.",
+      "arrow": "→",
+      "steps": {
+        "step1": {
+          "title": "Install the daemon",
+          "desc": "One curl command installs the daemon plus the adhdev CLI — the launcher you run to pair machines and start the daemon (not to be confused with the CLI agents it drives, like Claude Code or Codex). Same binary powers cloud and standalone."
+        },
+        "step2": {
+          "title": "Link a machine",
+          "desc": "Sign in once with GitHub or Google and the daemon pairs itself — no token to copy."
+        },
+        "step3": {
+          "title": "Drive your agents",
+          "desc": "Launch Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi, and other agents from the dashboard. Read chat, send prompts, provide visual context (paste, drag & drop, or upload multiple images at once), approve actions, and switch sessions."
+        }
+      }
+    },
+    "cta": {
+      "headline": "Stop juggling tabs. Drive every agent from one dashboard.",
+      "subtitle": "One curl command, one daemon, every agent you already use. Drive them all from the web — Cloud is live.",
+      "getStarted": "Get started →",
+      "github": "GitHub",
+      "discord": "Discord"
+    },
+    "footer": {
+      "docs": "Docs",
+      "github": "GitHub",
+      "discord": "Discord",
+      "dashboard": "Dashboard",
+      "terms": "Terms",
+      "privacy": "Privacy",
+      "contact": "Contact",
+      "copyright": "© {{year}} RacoLab. All rights reserved."
+    }
   }
 }
