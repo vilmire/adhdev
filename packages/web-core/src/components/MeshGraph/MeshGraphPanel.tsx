@@ -3,6 +3,7 @@
  */
 
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme } from './meshGraphTheme'
 import { formatMeshConnectionSummary } from '../../utils/mesh-visualization'
@@ -72,44 +73,46 @@ function summarizeHead(node: MeshGraphNode): string | null {
     return [headCommit, headMessage].filter(Boolean).join(' · ')
 }
 
-function formatUpstreamState(node: MeshGraphNode): string | null {
+type TFn = (key: string) => string
+
+function formatUpstreamState(node: MeshGraphNode, t: TFn): string | null {
     if (!node.upstream) return null
     switch (node.upstreamStatus) {
         case 'fresh':
-            return 'verified'
+            return t('meshGraph.panel.upstreamVerified')
         case 'stale':
-            return 'unverified (fetch failed)'
+            return t('meshGraph.panel.upstreamUnverifiedFetch')
         case 'unchecked':
-            return 'unverified'
+            return t('meshGraph.panel.upstreamUnverified')
         case 'unavailable':
-            return 'unavailable'
+            return t('meshGraph.panel.upstreamUnavailable')
         case 'no_upstream':
         default:
             return null
     }
 }
 
-function sessionStatusLabel(session: MeshGraphNode['sessionDetails'][number]): string {
+function sessionStatusLabel(session: MeshGraphNode['sessionDetails'][number], t: TFn): string {
     const raw = (session.chatStatus || session.state || session.lifecycle || '').trim()
     if (!raw) return 'unknown'
     const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_')
-    if (normalized.includes('approval')) return 'awaiting approval'
-    if (normalized.includes('generating') || normalized.includes('running') || normalized.includes('busy')) return 'generating'
-    if (normalized.includes('idle') || normalized.includes('ready') || normalized.includes('waiting_input')) return 'idle'
+    if (normalized.includes('approval')) return t('meshGraph.panel.statusAwaiting')
+    if (normalized.includes('generating') || normalized.includes('running') || normalized.includes('busy')) return t('meshGraph.panel.statusGenerating')
+    if (normalized.includes('idle') || normalized.includes('ready') || normalized.includes('waiting_input')) return t('meshGraph.panel.statusIdle')
     return normalized.replace(/_/g, ' ')
 }
 
-function sessionRoleLabel(session: MeshGraphNode['sessionDetails'][number]): string {
-    if (session.isSelfCoordinator) return 'coordinator'
+function sessionRoleLabel(session: MeshGraphNode['sessionDetails'][number], t: TFn): string {
+    if (session.isSelfCoordinator) return t('meshGraph.panel.statusCoordinator')
     const role = typeof session.role === 'string' ? session.role.trim() : ''
-    return role || 'worker'
+    return role || t('meshGraph.panel.statusWorker')
 }
 
-function sessionElapsedLabel(session: MeshGraphNode['sessionDetails'][number]): string {
+function sessionElapsedLabel(session: MeshGraphNode['sessionDetails'][number], t: TFn): string {
     const startedAt = session.startedAt || session.createdAt || null
-    if (!startedAt) return 'runtime age not reported'
+    if (!startedAt) return t('meshGraph.panel.runtimeAgeNotReported')
     const parsed = Date.parse(startedAt)
-    if (!Number.isFinite(parsed)) return 'runtime age not reported'
+    if (!Number.isFinite(parsed)) return t('meshGraph.panel.runtimeAgeNotReported')
     const elapsedSeconds = Math.max(0, Math.floor((Date.now() - parsed) / 1000))
     if (elapsedSeconds < 60) return `${elapsedSeconds}s`
     const minutes = Math.floor(elapsedSeconds / 60)
@@ -126,12 +129,13 @@ function shortSessionId(sessionId: string): string {
 }
 
 export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
+    const { t } = useTranslation('common')
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     if (!node) {
         return (
             <div className={`${meshTheme.panelEmptyClass} md:w-64`}>
-                Select a node to view details.
+                {t('meshGraph.panel.selectNode')}
             </div>
         )
     }
@@ -154,35 +158,35 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
 
             <div className="flex flex-wrap items-center gap-2">
                 <HealthBadge health={node.health} isDark={meshTheme.isDark} />
-                {isSubmoduleNode && <span className={meshTheme.isDark ? 'rounded border border-violet-500/20 bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-200' : 'rounded border border-violet-300 bg-violet-50 px-1.5 py-0.5 text-[10px] text-violet-700'}>Submodule</span>}
-                {node.dirty && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-[10px] bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' : 'px-1.5 py-0.5 rounded text-[10px] bg-amber-50 text-amber-700 border border-amber-300'}>Dirty</span>}
-                {node.outOfSync && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20' : 'px-1.5 py-0.5 rounded text-[10px] bg-rose-50 text-rose-700 border border-rose-300'}>Out of sync</span>}
-                {node.hasConflicts && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20' : 'px-1.5 py-0.5 rounded text-[10px] bg-rose-50 text-rose-700 border border-rose-300'}>Conflict</span>}
-                {node.isOrphan && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20' : 'px-1.5 py-0.5 rounded text-[10px] bg-rose-50 text-rose-700 border border-rose-300'}>Orphan</span>}
+                {isSubmoduleNode && <span className={meshTheme.isDark ? 'rounded border border-violet-500/20 bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-200' : 'rounded border border-violet-300 bg-violet-50 px-1.5 py-0.5 text-[10px] text-violet-700'}>{t('meshGraph.panel.submoduleBadge')}</span>}
+                {node.dirty && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-[10px] bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' : 'px-1.5 py-0.5 rounded text-[10px] bg-amber-50 text-amber-700 border border-amber-300'}>{t('meshGraph.panel.dirtyBadge')}</span>}
+                {node.outOfSync && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20' : 'px-1.5 py-0.5 rounded text-[10px] bg-rose-50 text-rose-700 border border-rose-300'}>{t('meshGraph.panel.outOfSyncBadge')}</span>}
+                {node.hasConflicts && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20' : 'px-1.5 py-0.5 rounded text-[10px] bg-rose-50 text-rose-700 border border-rose-300'}>{t('meshGraph.panel.conflictBadge')}</span>}
+                {node.isOrphan && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20' : 'px-1.5 py-0.5 rounded text-[10px] bg-rose-50 text-rose-700 border border-rose-300'}>{t('meshGraph.panel.orphanBadge')}</span>}
             </div>
 
             <div className="flex flex-col gap-0.5 mt-1">
-                <Field label="Workspace" value={node.workspace} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Branch" value={node.branch} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Upstream" value={!isSubmoduleNode ? (node.upstream ?? null) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Upstream state" value={!isSubmoduleNode ? formatUpstreamState(node) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="HEAD" value={headSummary} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Submodule path" value={node.submodulePath ?? null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Submodule commit" value={node.submoduleCommit ?? null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Parent node" value={isSubmoduleNode ? (node.machineLabel || node.parentNodeId || null) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Ahead" value={!isSubmoduleNode && (!node.upstream || node.upstreamStatus === 'fresh') && node.ahead > 0 ? `+${node.ahead}` : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Behind" value={!isSubmoduleNode && (!node.upstream || node.upstreamStatus === 'fresh') && node.behind > 0 ? `-${node.behind}` : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Dirty files" value={node.dirtyFiles > 0 ? node.dirtyFiles : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Active sessions" value={node.activeSessionCount > 0 ? node.activeSessionCount : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Providers" value={!isSubmoduleNode ? (node.providers.join(', ') || null) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Connection" value={connectionSummary} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Link note" value={connectionSummary ? (node.connectionReason ?? null) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label="Error" value={node.error ?? null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldWorkspace')} value={node.workspace} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldBranch')} value={node.branch} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldUpstream')} value={!isSubmoduleNode ? (node.upstream ?? null) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldUpstreamState')} value={!isSubmoduleNode ? formatUpstreamState(node, t) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldHead')} value={headSummary} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldSubmodulePath')} value={node.submodulePath ?? null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldSubmoduleCommit')} value={node.submoduleCommit ?? null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldParentNode')} value={isSubmoduleNode ? (node.machineLabel || node.parentNodeId || null) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldAhead')} value={!isSubmoduleNode && (!node.upstream || node.upstreamStatus === 'fresh') && node.ahead > 0 ? `+${node.ahead}` : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldBehind')} value={!isSubmoduleNode && (!node.upstream || node.upstreamStatus === 'fresh') && node.behind > 0 ? `-${node.behind}` : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldDirtyFiles')} value={node.dirtyFiles > 0 ? node.dirtyFiles : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldActiveSessions')} value={node.activeSessionCount > 0 ? node.activeSessionCount : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldProviders')} value={!isSubmoduleNode ? (node.providers.join(', ') || null) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldConnection')} value={connectionSummary} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldLinkNote')} value={connectionSummary ? (node.connectionReason ?? null) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                <Field label={t('meshGraph.panel.fieldError')} value={node.error ?? null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
             </div>
 
             {node.orphanReasons.length > 0 && (
                 <div className="mt-1">
-                    <div className={meshTheme.isDark ? 'mb-1 text-[10px] font-semibold text-red-400' : 'mb-1 text-[10px] font-semibold text-rose-700'}>Orphan reasons</div>
+                    <div className={meshTheme.isDark ? 'mb-1 text-[10px] font-semibold text-red-400' : 'mb-1 text-[10px] font-semibold text-rose-700'}>{t('meshGraph.panel.orphanReasons')}</div>
                     <ul className={meshTheme.isDark ? 'list-disc list-inside text-[10px] text-red-300 space-y-0.5' : 'list-disc list-inside text-[10px] text-rose-700 space-y-0.5'}>
                         {node.orphanReasons.map((r, i) => (
                             <li key={i}>{r}</li>
@@ -193,7 +197,7 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
 
             {node.sessionDetails.length > 0 && (
                 <div className="mt-2">
-                    <div className={meshTheme.isDark ? 'mb-1 text-[10px] font-semibold text-slate-300' : 'mb-1 text-[10px] font-semibold text-slate-700'}>Attached chats</div>
+                    <div className={meshTheme.isDark ? 'mb-1 text-[10px] font-semibold text-slate-300' : 'mb-1 text-[10px] font-semibold text-slate-700'}>{t('meshGraph.panel.attachedChats')}</div>
                     <div className="flex flex-col gap-1.5">
                         {node.sessionDetails.map(session => (
                             <div
@@ -202,20 +206,20 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
                                 title={[
                                     `Session ID: ${session.sessionId}`,
                                     session.providerType ? `Provider: ${session.providerType}` : null,
-                                    `Status: ${sessionStatusLabel(session)}`,
-                                    `Role: ${sessionRoleLabel(session)}`,
+                                    `Status: ${sessionStatusLabel(session, t)}`,
+                                    `Role: ${sessionRoleLabel(session, t)}`,
                                     session.startedAt || session.createdAt ? `Started: ${session.startedAt || session.createdAt}` : 'Started: not reported',
                                     session.statusNote ? `Note: ${session.statusNote}` : null,
                                 ].filter(Boolean).join('\n')}
                             >
                                 <div className="flex min-w-0 items-center justify-between gap-2">
                                     <span className="min-w-0 truncate font-mono select-text">{shortSessionId(session.sessionId)}</span>
-                                    <span>{sessionStatusLabel(session)}</span>
+                                    <span>{sessionStatusLabel(session, t)}</span>
                                 </div>
                                 <div className="mt-0.5 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5">
-                                    <span className="truncate">{session.providerType || 'provider unknown'}</span>
-                                    <span>{sessionRoleLabel(session)}</span>
-                                    <span>{sessionElapsedLabel(session)}</span>
+                                    <span className="truncate">{session.providerType || t('meshGraph.panel.providerUnknown')}</span>
+                                    <span>{sessionRoleLabel(session, t)}</span>
+                                    <span>{sessionElapsedLabel(session, t)}</span>
                                 </div>
                                 {session.statusNote && (
                                     <div className="mt-1 leading-4">

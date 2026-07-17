@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import AppPage from '../../components/ui/AppPage'
 import { Section } from '../../components/ui/Section'
@@ -214,6 +215,7 @@ export function MeshDetailView({
     features,
     sendCommand,
 }: Props) {
+    const { t } = useTranslation('common')
     const policy = readMeshPolicy(selectedMesh)
     const nodes: MeshNode[] = selectedMesh.nodes || []
     // Drives the priority_only → distribution display: a legacy 'priority_only' mesh
@@ -252,11 +254,11 @@ export function MeshDetailView({
             widthClassName="max-w-5xl"
             actions={
                 <div className="flex gap-2">
-                    <button className="btn btn-secondary btn-sm" onClick={onBack}>← Back</button>
+                    <button className="btn btn-secondary btn-sm" onClick={onBack}>{t('repoMesh.detail.back')}</button>
                     <button className="btn btn-secondary btn-sm inline-flex items-center gap-1.5" onClick={() => onRefreshGraph(true)} disabled={graphLoading}>
-                        <IconRefresh size={13} />{graphLoading ? 'Probing…' : 'Refresh'}
+                        <IconRefresh size={13} />{graphLoading ? t('repoMesh.detail.probing') : t('repoMesh.detail.refresh')}
                     </button>
-                    <button className="btn btn-danger btn-sm" onClick={() => onDelete(selectedMesh.id)}>Delete</button>
+                    <button className="btn btn-danger btn-sm" onClick={() => onDelete(selectedMesh.id)}>{t('repoMesh.detail.delete')}</button>
                 </div>
             }
         >
@@ -287,7 +289,7 @@ export function MeshDetailView({
                  The page no longer embeds the observability surface (graph/overview/status);
                  that surface is reserved for DashboardMeshGraphDialog, which this button
                  launches. The dialog owns its own mesh_status loader + live-session overlay. */}
-            <Section title="Observability" description="Open the live mesh graph, overview, and runtime status in the observability dialog.">
+            <Section title={t('repoMesh.detail.observabilityTitle')} description={t('repoMesh.detail.observabilityDescription')}>
                 {graphError && <div className="mb-3 text-[12px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">{graphError}</div>}
                 <div className="flex flex-wrap items-center gap-3">
                     <button
@@ -295,12 +297,12 @@ export function MeshDetailView({
                         className="btn btn-primary btn-sm inline-flex items-center gap-1.5"
                         onClick={() => setGraphDialogOpen(true)}
                         disabled={!canLaunchGraphDialog}
-                        title={canLaunchGraphDialog ? 'Open the mesh graph / overview / status dialog' : 'A coordinator daemon must be selected first'}
+                        title={canLaunchGraphDialog ? t('repoMesh.detail.observabilityOpenTitle') : t('repoMesh.detail.observabilityDisabledTitle')}
                     >
-                        <IconMesh size={14} />Open mesh graph & status
+                        <IconMesh size={14} />{t('repoMesh.detail.observabilityOpen')}
                     </button>
                     <span className="text-[12px] text-text-muted">
-                        Topology graph, overview cards (missions, ledger, queue, nodes, sessions), and per-node runtime drift.
+                        {t('repoMesh.detail.observabilityHint')}
                     </span>
                 </div>
             </Section>
@@ -353,14 +355,14 @@ export function MeshDetailView({
             />
 
             {/* ── Scheduling ── */}
-            <Section title="Scheduling" description="How untargeted queue work is distributed across eligible nodes.">
+            <Section title={t('repoMesh.detail.schedulingTitle')} description={t('repoMesh.detail.schedulingDescription')}>
                 {/* Mesh-level "Max parallel tasks" is hidden: the real concurrency
                     limits live per node / per capability slot (ORCHESTRATION_NODE_SLOTS.md),
                     so a global cap has little meaning. The policy field still exists and
                     defaults high — set it via the API only if you genuinely need a
                     mesh-wide ceiling. */}
                 <fieldset className="border-none p-0 m-0">
-                    <legend className="text-[13px] font-medium text-text-secondary mb-2">Distribution</legend>
+                    <legend className="text-[13px] font-medium text-text-secondary mb-2">{t('repoMesh.detail.distribution')}</legend>
                     <div className="flex flex-col gap-2">
                         {DISTRIBUTION_OPTIONS.map(opt => {
                             const currentDistribution = strategyToDistribution(policy.schedulingStrategy, { priorityConfigured: anyNodePriorityConfigured })
@@ -375,7 +377,7 @@ export function MeshDetailView({
                                         <span className="flex items-center gap-2 text-sm text-text-primary">
                                             {opt.label}
                                             {recommendedDistribution === opt.value && (
-                                                <span className="rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">Recommended</span>
+                                                <span className="rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">{t('repoMesh.detail.recommended')}</span>
                                             )}
                                         </span>
                                         <span className="block text-[12px] text-text-muted">{opt.description}</span>
@@ -385,7 +387,7 @@ export function MeshDetailView({
                         })}
                     </div>
                 </fieldset>
-                {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">Saving…</div>}
+                {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">{t('repoMesh.detail.saving')}</div>}
 
                 {/* Per-node scheduling knobs (priority + per-provider max-parallel) were
                     removed: capability slots absorb both — slot order = preference and
@@ -401,15 +403,15 @@ export function MeshDetailView({
                  inbox + notifications, which most operators want to control. Same
                  policy.spawnedSessionVisibility binding as before (moved out of the
                  collapsed "Safety & Git" advanced accordion for discoverability). */}
-            <Section title="Dashboard visibility" description="Whether the worker sessions this coordinator spawns show up in your dashboard inbox and raise notifications.">
-                <FormField label="Coordinator-spawned worker sessions"
-                    hint="Hidden = keep the inbox quiet and mute their notifications; you interact through the coordinator session. Visible = show every spawned worker as its own conversation.">
+            <Section title={t('repoMesh.detail.visibilityTitle')} description={t('repoMesh.detail.visibilityDescription')}>
+                <FormField label={t('repoMesh.detail.visibilityLabel')}
+                    hint={t('repoMesh.detail.visibilityHint')}>
                     <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
                         value={policy.spawnedSessionVisibility === 'visible' ? 'visible' : 'hidden'}
                         onChange={e => onUpdatePolicy({ spawnedSessionVisibility: e.target.value === 'visible' ? 'visible' : 'hidden' })}
                         disabled={savingPolicy}>
-                        <option value="hidden">Hidden (no notifications, keep inbox quiet)</option>
-                        <option value="visible">Visible (show every worker in the dashboard)</option>
+                        <option value="hidden">{t('repoMesh.detail.visibilityHidden')}</option>
+                        <option value="visible">{t('repoMesh.detail.visibilityVisible')}</option>
                     </select>
                 </FormField>
             </Section>
@@ -420,7 +422,7 @@ export function MeshDetailView({
                  (MagiPanelManager) and its magi_panel_* daemon commands were removed; only
                  magi_kind_panel_* remains. */}
             {displayedMeshStatus && (
-                <Section title="MAGI review panels" description="MAGI (Multi-Agent Ground-truth Insight) runs a panel of AI agents that cross-check each other's work to surface the ground truth. Choose which agents handle each review type.">
+                <Section title={t('repoMesh.detail.magiTitle')} description={t('repoMesh.detail.magiDescription')}>
                     <MagiKindPanelEditor
                         status={displayedMeshStatus}
                         daemonId={activeDaemonId}
@@ -448,19 +450,19 @@ export function MeshDetailView({
                     a daemon target (activeDaemonId) — on Settings it had no daemon/mesh context and
                     showed "No connected daemons". */}
             {features.coordinatorPrompt && (
-                <Section title="Coordinator prompt" collapsible defaultOpen={false}
-                    badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-[10px] font-medium text-text-muted">advanced</span>}
-                    description="Customize the system prompt for coordinator sessions. Per-mesh overrides apply to this mesh only; user-level overrides apply to every mesh this daemon coordinates.">
+                <Section title={t('repoMesh.detail.coordinatorPromptTitle')} collapsible defaultOpen={false}
+                    badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-[10px] font-medium text-text-muted">{t('repoMesh.detail.advanced')}</span>}
+                    description={t('repoMesh.detail.coordinatorPromptDescription')}>
 
                     {/* Per-mesh override (this mesh's coordinator config) */}
                     <div className="rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
-                        <div className="text-[13px] font-semibold mb-1">This mesh</div>
-                        <p className="text-[12px] text-text-muted mb-3">Applies only to coordinator sessions for <span className="font-mono text-[11px]">{selectedMesh.name}</span>. Leave empty to fall through to the user-level / daemon default.</p>
-                        <FormField label="Override (replaces default)" hint="When set, replaces the daemon's default base prompt. Leave empty to keep the default.">
+                        <div className="text-[13px] font-semibold mb-1">{t('repoMesh.detail.thisMesh')}</div>
+                        <p className="text-[12px] text-text-muted mb-3">{t('repoMesh.detail.thisMeshHint', { name: selectedMesh.name })}</p>
+                        <FormField label={t('repoMesh.detail.overrideLabel')} hint={t('repoMesh.detail.overrideHint')}>
                             <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
                                 rows={6} value={coordinatorPromptDraft.override}
                                 onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, override: e.target.value })}
-                                disabled={savingCoordinatorPrompt} placeholder="(empty — daemon default applies)" />
+                                disabled={savingCoordinatorPrompt} placeholder={t('repoMesh.detail.overridePlaceholder')} />
                             <CoordinatorPromptDefaultPreview
                                 daemonId={activeDaemonId}
                                 meshId={selectedMesh.id}
@@ -468,33 +470,31 @@ export function MeshDetailView({
                                 sendCommand={sendCommand}
                             />
                         </FormField>
-                        <FormField label="Append (added after the base)" hint="Always added after whichever base prompt wins.">
+                        <FormField label={t('repoMesh.detail.appendLabel')} hint={t('repoMesh.detail.appendHint')}>
                             <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
                                 rows={4} value={coordinatorPromptDraft.append}
                                 onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, append: e.target.value })}
-                                disabled={savingCoordinatorPrompt} placeholder="(empty — nothing appended)" />
+                                disabled={savingCoordinatorPrompt} placeholder={t('repoMesh.detail.appendPlaceholder')} />
                         </FormField>
                         <details className="mt-2 text-[12px] text-text-muted">
-                            <summary className="cursor-pointer select-none">Available placeholders</summary>
+                            <summary className="cursor-pointer select-none">{t('repoMesh.detail.availablePlaceholders')}</summary>
                             <p className="mt-1 font-mono break-words">
                                 {'{{meshName}}, {{repo}}, {{defaultBranch}}, {{cliType}}, {{nodes}}, {{policy}}, {{tools}}, {{workflow}}, {{rules}}, {{toolExposurePreflight}}'}
                             </p>
                         </details>
                         <div className="mt-3 flex items-center gap-2">
                             <button type="button" className="btn btn-primary btn-sm" onClick={onSaveCoordinatorPrompt} disabled={savingCoordinatorPrompt}>
-                                {savingCoordinatorPrompt ? 'Saving…' : 'Save coordinator prompt'}
+                                {savingCoordinatorPrompt ? t('repoMesh.detail.saving') : t('repoMesh.detail.saveCoordinatorPrompt')}
                             </button>
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => onCoordinatorPromptDraftChange({ override: '', append: '' })} disabled={savingCoordinatorPrompt} title="Clear both fields. Click Save to commit.">Clear</button>
+                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => onCoordinatorPromptDraftChange({ override: '', append: '' })} disabled={savingCoordinatorPrompt} title={t('repoMesh.detail.clearTitle')}>{t('repoMesh.detail.clear')}</button>
                         </div>
                     </div>
 
                     {/* User-level (per-machine files on the coordinator daemon) */}
                     <div className="mt-5 border-t border-border-subtle pt-4">
-                        <div className="text-[13px] font-semibold mb-1">User-level (this daemon)</div>
+                        <div className="text-[13px] font-semibold mb-1">{t('repoMesh.detail.userLevel')}</div>
                         <p className="text-[12px] text-text-muted mb-3">
-                            Per-machine prompt files on the coordinator daemon. They apply to every mesh this
-                            daemon coordinates and are not synced across daemons. Per-mesh overrides above win
-                            over these.
+                            {t('repoMesh.detail.userLevelDescription')}
                         </p>
                         <CoordinatorPromptsSection daemonId={activeDaemonId || undefined} />
                     </div>
@@ -502,17 +502,17 @@ export function MeshDetailView({
             )}
 
             {/* ── Safety & Git (advanced) ── */}
-            <Section title="Safety & Git" collapsible defaultOpen={false}
-                badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-[10px] font-medium text-text-muted">advanced</span>}
-                description="Checkpointing, approval gates, and git safety behavior for coordinator-driven tasks.">
+            <Section title={t('repoMesh.detail.safetyTitle')} collapsible defaultOpen={false}
+                badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-[10px] font-medium text-text-muted">{t('repoMesh.detail.advanced')}</span>}
+                description={t('repoMesh.detail.safetyDescription')}>
                 <div className="grid gap-4 sm:grid-cols-2">
                     {[
-                        { label: 'Auto-commit a checkpoint before each task', key: 'requirePreTaskCheckpoint', opts: [['no', 'No'], ['yes', 'Yes']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
-                        { label: 'Auto-commit a checkpoint after each task', key: 'requirePostTaskCheckpoint', opts: [['yes', 'Yes'], ['no', 'No']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
-                        { label: 'Push approval', key: 'requireApprovalForPush', opts: [['required', 'Require approval before push'], ['not_required', 'Do not require approval']], val: (v: any) => v ? 'required' : 'not_required', parse: (v: string) => v === 'required' },
-                        { label: 'Destructive git approval', key: 'requireApprovalForDestructiveGit', opts: [['required', 'Require approval'], ['not_required', 'Do not require approval']], val: (v: any) => v ? 'required' : 'not_required', parse: (v: string) => v === 'required' },
-                        { label: 'When the workspace has uncommitted changes', key: 'dirtyWorkspaceBehavior', opts: [['warn', 'Warn and continue'], ['block', 'Block task'], ['checkpoint_then_continue', 'Checkpoint then continue']], val: (v: any) => v || 'warn', parse: (v: string) => v },
-                        { label: 'Auto-publish submodule commits (advanced)', key: 'allowAutoPublishSubmoduleMainCommits', opts: [['disabled', 'Require explicit approval'], ['enabled', 'Allow Refinery non-force publish']], val: (v: any) => v ? 'enabled' : 'disabled', parse: (v: string) => v === 'enabled' },
+                        { label: t('repoMesh.detail.checkpointBefore'), key: 'requirePreTaskCheckpoint', opts: [['no', 'No'], ['yes', 'Yes']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
+                        { label: t('repoMesh.detail.checkpointAfter'), key: 'requirePostTaskCheckpoint', opts: [['yes', 'Yes'], ['no', 'No']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
+                        { label: t('repoMesh.detail.pushApproval'), key: 'requireApprovalForPush', opts: [['required', t('repoMesh.detail.requireApprovalBeforePush')], ['not_required', t('repoMesh.detail.doNotRequireApproval')]], val: (v: any) => v ? 'required' : 'not_required', parse: (v: string) => v === 'required' },
+                        { label: t('repoMesh.detail.destructiveGitApproval'), key: 'requireApprovalForDestructiveGit', opts: [['required', t('repoMesh.detail.requireApproval')], ['not_required', t('repoMesh.detail.doNotRequireApproval')]], val: (v: any) => v ? 'required' : 'not_required', parse: (v: string) => v === 'required' },
+                        { label: t('repoMesh.detail.uncommittedChanges'), key: 'dirtyWorkspaceBehavior', opts: [['warn', t('repoMesh.detail.warnAndContinue')], ['block', t('repoMesh.detail.blockTask')], ['checkpoint_then_continue', t('repoMesh.detail.checkpointThenContinue')]], val: (v: any) => v || 'warn', parse: (v: string) => v },
+                        { label: t('repoMesh.detail.autoPublishSubmodule'), key: 'allowAutoPublishSubmoduleMainCommits', opts: [['disabled', t('repoMesh.detail.requireExplicitApproval')], ['enabled', t('repoMesh.detail.allowRefineryPublish')]], val: (v: any) => v ? 'enabled' : 'disabled', parse: (v: string) => v === 'enabled' },
                     ].map(({ label, key, opts, val, parse }) => (
                         <FormField key={key} label={label}>
                             <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
@@ -537,32 +537,32 @@ export function MeshDetailView({
                         onUpdatePolicy({ autoFastForward: { ...aff, ...change } });
                     return (
                         <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                            <FormField label="Auto fast-forward idle nodes">
+                            <FormField label={t('repoMesh.detail.autoFastForward')}>
                                 <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
                                     value={affEnabled ? 'enabled' : 'disabled'} onChange={e => patchAff({ enabled: e.target.value === 'enabled' })} disabled={savingPolicy}>
-                                    <option value="enabled">Enabled (catch up online, clean, behind nodes)</option>
-                                    <option value="disabled">Disabled</option>
+                                    <option value="enabled">{t('repoMesh.detail.ffEnabled')}</option>
+                                    <option value="disabled">{t('repoMesh.detail.ffDisabled')}</option>
                                 </select>
                             </FormField>
-                            <FormField label="Include remote nodes" hint="Off = only the coordinator's local workspace is auto fast-forwarded.">
+                            <FormField label={t('repoMesh.detail.includeRemoteNodes')} hint={t('repoMesh.detail.includeRemoteNodesHint')}>
                                 <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
                                     value={affRemote ? 'yes' : 'no'} onChange={e => patchAff({ remoteNodes: e.target.value === 'yes' })} disabled={savingPolicy || !affEnabled}>
-                                    <option value="no">No (local workspace only)</option>
-                                    <option value="yes">Yes (delegate to remote owning daemons)</option>
+                                    <option value="no">{t('repoMesh.detail.remoteNo')}</option>
+                                    <option value="yes">{t('repoMesh.detail.remoteYes')}</option>
                                 </select>
                             </FormField>
-                            <FormField label="Detection mode" hint="Idle = on a node's idle edge. Continuous = also scan periodically (base nodes only).">
+                            <FormField label={t('repoMesh.detail.detectionMode')} hint={t('repoMesh.detail.detectionModeHint')}>
                                 <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
                                     value={affMode} onChange={e => patchAff({ mode: e.target.value === 'continuous' ? 'continuous' : 'idle' })} disabled={savingPolicy || !affEnabled || !affRemote}>
-                                    <option value="idle">Idle edge only</option>
-                                    <option value="continuous">Continuous (periodic scan)</option>
+                                    <option value="idle">{t('repoMesh.detail.idleEdgeOnly')}</option>
+                                    <option value="continuous">{t('repoMesh.detail.continuousScan')}</option>
                                 </select>
                             </FormField>
                         </div>
                     );
                 })()}
                 <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-4">
-                    <FormField label="When removing a node, its sessions…" hint="Separate transcript cleanup from runtime/process cleanup.">
+                    <FormField label={t('repoMesh.detail.sessionCleanupLabel')} hint={t('repoMesh.detail.sessionCleanupHint')}>
                         <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
                             value={policy.sessionCleanupOnNodeRemove || 'preserve'} onChange={e => onUpdatePolicy({ sessionCleanupOnNodeRemove: e.target.value })} disabled={savingPolicy}>
                             {SESSION_CLEANUP_MODE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -572,7 +572,7 @@ export function MeshDetailView({
                         {SESSION_CLEANUP_MODE_OPTIONS.find(o => o.value === policy.sessionCleanupOnNodeRemove)?.description || SESSION_CLEANUP_MODE_OPTIONS[0].description}
                     </div>
                 </div>
-                {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">Saving…</div>}
+                {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">{t('repoMesh.detail.saving')}</div>}
             </Section>
 
             {/* ── Integrations: Standalone Hermes MCP config ── */}

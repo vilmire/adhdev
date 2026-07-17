@@ -3,6 +3,7 @@
  */
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
     Background,
     BackgroundVariant,
@@ -331,6 +332,7 @@ function getLocalityBadgeKind(node: MeshGraphNode): 'meta' | 'health' {
 }
 
 function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
+    const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
     const compact = useContext(MeshGraphCompactContext)
     const direction = useContext(MeshGraphDirectionContext)
@@ -403,7 +405,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 </div>
                 {node.health === 'unknown' && !attentionBadge && (
                     <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[9px] italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
-                        <span className="truncate">Connecting...</span>
+                        <span className="truncate">{t('meshGraph.obs.connecting')}</span>
                     </div>
                 )}
                 {attentionBadge && (
@@ -436,7 +438,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                             >
                                 <div className="flex min-w-0 items-center justify-between gap-1.5">
                                     <span className={`min-w-0 truncate text-[9px] ${meshTheme.textMuted}`}>
-                                        {session.providerType || 'provider unknown'}
+                                        {session.providerType || t('meshGraph.panel.providerUnknown')}
                                     </span>
                                     <span className={`shrink-0 rounded-full border px-1 py-0 text-[8px] font-semibold uppercase tracking-[0.1em] ${getSessionStatusBadgeClasses(session, meshTheme.isDark)}`}>
                                         {formatSessionStatusLabel(session)}
@@ -555,7 +557,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 <div className="flex min-w-0 flex-wrap gap-1.5 text-[10px]">
                     {node.health === 'unknown' ? (
                         <span className={`rounded-full border px-2 py-0.5 italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
-                            connecting...
+                            {t('meshGraph.obs.connecting')}
                         </span>
                     ) : (
                         <span className={`rounded-full border px-2 py-0.5 capitalize ${getBadgeClasses('health', meshTheme.isDark)}`}>
@@ -564,7 +566,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     )}
                     {isSubmoduleNode && (
                         <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('submodule', meshTheme.isDark)}`}>
-                            submodule
+                            {t('meshGraph.panel.submoduleBadge')}
                         </span>
                     )}
                     {!isDefaultBranchNode && node.health === 'unknown' && !node.locality && (
@@ -605,29 +607,29 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     )}
                     {node.outOfSync && (
                         <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('conflict', meshTheme.isDark)}`}>
-                            out of sync
+                            {t('meshGraph.panel.outOfSyncBadge')}
                         </span>
                     )}
                     {node.hasConflicts && (
                         <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('conflict', meshTheme.isDark)}`}>
-                            conflicts
+                            {t('meshGraph.panel.conflictBadge')}
                         </span>
                     )}
                     {!isSubmoduleNode && node.upstream && node.upstreamStatus !== 'fresh' && (
                         <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('orphan', meshTheme.isDark)}`}>
-                            upstream unverified
+                            {t('meshGraph.panel.upstreamUnverified')}
                         </span>
                     )}
                     {node.isOrphan && (
                         <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('orphan', meshTheme.isDark)}`}>
-                            needs follow-up
+                            {t('meshGraph.panel.needsFollowUp')}
                         </span>
                     )}
                     {/* The attention badge above already surfaces in-progress/failed refine state;
                         the card only adds the recent-completed case it does not show. */}
                     {!isSubmoduleNode && node.refineJobStatus === 'completed' && (
                         <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('refineDone', meshTheme.isDark)}`} title={node.refineJobBranch ? `refined ${node.refineJobBranch}${node.refineJobInto ? ` → ${node.refineJobInto}` : ''}` : 'refine completed'}>
-                            refined
+                            {t('meshGraph.panel.refined')}
                         </span>
                     )}
                 </div>
@@ -639,7 +641,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 {visibleSessions.length > 0 && (
                     <div className="mt-3">
                         <div className={`mb-1.5 text-[9px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>
-                            Attached Chats
+                            {t('meshGraph.panel.attachedChats')}
                         </div>
                         <div className="flex max-h-56 flex-col gap-1.5 overflow-y-auto pr-1">
                             {visibleSessions.map(session => {
@@ -667,7 +669,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                             </span>
                                         </div>
                                         <div className={`mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-[9px] ${meshTheme.textMuted}`}>
-                                            <span className="truncate">{session.providerType || 'provider unknown'}</span>
+                                            <span className="truncate">{session.providerType || t('meshGraph.panel.providerUnknown')}</span>
                                             <span>{roleLabel}</span>
                                             <span>{formatElapsedSince(startedAt)}</span>
                                         </div>

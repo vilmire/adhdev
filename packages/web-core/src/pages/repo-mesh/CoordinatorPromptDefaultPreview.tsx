@@ -64,17 +64,17 @@ export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliT
 
             {open && (
                 <div className="mt-2">
-                    {loading && <div className="text-[12px] text-text-muted">Rendering…</div>}
+                    {loading && <div className="text-[12px] text-text-muted">{t('repoMesh.promptPreview.rendering')}</div>}
                     {error && (
                         <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-300">
                             {error}
-                            <button type="button" onClick={() => void load()} className="ml-2 underline bg-transparent border-none cursor-pointer text-amber-300">Retry</button>
+                            <button type="button" onClick={() => void load()} className="ml-2 underline bg-transparent border-none cursor-pointer text-amber-300">{t('repoMesh.promptPreview.retry')}</button>
                         </div>
                     )}
                     {!loading && !error && prompt !== null && (
                         <>
                             <div className="mb-1 flex items-center justify-between text-[11px] text-text-muted">
-                                <span>This is what a coordinator session gets when Override is empty.</span>
+                                <span>{t('repoMesh.promptPreview.info')}</span>
                                 {bytes !== null && <span>{(bytes / 1024).toFixed(1)} KB</span>}
                             </div>
                             <textarea
