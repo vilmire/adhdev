@@ -14,6 +14,7 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 
 export interface MeshSessionChatMessage {
   role?: string;
@@ -58,9 +59,10 @@ function formatTimestamp(at?: number): string {
 }
 
 export function MeshSessionChatViewer(props: MeshSessionChatViewerProps): React.JSX.Element {
+  const { t } = useTranslation();
   const baseClass = ['mesh-session-chat-viewer', props.className || ''].filter(Boolean).join(' ');
   if (props.loading) {
-    return <div className={`${baseClass} mesh-session-chat-viewer--loading`}>Loading…</div>;
+    return <div className={`${baseClass} mesh-session-chat-viewer--loading`}>{t('meshGraph.chat.loading')}</div>;
   }
   if (props.error) {
     return <div className={`${baseClass} mesh-session-chat-viewer--error`}>{props.error}</div>;
@@ -69,7 +71,7 @@ export function MeshSessionChatViewer(props: MeshSessionChatViewerProps): React.
   const showInternal = props.showInternal === true;
   const visible = messages.filter(m => isUserFacingMessage(m, showInternal));
   if (visible.length === 0) {
-    return <div className={`${baseClass} mesh-session-chat-viewer--empty`}><em>{props.emptyLabel ?? 'No messages.'}</em></div>;
+    return <div className={`${baseClass} mesh-session-chat-viewer--empty`}><em>{props.emptyLabel ?? t('meshGraph.chat.empty')}</em></div>;
   }
   return (
     <ol className={baseClass}>

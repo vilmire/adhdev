@@ -205,5 +205,213 @@
     "hideConversationTitle": "Hide conversation",
     "stopSessionAria": "Stop {{title}} session",
     "stopSessionTitle": "Stop session (terminates the agent)"
+  },
+  "meshGraph": {
+    "help": {
+      "toggleAria": "Mesh help",
+      "toggleTitle": "Mesh concept help",
+      "regionAria": "Mesh concept help",
+      "kicker": "Help",
+      "title": "Mesh concepts at a glance",
+      "close": "Close help",
+      "sections": {
+        "node": {
+          "term": "Node",
+          "summary": "A workspace participating in the mesh — a repo checkout or an isolated git worktree.",
+          "details": [
+            "Base node vs worktree clone node — a clone isolates parallel work without conflicts.",
+            "Shows health (online/offline) alongside git state (branch · ahead/behind · dirty).",
+            "Multiple nodes can share the same daemon."
+          ]
+        },
+        "p2p": {
+          "term": "P2P connection",
+          "summary": "How the selected coordinator reaches each remote node over WebRTC.",
+          "details": [
+            "direct — a direct host/STUN path; lowest latency.",
+            "relay — TURN-relayed; works through restrictive networks but is slower.",
+            "disconnected / failed — no live P2P link from the coordinator right now.",
+            "P2P connectivity is shown as transport and RTT chips on each node card (and in the node detail panel), not as a graph edge."
+          ]
+        },
+        "session": {
+          "term": "Session",
+          "summary": "An agent CLI session running on a node.",
+          "details": [
+            "status = idle / generating / waiting_approval.",
+            "Distinguishes coordinator sessions (which dispatch and collect work) from delegated worker sessions (which do the work)."
+          ]
+        },
+        "task": {
+          "term": "Task",
+          "summary": "A single unit of work handled by the queue-based pull model.",
+          "details": [
+            "States: pending → assigned → completed / failed / cancelled.",
+            "Idle nodes claim from the queue automatically; direct dispatch targets a specific session."
+          ]
+        },
+        "mission": {
+          "term": "Mission",
+          "summary": "A multi-task batch aimed at one goal, and the durable record of that effort.",
+          "details": [
+            "States: active / paused / completed / abandoned.",
+            "Progress is derived from the states of its member tasks."
+          ]
+        },
+        "refinery": {
+          "term": "Refinery (refine)",
+          "summary": "The process of safely converging and merging a worktree branch into the base.",
+          "details": [
+            "Config-driven (.adhdev/refine.*) — guarded by a patch-equivalence preflight and a no-op guard.",
+            "ff-only by principle; no force-push.",
+            "If a submodule commit is unreachable from origin it must be published → classified as blocked_review."
+          ]
+        },
+        "completion": {
+          "term": "Completion model",
+          "summary": "Completion of delegated work is persisted to the queue (pending-events).",
+          "details": [
+            "The coordinator learns of completion via periodic polling or events.",
+            "Because it is persisted to the queue, completion signals are never lost."
+          ]
+        },
+        "magi": {
+          "term": "MAGI",
+          "summary": "Cross-verification: several independent AI agents answer the same question in parallel.",
+          "details": [
+            "Confidence comes from independence — different AIs on different machines fail in different ways.",
+            "When the agents disagree, the disagreement itself flags what to double-check.",
+            "Run via mesh_magi_review; the synthesis weighs agreement against source coupling."
+          ]
+        },
+        "magiPanel": {
+          "term": "MAGI panel",
+          "summary": "A saved, reusable team of (machine × AI) members you invoke by name across investigations.",
+          "details": [
+            "Each member is one provider (AI) optionally pinned to a node (machine), with a replica count.",
+            "independent — spans ≥2 providers AND ≥2 machines, so agreement adds real confidence.",
+            "coupled — collapses to one AI or one machine; repeated members repeat the same mistakes.",
+            "Managed machine-locally from the Panels tab; defined in ~/.adhdev/meshes.json."
+          ]
+        },
+        "convergence": {
+          "term": "Branch convergence states",
+          "summary": "After worktree work, each branch is classified into exactly one final state.",
+          "details": [
+            "merged_to_main — merged into the base.",
+            "pushed_feature_branch_needs_merge — pushed, awaiting merge.",
+            "blocked_review — held back by review/reachability issues.",
+            "cleanup_candidate — ready to clean up.",
+            "not_mergeable — cannot be merged."
+          ]
+        }
+      }
+    },
+    "approvals": {
+      "title": "PENDING APPROVALS",
+      "empty": "No sessions are awaiting an approval decision.",
+      "sessionFallback": "session {{id}}",
+      "approve": "Approve",
+      "reject": "Reject"
+    },
+    "chat": {
+      "loading": "Loading…",
+      "empty": "No messages."
+    },
+    "coordinatorBadge": {
+      "daemon": "daemon: {{id}}",
+      "run": "run: {{id}}",
+      "session": "session: {{id}}"
+    },
+    "difficulty": {
+      "intro": "Map each task difficulty to a brain. The coordinator classifies a task's difficulty; easy work then runs on a cheaper model at low effort, hard work on a stronger model at high effort. Leave a field blank to keep the routed default.",
+      "connectPrompt": "Connect to a coordinator daemon to edit brain presets.",
+      "errorLoad": "Failed to load brain presets",
+      "errorSave": "Failed to save brain presets",
+      "provider": "Provider",
+      "model": "Model",
+      "thinking": "Thinking",
+      "routedDefault": "(routed default)",
+      "defaultOption": "(default)",
+      "modelPlaceholder": "e.g. haiku, sonnet, opus",
+      "savePresets": "Save presets",
+      "saving": "Saving…",
+      "reset": "Reset",
+      "loading": "Loading…",
+      "easy": "Easy",
+      "easyHint": "trivial fixes, renames, docs — save tokens",
+      "medium": "Medium",
+      "mediumHint": "ordinary feature / bugfix work",
+      "difficult": "Difficult",
+      "difficultHint": "architecture, tricky debugging, hard reasoning",
+      "freeform": "Freeform",
+      "freeformHint": "no fixed shape"
+    },
+    "magiKind": {
+      "intro": "Pick which agents review each task type. Add one row per agent.",
+      "refresh": "Refresh",
+      "loading": "Loading…",
+      "connectPrompt": "Connect to a coordinator daemon to manage kind → panel bindings.",
+      "errorLoad": "Failed to load kind panels",
+      "errorSave": "Failed to save kind binding",
+      "errorRemove": "Failed to remove kind binding",
+      "errorSlotProvider": "Slot {{slot}}: provider is required",
+      "errorSlotReplica": "Slot {{slot}}: replica count must be ≥ 1",
+      "errorNoSlot": "A kind binding needs at least one slot",
+      "removeConfirm": "Remove the MAGI panel binding for \"{{kind}}\"?",
+      "kindRca": "Root-cause analysis",
+      "kindDesign": "Design / approach review",
+      "kindClaimAudit": "Verify specific claims",
+      "kindFreeform": "Freeform review",
+      "agentCount_one": "{{count}} agent",
+      "agentCount_other": "{{count}} agents",
+      "off": "off",
+      "noAgents": "No agents yet — add one to enable this review type.",
+      "machine": "Machine",
+      "machineTitle": "Which machine runs this agent. Leave on \"any\" to let the coordinator route by tags.",
+      "anyMachine": "Any machine",
+      "offlineSuffix": "{{label}} (offline)",
+      "provider": "Provider",
+      "providerTitle": "The AI agent this slot runs.",
+      "selectProvider": "Select provider…",
+      "model": "Model",
+      "modelTitle": "Optional model override (best-effort). Blank uses the provider default.",
+      "modelDefault": "default",
+      "modelCustom": "Custom…",
+      "backToModelList": "← Back to model list",
+      "copies": "Copies",
+      "copiesTitle": "How many parallel copies of this agent to run. Blank = 1.",
+      "removeAgent": "Remove agent",
+      "addAgent": "+ Add agent",
+      "save": "Save",
+      "saving": "Saving…",
+      "removeBinding": "Remove binding",
+      "removeBindingTitle": "Clear this kind binding",
+      "removeBindingDisabledTitle": "Nothing to remove — this kind is unconfigured"
+    },
+    "synthesis": {
+      "empty": "No MAGI cross-verification synthesis has been persisted for this mesh yet. Run a MAGI review (mesh_magi_review) and collect it (mesh_magi_collect); the synthesized summary then appears here, persisted to the mesh ledger.",
+      "synthesized": "synthesized",
+      "running": "running",
+      "answered": "{{answered}}/{{total}} answered",
+      "needsVerificationCount": "{{count}} needs verification",
+      "agreedCount": "{{count}} agreed",
+      "staleCount": "{{count}} stale",
+      "gitSkewLabel": "Git skew: ",
+      "gitSkewNote_one": "{{count}} branch ({{branches}}) — evidence compares different code.",
+      "gitSkewNote_other": "{{count}} branches ({{branches}}) — evidence compares different code.",
+      "needsVerification": "Needs verification",
+      "openQuestions": "Open questions",
+      "rawReplicaAnswers": "Raw replica answers",
+      "rawTitleLive": "Best-effort: raw replica text is not persisted — recoverable only from a live coordinator with the replica sessions still reachable.",
+      "rawTitleOffline": "A live coordinator daemon is required to fetch raw replica answers.",
+      "loading": "Loading…",
+      "reloadRaw": "Reload raw answers",
+      "loadRaw": "Load raw answers",
+      "rawNotice": "Raw per-replica text is not persisted (only this synthesis summary is). It is fetched live from the coordinator and is unavailable once the replica sessions age out or no live session exists.",
+      "errorLoadRaw": "Failed to load raw answers",
+      "rawEmpty": "No raw answers were returned — the replica transcripts are not retained (raw not persisted), aged out, or no live session is reachable for this group.",
+      "truncated": "truncated"
+    }
   }
 }

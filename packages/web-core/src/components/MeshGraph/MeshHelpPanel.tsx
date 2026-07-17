@@ -1,4 +1,5 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { MeshGraphTheme } from './meshGraphTheme'
 import { IconHelp, IconX } from '../Icons'
 
@@ -26,100 +27,22 @@ type HelpSection = {
 
 /**
  * The mesh concept reference, in reading order. Concise but not thin — matches
- * the dashboard's developer-facing English tone.
+ * the dashboard's developer-facing English tone. Content is resolved from the
+ * i18n catalog (meshGraph.help.sections.*) at render; this list just fixes the
+ * reading order.
  */
-const MESH_HELP_SECTIONS: HelpSection[] = [
-    {
-        term: 'Node',
-        summary: 'A workspace participating in the mesh — a repo checkout or an isolated git worktree.',
-        details: [
-            'Base node vs worktree clone node — a clone isolates parallel work without conflicts.',
-            'Shows health (online/offline) alongside git state (branch · ahead/behind · dirty).',
-            'Multiple nodes can share the same daemon.',
-        ],
-    },
-    {
-        term: 'P2P connection',
-        summary: 'How the selected coordinator reaches each remote node over WebRTC.',
-        details: [
-            'direct — a direct host/STUN path; lowest latency.',
-            'relay — TURN-relayed; works through restrictive networks but is slower.',
-            'disconnected / failed — no live P2P link from the coordinator right now.',
-            'P2P connectivity is shown as transport and RTT chips on each node card (and in the node detail panel), not as a graph edge.',
-        ],
-    },
-    {
-        term: 'Session',
-        summary: 'An agent CLI session running on a node.',
-        details: [
-            'status = idle / generating / waiting_approval.',
-            'Distinguishes coordinator sessions (which dispatch and collect work) from delegated worker sessions (which do the work).',
-        ],
-    },
-    {
-        term: 'Task',
-        summary: 'A single unit of work handled by the queue-based pull model.',
-        details: [
-            'States: pending → assigned → completed / failed / cancelled.',
-            'Idle nodes claim from the queue automatically; direct dispatch targets a specific session.',
-        ],
-    },
-    {
-        term: 'Mission',
-        summary: 'A multi-task batch aimed at one goal, and the durable record of that effort.',
-        details: [
-            'States: active / paused / completed / abandoned.',
-            'Progress is derived from the states of its member tasks.',
-        ],
-    },
-    {
-        term: 'Refinery (refine)',
-        summary: 'The process of safely converging and merging a worktree branch into the base.',
-        details: [
-            'Config-driven (.adhdev/refine.*) — guarded by a patch-equivalence preflight and a no-op guard.',
-            'ff-only by principle; no force-push.',
-            'If a submodule commit is unreachable from origin it must be published → classified as blocked_review.',
-        ],
-    },
-    {
-        term: 'Completion model',
-        summary: 'Completion of delegated work is persisted to the queue (pending-events).',
-        details: [
-            'The coordinator learns of completion via periodic polling or events.',
-            'Because it is persisted to the queue, completion signals are never lost.',
-        ],
-    },
-    {
-        term: 'MAGI',
-        summary: 'Cross-verification: several independent AI agents answer the same question in parallel.',
-        details: [
-            'Confidence comes from independence — different AIs on different machines fail in different ways.',
-            'When the agents disagree, the disagreement itself flags what to double-check.',
-            'Run via mesh_magi_review; the synthesis weighs agreement against source coupling.',
-        ],
-    },
-    {
-        term: 'MAGI panel',
-        summary: 'A saved, reusable team of (machine × AI) members you invoke by name across investigations.',
-        details: [
-            'Each member is one provider (AI) optionally pinned to a node (machine), with a replica count.',
-            'independent — spans ≥2 providers AND ≥2 machines, so agreement adds real confidence.',
-            'coupled — collapses to one AI or one machine; repeated members repeat the same mistakes.',
-            'Managed machine-locally from the Panels tab; defined in ~/.adhdev/meshes.json.',
-        ],
-    },
-    {
-        term: 'Branch convergence states',
-        summary: 'After worktree work, each branch is classified into exactly one final state.',
-        details: [
-            'merged_to_main — merged into the base.',
-            'pushed_feature_branch_needs_merge — pushed, awaiting merge.',
-            'blocked_review — held back by review/reachability issues.',
-            'cleanup_candidate — ready to clean up.',
-            'not_mergeable — cannot be merged.',
-        ],
-    },
-]
+const MESH_HELP_SECTION_IDS = [
+    'node',
+    'p2p',
+    'session',
+    'task',
+    'mission',
+    'refinery',
+    'completion',
+    'magi',
+    'magiPanel',
+    'convergence',
+] as const
 
 /**
  * The single "?" toggle button. Mirrors the small round affordance the old
@@ -130,6 +53,7 @@ export function MeshHelpToggle({ meshTheme, open, onToggle }: {
     open: boolean
     onToggle: () => void
 }) {
+    const { t } = useTranslation()
     const dk = meshTheme.isDark
     const base = 'inline-flex h-7 w-7 items-center justify-center rounded-lg border transition'
     const cls = open
@@ -143,9 +67,9 @@ export function MeshHelpToggle({ meshTheme, open, onToggle }: {
         <button
             type="button"
             onClick={onToggle}
-            aria-label="Mesh help"
+            aria-label={t('meshGraph.help.toggleAria')}
             aria-expanded={open}
-            title="Mesh concept help"
+            title={t('meshGraph.help.toggleTitle')}
             className={`${base} ${cls}`}
         >
             <IconHelp size={15} />
@@ -162,7 +86,17 @@ export function MeshHelpPanel({ meshTheme, onClose }: {
     meshTheme: MeshGraphTheme
     onClose: () => void
 }) {
+    const { t } = useTranslation()
     const dk = meshTheme.isDark
+
+    const sections: HelpSection[] = useMemo(
+        () => MESH_HELP_SECTION_IDS.map(id => ({
+            term: t(`meshGraph.help.sections.${id}.term`),
+            summary: t(`meshGraph.help.sections.${id}.summary`),
+            details: t(`meshGraph.help.sections.${id}.details`, { returnObjects: true }) as string[],
+        })),
+        [t],
+    )
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
@@ -176,17 +110,17 @@ export function MeshHelpPanel({ meshTheme, onClose }: {
         <div
             className={`shrink-0 rounded-2xl border p-4 ${dk ? 'border-white/10 bg-white/[0.03]' : 'border-slate-200 bg-white/80'}`}
             role="region"
-            aria-label="Mesh concept help"
+            aria-label={t('meshGraph.help.regionAria')}
         >
             <div className="mb-3 flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                    <div className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>Help</div>
-                    <div className={`mt-0.5 text-sm font-semibold ${meshTheme.textPrimary}`}>Mesh concepts at a glance</div>
+                    <div className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>{t('meshGraph.help.kicker')}</div>
+                    <div className={`mt-0.5 text-sm font-semibold ${meshTheme.textPrimary}`}>{t('meshGraph.help.title')}</div>
                 </div>
                 <button
                     type="button"
                     onClick={onClose}
-                    aria-label="Close help"
+                    aria-label={t('meshGraph.help.close')}
                     className={dk
                         ? 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white'
                         : 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900'}
@@ -195,7 +129,7 @@ export function MeshHelpPanel({ meshTheme, onClose }: {
                 </button>
             </div>
             <dl className="grid gap-3 sm:grid-cols-2">
-                {MESH_HELP_SECTIONS.map(section => (
+                {sections.map(section => (
                     <div
                         key={section.term}
                         className={`rounded-xl border p-3 ${dk ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}

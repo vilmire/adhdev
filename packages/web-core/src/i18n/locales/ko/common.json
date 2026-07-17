@@ -205,5 +205,213 @@
     "hideConversationTitle": "대화 숨기기",
     "stopSessionAria": "{{title}} 세션 중지",
     "stopSessionTitle": "세션 중지 (에이전트를 종료합니다)"
+  },
+  "meshGraph": {
+    "help": {
+      "toggleAria": "메시 도움말",
+      "toggleTitle": "메시 개념 도움말",
+      "regionAria": "메시 개념 도움말",
+      "kicker": "도움말",
+      "title": "메시 개념 한눈에 보기",
+      "close": "도움말 닫기",
+      "sections": {
+        "node": {
+          "term": "노드",
+          "summary": "메시에 참여하는 워크스페이스 — 리포 체크아웃 또는 격리된 git 워크트리.",
+          "details": [
+            "베이스 노드 vs 워크트리 클론 노드 — 클론은 충돌 없이 병렬 작업을 격리합니다.",
+            "상태(온라인/오프라인)를 git 상태(브랜치 · ahead/behind · dirty)와 함께 표시합니다.",
+            "여러 노드가 같은 데몬을 공유할 수 있습니다."
+          ]
+        },
+        "p2p": {
+          "term": "P2P 연결",
+          "summary": "선택한 코디네이터가 WebRTC로 각 원격 노드에 도달하는 방식.",
+          "details": [
+            "direct — 직접 host/STUN 경로; 가장 낮은 지연.",
+            "relay — TURN 릴레이; 제한적 네트워크에서도 작동하지만 느립니다.",
+            "disconnected / failed — 현재 코디네이터로부터 활성 P2P 링크가 없음.",
+            "P2P 연결성은 그래프 엣지가 아니라 각 노드 카드(및 노드 상세 패널)의 transport·RTT 칩으로 표시됩니다."
+          ]
+        },
+        "session": {
+          "term": "세션",
+          "summary": "노드에서 실행 중인 에이전트 CLI 세션.",
+          "details": [
+            "status = idle / generating / waiting_approval.",
+            "작업을 디스패치·수집하는 코디네이터 세션과 실제 작업을 수행하는 위임 워커 세션을 구분합니다."
+          ]
+        },
+        "task": {
+          "term": "태스크",
+          "summary": "큐 기반 풀 모델로 처리되는 단일 작업 단위.",
+          "details": [
+            "상태: pending → assigned → completed / failed / cancelled.",
+            "유휴 노드는 큐에서 자동으로 클레임하며, 직접 디스패치는 특정 세션을 대상으로 합니다."
+          ]
+        },
+        "mission": {
+          "term": "미션",
+          "summary": "하나의 목표를 향한 다중 태스크 배치이자 그 노력의 영속 기록.",
+          "details": [
+            "상태: active / paused / completed / abandoned.",
+            "진행률은 소속 태스크들의 상태에서 파생됩니다."
+          ]
+        },
+        "refinery": {
+          "term": "리파이너리 (refine)",
+          "summary": "워크트리 브랜치를 베이스로 안전하게 수렴·머지하는 과정.",
+          "details": [
+            "구성 기반(.adhdev/refine.*) — 패치 동등성 프리플라이트와 no-op 가드로 보호됩니다.",
+            "원칙적으로 ff-only; 강제 푸시 없음.",
+            "서브모듈 커밋이 origin에서 도달 불가하면 게시되어야 하며 → blocked_review로 분류됩니다."
+          ]
+        },
+        "completion": {
+          "term": "완료 모델",
+          "summary": "위임된 작업의 완료는 큐(pending-events)에 영속됩니다.",
+          "details": [
+            "코디네이터는 주기적 폴링 또는 이벤트로 완료를 인지합니다.",
+            "큐에 영속되므로 완료 신호는 결코 유실되지 않습니다."
+          ]
+        },
+        "magi": {
+          "term": "MAGI",
+          "summary": "교차 검증: 여러 독립 AI 에이전트가 같은 질문에 병렬로 답합니다.",
+          "details": [
+            "신뢰는 독립성에서 나옵니다 — 서로 다른 머신의 서로 다른 AI는 서로 다르게 실패합니다.",
+            "에이전트들이 의견이 갈리면 그 불일치 자체가 재확인할 지점을 표시합니다.",
+            "mesh_magi_review로 실행하며, 합성은 합의를 소스 결합도와 견주어 평가합니다."
+          ]
+        },
+        "magiPanel": {
+          "term": "MAGI 패널",
+          "summary": "이름으로 호출하는, 저장·재사용 가능한 (머신 × AI) 멤버 팀.",
+          "details": [
+            "각 멤버는 하나의 프로바이더(AI)이며, 선택적으로 노드(머신)에 고정되고 복제 수를 가집니다.",
+            "independent — 프로바이더 ≥2 AND 머신 ≥2에 걸쳐 합의가 실질적 신뢰를 더합니다.",
+            "coupled — 하나의 AI 또는 머신으로 수렴; 반복 멤버는 같은 실수를 반복합니다.",
+            "패널 탭에서 머신 로컬로 관리; ~/.adhdev/meshes.json에 정의됩니다."
+          ]
+        },
+        "convergence": {
+          "term": "브랜치 수렴 상태",
+          "summary": "워크트리 작업 후 각 브랜치는 정확히 하나의 최종 상태로 분류됩니다.",
+          "details": [
+            "merged_to_main — 베이스에 머지됨.",
+            "pushed_feature_branch_needs_merge — 푸시됨, 머지 대기.",
+            "blocked_review — 리뷰/도달성 문제로 보류됨.",
+            "cleanup_candidate — 정리 준비 완료.",
+            "not_mergeable — 머지 불가."
+          ]
+        }
+      }
+    },
+    "approvals": {
+      "title": "대기 중인 승인",
+      "empty": "승인 결정을 기다리는 세션이 없습니다.",
+      "sessionFallback": "세션 {{id}}",
+      "approve": "승인",
+      "reject": "거절"
+    },
+    "chat": {
+      "loading": "불러오는 중…",
+      "empty": "메시지가 없습니다."
+    },
+    "coordinatorBadge": {
+      "daemon": "데몬: {{id}}",
+      "run": "실행: {{id}}",
+      "session": "세션: {{id}}"
+    },
+    "difficulty": {
+      "intro": "각 태스크 난이도를 브레인에 매핑하세요. 코디네이터가 태스크의 난이도를 분류하며, 쉬운 작업은 저노력의 저렴한 모델에서, 어려운 작업은 고노력의 강력한 모델에서 실행됩니다. 필드를 비워 두면 라우팅된 기본값을 유지합니다.",
+      "connectPrompt": "브레인 프리셋을 편집하려면 코디네이터 데몬에 연결하세요.",
+      "errorLoad": "브레인 프리셋을 불러오지 못했습니다",
+      "errorSave": "브레인 프리셋을 저장하지 못했습니다",
+      "provider": "프로바이더",
+      "model": "모델",
+      "thinking": "사고",
+      "routedDefault": "(라우팅 기본값)",
+      "defaultOption": "(기본값)",
+      "modelPlaceholder": "예: haiku, sonnet, opus",
+      "savePresets": "프리셋 저장",
+      "saving": "저장 중…",
+      "reset": "초기화",
+      "loading": "불러오는 중…",
+      "easy": "쉬움",
+      "easyHint": "사소한 수정, 이름 변경, 문서 — 토큰 절약",
+      "medium": "보통",
+      "mediumHint": "일반적인 기능 / 버그 수정 작업",
+      "difficult": "어려움",
+      "difficultHint": "아키텍처, 까다로운 디버깅, 어려운 추론",
+      "freeform": "자유형",
+      "freeformHint": "고정된 형태 없음"
+    },
+    "magiKind": {
+      "intro": "각 태스크 유형을 검토할 에이전트를 선택하세요. 에이전트당 한 행씩 추가합니다.",
+      "refresh": "새로고침",
+      "loading": "불러오는 중…",
+      "connectPrompt": "kind → 패널 바인딩을 관리하려면 코디네이터 데몬에 연결하세요.",
+      "errorLoad": "kind 패널을 불러오지 못했습니다",
+      "errorSave": "kind 바인딩을 저장하지 못했습니다",
+      "errorRemove": "kind 바인딩을 제거하지 못했습니다",
+      "errorSlotProvider": "슬롯 {{slot}}: 프로바이더가 필요합니다",
+      "errorSlotReplica": "슬롯 {{slot}}: 복제 수는 1 이상이어야 합니다",
+      "errorNoSlot": "kind 바인딩에는 최소 하나의 슬롯이 필요합니다",
+      "removeConfirm": "\"{{kind}}\"의 MAGI 패널 바인딩을 제거할까요?",
+      "kindRca": "근본 원인 분석",
+      "kindDesign": "설계 / 접근 검토",
+      "kindClaimAudit": "특정 주장 검증",
+      "kindFreeform": "자유형 검토",
+      "agentCount_one": "에이전트 {{count}}개",
+      "agentCount_other": "에이전트 {{count}}개",
+      "off": "꺼짐",
+      "noAgents": "아직 에이전트가 없습니다 — 하나 추가하여 이 검토 유형을 활성화하세요.",
+      "machine": "머신",
+      "machineTitle": "이 에이전트를 실행할 머신. \"any\"로 두면 코디네이터가 태그로 라우팅합니다.",
+      "anyMachine": "아무 머신",
+      "offlineSuffix": "{{label}} (오프라인)",
+      "provider": "프로바이더",
+      "providerTitle": "이 슬롯이 실행하는 AI 에이전트.",
+      "selectProvider": "프로바이더 선택…",
+      "model": "모델",
+      "modelTitle": "선택적 모델 재정의(최선). 비워 두면 프로바이더 기본값을 사용합니다.",
+      "modelDefault": "기본값",
+      "modelCustom": "사용자 지정…",
+      "backToModelList": "← 모델 목록으로",
+      "copies": "복제 수",
+      "copiesTitle": "이 에이전트를 병렬로 몇 개 실행할지. 비우면 = 1.",
+      "removeAgent": "에이전트 제거",
+      "addAgent": "+ 에이전트 추가",
+      "save": "저장",
+      "saving": "저장 중…",
+      "removeBinding": "바인딩 제거",
+      "removeBindingTitle": "이 kind 바인딩 지우기",
+      "removeBindingDisabledTitle": "제거할 것이 없습니다 — 이 kind는 구성되지 않았습니다"
+    },
+    "synthesis": {
+      "empty": "이 메시에 아직 영속된 MAGI 교차 검증 합성이 없습니다. MAGI 리뷰(mesh_magi_review)를 실행하고 수집(mesh_magi_collect)하세요. 합성된 요약이 메시 원장에 영속되어 여기에 표시됩니다.",
+      "synthesized": "합성됨",
+      "running": "실행 중",
+      "answered": "{{answered}}/{{total}} 응답",
+      "needsVerificationCount": "{{count}}건 검증 필요",
+      "agreedCount": "{{count}}건 합의",
+      "staleCount": "{{count}}건 오래됨",
+      "gitSkewLabel": "Git 편차: ",
+      "gitSkewNote_one": "브랜치 {{count}}개 ({{branches}}) — 증거가 서로 다른 코드를 비교합니다.",
+      "gitSkewNote_other": "브랜치 {{count}}개 ({{branches}}) — 증거가 서로 다른 코드를 비교합니다.",
+      "needsVerification": "검증 필요",
+      "openQuestions": "미해결 질문",
+      "rawReplicaAnswers": "원본 복제 답변",
+      "rawTitleLive": "최선: 원본 복제 텍스트는 영속되지 않으며, 복제 세션이 아직 도달 가능한 라이브 코디네이터에서만 복구할 수 있습니다.",
+      "rawTitleOffline": "원본 복제 답변을 가져오려면 라이브 코디네이터 데몬이 필요합니다.",
+      "loading": "불러오는 중…",
+      "reloadRaw": "원본 답변 다시 불러오기",
+      "loadRaw": "원본 답변 불러오기",
+      "rawNotice": "원본 복제별 텍스트는 영속되지 않습니다(이 합성 요약만 영속됨). 코디네이터에서 라이브로 가져오며, 복제 세션이 만료되거나 라이브 세션이 없으면 사용할 수 없습니다.",
+      "errorLoadRaw": "원본 답변을 불러오지 못했습니다",
+      "rawEmpty": "반환된 원본 답변이 없습니다 — 복제 트랜스크립트가 보존되지 않았거나(원본 미영속), 만료되었거나, 이 그룹에 도달 가능한 라이브 세션이 없습니다.",
+      "truncated": "잘림"
+    }
   }
 }

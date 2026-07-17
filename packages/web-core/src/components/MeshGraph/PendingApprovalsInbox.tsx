@@ -15,6 +15,7 @@
  * call), so this file imports no daemon-core VALUE — only presentation + a props-injected callback.
  */
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { RepoMeshNodeStatus, RepoMeshSessionStatus } from '@adhdev/daemon-core'
 import { IconWarning } from '../Icons'
 
@@ -79,6 +80,7 @@ interface Props {
 }
 
 export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hideWhenEmpty = true }: Props) {
+    const { t } = useTranslation()
     const items = useMemo(
         () => approvals ?? derivePendingApprovals(nodes),
         [approvals, nodes],
@@ -110,12 +112,12 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
         >
             <div className="flex items-center gap-2 mb-2 font-black text-xs" style={{ color: 'var(--status-warning)' }}>
                 <IconWarning size={14} />
-                PENDING APPROVALS
+                {t('meshGraph.approvals.title')}
                 <span className="opacity-70 font-semibold">({items.length})</span>
             </div>
 
             {items.length === 0 ? (
-                <div className="text-[11px] opacity-70">No sessions are awaiting an approval decision.</div>
+                <div className="text-[11px] opacity-70">{t('meshGraph.approvals.empty')}</div>
             ) : (
                 <ul className="flex flex-col gap-2">
                     {items.map(item => {
@@ -137,7 +139,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                     <div className="text-[10px] opacity-60 truncate">
                                         {item.detail
                                             ? item.detail.replace(/[\n\r]+/g, ' ').slice(0, 120)
-                                            : `session ${item.sessionId}`}
+                                            : t('meshGraph.approvals.sessionFallback', { id: item.sessionId })}
                                     </div>
                                 </div>
                                 <div className="flex gap-2 shrink-0">
@@ -147,14 +149,14 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                         className={`btn btn-sm border-none rounded-md text-xs px-3 py-1 font-extrabold ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
                                         style={{ color: 'var(--status-warning)', background: 'var(--surface-primary)' }}
                                     >
-                                        {active === 'approve' ? '⏳ ...' : 'Approve'}
+                                        {active === 'approve' ? '⏳ ...' : t('meshGraph.approvals.approve')}
                                     </button>
                                     <button
                                         onClick={() => handle(item, 'reject')}
                                         disabled={disabled}
                                         className={`btn btn-sm border-none rounded-md text-xs px-3 py-1 font-semibold text-white bg-red-500/30 ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
                                     >
-                                        {active === 'reject' ? '⏳ ...' : 'Reject'}
+                                        {active === 'reject' ? '⏳ ...' : t('meshGraph.approvals.reject')}
                                     </button>
                                 </div>
                             </li>

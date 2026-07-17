@@ -13,6 +13,7 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 
 export interface CoordinatorIdentityBadgeProps {
   /** Coordinator daemon id (machineId of the host daemon). */
@@ -38,6 +39,7 @@ function shortDaemonId(daemonId: string): string {
 }
 
 export function CoordinatorIdentityBadge(props: CoordinatorIdentityBadgeProps): React.JSX.Element | null {
+  const { t } = useTranslation();
   const daemonId = typeof props.daemonId === 'string' ? props.daemonId.trim() : '';
   if (!daemonId) return null;
   // Priority: explicit friendly machineLabel (nickname) → caller label override →
@@ -45,10 +47,10 @@ export function CoordinatorIdentityBadge(props: CoordinatorIdentityBadgeProps): 
   const machineLabel = typeof props.machineLabel === 'string' ? props.machineLabel.trim() : '';
   const label = machineLabel || props.label || shortDaemonId(daemonId);
   const tooltipLines: string[] = [
-    `daemon: ${daemonId}`,
+    t('meshGraph.coordinatorBadge.daemon', { id: daemonId }),
   ];
-  if (props.coordinatorRunId) tooltipLines.push(`run: ${props.coordinatorRunId}`);
-  if (props.sessionId) tooltipLines.push(`session: ${props.sessionId}`);
+  if (props.coordinatorRunId) tooltipLines.push(t('meshGraph.coordinatorBadge.run', { id: props.coordinatorRunId }));
+  if (props.sessionId) tooltipLines.push(t('meshGraph.coordinatorBadge.session', { id: props.sessionId }));
   const className = [
     'coordinator-identity-badge',
     props.warning ? 'coordinator-identity-badge--warning' : '',
