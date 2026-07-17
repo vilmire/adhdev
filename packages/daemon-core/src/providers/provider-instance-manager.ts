@@ -211,7 +211,18 @@ export class ProviderInstanceManager {
         this.tickInterval = intervalMs || this.tickInterval;
 
         this.tickTimer = setInterval(async () => {
+            const now = Date.now();
             for (const [id, instance] of this.instances) {
+                // MESH-STALL-WATCH (feature 1: STALL detection): a status-agnostic
+                // watchdog for coordinator-spawned mesh worker sessions, driven by
+                // THIS existing 5s tick (no separate timer). Cheap (reads the
+                // adapter's raw-output clock only) and a no-op for non-mesh /
+                // non-CLI instances, so it runs before the per-instance onTick.
+                try {
+                    instance.checkMeshWorkerStall?.(now);
+                } catch (e) {
+                    LOG.warn('InstanceMgr', `[InstanceManager] Mesh stall check failed for ${id}: ${(e as Error).message}`);
+                }
                 try {
                     await instance.onTick();
                 } catch (e) {

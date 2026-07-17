@@ -252,6 +252,16 @@ export class CliProviderInstance implements ProviderInstance {
      */
     private static readonly APPROVAL_RESUME_GRACE_MS = 18_000;
 
+    // MESH-STALL-WATCH (feature 1: STALL detection): how long a coordinator-spawned
+    // mesh worker's raw PTY output (lastOutputAt) may stay unchanged before the
+    // status-agnostic stall watchdog fires ONE informational monitor:no_progress
+    // event. Unlike the StatusMonitor no-progress watchdog (which only runs while a
+    // turn is generating), this observes pure screen stasis regardless of the
+    // reported status — a worker parked idle, wedged mid-turn, or spawned with no
+    // output at all. 180s matches DEFAULT_MONITOR_CONFIG.noProgressThresholdSec so
+    // the two watchdogs agree on the same "long interval" bound.
+    private static readonly MESH_WORKER_STALL_THRESHOLD_MS = 180_000;
+
     private adapter: ProviderCliAdapter;
     private context: InstanceContext | null = null;
     private events: ProviderEvent[] = [];
@@ -265,6 +275,16 @@ export class CliProviderInstance implements ProviderInstance {
     // first sets it; the other becomes a no-op.
     private agentReadyEmitted = false;
     private generatingStartedAt: number = 0;
+    // MESH-STALL-WATCH (feature 1): the lastOutputAt value the stall episode is
+    // currently armed against. A stall episode is "the raw PTY output has not
+    // advanced past this anchor". When the adapter has never emitted output
+    // (lastOutputAt === 0) the anchor is the spawn time (this.startedAt) so a
+    // worker that produced NOTHING is still caught. On any new output the anchor
+    // re-arms to the fresh lastOutputAt and meshStallEmittedForAnchor resets, so a
+    // single continuous stall fires AT MOST ONCE and a later stall re-arms cleanly.
+    // -1 = not yet initialised for this session.
+    private meshStallAnchorAt = -1;
+    private meshStallEmittedForAnchor = false;
     // FALSE-IDLE continuity epoch: monotonically bumped on EVERY entry into a busy
     // phase (→generating or →waiting_approval). The completedDebouncePending snapshots
     // this value at arm time (busyEpochAtArm); the flush guard requires it UNCHANGED
@@ -1967,6 +1987,114 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /**
+     * MESH-STALL-WATCH (feature 1: STALL detection). Status-agnostic stall
+     * watchdog for coordinator-spawned mesh worker sessions. Driven by the
+     * ProviderInstanceManager's existing 5s onTick loop (NO new timer) — see
+     * ProviderInstanceManager.startTicking. Reuses the adapter's raw-PTY-output
+     * clock (lastOutputAt, bumped on every output chunk) as the sole signal: if a
+     * live worker's screen has been byte-for-byte unchanged for
+     * MESH_WORKER_STALL_THRESHOLD_MS (180s), fire ONE informational
+     * monitor:no_progress event down the existing task_stalled ledger +
+     * pendingCoordinatorEvent path.
+     *
+     * Deliberately status-agnostic: it does NOT read getStatus()'s reported status
+     * (which would couple it to the generating-only StatusMonitor and the
+     * idle-timeout FSM). A normally-idle worker CAN trip this after 3 quiet
+     * minutes; that is accepted and surfaced as an informational stall (NOT a
+     * failure/auto-restart) so the coordinator judges. getStatus/getState are NOT
+     * called here, so status heartbeats never move the stall anchor.
+     *
+     * Anchoring: the episode arms against the current lastOutputAt; a worker that
+     * has emitted nothing yet (lastOutputAt === 0) anchors on this.startedAt (spawn
+     * time) so a silent spawn is still caught. Any new output re-arms the anchor
+     * and clears the emitted flag, so one continuous stall emits at most once and a
+     * later stall re-arms cleanly.
+     */
+    checkMeshWorkerStall(now: number = Date.now()): void {
+        if (!this.isMeshWorkerSession()) {
+            // Not (or no longer) a mesh worker — drop any armed episode so a session
+            // whose mesh markers were detached does not carry a stale anchor.
+            this.meshStallAnchorAt = -1;
+            this.meshStallEmittedForAnchor = false;
+            return;
+        }
+        if (!this.adapter.isAlive()) {
+            // Dead PTY: nothing to watch. agent:stopped covers the exit; re-arm on
+            // the next live session so a restart starts a fresh episode.
+            this.meshStallAnchorAt = -1;
+            this.meshStallEmittedForAnchor = false;
+            return;
+        }
+
+        let lastOutputAt: number;
+        try {
+            // allowParse:false — a cheap status read that must NOT trigger parsing
+            // and must NOT mutate lastOutputAt (getState/getStatus never bump it).
+            const status = this.adapter.getStatus({ allowParse: false }) as { lastOutputAt?: unknown };
+            lastOutputAt = typeof status?.lastOutputAt === 'number' && Number.isFinite(status.lastOutputAt)
+                ? status.lastOutputAt
+                : 0;
+        } catch {
+            return; // defensive: a failed status read just skips this tick
+        }
+
+        // The anchor is the last raw output; before any output, the spawn time so a
+        // silent worker is still caught.
+        const anchor = lastOutputAt > 0 ? lastOutputAt : this.startedAt;
+
+        if (this.meshStallAnchorAt === -1) {
+            // First observation this session — arm against the current anchor.
+            this.meshStallAnchorAt = anchor;
+            this.meshStallEmittedForAnchor = false;
+            return;
+        }
+
+        if (anchor > this.meshStallAnchorAt) {
+            // New output advanced the clock — re-arm the episode against it.
+            this.meshStallAnchorAt = anchor;
+            this.meshStallEmittedForAnchor = false;
+            return;
+        }
+
+        if (this.meshStallEmittedForAnchor) return; // already fired for this stall
+
+        const stalledMs = now - this.meshStallAnchorAt;
+        if (stalledMs < CliProviderInstance.MESH_WORKER_STALL_THRESHOLD_MS) return;
+
+        this.meshStallEmittedForAnchor = true;
+
+        // observedStatus is surfaced as context only — deliberately NOT stamped as
+        // the reconciliation-triggering `status` field (which would let
+        // buildNoProgressCompletionReconciliation mistake an idle stall for a
+        // completion). See mesh-events-stale.buildNoProgressCompletionReconciliation.
+        let observedStatus = 'unknown';
+        try {
+            const s = (this.adapter.getStatus({ allowParse: false }) as { status?: unknown })?.status;
+            if (typeof s === 'string' && s) observedStatus = s;
+        } catch { /* best-effort context only */ }
+
+        if (this.isMeshWorkerSession()) {
+            traceMeshEventStage('fired', this.meshTraceCtx('monitor:no_progress'), 'mesh_worker_stall_watchdog');
+        }
+
+        const stalledSec = Math.round(stalledMs / 1000);
+        this.pushEvent({
+            event: 'monitor:no_progress',
+            agentKey: `${this.type}:cli`,
+            elapsedSec: stalledSec,
+            timestamp: now,
+            // MESH-STALL-WATCH marker: buildMeshSystemMessage generalizes the
+            // coordinator message (generating-specific → "PTY output unchanged")
+            // when this is set, since this watchdog fires status-agnostically.
+            meshWorkerStall: true,
+            lastOutputAt: this.meshStallAnchorAt,
+            stalledMs,
+            observedStatus,
+            taskId: this.completingTurnTaskId(),
+        });
+    }
+
+    /**
      * AUTOAPPROVE-FLAP-RECUR (Fix A+B): how long a busy blip / modal scroll-out may
      * persist before the in-progress settle gate is torn down. For a delegated
      * worker whose auto-approve episode is genuinely still cycling (mask clock
@@ -3525,6 +3653,20 @@ export class CliProviderInstance implements ProviderInstance {
                 // Cancel any pending debounce flush — monitor already fired completion.
                 if (this.completedDebounceTimer) { clearTimeout(this.completedDebounceTimer); this.completedDebounceTimer = null; }
                 this.completedDebouncePending = null;
+                continue;
+            }
+            // MESH-STALL-WATCH dedupe: for a coordinator-spawned mesh worker the
+            // status-agnostic stall watchdog (checkMeshWorkerStall) owns the
+            // monitor:no_progress alert. The StatusMonitor here fires its OWN
+            // generating-only no-progress on the SAME 180s bound, which would
+            // double-emit into the task_stalled ledger + coordinator inbox for the
+            // one stall. Suppress the StatusMonitor's copy for mesh workers only —
+            // the completion-reconciliation branch above (which turns a no-progress
+            // WITH final-assistant into a real completion) still runs, so genuine
+            // idle-reconciled completions are unaffected. Non-mesh sessions keep the
+            // original StatusMonitor behavior untouched.
+            if (me.type === 'monitor:no_progress' && this.isMeshWorkerSession()) {
+                traceMeshEventDrop('mesh_worker_stall_watchdog_owns_no_progress', this.meshTraceCtx('monitor:no_progress'));
                 continue;
             }
             this.pushEvent({ event: me.type, agentKey: me.agentKey, message: me.message, elapsedSec: me.elapsedSec, timestamp: me.timestamp });

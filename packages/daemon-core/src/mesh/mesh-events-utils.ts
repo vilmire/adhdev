@@ -356,6 +356,21 @@ export function buildMeshSystemMessage(args: {
         return `[System] ${args.nodeLabel} has stopped${metadata}. Use mesh_read_chat once if you need to inspect its last output.`;
     }
     if (args.event === 'monitor:no_progress') {
+        // MESH-STALL-WATCH (feature 1: STALL detection): the status-agnostic stall
+        // watchdog fires this event regardless of the reported status — a worker's
+        // raw PTY output was byte-for-byte unchanged past the stall bound. Surface
+        // the generalized "output unchanged" wording (with the observed status,
+        // stalled duration and taskId as context) and make explicit this is
+        // INFORMATIONAL — a quiet/idle worker can trip it; it is NOT a failure or
+        // auto-restart. The generating-only StatusMonitor copy keeps its original
+        // phrasing.
+        if (args.metadataEvent.meshWorkerStall === true) {
+            const observedStatus = readNonEmptyString(args.metadataEvent.observedStatus);
+            const stalledMs = typeof args.metadataEvent.stalledMs === 'number' ? args.metadataEvent.stalledMs : undefined;
+            const stalledSuffix = stalledMs !== undefined ? ` for ${Math.round(stalledMs / 1000)}s` : '';
+            const statusSuffix = observedStatus ? ` (observed status: ${observedStatus})` : '';
+            return `[System] ${args.nodeLabel}: PTY output unchanged${stalledSuffix}${statusSuffix}${metadata}. This is an informational stall — the worker's screen has been static regardless of its reported status; it may be genuinely idle, waiting, or wedged, so this is NOT a failure or auto-restart. Judge whether to inspect it: wait for pendingCoordinatorEvents/a completion event, or make one bounded mesh_read_chat check if you need to see its current screen, then wait again.`;
+        }
         return `[System] ${args.nodeLabel} is still reported as generating after a long interval${metadata}. Wait for pendingCoordinatorEvents or a completion/status event; if the user explicitly asks for status, make one bounded status check and then wait again.`;
     }
     if (args.event === 'worktree_bootstrap_complete') {

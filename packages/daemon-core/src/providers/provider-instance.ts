@@ -195,6 +195,16 @@ export interface ProviderInstance {
  /** Tick — periodic status refresh (IDE: readChat, Extension: stream collection) */
     onTick(): Promise<void>;
 
+    /**
+     * MESH-STALL-WATCH (feature 1: STALL detection). Status-agnostic stall
+     * watchdog for coordinator-spawned mesh worker sessions, invoked from the
+     * ProviderInstanceManager's existing tick loop (no separate timer). Fires ONE
+     * informational monitor:no_progress event when a live worker's raw PTY output
+     * has been unchanged past the stall threshold. Optional — only CLI instances
+     * (which own a PTY / lastOutputAt clock) implement it; a no-op elsewhere.
+     */
+    checkMeshWorkerStall?(now?: number): void;
+
  /** Return current status */
     getState(): ProviderState;
 
