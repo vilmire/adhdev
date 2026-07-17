@@ -71,7 +71,7 @@ describe('mesh graph view interaction boundaries', () => {
 
         expect(source).toContain('getMeshGraphAttentionBadge(node)')
         expect(viewModelSource).toContain('formatMeshGraphAheadBehind(node)')
-        expect(source).toContain("needs follow-up")
+        expect(source).toContain("t('meshGraph.panel.needsFollowUp')")
     })
 
     it('keeps graph node cards on the shared mesh-theme helper instead of hardcoding page-theme tokens', () => {

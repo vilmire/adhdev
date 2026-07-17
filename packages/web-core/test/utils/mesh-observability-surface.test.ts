@@ -103,9 +103,9 @@ describe('MeshObservabilitySurface', () => {
       path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshGraphView.tsx'),
       'utf8',
     )
-    expect(source).toContain("upstream unverified")
+    expect(source).toContain("t('meshGraph.panel.upstreamUnverified')")
     expect(source).toContain("getMeshGraphCalloutText(node)")
-    expect(source).toContain("needs follow-up")
+    expect(source).toContain("t('meshGraph.panel.needsFollowUp')")
   })
 
   it('replaces a silent converged headline with explicit peer snapshot warnings when peer git visibility is incomplete', () => {

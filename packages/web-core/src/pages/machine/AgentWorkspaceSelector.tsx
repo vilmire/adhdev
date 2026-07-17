@@ -1,4 +1,3 @@
-import { useTranslation } from 'react-i18next'
 import { getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import type { MachineData } from './types'
 
@@ -23,7 +22,6 @@ export default function AgentWorkspaceSelector({
     onCustomPathChange,
     onOpenBrowseDialog,
 }: AgentWorkspaceSelectorProps) {
-    const { t } = useTranslation('common')
     return (
         <div className="mb-3">
             <div className="flex gap-2 items-center flex-wrap">
@@ -42,19 +40,19 @@ export default function AgentWorkspaceSelector({
                 >
                     {(machine.workspaces || []).length > 0 ? (
                         <>
-                            <option value="">{t('machine.workspace.noWorkspace')}</option>
+                            <option value="">(no workspace — launch in home)</option>
                             {(machine.workspaces || []).map(w => (
                                 <option key={w.id} value={w.id}>
                                     {w.id === machine.defaultWorkspaceId ? '⭐ ' : ''}
                                     {getWorkspaceDisplayLabel(w.path, w.label)}
                                 </option>
                             ))}
-                            <option value="__custom__">{canBrowse ? t('machine.workspace.selectWorkspace') : t('machine.workspace.customPath')}</option>
+                            <option value="__custom__">{canBrowse ? '📁 Select workspace…' : '✏️ Custom path…'}</option>
                         </>
                     ) : (
                         <>
-                            <option value="">{t('machine.workspace.noWorkspacesSaved')}</option>
-                            <option value="__custom__">{canBrowse ? t('machine.workspace.selectWorkspace') : t('machine.workspace.customPath')}</option>
+                            <option value="">(no workspaces saved — add in Overview tab)</option>
+                            <option value="__custom__">{canBrowse ? '📁 Select workspace…' : '✏️ Custom path…'}</option>
                         </>
                     )}
                 </select>
@@ -65,12 +63,12 @@ export default function AgentWorkspaceSelector({
                             className="px-3 py-1.5 rounded-md text-sm bg-bg-primary border border-border-default hover:border-accent-primary text-text-secondary hover:text-text-primary transition-colors"
                             onClick={onOpenBrowseDialog}
                         >
-                            {t('machine.workspace.selectWorkspaceBtn')}
+                            Select workspace…
                         </button>
                     ) : (
                         <input
                             type="text"
-                            placeholder={t('machine.workspace.enterAbsolutePath')}
+                            placeholder="Enter absolute path…"
                             value={customPath}
                             onChange={e => onCustomPathChange(e.target.value)}
                             className="px-3 py-1.5 rounded-md flex-1 min-w-[200px] text-sm bg-bg-primary border border-border-default focus:border-accent-primary focus:outline-none transition-colors"
@@ -83,17 +81,17 @@ export default function AgentWorkspaceSelector({
                 {selectedWorkspace === '__custom__'
                     ? (resolvedWorkspacePath
                         ? <span className="font-mono truncate block" title={resolvedWorkspacePath}>{resolvedWorkspacePath}</span>
-                        : (canBrowse ? t('machine.workspace.browseHint') : t('machine.workspace.absolutePathHint')))
+                        : (canBrowse ? 'Browse to a folder before launching there.' : 'Enter an absolute path to launch there.'))
                     : resolvedWorkspacePath
                         ? (
                             <>
                                 <span className="font-medium text-text-secondary">
-                                    {selectedWorkspace === machine.defaultWorkspaceId ? t('machine.workspace.defaultWorkspace') : t('machine.workspace.selectedWorkspace')}
+                                    {selectedWorkspace === machine.defaultWorkspaceId ? 'Default workspace' : 'Selected workspace'}
                                 </span>
                                 <span className="font-mono truncate block" title={resolvedWorkspacePath}>{resolvedWorkspacePath}</span>
                             </>
                         )
-                        : t('machine.workspace.noWorkspaceSelected')}
+                        : 'No workspace selected. This launches in the home directory.'}
             </div>
         </div>
     )

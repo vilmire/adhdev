@@ -70,7 +70,7 @@ describe('CLI terminal measured layout plumbing', () => {
     const paneSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
     const compatSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/compat.ts'), 'utf8')
 
-    expect(paneSource.includes('Load older terminal output')).toBe(true)
+    expect(paneSource.includes("t('terminal.loadOlderOutput')")).toBe(true)
     expect(paneSource.includes('const shouldOfferOlderScrollbackLoad = runtimeReady')).toBe(true)
     expect(paneSource.includes('&& mayHaveOlderRuntimeScrollback')).toBe(true)
     expect(paneSource.includes('&& !hasLoadedOlderRuntimeScrollback')).toBe(true)
@@ -224,8 +224,8 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(paneSource.includes('const [terminalControlsOpen, setTerminalControlsOpen] = useState(false);')).toBe(true)
     expect(paneSource.includes('const sendTerminalControlInput = (data: string) => {')).toBe(true)
     expect(paneSource.includes("sendPtyInput?.(daemonRouteId, sessionId, data) ?? false")).toBe(true)
-    expect(paneSource.includes('aria-label="Open terminal control keys"')).toBe(true)
-    expect(paneSource.includes('aria-label="Terminal control keys"')).toBe(true)
+    expect(paneSource.includes("t('terminal.openControlKeys')")).toBe(true)
+    expect(paneSource.includes("t('terminal.closeControlKeys')")).toBe(true)
 
     // The popover was revamped from 12 fixed sequences into sticky Ctrl/Alt/Shift
     // modifier toggles + a composable key grid. Keys that phone keyboards cannot type
