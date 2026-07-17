@@ -2414,10 +2414,17 @@
     }
 
     .dashboard-header-inbox-item-title {
+        display: flex;
+        align-items: center;
+        gap: 6px;
         font-size: 13px;
         font-weight: 600;
         color: var(--text-primary);
         line-height: 1.25;
+    }
+
+    .dashboard-header-inbox-item-spinner {
+        flex-shrink: 0;
     }
 
     .dashboard-header-inbox-item-meta {

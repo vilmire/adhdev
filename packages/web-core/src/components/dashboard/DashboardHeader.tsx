@@ -540,7 +540,12 @@ export default function DashboardHeader({
                                                     onHiddenOpenChange(false);
                                                 }}
                                             >
-                                                <span className="dashboard-header-inbox-item-title">{getConversationTitle(conversation)}</span>
+                                                <span className="dashboard-header-inbox-item-title">
+                                                    {conversation.status === 'generating' && (
+                                                        <span className="tab-spinner dashboard-header-inbox-item-spinner" aria-label="generating" />
+                                                    )}
+                                                    {getConversationTitle(conversation)}
+                                                </span>
                                                 <span className="dashboard-header-inbox-item-meta">
                                                     {hiddenConversations.indexOf(conversation) < 9 ? (
                                                         <span className="dashboard-header-item-shortcut">⌥{hiddenConversations.indexOf(conversation) + 1}</span>
