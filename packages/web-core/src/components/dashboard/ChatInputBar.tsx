@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useControlsBarVisibility } from '../../hooks/useControlsBarVisibility';
 import { sanitizePastedText } from '../../utils/text';
 import type { MessageInputSupport } from '@adhdev/daemon-core';
@@ -96,6 +97,7 @@ const ChatInputBar = memo(function ChatInputBar({
     onControlsToggle,
     messageInput,
 }: ChatInputBarProps) {
+    const { t } = useTranslation('common');
     const chatInputRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [draftInput, setDraftInput] = useState('');
@@ -293,9 +295,9 @@ const ChatInputBar = memo(function ChatInputBar({
                             type="button"
                             onClick={() => fileInputRef.current?.click()}
                             disabled={attachments.length >= MAX_ATTACHMENTS}
-                            title={attachments.length >= MAX_ATTACHMENTS ? `Max ${MAX_ATTACHMENTS} images` : 'Attach image'}
+                            title={attachments.length >= MAX_ATTACHMENTS ? `Max ${MAX_ATTACHMENTS} images` : t('chatInput.attachImage')}
                             className="h-10 w-8 shrink-0 rounded-full border border-border-subtle bg-bg-secondary text-text-muted hover:text-text-primary hover:bg-[var(--surface-tertiary)] transition-colors flex items-center justify-center disabled:opacity-40"
-                            aria-label="Attach image"
+                            aria-label={t('chatInput.attachImage')}
                         >
                             {/* Paperclip icon */}
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -309,7 +311,7 @@ const ChatInputBar = memo(function ChatInputBar({
                     <textarea
                         ref={chatInputRef}
                         rows={1}
-                        placeholder={statusMessage || (canAttachImages && attachments.length > 0 ? 'Add a message (optional)...' : `Send message to ${panelLabel}... (Shift+Enter for newline)`)}
+                        placeholder={statusMessage || (canAttachImages && attachments.length > 0 ? 'Add a message (optional)...' : t('chatInput.placeholder', { panel: panelLabel }))}
                         value={draftInput}
                         onChange={e => setDraftInput(e.target.value)}
                         onPaste={e => {
@@ -370,7 +372,7 @@ const ChatInputBar = memo(function ChatInputBar({
                         hasDraft && !isBusy ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
                     }`}
                     style={hasDraft && !isBusy ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
-                    aria-label="Send message"
+                    aria-label={t('chatInput.sendMessage')}
                 >
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={hasDraft ? 'text-white' : 'text-text-muted'}>
                         <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
@@ -397,7 +399,7 @@ const ChatInputBar = memo(function ChatInputBar({
             {/* Attach error / drag hint */}
             {(attachError || (canAttachImages && isDragOver)) && (
                 <div className={`pt-1.5 px-1 text-[11px] ${attachError ? 'text-red-400' : 'text-[var(--accent-primary)]'}`}>
-                    {attachError || 'Drop image here'}
+                    {attachError || t('chatInput.dropImage')}
                 </div>
             )}
             {inlineStatusMessage && !attachError && (

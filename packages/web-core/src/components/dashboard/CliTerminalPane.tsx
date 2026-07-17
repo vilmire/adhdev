@@ -2,6 +2,7 @@
  * CliTerminalPane — CLI agent terminal view with buffer replay and input bar.
  */
 import { useRef, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CliTerminal } from '../CliTerminal';
 import type { CliTerminalHandle } from '../CliTerminal';
 import { useTransport } from '../../context/TransportContext';
@@ -38,6 +39,7 @@ export default function CliTerminalPane({
     isVisible = true,
     isInputActive = true,
 }: CliTerminalPaneProps) {
+    const { t } = useTranslation('common');
     useBaseDaemons();
     const { sendPtyInput } = useTransport();
     const [runtimeReady, setRuntimeReady] = useState(false);
@@ -605,7 +607,7 @@ export default function CliTerminalPane({
                             disabled={!sessionId || isLoadingScrollback}
                             title="Replay raw session scrollback so the terminal viewport can scroll farther up"
                         >
-                            {isLoadingScrollback ? 'Loading older...' : 'Load older terminal output'}
+                            {isLoadingScrollback ? t('terminal.loadingOlder') : t('terminal.loadOlderOutput')}
                         </button>
                         {scrollbackStatusMessage && (
                             <span className="rounded-full border border-white/10 bg-black/35 px-2 py-1 text-[10px] text-white/70 backdrop-blur-sm">
@@ -626,7 +628,7 @@ export default function CliTerminalPane({
                         onClick={() => setShowSpecDebug(v => !v)}
                         title="Spec debug — inspect current state, sections, and transition history"
                     >
-                        Debug
+                        {t('terminal.debug')}
                     </button>
                     <button
                         type="button"
@@ -635,7 +637,7 @@ export default function CliTerminalPane({
                         disabled={!runtimeReady}
                         title="Copy selected terminal text, or the visible terminal viewport if nothing is selected"
                     >
-                        Copy
+                        {t('terminal.copy')}
                     </button>
                     <div className="relative">
                         <button
@@ -643,7 +645,7 @@ export default function CliTerminalPane({
                             className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-[11px] font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
                             onClick={() => setTerminalControlsOpen((open) => !open)}
                             disabled={!runtimeReady}
-                            aria-label="Open terminal control keys"
+                            aria-label={terminalControlsOpen ? t('terminal.closeControlKeys') : t('terminal.openControlKeys')}
                             aria-expanded={terminalControlsOpen}
                             aria-controls="terminal-control-keys-popover"
                             title="Open mobile-friendly terminal control keys"
@@ -654,7 +656,7 @@ export default function CliTerminalPane({
                             <div
                                 id="terminal-control-keys-popover"
                                 role="dialog"
-                                aria-label="Terminal control keys"
+                                aria-label={t('terminal.openControlKeys')}
                                 className="absolute right-0 top-10 w-72 rounded-2xl border border-white/10 bg-[#0b0d12]/95 p-3 text-white/85 shadow-2xl shadow-black/40 backdrop-blur-md"
                             >
                                 <div className="mb-2 flex items-center justify-between gap-2">
@@ -663,7 +665,7 @@ export default function CliTerminalPane({
                                         type="button"
                                         className="rounded-full px-2 py-0.5 text-[11px] text-white/55 transition-colors hover:bg-white/10 hover:text-white/85"
                                         onClick={() => setTerminalControlsOpen(false)}
-                                        aria-label="Close terminal control keys"
+                                        aria-label={t('terminal.closeControlKeys')}
                                     >
                                         ×
                                     </button>

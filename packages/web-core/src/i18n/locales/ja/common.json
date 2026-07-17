@@ -1,5 +1,80 @@
 {
   "chat": {
     "copyMessage": "メッセージをコピー"
+  },
+  "chatPane": {
+    "connectingToMachine": "マシンに接続しています",
+    "establishingP2P": "P2P接続を確立中",
+    "agentNotMonitored": "エージェントが監視されていません",
+    "clickToSwitchMonitoring": "クリックしてこのエージェントの監視に切り替えます",
+    "agentPanelHidden": "エージェントパネルがまだ表示されていません",
+    "openPanelHint": "使用しているアプリでエージェントパネルまたはチャットビューを開いてメッセージを表示してください",
+    "noMessagesYet": "まだメッセージはありません",
+    "loadingChat": "チャットを読み込み中...",
+    "openPanel": "{{label}}パネルを開く",
+    "switchingPanel": "切り替え中...",
+    "openingPanel": "開いています..."
+  },
+  "chatInput": {
+    "attachImage": "画像を添付",
+    "placeholder": "{{panel}}にメッセージを送信...(改行はShift+Enter)",
+    "sendMessage": "メッセージを送信",
+    "dropImage": "ここに画像をドロップ"
+  },
+  "paneGroup": {
+    "noConversations": "まだ会話はありません",
+    "waitingForDaemon": "デーモンを待っています",
+    "connectYourMachines": "マシンを接続してください",
+    "daemonDescription": "ADHDevデーモンを起動してこのダッシュボードに接続してください。オンラインになると、インストールされたプロバイダーでセッションを開始できます。",
+    "installDescription": "マシンにADHDevをインストールしてサインインすると、ここに表示されます。",
+    "newSession": "新しいセッション",
+    "newSessionDescription": "接続されたマシンの準備ができています。CLI、ACP、またはIDEのインストール済みプロバイダーで新しいセッションを開始してください。"
+  },
+  "terminal": {
+    "loadOlderOutput": "古いターミナル出力を読み込む",
+    "loadingOlder": "古いものを読み込み中...",
+    "debug": "デバッグ",
+    "copy": "コピー",
+    "openControlKeys": "ターミナル制御キーを開く",
+    "closeControlKeys": "ターミナル制御キーを閉じる"
+  },
+  "conversation": {
+    "muteThis": "このチャットをミュート",
+    "unmuteThis": "このチャットのミュートを解除",
+    "mutedTitle": "ミュート中 — 通知はオフです。クリックで解除します。",
+    "muteTitle": "このチャットの通知をミュート"
+  },
+  "cliView": {
+    "switchToTerminal": "ターミナルビューに切り替え",
+    "switchToChat": "チャットビューに切り替え"
+  },
+  "launch": {
+    "resumeSavedHistory": "保存済み履歴を再開",
+    "startFresh": "新しく開始",
+    "resumingSavedHistory": "保存済み履歴を再開中…",
+    "startingFresh": "新しく開始中…",
+    "startIde": "IDEを起動",
+    "startingIde": "IDEを起動中…",
+    "startAcpSession": "ACPセッションを開始",
+    "startingAcpSession": "ACPセッションを開始中…",
+    "recoverHostedRuntime": "ホストされたランタイムを復元",
+    "hostedRuntimeRecoveryDescription": "中断後のホストされたランタイムのフォールバック復元。通常の継続性のためには、保存済み履歴を開いてください。",
+    "openSavedHistory": "保存済み履歴を開く",
+    "savedHistoryTitle": "保存済み履歴",
+    "savedHistoryHelper": "同じプロバイダーの会話で継続性を保ちたい場合は、保存済み履歴を使用してください。",
+    "savedHistoryEmpty": "保存済み履歴がまだ見つかりません。",
+    "refreshSavedHistory": "保存済み履歴を更新",
+    "refreshingSavedHistory": "保存済み履歴を更新中…",
+    "startFreshWith": "{{label}}で新しく開始しますか？",
+    "restart": "{{label}}を再起動しますか？",
+    "startFreshReview": "新しく開始する前にプロバイダーとターゲットフォルダーを確認してください。",
+    "restartIdeReview": "このIDEを再起動する前にターゲットワークスペースを確認または変更してください。",
+    "restartStoppedReview": "この停止したセッションを再起動する前にターゲットワークスペースを確認または変更してください。",
+    "confirmStartFresh": "新しく開始",
+    "confirmRestart": "再起動",
+    "confirmStartingFresh": "新しく開始中…",
+    "confirmRestarting": "再起動中…",
+    "resumeWith": "{{label}}で保存済み履歴を再開しますか？",
+    "resumeReview": "保存済み履歴を再開する前にターゲットワークスペースを確認または変更してください。"
   }
 }

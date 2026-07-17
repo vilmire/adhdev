@@ -1,5 +1,80 @@
 {
   "chat": {
     "copyMessage": "Copiar mensaje"
+  },
+  "chatPane": {
+    "connectingToMachine": "Conectando con tu máquina",
+    "establishingP2P": "Estableciendo conexión P2P",
+    "agentNotMonitored": "Agente no supervisado",
+    "clickToSwitchMonitoring": "Haz clic para cambiar la supervisión a este agente",
+    "agentPanelHidden": "El panel del agente aún no es visible",
+    "openPanelHint": "Abre el panel del agente o la vista de chat en la aplicación que estás usando para ver los mensajes",
+    "noMessagesYet": "Todavía no hay mensajes",
+    "loadingChat": "Cargando chat...",
+    "openPanel": "Abrir panel de {{label}}",
+    "switchingPanel": "Cambiando...",
+    "openingPanel": "Abriendo..."
+  },
+  "chatInput": {
+    "attachImage": "Adjuntar imagen",
+    "placeholder": "Enviar mensaje a {{panel}}... (Shift+Enter para nueva línea)",
+    "sendMessage": "Enviar mensaje",
+    "dropImage": "Suelta la imagen aquí"
+  },
+  "paneGroup": {
+    "noConversations": "Todavía no hay conversaciones",
+    "waitingForDaemon": "Esperando tu daemon",
+    "connectYourMachines": "Conecta tus máquinas",
+    "daemonDescription": "Inicia el daemon de ADHDev para conectar este panel. Una vez en línea, puedes iniciar sesiones con cualquier proveedor instalado.",
+    "installDescription": "Instala ADHDev en una máquina, inicia sesión y aparecerá aquí.",
+    "newSession": "Nueva sesión",
+    "newSessionDescription": "Una máquina conectada está lista. Inicia una nueva sesión con cualquier proveedor instalado — CLI, ACP o IDE."
+  },
+  "terminal": {
+    "loadOlderOutput": "Cargar salida de terminal anterior",
+    "loadingOlder": "Cargando anteriores...",
+    "debug": "Depurar",
+    "copy": "Copiar",
+    "openControlKeys": "Abrir teclas de control del terminal",
+    "closeControlKeys": "Cerrar teclas de control del terminal"
+  },
+  "conversation": {
+    "muteThis": "Silenciar este chat",
+    "unmuteThis": "Activar sonido de este chat",
+    "mutedTitle": "Silenciado — notificaciones desactivadas. Clic para reactivar.",
+    "muteTitle": "Silenciar notificaciones de este chat"
+  },
+  "cliView": {
+    "switchToTerminal": "Cambiar a vista Terminal",
+    "switchToChat": "Cambiar a vista Chat"
+  },
+  "launch": {
+    "resumeSavedHistory": "Reanudar historial guardado",
+    "startFresh": "Empezar de nuevo",
+    "resumingSavedHistory": "Reanudando historial guardado…",
+    "startingFresh": "Empezando de nuevo…",
+    "startIde": "Iniciar IDE",
+    "startingIde": "Iniciando IDE…",
+    "startAcpSession": "Iniciar sesión ACP",
+    "startingAcpSession": "Iniciando sesión ACP…",
+    "recoverHostedRuntime": "Recuperar runtime alojado",
+    "hostedRuntimeRecoveryDescription": "Recuperación de respaldo para runtimes alojados tras interrupciones. Para continuidad normal, abre el historial guardado.",
+    "openSavedHistory": "Abrir historial guardado",
+    "savedHistoryTitle": "Historial guardado",
+    "savedHistoryHelper": "Usa el historial guardado cuando quieras continuidad en la misma conversación del proveedor.",
+    "savedHistoryEmpty": "Todavía no se encontró historial guardado.",
+    "refreshSavedHistory": "Actualizar historial guardado",
+    "refreshingSavedHistory": "Actualizando historial guardado…",
+    "startFreshWith": "¿Empezar de nuevo con {{label}}?",
+    "restart": "¿Reiniciar {{label}}?",
+    "startFreshReview": "Revisa el proveedor y la carpeta de destino antes de empezar de nuevo.",
+    "restartIdeReview": "Revisa o cambia el espacio de trabajo de destino antes de reiniciar este IDE.",
+    "restartStoppedReview": "Revisa o cambia el espacio de trabajo de destino antes de reiniciar esta sesión detenida.",
+    "confirmStartFresh": "Empezar de nuevo",
+    "confirmRestart": "Reiniciar",
+    "confirmStartingFresh": "Empezando de nuevo…",
+    "confirmRestarting": "Reiniciando…",
+    "resumeWith": "¿Reanudar el historial guardado con {{label}}?",
+    "resumeReview": "Revisa o cambia el espacio de trabajo de destino antes de reanudar el historial guardado."
   }
 }

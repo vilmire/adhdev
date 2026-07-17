@@ -9,6 +9,7 @@
  * so a lost command can't wedge the icon).
  */
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { IconBell, IconBellOff } from '../Icons'
 
 interface Props {
@@ -22,6 +23,7 @@ interface Props {
 const PENDING_TTL_MS = 8000
 
 export default function ConversationMuteButton({ sessionId, daemonId, muted, sendDaemonCommand }: Props) {
+    const { t } = useTranslation('common')
     // Optimistic override: the value we just requested, held until the daemon
     // snapshot confirms it (muted === pending) or the request times out.
     const [pending, setPending] = useState<boolean | null>(null)
@@ -54,9 +56,9 @@ export default function ConversationMuteButton({ sessionId, daemonId, muted, sen
         <button
             type="button"
             onClick={onClick}
-            aria-label={effectiveMuted ? 'Unmute this chat' : 'Mute this chat'}
+            aria-label={effectiveMuted ? t('conversation.unmuteThis') : t('conversation.muteThis')}
             aria-pressed={effectiveMuted}
-            title={effectiveMuted ? 'Muted — notifications silenced. Click to unmute.' : 'Mute notifications for this chat'}
+            title={effectiveMuted ? t('conversation.mutedTitle') : t('conversation.muteTitle')}
             className={`inline-flex items-center justify-center w-6 h-6 rounded-full leading-none transition-colors ${
                 effectiveMuted
                     ? 'bg-amber-500 text-white hover:bg-amber-600'

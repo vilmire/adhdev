@@ -3,6 +3,7 @@
  * ChatPane — Chat view for IDE, ACP, and CLI chat-mode sessions.
  */
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import ChatControlsSection from './ChatControlsSection';
 import ChatInputBar, { type ImageAttachment } from './ChatInputBar';
@@ -87,6 +88,7 @@ export default function ChatPane({
     isInputActive = true,
     isVisible = true,
 }: ChatPaneProps) {
+    const { t } = useTranslation('common');
     const receivedAtCache = useRef<Map<string, number>>(new Map());
     const debugGestureStateRef = useRef<ControlsToggleDebugGestureState | undefined>(undefined);
     const loadDaemonMetadata = useDaemonMetadataLoader();
@@ -347,8 +349,8 @@ export default function ChatPane({
                         </div>
                     </div>
                     <div className="flex flex-col items-center gap-1.5">
-                        <div className="text-[13px] text-blue-400 font-medium">Connecting to your machine<span className="connecting-dots"></span></div>
-                        <div className="text-[11px] opacity-35">Establishing P2P connection</div>
+                        <div className="text-[13px] text-blue-400 font-medium">{t('chatPane.connectingToMachine')}<span className="connecting-dots"></span></div>
+                        <div className="text-[11px] opacity-35">{t('chatPane.establishingP2P')}</div>
                     </div>
                 </div>
             );
@@ -360,11 +362,11 @@ export default function ChatPane({
             return (
                 <div className="text-center mt-16 flex flex-col items-center gap-3">
                     <div className="text-3xl opacity-60"><IconPlug size={28} /></div>
-                    <div className="text-[13px] opacity-50">Agent not monitored</div>
+                    <div className="text-[13px] opacity-50">{t('chatPane.agentNotMonitored')}</div>
                     <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
-                        {isFocusingAgent ? '⌛ Switching...' : <span className="flex items-center gap-1.5"><IconFolder size={14} /> Open {panelLabel} Panel</span>}
+                        {isFocusingAgent ? `⌛ ${t('chatPane.switchingPanel')}` : <span className="flex items-center gap-1.5"><IconFolder size={14} /> {t('chatPane.openPanel', { label: panelLabel })}</span>}
                     </button>
-                    <div className="text-[11px] opacity-35 max-w-[280px]">Click to switch monitoring to this agent</div>
+                    <div className="text-[11px] opacity-35 max-w-[280px]">{t('chatPane.clickToSwitchMonitoring')}</div>
                 </div>
             );
         }
@@ -372,11 +374,11 @@ export default function ChatPane({
             return (
                 <div className="text-center mt-16 flex flex-col items-center gap-3">
                     <div className="text-3xl opacity-60"><IconEye size={28} /></div>
-                    <div className="text-[13px] opacity-50">Agent panel is not visible yet</div>
+                    <div className="text-[13px] opacity-50">{t('chatPane.agentPanelHidden')}</div>
                     <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
-                        {isFocusingAgent ? '⌛ Opening...' : <span className="flex items-center gap-1.5"><IconFolder size={14} /> Open {panelLabel} Panel</span>}
+                        {isFocusingAgent ? `⌛ ${t('chatPane.openingPanel')}` : <span className="flex items-center gap-1.5"><IconFolder size={14} /> {t('chatPane.openPanel', { label: panelLabel })}</span>}
                     </button>
-                    <div className="text-[11px] opacity-35 max-w-[280px]">Open the agent panel or chat view in the app you are using to start viewing messages</div>
+                    <div className="text-[11px] opacity-35 max-w-[280px]">{t('chatPane.openPanelHint')}</div>
                 </div>
             );
         }
@@ -386,14 +388,14 @@ export default function ChatPane({
                 return (
                     <div className="text-center mt-16 flex flex-col items-center gap-3">
                         <div className="text-2xl opacity-40">💬</div>
-                        <div className="text-[13px] opacity-40">No messages yet</div>
+                        <div className="text-[13px] opacity-40">{t('chatPane.noMessagesYet')}</div>
                     </div>
                 );
             }
             return (
                 <div className="text-center mt-16 flex flex-col items-center gap-3">
                     <div className="text-2xl opacity-40 animate-pulse">💬</div>
-                    <div className="text-[13px] opacity-40">Loading chat...</div>
+                    <div className="text-[13px] opacity-40">{t('chatPane.loadingChat')}</div>
                 </div>
             );
         }

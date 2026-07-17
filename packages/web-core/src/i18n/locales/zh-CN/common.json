@@ -1,5 +1,80 @@
 {
   "chat": {
     "copyMessage": "复制消息"
+  },
+  "chatPane": {
+    "connectingToMachine": "正在连接到您的机器",
+    "establishingP2P": "正在建立P2P连接",
+    "agentNotMonitored": "代理未被监控",
+    "clickToSwitchMonitoring": "点击切换到监控此代理",
+    "agentPanelHidden": "代理面板尚不可见",
+    "openPanelHint": "在您使用的应用中打开代理面板或聊天视图以开始查看消息",
+    "noMessagesYet": "暂无消息",
+    "loadingChat": "正在加载聊天...",
+    "openPanel": "打开{{label}}面板",
+    "switchingPanel": "切换中...",
+    "openingPanel": "正在打开..."
+  },
+  "chatInput": {
+    "attachImage": "附加图片",
+    "placeholder": "向{{panel}}发送消息...(Shift+Enter换行)",
+    "sendMessage": "发送消息",
+    "dropImage": "将图片拖放到此处"
+  },
+  "paneGroup": {
+    "noConversations": "还没有对话",
+    "waitingForDaemon": "等待守护进程",
+    "connectYourMachines": "连接您的机器",
+    "daemonDescription": "启动ADHDev守护进程以连接此仪表板。一旦在线，您可以使用任何已安装的提供商启动会话。",
+    "installDescription": "在机器上安装ADHDev并登录，它将显示在这里。",
+    "newSession": "新建会话",
+    "newSessionDescription": "已连接的机器已就绪。使用任何已安装的提供商（CLI、ACP或IDE）开始新会话。"
+  },
+  "terminal": {
+    "loadOlderOutput": "加载较旧的终端输出",
+    "loadingOlder": "正在加载较旧内容...",
+    "debug": "调试",
+    "copy": "复制",
+    "openControlKeys": "打开终端控制键",
+    "closeControlKeys": "关闭终端控制键"
+  },
+  "conversation": {
+    "muteThis": "静音此聊天",
+    "unmuteThis": "取消静音此聊天",
+    "mutedTitle": "已静音 — 通知已关闭。点击取消静音。",
+    "muteTitle": "静音此聊天的通知"
+  },
+  "cliView": {
+    "switchToTerminal": "切换到终端视图",
+    "switchToChat": "切换到聊天视图"
+  },
+  "launch": {
+    "resumeSavedHistory": "恢复保存的历史记录",
+    "startFresh": "重新开始",
+    "resumingSavedHistory": "正在恢复保存的历史记录…",
+    "startingFresh": "正在重新开始…",
+    "startIde": "启动IDE",
+    "startingIde": "正在启动IDE…",
+    "startAcpSession": "开始ACP会话",
+    "startingAcpSession": "正在开始ACP会话…",
+    "recoverHostedRuntime": "恢复托管运行时",
+    "hostedRuntimeRecoveryDescription": "中断后托管运行时的回退恢复。要正常延续，请改为打开保存的历史记录。",
+    "openSavedHistory": "打开保存的历史记录",
+    "savedHistoryTitle": "保存的历史记录",
+    "savedHistoryHelper": "当您希望在同一提供商对话中保持连续性时，请使用保存的历史记录。",
+    "savedHistoryEmpty": "尚未找到保存的历史记录。",
+    "refreshSavedHistory": "刷新保存的历史记录",
+    "refreshingSavedHistory": "正在刷新保存的历史记录…",
+    "startFreshWith": "使用{{label}}重新开始？",
+    "restart": "重启{{label}}？",
+    "startFreshReview": "重新开始前请检查提供商和目标文件夹。",
+    "restartIdeReview": "重启此IDE前，请查看或更改目标工作区。",
+    "restartStoppedReview": "重启此已停止的会话前，请查看或更改目标工作区。",
+    "confirmStartFresh": "重新开始",
+    "confirmRestart": "重启",
+    "confirmStartingFresh": "正在重新开始…",
+    "confirmRestarting": "正在重启…",
+    "resumeWith": "使用{{label}}恢复保存的历史记录？",
+    "resumeReview": "恢复保存的历史记录前，请查看或更改目标工作区。"
   }
 }

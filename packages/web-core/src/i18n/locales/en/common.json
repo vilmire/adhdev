@@ -688,5 +688,80 @@
   },
   "chat": {
     "copyMessage": "Copy message"
+  },
+  "chatPane": {
+    "connectingToMachine": "Connecting to your machine",
+    "establishingP2P": "Establishing P2P connection",
+    "agentNotMonitored": "Agent not monitored",
+    "clickToSwitchMonitoring": "Click to switch monitoring to this agent",
+    "agentPanelHidden": "Agent panel is not visible yet",
+    "openPanelHint": "Open the agent panel or chat view in the app you are using to start viewing messages",
+    "noMessagesYet": "No messages yet",
+    "loadingChat": "Loading chat...",
+    "openPanel": "Open {{label}} Panel",
+    "switchingPanel": "Switching...",
+    "openingPanel": "Opening..."
+  },
+  "chatInput": {
+    "attachImage": "Attach image",
+    "placeholder": "Send message to {{panel}}... (Shift+Enter for newline)",
+    "sendMessage": "Send message",
+    "dropImage": "Drop image here"
+  },
+  "paneGroup": {
+    "noConversations": "No conversations yet",
+    "waitingForDaemon": "Waiting for your daemon",
+    "connectYourMachines": "Connect your machines",
+    "daemonDescription": "Start the ADHDev daemon to connect this dashboard. Once it is online, you can launch sessions with any installed provider.",
+    "installDescription": "Install ADHDev on a machine, sign in, and it will show up here.",
+    "newSession": "New session",
+    "newSessionDescription": "A connected machine is ready. Start a new session with any installed provider — CLI, ACP, or IDE."
+  },
+  "terminal": {
+    "loadOlderOutput": "Load older terminal output",
+    "loadingOlder": "Loading older...",
+    "debug": "Debug",
+    "copy": "Copy",
+    "openControlKeys": "Open terminal control keys",
+    "closeControlKeys": "Close terminal control keys"
+  },
+  "conversation": {
+    "muteThis": "Mute this chat",
+    "unmuteThis": "Unmute this chat",
+    "mutedTitle": "Muted — notifications silenced. Click to unmute.",
+    "muteTitle": "Mute notifications for this chat"
+  },
+  "cliView": {
+    "switchToTerminal": "Switch to Terminal view",
+    "switchToChat": "Switch to Chat view"
+  },
+  "launch": {
+    "resumeSavedHistory": "Resume saved history",
+    "startFresh": "Start fresh",
+    "resumingSavedHistory": "Resuming saved history…",
+    "startingFresh": "Starting fresh…",
+    "startIde": "Start IDE",
+    "startingIde": "Starting IDE…",
+    "startAcpSession": "Start ACP session",
+    "startingAcpSession": "Starting ACP session…",
+    "recoverHostedRuntime": "Recover hosted runtime",
+    "hostedRuntimeRecoveryDescription": "Fallback recovery for hosted runtimes after interruptions. For normal continuity, open saved history instead.",
+    "openSavedHistory": "Open saved history",
+    "savedHistoryTitle": "Saved History",
+    "savedHistoryHelper": "Use saved history when you want continuity in the same provider conversation.",
+    "savedHistoryEmpty": "No saved history found yet.",
+    "refreshSavedHistory": "Refresh saved history",
+    "refreshingSavedHistory": "Refreshing saved history…",
+    "startFreshWith": "Start fresh with {{label}}?",
+    "restart": "Restart {{label}}?",
+    "startFreshReview": "Review the provider and target folder before starting fresh.",
+    "restartIdeReview": "Review or change the target workspace before restarting this IDE.",
+    "restartStoppedReview": "Review or change the target workspace before restarting this stopped session.",
+    "confirmStartFresh": "Start fresh",
+    "confirmRestart": "Restart",
+    "confirmStartingFresh": "Starting fresh…",
+    "confirmRestarting": "Restarting…",
+    "resumeWith": "Resume saved history with {{label}}?",
+    "resumeReview": "Review or change the target workspace before resuming saved history."
   }
 }

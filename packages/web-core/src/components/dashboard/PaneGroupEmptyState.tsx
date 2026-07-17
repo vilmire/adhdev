@@ -1,6 +1,6 @@
 import { IconPlus } from '../Icons'
 import InstallCommand from '../InstallCommand'
-import { DASHBOARD_NEW_SESSION_DESCRIPTION, DASHBOARD_NEW_SESSION_LABEL } from './dashboard-session-cta'
+import { useTranslation } from 'react-i18next'
 
 interface PaneGroupEmptyStateProps {
     conversationsCount: number
@@ -19,6 +19,7 @@ export default function PaneGroupEmptyState({
     suppressGuide = false,
     onOpenNewSession,
 }: PaneGroupEmptyStateProps) {
+    const { t } = useTranslation('common')
     if (suppressGuide) {
         return <div className="text-sm text-text-muted opacity-0 select-none" aria-hidden="true">No active agent</div>
     }
@@ -26,15 +27,15 @@ export default function PaneGroupEmptyState({
     const shouldShowInstallCta = !isStandalone && !hasRegisteredMachines
     const canStartSession = hasRegisteredMachines && !!onOpenNewSession
     const title = hasRegisteredMachines
-        ? 'No conversations yet'
+        ? t('paneGroup.noConversations')
         : isStandalone
-            ? 'Waiting for your daemon'
-            : 'Connect your machines'
+            ? t('paneGroup.waitingForDaemon')
+            : t('paneGroup.connectYourMachines')
     const description = hasRegisteredMachines
-        ? DASHBOARD_NEW_SESSION_DESCRIPTION
+        ? t('paneGroup.newSessionDescription')
         : isStandalone
-            ? 'Start the ADHDev daemon to connect this dashboard. Once it is online, you can launch sessions with any installed provider.'
-            : 'Install ADHDev on a machine, sign in, and it will show up here.'
+            ? t('paneGroup.daemonDescription')
+            : t('paneGroup.installDescription')
 
     if (conversationsCount === 0 && !isSplitMode) {
         return (
@@ -55,11 +56,11 @@ export default function PaneGroupEmptyState({
                                 type="button"
                                 onClick={onOpenNewSession}
                                 className="btn btn-secondary btn-sm inline-flex items-center gap-2"
-                                title={DASHBOARD_NEW_SESSION_LABEL}
-                                aria-label={DASHBOARD_NEW_SESSION_LABEL}
+                                title={t('paneGroup.newSession')}
+                                aria-label={t('paneGroup.newSession')}
                             >
                                 <IconPlus size={14} />
-                                <span>{DASHBOARD_NEW_SESSION_LABEL}</span>
+                                <span>{t('paneGroup.newSession')}</span>
                             </button>
                         </div>
                     )}

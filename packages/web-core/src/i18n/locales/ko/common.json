@@ -688,5 +688,80 @@
   },
   "chat": {
     "copyMessage": "메시지 복사"
+  },
+  "chatPane": {
+    "connectingToMachine": "머신에 연결 중",
+    "establishingP2P": "P2P 연결 설정 중",
+    "agentNotMonitored": "에이전트 모니터링 안 됨",
+    "clickToSwitchMonitoring": "이 에이전트로 모니터링 전환하려면 클릭하세요",
+    "agentPanelHidden": "에이전트 패널이 아직 표시되지 않습니다",
+    "openPanelHint": "사용 중인 앱에서 에이전트 패널이나 채팅 보기를 열어 메시지를 확인하세요",
+    "noMessagesYet": "아직 메시지가 없습니다",
+    "loadingChat": "채팅 불러오는 중...",
+    "openPanel": "{{label}} 패널 열기",
+    "switchingPanel": "전환 중...",
+    "openingPanel": "여는 중..."
+  },
+  "chatInput": {
+    "attachImage": "이미지 첨부",
+    "placeholder": "{{panel}}에 메시지 전송... (줄바꿈은 Shift+Enter)",
+    "sendMessage": "메시지 전송",
+    "dropImage": "여기에 이미지를 놓으세요"
+  },
+  "paneGroup": {
+    "noConversations": "아직 대화가 없습니다",
+    "waitingForDaemon": "데몬을 기다리는 중",
+    "connectYourMachines": "머신을 연결하세요",
+    "daemonDescription": "ADHDev 데몬을 시작하여 이 대시보드에 연결하세요. 온라인이 되면 설치된 프로바이더로 세션을 실행할 수 있습니다.",
+    "installDescription": "머신에 ADHDev를 설치하고 로그인하면 여기에 표시됩니다.",
+    "newSession": "새 세션",
+    "newSessionDescription": "연결된 머신이 준비되었습니다. CLI, ACP, IDE 중 설치된 프로바이더로 새 세션을 시작하세요."
+  },
+  "terminal": {
+    "loadOlderOutput": "이전 터미널 출력 불러오기",
+    "loadingOlder": "이전 항목 불러오는 중...",
+    "debug": "디버그",
+    "copy": "복사",
+    "openControlKeys": "터미널 제어 키 열기",
+    "closeControlKeys": "터미널 제어 키 닫기"
+  },
+  "conversation": {
+    "muteThis": "이 채팅 음소거",
+    "unmuteThis": "이 채팅 음소거 해제",
+    "mutedTitle": "음소거됨 — 알림이 차단되었습니다. 클릭하여 해제하세요.",
+    "muteTitle": "이 채팅 알림 음소거"
+  },
+  "cliView": {
+    "switchToTerminal": "터미널 보기로 전환",
+    "switchToChat": "채팅 보기로 전환"
+  },
+  "launch": {
+    "resumeSavedHistory": "저장된 기록 재개",
+    "startFresh": "새로 시작",
+    "resumingSavedHistory": "저장된 기록 재개 중…",
+    "startingFresh": "새로 시작 중…",
+    "startIde": "IDE 시작",
+    "startingIde": "IDE 시작 중…",
+    "startAcpSession": "ACP 세션 시작",
+    "startingAcpSession": "ACP 세션 시작 중…",
+    "recoverHostedRuntime": "호스팅 런타임 복구",
+    "hostedRuntimeRecoveryDescription": "중단 후 호스팅 런타임의 폴백 복구. 일반적인 연속성을 위해서는 저장된 기록을 여세요.",
+    "openSavedHistory": "저장된 기록 열기",
+    "savedHistoryTitle": "저장된 기록",
+    "savedHistoryHelper": "같은 프로바이더 대화의 연속성을 원할 때 저장된 기록을 사용하세요.",
+    "savedHistoryEmpty": "아직 저장된 기록이 없습니다.",
+    "refreshSavedHistory": "저장된 기록 새로고침",
+    "refreshingSavedHistory": "저장된 기록 새로고침 중…",
+    "startFreshWith": "{{label}}(으)로 새로 시작할까요?",
+    "restart": "{{label}}을(를) 재시작할까요?",
+    "startFreshReview": "새로 시작하기 전에 프로바이더와 대상 폴더를 확인하세요.",
+    "restartIdeReview": "IDE를 재시작하기 전에 대상 워크스페이스를 확인하거나 변경하세요.",
+    "restartStoppedReview": "중지된 세션을 재시작하기 전에 대상 워크스페이스를 확인하거나 변경하세요.",
+    "confirmStartFresh": "새로 시작",
+    "confirmRestart": "재시작",
+    "confirmStartingFresh": "새로 시작 중…",
+    "confirmRestarting": "재시작 중…",
+    "resumeWith": "{{label}}(으)로 저장된 기록을 재개할까요?",
+    "resumeReview": "저장된 기록을 재개하기 전에 대상 워크스페이스를 확인하거나 변경하세요."
   }
 }
