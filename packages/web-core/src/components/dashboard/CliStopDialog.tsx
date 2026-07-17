@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import type { ActiveConversation } from './types'
 import { getConversationStopDialogLabel } from './conversation-presenters'
 
@@ -16,6 +17,7 @@ export default function CliStopDialog({
     onStopNow,
     onSaveAndStop,
 }: CliStopDialogProps) {
+    const { t } = useTranslation()
     const agentLabel = getConversationStopDialogLabel(activeConv)
 
     return (
@@ -27,11 +29,11 @@ export default function CliStopDialog({
                 className="card fade-in mobile-compact-dialog relative w-full sm:w-[min(92vw,420px)] md:w-[92%] md:max-w-[420px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] flex flex-col overflow-hidden rounded-[24px] sm:rounded-[18px] shadow-[0_20px_40px_rgba(0,0,0,0.4)]"
             >
                 <div className="px-4 py-4 md:px-6 md:py-5 border-b border-border-subtle bg-bg-primary">
-                    <h3 className="m-0 text-base md:text-lg font-extrabold">Stop {agentLabel}?</h3>
+                    <h3 className="m-0 text-base md:text-lg font-extrabold">{t('cliStop.title', { agent: agentLabel })}</h3>
                     <div className="mt-1 text-[13px] md:text-sm text-text-muted leading-relaxed">
                         {canSaveAndStop
-                            ? 'Stop asks the provider to exit cleanly when supported. Force Stop ends the runtime immediately.'
-                            : 'This provider does not support graceful stop. Force Stop will end the runtime immediately.'}
+                            ? t('cliStop.gracefulDescription')
+                            : t('cliStop.forceOnlyDescription')}
                     </div>
                 </div>
 
@@ -41,20 +43,20 @@ export default function CliStopDialog({
                             onClick={onSaveAndStop}
                             className="btn btn-primary w-full justify-center min-h-[42px]"
                         >
-                            Stop
+                            {t('cliStop.stop')}
                         </button>
                     )}
                     <button
                         onClick={onStopNow}
                         className="btn btn-secondary w-full justify-center min-h-[42px] text-red-400 border-red-500/25 hover:bg-red-500/10"
                     >
-                        Force Stop
+                        {t('cliStop.forceStop')}
                     </button>
                     <button
                         onClick={onCancel}
                         className="btn btn-secondary w-full justify-center min-h-[42px]"
                     >
-                        Cancel
+                        {t('common.cancel')}
                     </button>
                 </div>
             </div>

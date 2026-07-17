@@ -1,6 +1,7 @@
 /**
  * ToastContainer — Toast notification container for Dashboard
  */
+import { useTranslation } from 'react-i18next';
 import type { Toast } from '../../context/BaseDaemonContext';
 import { IconX } from '../Icons';
 export type { Toast };
@@ -11,28 +12,29 @@ export interface ToastContainerProps {
     onClickToast?: (toast: Toast) => void;
 }
 
-const TYPE_TONE: Record<string, { accent: string; chipBg: string; chipText: string; label: string }> = {
+const TYPE_TONE: Record<string, { accent: string; chipBg: string; chipText: string; labelKey: string }> = {
     success: {
         accent: 'var(--accent-primary)',
         chipBg: 'color-mix(in srgb, var(--accent-primary) 14%, transparent)',
         chipText: 'var(--accent-primary-light)',
-        label: 'Done',
+        labelKey: 'toast.label.success',
     },
     warning: {
         accent: 'var(--accent-primary)',
         chipBg: 'color-mix(in srgb, var(--accent-primary) 14%, transparent)',
         chipText: 'var(--accent-primary-light)',
-        label: 'Attention',
+        labelKey: 'toast.label.warning',
     },
     info: {
         accent: 'var(--accent-primary)',
         chipBg: 'color-mix(in srgb, var(--accent-primary) 14%, transparent)',
         chipText: 'var(--accent-primary-light)',
-        label: 'Update',
+        labelKey: 'toast.label.info',
     },
 }
 
 export default function ToastContainer({ toasts, onDismiss, onClickToast }: ToastContainerProps) {
+    const { t } = useTranslation();
     return (
         <div className="fixed right-4 z-[var(--z-toast)] flex flex-col gap-2 pointer-events-none" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 16px)' }}>
             {toasts.map(toast => {
@@ -59,7 +61,7 @@ export default function ToastContainer({ toasts, onDismiss, onClickToast }: Toas
                         <button
                             className="absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-glass transition-colors leading-none cursor-pointer"
                             onClick={(e) => { e.stopPropagation(); onDismiss(toast.id); }}
-                            aria-label="Dismiss"
+                            aria-label={t('toast.dismiss')}
                         ><IconX size={14} /></button>
                         <div className="px-4 py-3.5 pl-5">
                             <div className="flex items-center gap-2 pr-8">
@@ -71,7 +73,7 @@ export default function ToastContainer({ toasts, onDismiss, onClickToast }: Toas
                                         border: `1px solid color-mix(in srgb, ${tone.accent} 22%, transparent)`,
                                     }}
                                 >
-                                    {tone.label}
+                                    {t(tone.labelKey)}
                                 </span>
                             </div>
                             <div className="mt-2 text-[13px] font-semibold leading-[1.45] text-text-primary">

@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { ActiveConversation, CliConversationViewMode } from './types';
 import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
 import { IconBell, IconChat, IconScroll, IconMonitor, IconEyeOff, IconX, IconPlus, IconMesh } from '../Icons';
@@ -55,8 +56,10 @@ export interface DashboardHeaderProps {
 
 type DashboardHeaderConnectionState = {
     tone: 'connected' | 'limited' | 'disconnected';
-    title: string;
-    subtitle: string | null;
+    /** i18n key for the connection title (translate at render). */
+    titleKey: string;
+    /** i18n key for the connection subtitle, or null when absent. */
+    subtitleKey: string | null;
 };
 
 export function getDashboardHeaderConnectionState({
@@ -73,8 +76,8 @@ export function getDashboardHeaderConnectionState({
     if (wsStatus !== 'connected') {
         return {
             tone: 'disconnected',
-            title: 'Disconnected',
-            subtitle: null,
+            titleKey: 'connection.disconnected',
+            subtitleKey: null,
         };
     }
 
@@ -85,23 +88,23 @@ export function getDashboardHeaderConnectionState({
     if (daemonCount > 0 && p2pConnecting > 0 && p2pConnected === 0) {
         return {
             tone: 'limited',
-            title: 'Connected to dashboard',
-            subtitle: 'Connecting to machine...',
+            titleKey: 'connection.connectedToDashboard',
+            subtitleKey: 'connection.connectingToMachine',
         };
     }
 
     if (isConnected) {
         return {
             tone: 'connected',
-            title: 'Connected',
-            subtitle: null,
+            titleKey: 'connection.connected',
+            subtitleKey: null,
         };
     }
 
     return {
         tone: 'limited',
-        title: 'Connected to dashboard',
-        subtitle: null,
+        titleKey: 'connection.connectedToDashboard',
+        subtitleKey: null,
     };
 }
 
@@ -125,6 +128,7 @@ function DashboardHeaderNotificationItem({
     onMarkUnread: () => void;
     onDelete: () => void;
 }) {
+    const { t } = useTranslation()
     const timeLabel = formatRelativeTime(notification.updatedAt)
     const isUnread = !notification.readAt
 
@@ -138,7 +142,7 @@ function DashboardHeaderNotificationItem({
                 <span className="dashboard-header-inbox-item-title">{notification.title}</span>
                 <span className="dashboard-header-inbox-item-meta">
                     {shortcutIndex ? <span className="dashboard-header-item-shortcut">⌥{shortcutIndex}</span> : null}
-                    {[notification.type === 'needs_attention' ? 'Action needed' : 'Task complete', timeLabel].filter(Boolean).join(' · ')}
+                    {[notification.type === 'needs_attention' ? t('notification.actionNeeded') : t('notification.taskComplete'), timeLabel].filter(Boolean).join(' · ')}
                 </span>
                 {notification.preview ? (
                     <span className="dashboard-header-inbox-item-meta dashboard-header-inbox-item-preview">{notification.preview}</span>
@@ -147,15 +151,15 @@ function DashboardHeaderNotificationItem({
             <div className="ml-3 flex shrink-0 items-center gap-1.5">
                 {isUnread ? (
                     <button type="button" className="dashboard-header-hidden-secondary" onClick={(event) => { event.stopPropagation(); onMarkRead(); }}>
-                        Mark read
+                        {t('notification.markRead')}
                     </button>
                 ) : (
                     <button type="button" className="dashboard-header-hidden-secondary" onClick={(event) => { event.stopPropagation(); onMarkUnread(); }}>
-                        Mark unread
+                        {t('notification.markUnread')}
                     </button>
                 )}
                 <button type="button" className="dashboard-header-hidden-secondary" onClick={(event) => { event.stopPropagation(); onDelete(); }}>
-                    Delete
+                    {t('notification.delete')}
                 </button>
             </div>
         </div>
@@ -194,6 +198,7 @@ export default function DashboardHeader({
     onOpenGitDialog,
     onOpenMeshGraph,
 }: DashboardHeaderProps) {
+    const { t } = useTranslation();
     const { ides, p2pStates = {} } = useBaseDaemons();
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
     const isAcpActive = !!activeConv && isAcpConv(activeConv);
@@ -212,7 +217,8 @@ export default function DashboardHeader({
         daemonCount: daemons.length,
         p2pStates,
     });
-    const statusText = connectionState.subtitle;
+    const connectionTitle = t(connectionState.titleKey);
+    const statusText = connectionState.subtitleKey ? t(connectionState.subtitleKey) : null;
     const dotColor = connectionState.tone === 'connected'
         ? '#22c55e'
         : connectionState.tone === 'limited'
@@ -325,13 +331,13 @@ export default function DashboardHeader({
                         <h1 className="header-title m-0 flex items-center gap-1.5">
                         <IconChat size={18} />
                         {/* Mobile: show active tab title; Desktop: "Dashboard" */}
-                        <span className="header-title-desktop">Dashboard</span>
+                        <span className="header-title-desktop">{t('dashboard.header.title')}</span>
                         <span className="header-title-mobile">
-                            {activeConv ? getConversationTitle(activeConv) : 'Dashboard'}
+                            {activeConv ? getConversationTitle(activeConv) : t('dashboard.header.title')}
                         </span>
                         <span
-                            title={connectionState.title}
-                            aria-label={connectionState.title}
+                            title={connectionTitle}
+                            aria-label={connectionTitle}
                             className="header-title-status-dot"
                             style={{ background: dotColor, boxShadow: dotGlow }}
                         />
@@ -369,11 +375,11 @@ export default function DashboardHeader({
                         type="button"
                         onClick={onOpenDashboardGuide}
                         className="btn btn-secondary btn-sm hidden md:inline-flex items-center gap-1.5 dashboard-header-guide-button"
-                        title="Dashboard guide"
-                        aria-label="Open dashboard guide"
+                        title={t('dashboard.header.guide')}
+                        aria-label={t('dashboard.header.guideOpen')}
                     >
                         <span className="font-semibold leading-none">?</span>
-                        {guideNudgeVisible && <span>Guide</span>}
+                        {guideNudgeVisible && <span>{t('dashboard.header.guideShort')}</span>}
                     </button>
                 )}
                 {activeConv && (isCliActive || isAcpActive || !isAcpConv(activeConv)) && (
@@ -388,7 +394,7 @@ export default function DashboardHeader({
                             <button
                                 type="button"
                                 className="appearance-none bg-transparent border-0 p-0 cursor-pointer"
-                                title="Open git status"
+                                title={t('dashboard.header.openGitStatus')}
                                 onClick={() => onOpenGitDialog(activeConv.daemonId!, activeConv.workspacePath!)}
                             >
                                 <GitStatusPill git={activeConv.git} compact className="max-w-[8rem] shrink-0" />
@@ -401,10 +407,10 @@ export default function DashboardHeader({
                                 type="button"
                                 onClick={() => onOpenMeshGraph(activeConv)}
                                 className="btn btn-secondary btn-sm dashboard-header-mesh-button"
-                                title="Open live repo mesh graph"
+                                title={t('dashboard.header.openMeshGraph')}
                             >
                                 <IconMesh size={14} />
-                                <span className="hidden lg:inline">Mesh graph</span>
+                                <span className="hidden lg:inline">{t('dashboard.header.meshGraph')}</span>
                             </button>
                         )}
 
@@ -416,7 +422,7 @@ export default function DashboardHeader({
                                 <button
                                     onClick={() => onStopCli(activeConv)}
                                     className="btn btn-secondary btn-sm"
-                                    title={isAcpActive ? 'Stop ACP session' : 'Stop CLI process'}
+                                    title={isAcpActive ? t('dashboard.header.stopAcpSession') : t('dashboard.header.stopCliProcess')}
                                     style={{
                                         color: 'var(--status-error, #ef4444)',
                                         borderColor: 'color-mix(in srgb, var(--status-error, #ef4444) 25%, transparent)',
@@ -431,7 +437,7 @@ export default function DashboardHeader({
                             <button
                                 onClick={() => onOpenHistory(activeConv)}
                                 className="btn btn-secondary btn-sm"
-                                title="Chat History"
+                                title={t('dashboard.header.chatHistory')}
                             >
                                 <IconScroll size={14} />
                             </button>
@@ -440,7 +446,7 @@ export default function DashboardHeader({
                             <button
                                 onClick={onOpenRemote}
                                 className="btn btn-secondary btn-sm"
-                                title="Remote Control"
+                                title={t('dashboard.header.remoteControl')}
                             >
                                 <IconMonitor size={14} />
                             </button>
@@ -479,7 +485,7 @@ export default function DashboardHeader({
                             type="button"
                             onClick={() => onHiddenOpenChange(!hiddenOpen)}
                             className="btn btn-secondary btn-sm dashboard-header-hidden-button"
-                            title={`Hidden tabs${actionShortcuts?.toggleHiddenTabs ? ` (${actionShortcuts.toggleHiddenTabs})` : ''}. Drag a tab here to hide it.`}
+                            title={`${t('dashboard.hidden.title')}${actionShortcuts?.toggleHiddenTabs ? ` (${actionShortcuts.toggleHiddenTabs})` : ''}. ${t('dashboard.hidden.dragHint')}`}
                         >
                             <IconEyeOff size={16} />
                             {hiddenConversations.length > 0 && <span className={`dashboard-header-hidden-badge${hiddenSpawnAnim ? ' hidden-badge-pop' : ''}`}>{hiddenConversations.length}</span>}
@@ -488,7 +494,7 @@ export default function DashboardHeader({
                             <div className="dashboard-header-hidden-popover">
                                 <div className="dashboard-header-hidden-topbar">
                                     <div className="flex items-center gap-2 min-w-0">
-                                        <div className="dashboard-header-inbox-section-title mb-0">Hidden tabs</div>
+                                        <div className="dashboard-header-inbox-section-title mb-0">{t('dashboard.hidden.title')}</div>
                                         <ShortcutPill value={actionShortcuts?.toggleHiddenTabs} />
                                     </div>
                                     <div className="dashboard-header-hidden-actions">
@@ -498,7 +504,7 @@ export default function DashboardHeader({
                                                 className="dashboard-header-hidden-secondary"
                                                 onClick={onResetPanelsToMain}
                                             >
-                                                Reset panels
+                                                {t('dashboard.hidden.resetPanels')}
                                             </button>
                                         )}
                                         {hiddenConversations.length > 0 && onShowAllHidden && (
@@ -510,7 +516,7 @@ export default function DashboardHeader({
                                                     onHiddenOpenChange(false);
                                                 }}
                                             >
-                                                Restore all
+                                                {t('dashboard.hidden.restoreAll')}
                                             </button>
                                         )}
                                     </div>
@@ -522,7 +528,7 @@ export default function DashboardHeader({
                                         onClick={() => onHideConversation(activeConv)}
                                     >
                                         <span className="dashboard-header-hidden-current-leading">
-                                            <span className="dashboard-header-hidden-current-label">Hide current tab</span>
+                                            <span className="dashboard-header-hidden-current-label">{t('dashboard.hidden.hideCurrentTab')}</span>
                                             <ShortcutPill value={actionShortcuts?.hideCurrentTab} />
                                         </span>
                                         <span className="dashboard-header-hidden-current-title">{getConversationTitle(activeConv)}</span>
@@ -542,7 +548,7 @@ export default function DashboardHeader({
                                             >
                                                 <span className="dashboard-header-inbox-item-title">
                                                     {conversation.status === 'generating' && (
-                                                        <span className="tab-spinner dashboard-header-inbox-item-spinner" aria-label="generating" />
+                                                        <span className="tab-spinner dashboard-header-inbox-item-spinner" aria-label={t('dashboard.header.generating')} />
                                                     )}
                                                     {getConversationTitle(conversation)}
                                                 </span>
@@ -556,7 +562,7 @@ export default function DashboardHeader({
                                         ))}
                                     </div>
                                 ) : (
-                                    <div className="dashboard-header-inbox-empty">No hidden tabs.</div>
+                                    <div className="dashboard-header-inbox-empty">{t('dashboard.hidden.empty')}</div>
                                 )}
                             </div>
                         )}
@@ -565,7 +571,7 @@ export default function DashboardHeader({
                         type="button"
                         onClick={() => onInboxOpenChange(!inboxOpen)}
                         className="btn btn-secondary btn-sm dashboard-header-inbox-button"
-                        title="Activity inbox"
+                        title={t('dashboard.header.activityInbox')}
                     >
                         <IconBell size={16} />
                         {inboxCount > 0 && <span className="dashboard-header-inbox-badge">{inboxCount}</span>}
@@ -574,7 +580,7 @@ export default function DashboardHeader({
                         <div className="dashboard-header-inbox-popover">
                             {unreadNotifications.length > 0 && (
                                 <div className="dashboard-header-inbox-section">
-                                    <div className="dashboard-header-inbox-section-title">Unread</div>
+                                    <div className="dashboard-header-inbox-section-title">{t('dashboard.inbox.unread')}</div>
                                     {unreadNotifications.map(notification => (
                                         <DashboardHeaderNotificationItem
                                             key={notification.id}
@@ -590,7 +596,7 @@ export default function DashboardHeader({
                             )}
                             {readNotifications.length > 0 && (
                                 <div className="dashboard-header-inbox-section">
-                                    <div className="dashboard-header-inbox-section-title">Read</div>
+                                    <div className="dashboard-header-inbox-section-title">{t('dashboard.inbox.read')}</div>
                                     {readNotifications.map(notification => (
                                         <DashboardHeaderNotificationItem
                                             key={notification.id}
@@ -604,7 +610,7 @@ export default function DashboardHeader({
                                 </div>
                             )}
                             {notifications.length === 0 && (
-                                <div className="dashboard-header-inbox-empty">No pending activity.</div>
+                                <div className="dashboard-header-inbox-empty">{t('dashboard.inbox.empty')}</div>
                             )}
                         </div>
                     )}

@@ -10,6 +10,7 @@
  *   3. Web Push (server-side, via UserSession — not managed here)
  */
 
+import { i18next } from '../i18n/config'
 import { formatIdeType, getMachineDisplayName } from '../utils/daemon-utils'
 import { shouldNotify } from '../hooks/useNotificationPrefs'
 import { notify } from '../hooks/useBrowserNotifications'
@@ -259,8 +260,9 @@ class EventManager {
         let type: 'success' | 'info' | 'warning' = 'info'
 
         if (payload.event === 'agent:generating_completed') {
-            const dur = payload.duration ? ` (${payload.duration}s)` : ''
-            msg = `✅ ${ideLabel} agent task completed${dur}`
+            msg = payload.duration
+                ? `✅ ${i18next.t('event.taskCompletedWithDuration', { label: ideLabel, duration: payload.duration })}`
+                : `✅ ${i18next.t('event.taskCompleted', { label: ideLabel })}`
             type = 'success'
 
             // Sound (suppressed for muted conversations)
@@ -273,7 +275,7 @@ class EventManager {
         // ── agent:generating_started ──
         } else if (payload.event === 'agent:generating_started') {
         } else if (payload.event === 'agent:waiting_approval') {
-            msg = `⚡ ${ideLabel} approval needed`
+            msg = `⚡ ${i18next.t('event.approvalNeeded', { label: ideLabel })}`
             type = 'warning'
 
             // Inline action toast with modal buttons (skipped for muted conversations —
@@ -309,26 +311,28 @@ class EventManager {
 
         // ── monitor:no_progress (legacy event name: monitor:long_generating) ──
         } else if (payload.event === 'monitor:no_progress' || payload.event === 'monitor:long_generating') {
-            const dur = payload.elapsedSec ? ` (${Math.round(payload.elapsedSec / 60)}m)` : ''
-            msg = `⚠️ ${ideLabel} agent shows no progress${dur}`
+            const minutes = payload.elapsedSec ? Math.round(payload.elapsedSec / 60) : 0
+            msg = minutes
+                ? `⚠️ ${i18next.t('event.noProgressWithDuration', { label: ideLabel, minutes })}`
+                : `⚠️ ${i18next.t('event.noProgress', { label: ideLabel })}`
             type = 'warning'
 
             // Browser desktop notification (only if unfocused, and not muted)
             if (!conversationMuted && shouldNotify('browser') && !document.hasFocus()) {
                 notify(
-                    `⚠️ ${ideLabel} — No Progress`,
-                    `Agent has shown no progress for over ${dur.replace(/[()]/g, '')}`,
+                    `⚠️ ${i18next.t('event.noProgressTitle', { label: ideLabel })}`,
+                    i18next.t('event.noProgressBody', { duration: minutes ? `${minutes}m` : '' }),
                     `no-progress-${payload.targetSessionId || payload.daemonId || 'daemon'}`,
                 )
             }
 
         // ── team:view_request (incoming request to view YOUR session) ──
         } else if (payload.event === 'team:view_request') {
-            const requesterName = payload.requesterName || 'A team member'
+            const requesterName = payload.requesterName || i18next.t('event.someoneRequester')
             const requestId = payload.requestId
             const orgId = payload.orgId
 
-            msg = `👁️ ${requesterName} wants to view your session`
+            msg = `👁️ ${i18next.t('event.viewRequest', { requester: requesterName })}`
             type = 'warning'
 
             // Show actionable toast with Approve/Decline
@@ -350,21 +354,21 @@ class EventManager {
             // Browser notification if not focused
             if (shouldNotify('browser') && !document.hasFocus()) {
                 notify(
-                    `👁️ View Request`,
-                    `${requesterName} wants to view your session`,
+                    `👁️ ${i18next.t('event.viewRequestTitle')}`,
+                    i18next.t('event.viewRequest', { requester: requesterName }),
                     `view-request-${requestId}`,
                 )
             }
 
         // ── team:view_request_approved (your request was approved) ──
         } else if (payload.event === 'team:view_request_approved') {
-            msg = `✅ View request approved`
+            msg = `✅ ${i18next.t('event.viewRequestApproved')}`
             type = 'success'
 
         // ── team:view_request_rejected (your request was declined) ──
         } else if (payload.event === 'team:view_request_rejected') {
-            const targetName = payload.targetName || 'Team member'
-            msg = `❌ ${targetName} declined your view request`
+            const targetName = payload.targetName || i18next.t('event.someoneTarget')
+            msg = `❌ ${i18next.t('event.viewRequestDeclined', { target: targetName })}`
             type = 'warning'
         }
 

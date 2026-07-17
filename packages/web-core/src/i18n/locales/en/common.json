@@ -2,5 +2,91 @@
   "language": {
     "label": "Language",
     "select": "Select language"
+  },
+  "common": {
+    "cancel": "Cancel"
+  },
+  "connection": {
+    "disconnected": "Disconnected",
+    "connected": "Connected",
+    "connectedToDashboard": "Connected to dashboard",
+    "connectingToMachine": "Connecting to machine...",
+    "networkOffline": "Network offline",
+    "reconnecting": "Reconnecting",
+    "sessionExpired": "Session expired.",
+    "logInAgain": "Log in again",
+    "connectionFailed": "Connection failed — refresh the page or try again shortly.",
+    "reconnectNow": "Reconnect now"
+  },
+  "toast": {
+    "label": {
+      "success": "Done",
+      "warning": "Attention",
+      "info": "Update"
+    },
+    "dismiss": "Dismiss"
+  },
+  "notification": {
+    "actionNeeded": "Action needed",
+    "taskComplete": "Task complete",
+    "markRead": "Mark read",
+    "markUnread": "Mark unread",
+    "delete": "Delete"
+  },
+  "event": {
+    "taskCompleted": "{{label}} agent task completed",
+    "taskCompletedWithDuration": "{{label}} agent task completed ({{duration}}s)",
+    "approvalNeeded": "{{label}} approval needed",
+    "noProgress": "{{label}} agent shows no progress",
+    "noProgressWithDuration": "{{label}} agent shows no progress ({{minutes}}m)",
+    "noProgressTitle": "{{label}} — No Progress",
+    "noProgressBody": "Agent has shown no progress for over {{duration}}",
+    "viewRequest": "{{requester}} wants to view your session",
+    "viewRequestTitle": "View Request",
+    "viewRequestApproved": "View request approved",
+    "viewRequestDeclined": "{{target}} declined your view request",
+    "someoneRequester": "A team member",
+    "someoneTarget": "Team member"
+  },
+  "dashboard": {
+    "header": {
+      "title": "Dashboard",
+      "guide": "Dashboard guide",
+      "guideOpen": "Open dashboard guide",
+      "guideShort": "Guide",
+      "openGitStatus": "Open git status",
+      "openMeshGraph": "Open live repo mesh graph",
+      "meshGraph": "Mesh graph",
+      "stopAcpSession": "Stop ACP session",
+      "stopCliProcess": "Stop CLI process",
+      "chatHistory": "Chat History",
+      "remoteControl": "Remote Control",
+      "generating": "generating",
+      "activityInbox": "Activity inbox"
+    },
+    "hidden": {
+      "title": "Hidden tabs",
+      "dragHint": "Drag a tab here to hide it.",
+      "resetPanels": "Reset panels",
+      "restoreAll": "Restore all",
+      "hideCurrentTab": "Hide current tab",
+      "empty": "No hidden tabs."
+    },
+    "inbox": {
+      "unread": "Unread",
+      "read": "Read",
+      "empty": "No pending activity."
+    }
+  },
+  "cliStop": {
+    "title": "Stop {{agent}}?",
+    "gracefulDescription": "Stop asks the provider to exit cleanly when supported. Force Stop ends the runtime immediately.",
+    "forceOnlyDescription": "This provider does not support graceful stop. Force Stop will end the runtime immediately.",
+    "stop": "Stop",
+    "forceStop": "Force Stop"
+  },
+  "approval": {
+    "processing": "PROCESSING...",
+    "actionRequired": "ACTION REQUIRED"
   }
 }

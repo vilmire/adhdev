@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 /**
  * ConnectionBanner — WS connection status banner
@@ -38,6 +39,7 @@ export default function ConnectionBanner({
     reconnectDelayMs = DEFAULT_RECONNECT_BANNER_DELAY_MS,
     reconnectActionDelayMs = DEFAULT_RECONNECT_ACTION_DELAY_MS,
 }: ConnectionBannerProps) {
+    const { t } = useTranslation();
     const reconnectLikeStatus = isReconnectLikeStatus(wsStatus);
     const [showReconnectState, setShowReconnectState] = useState(() => !reconnectLikeStatus || reconnectDelayMs <= 0);
     const [showReconnectAction, setShowReconnectAction] = useState(() => !reconnectLikeStatus || reconnectActionDelayMs <= 0);
@@ -142,16 +144,16 @@ export default function ConnectionBanner({
                             }}
                         />
                         <span className="min-w-0 text-center whitespace-nowrap">
-                            {wsStatus === 'offline' && 'Network offline'}
-                            {wsStatus === 'disconnected' && 'Reconnecting'}
-                            {wsStatus === 'reconnecting' && 'Reconnecting'}
+                            {wsStatus === 'offline' && t('connection.networkOffline')}
+                            {wsStatus === 'disconnected' && t('connection.reconnecting')}
+                            {wsStatus === 'reconnecting' && t('connection.reconnecting')}
                             {wsStatus === 'auth_failed' && (
                                 loginUrl ? (
                                     <>
-                                        Session expired.{' '}
-                                        <a href={loginUrl} className="text-inherit underline">Log in again</a>
+                                        {t('connection.sessionExpired')}{' '}
+                                        <a href={loginUrl} className="text-inherit underline">{t('connection.logInAgain')}</a>
                                     </>
-                                ) : 'Connection failed — refresh the page or try again shortly.'
+                                ) : t('connection.connectionFailed')
                             )}
                         </span>
                         {showManualReconnectAction && (
@@ -161,7 +163,7 @@ export default function ConnectionBanner({
                                 onClick={() => onReconnect?.()}
                                 disabled={wsStatus === 'offline'}
                             >
-                                Reconnect now
+                                {t('connection.reconnectNow')}
                             </button>
                         )}
                     </div>
@@ -171,7 +173,7 @@ export default function ConnectionBanner({
                 <div className={overlayClassName} style={overlayStyle}>
                     <div className="pointer-events-none rounded-2xl border px-4 py-2 text-xs font-semibold flex items-center gap-2 justify-center bg-gradient-to-r from-green-500/[0.12] to-green-500/[0.04] text-green-400 border-green-500/15 shadow-[0_18px_40px_rgba(2,6,23,0.2)] backdrop-blur-xl animate-[fadeIn_0.3s_ease]">
                         <img src="/otter-logo.png" alt="" className="w-4 h-4" />
-                        Connected
+                        {t('connection.connected')}
                     </div>
                 </div>
             )}

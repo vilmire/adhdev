@@ -4,6 +4,7 @@
  * Buttons are disabled after click to prevent duplicate submissions.
  */
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { ActiveConversation } from './types';
 import { getConversationViewStates } from './DashboardMobileChatShared';
 import { IconWarning } from '../Icons';
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
+    const { t } = useTranslation();
     const [pendingButton, setPendingButton] = useState<string | null>(null);
 
     // Reset pending on modal status change (approval complete or new approval)
@@ -48,7 +50,7 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
             )}
             <div className="flex justify-between items-center">
                 <div className="font-black text-xs flex items-center gap-2">
-                    <IconWarning size={14} /> {pendingButton ? 'PROCESSING...' : 'ACTION REQUIRED'}
+                    <IconWarning size={14} /> {pendingButton ? t('approval.processing') : t('approval.actionRequired')}
                 </div>
                 <div className="flex gap-2 flex-wrap">
                     {activeConv.modalButtons.map((btnText, idx) => {
