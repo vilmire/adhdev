@@ -15,6 +15,7 @@ import {
     normalizeStandaloneFontPreferences,
 } from './standalone-font-preferences'
 import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, Button, Input } from '@adhdev/web-core'
+import { useTranslation } from 'react-i18next'
 import StandaloneLayout from './StandaloneLayout'
 import StandaloneAbout from './StandaloneAbout'
 import StandaloneSettings from './StandaloneSettings'
@@ -33,6 +34,7 @@ const standaloneApiClient = createApiClient({
 })
 
 function StandaloneAuthGate({ children }: { children: ReactNode }) {
+    const { t } = useTranslation('common')
     const [status, setStatus] = useState<StandaloneAuthSessionStatus | null>(null)
     const [loading, setLoading] = useState(true)
     const [password, setPassword] = useState('')
@@ -101,11 +103,11 @@ function StandaloneAuthGate({ children }: { children: ReactNode }) {
     }
 
     if (loading) {
-        return <div className="min-h-screen flex items-center justify-center text-sm text-text-muted">Loading standalone dashboard…</div>
+        return <div className="min-h-screen flex items-center justify-center text-sm text-text-muted">{t('standalone.auth.loading')}</div>
     }
 
     if (!status) {
-        return <div className="min-h-screen flex items-center justify-center text-sm text-red-400">Failed to load standalone auth status: {error || 'unknown error'}</div>
+        return <div className="min-h-screen flex items-center justify-center text-sm text-red-400">{t('standalone.auth.loadError', { error: error || 'unknown error' })}</div>
     }
 
     if (!status.required || status.authenticated) {
@@ -116,11 +118,11 @@ function StandaloneAuthGate({ children }: { children: ReactNode }) {
         <div className="min-h-screen bg-bg-base flex items-center justify-center px-4">
             <div className="w-full max-w-md rounded-2xl border border-border-subtle bg-bg-panel p-6 shadow-2xl flex flex-col gap-4">
                 <div>
-                    <div className="text-lg font-semibold text-text-primary">Standalone sign-in</div>
+                    <div className="text-lg font-semibold text-text-primary">{t('standalone.auth.signInTitle')}</div>
                     <p className="text-sm text-text-muted mt-1">
                         {status.hasPasswordAuth
-                            ? 'This self-hosted dashboard is protected by a local password.'
-                            : 'This standalone server is protected by a token. Open it using the tokenized URL or set a password from an already-authenticated session.'}
+                            ? t('standalone.auth.passwordProtected')
+                            : t('standalone.auth.tokenProtected')}
                     </p>
                 </div>
                 {status.hasPasswordAuth ? (
@@ -129,7 +131,7 @@ function StandaloneAuthGate({ children }: { children: ReactNode }) {
                             type="password"
                             value={password}
                             onChange={e => setPassword(e.target.value)}
-                            placeholder="Enter standalone password"
+                            placeholder={t('standalone.auth.passwordPlaceholder')}
                             autoFocus
                         />
                         <Button
@@ -138,12 +140,12 @@ function StandaloneAuthGate({ children }: { children: ReactNode }) {
                             disabled={submitting || !password}
                             className="justify-center"
                         >
-                            {submitting ? 'Signing in…' : 'Unlock dashboard'}
+                            {submitting ? t('standalone.auth.signingIn') : t('standalone.auth.unlock')}
                         </Button>
                     </form>
                 ) : (
                     <AlertBanner variant="warning">
-                        Password login is not enabled on this server.
+                        {t('standalone.auth.noPasswordEnabled')}
                     </AlertBanner>
                 )}
                 {error && (
@@ -159,11 +161,12 @@ function StandaloneAuthGate({ children }: { children: ReactNode }) {
  * Redirect /machines and /machine to the single machine's detail page.
  */
 function SingleMachineRedirect() {
+    const { t } = useTranslation('common')
     const { ides, initialLoaded } = useBaseDaemons()
     // In standalone, redirect only after the initial status payload has arrived.
     // Otherwise `/machines` briefly bounces back to `/dashboard` before daemon data exists.
     if (!initialLoaded) {
-        return <div className="p-10 text-center text-text-muted">⏳ Loading machine...</div>
+        return <div className="p-10 text-center text-text-muted">{t('standalone.machine.loading')}</div>
     }
 
     const daemonEntry = ides.find((d: any) => d.daemonMode || d.type === 'adhdev-daemon')
@@ -204,6 +207,7 @@ function OnboardingGate() {
 
 // Global interactive prompt dialog — shown whenever any session has waiting_choice status
 function InteractivePromptGate() {
+    const { t } = useTranslation('common')
     const { ides } = useBaseDaemons()
     // Find the first session with an active interactive prompt
     const activeSessionId = useMemo(() => {
@@ -224,7 +228,7 @@ function InteractivePromptGate() {
                     onClick={reopen}
                     className="fixed bottom-4 right-4 z-[79] btn btn-primary btn-sm shadow-lg"
                 >
-                    Awaiting your input ↑
+                    {t('standalone.machine.awaitingInput')}
                 </button>
             )}
             <InteractivePromptModal

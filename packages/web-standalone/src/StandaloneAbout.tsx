@@ -4,6 +4,7 @@
  * Shows what the standalone version includes, what Cloud adds,
  * and keeps the same section rhythm as the rest of the app.
  */
+import { useTranslation } from 'react-i18next'
 import {
     AppPage,
     BUILTIN_CLI_AGENTS,
@@ -63,11 +64,12 @@ const COMPARISON = [
 ]
 
 export default function StandaloneAbout() {
+    const { t } = useTranslation('common')
     return (
         <AppPage
             icon={<IconInfo className="text-text-primary" />}
-            title="About"
-            subtitle="Self-hosted ADHDev overview, built-in surfaces, and what changes in Cloud"
+            title={t('standalone.about.title')}
+            subtitle={t('standalone.about.subtitle')}
             widthClassName="max-w-5xl"
             actions={(
                 <div className="px-3 py-1 text-[11px] font-semibold tracking-wide rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
@@ -78,21 +80,21 @@ export default function StandaloneAbout() {
             <Section>
                 <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                     <div className="max-w-2xl">
-                        <div className="text-[11px] font-semibold tracking-[0.18em] uppercase text-emerald-400 mb-2">Self-hosted edition</div>
-                        <h2 className="text-2xl font-semibold tracking-tight text-text-primary mb-2">Keep the same dashboard experience, with the runtime fully on-device.</h2>
+                        <div className="text-[11px] font-semibold tracking-[0.18em] uppercase text-emerald-400 mb-2">{t('standalone.about.selfHostedEdition')}</div>
+                        <h2 className="text-2xl font-semibold tracking-tight text-text-primary mb-2">{t('standalone.about.headline')}</h2>
                         <p className="text-sm text-text-muted leading-relaxed">
-                            Standalone keeps the browser, daemon, screenshots, and control path on your own machine. It is the same core product shape as cloud, just without the remote networking and team layers.
+                            {t('standalone.about.description')}
                         </p>
                     </div>
                     <div className="grid gap-2 min-w-[220px]">
-                        <a href="https://docs.adhf.dev" target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm inline-flex justify-center no-underline">Docs ↗</a>
-                        <a href="https://github.com/vilmire/adhdev" target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm inline-flex justify-center no-underline">GitHub ↗</a>
-                        <a href="https://adhf.dev" target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm inline-flex justify-center no-underline">Try Cloud ↗</a>
+                        <a href="https://docs.adhf.dev" target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm inline-flex justify-center no-underline">{t('standalone.about.docs')}</a>
+                        <a href="https://github.com/vilmire/adhdev" target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm inline-flex justify-center no-underline">{t('standalone.about.github')}</a>
+                        <a href="https://adhf.dev" target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm inline-flex justify-center no-underline">{t('standalone.about.tryCloud')}</a>
                     </div>
                 </div>
             </Section>
 
-            <Section title="Included in standalone" description="The local-first feature set available without the cloud control plane.">
+            <Section title={t('standalone.about.includedSection')} description={t('standalone.about.includedDescription')}>
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {SELFHOST_FEATURES.map(feature => (
                         <div key={feature.title} className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-4 transition-colors hover:border-border-default">
@@ -108,7 +110,7 @@ export default function StandaloneAbout() {
                 </div>
             </Section>
 
-            <Section title="Built-in inventory" description="Bundled editors and agent surfaces exposed in the standalone dashboard. These lists describe inventory, not verified support.">
+            <Section title={t('standalone.about.inventorySection')} description={t('standalone.about.inventoryDescription')}>
                 <div className="grid gap-4 md:grid-cols-3">
                     {[
                         { label: 'IDEs', items: BUILTIN_IDES.map(item => `${item.icon} ${item.name}`) },
@@ -129,7 +131,7 @@ export default function StandaloneAbout() {
                 </div>
             </Section>
 
-            <Section title="Cloud-only extras" description="Capabilities that need the hosted control plane or team infrastructure.">
+            <Section title={t('standalone.about.cloudExtrasSection')} description={t('standalone.about.cloudExtrasDescription')}>
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {CLOUD_EXTRAS.map(feature => (
                         <div key={feature.title} className="rounded-xl border border-accent-primary/20 bg-accent-primary/5 px-4 py-4">
@@ -145,14 +147,14 @@ export default function StandaloneAbout() {
                 </div>
             </Section>
 
-            <Section title="Self-hosted vs Cloud" description="The product split at a glance.">
+            <Section title={t('standalone.about.comparisonSection')} description={t('standalone.about.comparisonDescription')}>
                 <div className="overflow-x-auto rounded-xl border border-border-subtle">
                     <table className="w-full text-[13px]">
                         <thead>
                             <tr className="bg-bg-secondary">
-                                <th className="text-left px-4 py-3 font-semibold text-text-muted text-[11px] uppercase tracking-wider">Feature</th>
-                                <th className="text-center px-4 py-3 font-semibold text-text-muted text-[11px] uppercase tracking-wider w-[110px]">Selfhost</th>
-                                <th className="text-center px-4 py-3 font-semibold text-accent-primary text-[11px] uppercase tracking-wider w-[110px]">Cloud</th>
+                                <th className="text-left px-4 py-3 font-semibold text-text-muted text-[11px] uppercase tracking-wider">{t('standalone.about.featureHeader')}</th>
+                                <th className="text-center px-4 py-3 font-semibold text-text-muted text-[11px] uppercase tracking-wider w-[110px]">{t('standalone.about.selfhostHeader')}</th>
+                                <th className="text-center px-4 py-3 font-semibold text-accent-primary text-[11px] uppercase tracking-wider w-[110px]">{t('standalone.about.cloudHeader')}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -170,12 +172,12 @@ export default function StandaloneAbout() {
 
             <EmptyState
                 icon={<img src="/otter-logo.png" alt="" className="mx-auto h-12 w-12 opacity-80" />}
-                title="Cloud is optional, not required"
-                description="You can stay fully local in standalone, and move to cloud later without changing how you use the dashboard."
+                title={t('standalone.about.cloudOptional')}
+                description={t('standalone.about.cloudOptionalDescription')}
                 action={(
                     <div className="flex flex-wrap justify-center gap-3">
-                        <a href="https://adhf.dev" target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm no-underline">Compare Cloud ↗</a>
-                        <a href="https://discord.gg/WJD3tCfBzk" target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm no-underline"><IconDiscord size={14} className="mr-1" />Discord ↗</a>
+                        <a href="https://adhf.dev" target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm no-underline">{t('standalone.about.compareCloud')}</a>
+                        <a href="https://discord.gg/WJD3tCfBzk" target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm no-underline"><IconDiscord size={14} className="mr-1" />{t('standalone.about.discord')}</a>
                     </div>
                 )}
             />

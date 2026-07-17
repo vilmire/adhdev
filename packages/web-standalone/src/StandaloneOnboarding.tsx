@@ -14,6 +14,7 @@
  * the curl test surface uses).
  */
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { AlertBanner, Button, Dialog } from '@adhdev/web-core'
 
 const DEFAULTS = ['claude-cli', 'codex-cli', 'antigravity-cli', 'hermes-cli']
@@ -56,6 +57,7 @@ const CATEGORY_GROUP_LABEL: Record<string, string> = {
 }
 
 export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingProps) {
+    const { t } = useTranslation('common')
     const [providers, setProviders] = useState<RegistryProvider[]>([])
     const [selected, setSelected] = useState<Set<string>>(new Set(DEFAULTS))
     const [loading, setLoading] = useState(true)
@@ -149,11 +151,11 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
             onClose={handleClose}
             size="lg"
             contentClassName="max-w-2xl"
-            title="Welcome to ADHDev"
+            title={t('standalone.onboarding.title')}
             footer={(
                 <div className="flex w-full items-center gap-2">
                     <div className="text-[11px] text-text-muted">
-                        {selected.size} provider{selected.size !== 1 ? 's' : ''} selected
+                        {t(selected.size !== 1 ? 'standalone.onboarding.selectedCount_other' : 'standalone.onboarding.selectedCount_one', { count: selected.size })}
                     </div>
                     <div className="ml-auto flex gap-2">
                         <Button
@@ -161,7 +163,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                             size="sm"
                             onClick={handleSkip}
                             disabled={installing}
-                        >Skip</Button>
+                        >{t('standalone.onboarding.skip')}</Button>
                         <Button
                             variant="primary"
                             size="sm"
@@ -176,7 +178,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                             }}
                             disabled={installing || (!results && selected.size === 0)}
                         >
-                            {installing ? 'Installing…' : results ? 'Done' : `Install ${selected.size}`}
+                            {installing ? t('standalone.onboarding.installing') : results ? t('standalone.onboarding.done') : t('standalone.onboarding.installCount', { count: selected.size })}
                         </Button>
                     </div>
                 </div>
@@ -185,27 +187,25 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
             <div className="flex flex-col gap-5">
                 {/* Intro */}
                 <div className="text-[12px] text-text-muted">
-                    Pick the providers you want to use. Defaults to the four officially supported CLI
-                    providers; you can install IDE, ACP, or extension providers from the tabs below or
-                    later from <span className="text-text-secondary">Burrow → Providers → Add provider</span>.
+                    {t('standalone.onboarding.intro')}
                 </div>
 
                 {/* Category tabs */}
                 {!loading && !error && providers.length > 0 && (
                     <div className="flex gap-1 flex-wrap border-b border-border-subtle pb-2">
-                        {CATEGORY_TABS.map(t => {
-                            const count = t.key === 'all'
+                        {CATEGORY_TABS.map(tab => {
+                            const count = tab.key === 'all'
                                 ? providers.length
-                                : providers.filter(p => p.category === t.key).length
-                            if (count === 0 && t.key !== 'all') return null
+                                : providers.filter(p => p.category === tab.key).length
+                            if (count === 0 && tab.key !== 'all') return null
                             return (
                                 <button
-                                    key={t.key}
-                                    onClick={() => setFilter(t.key)}
+                                    key={tab.key}
+                                    onClick={() => setFilter(tab.key)}
                                     className={`machine-btn text-[10px] px-2 py-0.5 ${
-                                        filter === t.key ? 'bg-accent-primary/12 border-accent-primary/40 text-accent-primary' : ''
+                                        filter === tab.key ? 'bg-accent-primary/12 border-accent-primary/40 text-accent-primary' : ''
                                     }`}
-                                >{t.label} <span className="opacity-60">({count})</span></button>
+                                >{tab.label} <span className="opacity-60">({count})</span></button>
                             )
                         })}
                     </div>
@@ -213,13 +213,13 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
 
                 {/* Catalog */}
                 {loading && (
-                    <div className="text-text-muted text-[12px] py-8 text-center">Loading registry…</div>
+                    <div className="text-text-muted text-[12px] py-8 text-center">{t('standalone.onboarding.loadingRegistry')}</div>
                 )}
                 {!loading && error && (
-                    <AlertBanner variant="error">Failed to load registry: {error}</AlertBanner>
+                    <AlertBanner variant="error">{t('standalone.onboarding.loadError', { error })}</AlertBanner>
                 )}
                 {!loading && !error && visible.length === 0 && (
-                    <div className="text-text-muted text-[12px] py-8 text-center">No providers in this category.</div>
+                    <div className="text-text-muted text-[12px] py-8 text-center">{t('standalone.onboarding.noProviders')}</div>
                 )}
                 {!loading && !error && visible.length > 0 && (
                     <div className="flex flex-col gap-4">
@@ -259,7 +259,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                                                 </div>
                                                 {result && (
                                                     <span className={`text-[10px] font-semibold ${result.ok ? 'text-status-online' : 'text-status-error'}`}>
-                                                        {result.ok ? '✓ installed' : `✗ ${result.error ?? 'failed'}`}
+                                                        {result.ok ? t('standalone.onboarding.installed') : t('standalone.onboarding.installFailed', { error: result.error ?? 'failed' })}
                                                     </span>
                                                 )}
                                             </label>

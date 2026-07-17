@@ -5,6 +5,7 @@
  * ConnectedMachinesSection) plus standalone-specific sections.
  */
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
     AppPage,
     Section,
@@ -39,6 +40,7 @@ import {
 declare const __APP_VERSION__: string
 
 export default function StandaloneSettings() {
+    const { t } = useTranslation('common')
     const { ides } = useBaseDaemons()
 
     const daemonEntry: any = ides.find((d: any) => d.type === 'adhdev-daemon')
@@ -133,7 +135,7 @@ export default function StandaloneSettings() {
             setFontPreferences(savedFonts)
             applyStandaloneFontPreferences(savedFonts)
             cacheStandaloneFontPreferences(savedFonts)
-            setFontNotice('Standalone chat fonts saved for this self-hosted dashboard.')
+            setFontNotice(t('standalone.settings.fontsSaved'))
         } catch (err) {
             setFontError(err instanceof Error ? err.message : String(err))
         } finally {
@@ -173,8 +175,8 @@ export default function StandaloneSettings() {
             setPreferences(data)
             setBindHostInput(data.standaloneBindHost)
             setAuthNotice(data.standaloneBindHost === '0.0.0.0'
-                ? 'Default standalone network mode set to all interfaces (0.0.0.0). Restart standalone to apply it.'
-                : 'Default standalone network mode set to localhost only. Restart standalone to apply it.')
+                ? t('standalone.settings.networkSavedAll')
+                : t('standalone.settings.networkSavedLocal'))
         } catch (err) {
             setAuthError(err instanceof Error ? err.message : String(err))
         } finally {
@@ -186,11 +188,11 @@ export default function StandaloneSettings() {
         setAuthError('')
         setAuthNotice('')
         if (newPassword.trim().length < 4) {
-            setAuthError('Password must be at least 4 characters.')
+            setAuthError(t('standalone.settings.passwordTooShort'))
             return
         }
         if (newPassword !== confirmPassword) {
-            setAuthError('New password and confirmation do not match.')
+            setAuthError(t('standalone.settings.passwordMismatch'))
             return
         }
         setAuthSaving(true)
@@ -212,7 +214,7 @@ export default function StandaloneSettings() {
             setCurrentPassword('')
             setNewPassword('')
             setConfirmPassword('')
-            setAuthNotice(authStatus?.hasPasswordAuth ? 'Standalone password updated.' : 'Standalone password enabled.')
+            setAuthNotice(authStatus?.hasPasswordAuth ? t('standalone.settings.passwordUpdated') : t('standalone.settings.passwordEnabled'))
             stripStandaloneTokenFromLocation()
         } catch (err) {
             setAuthError(err instanceof Error ? err.message : String(err))
@@ -243,7 +245,7 @@ export default function StandaloneSettings() {
             setCurrentPassword('')
             setNewPassword('')
             setConfirmPassword('')
-            setAuthNotice('Standalone password disabled.')
+            setAuthNotice(t('standalone.settings.passwordDisabled'))
         } catch (err) {
             setAuthError(err instanceof Error ? err.message : String(err))
         } finally {
@@ -254,44 +256,44 @@ export default function StandaloneSettings() {
     return (
         <AppPage
             icon={<IconSettings className="text-text-primary" />}
-            title="Settings"
-            subtitle="Local daemon configuration, appearance, and on-device preferences"
+            title={t('standalone.settings.title')}
+            subtitle={t('standalone.settings.subtitle')}
             widthClassName="max-w-5xl"
         >
             <AlertBanner variant="info">
-                Standalone settings stay on this machine. The browser only talks to your local daemon over localhost or your self-hosted LAN endpoint.
+                {t('standalone.settings.infoNotice')}
             </AlertBanner>
 
             {authStatus?.publicHostWarning && (
                 <AlertBanner variant="warning">
-                    This standalone server is currently bound to 0.0.0.0 without auth. Anyone on your LAN can open the dashboard until you set a password or token.
+                    {t('standalone.settings.publicHostWarning')}
                 </AlertBanner>
             )}
 
             {/* ═══ Daemon Info ═══ */}
-            <Section title="Daemon" description="Connection health and local endpoints for the self-hosted runtime.">
+            <Section title={t('standalone.settings.daemonSection')} description={t('standalone.settings.daemonDescription')}>
                 <div className="grid grid-cols-[100px_1fr] gap-x-4 gap-y-2.5 text-sm">
-                    <span className="text-text-muted">Version</span>
+                    <span className="text-text-muted">{t('standalone.settings.versionLabel')}</span>
                     <span className="font-mono text-xs">v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?'}</span>
-                    <span className="text-text-muted">Status</span>
+                    <span className="text-text-muted">{t('standalone.settings.statusLabel')}</span>
                     <span className={daemonEntry ? 'text-green-400' : 'text-yellow-400'}>
-                        {daemonEntry ? '● Running' : '○ Not connected'}
+                        {daemonEntry ? t('standalone.settings.statusRunning') : t('standalone.settings.statusNotConnected')}
                     </span>
-                    <span className="text-text-muted">Current bind</span>
+                    <span className="text-text-muted">{t('standalone.settings.currentBindLabel')}</span>
                     <span className="font-mono text-xs">{preferences?.currentBindHost || authStatus?.boundHost || '127.0.0.1'}</span>
-                    <span className="text-text-muted">Default bind</span>
+                    <span className="text-text-muted">{t('standalone.settings.defaultBindLabel')}</span>
                     <span className="font-mono text-xs">{preferences?.standaloneBindHost || '127.0.0.1'}</span>
-                    <span className="text-text-muted">Auth</span>
+                    <span className="text-text-muted">{t('standalone.settings.authLabel')}</span>
                     <span className="text-xs">
-                        {authStatus?.hasPasswordAuth ? 'Password enabled' : authStatus?.hasTokenAuth ? 'Token enabled' : 'No auth configured'}
+                        {authStatus?.hasPasswordAuth ? t('standalone.settings.authPassword') : authStatus?.hasTokenAuth ? t('standalone.settings.authToken') : t('standalone.settings.authNone')}
                     </span>
                 </div>
             </Section>
 
-            <Section title="Network Access" description="Choose the default bind host for future standalone launches. CLI --host still overrides this for one-off runs.">
+            <Section title={t('standalone.settings.networkSection')} description={t('standalone.settings.networkDescription')}>
                 <div className="flex flex-col gap-3">
                     <div className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3 text-sm text-text-muted">
-                        Use localhost-only if this dashboard should stay on the current machine. Use all interfaces if you usually access it from phones, tablets, or other devices on your LAN. If you expose that machine more broadly, set a password or token.
+                        {t('standalone.settings.networkHint')}
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
                         <label className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3 text-sm flex gap-3 items-start cursor-pointer">
@@ -302,8 +304,8 @@ export default function StandaloneSettings() {
                                 onChange={() => setBindHostInput('127.0.0.1')}
                             />
                             <span>
-                                <span className="block font-medium text-text-primary">Localhost only</span>
-                                <span className="block text-text-muted text-xs mt-1">Bind to 127.0.0.1. Best when only this machine should open the dashboard.</span>
+                                <span className="block font-medium text-text-primary">{t('standalone.settings.localhostLabel')}</span>
+                                <span className="block text-text-muted text-xs mt-1">{t('standalone.settings.localhostHint')}</span>
                             </span>
                         </label>
                         <label className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3 text-sm flex gap-3 items-start cursor-pointer">
@@ -314,8 +316,8 @@ export default function StandaloneSettings() {
                                 onChange={() => setBindHostInput('0.0.0.0')}
                             />
                             <span>
-                                <span className="block font-medium text-text-primary">All interfaces</span>
-                                <span className="block text-text-muted text-xs mt-1">Bind to 0.0.0.0. Good for LAN access, reverse proxies, or other external entry points.</span>
+                                <span className="block font-medium text-text-primary">{t('standalone.settings.allInterfacesLabel')}</span>
+                                <span className="block text-text-muted text-xs mt-1">{t('standalone.settings.allInterfacesHint')}</span>
                             </span>
                         </label>
                     </div>
@@ -327,39 +329,39 @@ export default function StandaloneSettings() {
                             onClick={() => { void handleSaveBindHost() }}
                             disabled={authSaving}
                         >
-                            {authSaving ? 'Saving…' : 'Save default network mode'}
+                            {authSaving ? t('standalone.settings.saving') : t('standalone.settings.saveNetworkMode')}
                         </Button>
-                        <span className="text-xs text-text-muted">Applies on next standalone restart. Current run stays bound to {preferences?.currentBindHost || authStatus?.boundHost || '127.0.0.1'}.</span>
+                        <span className="text-xs text-text-muted">{t('standalone.settings.networkRestartHint', { host: preferences?.currentBindHost || authStatus?.boundHost || '127.0.0.1' })}</span>
                     </div>
                 </div>
             </Section>
 
-            <Section title="Dashboard Security" description="Self-hosted-only password protection for browsers using this standalone dashboard.">
+            <Section title={t('standalone.settings.securitySection')} description={t('standalone.settings.securityDescription')}>
                 <div className="flex flex-col gap-3">
                     <div className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3 text-sm text-text-muted">
                         {authStatus?.hasPasswordAuth
-                            ? 'A local password is currently required for browser access. Existing sessions are rotated when you change it.'
-                            : 'No standalone password is set yet. If you usually run with --host, setting one is strongly recommended.'}
+                            ? t('standalone.settings.passwordSet')
+                            : t('standalone.settings.passwordNotSet')}
                     </div>
                     {authError && <AlertBanner variant="error">{authError}</AlertBanner>}
                     {authNotice && <AlertBanner variant="success">{authNotice}</AlertBanner>}
                     <div className="grid gap-3 md:grid-cols-2">
                         <Input
                             type="password"
-                            placeholder={authStatus?.hasPasswordAuth ? 'Current password' : 'Current password (not needed for first setup)'}
+                            placeholder={authStatus?.hasPasswordAuth ? t('standalone.settings.currentPasswordPlaceholder') : t('standalone.settings.currentPasswordFirstTimePlaceholder')}
                             value={currentPassword}
                             onChange={e => setCurrentPassword(e.target.value)}
                         />
                         <Input
                             type="password"
-                            placeholder={authStatus?.hasPasswordAuth ? 'New password' : 'New standalone password'}
+                            placeholder={authStatus?.hasPasswordAuth ? t('standalone.settings.newPasswordPlaceholder') : t('standalone.settings.newPasswordFirstTimePlaceholder')}
                             value={newPassword}
                             onChange={e => setNewPassword(e.target.value)}
                         />
                         <Input
                             type="password"
                             className="md:col-span-2"
-                            placeholder="Confirm new password"
+                            placeholder={t('standalone.settings.confirmPasswordPlaceholder')}
                             value={confirmPassword}
                             onChange={e => setConfirmPassword(e.target.value)}
                         />
@@ -372,7 +374,7 @@ export default function StandaloneSettings() {
                             onClick={() => { void handleSavePassword() }}
                             disabled={authSaving}
                         >
-                            {authSaving ? 'Saving…' : authStatus?.hasPasswordAuth ? 'Update password' : 'Enable password'}
+                            {authSaving ? t('standalone.settings.saving') : authStatus?.hasPasswordAuth ? t('standalone.settings.updatePassword') : t('standalone.settings.enablePassword')}
                         </Button>
                         {authStatus?.hasPasswordAuth && (
                             <Button
@@ -382,7 +384,7 @@ export default function StandaloneSettings() {
                                 onClick={() => { void handleClearPassword() }}
                                 disabled={authSaving}
                             >
-                                Disable password
+                                {t('standalone.settings.disablePassword')}
                             </Button>
                         )}
                     </div>
@@ -390,9 +392,9 @@ export default function StandaloneSettings() {
             </Section>
 
             {/* ═══ Detected IDEs ═══ */}
-            <Section title="Detected IDEs" description="Editors discovered by the local daemon on this machine.">
+            <Section title={t('standalone.settings.detectedIdesSection')} description={t('standalone.settings.detectedIdesDescription')}>
                 {detectedIdes.length === 0 ? (
-                    <p className="text-sm text-text-muted">No IDEs detected. Start an IDE to see it here.</p>
+                    <p className="text-sm text-text-muted">{t('standalone.settings.noIdesDetected')}</p>
                 ) : (
                     <div className="flex flex-col gap-1.5">
                         {detectedIdes.map((ide) => (
@@ -409,22 +411,22 @@ export default function StandaloneSettings() {
             </Section>
 
             {/* ═══ Connected Machine ═══ */}
-            <Section title="Machine" description="The local burrow exposed by your standalone daemon.">
+            <Section title={t('standalone.settings.machineSection')} description={t('standalone.settings.machineDescription')}>
                 <ConnectedMachinesSection
                     ides={ides}
-                    emptyMessage="Daemon not connected. Run 'adhdev-standalone' to start."
+                    emptyMessage={t('standalone.settings.daemonNotConnected')}
                 />
             </Section>
 
             {/* ═══ Theme ═══ */}
-            <Section title="Appearance" description="Match the rest of the dashboard with a single place for mode, theme, and standalone-only font overrides.">
+            <Section title={t('standalone.settings.appearanceSection')} description={t('standalone.settings.appearanceDescription')}>
                 <AppearanceSettingsSection
-                    themeDescription="Choose a preset or create a custom surface, accent, and chat palette for the standalone UI."
-                    mobileDescription="Choose whether phones open the dashboard as a chat app first or in the full workspace layout."
+                    themeDescription={t('standalone.settings.themeDescription')}
+                    mobileDescription={t('standalone.settings.mobileDescription')}
                     fontsSlot={
                         <div className="border-t border-border-subtle pt-4">
-                            <div className="text-xs text-text-muted mb-1 font-medium">Fonts</div>
-                            <p className="text-[11px] text-text-muted mb-3">Standalone-only typography overrides for chat text, markdown code, and terminal output.</p>
+                            <div className="text-xs text-text-muted mb-1 font-medium">{t('standalone.settings.fontsLabel')}</div>
+                            <p className="text-[11px] text-text-muted mb-3">{t('standalone.settings.fontsDescription')}</p>
                             <StandaloneFontSettingsSection
                                 value={fontPreferences}
                                 savedValue={normalizeStandaloneFontPreferences(preferences?.standaloneFontPreferences)}
@@ -442,12 +444,12 @@ export default function StandaloneSettings() {
             </Section>
 
             {/* ═══ Notifications ═══ */}
-            <Section title="Notifications" description="Browser prompts and local sound cues for agent activity.">
+            <Section title={t('standalone.settings.notificationsSection')} description={t('standalone.settings.notificationsDescription')}>
                 <div className="flex flex-col gap-3">
                     <BrowserNotificationSettings />
                     <ToggleRow
-                        label={<span className="flex items-center gap-1.5"><IconVolume size={15} /> Sound Effects</span>}
-                        description="Play a sound when agent completes or needs approval"
+                        label={<span className="flex items-center gap-1.5"><IconVolume size={15} /> {t('standalone.settings.soundEffectsLabel')}</span>}
+                        description={t('standalone.settings.soundEffectsDescription')}
                         checked={soundEnabled}
                         onChange={handleSoundToggle}
                     />
@@ -455,21 +457,21 @@ export default function StandaloneSettings() {
             </Section>
 
             {/* ═══ Preferences ═══ */}
-            <Section title="Profile" description="How your name appears in local chat threads and dashboard views.">
+            <Section title={t('standalone.settings.profileSection')} description={t('standalone.settings.profileDescription')}>
                 <div className="flex flex-col gap-3">
                     <div className="flex items-center justify-between px-3.5 py-4 bg-bg-glass rounded-xl border border-border-subtle hover:border-border-default transition-colors">
                         <div className="flex flex-col gap-1 pr-4 max-w-[500px]">
                             <span className="text-sm font-semibold flex items-center gap-2">
-                                <IconUser size={16} className="text-text-secondary" /> Display Name
+                                <IconUser size={16} className="text-text-secondary" /> {t('standalone.settings.displayNameLabel')}
                             </span>
                             <span className="text-[12px] text-text-muted leading-relaxed">
-                                Your name shown in chat threads and on the team dashboard.
+                                {t('standalone.settings.displayNameHint')}
                             </span>
                         </div>
                         <Input
                             type="text"
                             className="w-48 text-right"
-                            placeholder="Anonymous"
+                            placeholder={t('standalone.settings.displayNamePlaceholder')}
                             value={localUserName}
                             onChange={e => setLocalUserName(e.target.value)}
                             onBlur={handleSaveUserName}

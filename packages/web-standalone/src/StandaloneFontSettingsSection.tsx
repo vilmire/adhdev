@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { AlertBanner, Button, Input, Select } from '@adhdev/web-core'
 import {
   CHAT_FONT_PRESET_OPTIONS,
@@ -44,6 +45,7 @@ function FontControl({
   options: typeof CHAT_FONT_PRESET_OPTIONS | typeof MONO_FONT_PRESET_OPTIONS
   onChange: (next: StandaloneFontChoice) => void
 }) {
+  const { t } = useTranslation('common')
   return (
     <div className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3 flex flex-col gap-3">
       <div>
@@ -74,7 +76,7 @@ function FontControl({
           />
         )}
         <div className="text-[11px] text-text-muted">
-          <span className="font-medium text-text-secondary">Resolved stack:</span>{' '}
+          <span className="font-medium text-text-secondary">{t('standalone.fonts.resolvedStack')}</span>{' '}
           <span className="font-mono break-all">{resolveStandaloneFontFamily(surface, value)}</span>
         </div>
       </div>
@@ -93,12 +95,13 @@ export default function StandaloneFontSettingsSection({
   onResetToSaved,
   onResetToDefaults,
 }: StandaloneFontSettingsSectionProps) {
+  const { t } = useTranslation('common')
   const isDirty = JSON.stringify(value) !== JSON.stringify(savedValue)
 
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3 text-sm text-text-muted">
-        Standalone-only font overrides. These do not affect the cloud dashboard. Chat bubbles, markdown prose, code blocks, tool rows, and terminal output all use the preferences below.
+        {t('standalone.fonts.fontOverridesNotice')}
       </div>
 
       {error && <AlertBanner variant="error">{error}</AlertBanner>}
@@ -107,24 +110,24 @@ export default function StandaloneFontSettingsSection({
       <div className="grid gap-3 lg:grid-cols-3">
         <FontControl
           surface="chat"
-          title="Chat text"
-          description="Assistant/user prose, markdown text, thought cards, and system notes."
+          title={t('standalone.fonts.chat')}
+          description={t('standalone.fonts.chatDescription')}
           value={value.chat}
           options={CHAT_FONT_PRESET_OPTIONS}
           onChange={next => onChange(updateChoice(value, 'chat', next))}
         />
         <FontControl
           surface="code"
-          title="Code blocks"
-          description="Markdown code fences, inline code, and preformatted command output."
+          title={t('standalone.fonts.code')}
+          description={t('standalone.fonts.codeDescription')}
           value={value.code}
           options={MONO_FONT_PRESET_OPTIONS}
           onChange={next => onChange(updateChoice(value, 'code', next))}
         />
         <FontControl
           surface="terminal"
-          title="Terminal"
-          description="Terminal transcript cards and tool/command rows in chat mode."
+          title={t('standalone.fonts.terminal')}
+          description={t('standalone.fonts.terminalDescription')}
           value={value.terminal}
           options={MONO_FONT_PRESET_OPTIONS}
           onChange={next => onChange(updateChoice(value, 'terminal', next))}
@@ -134,12 +137,12 @@ export default function StandaloneFontSettingsSection({
       <div className="rounded-2xl border border-border-subtle bg-bg-primary/70 p-4 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-medium text-text-primary">Live preview</div>
+            <div className="text-sm font-medium text-text-primary">{t('standalone.fonts.livePreview')}</div>
             <div className="text-xs text-text-muted mt-1">
               Chat: {getStandaloneFontPreferenceLabel('chat', value.chat.preset)} · Code: {getStandaloneFontPreferenceLabel('code', value.code.preset)} · Terminal: {getStandaloneFontPreferenceLabel('terminal', value.terminal.preset)}
             </div>
           </div>
-          <div className="text-[11px] text-text-muted">Defaults: {getStandaloneFontPreferenceLabel('chat', DEFAULT_STANDALONE_FONT_PREFERENCES.chat.preset)} / {getStandaloneFontPreferenceLabel('code', DEFAULT_STANDALONE_FONT_PREFERENCES.code.preset)}</div>
+          <div className="text-[11px] text-text-muted">{t('standalone.fonts.defaults')} {getStandaloneFontPreferenceLabel('chat', DEFAULT_STANDALONE_FONT_PREFERENCES.chat.preset)} / {getStandaloneFontPreferenceLabel('code', DEFAULT_STANDALONE_FONT_PREFERENCES.code.preset)}</div>
         </div>
 
         <div className="chat-container rounded-xl border border-border-subtle min-h-0 !p-4">
@@ -176,7 +179,7 @@ export default function StandaloneFontSettingsSection({
           onClick={onSave}
           disabled={saving || !isDirty}
         >
-          {saving ? 'Saving…' : 'Save font settings'}
+          {saving ? t('standalone.fonts.saving') : t('standalone.fonts.saveFontSettings')}
         </Button>
         <Button
           type="button"
@@ -185,7 +188,7 @@ export default function StandaloneFontSettingsSection({
           onClick={onResetToSaved}
           disabled={saving || !isDirty}
         >
-          Revert to saved
+          {t('standalone.fonts.revertToSaved')}
         </Button>
         <Button
           type="button"
@@ -194,7 +197,7 @@ export default function StandaloneFontSettingsSection({
           onClick={onResetToDefaults}
           disabled={saving}
         >
-          Reset to defaults
+          {t('standalone.fonts.resetToDefaults')}
         </Button>
       </div>
     </div>
