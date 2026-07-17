@@ -259,9 +259,30 @@ export class CliProviderInstance implements ProviderInstance {
     // event. Unlike the StatusMonitor no-progress watchdog (which only runs while a
     // turn is generating), this observes pure screen stasis regardless of the
     // reported status — a worker parked idle, wedged mid-turn, or spawned with no
-    // output at all. 180s matches DEFAULT_MONITOR_CONFIG.noProgressThresholdSec so
-    // the two watchdogs agree on the same "long interval" bound.
-    private static readonly MESH_WORKER_STALL_THRESHOLD_MS = 180_000;
+    // output at all.
+    //
+    // FALSE-STALL-WATCHDOG-OVERFIRE (fix C): the threshold is now turn-scoped. When
+    // an explicit turn is in flight (hasAdapterPendingResponse() — the adapter's
+    // currentTurnScope / isWaitingForResponse / isProcessing / partial buffer), a
+    // long silent thinking gap (claude-cli opus/high can go minutes between visible
+    // tokens) is normal, so the bar is raised to MESH_WORKER_STALL_TURN_THRESHOLD_MS.
+    // Outside a turn (idle) the tighter MESH_WORKER_STALL_IDLE_THRESHOLD_MS applies.
+    // This is a THRESHOLD RAISE, not a suppression: a genuine mid-turn wedge still
+    // fires (late, at the turn bound) rather than being hidden behind a sticky
+    // generating status. 180s matches DEFAULT_MONITOR_CONFIG.noProgressThresholdSec
+    // so the idle bound agrees with the StatusMonitor watchdog's "long interval".
+    private static readonly MESH_WORKER_STALL_IDLE_THRESHOLD_MS = 180_000;
+    private static readonly MESH_WORKER_STALL_TURN_THRESHOLD_MS = 360_000;
+    // FALSE-STALL-WATCHDOG-OVERFIRE (fix E): minimum spacing between two stall
+    // notifications for the SAME session, even across anchor re-arms. The
+    // per-anchor meshStallEmittedForAnchor guard already stops a single continuous
+    // stall from re-firing; this cooldown additionally throttles the churn where a
+    // worker dribbles one byte every few minutes (each re-arming the anchor and then
+    // re-crossing the bar), which would otherwise page the coordinator repeatedly.
+    // The stall is still fired for observability — just not more than once per
+    // window per session. Set larger than the stall thresholds so consecutive
+    // re-armed stalls a few minutes apart collapse into a single notification.
+    private static readonly MESH_WORKER_STALL_REFIRE_COOLDOWN_MS = 600_000;
 
     private adapter: ProviderCliAdapter;
     private context: InstanceContext | null = null;
@@ -286,6 +307,18 @@ export class CliProviderInstance implements ProviderInstance {
     // -1 = not yet initialised for this session.
     private meshStallAnchorAt = -1;
     private meshStallEmittedForAnchor = false;
+    // FALSE-STALL-WATCHDOG-OVERFIRE (fix B): the turn-active state observed on the
+    // PREVIOUS stall tick. When a turn ends (active → inactive: the completion/idle
+    // transition), the anchor is force re-armed to `now` so the completed→idle valley
+    // does not fire against the pre-completion output clock. The turn-end edge is the
+    // signal; updateStatus's own idle transition does not touch the stall anchor, so
+    // this watchdog-local edge detector owns the re-arm. undefined = no prior tick.
+    private meshStallTurnActiveLast: boolean | undefined = undefined;
+    // FALSE-STALL-WATCHDOG-OVERFIRE (fix E): wall-clock of the most recent stall
+    // emission for this session, or -1 if none. Enforces
+    // MESH_WORKER_STALL_REFIRE_COOLDOWN_MS between successive emissions across
+    // anchor re-arms (the per-anchor guard only covers a single continuous stall).
+    private meshStallLastFiredAt = -1;
     // FALSE-IDLE continuity epoch: monotonically bumped on EVERY entry into a busy
     // phase (→generating or →waiting_approval). The completedDebouncePending snapshots
     // this value at arm time (busyEpochAtArm); the flush guard requires it UNCHANGED
@@ -2108,30 +2141,36 @@ export class CliProviderInstance implements ProviderInstance {
      * ProviderInstanceManager's existing 5s onTick loop (NO new timer) — see
      * ProviderInstanceManager.startTicking. Reuses the adapter's raw-PTY-output
      * clock (lastOutputAt, bumped on every output chunk) as the sole signal: if a
-     * live worker's screen has been byte-for-byte unchanged for
-     * MESH_WORKER_STALL_THRESHOLD_MS (180s), fire ONE informational
-     * monitor:no_progress event down the existing task_stalled ledger +
-     * pendingCoordinatorEvent path.
+     * live worker's screen has been byte-for-byte unchanged past the turn-scoped
+     * threshold (below), fire ONE informational monitor:no_progress event down the
+     * existing task_stalled ledger + pendingCoordinatorEvent path.
      *
-     * Deliberately status-agnostic: it does NOT read getStatus()'s reported status
-     * (which would couple it to the generating-only StatusMonitor and the
-     * idle-timeout FSM). A normally-idle worker CAN trip this after 3 quiet
-     * minutes; that is accepted and surfaced as an informational stall (NOT a
-     * failure/auto-restart) so the coordinator judges. getStatus/getState are NOT
-     * called here, so status heartbeats never move the stall anchor.
+     * The reported status is read for TWO bounded purposes only — it does NOT
+     * suppress the fire (sticky-status blindness would hide a real wedge):
+     *   • Fix B (anchor re-arm on turn end): the FSM's completion/idle transition
+     *     never touches the stall anchor, so a completed worker that goes idle would
+     *     otherwise keep counting from its LAST pre-completion output and false-fire
+     *     in the quiet valley right after finishing. We detect the turn-active edge
+     *     (hasAdapterPendingResponse()) and, on active → inactive, re-arm the anchor
+     *     to `now` so the post-completion idle valley starts a fresh clock.
+     *   • Fix C (turn-scoped threshold): while a turn is genuinely in flight the bar
+     *     is raised (MESH_WORKER_STALL_TURN_THRESHOLD_MS) to absorb long normal
+     *     thinking gaps; outside a turn the tighter idle bound applies. This is a
+     *     RAISE, not a skip — a real mid-turn wedge still fires late at the turn bound.
      *
      * Anchoring: the episode arms against the current lastOutputAt; a worker that
      * has emitted nothing yet (lastOutputAt === 0) anchors on this.startedAt (spawn
      * time) so a silent spawn is still caught. Any new output re-arms the anchor
      * and clears the emitted flag, so one continuous stall emits at most once and a
-     * later stall re-arms cleanly.
+     * later stall re-arms cleanly. Fix E adds a per-session refire cooldown so a
+     * dribble of one-byte-per-few-minutes output cannot page the coordinator on
+     * every re-arm.
      */
     checkMeshWorkerStall(now: number = Date.now()): void {
         if (!this.isMeshWorkerSession()) {
             // Not (or no longer) a mesh worker — drop any armed episode so a session
             // whose mesh markers were detached does not carry a stale anchor.
-            this.meshStallAnchorAt = -1;
-            this.meshStallEmittedForAnchor = false;
+            this.resetMeshStallEpisode();
             return;
         }
         // Defensive: not every CliAdapter implementation exposes isAlive() — the
@@ -2144,26 +2183,52 @@ export class CliProviderInstance implements ProviderInstance {
         if (typeof this.adapter.isAlive === 'function' && !this.adapter.isAlive()) {
             // Dead PTY: nothing to watch. agent:stopped covers the exit; re-arm on
             // the next live session so a restart starts a fresh episode.
-            this.meshStallAnchorAt = -1;
-            this.meshStallEmittedForAnchor = false;
+            this.resetMeshStallEpisode();
             return;
         }
 
         let lastOutputAt: number;
+        let observedStatus = 'unknown';
         try {
             // allowParse:false — a cheap status read that must NOT trigger parsing
             // and must NOT mutate lastOutputAt (getState/getStatus never bump it).
-            const status = this.adapter.getStatus({ allowParse: false }) as { lastOutputAt?: unknown };
+            // Read once for both the anchor clock and the observedStatus context.
+            const status = this.adapter.getStatus({ allowParse: false }) as { lastOutputAt?: unknown; status?: unknown };
             lastOutputAt = typeof status?.lastOutputAt === 'number' && Number.isFinite(status.lastOutputAt)
                 ? status.lastOutputAt
                 : 0;
+            if (typeof status?.status === 'string' && status.status) observedStatus = status.status;
         } catch {
             return; // defensive: a failed status read just skips this tick
         }
 
+        // FALSE-STALL-WATCHDOG-OVERFIRE (fix B + C): observe whether a turn is
+        // genuinely in flight. hasAdapterPendingResponse() reads the adapter's
+        // currentTurnScope / isWaitingForResponse / isProcessing / partial buffer —
+        // real liveness, NOT the sticky FSM status. This drives both the turn-end
+        // anchor re-arm (B) and the turn-scoped threshold (C).
+        let turnActive = false;
+        try {
+            turnActive = this.hasAdapterPendingResponse();
+        } catch { /* defensive: missing adapter diagnostics → treat as no active turn */ }
+        const turnEnded = this.meshStallTurnActiveLast === true && !turnActive;
+        this.meshStallTurnActiveLast = turnActive;
+
         // The anchor is the last raw output; before any output, the spawn time so a
         // silent worker is still caught.
         const anchor = lastOutputAt > 0 ? lastOutputAt : this.startedAt;
+
+        // FALSE-STALL-WATCHDOG-OVERFIRE (fix B): a turn just ended (active → idle).
+        // The completion/idle FSM transition does not touch the stall anchor, so the
+        // post-completion quiet valley would otherwise be measured from the last
+        // pre-completion output and false-fire almost immediately. Force the anchor
+        // forward to `now` so the idle valley starts a fresh clock. This overrides a
+        // stale (pre-completion) anchor even though `anchor` itself did not advance.
+        if (turnEnded && this.meshStallAnchorAt !== -1) {
+            this.meshStallAnchorAt = Math.max(anchor, now);
+            this.meshStallEmittedForAnchor = false;
+            return;
+        }
 
         if (this.meshStallAnchorAt === -1) {
             // First observation this session — arm against the current anchor.
@@ -2181,20 +2246,31 @@ export class CliProviderInstance implements ProviderInstance {
 
         if (this.meshStallEmittedForAnchor) return; // already fired for this stall
 
+        // FALSE-STALL-WATCHDOG-OVERFIRE (fix C): raise the bar while a turn is in
+        // flight so a long normal thinking gap is absorbed; a genuine mid-turn wedge
+        // still fires — late, at the turn bound — rather than being hidden.
+        const threshold = turnActive
+            ? CliProviderInstance.MESH_WORKER_STALL_TURN_THRESHOLD_MS
+            : CliProviderInstance.MESH_WORKER_STALL_IDLE_THRESHOLD_MS;
         const stalledMs = now - this.meshStallAnchorAt;
-        if (stalledMs < CliProviderInstance.MESH_WORKER_STALL_THRESHOLD_MS) return;
+        if (stalledMs < threshold) return;
 
+        // FALSE-STALL-WATCHDOG-OVERFIRE (fix E): per-session refire cooldown. Mark
+        // this anchor emitted regardless so a still-static anchor does not re-check
+        // every tick, but suppress the actual coordinator notification (and the
+        // trace/event) when the previous emission for this session was too recent.
         this.meshStallEmittedForAnchor = true;
+        if (this.meshStallLastFiredAt >= 0
+            && now - this.meshStallLastFiredAt < CliProviderInstance.MESH_WORKER_STALL_REFIRE_COOLDOWN_MS) {
+            return;
+        }
+        this.meshStallLastFiredAt = now;
 
-        // observedStatus is surfaced as context only — deliberately NOT stamped as
-        // the reconciliation-triggering `status` field (which would let
+        // observedStatus (read above from the single allowParse:false status probe)
+        // is surfaced as context only — deliberately NOT stamped as the
+        // reconciliation-triggering `status` field (which would let
         // buildNoProgressCompletionReconciliation mistake an idle stall for a
         // completion). See mesh-events-stale.buildNoProgressCompletionReconciliation.
-        let observedStatus = 'unknown';
-        try {
-            const s = (this.adapter.getStatus({ allowParse: false }) as { status?: unknown })?.status;
-            if (typeof s === 'string' && s) observedStatus = s;
-        } catch { /* best-effort context only */ }
 
         if (this.isMeshWorkerSession()) {
             traceMeshEventStage('fired', this.meshTraceCtx('monitor:no_progress'), 'mesh_worker_stall_watchdog');
@@ -2215,6 +2291,20 @@ export class CliProviderInstance implements ProviderInstance {
             observedStatus,
             taskId: this.completingTurnTaskId(),
         });
+    }
+
+    /**
+     * FALSE-STALL-WATCHDOG-OVERFIRE: drop the entire stall episode for this session.
+     * Called when the session is no longer a mesh worker or the PTY is dead — the
+     * next live tick re-arms a fresh episode. Clears the fix-B turn-edge state and
+     * the fix-E refire cooldown alongside the base anchor so a re-armed session
+     * starts with a clean slate (a restart is not throttled by a prior stall).
+     */
+    private resetMeshStallEpisode(): void {
+        this.meshStallAnchorAt = -1;
+        this.meshStallEmittedForAnchor = false;
+        this.meshStallTurnActiveLast = undefined;
+        this.meshStallLastFiredAt = -1;
     }
 
     /**
