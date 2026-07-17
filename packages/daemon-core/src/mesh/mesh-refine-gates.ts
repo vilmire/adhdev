@@ -556,6 +556,262 @@ export async function runMeshRefinePatchEquivalenceGate(
     }
 }
 
+/**
+ * Machine-readable sub-classification of a `patch_equivalence_failed` (and the
+ * related submodule-gitlink preflight blocks). The opaque top-level
+ * `patch_equivalence_failed` code is preserved for backward compatibility; this
+ * detailed reason is added ALONGSIDE it so coordinators no longer have to guess
+ * WHY the preflight blocked (the 2026-07-17 hidden-spinner convergence incident:
+ * the real cause was a diverged base + an unreachable submodule gitlink artifact,
+ * not a real patch conflict, but Refinery only returned the opaque code and the
+ * coordinator mis-attributed it to a stale daemon version).
+ */
+export type MeshRefinePatchEquivalenceDetailedReasonCode =
+    /** Worktree base diverged from target base (HEAD is not a descendant of origin/main). */
+    | 'base_divergence'
+    /** Submodule gitlink commit is not reachable from the submodule's remote main branch (publish needed). */
+    | 'submodule_unreachable'
+    /** Genuine non-equivalent content: expected tree vs actual merge diff differ. */
+    | 'actual_patch_diff'
+    /** Submodule gitlink trivial fast-forward mis-judged as non-equivalent (HEAD descends origin/main, patch-id equal, blocked only by the gitlink). */
+    | 'trivial_ff_misjudgment'
+    /** Already identical to origin/main (ahead 0 / behind 0, no diff) — should be treated as success/no-op. */
+    | 'already_converged'
+    /** Fallback when the classifier itself could not run (git error); keep the opaque code, note the reason. */
+    | 'unclassified';
+
+export type MeshRefinePatchEquivalenceFailureClassification = {
+    detailedReason: MeshRefinePatchEquivalenceDetailedReasonCode;
+    /** Human-readable one-line description of the sub-cause. */
+    detailedReasonDescription: string;
+    /** Suggested next action for the coordinator/owner (free-form, actionable). */
+    recommendedAction: string;
+    /** Structured supporting evidence: SHAs, ahead/behind, submodule reachability, patch-id comparison, diff stat. */
+    evidence: {
+        baseHead?: string;
+        branchHead?: string;
+        mergeBase?: string;
+        /** How many commits base (origin/main) is ahead of the branch's merge-base (branch is behind). */
+        behind?: number;
+        /** How many commits the branch is ahead of the merge-base. */
+        ahead?: number;
+        /** True when HEAD is NOT a descendant of the target base (diverged). */
+        baseDiverged?: boolean;
+        expectedPatchId?: string;
+        actualPatchId?: string;
+        patchIdEqual?: boolean;
+        /** Compact one-line diff stat summary of the residual/actual merge diff (best-effort). */
+        diffStat?: string;
+        /** Per-submodule gitlink reachability against submodule origin/main (best-effort). */
+        submoduleGitlinks?: Array<{
+            path: string;
+            baseCommit?: string;
+            branchCommit?: string;
+            /** True when branchCommit descends baseCommit (a strict fast-forward advance). */
+            fastForward?: boolean;
+            /** True when branchCommit is reachable from the submodule's local origin/main. */
+            reachableFromOriginMain?: boolean;
+        }>;
+        /** Effective auto-publish-submodule-main-commits policy value at classification time. */
+        autoPublishSubmoduleMainCommits?: boolean;
+        /** Set when the classifier itself errored (detailedReason === 'unclassified'). */
+        classifierError?: string;
+    };
+};
+
+/**
+ * Classify WHY a patch-equivalence preflight blocked, turning the opaque
+ * `patch_equivalence_failed` code into a machine-readable {@link
+ * MeshRefinePatchEquivalenceDetailedReasonCode} plus a recommended action and
+ * structured evidence. Read-only: runs only `git` inspection commands (rev-list,
+ * merge-base, diff --stat, submodule reachability probes) against the already-set
+ * worktree — it never mutates the repo.
+ *
+ * Priority of classification (first match wins):
+ *   1. already_converged     — ahead 0 & behind 0 & no residual diff
+ *   2. submodule_unreachable  — a changed gitlink commit is not reachable from the
+ *                               submodule's origin/main (publish needed)
+ *   3. trivial_ff_misjudgment — HEAD descends origin/main AND (excl. gitlinks) the
+ *                               patch-ids match — blocked only by a ff gitlink
+ *   4. base_divergence        — HEAD is not a descendant of the target base
+ *   5. actual_patch_diff      — genuine content divergence (the residual case)
+ *
+ * `targetBaseRef` is the ref the branch is meant to land on (e.g. 'origin/main'
+ * or the pinned baseHead SHA). `autoPublishSubmoduleMainCommits` is threaded in so
+ * the submodule_unreachable recommendation can name the current policy value.
+ */
+export async function classifyPatchEquivalenceFailure(
+    repoRoot: string,
+    baseHead: string,
+    branchHead: string,
+    summary: MeshRefinePatchEquivalenceSummary,
+    options: { targetBaseRef?: string; autoPublishSubmoduleMainCommits?: boolean } = {},
+): Promise<MeshRefinePatchEquivalenceFailureClassification> {
+    const targetBaseRef = options.targetBaseRef || baseHead;
+    const autoPublish = options.autoPublishSubmoduleMainCommits;
+    const evidence: MeshRefinePatchEquivalenceFailureClassification['evidence'] = {
+        baseHead,
+        branchHead,
+        mergeBase: summary.mergeBase,
+        expectedPatchId: summary.expectedPatchId,
+        actualPatchId: summary.actualPatchId,
+        patchIdEqual: !!summary.expectedPatchId && summary.expectedPatchId === summary.actualPatchId,
+        ...(autoPublish !== undefined ? { autoPublishSubmoduleMainCommits: autoPublish } : {}),
+    };
+    try {
+        const git = (args: string[]): string => execFileSync(GIT, args, {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+            windowsHide: true,
+        });
+        const gitOk = (args: string[]): boolean => {
+            try { git(args); return true; } catch { return false; }
+        };
+
+        // ahead/behind of branch vs the target base ref. left = base-only (behind),
+        // right = branch-only (ahead).
+        let ahead = 0;
+        let behind = 0;
+        try {
+            const out = git(['rev-list', '--left-right', '--count', `${targetBaseRef}...${branchHead}`]).trim();
+            const [left, right] = out.split(/\s+/).map(n => Number.parseInt(n, 10));
+            behind = Number.isFinite(left) ? left : 0;
+            ahead = Number.isFinite(right) ? right : 0;
+        } catch { /* keep zeros */ }
+        evidence.ahead = ahead;
+        evidence.behind = behind;
+        // HEAD (branchHead) diverged from the target base = base is NOT an ancestor
+        // of the branch. behind>0 with the base ref not reachable from HEAD.
+        const baseIsAncestor = gitOk(['merge-base', '--is-ancestor', targetBaseRef, branchHead]);
+        evidence.baseDiverged = !baseIsAncestor;
+
+        // Residual/actual diff stat (best-effort): what the merge would still introduce.
+        let diffStat = '';
+        try {
+            if (summary.mergedTree) {
+                diffStat = git(['diff', '--stat', baseHead, summary.mergedTree]).trim().split('\n').filter(Boolean).slice(-1)[0] || '';
+            } else {
+                diffStat = git(['diff', '--stat', baseHead, branchHead]).trim().split('\n').filter(Boolean).slice(-1)[0] || '';
+            }
+        } catch { /* diff stat is best-effort */ }
+        if (diffStat) evidence.diffStat = diffStat;
+
+        // Changed gitlink reachability against each submodule's local origin/main.
+        const submoduleGitlinks: NonNullable<MeshRefinePatchEquivalenceFailureClassification['evidence']['submoduleGitlinks']> = [];
+        try {
+            const nameStatus = git(['diff', '--name-only', '--diff-filter=d', baseHead, branchHead]).trim();
+            const changedPaths = nameStatus ? nameStatus.split('\n').map(p => p.trim()).filter(Boolean) : [];
+            for (const p of changedPaths) {
+                // Only submodule (gitlink, mode 160000) entries.
+                let baseCommit: string | undefined;
+                let branchCommit: string | undefined;
+                try {
+                    const baseLs = git(['ls-tree', baseHead, '--', p]).trim();
+                    const branchLs = git(['ls-tree', branchHead, '--', p]).trim();
+                    const isGitlink = /(^|\s)160000\s/.test(baseLs) || /(^|\s)160000\s/.test(branchLs);
+                    if (!isGitlink) continue;
+                    baseCommit = baseLs.split(/\s+/)[2];
+                    branchCommit = branchLs.split(/\s+/)[2];
+                } catch { continue; }
+                const submoduleRepo = pathJoin(repoRoot, p);
+                let fastForward: boolean | undefined;
+                let reachableFromOriginMain: boolean | undefined;
+                if (branchCommit) {
+                    if (baseCommit) {
+                        fastForward = execGitOk(submoduleRepo, ['merge-base', '--is-ancestor', baseCommit, branchCommit]);
+                    }
+                    reachableFromOriginMain = execGitOk(submoduleRepo, ['merge-base', '--is-ancestor', branchCommit, 'refs/remotes/origin/main']);
+                }
+                submoduleGitlinks.push({ path: p, baseCommit, branchCommit, fastForward, reachableFromOriginMain });
+            }
+        } catch { /* submodule inspection is best-effort */ }
+        if (submoduleGitlinks.length) evidence.submoduleGitlinks = submoduleGitlinks;
+
+        // Existing gate signal: the merge-tree trivial-ff evaluation, if the gate
+        // captured it (a genuine non-trivial submodule conflict lands here too).
+        const gitlinkFf = summary.gitlinkTrivialFastForward;
+
+        // ── Classification (first match wins) ────────────────────────────────
+        const noResidualDiff = !evidence.diffStat && (!summary.actualPatchId || summary.actualPatchId === '');
+
+        // 1. already_converged: nothing ahead, nothing behind, no residual diff.
+        if (ahead === 0 && behind === 0 && noResidualDiff) {
+            return {
+                detailedReason: 'already_converged',
+                detailedReasonDescription: 'Branch is already identical to the target base (ahead 0, behind 0, no residual diff); the merge would be a no-op.',
+                recommendedAction: 'Treat as already converged — no merge needed. Verify with `git range-diff` / patch-id, then mark the branch merged (or clean up the worktree).',
+                evidence,
+            };
+        }
+
+        // 2. submodule_unreachable: a changed gitlink is not reachable from the
+        //    submodule's origin/main. This is the publish-needed artifact.
+        const unreachable = submoduleGitlinks.filter(g => g.reachableFromOriginMain === false);
+        if (unreachable.length > 0) {
+            const paths = unreachable.map(g => g.path).join(', ');
+            return {
+                detailedReason: 'submodule_unreachable',
+                detailedReasonDescription: `Submodule gitlink commit(s) not reachable from submodule origin/main (publish needed): ${paths}.`,
+                recommendedAction: `Publish the submodule commit(s) to submodule origin/main, then retry mesh_refine_node (policy allowAutoPublishSubmoduleMainCommits=${autoPublish === undefined ? 'unknown' : autoPublish}).`,
+                evidence,
+            };
+        }
+
+        // 3. trivial_ff_misjudgment: HEAD descends the target base AND the non-gitlink
+        //    patch-ids are equal, so the ONLY thing blocking is a fast-forward gitlink
+        //    that merge-tree refused. (Either the gate flagged an unresolved gitlink
+        //    ff, or every changed gitlink is a proven ff.)
+        const changedGitlinks = submoduleGitlinks.length > 0;
+        const allGitlinksFf = changedGitlinks && submoduleGitlinks.every(g => g.fastForward === true);
+        const gateSawUnresolvedGitlinkFf = gitlinkFf?.resolved === false && Array.isArray(gitlinkFf.gitlinks) && gitlinkFf.gitlinks.some(g => g.fastForward);
+        if (baseIsAncestor && (evidence.patchIdEqual || allGitlinksFf || gateSawUnresolvedGitlinkFf)) {
+            return {
+                detailedReason: 'trivial_ff_misjudgment',
+                detailedReasonDescription: 'HEAD descends the target base and the patch content matches; the block is a submodule gitlink trivial fast-forward that merge-tree refused, not a real divergence.',
+                recommendedAction: 'Converge via the strict fast-forward-only bypass (verify HEAD descends origin/main and patch-id equality, then merge --ff-only) instead of the refine gate.',
+                evidence,
+            };
+        }
+
+        // 4. base_divergence: HEAD is not a descendant of the target base.
+        if (!baseIsAncestor) {
+            return {
+                detailedReason: 'base_divergence',
+                detailedReasonDescription: `Worktree base has diverged from ${targetBaseRef} (HEAD is not a descendant; ahead ${ahead}, behind ${behind}).`,
+                recommendedAction: `Rebase the branch onto ${targetBaseRef}, then retry mesh_refine_node.`,
+                evidence,
+            };
+        }
+
+        // 5. actual_patch_diff: genuine non-equivalent content.
+        return {
+            detailedReason: 'actual_patch_diff',
+            detailedReasonDescription: 'The merge introduces content not equivalent to the branch\'s cumulative patch (expected tree vs actual merge diff differ).',
+            recommendedAction: 'Manual review required — inspect the residual diff; the branch content is not patch-equivalent to a clean merge onto the base.',
+            evidence,
+        };
+    } catch (e: any) {
+        evidence.classifierError = e?.message || String(e);
+        return {
+            detailedReason: 'unclassified',
+            detailedReasonDescription: 'Patch-equivalence sub-cause could not be classified (git inspection failed); see classifierError.',
+            recommendedAction: 'Inspect the refineStages and patchEquivalence summary manually to determine the cause.',
+            evidence,
+        };
+    }
+}
+
+/** Small helper: run a git command in `cwd` and return whether it exited 0. */
+function execGitOk(cwd: string, args: string[]): boolean {
+    try {
+        execFileSync(GIT, args, { cwd, encoding: 'utf8', maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES, windowsHide: true });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 export type MeshWorktreePatchContainmentSummary = {
     /** True only when merging worktreeHead into ref introduces no new patch. */
     contained: boolean;

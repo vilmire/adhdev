@@ -35,6 +35,7 @@ import {
     RefineContext,
     RefineExecFileAsync,
     RefineStageOutcome,
+    classifyPatchEquivalenceFailure,
     recordMeshRefineStage,
     resolveRefineryAutoPublishSubmoduleMainCommits,
     runMeshRefineEffectiveDiffGate,
@@ -616,9 +617,20 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
                         error: submoduleHintPatchEquivalence.error,
                         actionableHint: submoduleHintPatchEquivalence.actionableHint,
                     });
+                    const classification = await classifyPatchEquivalenceFailure(
+                        repoRoot, baseHead, ctx.branchHead, submoduleHintPatchEquivalence,
+                        {
+                            targetBaseRef: baseHead,
+                            autoPublishSubmoduleMainCommits: resolveRefineryAutoPublishSubmoduleMainCommits(ctx.mesh, node.workspace).enabled,
+                        },
+                    );
                     return { kind: 'terminal', result: {
                         success: false,
                         code: 'patch_equivalence_failed',
+                        detailedReason: classification.detailedReason,
+                        detailedReasonDescription: classification.detailedReasonDescription,
+                        recommendedAction: classification.recommendedAction,
+                        evidence: classification.evidence,
                         convergenceStatus: 'blocked_review',
                         error: 'Refinery patch-equivalence preflight failed (submodule gitlink conflict); merge/refine was not attempted.',
                         branch,
@@ -801,7 +813,7 @@ export async function refineValidationStage(self: DaemonCommandRouter, ctx: Refi
 export async function refinePatchEquivalenceStage(self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
             // DS2: node/execFileAsync are no longer needed here — the rebase moved to
             // sync_base — and branchHead/patchEquivalence are no longer mutated in-stage.
-            const { meshId, nodeId, args, repoRoot, baseHead, branch, baseBranch, validationSummary, refineStages } = ctx;
+            const { meshId, nodeId, args, repoRoot, baseHead, branch, baseBranch, mesh, node, validationSummary, refineStages } = ctx;
             const branchHead = ctx.branchHead;
             const patchEquivalenceStarted = Date.now();
             const patchEquivalence = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
@@ -826,9 +838,24 @@ export async function refinePatchEquivalenceStage(self: DaemonCommandRouter, ctx
                 // branch itself has no changes (degenerate), which is NOT already-merged.
                 const alreadyMergedViaOtherPath = !patchEquivalence.actualPatchId && !!patchEquivalence.expectedPatchId;
                 if (!alreadyMergedViaOtherPath) {
+                    const classification = await classifyPatchEquivalenceFailure(
+                        repoRoot, baseHead, branchHead, patchEquivalence,
+                        {
+                            targetBaseRef: baseHead,
+                            autoPublishSubmoduleMainCommits: resolveRefineryAutoPublishSubmoduleMainCommits(mesh, node.workspace).enabled,
+                        },
+                    );
+                    recordMeshRefineStage(refineStages, 'patch_equivalence_classification', 'failed', patchEquivalenceStarted, {
+                        detailedReason: classification.detailedReason,
+                        recommendedAction: classification.recommendedAction,
+                    });
                     return { kind: 'terminal', result: {
                         success: false,
                         code: 'patch_equivalence_failed',
+                        detailedReason: classification.detailedReason,
+                        detailedReasonDescription: classification.detailedReasonDescription,
+                        recommendedAction: classification.recommendedAction,
+                        evidence: classification.evidence,
                         convergenceStatus: 'blocked_review',
                         error: 'Refinery patch-equivalence preflight failed; merge/refine was not attempted.',
                         branch,
@@ -2278,6 +2305,15 @@ export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: Mes
             };
             if (typeof result.error === 'string') ctx.error = result.error;
             if (typeof result.blockedReason === 'string') ctx.blockedReason = result.blockedReason;
+            // Detailed patch-equivalence sub-cause classification (base_divergence,
+            // submodule_unreachable, actual_patch_diff, trivial_ff_misjudgment,
+            // already_converged, unclassified) + recommended action + evidence.
+            // Promoted onto blockerContext so coordinators reading task_failed ledger
+            // entries see the cause without parsing the free-form error string.
+            if (typeof result.detailedReason === 'string') ctx.detailedReason = result.detailedReason;
+            if (typeof result.detailedReasonDescription === 'string') ctx.detailedReasonDescription = result.detailedReasonDescription;
+            if (typeof result.recommendedAction === 'string') ctx.recommendedAction = result.recommendedAction;
+            if (result.evidence && typeof result.evidence === 'object') ctx.evidence = result.evidence;
             // Patch equivalence details
             if (stage === 'patch_equivalence' && result.patchEquivalence) {
                 const pe = result.patchEquivalence as Record<string, unknown>;
@@ -2287,6 +2323,9 @@ export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: Mes
                     status: pe.status,
                     actionableHint: pe.actionableHint,
                     error: pe.error,
+                    ...(typeof result.detailedReason === 'string' ? { detailedReason: result.detailedReason } : {}),
+                    ...(typeof result.recommendedAction === 'string' ? { recommendedAction: result.recommendedAction } : {}),
+                    ...(result.evidence && typeof result.evidence === 'object' ? { evidence: result.evidence } : {}),
                 };
             }
             // Submodule reachability details
