@@ -560,5 +560,31 @@
       "logCount": "{{count}} registros",
       "logCountFiltered": " (filtrado de {{total}})"
     }
+  },
+  "historyModal": {
+    "chatHistory": "Historial de chat",
+    "startNewChat": "+ Iniciar nueva sesión de chat",
+    "creating": "⌛ Creando...",
+    "searchPlaceholder": "Buscar título o vista previa",
+    "filterWorkspace": "Filtrar por workspace",
+    "filterModel": "Filtrar por modelo",
+    "sortRecent": "Más recientes",
+    "sortOldest": "Más antiguos primero",
+    "sortMessages": "Más mensajes",
+    "resumeReadyOnly": "Solo reanudables",
+    "untitledSession": "Sesión sin título",
+    "noSavedPreview": "Aún no hay vista previa guardada",
+    "workspaceUnknown": "Workspace desconocido",
+    "selectedWorkspaceSuffix": " · workspace seleccionado",
+    "msgCount": "{{count}} mensajes",
+    "statusActive": "ACTIVA",
+    "statusMissingWorkspace": "FALTA WORKSPACE",
+    "statusResumeSelectedWorkspace": "REANUDAR EN WORKSPACE SELECCIONADO",
+    "statusResuming": "REANUDANDO...",
+    "statusResume": "REANUDAR",
+    "noMatchingHistory": "Ningún historial guardado coincide con estos filtros.",
+    "noRecentChats": "No se encontraron sesiones de chat recientes.",
+    "refreshHistory": "Actualizar historial",
+    "refreshing": "⌛ Actualizando..."
   }
 }

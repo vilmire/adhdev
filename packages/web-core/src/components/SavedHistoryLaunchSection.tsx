@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import LaunchSectionCard from './LaunchSectionCard'
 import {
   buildSavedHistorySummaryView,
@@ -51,6 +52,7 @@ export default function SavedHistoryLaunchSection({
   onOpenHistory,
   onClearSelection,
 }: SavedHistoryLaunchSectionProps) {
+  const { t } = useTranslation('common')
   const summary = selectedSession ? buildSavedHistorySummaryView(selectedSession) : null
   const refreshStatus = buildSavedHistoryRefreshStatus({
     savedSessionsLoading,
@@ -61,7 +63,7 @@ export default function SavedHistoryLaunchSection({
   return (
     <LaunchSectionCard
       title="Saved history"
-      description={getSavedHistoryHelperLabel()}
+      description={getSavedHistoryHelperLabel(t)}
       action={(
         <>
           <button
@@ -78,7 +80,7 @@ export default function SavedHistoryLaunchSection({
             disabled={busy}
             onClick={onOpenHistory}
           >
-            {getOpenHistoryLabel()}
+            {getOpenHistoryLabel(t)}
           </button>
         </>
       )}

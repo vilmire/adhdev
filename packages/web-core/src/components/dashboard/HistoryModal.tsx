@@ -8,6 +8,7 @@ import type { DaemonData } from '../../types';
 import { IconCandle, IconRefresh, IconX } from '../Icons';
 import { isAcpConv, isCliConv, type ActiveConversation } from './types';
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { getConversationHistorySubtitle } from './conversation-presenters';
 import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state';
@@ -76,6 +77,7 @@ export default function HistoryModal({
     savedHistoryFilters, missingWorkspaceResumePath, onSavedHistoryFiltersChange,
     onClose, onNewChat, onSwitchSession, onRefreshHistory, onResumeSavedSession,
 }: HistoryModalProps) {
+    const { t } = useTranslation('common');
     const ideEntry = ides.find(i => i.id === activeConv.routeId);
     const chats = ideEntry?.chats || [];
     const activeChatId = ideEntry?.activeChat?.id;
@@ -122,10 +124,10 @@ export default function HistoryModal({
             <div className="card fade-in relative w-full sm:w-[90%] max-w-[500px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[80vh] flex flex-col p-0 overflow-hidden shadow-[0_20px_40px_rgba(0,0,0,0.4)] rounded-[24px] sm:rounded-[20px]">
                 <div className="px-4 py-4 sm:px-6 sm:py-5 border-b border-border-subtle flex justify-between items-center bg-[var(--surface-primary)] shrink-0">
                     <div>
-                        <h3 className="m-0 text-lg font-extrabold">{isSavedSessionMode ? getSavedHistoryModalTitle() : 'Chat History'}</h3>
+                        <h3 className="m-0 text-lg font-extrabold">{isSavedSessionMode ? getSavedHistoryModalTitle(t) : t('historyModal.chatHistory')}</h3>
                         <div className="text-xs text-text-muted mt-0.5">{getConversationHistorySubtitle(activeConv)}</div>
                         {isSavedSessionMode && (
-                            <div className="text-[11px] text-text-muted mt-1">{getSavedHistoryHelperLabel()}</div>
+                            <div className="text-[11px] text-text-muted mt-1">{getSavedHistoryHelperLabel(t)}</div>
                         )}
                     </div>
                     <button onClick={onClose} className="btn btn-secondary btn-sm rounded-md px-1.5 py-1.5 border-transparent bg-transparent hover:bg-bg-secondary"><IconX size={16} /></button>
@@ -138,7 +140,7 @@ export default function HistoryModal({
                             disabled={isCreatingChat}
                             className="w-full p-3.5 rounded-xl mb-3 bg-indigo-500/10 border border-dashed border-accent text-accent font-bold text-sm cursor-pointer"
                         >
-                            {isCreatingChat ? '⌛ Creating...' : '+ Start New Chat Session'}
+                            {isCreatingChat ? t('historyModal.creating') : t('historyModal.startNewChat')}
                         </button>
                     )}
 
@@ -150,21 +152,21 @@ export default function HistoryModal({
                                         type="text"
                                         value={filters.textQuery}
                                         onChange={(event) => setFilters({ ...filters, textQuery: event.target.value })}
-                                        placeholder="Search title or preview"
+                                        placeholder={t('historyModal.searchPlaceholder')}
                                         className="w-full rounded-lg border border-border-subtle bg-bg-primary px-3 py-2 text-sm text-text-primary"
                                     />
                                     <input
                                         type="text"
                                         value={filters.workspaceQuery}
                                         onChange={(event) => setFilters({ ...filters, workspaceQuery: event.target.value })}
-                                        placeholder="Filter by workspace"
+                                        placeholder={t('historyModal.filterWorkspace')}
                                         className="w-full rounded-lg border border-border-subtle bg-bg-primary px-3 py-2 text-sm text-text-primary"
                                     />
                                     <input
                                         type="text"
                                         value={filters.modelQuery}
                                         onChange={(event) => setFilters({ ...filters, modelQuery: event.target.value })}
-                                        placeholder="Filter by model"
+                                        placeholder={t('historyModal.filterModel')}
                                         className="w-full rounded-lg border border-border-subtle bg-bg-primary px-3 py-2 text-sm text-text-primary"
                                     />
                                     <select
@@ -172,9 +174,9 @@ export default function HistoryModal({
                                         onChange={(event) => setFilters({ ...filters, sortMode: event.target.value as SavedHistoryFilterState['sortMode'] })}
                                         className="w-full rounded-lg border border-border-subtle bg-bg-primary px-3 py-2 text-sm text-text-primary"
                                     >
-                                        <option value="recent">Most recent</option>
-                                        <option value="oldest">Oldest first</option>
-                                        <option value="messages">Most messages</option>
+                                        <option value="recent">{t('historyModal.sortRecent')}</option>
+                                        <option value="oldest">{t('historyModal.sortOldest')}</option>
+                                        <option value="messages">{t('historyModal.sortMessages')}</option>
                                     </select>
                                 </div>
                                 <label className="mt-2 flex items-center gap-2 text-[11px] text-text-muted">
@@ -183,7 +185,7 @@ export default function HistoryModal({
                                         checked={filters.resumableOnly}
                                         onChange={(event) => setFilters({ ...filters, resumableOnly: event.target.checked })}
                                     />
-                                    Resume-ready only
+                                    {t('historyModal.resumeReadyOnly')}
                                 </label>
                             </div>
                             {filteredSavedSessions.map((session) => {
@@ -210,7 +212,7 @@ export default function HistoryModal({
                                                 <div className={`font-bold text-sm mb-1 truncate ${
                                                     isActive ? 'text-[var(--accent-primary-light)]' : 'text-text-primary'
                                                 }`}>
-                                                    {session.title || 'Untitled Session'}
+                                                    {session.title || t('historyModal.untitledSession')}
                                                 </div>
                                                 <div className="text-[11px] text-text-muted font-mono truncate">
                                                     {session.providerSessionId}
@@ -221,25 +223,25 @@ export default function HistoryModal({
                                             </div>
                                         </div>
                                         <div className="mt-2 text-[12px] text-text-muted line-clamp-2">
-                                            {session.preview || 'No saved preview yet'}
+                                            {session.preview || t('historyModal.noSavedPreview')}
                                         </div>
                                         <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-text-muted">
                                             <div className="truncate">
-                                                {session.workspace || 'Workspace unknown'}
-                                                {usesSelectedWorkspace ? ' · selected workspace' : ''}
+                                                {session.workspace || t('historyModal.workspaceUnknown')}
+                                                {usesSelectedWorkspace ? t('historyModal.selectedWorkspaceSuffix') : ''}
                                                 {getProviderSummaryLine(session.summaryMetadata) ? ` · ${getProviderSummaryLine(session.summaryMetadata)}` : ''}
-                                                {session.messageCount > 0 ? ` · ${session.messageCount} msgs` : ''}
+                                                {session.messageCount > 0 ? ` · ${t('historyModal.msgCount', { count: session.messageCount })}` : ''}
                                             </div>
                                             <div className="shrink-0">
                                                 {isActive
-                                                    ? 'ACTIVE'
+                                                    ? t('historyModal.statusActive')
                                                     : !session.canResume
-                                                        ? 'MISSING WORKSPACE'
+                                                        ? t('historyModal.statusMissingWorkspace')
                                                         : usesSelectedWorkspace
-                                                            ? 'RESUME IN SELECTED WORKSPACE'
+                                                            ? t('historyModal.statusResumeSelectedWorkspace')
                                                         : isResumingSavedSessionId === session.providerSessionId
-                                                            ? 'RESUMING...'
-                                                            : 'RESUME'}
+                                                            ? t('historyModal.statusResuming')
+                                                            : t('historyModal.statusResume')}
                                             </div>
                                         </div>
                                     </button>
@@ -259,12 +261,12 @@ export default function HistoryModal({
                             <div className={`font-bold text-sm mb-1 ${
                                 activeChatId === chat.id ? 'text-[var(--accent-primary-light)]' : 'text-text-primary'
                             }`}>
-                                {chat.title || 'Untitled Session'}
+                                {chat.title || t('historyModal.untitledSession')}
                             </div>
                             <div className="flex justify-between items-center">
                                 <div className="text-[11px] text-text-muted font-mono">{chat.id.substring(0, 12)}...</div>
                                 {activeChatId === chat.id && (
-                                    <span className="text-[10px] bg-accent text-white px-2 py-0.5 rounded-[10px] font-extrabold">ACTIVE</span>
+                                    <span className="text-[10px] bg-accent text-white px-2 py-0.5 rounded-[10px] font-extrabold">{t('historyModal.statusActive')}</span>
                                 )}
                             </div>
                         </div>
@@ -275,14 +277,14 @@ export default function HistoryModal({
                             <div className="text-3xl mb-3 opacity-60"><IconCandle size={32} /></div>
                             <div className="text-[13px]">
                                 {isSavedSessionMode
-                                    ? (savedSessions.length > 0 ? 'No saved history matches these filters.' : getSavedHistoryEmptyStateLabel())
-                                    : 'No recent chat sessions found.'}
+                                    ? (savedSessions.length > 0 ? t('historyModal.noMatchingHistory') : getSavedHistoryEmptyStateLabel(t))
+                                    : t('historyModal.noRecentChats')}
                             </div>
                         </div>
                     )}
                     {isSavedSessionMode && isSavedSessionsLoading && (
                         <div className="py-10 px-5 text-center text-text-muted">
-                            <div className="text-[13px]">{getRefreshingSavedHistoryLabel()}</div>
+                            <div className="text-[13px]">{getRefreshingSavedHistoryLabel(t)}</div>
                         </div>
                     )}
                 </div>
@@ -294,8 +296,8 @@ export default function HistoryModal({
                         className="btn btn-secondary btn-sm rounded-[10px]"
                     >
                         {(isRefreshingHistory || isSavedSessionsLoading)
-                            ? '⌛ Refreshing...'
-                            : <span className="flex items-center gap-1.5"><IconRefresh size={13} /> {isSavedSessionMode ? getRefreshSavedHistoryLabel() : 'Refresh History'}</span>}
+                            ? t('historyModal.refreshing')
+                            : <span className="flex items-center gap-1.5"><IconRefresh size={13} /> {isSavedSessionMode ? getRefreshSavedHistoryLabel(t) : t('historyModal.refreshHistory')}</span>}
                     </button>
                 </div>
             </div>

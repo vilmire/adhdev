@@ -560,5 +560,31 @@
       "logCount": "{{count}} 条日志",
       "logCountFiltered": " (从 {{total}} 条中筛选)"
     }
+  },
+  "historyModal": {
+    "chatHistory": "聊天记录",
+    "startNewChat": "+ 开始新聊天会话",
+    "creating": "⌛ 创建中...",
+    "searchPlaceholder": "搜索标题或预览",
+    "filterWorkspace": "按工作区筛选",
+    "filterModel": "按模型筛选",
+    "sortRecent": "最新",
+    "sortOldest": "最早",
+    "sortMessages": "消息最多",
+    "resumeReadyOnly": "仅可恢复",
+    "untitledSession": "无标题会话",
+    "noSavedPreview": "暂无保存的预览",
+    "workspaceUnknown": "工作区未知",
+    "selectedWorkspaceSuffix": " · 选定的工作区",
+    "msgCount": "{{count}} 条消息",
+    "statusActive": "活动",
+    "statusMissingWorkspace": "缺少工作区",
+    "statusResumeSelectedWorkspace": "在选定的工作区中恢复",
+    "statusResuming": "恢复中...",
+    "statusResume": "恢复",
+    "noMatchingHistory": "没有符合这些筛选条件的保存记录。",
+    "noRecentChats": "未找到最近的聊天会话。",
+    "refreshHistory": "刷新记录",
+    "refreshing": "⌛ 刷新中..."
   }
 }

@@ -560,5 +560,31 @@
       "logCount": "ログ {{count}} 件",
       "logCountFiltered": " ({{total}} 件から絞り込み)"
     }
+  },
+  "historyModal": {
+    "chatHistory": "チャット履歴",
+    "startNewChat": "+ 新しいチャットセッションを開始",
+    "creating": "⌛ 作成中...",
+    "searchPlaceholder": "タイトルまたはプレビューを検索",
+    "filterWorkspace": "ワークスペースで絞り込み",
+    "filterModel": "モデルで絞り込み",
+    "sortRecent": "最新順",
+    "sortOldest": "古い順",
+    "sortMessages": "メッセージ数順",
+    "resumeReadyOnly": "再開可能のみ",
+    "untitledSession": "無題のセッション",
+    "noSavedPreview": "保存されたプレビューはありません",
+    "workspaceUnknown": "ワークスペース不明",
+    "selectedWorkspaceSuffix": " · 選択したワークスペース",
+    "msgCount": "{{count}} 件のメッセージ",
+    "statusActive": "アクティブ",
+    "statusMissingWorkspace": "ワークスペースなし",
+    "statusResumeSelectedWorkspace": "選択したワークスペースで再開",
+    "statusResuming": "再開中...",
+    "statusResume": "再開",
+    "noMatchingHistory": "これらのフィルターに一致する保存履歴はありません。",
+    "noRecentChats": "最近のチャットセッションが見つかりません。",
+    "refreshHistory": "履歴を更新",
+    "refreshing": "⌛ 更新中..."
   }
 }

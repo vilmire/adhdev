@@ -13,6 +13,7 @@
  * and the full goal cached per-mission so a second expand is instant.
  */
 import { useCallback, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { Section } from '../../components/ui/Section'
 
@@ -63,6 +64,7 @@ function missionStatusOf(m: MissionLike): string {
 const COLLAPSED_LIMIT = 8
 
 export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: MeshMissionsSectionProps) {
+    const { t } = useTranslation('common')
     const missions = useMemo(() => readMissions(status), [status])
     // Full goal text fetched on demand, keyed by mission id.
     const [fullGoals, setFullGoals] = useState<Record<string, string>>({})
@@ -104,11 +106,11 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
             }
             setFullGoals(prev => ({ ...prev, ...next }))
         } catch (err) {
-            setFetchError(err instanceof Error ? err.message : 'Failed to fetch full mission goals')
+            setFetchError(err instanceof Error ? err.message : t('repoMesh.missions.errorFetch'))
         } finally {
             setFetching(false)
         }
-    }, [daemonId, meshId, sendCommand])
+    }, [daemonId, meshId, sendCommand, t])
 
     const toggle = useCallback((id: string) => {
         setExpanded(prev => ({ ...prev, [id]: !prev[id] }))
@@ -119,7 +121,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
     if (missions.length === 0) return null
 
     return (
-        <Section title="Missions" description="Active and historical missions reported by the coordinator. Expand a goal to fetch its full text on demand.">
+        <Section title={t('repoMesh.missions.title')} description={t('repoMesh.missions.description')}>
             {fetchError && <div className="mb-3 text-[12px] text-amber-400">{fetchError}</div>}
             <div className="mb-3 flex flex-wrap items-center gap-1.5">
                 {STATUS_FILTERS.filter(s => (statusCounts[s] || 0) > 0).map(s => (
@@ -149,7 +151,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                 </button>
             </div>
             {filtered.length === 0 && (
-                <div className="text-[12px] text-text-muted">No {statusFilter} missions.</div>
+                <div className="text-[12px] text-text-muted">{t('repoMesh.missions.empty', { status: statusFilter })}</div>
             )}
             <div className="flex flex-col gap-2">
                 {visible.map(mission => {
@@ -171,13 +173,13 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                                     </span>
                                 )}
                                 {total > 0 && (
-                                    <span className="shrink-0 text-[11px] text-text-muted">{total} task{total === 1 ? '' : 's'}</span>
+                                    <span className="shrink-0 text-[11px] text-text-muted">{t('repoMesh.missions.taskCount', { count: total })}</span>
                                 )}
                             </div>
                             {goalText && (
                                 <div className={`mt-1.5 whitespace-pre-wrap text-[12px] leading-5 text-text-secondary ${isOpen ? 'max-h-72 overflow-y-auto' : 'line-clamp-2'}`}>
                                     {goalText}
-                                    {stillTruncated && <span className="text-text-muted"> … (full goal unavailable)</span>}
+                                    {stillTruncated && <span className="text-text-muted">{t('repoMesh.missions.goalUnavailable')}</span>}
                                 </div>
                             )}
                             {(preview.truncated || full) && canCommand && (
@@ -187,7 +189,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                                     onClick={() => toggle(mission.id)}
                                     disabled={fetching}
                                 >
-                                    {isOpen ? 'Show less' : fetching && !full ? 'Loading…' : 'Show full goal'}
+                                    {isOpen ? t('repoMesh.missions.showLess') : fetching && !full ? t('repoMesh.missions.loading') : t('repoMesh.missions.showFullGoal')}
                                 </button>
                             )}
                         </div>
@@ -200,7 +202,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                     className="mt-2 text-[12px] text-accent-primary hover:underline"
                     onClick={() => setShowAll(true)}
                 >
-                    Show {hiddenCount} more
+                    {t('repoMesh.missions.showMore', { count: hiddenCount })}
                 </button>
             )}
         </Section>

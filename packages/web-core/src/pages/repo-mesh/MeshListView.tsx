@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import AppPage from '../../components/ui/AppPage'
 import { Section } from '../../components/ui/Section'
@@ -65,35 +66,36 @@ export function MeshListView({
     onCreate,
     onCancelCreate,
 }: Props) {
+    const { t } = useTranslation('common')
     return (
         <AppPage
             icon={<IconMesh />}
-            title="Repo Meshes"
-            subtitle={`${meshes.length} mesh${meshes.length !== 1 ? 'es' : ''}`}
+            title={t('repoMesh.list.title')}
+            subtitle={t('repoMesh.list.count', { count: meshes.length })}
             widthClassName="max-w-5xl"
-            actions={<button className="btn btn-primary btn-sm" onClick={onToggleCreate}>+ Create Mesh</button>}
+            actions={<button className="btn btn-primary btn-sm" onClick={onToggleCreate}>{t('repoMesh.list.createMesh')}</button>}
         >
             {error && <AlertBanner variant="error" onDismiss={onDismissError} className="mb-4">{error}</AlertBanner>}
 
             {showCreate && (
                 <Section className="mb-5 border-accent/40 animate-[fadeIn_0.3s_ease-out]">
-                    <h3 className="text-base font-bold mb-4">Create Repo Mesh</h3>
+                    <h3 className="text-base font-bold mb-4">{t('repoMesh.list.createTitle')}</h3>
 
                     {features.createDaemonPicker && (
-                        <FormField label="Create on machine" hint="Mesh setup is stored by the selected daemon.">
+                        <FormField label={t('repoMesh.list.createOnMachine')} hint={t('repoMesh.list.createOnMachineHint')}>
                             <select className="input w-full" value={newMeshDaemonId} onChange={e => onNewMeshDaemonIdChange(e.target.value)} disabled={!daemons.length}>
                                 {daemons.length === 0
-                                    ? <option value="">No connected daemon</option>
+                                    ? <option value="">{t('repoMesh.list.noConnectedDaemon')}</option>
                                     : daemons.map(d => <option key={d.id} value={d.id}>{daemonLabel(d)}</option>)}
                             </select>
                         </FormField>
                     )}
 
                     {features.createDaemonPicker && (
-                        <FormField label="Workspace" hint="Choose from workspaces registered by the selected daemon.">
+                        <FormField label={t('repoMesh.list.workspace')} hint={t('repoMesh.list.workspaceHint')}>
                             <select className="input w-full" value={newMeshWorkspace} onChange={e => onNewMeshWorkspaceChange(e.target.value)} disabled={!newMeshDaemonId || !createPickerWorkspaces.length}>
-                                {!newMeshDaemonId ? <option value="">Select a machine first</option>
-                                    : createPickerWorkspaces.length === 0 ? <option value="">No registered workspaces</option>
+                                {!newMeshDaemonId ? <option value="">{t('repoMesh.list.selectMachineFirst')}</option>
+                                    : createPickerWorkspaces.length === 0 ? <option value="">{t('repoMesh.list.noRegisteredWorkspaces')}</option>
                                     : createPickerWorkspaces.map(w => (
                                         <option key={w.id || w.path} value={w.path}>
                                             {w.label ? `${w.label} · ${w.path}` : w.path}
@@ -103,32 +105,32 @@ export function MeshListView({
                         </FormField>
                     )}
 
-                    <FormField label="Name">
+                    <FormField label={t('repoMesh.list.name')}>
                         <Input value={createName} onChange={e => onCreateNameChange(e.target.value)} placeholder="my-project-mesh" autoFocus />
                     </FormField>
-                    <FormField label="Repo remote URL (optional)" hint="Provide a remote URL OR a stable identity.">
+                    <FormField label={t('repoMesh.list.remoteUrl')} hint={t('repoMesh.list.remoteUrlHint')}>
                         <Input value={createRepoRemoteUrl} onChange={e => onCreateRepoRemoteUrlChange(e.target.value)} placeholder="https://github.com/user/repo" />
                     </FormField>
-                    <FormField label="Repo identity (optional)" hint="Provide a remote URL OR a stable identity.">
+                    <FormField label={t('repoMesh.list.repoIdentity')} hint={t('repoMesh.list.remoteUrlHint')}>
                         <Input value={createRepoIdentity} onChange={e => onCreateRepoIdentityChange(e.target.value)} placeholder="github.com/user/repo" />
                     </FormField>
 
                     <div className="flex gap-2 mt-3">
                         <button className="btn btn-primary btn-sm" onClick={onCreate}
                             disabled={!createName.trim() || (!createRepoRemoteUrl.trim() && !createRepoIdentity.trim()) || (features.createDaemonPicker && (!newMeshDaemonId || !newMeshWorkspace))}>
-                            Create
+                            {t('repoMesh.list.create')}
                         </button>
-                        <button className="btn btn-secondary btn-sm" onClick={onCancelCreate}>Cancel</button>
+                        <button className="btn btn-secondary btn-sm" onClick={onCancelCreate}>{t('repoMesh.list.cancel')}</button>
                     </div>
                 </Section>
             )}
 
             {loading ? (
-                <div className="text-sm text-text-muted p-4">Loading meshes...</div>
+                <div className="text-sm text-text-muted p-4">{t('repoMesh.list.loading')}</div>
             ) : meshes.length === 0 ? (
-                <EmptyState icon={<IconMesh />} title="No Repo Meshes"
-                    description={daemons.length > 0 ? 'Create a mesh to get started.' : 'Connect an ADHDev daemon first.'}
-                    action={<button className="btn btn-primary btn-sm" disabled={!daemons.length} onClick={onToggleCreate}>Create First Mesh</button>} />
+                <EmptyState icon={<IconMesh />} title={t('repoMesh.list.emptyTitle')}
+                    description={daemons.length > 0 ? t('repoMesh.list.emptyWithDaemons') : t('repoMesh.list.emptyNoDaemons')}
+                    action={<button className="btn btn-primary btn-sm" disabled={!daemons.length} onClick={onToggleCreate}>{t('repoMesh.list.createFirst')}</button>} />
             ) : (
                 <div className="flex flex-col gap-2.5">
                     {meshes.map(mesh => (
@@ -141,7 +143,7 @@ export function MeshListView({
                                         <span className="font-bold text-sm">{mesh.name}</span>
                                     </div>
                                     <div className="text-[12px] text-text-muted flex items-center gap-2">
-                                        <span className="font-mono">{mesh.repoIdentity || (mesh as any).repo_identity || 'No repo identity'}</span>
+                                        <span className="font-mono">{mesh.repoIdentity || (mesh as any).repo_identity || t('repoMesh.list.noRepoIdentity')}</span>
                                         {(mesh.defaultBranch || (mesh as any).default_branch) && (
                                             <span className="inline-flex items-center gap-1"><IconGitBranch size={11} />{mesh.defaultBranch || (mesh as any).default_branch}</span>
                                         )}
@@ -149,7 +151,7 @@ export function MeshListView({
                                 </div>
                                 <div className="text-right text-[11px] text-text-muted shrink-0 ml-4">
                                     <div>{new Date(mesh.createdAt || (mesh as any).created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
-                                    <div className="text-text-muted/60">{mesh.nodes?.length ?? (mesh as any).nodeCount ?? 0} node(s)</div>
+                                    <div className="text-text-muted/60">{mesh.nodes?.length ?? (mesh as any).nodeCount ?? 0} {t('repoMesh.list.nodesSuffix')}</div>
                                 </div>
                             </div>
                         </button>

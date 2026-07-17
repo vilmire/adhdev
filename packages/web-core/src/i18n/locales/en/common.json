@@ -655,7 +655,11 @@
       "activeQueueAssignments": "Active queue assignments",
       "noActiveAssignment": "No active assigned queue task for this node.",
       "activeSessions": "Active sessions",
-      "launchBlocked": "No provider detected on this node — task launch is blocked until a provider is selected or installed. (Empty capability slots alone do not block launch; this means no provider was found.)"
+      "launchBlocked": "No provider detected on this node — task launch is blocked until a provider is selected or installed. (Empty capability slots alone do not block launch; this means no provider was found.)",
+      "titleNoCount": "Nodes & Providers",
+      "workspacesDetected": "{{count}} workspace(s) detected",
+      "pickFromSaved": "← Pick from saved workspaces",
+      "ownerMachine": "Owner: {{owner}} · Machine: {{machine}}"
     },
     "host": {
       "coordinatorProvider": "Coordinator CLI provider",
@@ -681,7 +685,12 @@
       "hostDaemonHint": "Pick the daemon that will host this mesh. Launching the coordinator on it fixes it as the host.",
       "resolvingHost": "Resolving host… (or pick a daemon to host)",
       "launchHostSetsHost": "Launch Host Coordinator (sets host)",
-      "noDaemonsToHost": "No connected daemons. Bring a daemon online to host this mesh."
+      "noDaemonsToHost": "No connected daemons. Bring a daemon online to host this mesh.",
+      "online": "online",
+      "offline": "offline",
+      "noCommandTarget": "No command target available — bring the host or a daemon online.",
+      "pickHostFirst": "Pick a host daemon (or wait for the host pin to resolve) first.",
+      "attachNodeFirst": "Attach a workspace from this daemon as a node first."
     },
     "slotEditor": {
       "empty": "No capability slots set — that's fine. This node still runs tasks using its provider priority order (below). Slots are optional fine-tuning: add one to route specific task difficulties or capabilities to a specific tool.",
@@ -1245,5 +1254,31 @@
       "logCount": "{{count}} logs",
       "logCountFiltered": " (filtered from {{total}})"
     }
+  },
+  "historyModal": {
+    "chatHistory": "Chat History",
+    "startNewChat": "+ Start New Chat Session",
+    "creating": "⌛ Creating...",
+    "searchPlaceholder": "Search title or preview",
+    "filterWorkspace": "Filter by workspace",
+    "filterModel": "Filter by model",
+    "sortRecent": "Most recent",
+    "sortOldest": "Oldest first",
+    "sortMessages": "Most messages",
+    "resumeReadyOnly": "Resume-ready only",
+    "untitledSession": "Untitled Session",
+    "noSavedPreview": "No saved preview yet",
+    "workspaceUnknown": "Workspace unknown",
+    "selectedWorkspaceSuffix": " · selected workspace",
+    "msgCount": "{{count}} msgs",
+    "statusActive": "ACTIVE",
+    "statusMissingWorkspace": "MISSING WORKSPACE",
+    "statusResumeSelectedWorkspace": "RESUME IN SELECTED WORKSPACE",
+    "statusResuming": "RESUMING...",
+    "statusResume": "RESUME",
+    "noMatchingHistory": "No saved history matches these filters.",
+    "noRecentChats": "No recent chat sessions found.",
+    "refreshHistory": "Refresh History",
+    "refreshing": "⌛ Refreshing..."
   }
 }

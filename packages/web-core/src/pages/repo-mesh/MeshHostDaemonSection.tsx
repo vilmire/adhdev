@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Section } from '../../components/ui/Section'
 import { AlertBanner } from '../../components/ui/AlertBanner'
 import { FormField } from '../../components/ui/FormField'
@@ -67,11 +68,12 @@ export function MeshHostDaemonSection({
     onHostRebindDaemonIdChange,
     onLaunchCoordinator,
 }: Props) {
+    const { t } = useTranslation('common')
     const cliProviderField = (
-        <FormField label="Coordinator CLI provider" hint="Tool launched for the host coordinator session.">
+        <FormField label={t('repoMesh.host.coordinatorProvider')} hint={t('repoMesh.host.coordinatorProviderHint')}>
             <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
                 value={coordinatorCliType} onChange={e => onCoordinatorCliTypeChange(e.target.value)}>
-                <option value="">Use node provider priority</option>
+                <option value="">{t('repoMesh.host.useNodePriority')}</option>
                 <option value="claude-cli">Claude Code</option>
                 <option value="codex-cli">Codex</option>
                 <option value="gemini-cli">Gemini</option>
@@ -87,16 +89,16 @@ export function MeshHostDaemonSection({
     // ── Host already pinned: read-only display (never a picker) ──
     if (hostPinned) {
         return (
-            <Section title="Mesh Host daemon" description="The daemon that owns this mesh's coordinator and live truth (status, queue, graph, node detail). Fixed when the mesh is created — it cannot be reassigned here.">
+            <Section title={t('repoMesh.host.title')} description={t('repoMesh.host.descriptionSet')}>
                 <div className="flex flex-wrap items-center gap-3">
                     <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[13px] text-text-primary ${hostOnline ? 'border-accent-primary/40 bg-accent-primary/10' : 'border-amber-500/40 bg-amber-500/10'}`}>
-                        <span className="text-text-muted">Host:</span>
-                        <span className="font-medium">{hostLabel || 'Unknown'}</span>
-                        <span className={hostOnline ? 'text-text-muted' : 'text-amber-400'}>· {hostOnline ? 'online' : 'offline'}</span>
+                        <span className="text-text-muted">{t('repoMesh.host.hostLabel')}</span>
+                        <span className="font-medium">{hostLabel || t('repoMesh.host.unknown')}</span>
+                        <span className={hostOnline ? 'text-text-muted' : 'text-amber-400'}>· {hostOnline ? t('repoMesh.host.online') : t('repoMesh.host.offline')}</span>
                     </span>
                     {selectedHostNode?.workspace && (
                         <span className="text-[12px] text-text-muted">
-                            Host node: <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span>
+                            {t('repoMesh.host.hostNode')} <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span>
                         </span>
                     )}
                 </div>
@@ -105,16 +107,14 @@ export function MeshHostDaemonSection({
                 {!hostOnline && (
                     <div className="mt-4">
                         <AlertBanner variant="warning" className="mb-3">
-                            <strong>Host offline.</strong>{' '}
-                            The pinned host daemon is not connected. Live status/queue/graph will not load until it reconnects.
-                            You can temporarily route commands through another connected daemon below — this is a routing fallback,
-                            not a host reassignment.
+                            <strong>{t('repoMesh.host.hostOffline')}</strong>{' '}
+                            {t('repoMesh.host.hostOfflineText')}
                         </AlertBanner>
                         {daemons.length > 0 ? (
-                            <FormField label="Reconnect to command" hint="Route commands through this connected daemon until the host is back. Does not change the mesh host.">
+                            <FormField label={t('repoMesh.host.reconnectToCommand')} hint={t('repoMesh.host.reconnectToCommandHint')}>
                                 <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
                                     value={hostRebindDaemonId} onChange={e => onHostRebindDaemonIdChange(e.target.value)}>
-                                    <option value="">Wait for host to reconnect</option>
+                                    <option value="">{t('repoMesh.host.waitForHost')}</option>
                                     {daemons.map(d => (
                                         <option key={d.id} value={d.id}>{daemonLabel(d)}</option>
                                     ))}
@@ -122,7 +122,7 @@ export function MeshHostDaemonSection({
                             </FormField>
                         ) : (
                             <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-muted">
-                                No connected daemons available to route commands through. Bring the host (or another daemon) online.
+                                {t('repoMesh.host.noDaemonsToRoute')}
                             </div>
                         )}
                     </div>
@@ -132,8 +132,8 @@ export function MeshHostDaemonSection({
                     {cliProviderField}
                     <button className="btn btn-primary btn-sm" onClick={onLaunchCoordinator}
                         disabled={launchingCoordinator || !coordinatorDaemonId}
-                        title={!coordinatorDaemonId ? 'No command target available — bring the host or a daemon online.' : undefined}>
-                        {launchingCoordinator ? 'Launching...' : 'Launch Host Coordinator'}
+                        title={!coordinatorDaemonId ? t('repoMesh.host.noCommandTarget') : undefined}>
+                        {launchingCoordinator ? t('repoMesh.host.launching') : t('repoMesh.host.launchHost')}
                     </button>
                 </div>
                 {launchResultBanner}
@@ -150,10 +150,10 @@ export function MeshHostDaemonSection({
     // so the header never flashes a wrong remote node on cold entry.
     const setupDaemon = daemons.find(d => d.id === coordinatorDaemonId)
     return (
-        <Section title="Mesh Host daemon" description="This mesh has no host yet. Launching the coordinator on a connected daemon fixes that daemon as the mesh host (a 1:1 pin); it owns live truth thereafter.">
+        <Section title={t('repoMesh.host.title')} description={t('repoMesh.host.descriptionUnset')}>
             <AlertBanner variant="info" className="mb-4">
-                <strong>Set the mesh host.</strong>{' '}
-                The host is the daemon that owns this mesh's coordinator and live truth. Launch the host coordinator below to set it — the host is fixed once established.
+                <strong>{t('repoMesh.host.setHostBanner')}</strong>{' '}
+                {t('repoMesh.host.setHostBannerText')}
             </AlertBanner>
             {daemons.length > 0 ? (
                 <>
@@ -170,10 +170,10 @@ export function MeshHostDaemonSection({
                         // an arbitrary connected daemon (HOST-MISSEED-FIRSTSETUP) — that is
                         // what flashed a wrong remote node (e.g. moltbot) in the header on
                         // cold entry. Let the operator explicitly pick the host instead.
-                        <FormField label="Host daemon" hint="Pick the daemon that will host this mesh. Launching the coordinator on it fixes it as the host.">
+                        <FormField label={t('repoMesh.host.hostDaemon')} hint={t('repoMesh.host.hostDaemonHint')}>
                             <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
                                 value="" onChange={e => onCoordinatorDaemonIdChange(e.target.value)}>
-                                <option value="">Resolving host… (or pick a daemon to host)</option>
+                                <option value="">{t('repoMesh.host.resolvingHost')}</option>
                                 {daemons.map(d => (
                                     <option key={d.id} value={d.id}>{daemonLabel(d)}</option>
                                 ))}
@@ -184,14 +184,14 @@ export function MeshHostDaemonSection({
                         {cliProviderField}
                         <button className="btn btn-primary btn-sm" onClick={onLaunchCoordinator}
                             disabled={!coordinatorDaemonId || !isHostNodeAttached || launchingCoordinator}
-                            title={!coordinatorDaemonId ? 'Pick a host daemon (or wait for the host pin to resolve) first.' : !isHostNodeAttached ? 'Attach a workspace from this daemon as a node first.' : undefined}>
-                            {launchingCoordinator ? 'Launching...' : 'Launch Host Coordinator (sets host)'}
+                            title={!coordinatorDaemonId ? t('repoMesh.host.pickHostFirst') : !isHostNodeAttached ? t('repoMesh.host.attachNodeFirst') : undefined}>
+                            {launchingCoordinator ? t('repoMesh.host.launching') : t('repoMesh.host.launchHostSetsHost')}
                         </button>
                     </div>
                 </>
             ) : (
                 <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-muted">
-                    No connected daemons. Bring a daemon online to host this mesh.
+                    {t('repoMesh.host.noDaemonsToHost')}
                 </div>
             )}
             {launchResultBanner}

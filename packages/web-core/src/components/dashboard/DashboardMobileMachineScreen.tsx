@@ -4,6 +4,7 @@ import { formatRelativeTime, type MobileConversationListItem, type MobileMachine
 import type { ActiveConversation } from './types'
 import type { MachineRecentLaunch, WorkspaceLaunchKind } from '../../pages/machine/types'
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import {
     getCliLaunchBusyLabel,
@@ -82,6 +83,7 @@ export default function DashboardMobileMachineScreen({
     onLaunchWorkspaceProvider,
     onListSavedSessions,
 }: DashboardMobileMachineScreenProps) {
+    const { t } = useTranslation('common')
     const formatKindLabel = (kind: MachineRecentLaunch['kind']) => {
         if (kind === 'ide') return 'IDE'
         if (kind === 'cli') return 'CLI'
@@ -116,25 +118,25 @@ export default function DashboardMobileMachineScreen({
                 })
                 launcher.openLaunchConfirm({
                     title: session.kind === 'ide'
-                        ? getMachineLaunchConfirmTitle('restart-ide', session.label)
+                        ? getMachineLaunchConfirmTitle(t, 'restart-ide', session.label)
                         : session.providerSessionId
-                            ? getRecentHistoryResumeConfirmTitle(session.label)
-                            : getMachineLaunchConfirmTitle('start-fresh', session.label),
+                            ? getRecentHistoryResumeConfirmTitle(t, session.label)
+                            : getMachineLaunchConfirmTitle(t, 'start-fresh', session.label),
                     description: session.kind === 'ide'
-                        ? getMachineLaunchConfirmDescription('restart-ide')
+                        ? getMachineLaunchConfirmDescription(t, 'restart-ide')
                         : session.providerSessionId
-                            ? getRecentHistoryResumeConfirmDescription()
-                            : getMachineLaunchConfirmDescription('start-fresh'),
+                            ? getRecentHistoryResumeConfirmDescription(t)
+                            : getMachineLaunchConfirmDescription(t, 'start-fresh'),
                     confirmLabel: session.kind === 'ide'
-                        ? getMachineLaunchConfirmLabel('restart-ide')
+                        ? getMachineLaunchConfirmLabel(t, 'restart-ide')
                         : session.providerSessionId
-                            ? getCliLaunchPrimaryActionLabel(true)
-                            : getMachineLaunchConfirmLabel('start-fresh'),
+                            ? getCliLaunchPrimaryActionLabel(t, true)
+                            : getMachineLaunchConfirmLabel(t, 'start-fresh'),
                     busyLabel: session.kind === 'ide'
-                        ? getMachineLaunchBusyLabel('restart-ide')
+                        ? getMachineLaunchBusyLabel(t, 'restart-ide')
                         : session.providerSessionId
-                            ? getCliLaunchBusyLabel(true)
-                            : getMachineLaunchBusyLabel('start-fresh'),
+                            ? getCliLaunchBusyLabel(t, true)
+                            : getMachineLaunchBusyLabel(t, 'start-fresh'),
                     workspaceOptions: options,
                     selectedWorkspaceKey: selectedKey,
                     details: [
@@ -151,7 +153,7 @@ export default function DashboardMobileMachineScreen({
                 })
             },
         }
-    }), [launcher, onOpenRecent, topRecentLaunches])
+    }), [launcher, onOpenRecent, topRecentLaunches, t])
     const conversationCards = useMemo(() => topConversationItems.map(item => ({
         key: `recent-chat:${item.conversation.tabKey}`,
         primary: getConversationTitle(item.conversation),
@@ -532,7 +534,7 @@ export default function DashboardMobileMachineScreen({
                     selectedWorkspaceKey={launcher.launchConfirmWorkspaceKey}
                     onWorkspaceChange={launcher.setLaunchConfirmWorkspaceKeyAndSync}
                     confirmLabel={launcher.launchConfirm.providerType
-                        ? getCliLaunchPrimaryActionLabel(!!launcher.launchConfirmResumeId)
+                        ? getCliLaunchPrimaryActionLabel(t, !!launcher.launchConfirmResumeId)
                         : launcher.launchConfirm.confirmLabel}
                     busyLabel={launcher.launchConfirm.providerType
                         ? undefined
@@ -551,7 +553,7 @@ export default function DashboardMobileMachineScreen({
                                     <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Resume saved history</div>
                                     {launcher.launchConfirmSessionsLoading && <div className="text-[10px] text-text-secondary font-medium">Loading...</div>}
                                 </div>
-                                <div className="text-[11px] text-text-secondary mb-2">{getSavedHistoryHelperLabel()}</div>
+                                <div className="text-[11px] text-text-secondary mb-2">{getSavedHistoryHelperLabel(t)}</div>
                                 <div className="grid grid-cols-1 gap-2 mb-2">
                                     <input
                                         type="text"
@@ -603,7 +605,7 @@ export default function DashboardMobileMachineScreen({
                                     className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
                                     disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
                                 >
-                                    <option value="">{getCliResumeSelectPlaceholder()}</option>
+                                    <option value="">{getCliResumeSelectPlaceholder(t)}</option>
                                     {launcher.filteredLaunchConfirmSavedSessions.map(sess => (
                                         <option key={sess.providerSessionId} value={sess.providerSessionId} disabled={!sess.canResume}>
                                             {sess.title || sess.providerSessionId} {!sess.canResume ? '(workspace missing)' : ''}
