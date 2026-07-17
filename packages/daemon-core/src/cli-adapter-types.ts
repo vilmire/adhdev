@@ -118,6 +118,11 @@ export interface CliAdapter {
     cancel(): void;
     isProcessing(): boolean;
     isReady(): boolean;
+    // Liveness of the underlying process/PTY. Optional because not every adapter
+    // implementation exposes it (the spec-driven path historically did not); the
+    // MESH-STALL-WATCH watchdog must call it defensively (typeof guard) so a
+    // missing implementation never throws in the 5s tick.
+    isAlive?(): boolean;
     setOnStatusChange(callback: () => void): void;
     updateRuntimeSettings?(settings: Record<string, unknown>): void;
     setCliScripts?(scripts: Record<string, unknown>): void;

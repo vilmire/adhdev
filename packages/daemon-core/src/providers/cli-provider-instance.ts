@@ -1527,6 +1527,26 @@ export class CliProviderInstance implements ProviderInstance {
         return '';
     }
 
+    /**
+     * NOTIF Defect-B: the final assistant summary this instance ALREADY parsed and
+     * cached for the current turn (lastCompletionSummary), if any. The evidence
+     * probe (completionFinalAssistantEvidence) is a POINT-SAMPLE: on a native-source
+     * provider (antigravity) the parsed screen and the native transcript can both
+     * momentarily yield no in-turn final assistant at the exact instant the
+     * completion gate fires — source='unavailable', missingEvidence=true — even
+     * though a prior poll already read the real answer off native-history and cached
+     * it here (the same value mesh_read_chat.summary shows). Consulting the cache at
+     * emit time lets that already-secured summary count as evidence, so the completion
+     * notification carries the answer instead of completion_diagnostic=missing_final_assistant
+     * with an empty summary. Returns '' when the cache is empty or was reset by the
+     * next turn (see lastCompletionSummary = null on onTurnStarted).
+     */
+    private cachedCompletionSummaryContent(): string {
+        const cached = this.lastCompletionSummary;
+        const content = typeof cached?.content === 'string' ? cached.content.trim() : '';
+        return content;
+    }
+
     private completionFinalAssistantEvidence(parsedMessages: unknown, turnStartedAt?: number): CompletionFinalAssistantEvidence {
         // (FALSEIDLE FixB) UPPER-BOUND turn-end evidence. completionHasFinalAssistantMessage is a
         // pure message-content check ("does the last visible bubble read as a finalized assistant
@@ -1679,12 +1699,39 @@ export class CliProviderInstance implements ProviderInstance {
         const lastVisibleKind = typeof (lastVisible as any)?.kind === 'string' ? (lastVisible as any).kind : null;
         const lastVisibleContentLength = lastVisible ? flattenContent(lastVisible.content).trim().length : 0;
 
+        // NOTIF Defect-B: when the live evidence probe momentarily yields no in-turn
+        // final assistant (source='unavailable'/external-native with present=false) but
+        // a prior poll already parsed and CACHED the real answer for this turn
+        // (lastCompletionSummary — the same value mesh_read_chat.summary surfaces),
+        // credit the cache as evidence. This flips finalAssistantPresent to true and
+        // records the cached source so the completion notification carries
+        // completion_diagnostic=present with the summary, instead of
+        // missing_final_assistant with an empty payload. Only ever UPGRADES a
+        // point-sample miss — a genuine present=true is unchanged, and an empty cache
+        // leaves the missing-evidence diagnostic exactly as before.
+        const cachedSummary = evidence.present ? '' : this.cachedCompletionSummaryContent();
+        const creditedFromCache = !evidence.present && cachedSummary.length > 0;
+        const finalAssistantPresent = evidence.present || creditedFromCache;
+        const finalAssistantEvidenceSource = evidence.present
+            ? evidence.source
+            : (creditedFromCache ? 'cached-summary' : evidence.source);
+        // When the cached summary rescues the evidence, the turn is no longer
+        // "missing final assistant" — clear that blockReason so isMissingFinalAssistant‑
+        // Diagnostic()/isWeakCompletionEvidence() no longer flag it (both key off
+        // blockReason='missing_final_assistant' independently of finalAssistantPresent)
+        // and the coordinator log's formatCompletionMetadata reads
+        // completion_diagnostic=present (empty blockReason → 'present'). The ORIGINAL
+        // reason is preserved under originalBlockReason for diagnostics.
+        const clearMissingBlock = creditedFromCache && args.blockReason === 'missing_final_assistant';
+        const effectiveBlockReason = clearMissingBlock ? undefined : args.blockReason;
+
         return {
             providerType: this.type,
             sessionId: this.instanceId,
             providerSessionId: this.providerSessionId || null,
             workspace: this.workingDir,
-            blockReason: args.blockReason,
+            ...(effectiveBlockReason ? { blockReason: effectiveBlockReason } : {}),
+            ...(clearMissingBlock ? { originalBlockReason: args.blockReason } : {}),
             emittedAfterFinalizationTimeout: args.emittedAfterFinalizationTimeout,
             waitedMs: args.waitedMs,
             maxWaitMs: COMPLETED_FINALIZATION_MAX_WAIT_MS,
@@ -1692,8 +1739,9 @@ export class CliProviderInstance implements ProviderInstance {
             latestVisibleStatus: args.latestVisibleStatus,
             parsedStatus: typeof parsed?.status === 'string' ? parsed.status : (parseError ? 'parse_error' : 'unknown'),
             parseError: parseError || undefined,
-            finalAssistantPresent: evidence.present,
-            finalAssistantEvidenceSource: evidence.source,
+            finalAssistantPresent,
+            finalAssistantFromCachedSummary: !evidence.present && cachedSummary.length > 0,
+            finalAssistantEvidenceSource,
             visibleMessageCount: visibleMessages.length,
             lastVisibleRole,
             lastVisibleKind,
@@ -2072,7 +2120,14 @@ export class CliProviderInstance implements ProviderInstance {
             this.meshStallEmittedForAnchor = false;
             return;
         }
-        if (!this.adapter.isAlive()) {
+        // Defensive: not every CliAdapter implementation exposes isAlive() — the
+        // spec-driven adapter (SpecCliAdapter, used by native-source providers like
+        // antigravity-cli) historically had none, so an unguarded call threw
+        // `this.adapter.isAlive is not a function` on EVERY 5s tick, disabling stall
+        // detection for those sessions entirely. A missing method is treated as alive
+        // (the session lifecycle drops the anchor via isMeshWorkerSession()/exit paths),
+        // never as a throw. When present, a dead process drops the armed episode.
+        if (typeof this.adapter.isAlive === 'function' && !this.adapter.isAlive()) {
             // Dead PTY: nothing to watch. agent:stopped covers the exit; re-arm on
             // the next live session so a restart starts a fresh episode.
             this.meshStallAnchorAt = -1;
@@ -2541,9 +2596,15 @@ export class CliProviderInstance implements ProviderInstance {
                 // delegated session's inbox preview blank — or, for a LOCAL worktree session,
                 // stuck on the dispatched user task. If the parser DID surface assistant text,
                 // prefer it; only fall back to '' when no assistant summary can be derived.
-                finalSummary: blockReason.startsWith('parsed_status:')
-                    ? (this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt) ?? '')
-                    : this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt),
+                // NOTIF Defect-B: completionFinalSummary is a point-sample of native-history/
+                // screen at THIS instant; on a native-source provider (antigravity) it can be
+                // empty at the forced-emit instant even though a prior poll already cached the
+                // real answer (lastCompletionSummary). Fall back to the cache so the notification
+                // carries the summary that mesh_read_chat.summary already shows — consistent with
+                // completionDiagnostic.finalAssistantPresent being credited from the same cache.
+                finalSummary: (this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt)
+                    || this.cachedCompletionSummaryContent()
+                    || (blockReason.startsWith('parsed_status:') ? '' : undefined)),
                 completionDiagnostic,
             });
             this.completedDebouncePending = null;

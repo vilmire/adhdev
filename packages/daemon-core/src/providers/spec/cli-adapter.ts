@@ -277,6 +277,15 @@ export class SpecCliAdapter implements CliAdapter {
         return this.spawned && !this.exited;
     }
 
+    // Process liveness for the MESH-STALL-WATCH watchdog (checkMeshWorkerStall).
+    // The spec path drives the child through the transport/driver rather than a
+    // directly-held ptyProcess handle, so liveness is tracked by the spawned/exited
+    // lifecycle flags — the same pair isReady() uses. A spawned, not-yet-exited
+    // session is alive. ProviderCliAdapter exposes the equivalent via `ptyProcess !== null`.
+    isAlive(): boolean {
+        return this.spawned && !this.exited;
+    }
+
     setOnStatusChange(cb: () => void): void {
         this.statusCallback = cb;
     }

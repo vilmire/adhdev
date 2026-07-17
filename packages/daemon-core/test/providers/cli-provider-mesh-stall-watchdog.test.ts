@@ -123,6 +123,27 @@ describe('CliProviderInstance.checkMeshWorkerStall', () => {
     expect(emitted).toHaveLength(0)
   })
 
+  it('does not throw and treats liveness as alive when the adapter has no isAlive() (SpecCliAdapter / antigravity-cli)', () => {
+    // Regression: the spec-driven adapter (native-source providers like
+    // antigravity-cli) implements CliAdapter but historically exposed no
+    // isAlive(). The 5s tick called this.adapter.isAlive() unguarded and threw
+    // `this.adapter.isAlive is not a function` on EVERY check, disabling stall
+    // detection for those sessions. The call site is now typeof-guarded and a
+    // missing method is treated as alive — so the watchdog still arms + fires.
+    const outputAt = 10_000
+    const { instance, emitted, adapter } = makeInstance({ settings: meshSettings, lastOutputAt: outputAt })
+    // Remove isAlive to model the spec-adapter (pre-fix) shape.
+    delete (adapter as any).isAlive
+    expect(() => instance.checkMeshWorkerStall(outputAt)).not.toThrow()
+    expect(emitted).toHaveLength(0)
+    instance.checkMeshWorkerStall(outputAt + STALL_MS - 1)
+    expect(emitted).toHaveLength(0)
+    // Alive-by-default: the stall still fires exactly once at the threshold.
+    instance.checkMeshWorkerStall(outputAt + STALL_MS)
+    expect(emitted).toHaveLength(1)
+    expect(emitted[0].meshWorkerStall).toBe(true)
+  })
+
   it('does not fire for a dead PTY and re-arms cleanly when it comes back alive', () => {
     const outputAt = 10_000
     const { instance, emitted, adapter } = makeInstance({ settings: meshSettings, lastOutputAt: outputAt, alive: false })
