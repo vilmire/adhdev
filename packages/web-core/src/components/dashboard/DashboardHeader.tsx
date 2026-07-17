@@ -200,6 +200,8 @@ export default function DashboardHeader({
     const meshGraphAvailable = !!activeConv?.daemonId && !!activeConv?.coordinator?.meshId
     const effectiveCliViewMode = activeCliViewMode || (activeConv ? (isCliTerminalConv(activeConv) ? 'terminal' : 'chat') : null);
     const [isHiddenDropTarget, setIsHiddenDropTarget] = useState(false);
+    const [hiddenSpawnAnim, setHiddenSpawnAnim] = useState(false);
+    const prevHiddenCountRef = useRef<number | null>(null);
     const inboxRef = useRef<HTMLDivElement | null>(null);
     const hiddenRef = useRef<HTMLDivElement | null>(null);
 
@@ -292,6 +294,21 @@ export default function DashboardHeader({
         onOpenNotification,
         onShowConversation,
     ])
+
+    useEffect(() => {
+        const count = hiddenConversations.length;
+        if (prevHiddenCountRef.current === null) {
+            // Initial mount: seed ref without firing animation
+            prevHiddenCountRef.current = count;
+            return;
+        }
+        if (count > prevHiddenCountRef.current) {
+            setHiddenSpawnAnim(true);
+        }
+        prevHiddenCountRef.current = count;
+    }, [hiddenConversations.length]);
+
+    const handleHiddenSpawnAnimEnd = () => setHiddenSpawnAnim(false);
 
     const handleHideDrop = (tabKey: string | null | undefined) => {
         if (!tabKey) return
@@ -432,7 +449,8 @@ export default function DashboardHeader({
                 )}
                 <div className="dashboard-header-inbox" ref={inboxRef}>
                     <div
-                        className={`dashboard-header-hidden${isHiddenDropTarget ? ' is-drop-target' : ''}`}
+                        className={`dashboard-header-hidden${isHiddenDropTarget ? ' is-drop-target' : ''}${hiddenSpawnAnim ? ' hidden-spawn-flash' : ''}`}
+                        onAnimationEnd={handleHiddenSpawnAnimEnd}
                         ref={hiddenRef}
                         onDragEnter={event => {
                             if (!event.dataTransfer.types.includes('text/tab-key')) return
@@ -464,7 +482,7 @@ export default function DashboardHeader({
                             title={`Hidden tabs${actionShortcuts?.toggleHiddenTabs ? ` (${actionShortcuts.toggleHiddenTabs})` : ''}. Drag a tab here to hide it.`}
                         >
                             <IconEyeOff size={16} />
-                            {hiddenConversations.length > 0 && <span className="dashboard-header-hidden-badge">{hiddenConversations.length}</span>}
+                            {hiddenConversations.length > 0 && <span className={`dashboard-header-hidden-badge${hiddenSpawnAnim ? ' hidden-badge-pop' : ''}`}>{hiddenConversations.length}</span>}
                         </button>
                         {hiddenOpen && (
                             <div className="dashboard-header-hidden-popover">

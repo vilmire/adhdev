@@ -2172,6 +2172,54 @@
         box-shadow: 0 0 0 2px var(--surface-primary);
     }
 
+    @keyframes hidden-tab-flash {
+        0% {
+            box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 60%, transparent);
+            background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+        }
+        100% {
+            box-shadow: 0 0 0 0px transparent;
+            background: transparent;
+        }
+    }
+
+    @keyframes hidden-badge-pop {
+        0%   { transform: scale(1); }
+        40%  { transform: scale(1.25); }
+        100% { transform: scale(1); }
+    }
+
+    .dashboard-header-hidden.hidden-spawn-flash {
+        animation: hidden-tab-flash 600ms ease-out forwards;
+        border-radius: 10px;
+    }
+
+    .dashboard-header-hidden.hidden-spawn-flash .dashboard-header-hidden-button {
+        background: color-mix(in srgb, var(--accent-primary) 10%, var(--surface-primary));
+        border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-default));
+        color: var(--accent-primary);
+        transition: background 600ms ease-out, border-color 600ms ease-out, color 600ms ease-out;
+    }
+
+    .dashboard-header-hidden-badge.hidden-badge-pop {
+        animation: hidden-badge-pop 300ms ease-out forwards;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .dashboard-header-hidden.hidden-spawn-flash {
+            animation: none;
+        }
+        .dashboard-header-hidden.hidden-spawn-flash .dashboard-header-hidden-button {
+            background: unset;
+            border-color: unset;
+            color: unset;
+            transition: none;
+        }
+        .dashboard-header-hidden-badge.hidden-badge-pop {
+            animation: none;
+        }
+    }
+
     .dashboard-header-inbox-popover {
         position: absolute;
         top: calc(100% + 10px);
