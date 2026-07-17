@@ -14,7 +14,7 @@ import {
     initStandaloneFontPreferences,
     normalizeStandaloneFontPreferences,
 } from './standalone-font-preferences'
-import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, Button, Input } from '@adhdev/web-core'
+import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, Button, Input } from '@adhdev/web-core'
 import StandaloneLayout from './StandaloneLayout'
 import StandaloneAbout from './StandaloneAbout'
 import StandaloneSettings from './StandaloneSettings'
@@ -24,6 +24,7 @@ import '@adhdev/web-core/index.css'
 // Restore persisted appearance before first render so CSS vars resolve correctly.
 initTheme()
 initChatTheme()
+initI18n()
 initStandaloneFontPreferences()
 
 const standaloneApiClient = createApiClient({

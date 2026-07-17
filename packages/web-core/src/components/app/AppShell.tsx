@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { IconX } from '../Icons'
 import ThemeToggle from '../ThemeToggle'
+import LanguageSelector from '../LanguageSelector'
 
 export interface AppShellNavItem {
     id: string
@@ -151,6 +152,7 @@ export default function AppShell({
                     {footerItems.map(renderNavItem)}
                     {renderMaybeNode(footerInfo, renderState)}
                     <ThemeToggle collapsed={collapsed} />
+                    <LanguageSelector collapsed={collapsed} />
                     {renderMaybeNode(footerActions, renderState)}
                 </div>
             </aside>

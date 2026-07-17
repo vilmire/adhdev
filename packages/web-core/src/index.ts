@@ -181,6 +181,7 @@ export { StatusBadge } from './components/ui/StatusBadge'
 export { DataTable } from './components/ui/DataTable'
 export { ErrorBoundary } from './components/ui/ErrorBoundary'
 export { default as ThemeToggle } from './components/ThemeToggle'
+export { default as LanguageSelector } from './components/LanguageSelector'
 
 // ── Settings (shared) ──
 export { ToggleRow } from './components/settings/ToggleRow'
@@ -209,12 +210,30 @@ export {
     IconBarChart, IconScroll, IconFolder, IconWarning, IconClock,
     IconTerminal, IconSplitView, IconPlay, IconX, IconRocket, IconBot, IconThought,
     IconWrench, IconCandle, IconApple, IconLinux, IconWindows, IconBell, IconBuilding,
-    IconCheckCircle, IconZap, IconVolume, IconDiscord
+    IconCheckCircle, IconZap, IconVolume, IconDiscord, IconGlobe
 } from './components/Icons'
 
 // ── Hooks ──
 export { useTheme, initTheme } from './hooks/useTheme'
 export type { Theme, ThemePreference } from './hooks/useTheme'
+
+// ── i18n ──
+export {
+    initI18n,
+    i18next,
+    useLanguage,
+    getStoredLanguage,
+    resolveInitialLanguage,
+    applyDocumentLanguage,
+    normalizeLanguage,
+    isSupportedLanguage,
+    SUPPORTED_LANGUAGES,
+    DEFAULT_LANGUAGE,
+    LANGUAGE_OPTIONS,
+    LANG_STORAGE_KEY,
+    DEFAULT_NAMESPACE,
+} from './i18n'
+export type { SupportedLanguage, LanguageOption } from './i18n'
 export { useDaemonMetadataLoader } from './hooks/useDaemonMetadataLoader'
 export { useDaemonMachineRuntimeLoader } from './hooks/useDaemonMachineRuntimeLoader'
 export { useDaemonMachineRuntimeSubscription } from './hooks/useDaemonMachineRuntimeSubscription'
