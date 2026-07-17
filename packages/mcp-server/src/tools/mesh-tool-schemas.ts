@@ -179,6 +179,23 @@ export const MESH_READ_DEBUG_TOOL = {
     },
 };
 
+export const MESH_READ_TERMINAL_TOOL = {
+    name: 'mesh_read_terminal',
+    description: 'Read the CURRENT raw terminal screen (the rendered PTY viewport — what a human would see on screen right now) of a delegated agent session on a mesh node. '
+        + 'This is the LIVE screen, not the parsed chat transcript: use it to see exactly what the worker is showing — a prompt it is parked on, a modal, a spinner, or unparsed output that mesh_read_chat does not surface. For the conversation transcript use mesh_read_chat instead. '
+        + 'The reply is byte-bounded (default 32KiB, max 64KiB; the BOTTOM of the screen — prompt/modal/recent output — is kept when truncated) and returns truncated/original_bytes/returned_bytes plus the cursor position and viewport size. '
+        + 'Scoped to coordinator-spawned mesh worker sessions only. NOTE: the raw screen can contain tokens / command args / env values, so treat the returned text as sensitive.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Target node ID.' },
+            session_id: { type: 'string', description: 'Agent session ID whose live terminal viewport to read.' },
+            max_bytes: { type: 'number', description: 'Optional UTF-8 byte cap for the returned screen text (default 32768, clamped to [1024, 65536]). When the screen exceeds it, the bottom (most recent) lines are kept.' },
+        },
+        required: ['node_id', 'session_id'],
+    },
+};
+
 export const MESH_LAUNCH_SESSION_TOOL = {
     name: 'mesh_launch_session',
     description: 'Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Hermes = hermes-cli, Claude Code/Claude = claude-cli, Codex = codex-cli, Gemini = gemini-cli. If type is omitted, resolve strictly from the node policy providerPriority and provider detection; fail closed when no configured provider is usable. Do not default to claude-cli.',
@@ -822,6 +839,7 @@ export const ALL_MESH_TOOLS = [
     MESH_SEND_TASK_TOOL,
     MESH_READ_CHAT_TOOL,
     MESH_READ_DEBUG_TOOL,
+    MESH_READ_TERMINAL_TOOL,
     MESH_LAUNCH_SESSION_TOOL,
     MESH_GIT_STATUS_TOOL,
     MESH_READ_NODE_LOGS_TOOL,

@@ -15,6 +15,7 @@
  */
 
 import * as os from 'os';
+import { createHash } from 'crypto';
 import type { CliAdapter, CliLaunchInfo } from '../cli-adapter-types.js';
 import type { InteractivePromptResponse } from '../providers/types/interactive-prompt.js';
 import { LOG } from '../logging/logger.js';
@@ -43,6 +44,7 @@ import {
     normalizeScreenSnapshot,
     promptLikelyVisible,
     sanitizeTerminalText,
+    truncateToByteTailByLine,
     TerminalTranscriptAccumulator,
     type CliChatMessage,
     type CliProviderModule,
@@ -308,6 +310,11 @@ export class ProviderCliAdapter implements CliAdapter {
         result: any;
     } | null = null;
     private static readonly SCREEN_SNAPSHOT_MIN_INTERVAL_MS = 250;
+    // MESH-READ-TERMINAL (feature 2): byte caps for getTerminalScreenSnapshot.
+    // Byte, not char — a multi-byte-glyph screen can exceed an MCP payload cap
+    // while the char count still looks safe. 32KiB default, 64KiB absolute hard cap.
+    private static readonly TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
+    private static readonly TERMINAL_SNAPSHOT_ABSOLUTE_MAX_BYTES = 64 * 1024;
     // (FALSEIDLE Path-C) Consecutive gate-eligible getStatus polls a mesh/autonomous
     // session must show before the poll-static-idle confirm fires. 2 = one extra
     // status tick of hysteresis: enough to reject a single momentary-silence
@@ -2297,6 +2304,60 @@ export class ProviderCliAdapter implements CliAdapter {
         };
     }
     isAlive(): boolean { return this.ptyProcess !== null; }
+
+    /**
+     * MESH-READ-TERMINAL (feature 2: RAW terminal read). Narrow, least-privilege
+     * read of the CURRENT rendered viewport for mesh_read_terminal. Deliberately
+     * NARROWER than getSnapshot()/getDebugSnapshot():
+     *  - It returns ONLY the terminal's current rendered viewport (what a human
+     *    would see on screen right now), the cursor position and the viewport
+     *    size. NO debug buffers, NO parser/FSM state, NO scrollback/history.
+     *  - It does NOT call getParseScreenText() (which may graft an older snapshot
+     *    onto the current frame for parse accuracy) — the caller asked for the
+     *    live viewport, not a parse-optimized composite.
+     *  - The payload is bounded in BYTES (UTF-8) with bottom-tail preservation so
+     *    a screen of multi-byte glyphs can never exceed the MCP payload cap. See
+     *    truncateToByteTailByLine.
+     *
+     * SECURITY NOTE: the raw viewport can contain tokens / command args / env
+     * values / user data. Callers MUST gate this on mesh ownership and MUST NOT
+     * log the returned text. Opt-in redaction is intentionally out of scope for
+     * this feature and left as a future enhancement.
+     *
+     * `maxBytes` is clamped to [1KiB, ABSOLUTE_MAX] (default 32KiB, hard cap 64KiB).
+     */
+    getTerminalScreenSnapshot(maxBytes = ProviderCliAdapter.TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES): {
+        text: string;
+        cursor: { col: number; row: number };
+        cols: number;
+        rows: number;
+        truncated: boolean;
+        originalBytes: number;
+        returnedBytes: number;
+        hash: string;
+    } {
+        const cap = Math.min(
+            ProviderCliAdapter.TERMINAL_SNAPSHOT_ABSOLUTE_MAX_BYTES,
+            Math.max(1024, Math.floor(maxBytes) || ProviderCliAdapter.TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES),
+        );
+        // Current rendered viewport only — no scrollback, no parse composite.
+        const rawViewport = this.terminalScreen.getText() || '';
+        const size = this.terminalScreen.getSize();
+        const cursor = this.terminalScreen.getCursorPosition();
+        const truncation = truncateToByteTailByLine(rawViewport, cap);
+        const hash = createHash('sha256').update(rawViewport, 'utf8').digest('hex').slice(0, 16);
+        return {
+            text: truncation.text,
+            cursor,
+            cols: size.cols,
+            rows: size.rows,
+            truncated: truncation.truncated,
+            originalBytes: truncation.originalBytes,
+            returnedBytes: truncation.returnedBytes,
+            hash,
+        };
+    }
+
     flushOutboundQueue(): void { this.schedulePendingOutboundFlush(); }
 
     async writeRaw(data: string | Buffer): Promise<void> {

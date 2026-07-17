@@ -64,7 +64,10 @@ function meshWithRemoteWorkerSession(daemonId: string) {
 }
 
 describe('session-scoped command — remote mesh worker forward ([Z])', () => {
-    for (const cmd of ['invoke_provider_script', 'resolve_action', 'set_mode', 'change_model', 'set_thought_level', 'set_conversation_prefs']) {
+    // read_terminal (MESH-READ-TERMINAL feature 2): the mesh_read_terminal daemon verb must be
+    // in MESH_FORWARDABLE_SESSION_COMMANDS so a read against a REMOTE worker reaches the owning
+    // daemon (which holds the live viewport) instead of returning 'Session not found'.
+    for (const cmd of ['invoke_provider_script', 'resolve_action', 'set_mode', 'change_model', 'set_thought_level', 'set_conversation_prefs', 'read_terminal']) {
         it(`forwards ${cmd} for a remote worker session to the owning worker daemon`, async () => {
             const dispatch = vi.fn(async () => ({ success: true, forwarded: true }));
             const router = createRouter({ statusInstanceId: 'daemon-coordinator', dispatchMeshCommand: dispatch });

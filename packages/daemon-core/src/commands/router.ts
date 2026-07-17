@@ -212,6 +212,14 @@ const MESH_FORWARDABLE_SESSION_COMMANDS = new Set([
     // daemon's own CLI session (TASKECHO coordinator self-echo). Forwarding to the owning daemon
     // delivers it to the real worker instead. (findAdapter is also fail-closed as the backstop.)
     'agent_command',
+    // read_terminal (MESH-READ-TERMINAL feature 2): mesh_read_terminal reads the CURRENT
+    // rendered PTY viewport of a specific worker session. The live viewport lives ONLY on the
+    // OWNING session's adapter, so when the target is a REMOTE worker the coordinator has no
+    // local instance and the handler would return 'Session not found' — the exact
+    // remote-worker forwarding gap of mission 6938892f. Forward it to the owning worker daemon
+    // so it reads its own live screen. (It is read-only; unlike the mutations above it makes no
+    // state change, but it is session-scoped identically and must reach the owning daemon.)
+    'read_terminal',
 ]);
 
 function normalizeCommandSource(source: string): CommandLogEntry['source'] {

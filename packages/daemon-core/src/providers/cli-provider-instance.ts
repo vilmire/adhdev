@@ -1987,6 +1987,34 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /**
+     * MESH-READ-TERMINAL (feature 2: RAW terminal read). Public read of the
+     * CURRENT rendered PTY viewport for the mesh_read_terminal tool, delegating to
+     * the adapter's narrow getTerminalScreenSnapshot() (viewport + cursor + size
+     * only; no debug buffers / parser state / history; byte-bounded, bottom-tail
+     * preserved).
+     *
+     * Gated on isMeshWorkerSession(): this raw viewport can expose tokens /
+     * command args / env / user data, so only a coordinator-spawned worker session
+     * is readable. The MCP layer ALSO cross-checks mesh/session/node ownership
+     * (isMeshOwnedDelegateSession) — isMeshWorkerSession alone is a broad
+     * "delegated" gate, so the two together block cross-mesh access. Returns null
+     * for a non-mesh session so the daemon command surfaces a clean refusal.
+     */
+    getTerminalScreenSnapshot(maxBytes?: number): {
+        text: string;
+        cursor: { col: number; row: number };
+        cols: number;
+        rows: number;
+        truncated: boolean;
+        originalBytes: number;
+        returnedBytes: number;
+        hash: string;
+    } | null {
+        if (!this.isMeshWorkerSession()) return null;
+        return this.adapter.getTerminalScreenSnapshot(maxBytes);
+    }
+
+    /**
      * MESH-STALL-WATCH (feature 1: STALL detection). Status-agnostic stall
      * watchdog for coordinator-spawned mesh worker sessions. Driven by the
      * ProviderInstanceManager's existing 5s onTick loop (NO new timer) — see

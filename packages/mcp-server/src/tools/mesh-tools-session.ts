@@ -16,6 +16,7 @@ import {
     buildMissingNodeReadChatRecovery,
     buildQueueTriggerGuidance,
     collectLiveStatusProbe,
+    collectLiveStatusSessions,
     collectMeshViewQueueNodesWithLiveSessions,
     commandForNode,
     compactChatPayload,
@@ -814,6 +815,56 @@ export async function meshReadDebug(
         ...(providerSessionId ? { providerSessionId } : {}),
         tailLimit: args.tail ?? 40,
         ...(delivery ? { delivery } : {}),
+    });
+    const payload = unwrapCommandPayload(result);
+    return JSON.stringify(payload, null, 2);
+}
+
+/**
+ * MESH-READ-TERMINAL (feature 2: RAW terminal read). Read the CURRENT rendered
+ * PTY viewport (live screen) of a delegated worker session on a mesh node.
+ *
+ * OWNERSHIP DOUBLE-CHECK (defense-in-depth, per mission 6938892f class):
+ *   1. MCP side (here): resolve the session record from the node's live session
+ *      list and require isMeshOwnedDelegateSession(session, meshId, nodeId) —
+ *      mesh/session/node identity must match, so a cross-mesh or coordinator-own
+ *      session id cannot be read.
+ *   2. daemon side (read_terminal → getTerminalScreenSnapshot): gated on
+ *      isMeshWorkerSession(). isMeshWorkerSession alone is a broad "delegated"
+ *      gate, so the MCP-side identity match is what blocks cross-mesh access.
+ *
+ * The read_terminal daemon verb is in MESH_FORWARDABLE_SESSION_COMMANDS, so when
+ * the worker is a REMOTE node the coordinator's daemon forwards it to the owning
+ * worker daemon (which holds the live viewport) instead of returning
+ * 'Session not found'.
+ */
+export async function meshReadTerminal(
+    ctx: MeshContext,
+    args: { node_id: string; session_id: string; max_bytes?: number },
+): Promise<string> {
+    const node = await findNodeWithRefresh(ctx, args.node_id);
+
+    // OWNERSHIP DOUBLE-CHECK (MCP side): the session must be a mesh-owned delegate
+    // of THIS mesh + node. Resolve it from the node's live session list; a miss or
+    // a non-owned/ cross-mesh record is refused before any command is issued.
+    const liveSessions = await collectLiveStatusSessions(ctx, node);
+    const record = liveSessions.find((s) => readSessionRecordId(s) === args.session_id);
+    if (record && !isMeshOwnedDelegateSession(record, ctx.mesh.id, args.node_id)) {
+        return JSON.stringify({
+            success: false,
+            error: 'session is not a mesh-owned delegate of this mesh/node — mesh_read_terminal is scoped to sessions this coordinator spawned',
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+        }, null, 2);
+    }
+
+    const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
+    const result = await commandForNode(ctx, node, 'read_terminal', {
+        sessionId: args.session_id,
+        targetSessionId: args.session_id,
+        workspace: node.workspace,
+        ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
+        ...(typeof args.max_bytes === 'number' && Number.isFinite(args.max_bytes) ? { maxBytes: args.max_bytes } : {}),
     });
     const payload = unwrapCommandPayload(result);
     return JSON.stringify(payload, null, 2);

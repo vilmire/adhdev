@@ -56,6 +56,11 @@ export class TerminalScreen {
         return this.terminal.getCursorPosition();
     }
 
+    /** Current viewport dimensions (cols × rows). */
+    getSize(): { cols: number; rows: number } {
+        return { cols: this.cols, rows: this.rows };
+    }
+
     dispose(): void {
         this.terminal.dispose();
     }

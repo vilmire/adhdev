@@ -134,6 +134,59 @@ export function handlePtyResize(_h: CommandHelpers, args: any): CommandResult {
     return { success: false, error: 'PTY resize temporarily disabled', code: 'PTY_RESIZE_DISABLED' };
 }
 
+interface TerminalSnapshotInstance extends ProviderInstance {
+    getTerminalScreenSnapshot?(maxBytes?: number): {
+        text: string;
+        cursor: { col: number; row: number };
+        cols: number;
+        rows: number;
+        truncated: boolean;
+        originalBytes: number;
+        returnedBytes: number;
+        hash: string;
+    } | null;
+}
+
+/**
+ * MESH-READ-TERMINAL (feature 2: RAW terminal read). Reads the CURRENT rendered
+ * PTY viewport of a specific mesh worker session for the mesh_read_terminal tool.
+ *
+ * This is the daemon-side `read_terminal` verb. It runs BOTH on the coordinator
+ * (for a locally-hosted worker) and, after router forwarding
+ * (MESH_FORWARDABLE_SESSION_COMMANDS + _meshDirectDispatch), on the OWNING remote
+ * worker daemon — where the live viewport actually exists. The instance's
+ * getTerminalScreenSnapshot() is gated on isMeshWorkerSession() (returns null for
+ * a non-mesh session), which the MCP layer complements with a mesh/session/node
+ * ownership cross-check. SECURITY: the raw viewport can contain tokens / args /
+ * env / user data — never logged here (only its byte size / truncation flag are).
+ */
+export function handleReadTerminal(h: CommandHelpers, args: any): CommandResult {
+    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+    const sessionId = targetSessionId || h.currentSession?.sessionId || '';
+    if (!sessionId) return { success: false, error: 'targetSessionId required' };
+
+    const session = h.ctx.sessionRegistry?.get(sessionId);
+    const instanceKey = session?.adapterKey || session?.instanceKey || sessionId;
+    const instance = h.ctx.instanceManager?.getInstance(instanceKey) as TerminalSnapshotInstance | undefined;
+    if (!instance) return { success: false, error: `Session not found: ${sessionId.split('_')[0]}` };
+    if (instance.category !== 'cli' || typeof instance.getTerminalScreenSnapshot !== 'function') {
+        return { success: false, error: 'read_terminal is only supported for CLI (PTY) sessions' };
+    }
+
+    const requestedMaxBytes = typeof args?.maxBytes === 'number' && Number.isFinite(args.maxBytes)
+        ? args.maxBytes
+        : undefined;
+    const snapshot = instance.getTerminalScreenSnapshot(requestedMaxBytes);
+    if (!snapshot) {
+        // getTerminalScreenSnapshot returns null when the session is NOT a mesh
+        // worker — the raw-viewport read is scoped to coordinator-delegated workers.
+        return { success: false, error: 'read_terminal is only available for coordinator-spawned mesh worker sessions' };
+    }
+    // Log size/truncation ONLY — never the screen text (may carry secrets).
+    LOG.info('Command', `[readTerminal] session=${sessionId.split('_')[0]} bytes=${snapshot.returnedBytes}/${snapshot.originalBytes} truncated=${snapshot.truncated} cols=${snapshot.cols} rows=${snapshot.rows}`);
+    return { success: true, ...snapshot };
+}
+
 // ─── Provider Settings ────────────────────────
 
 export function handleGetProviderSettings(h: CommandHelpers, args: any): CommandResult {

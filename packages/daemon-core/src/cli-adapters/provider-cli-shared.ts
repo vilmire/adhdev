@@ -482,6 +482,80 @@ export function sanitizeTerminalText(str: string): string {
     return stripTerminalNoise(stripAnsi(accumulator.append(str)));
 }
 
+/**
+ * MESH-READ-TERMINAL (feature 2): result of a byte-bounded, bottom-tail terminal
+ * screen truncation. The bound is in BYTES (UTF-8), not characters, because a
+ * screen full of multi-byte glyphs can blow past an MCP payload cap even when the
+ * character count looks safe. The bottom (tail) of the screen is preserved — the
+ * prompt, an active modal and the most recent output all live at the bottom — so
+ * a truncated read still shows the coordinator the actionable frame.
+ */
+export interface ByteTailTruncation {
+    text: string;
+    truncated: boolean;
+    /** UTF-8 byte length of the full input before truncation. */
+    originalBytes: number;
+    /** UTF-8 byte length of the returned (possibly truncated) text. */
+    returnedBytes: number;
+}
+
+/**
+ * Truncate `text` to at most `maxBytes` UTF-8 bytes, preserving whole lines from
+ * the BOTTOM up (the prompt/modal/recent output). Never splits a line and never
+ * splits a UTF-8 code point (whole-line granularity guarantees valid UTF-8). If
+ * even the single last line exceeds the bound, that line is hard-clipped on a
+ * safe UTF-8 boundary from its END so the tail is still returned intact-ish.
+ */
+export function truncateToByteTailByLine(text: string, maxBytes: number): ByteTailTruncation {
+    const input = String(text ?? '');
+    const originalBytes = Buffer.byteLength(input, 'utf8');
+    if (originalBytes <= maxBytes) {
+        return { text: input, truncated: false, originalBytes, returnedBytes: originalBytes };
+    }
+    // Split on newlines, keeping the newline characters so reassembly is exact.
+    const lines = input.split('\n');
+    const kept: string[] = [];
+    let bytes = 0;
+    // Walk from the last line upward, adding lines while they fit. Account for the
+    // '\n' rejoin cost (1 byte) between kept lines.
+    for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i];
+        const lineBytes = Buffer.byteLength(line, 'utf8');
+        const joinCost = kept.length > 0 ? 1 : 0;
+        if (bytes + lineBytes + joinCost > maxBytes) break;
+        bytes += lineBytes + joinCost;
+        kept.unshift(line);
+    }
+    if (kept.length > 0) {
+        const out = kept.join('\n');
+        return {
+            text: out,
+            truncated: true,
+            originalBytes,
+            returnedBytes: Buffer.byteLength(out, 'utf8'),
+        };
+    }
+    // Degenerate case: the single last line alone exceeds maxBytes. Hard-clip its
+    // TAIL on a UTF-8 code-point boundary (Buffer slice can split a multi-byte
+    // sequence, so decode-and-recut with the replacement-char guard).
+    const lastLine = lines[lines.length - 1] ?? '';
+    const buf = Buffer.from(lastLine, 'utf8');
+    let slice = buf.subarray(Math.max(0, buf.length - maxBytes));
+    // Trim leading bytes until the decode has no leading replacement char (i.e. we
+    // landed on a valid code-point boundary).
+    let decoded = slice.toString('utf8');
+    while (decoded.length > 0 && decoded.charCodeAt(0) === 0xfffd && slice.length > 0) {
+        slice = slice.subarray(1);
+        decoded = slice.toString('utf8');
+    }
+    return {
+        text: decoded,
+        truncated: true,
+        originalBytes,
+        returnedBytes: Buffer.byteLength(decoded, 'utf8'),
+    };
+}
+
 export function listCliScriptNames(scripts: CliScripts | undefined): string[] {
     if (!scripts) return [];
     return Object.entries(scripts)

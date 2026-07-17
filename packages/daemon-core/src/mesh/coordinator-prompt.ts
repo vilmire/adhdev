@@ -743,6 +743,7 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_launch_session\` | Start a new agent session on a node |
 | \`mesh_read_chat\` | Read recent chat messages from a delegated agent session |
 | \`mesh_read_debug\` | Collect a daemon-side chat/parser debug bundle for a session |
+| \`mesh_read_terminal\` | Read a worker session's CURRENT raw terminal screen (the live rendered PTY viewport — prompt/modal/spinner/unparsed output), not the parsed chat. Byte-bounded (32KiB default, 64KiB max; bottom of screen kept). Use to see exactly what a worker is showing when mesh_read_chat is not enough (e.g. after a stall alert). Screen text may contain secrets — treat as sensitive |
 | \`mesh_task_history\` | Read the task ledger — dispatches, completions, failures. Use to understand what has been done before deciding next steps |
 | \`mesh_ledger_query\` | Read-only ledger query along the kind/time/node axes (complement to task-axis mesh_task_history): filter by kind, since, node, tail — answer "what happened on node X / what failed since T" without scanning transcripts |
 | \`mesh_reconcile_ledger\` | Reconcile daemon-local ledgers over P2P — import missing entries from remote nodes into the coordinator local ledger |

@@ -28,6 +28,7 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_send_task',
     'mesh_read_chat',
     'mesh_read_debug',
+    'mesh_read_terminal',
     'mesh_launch_session',
     'mesh_git_status',
     'mesh_read_node_logs',
