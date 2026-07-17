@@ -14,12 +14,12 @@ import { getDashboardActiveTabHref } from '../utils/dashboard-route-paths'
 import ProgressBar from '../components/ProgressBar'
 import ConnectionBadge from '../components/ConnectionBadge'
 import InstallCommand from '../components/InstallCommand'
-import { IconServer, IconMonitor } from '../components/Icons'
+import { IconServer, IconMonitor, IconEyeOff } from '../components/Icons'
 
 // ─── Compact Agent Row (replaces full IdeCard/CliCard) ──────────
-function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive, onClick }: {
+function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive, hidden, onClick }: {
     icon: string; name: string; status: string; statusTone?: 'active' | 'waiting' | 'idle' | 'offline'; workspace?: string
-    isActive: boolean; onClick: () => void
+    isActive: boolean; hidden?: boolean; onClick: () => void
 }) {
     const statusDotColor = statusTone === 'active'
         ? '#f97316'
@@ -41,6 +41,15 @@ function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive
             >
                 <span className="text-sm">{icon}</span>
                 <span className="font-semibold text-[11px] text-text-primary">{name}</span>
+                {hidden && (
+                    <span
+                        className="inline-flex shrink-0 text-text-muted"
+                        title="Hidden"
+                        aria-label="Hidden"
+                    >
+                        <IconEyeOff size={11} />
+                    </span>
+                )}
                 {workspace && (
                     <span className="text-[9px] text-text-muted overflow-hidden text-ellipsis whitespace-nowrap max-w-[100px]">{workspace}</span>
                 )}
@@ -393,6 +402,7 @@ export default function MachinesPage() {
                                                                 statusTone={statusTone}
                                                                 workspace={getWorkspaceDisplayLabel(ide.workspace)}
                                                                 isActive={active}
+                                                                hidden={ide.surfaceHidden}
                                                                 onClick={() => openDashboardSession(ide.sessionId, machine.machineId)}
                                                             />
                                                             {/* Extension sub-rows */}
@@ -443,6 +453,7 @@ export default function MachinesPage() {
                                                             statusTone={statusTone}
                                                             workspace={getWorkspaceDisplayLabel(cli.workspace)}
                                                             isActive={!!active}
+                                                            hidden={cli.surfaceHidden}
                                                             onClick={() => openDashboardSession(cli.sessionId, machine.machineId)}
                                                         />
                                                     )
@@ -472,6 +483,7 @@ export default function MachinesPage() {
                                                             statusTone={statusTone}
                                                             workspace={getWorkspaceDisplayLabel(acp.workspace)}
                                                             isActive={!!active}
+                                                            hidden={acp.surfaceHidden}
                                                             onClick={() => openDashboardSession(acp.sessionId, machine.machineId)}
                                                         />
                                                     )

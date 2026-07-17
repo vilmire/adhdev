@@ -139,4 +139,47 @@ describe('groupByMachine session attribution', () => {
         expect(local?.cliSessions).toHaveLength(1)
         expect(local?.cliSessions[0].id).toBe('daemon_local:cli:s1')
     })
+
+    it('carries surfaceHidden onto the session summary so the machine card can render a hidden badge', () => {
+        const daemons: DaemonData[] = [
+            daemonMachine('daemon_local'),
+            cliSession('daemon_local:cli:hidden', { daemonId: 'daemon_local', sessionId: 'hidden', surfaceHidden: true }),
+            cliSession('daemon_local:cli:shown', { daemonId: 'daemon_local', sessionId: 'shown' }),
+        ]
+
+        const machines = groupByMachine(daemons, {})
+        const local = machines.find(m => m.machineId === 'daemon_local')
+
+        // A hidden session is NOT filtered out of the machine card list — it stays,
+        // flagged so the render can badge it (the inbox filter lives elsewhere).
+        expect(local?.cliSessions).toHaveLength(2)
+        const hidden = local?.cliSessions.find(c => c.sessionId === 'hidden')
+        const shown = local?.cliSessions.find(c => c.sessionId === 'shown')
+        expect(hidden?.surfaceHidden).toBe(true)
+        expect(shown?.surfaceHidden).toBeFalsy()
+    })
+
+    it('preserves surfaceHidden across a dedupe merge regardless of report order', () => {
+        const daemons: DaemonData[] = [
+            daemonMachine('daemon_worker'),
+            // Worker's own report does not mark hidden...
+            cliSession('daemon_worker:cli:remote-3', {
+                daemonId: 'daemon_worker',
+                sessionId: 'remote-3',
+            }),
+            // ...but the coordinator mirror carries surfaceHidden — the merge must keep it.
+            cliSession('daemon_coordinator:cli:remote-3', {
+                daemonId: 'daemon_coordinator',
+                ownerDaemonId: 'daemon_worker',
+                sessionId: 'remote-3',
+                surfaceHidden: true,
+            }),
+        ]
+
+        const machines = groupByMachine(daemons, {})
+        const worker = machines.find(m => m.machineId === 'daemon_worker')
+
+        expect(worker?.cliSessions).toHaveLength(1)
+        expect(worker?.cliSessions[0].surfaceHidden).toBe(true)
+    })
 })

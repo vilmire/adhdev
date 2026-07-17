@@ -393,6 +393,7 @@ export interface IdeSessionSummary {
     childSessions: SessionEntry[]
     activeChat?: { status?: string; activeModal?: { message: string; buttons: string[] } | null }
     lastActivityAt: number
+    surfaceHidden?: boolean
 }
 
 /** CLI session summary for machine detail/overview display */
@@ -408,6 +409,7 @@ export interface CliSessionSummary {
     runtimeWorkspaceLabel?: string
     runtimeWriteOwner?: RuntimeWriteOwner | null
     lastActivityAt: number
+    surfaceHidden?: boolean
 }
 
 /** ACP session summary for machine detail/overview display */
@@ -420,6 +422,7 @@ export interface AcpSessionSummary {
     workspace: string
     model?: string
     lastActivityAt: number
+    surfaceHidden?: boolean
 }
 
 /**
@@ -511,6 +514,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                 existing.status = pickLiveSessionStatus(existing.status, daemon.status || 'online')
                 existing.lastActivityAt = Math.max(existing.lastActivityAt, getDaemonEntryActivityAt(daemon))
                 if (!existing.workspace && daemon.workspace) existing.workspace = daemon.workspace
+                if (daemon.surfaceHidden !== undefined) existing.surfaceHidden = existing.surfaceHidden || daemon.surfaceHidden
             } else {
                 parent.acpSessions.push({
                     id: daemon.id,
@@ -520,6 +524,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                     status: daemon.status || 'online',
                     workspace: daemon.workspace || '',
                     lastActivityAt: getDaemonEntryActivityAt(daemon),
+                    surfaceHidden: daemon.surfaceHidden,
                 })
             }
         } else if (isCliEntry(daemon)) {
@@ -532,6 +537,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                 existing.status = pickLiveSessionStatus(existing.status, daemon.status || 'online')
                 existing.lastActivityAt = Math.max(existing.lastActivityAt, getDaemonEntryActivityAt(daemon))
                 if (!existing.workspace && daemon.workspace) existing.workspace = daemon.workspace
+                if (daemon.surfaceHidden !== undefined) existing.surfaceHidden = existing.surfaceHidden || daemon.surfaceHidden
             } else {
                 parent.cliSessions.push({
                     id: daemon.id,
@@ -545,6 +551,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                     runtimeWorkspaceLabel: daemon.runtimeWorkspaceLabel,
                     runtimeWriteOwner: daemon.runtimeWriteOwner || null,
                     lastActivityAt: getDaemonEntryActivityAt(daemon),
+                    surfaceHidden: daemon.surfaceHidden,
                 })
             }
         } else {
@@ -553,6 +560,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                 existing.status = pickLiveSessionStatus(existing.status, daemon.status || 'online')
                 existing.lastActivityAt = Math.max(existing.lastActivityAt, getDaemonEntryActivityAt(daemon))
                 if (!existing.workspace && daemon.workspace) existing.workspace = daemon.workspace
+                if (daemon.surfaceHidden !== undefined) existing.surfaceHidden = existing.surfaceHidden || daemon.surfaceHidden
             } else {
                 parent.ideSessions.push({
                     id: daemon.id,
@@ -565,6 +573,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                     childSessions: daemon.childSessions || [],
                     activeChat: daemon.activeChat || undefined,
                     lastActivityAt: getDaemonEntryActivityAt(daemon),
+                    surfaceHidden: daemon.surfaceHidden,
                 })
             }
         }
