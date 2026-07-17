@@ -38,7 +38,7 @@ import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
 import {
   ALL_MESH_TOOLS, meshStatus, meshListNodes, meshSendTask, meshReadChat,
   meshEnqueueTask, meshViewQueue, meshQueueCancel, meshQueueRequeue,
-  meshReadDebug, meshReadTerminal,
+  meshReadDebug, meshReadTerminal, meshSendKeys,
   meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon, meshCheckpoint, meshApprove, meshListPendingApprovals,
   meshCloneNode, meshRemoveNode, meshRefineNode,
   meshRefineConfig, meshInit, meshReinit, meshRefinePlan, meshRefineBatch,
@@ -210,6 +210,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_read_chat': text = await meshReadChat(meshCtx, a as any); break;
           case 'mesh_read_debug': text = await meshReadDebug(meshCtx, a as any); break;
           case 'mesh_read_terminal': text = await meshReadTerminal(meshCtx, a as any); break;
+          case 'mesh_send_keys': text = await meshSendKeys(meshCtx, a as any); break;
           case 'mesh_launch_session': text = await meshLaunchSession(meshCtx, a as any); break;
           case 'mesh_git_status': text = await meshGitStatus(meshCtx, a as any); break;
           case 'mesh_read_node_logs': text = await meshReadNodeLogs(meshCtx, a as any); break;

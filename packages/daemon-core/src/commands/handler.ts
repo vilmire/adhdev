@@ -566,6 +566,8 @@ export class DaemonCommandHandler implements CommandHelpers {
             case 'pty_resize': return Stream.handlePtyResize(this, args);
             // ─── MESH-READ-TERMINAL (feature 2): raw viewport read ──────────
             case 'read_terminal': return Stream.handleReadTerminal(this, args);
+            // ─── MESH-SEND-KEYS (feature 3): structured key injection ────────
+            case 'send_keys': return Stream.handleSendKeys(this, args);
 
             // ─── Provider Settings (stream-commands.ts) ──────────
             case 'get_provider_settings': return Stream.handleGetProviderSettings(this, args);

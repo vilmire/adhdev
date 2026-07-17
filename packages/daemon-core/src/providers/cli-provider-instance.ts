@@ -16,6 +16,7 @@ import { normalizeInteractivePrompt, normalizeInteractivePromptResponse, type In
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import { shortHash } from '../system/hash.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
+import type { MeshSendKeyItem, MeshSendKeyName } from '../cli-adapters/provider-cli-shared.js';
 import { createCliAdapter } from './spec/route.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
@@ -2012,6 +2013,31 @@ export class CliProviderInstance implements ProviderInstance {
     } | null {
         if (!this.isMeshWorkerSession()) return null;
         return this.adapter.getTerminalScreenSnapshot(maxBytes);
+    }
+
+    /**
+     * MESH-SEND-KEYS (feature 3: key injection). Public entry for the
+     * mesh_send_keys tool, delegating to the adapter's injectKeys() (structured
+     * key encoding + atomic write + submit-race recheck + modal fail-closed).
+     *
+     * Gated on isMeshWorkerSession(): PTY input into a worker is a
+     * coordinator-only capability. The MCP layer ALSO cross-checks mesh/session/
+     * node ownership (isMeshOwnedDelegateSession) and owns the destructive-key
+     * double gate (confirm_destructive + policy) and the audit ledger. Returns a
+     * refusal object for a non-mesh session so the daemon command surfaces a clean
+     * error (never silently writes to a non-worker PTY).
+     */
+    async injectKeys(
+        items: MeshSendKeyItem[],
+        opts: { allowModalOverride?: boolean } = {},
+    ): Promise<
+        | { ok: true; keys: MeshSendKeyName[]; hasDestructive: boolean; submits: boolean; bytes: number }
+        | { ok: false; refused: 'submit_race' | 'actionable_modal' | 'not_mesh_worker'; keys: MeshSendKeyName[]; hasDestructive: boolean }
+    > {
+        if (!this.isMeshWorkerSession()) {
+            return { ok: false, refused: 'not_mesh_worker', keys: [], hasDestructive: false };
+        }
+        return this.adapter.injectKeys(items, opts);
     }
 
     /**

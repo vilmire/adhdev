@@ -143,6 +143,7 @@ export type {
 export {
   DEFAULT_MESH_POLICY,
   resolveDelegatedWorkerAutoApprove,
+  resolveAllowSendKeysDestructive,
   resolveMagiSessionCleanupMode,
   magiAutoLaunchedSessionCleanupDecision,
   MESH_SCHEDULING_STRATEGIES,

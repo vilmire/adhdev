@@ -45,7 +45,10 @@ import {
     promptLikelyVisible,
     sanitizeTerminalText,
     truncateToByteTailByLine,
+    encodeMeshSendKeys,
     TerminalTranscriptAccumulator,
+    type MeshSendKeyItem,
+    type MeshSendKeyName,
     type CliChatMessage,
     type CliProviderModule,
     type CliScriptInput,
@@ -2355,6 +2358,77 @@ export class ProviderCliAdapter implements CliAdapter {
             originalBytes: truncation.originalBytes,
             returnedBytes: truncation.returnedBytes,
             hash,
+        };
+    }
+
+    /**
+     * MESH-SEND-KEYS (feature 3: key injection). Inject a STRUCTURED key sequence
+     * into the PTY for the mesh_send_keys tool. Reuses the same serialized write
+     * path as sends (writeToPty via writeRaw semantics) so the injection FIFO-
+     * orders behind any in-flight write.
+     *
+     * Two guards run INSIDE this method, immediately before the write, so they see
+     * a consistent snapshot of the adapter's submit/echo/queue state (no async gap
+     * between check and write — the encode is synchronous and the write is chained
+     * atomically after it):
+     *
+     *  1. submit-race recheck (echo-gate): even though writeToPty is FIFO, an
+     *     already-SCHEDULED echo-gated Enter (engine.submitPendingUntil in the
+     *     future), an armed stuck-submit retry (submitRetryTimer), or an in-flight
+     *     pending-outbound flush can submit at a DIFFERENT tick than our write —
+     *     so an injected literal could be submitted by a pending Enter, or our
+     *     ENTER could submit a half-typed pending body. When any of those is live
+     *     we REFUSE the injection rather than interleave.
+     *
+     *  2. modal fail-closed: if the session is parked on an actionable approval
+     *     modal, refuse a NON-destructive injection (ENTER/text/arrows) and direct
+     *     the caller to mesh_approve — so a modal choice can't be confirmed via
+     *     send_keys to bypass the approval policy. (A destructive ESC/CTRL_C, which
+     *     dismisses rather than confirms, is allowed to proceed past this gate; it
+     *     is separately gated by confirm_destructive + policy at the tool layer.)
+     *
+     * The caller (tool layer) owns the destructive-key double gate and the audit
+     * ledger. This method NEVER logs the literal text (only key enums / byte len).
+     */
+    async injectKeys(
+        items: MeshSendKeyItem[],
+        opts: { allowModalOverride?: boolean } = {},
+    ): Promise<
+        | { ok: true; keys: MeshSendKeyName[]; hasDestructive: boolean; submits: boolean; bytes: number }
+        | { ok: false; refused: 'submit_race' | 'actionable_modal'; keys: MeshSendKeyName[]; hasDestructive: boolean }
+    > {
+        if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
+        const encoded = encodeMeshSendKeys(items);
+
+        // (1) submit-race recheck — atomic w.r.t. the write below (no await between).
+        const now = Date.now();
+        const submitPending = this.engine.submitPendingUntil > now;
+        const submitRetryArmed = this.submitRetryTimer !== null;
+        const outboundBusy = this.pendingOutboundFlushInFlight || this.pendingOutboundQueue.length > 0;
+        if (submitPending || submitRetryArmed || outboundBusy) {
+            LOG.warn('CLI', `[${this.cliType}] send_keys refused (submit_race): submitPending=${submitPending} submitRetry=${submitRetryArmed} outboundBusy=${outboundBusy} keys=${encoded.keys.join(',')}`);
+            return { ok: false, refused: 'submit_race', keys: encoded.keys, hasDestructive: encoded.hasDestructive };
+        }
+
+        // (2) modal fail-closed — a NON-destructive injection into an actionable
+        //     modal is refused unless explicitly overridden.
+        const modalActive = this.engine.hasActionableApproval();
+        if (modalActive && !encoded.hasDestructive && !opts.allowModalOverride) {
+            LOG.warn('CLI', `[${this.cliType}] send_keys refused (actionable_modal): keys=${encoded.keys.join(',')} — use mesh_approve`);
+            return { ok: false, refused: 'actionable_modal', keys: encoded.keys, hasDestructive: encoded.hasDestructive };
+        }
+
+        // Atomic write: the full encoded sequence goes out in ONE writeToPty (which
+        // chains onto the write FIFO). text+ENTER is already one contiguous string,
+        // so the submit key can never be separated from the text it submits.
+        await this.writeToPty(encoded.sequence);
+        LOG.info('CLI', `[${this.cliType}] send_keys injected keys=${encoded.keys.join(',') || '(text-only)'} bytes=${Buffer.byteLength(encoded.sequence, 'utf8')} destructive=${encoded.hasDestructive}`);
+        return {
+            ok: true,
+            keys: encoded.keys,
+            hasDestructive: encoded.hasDestructive,
+            submits: encoded.submits,
+            bytes: Buffer.byteLength(encoded.sequence, 'utf8'),
         };
     }
 

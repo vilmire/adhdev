@@ -61,6 +61,7 @@ import {
     refreshMeshFromDaemon,
     resolveCoordinatorDaemonId,
     resolveCoordinatorNode,
+    resolveAllowSendKeysDestructive,
     resolveDelegatedWorkerAutoApprove,
     resolveMeshSessionProviderMetadata,
     resolveSessionProviderType,
@@ -867,6 +868,117 @@ export async function meshReadTerminal(
         ...(typeof args.max_bytes === 'number' && Number.isFinite(args.max_bytes) ? { maxBytes: args.max_bytes } : {}),
     });
     const payload = unwrapCommandPayload(result);
+    return JSON.stringify(payload, null, 2);
+}
+
+const MESH_SEND_KEYS_DESTRUCTIVE = new Set(['CTRL_C', 'ESC']);
+
+/**
+ * MESH-SEND-KEYS (feature 3: key injection). Inject a structured key sequence into
+ * a delegated worker session's live PTY.
+ *
+ * OWNERSHIP DOUBLE-CHECK (per mission 6938892f class, same as mesh_read_terminal):
+ *   1. MCP side (here): the session must be isMeshOwnedDelegateSession of THIS
+ *      mesh + node — blocks cross-mesh / coordinator-own PTY writes.
+ *   2. daemon side (send_keys → injectKeys): gated on isMeshWorkerSession().
+ *
+ * DESTRUCTIVE DOUBLE GATE (owner-approved): CTRL_C/ESC require BOTH
+ * confirm_destructive=true (per-call) AND mesh/node policy allowSendKeysDestructive
+ * (opt-in). delegatedWorkerAutoApprove does NOT grant this — it is tool-consent,
+ * not PTY-input authority, so a Ctrl-C could otherwise bypass it and kill the
+ * worker.
+ *
+ * The daemon layer independently enforces the submit-race recheck and the
+ * actionable-modal fail-closed refusal. Every attempt is AUDITED to the ledger
+ * (key enums + result), NEVER the literal text body.
+ *
+ * send_keys is in MESH_FORWARDABLE_SESSION_COMMANDS so a remote-worker target is
+ * forwarded to the owning daemon (which holds the live PTY).
+ */
+export async function meshSendKeys(
+    ctx: MeshContext,
+    args: {
+        node_id: string;
+        session_id: string;
+        sequence: Array<{ text?: string; key?: string }>;
+        confirm_destructive?: boolean;
+        allow_modal_override?: boolean;
+    },
+): Promise<string> {
+    const node = await findNodeWithRefresh(ctx, args.node_id);
+    const items = Array.isArray(args.sequence) ? args.sequence : [];
+    if (items.length === 0) {
+        return JSON.stringify({ success: false, error: 'sequence (non-empty array of {text}|{key}) required' }, null, 2);
+    }
+
+    // OWNERSHIP DOUBLE-CHECK (MCP side): resolve the session from the node's live
+    // session list; refuse a non-owned / cross-mesh record before writing anything.
+    const liveSessions = await collectLiveStatusSessions(ctx, node);
+    const record = liveSessions.find((s) => readSessionRecordId(s) === args.session_id);
+    if (record && !isMeshOwnedDelegateSession(record, ctx.mesh.id, args.node_id)) {
+        return JSON.stringify({
+            success: false,
+            error: 'session is not a mesh-owned delegate of this mesh/node — mesh_send_keys is scoped to sessions this coordinator spawned',
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+        }, null, 2);
+    }
+
+    // DESTRUCTIVE DOUBLE GATE.
+    const requestedKeys = items
+        .map((it) => (it && typeof it.key === 'string' ? it.key : ''))
+        .filter(Boolean);
+    const hasDestructive = requestedKeys.some((k) => MESH_SEND_KEYS_DESTRUCTIVE.has(k));
+    const auditKeys = requestedKeys.slice(0, 64);
+    const recordAudit = (result: string, extra: Record<string, unknown> = {}) => {
+        try {
+            appendLedgerEntry(ctx.mesh.id, {
+                kind: 'key_injection',
+                nodeId: args.node_id,
+                sessionId: args.session_id,
+                payload: {
+                    keys: auditKeys, // key ENUMS only — never the literal text body
+                    hasDestructive,
+                    confirmDestructive: args.confirm_destructive === true,
+                    result,
+                    ...extra,
+                },
+            });
+        } catch { /* ledger append is best-effort */ }
+    };
+
+    if (hasDestructive) {
+        const policyAllows = resolveAllowSendKeysDestructive(ctx.mesh.policy, node.policy);
+        if (args.confirm_destructive !== true || !policyAllows) {
+            recordAudit('refused', { refused: 'destructive_gate', policyAllows });
+            return JSON.stringify({
+                success: false,
+                error: 'destructive key (CTRL_C/ESC) requires BOTH confirm_destructive=true AND mesh policy allowSendKeysDestructive=true',
+                refused: 'destructive_gate',
+                confirmDestructive: args.confirm_destructive === true,
+                policyAllowsDestructive: policyAllows,
+            }, null, 2);
+        }
+    }
+
+    const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
+    const result = await commandForNode(ctx, node, 'send_keys', {
+        sessionId: args.session_id,
+        targetSessionId: args.session_id,
+        workspace: node.workspace,
+        ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
+        sequence: items,
+        confirm_destructive: args.confirm_destructive === true,
+        allow_modal_override: args.allow_modal_override === true,
+    });
+    const payload = unwrapCommandPayload(result) as Record<string, unknown>;
+    // Audit the daemon's verdict (injected / refused). The daemon result carries no
+    // literal text either, so it is safe to reflect keys/result here.
+    if (payload?.success === true) {
+        recordAudit('injected', { submits: payload.submits === true });
+    } else {
+        recordAudit('refused', { refused: readString(payload?.refused) || 'error' });
+    }
     return JSON.stringify(payload, null, 2);
 }
 

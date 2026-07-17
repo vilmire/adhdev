@@ -482,6 +482,104 @@ export function sanitizeTerminalText(str: string): string {
     return stripTerminalNoise(stripAnsi(accumulator.append(str)));
 }
 
+// ─── MESH-SEND-KEYS (feature 3: key injection) ─────────────────────────────
+//
+// The coordinator injects a STRUCTURED key sequence into a worker PTY — never
+// raw/base64 bytes (auditability + safety). Each item is either literal UTF-8
+// `text` or a named `key` from this closed enum; the encoder maps each key to its
+// exact terminal byte sequence. Keeping raw bytes out of the input surface means
+// the ledger can record the key ENUM (not the body text) and the destructive-key
+// gate can reason about a small, known set.
+
+/** Named PTY keys the send-keys tool accepts (closed enum). */
+export type MeshSendKeyName =
+    | 'ENTER' | 'ESC' | 'CTRL_C'
+    | 'UP' | 'DOWN' | 'LEFT' | 'RIGHT'
+    | 'TAB' | 'BACKSPACE';
+
+/** Exact terminal byte sequence for each named key. */
+export const MESH_SEND_KEY_ENCODING: Record<MeshSendKeyName, string> = {
+    ENTER: '\r',
+    ESC: '\x1b',
+    CTRL_C: '\x03',
+    UP: '\x1b[A',
+    DOWN: '\x1b[B',
+    RIGHT: '\x1b[C',
+    LEFT: '\x1b[D',
+    TAB: '\t',
+    BACKSPACE: '\x7f',
+};
+
+// Destructive keys: they can kill or derail the worker process. CTRL_C sends
+// SIGINT (kills the running command / the agent's turn); ESC dismisses / cancels
+// modals and pickers. delegatedWorkerAutoApprove is a TOOL-CONSENT policy, NOT a
+// PTY-input authorization — so these MUST NOT ride the auto-approve pathway; they
+// require an explicit confirm + mesh-policy opt-in. Text / ENTER / arrows / TAB /
+// BACKSPACE are non-destructive and need no confirm.
+export const MESH_DESTRUCTIVE_KEYS: ReadonlySet<MeshSendKeyName> = new Set<MeshSendKeyName>(['CTRL_C', 'ESC']);
+
+export type MeshSendKeyItem = { text: string } | { key: MeshSendKeyName };
+
+export interface MeshSendKeysEncodeResult {
+    /** The concatenated byte sequence to write to the PTY (single atomic write). */
+    sequence: string;
+    /** Named keys present, in order (for audit — text bodies are NOT recorded). */
+    keys: MeshSendKeyName[];
+    /** True if any item is a destructive key (CTRL_C / ESC). */
+    hasDestructive: boolean;
+    /** True if the sequence submits (ends with an ENTER/CR) — informational. */
+    submits: boolean;
+}
+
+/** Per-call limits (auditability + safety — no unbounded blast). */
+export const MESH_SEND_KEYS_MAX_ITEMS = 64;
+export const MESH_SEND_KEYS_MAX_TEXT_BYTES = 4096;
+
+/**
+ * Validate + encode a structured key sequence into the exact bytes to write.
+ * Throws on an invalid key name, an over-limit item count, or an over-limit
+ * total text byte length. text+ENTER (or any text followed by ENTER) is encoded
+ * as ONE contiguous string so the caller can submit it in a single atomic write
+ * — no interleaving between the text and its submit key.
+ */
+export function encodeMeshSendKeys(items: MeshSendKeyItem[]): MeshSendKeysEncodeResult {
+    if (!Array.isArray(items) || items.length === 0) {
+        throw new Error('send_keys: sequence must be a non-empty array');
+    }
+    if (items.length > MESH_SEND_KEYS_MAX_ITEMS) {
+        throw new Error(`send_keys: sequence exceeds ${MESH_SEND_KEYS_MAX_ITEMS} items`);
+    }
+    const parts: string[] = [];
+    const keys: MeshSendKeyName[] = [];
+    let hasDestructive = false;
+    let submits = false;
+    let textBytes = 0;
+    for (const item of items) {
+        if (item && typeof (item as { text?: unknown }).text === 'string') {
+            const text = (item as { text: string }).text;
+            textBytes += Buffer.byteLength(text, 'utf8');
+            if (textBytes > MESH_SEND_KEYS_MAX_TEXT_BYTES) {
+                throw new Error(`send_keys: total literal text exceeds ${MESH_SEND_KEYS_MAX_TEXT_BYTES} bytes`);
+            }
+            parts.push(text);
+            submits = false; // literal text after a submit re-opens the line
+            continue;
+        }
+        const keyName = item && typeof (item as { key?: unknown }).key === 'string'
+            ? (item as { key: string }).key
+            : '';
+        if (!(keyName in MESH_SEND_KEY_ENCODING)) {
+            throw new Error(`send_keys: unknown key '${keyName}'`);
+        }
+        const key = keyName as MeshSendKeyName;
+        parts.push(MESH_SEND_KEY_ENCODING[key]);
+        keys.push(key);
+        if (MESH_DESTRUCTIVE_KEYS.has(key)) hasDestructive = true;
+        submits = key === 'ENTER';
+    }
+    return { sequence: parts.join(''), keys, hasDestructive, submits };
+}
+
 /**
  * MESH-READ-TERMINAL (feature 2): result of a byte-bounded, bottom-tail terminal
  * screen truncation. The bound is in BYTES (UTF-8), not characters, because a

@@ -82,6 +82,12 @@ export type MeshLedgerKind =
     // magi_synthesis  payload: { source:'magi', consensusGroupId, missionId?, panel?, question?, synthesis }
     | 'magi_dispatched'
     | 'magi_synthesis'
+    // MESH-SEND-KEYS (feature 3): audit trail for coordinator PTY key injections
+    // via mesh_send_keys. Records the key ENUMS, destructive flag and result —
+    // NEVER the literal text body (may carry tokens / user data).
+    // payload: { keys: string[], hasDestructive: boolean, result: 'injected'|'refused'|'error',
+    //            refused?: string, submits?: boolean, confirmDestructive?: boolean }
+    | 'key_injection'
     ;
 
 export interface MeshLedgerEntry {

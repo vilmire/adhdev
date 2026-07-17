@@ -196,6 +196,36 @@ export const MESH_READ_TERMINAL_TOOL = {
     },
 };
 
+export const MESH_SEND_KEYS_TOOL = {
+    name: 'mesh_send_keys',
+    description: 'Inject a STRUCTURED key sequence into a delegated worker session\'s live PTY (keystrokes a human would type). '
+        + 'Use for interactions mesh_send_task cannot express: dismiss/answer a non-approval prompt, navigate a picker (arrows/TAB), submit an already-typed line (ENTER), correct input (BACKSPACE), or interrupt a runaway command (CTRL_C). For sending a task/message, use mesh_send_task; for an APPROVAL modal, use mesh_approve (send_keys is refused on an actionable approval modal by design). '
+        + 'Each sequence item is either {"text":"literal"} or {"key":NAME} where NAME ∈ ENTER|ESC|CTRL_C|UP|DOWN|LEFT|RIGHT|TAB|BACKSPACE. text+ENTER is submitted atomically. '
+        + 'DESTRUCTIVE keys (CTRL_C, ESC) can kill/derail the worker and require BOTH confirm_destructive=true AND mesh policy allowSendKeysDestructive — otherwise refused. '
+        + 'The injection is refused if the session has a pending submit/echo race, or (for non-destructive keys) an actionable approval modal. Scoped to coordinator-spawned mesh worker sessions. Each injection is audited (key enums + result; the literal text body is NOT recorded).',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Target node ID.' },
+            session_id: { type: 'string', description: 'Agent session ID whose PTY to inject into.' },
+            sequence: {
+                type: 'array',
+                description: 'Ordered key sequence. Each item is {"text":"literal UTF-8"} OR {"key":"ENTER|ESC|CTRL_C|UP|DOWN|LEFT|RIGHT|TAB|BACKSPACE"}. Max 64 items, 4096 total text bytes.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        text: { type: 'string', description: 'Literal UTF-8 text to type.' },
+                        key: { type: 'string', enum: ['ENTER', 'ESC', 'CTRL_C', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'TAB', 'BACKSPACE'], description: 'Named key.' },
+                    },
+                },
+            },
+            confirm_destructive: { type: 'boolean', description: 'Required true when the sequence contains a destructive key (CTRL_C/ESC). Also requires mesh policy allowSendKeysDestructive.' },
+            allow_modal_override: { type: 'boolean', description: 'Override the actionable-approval-modal fail-closed refusal for NON-destructive keys. Use only when you deliberately need to inject into a modal-parked session that is NOT an approval you should route through mesh_approve.' },
+        },
+        required: ['node_id', 'session_id', 'sequence'],
+    },
+};
+
 export const MESH_LAUNCH_SESSION_TOOL = {
     name: 'mesh_launch_session',
     description: 'Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Hermes = hermes-cli, Claude Code/Claude = claude-cli, Codex = codex-cli, Gemini = gemini-cli. If type is omitted, resolve strictly from the node policy providerPriority and provider detection; fail closed when no configured provider is usable. Do not default to claude-cli.',
@@ -840,6 +870,7 @@ export const ALL_MESH_TOOLS = [
     MESH_READ_CHAT_TOOL,
     MESH_READ_DEBUG_TOOL,
     MESH_READ_TERMINAL_TOOL,
+    MESH_SEND_KEYS_TOOL,
     MESH_LAUNCH_SESSION_TOOL,
     MESH_GIT_STATUS_TOOL,
     MESH_READ_NODE_LOGS_TOOL,

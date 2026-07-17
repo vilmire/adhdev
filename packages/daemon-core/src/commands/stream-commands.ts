@@ -187,6 +187,78 @@ export function handleReadTerminal(h: CommandHelpers, args: any): CommandResult 
     return { success: true, ...snapshot };
 }
 
+interface KeyInjectableInstance extends ProviderInstance {
+    injectKeys?(
+        items: Array<{ text: string } | { key: string }>,
+        opts?: { allowModalOverride?: boolean },
+    ): Promise<
+        | { ok: true; keys: string[]; hasDestructive: boolean; submits: boolean; bytes: number }
+        | { ok: false; refused: string; keys: string[]; hasDestructive: boolean }
+    >;
+}
+
+/**
+ * MESH-SEND-KEYS (feature 3: key injection). Inject a structured key sequence into
+ * a specific mesh worker session's PTY for the mesh_send_keys tool.
+ *
+ * Daemon-side `send_keys` verb. Like read_terminal it runs on the coordinator for
+ * a local worker and, after router forwarding (MESH_FORWARDABLE_SESSION_COMMANDS +
+ * _meshDirectDispatch), on the OWNING remote worker daemon. The instance's
+ * injectKeys() is gated on isMeshWorkerSession(); the MCP layer complements it with
+ * mesh/session/node ownership + the destructive-key double gate (confirm_destructive
+ * + mesh policy) + audit ledger.
+ *
+ * Defense-in-depth here: even though the MCP layer gates destructive keys, the
+ * daemon re-enforces confirm_destructive so a direct/forwarded send_keys that
+ * contains CTRL_C/ESC without confirm is refused at the boundary too.
+ * SECURITY: never logs the literal text body (only key enums / byte counts).
+ */
+export async function handleSendKeys(h: CommandHelpers, args: any): Promise<CommandResult> {
+    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+    const sessionId = targetSessionId || h.currentSession?.sessionId || '';
+    if (!sessionId) return { success: false, error: 'targetSessionId required' };
+
+    const items = Array.isArray(args?.sequence) ? args.sequence : null;
+    if (!items || items.length === 0) {
+        return { success: false, error: 'sequence (non-empty array of {text}|{key}) required' };
+    }
+
+    const session = h.ctx.sessionRegistry?.get(sessionId);
+    const instanceKey = session?.adapterKey || session?.instanceKey || sessionId;
+    const instance = h.ctx.instanceManager?.getInstance(instanceKey) as KeyInjectableInstance | undefined;
+    if (!instance) return { success: false, error: `Session not found: ${sessionId.split('_')[0]}` };
+    if (instance.category !== 'cli' || typeof instance.injectKeys !== 'function') {
+        return { success: false, error: 'send_keys is only supported for CLI (PTY) sessions' };
+    }
+
+    // Defense-in-depth destructive gate: refuse CTRL_C/ESC without confirm_destructive
+    // even at the daemon boundary (the MCP layer is the primary gate + policy check).
+    const DESTRUCTIVE = new Set(['CTRL_C', 'ESC']);
+    const hasDestructiveRequested = items.some((it: any) => it && typeof it.key === 'string' && DESTRUCTIVE.has(it.key));
+    if (hasDestructiveRequested && args?.confirm_destructive !== true) {
+        return {
+            success: false,
+            error: 'destructive key (CTRL_C/ESC) requires confirm_destructive=true',
+            refused: 'destructive_unconfirmed',
+        };
+    }
+
+    try {
+        const result = await instance.injectKeys(items, {
+            allowModalOverride: args?.allow_modal_override === true,
+        });
+        if (!result.ok) {
+            LOG.info('Command', `[sendKeys] session=${sessionId.split('_')[0]} refused=${result.refused} keys=${result.keys.join(',')} destructive=${result.hasDestructive}`);
+            return { success: false, error: `send_keys refused: ${result.refused}`, refused: result.refused, keys: result.keys, hasDestructive: result.hasDestructive };
+        }
+        LOG.info('Command', `[sendKeys] session=${sessionId.split('_')[0]} injected keys=${result.keys.join(',') || '(text-only)'} bytes=${result.bytes} destructive=${result.hasDestructive} submits=${result.submits}`);
+        return { success: true, keys: result.keys, hasDestructive: result.hasDestructive, submits: result.submits, bytes: result.bytes };
+    } catch (e: any) {
+        // Encode/validation errors (unknown key, over-limit) surface as a clean failure.
+        return { success: false, error: `send_keys: ${e?.message || String(e)}` };
+    }
+}
+
 // ─── Provider Settings ────────────────────────
 
 export function handleGetProviderSettings(h: CommandHelpers, args: any): CommandResult {

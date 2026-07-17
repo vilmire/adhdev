@@ -220,6 +220,13 @@ const MESH_FORWARDABLE_SESSION_COMMANDS = new Set([
     // so it reads its own live screen. (It is read-only; unlike the mutations above it makes no
     // state change, but it is session-scoped identically and must reach the owning daemon.)
     'read_terminal',
+    // send_keys (MESH-SEND-KEYS feature 3): mesh_send_keys injects a structured key sequence
+    // into a specific worker session's PTY. The live PTY lives ONLY on the OWNING session's
+    // adapter, so a remote-worker target must be forwarded to the owning daemon or the handler
+    // returns 'Session not found' (same class as mission 6938892f). Unlike read_terminal this
+    // MUTATES the worker PTY, so forwarding to the real owner (not a wrong local session) is
+    // doubly important. The daemon re-enforces the destructive-key confirm gate after the forward.
+    'send_keys',
 ]);
 
 function normalizeCommandSource(source: string): CommandLogEntry['source'] {

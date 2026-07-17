@@ -5,11 +5,11 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 43 tools (== ALL_MESH_TOOLS, kept in sync with the coordinator-prompt TOOLS table
+ * 44 tools (== ALL_MESH_TOOLS, kept in sync with the coordinator-prompt TOOLS table
  * by the 6-6 consistency test in daemon-core coordinator-prompt.test.ts):
  *   mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
  *   mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
- *   mesh_read_debug, mesh_read_terminal, mesh_launch_session, mesh_git_status, mesh_read_node_logs,
+ *   mesh_read_debug, mesh_read_terminal, mesh_send_keys, mesh_launch_session, mesh_git_status, mesh_read_node_logs,
  *   mesh_fast_forward_node, mesh_restart_daemon, mesh_checkpoint, mesh_approve,
  *   mesh_list_pending_approvals,
  *   mesh_clone_node, mesh_remove_node, mesh_refine_node, mesh_refine_batch,
@@ -94,6 +94,7 @@ import {
     requeueHeldMeshCoordinatorEvents,
     resolveMeshSurfacedSessionPreview,
     resolveDelegatedWorkerAutoApprove,
+    resolveAllowSendKeysDestructive,
     validateMeshTaskModeRequest,
 } from '@adhdev/daemon-core';
 import { readString, readNumeric, LARGE_LEDGER_FIELD_KEYS, summarizeLargeLedgerField, elideLargeNestedValue } from './mesh-tool-shared.js';
@@ -332,6 +333,7 @@ export {
     requeueTask,
     requeueHeldMeshCoordinatorEvents,
     resolveDelegatedWorkerAutoApprove,
+    resolveAllowSendKeysDestructive,
     resolveMeshSurfacedSessionPreview,
     summarizeMeshAsyncRefineJobs,
     tombstoneOperatingNote,

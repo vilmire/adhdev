@@ -351,6 +351,17 @@ export interface RepoMeshPolicy {
      */
     delegatedWorkerAutoApprove?: boolean;
     /**
+     * MESH-SEND-KEYS (feature 3): opt-in to allow the coordinator to inject
+     * DESTRUCTIVE keys (CTRL_C / ESC) into a worker PTY via mesh_send_keys. These
+     * can kill or derail the worker process, and delegatedWorkerAutoApprove is a
+     * TOOL-CONSENT policy, not a PTY-input authorization — so a destructive key
+     * injection additionally requires this explicit mesh-owner opt-in AND a
+     * per-call confirm_destructive=true. Defaults to false (destructive keys
+     * refused). Non-destructive keys (text/ENTER/arrows/TAB/BACKSPACE) are
+     * unaffected. A node policy may override per-node.
+     */
+    allowSendKeysDestructive?: boolean;
+    /**
      * What to do with delegated session-host records for a node when it is removed.
      * Defaults to 'preserve' so completed work can be reviewed later and live
      * runtimes are never stopped/deleted unless the mesh owner opts in.
@@ -473,6 +484,11 @@ export interface RepoMeshNodePolicy {
      * precedence over the mesh-level policy for worker sessions launched onto this node.
      */
     delegatedWorkerAutoApprove?: boolean;
+    /**
+     * MESH-SEND-KEYS (feature 3): per-node override for
+     * RepoMeshPolicy.allowSendKeysDestructive.
+     */
+    allowSendKeysDestructive?: boolean;
     /**
      * Optional associated/external repos that must be checked alongside this node.
      * These are explicit policy/config entries only; Repo Mesh does not auto-discover
@@ -732,6 +748,25 @@ export function resolveDelegatedWorkerAutoApprove(
         return meshPolicy.delegatedWorkerAutoApprove;
     }
     return true;
+}
+
+/**
+ * MESH-SEND-KEYS (feature 3): resolve whether DESTRUCTIVE key injection
+ * (CTRL_C/ESC via mesh_send_keys) is permitted for a node. Node policy overrides
+ * mesh policy; DEFAULTS TO FALSE (fail-closed) — a destructive key still requires
+ * a per-call confirm_destructive=true on top of this opt-in.
+ */
+export function resolveAllowSendKeysDestructive(
+    meshPolicy?: Pick<RepoMeshPolicy, 'allowSendKeysDestructive'> | null,
+    nodePolicy?: Pick<RepoMeshNodePolicy, 'allowSendKeysDestructive'> | null,
+): boolean {
+    if (typeof nodePolicy?.allowSendKeysDestructive === 'boolean') {
+        return nodePolicy.allowSendKeysDestructive;
+    }
+    if (typeof meshPolicy?.allowSendKeysDestructive === 'boolean') {
+        return meshPolicy.allowSendKeysDestructive;
+    }
+    return false;
 }
 
 /**
