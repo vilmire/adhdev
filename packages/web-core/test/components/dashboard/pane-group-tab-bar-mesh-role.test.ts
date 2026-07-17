@@ -69,4 +69,20 @@ describe('PaneGroupTabBar mesh role label', () => {
         expect(html.indexOf('adhdev-dockview-tab-mesh-role')).toBeGreaterThan(html.indexOf('adhdev-dockview-tab-status'))
         expect(html.indexOf('adhdev-dockview-tab-mesh-role')).toBeLessThan(html.indexOf('adhdev-dockview-tab-copy'))
     })
+
+    it('overlays a mesh icon badge on the tab header for mesh chats', () => {
+        const html = renderTabBar(createConversation({
+            settings: { meshCoordinatorFor: 'mesh-1' },
+            coordinator: { meshId: 'mesh-1', role: 'coordinator' },
+        }))
+
+        expect(html).toContain('adhdev-dockview-tab-mesh-badge')
+        expect(html).toContain('Mesh chat')
+    })
+
+    it('omits the mesh icon badge for non-mesh chats', () => {
+        const html = renderTabBar(createConversation())
+
+        expect(html).not.toContain('adhdev-dockview-tab-mesh-badge')
+    })
 })

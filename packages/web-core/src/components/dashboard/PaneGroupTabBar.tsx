@@ -8,7 +8,9 @@ import {
     getConversationMeshRoleTitle,
     getConversationTabMetaText,
     getConversationTitle,
+    isMeshGraphConversation,
 } from './conversation-presenters'
+import { IconMesh } from '../Icons'
 import GitStatusPill from '../git/GitStatusPill'
 
 const preventContextMenuButtonFocus = (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -91,6 +93,7 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
     const isReconnecting = viewStates.isReconnecting
     const meshRoleLabels = getConversationMeshRoleLabels(conv)
     const meshRoleTitle = getConversationMeshRoleTitle(conv)
+    const isMeshGraph = isMeshGraphConversation(conv)
 
     const handleDragStart = useCallback((e: React.DragEvent<HTMLDivElement>) => {
         draggingTabRef.current = conv.tabKey
@@ -181,10 +184,20 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
             onTouchEnd={clearLongPress}
             onTouchMove={clearLongPress}
             style={{
+                position: 'relative',
                 cursor: 'pointer',
                 opacity: isDraggedTab ? 0.4 : undefined,
             }}
         >
+            {isMeshGraph && (
+                <span
+                    className="adhdev-dockview-tab-mesh-badge pointer-events-none absolute top-0.5 right-0.5 text-text-muted"
+                    title="Mesh chat"
+                    aria-label="Mesh chat"
+                >
+                    <IconMesh size={11} />
+                </span>
+            )}
             {isTaskCompleteUnread && <span className="adhdev-dockview-tab-unread-dot" aria-hidden="true" />}
             <div className="adhdev-dockview-tab-status">
                 {viewStates.isGenerating ? (

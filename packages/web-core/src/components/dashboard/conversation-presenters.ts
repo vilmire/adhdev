@@ -19,6 +19,17 @@ export function getConversationMetaText(conversation: ActiveConversation): strin
     return getConversationMetaParts(conversation).join(' · ')
 }
 
+export function isMeshGraphConversation(conversation: ActiveConversation): boolean {
+    // Shared mesh-chat predicate reused by the mobile inbox (inline mesh icon)
+    // and the desktop tab header (mesh icon overlay). A conversation is treated
+    // as a mesh chat when it is bound to a daemon and carries a coordinator mesh
+    // id or a settings-level mesh-coordinator marker.
+    return !!conversation.daemonId
+        && !!(conversation.coordinator?.meshId
+            || (typeof conversation.settings?.meshCoordinatorFor === 'string'
+                && conversation.settings.meshCoordinatorFor.trim().length > 0))
+}
+
 export function getConversationMeshRoleLabels(conversation: ActiveConversation): string[] {
     const labels: string[] = []
     const isMeshNode = typeof conversation.settings?.meshNodeFor === 'string'

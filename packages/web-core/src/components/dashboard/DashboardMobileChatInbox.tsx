@@ -5,7 +5,7 @@ import InstallCommand from '../InstallCommand'
 import { formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
-import { getConversationMetaText, getConversationStatusHint, getConversationTitle } from './conversation-presenters'
+import { getConversationMetaText, getConversationStatusHint, getConversationTitle, isMeshGraphConversation } from './conversation-presenters'
 import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, copyChatDebugBundleTextToClipboard } from './chat-debug-bundle'
 import { eventManager } from '../../managers/EventManager'
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
@@ -194,8 +194,7 @@ function DashboardMobileChatItem({
     const previewClassName = isEarlier ? 'text-text-secondary opacity-80' : 'text-text-muted'
     const timestampClassName = isEarlier ? 'text-text-muted opacity-80' : 'text-text-muted'
     const shouldShowTimestamp = !isWorking && !isTaskComplete
-    const meshGraphAvailable = !!item.conversation.daemonId
-        && !!(item.conversation.coordinator?.meshId || item.conversation.settings?.meshCoordinatorFor)
+    const meshGraphAvailable = isMeshGraphConversation(item.conversation)
     const warningTextClassName = 'text-[color:var(--status-warning)]'
     const handleConversationContextMenu = (event: MouseEvent<HTMLButtonElement>) => {
         if (!onCollectChatDebugBundle) return
