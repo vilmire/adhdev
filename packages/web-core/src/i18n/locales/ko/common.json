@@ -1787,6 +1787,14 @@
       "send": "▶ 전송",
       "sending": "⏳",
       "close": "닫기"
+    },
+    "announcementBanner": {
+      "eyebrow": "시스템 공지",
+      "visibleUntil": "{{time}}까지 표시",
+      "dismiss": "닫기"
+    },
+    "upgradeBanner": {
+      "button": "업그레이드 →"
     }
   },
   "app": {

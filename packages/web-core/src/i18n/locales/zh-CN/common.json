@@ -1093,6 +1093,14 @@
       "send": "▶ Send",
       "sending": "⏳",
       "close": "Close"
+    },
+    "announcementBanner": {
+      "eyebrow": "System Notice",
+      "visibleUntil": "Visible until {{time}}",
+      "dismiss": "Dismiss"
+    },
+    "upgradeBanner": {
+      "button": "Upgrade →"
     }
   },
   "app": {
