@@ -1130,10 +1130,18 @@ describe('setupMeshEventForwarding', () => {
         providerType: 'codex-cli',
       })
 
+      // The trigger chain is async and event-loop-scheduled: emit(agent:ready) synchronously
+      // schedules a setImmediate that awaits the dry-run fast-forward (call 1) and then, when
+      // the dry-run satisfies policy, the execute fast-forward (call 2), and only then assigns
+      // the queue task. On a contended CI runner the whole file's ~100 tests thrash the event
+      // loop (real fs I/O per test), so the default 1000ms vi.waitFor window could expire after
+      // the dry-run but before the execute landed — the "expected 2, got 1" flake. Give the
+      // poll a generous deadline and a tight interval so a slow event loop is tolerated without
+      // changing what is asserted (the sequence is still deterministic — two ordered calls).
       await vi.waitFor(() => {
         expect(fastForwardMocks.fastForwardMeshNode).toHaveBeenCalledTimes(2)
         expect(getQueue(meshId).find(task => task.id === nextTask.id)?.status).toBe('assigned')
-      })
+      }, { timeout: 5000, interval: 10 })
       expect(fastForwardMocks.fastForwardMeshNode.mock.calls[0][0]).toMatchObject({
         meshId,
         nodeId: 'node_child_1',
@@ -1149,13 +1157,18 @@ describe('setupMeshEventForwarding', () => {
         trigger: 'idle_auto',
       })
 
+      // A second idle edge within the 30-minute throttle window must NOT re-run the ff. This is
+      // a negative assertion, so flush the full trigger-chain depth (the setImmediate that would
+      // schedule the run, plus a couple more event-loop turns to catch the awaited dry-run/execute
+      // had the throttle failed to gate) before asserting the count is unchanged. A single
+      // setImmediate tick only drains the outer scheduler, not the awaited inner calls.
       emit({
         event: 'agent:ready',
         instanceId: 'runtime-session-1',
         targetSessionId: 'runtime-session-1',
         providerType: 'codex-cli',
       })
-      await new Promise(resolve => setImmediate(resolve))
+      for (let i = 0; i < 4; i++) await new Promise(resolve => setImmediate(resolve))
       expect(fastForwardMocks.fastForwardMeshNode).toHaveBeenCalledTimes(2)
     } finally {
       cleanupMeshFiles(meshId)
