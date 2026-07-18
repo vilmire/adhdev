@@ -1392,7 +1392,7 @@ export class CliProviderInstance implements ProviderInstance {
      * real last answer with ZERO per-tick native reads (the native read already ran
      * once at completion). Reset on the next turn's start.
      */
-    private lastCompletionSummary: { content: string; receivedAt: number } | null = null;
+    private lastCompletionSummary: { content: string; receivedAt: number; sourceTimestampMs?: number } | null = null;
 
     private async enforceFreshSessionLaunchIfNeeded(): Promise<void> {
         const scriptName = getForcedNewSessionScriptName(this.provider, this.launchMode);
@@ -1594,18 +1594,31 @@ export class CliProviderInstance implements ProviderInstance {
      * the dashboard tail-repair cache — a display value, not a completion decision.
      */
     private lastVisibleAssistantSummary(messages: unknown): string {
-        if (!Array.isArray(messages)) return '';
+        return this.lastVisibleAssistantSummaryDetail(messages).content;
+    }
+
+    // Like lastVisibleAssistantSummary but also returns the source bubble's own
+    // timestamp (ms), so a cached summary can later be turn-scoped: the display
+    // cache is populated from an UNSCOPED tail read (it must show the answer as
+    // soon as native-history has it), so it can hold a bubble that predates the
+    // current turn. Recording the bubble's timestamp lets the weak-completion
+    // fallback reject a turn-stale cached summary instead of re-leaking the exact
+    // stale bubble the turn-boundary gate already rejected (FALSE-IDLE Defect 1c).
+    private lastVisibleAssistantSummaryDetail(messages: unknown): { content: string; timestampMs?: number } {
+        if (!Array.isArray(messages)) return { content: '' };
         for (let i = messages.length - 1; i >= 0; i -= 1) {
             const m = messages[i] as { role?: string; kind?: string; content?: unknown };
             const role = typeof m?.role === 'string' ? m.role : '';
             const kind = typeof m?.kind === 'string' ? m.kind : '';
             if (role === 'system') continue;
             if (kind === 'tool' || kind === 'activity') continue;
-            if (role === 'user' || role === 'human') return '';
-            if (role === 'assistant') return flattenContent(m.content as any).trim();
-            return '';
+            if (role === 'user' || role === 'human') return { content: '' };
+            if (role === 'assistant') {
+                return { content: flattenContent(m.content as any).trim(), timestampMs: readChatMessageTimestampMs(m as any) };
+            }
+            return { content: '' };
         }
-        return '';
+        return { content: '' };
     }
 
     /**
@@ -1625,6 +1638,29 @@ export class CliProviderInstance implements ProviderInstance {
     private cachedCompletionSummaryContent(): string {
         const cached = this.lastCompletionSummary;
         const content = typeof cached?.content === 'string' ? cached.content.trim() : '';
+        return content;
+    }
+
+    // FALSE-IDLE Defect 1c: turn-scoped view of the cached completion summary.
+    // The cache is populated from an UNSCOPED tail read (lastVisibleAssistant‑
+    // SummaryDetail) so the dashboard can show the answer the instant native-history
+    // has it — which means it can hold a bubble that PREDATES the producing turn.
+    // The weak-completion (missing_final_assistant) emit path falls back to the cache
+    // for finalSummary; without turn-scoping it would re-surface the exact stale
+    // mid-turn bubble the turn-boundary gate already rejected as evidence, freezing
+    // that stale text as the completion's finalSummary. Consult the cache only when
+    // its source bubble is proven in-turn (timestamp at/after turnStartedAt). When no
+    // boundary is known (turnStartedAt falsy) or the cache carries no source timestamp
+    // (legacy writes), behaviour is identical to the unscoped read.
+    private cachedInTurnCompletionSummaryContent(turnStartedAt?: number): string {
+        const cached = this.lastCompletionSummary;
+        const content = typeof cached?.content === 'string' ? cached.content.trim() : '';
+        if (!content) return '';
+        const hasBoundary = typeof turnStartedAt === 'number' && Number.isFinite(turnStartedAt) && turnStartedAt > 0;
+        const ts = cached?.sourceTimestampMs;
+        if (hasBoundary && typeof ts === 'number' && Number.isFinite(ts) && ts < (turnStartedAt as number)) {
+            return '';
+        }
         return content;
     }
 
@@ -1681,9 +1717,9 @@ export class CliProviderInstance implements ProviderInstance {
             // (which also requires turnClosed and turn-scoping): the dashboard should
             // show the answer as soon as native-history has it, even if the FSM has
             // not yet ratified the turn end. getState() replaces it on the next turn.
-            const lastVisibleAssistant = this.lastVisibleAssistantSummary(externalMessages);
-            if (lastVisibleAssistant) {
-                this.lastCompletionSummary = { content: lastVisibleAssistant, receivedAt: Date.now() };
+            const lastVisibleAssistant = this.lastVisibleAssistantSummaryDetail(externalMessages);
+            if (lastVisibleAssistant.content) {
+                this.lastCompletionSummary = { content: lastVisibleAssistant.content, receivedAt: Date.now(), sourceTimestampMs: lastVisibleAssistant.timestampMs };
             }
             return {
                 present,
@@ -1745,7 +1781,11 @@ export class CliProviderInstance implements ProviderInstance {
                 // sessions whose generating_completed is suppressed, and short-gen
                 // settle paths), so the dashboard sees the answer even when no
                 // agent:generating_completed is ever emitted. Native read already ran.
-                this.lastCompletionSummary = { content: externalSummary, receivedAt: Date.now() };
+                // externalSummary is already turn-scoped (extractFinalSummaryFromMessagesAfter
+                // dropped any bubble predating turnStartedAt), so it is in-turn by construction.
+                // Record the turn boundary as its source timestamp so the weak-completion
+                // fallback (cachedInTurnCompletionSummaryContent) accepts it.
+                this.lastCompletionSummary = { content: externalSummary, receivedAt: Date.now(), sourceTimestampMs: typeof turnStartedAt === 'number' ? turnStartedAt : undefined };
                 return externalSummary;
             }
             return parsedSummary || undefined;
@@ -1769,7 +1809,12 @@ export class CliProviderInstance implements ProviderInstance {
             parseError = error?.message || String(error);
         }
 
-        const evidence = this.completionFinalAssistantEvidence(parsed?.messages);
+        // FALSE-IDLE Defect 1c: turn-scope the diagnostic's evidence probe too. Passing
+        // pending.turnStartedAt makes completionHasFinalAssistantMessage reject a stale
+        // mid-turn bubble (predating the turn) just as the finalization gate did, so the
+        // diagnostic cannot credit finalAssistantPresent (or clear missing_final_assistant)
+        // off a bubble the gate already rejected. With no boundary this is unchanged.
+        const evidence = this.completionFinalAssistantEvidence(parsed?.messages, args.pending.turnStartedAt);
         if (evidence.source === 'external-native') {
             this.recordPendingTranscriptProbe(args.pending);
         }
@@ -1790,7 +1835,7 @@ export class CliProviderInstance implements ProviderInstance {
         // missing_final_assistant with an empty payload. Only ever UPGRADES a
         // point-sample miss — a genuine present=true is unchanged, and an empty cache
         // leaves the missing-evidence diagnostic exactly as before.
-        const cachedSummary = evidence.present ? '' : this.cachedCompletionSummaryContent();
+        const cachedSummary = evidence.present ? '' : this.cachedInTurnCompletionSummaryContent(args.pending.turnStartedAt);
         const creditedFromCache = !evidence.present && cachedSummary.length > 0;
         const finalAssistantPresent = evidence.present || creditedFromCache;
         const finalAssistantEvidenceSource = evidence.present
@@ -2755,7 +2800,7 @@ export class CliProviderInstance implements ProviderInstance {
                 // carries the summary that mesh_read_chat.summary already shows — consistent with
                 // completionDiagnostic.finalAssistantPresent being credited from the same cache.
                 finalSummary: (this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt)
-                    || this.cachedCompletionSummaryContent()
+                    || this.cachedInTurnCompletionSummaryContent(pending.turnStartedAt)
                     || (blockReason.startsWith('parsed_status:') ? '' : undefined)),
                 completionDiagnostic,
             });

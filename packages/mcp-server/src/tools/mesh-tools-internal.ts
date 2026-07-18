@@ -1133,7 +1133,17 @@ export const COMPACT_DETAILED_NODES_BYTE_BUDGET = 9000;
 // Nodes that don't fit even as a stub are folded into a counts+id-list summary so
 // the array stays bounded on pathologically large meshes; every node id is still
 // listed in foldedNodes.nodeIds, so nothing becomes undiscoverable.
-export const COMPACT_NODES_TOTAL_BYTE_BUDGET = 13000;
+//
+// This must leave headroom for the compact payload's FIXED top-level overhead
+// (branchConvergenceSummary, staleDaemonBuild* aggregates, activeWork*/ledger/
+// scheduling summaries, sourceOfTruth/hints — ~12KB with a large stale mesh) so the
+// whole compact string stays under the MCP token cap even for an all-noteworthy mesh
+// (the contract asserted by mesh-compact-payload-budget.test.ts). That top-level
+// overhead grew as compact aggregates were added, so 13000 here let a 12-node stale
+// mesh tip the whole payload to ~25.2KB — over the 25KB budget. 11500 restores the
+// margin (nodes + overhead ≈ 24KB) while still keeping the highest-severity nodes in
+// detail and every node id discoverable (array stub or foldedNodes.nodeIds).
+export const COMPACT_NODES_TOTAL_BYTE_BUDGET = 11500;
 
 
 // Byte budget for the whole compact `missions` array (live active/paused missions).
