@@ -9,6 +9,7 @@
  * This replaces the scattered notification UI across Settings and ProvidersTab.
  */
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Section } from '../components/ui/Section'
 import { ToggleRow } from '../components/settings/ToggleRow'
@@ -76,6 +77,7 @@ interface NotificationsPageProps {
 }
 
 export default function NotificationsPage({ machines, onBrowserPrefChange, renderPushSection }: NotificationsPageProps) {
+    const { t } = useTranslation('common')
     const [prefs, updatePrefs] = useNotificationPrefs()
     const { sendCommand } = useTransport()
     const [browserPermission, setBrowserPermission] = useState<NotificationPermission | 'unsupported'>(() => {
@@ -199,15 +201,15 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
 
     return (
         <div className="flex flex-col h-full">
-            <PageHeader icon={<IconBell className="text-text-primary" />} title="Notifications" subtitle="Alerts, auto-approve & provider settings" />
+            <PageHeader icon={<IconBell className="text-text-primary" />} title={t('notifications.title')} subtitle={t('notifications.subtitle')} />
             <div className="page-content">
 
                 {/* ═══ Section 1: Global / Browser ═══ */}
-                <Section title="Browser alerts" className="mb-4">
+                <Section title={t('notifications.sectionBrowserAlerts')} className="mb-4">
                     <div className="flex flex-col gap-3">
                         <ToggleRow
-                            label={<span className="flex items-center gap-1.5"><IconBell size={15} /> Notifications</span>}
-                            description="Master toggle for all alerts"
+                            label={<span className="flex items-center gap-1.5"><IconBell size={15} /> {t('notifications.masterToggleLabel')}</span>}
+                            description={t('notifications.masterToggleDesc')}
                             checked={prefs.globalEnabled}
                             onChange={v => setBrowserPref('globalEnabled', v)}
                         />
@@ -216,8 +218,8 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
 
                         {prefs.globalEnabled && (
                             <ToggleRow
-                                label={<span className="flex items-center gap-1.5"><IconMonitor size={15} /> Browser Notifications</span>}
-                                description="Desktop alerts when tab is inactive"
+                                label={<span className="flex items-center gap-1.5"><IconMonitor size={15} /> {t('notifications.browserNotificationsLabel')}</span>}
+                                description={t('notifications.browserNotificationsDesc')}
                                 checked={prefs.browserNotifications}
                                 onChange={v => setBrowserPref('browserNotifications', v)}
                             />
@@ -226,27 +228,27 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                         {prefs.globalEnabled && (
                             <div className="ml-5 pl-3 border-l-2 border-border-subtle flex flex-col gap-2">
                                 <div className="text-[11px] text-text-muted">
-                                    Browser alerts only fire while this dashboard tab stays open in the background.{renderPushSection ? ' If you close the tab, use Push Notifications instead.' : ''}
+                                    {renderPushSection ? t('notifications.browserBackgroundInfoWithPush') : t('notifications.browserBackgroundInfo')}
                                 </div>
                                 {browserPermission === 'default' && (
                                     <div className="flex flex-wrap items-center gap-2 text-[11px] text-amber-300">
-                                        <span>This browser has not granted notification permission yet. Allow it to receive browser alerts.</span>
+                                        <span>{t('notifications.permissionDefault')}</span>
                                         <button
                                             onClick={() => { void requestNotificationPermission().then(setBrowserPermission) }}
                                             className="px-2 py-0.5 rounded border border-border-default bg-bg-glass text-text-secondary hover:text-text-primary transition-colors"
                                         >
-                                            Allow notifications
+                                            {t('notifications.allowNotifications')}
                                         </button>
                                     </div>
                                 )}
                                 {browserPermission === 'denied' && (
                                     <div className="text-[11px] text-amber-300">
-                                        Browser notifications are blocked in site or browser settings. Re-enable them there to receive desktop alerts.
+                                        {t('notifications.permissionDenied')}
                                     </div>
                                 )}
                                 {browserPermission === 'unsupported' && (
                                     <div className="text-[11px] text-amber-300">
-                                        This browser cannot show desktop notifications here. Use a supported desktop browser, or rely on Push Notifications where available.
+                                        {t('notifications.permissionUnsupported')}
                                     </div>
                                 )}
                             </div>
@@ -255,20 +257,20 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                         {prefs.globalEnabled && prefs.browserNotifications && (
                             <div className="ml-5 pl-3 border-l-2 border-border-subtle flex flex-col gap-2">
                                 <ToggleRow
-                                    label={<span className="flex items-center gap-1.5"><IconCheckCircle size={15} /> Completion Alerts</span>}
-                                    description="Notify when agent finishes a task"
+                                    label={<span className="flex items-center gap-1.5"><IconCheckCircle size={15} /> {t('notifications.completionAlertsLabel')}</span>}
+                                    description={t('notifications.completionAlertsDesc')}
                                     checked={prefs.completionAlert}
                                     onChange={v => setBrowserPref('completionAlert', v)}
                                 />
                                 <ToggleRow
-                                    label={<span className="flex items-center gap-1.5"><IconZap size={15} /> Approval Alerts</span>}
-                                    description="Notify when agent needs approval"
+                                    label={<span className="flex items-center gap-1.5"><IconZap size={15} /> {t('notifications.approvalAlertsLabel')}</span>}
+                                    description={t('notifications.approvalAlertsDesc')}
                                     checked={prefs.approvalAlert}
                                     onChange={v => setBrowserPref('approvalAlert', v)}
                                 />
                                 <ToggleRow
-                                    label={<span className="flex items-center gap-1.5"><IconPlug size={15} /> Connection Alerts</span>}
-                                    description="Alert when a machine disconnects"
+                                    label={<span className="flex items-center gap-1.5"><IconPlug size={15} /> {t('notifications.connectionAlertsLabel')}</span>}
+                                    description={t('notifications.connectionAlertsDesc')}
                                     checked={prefs.disconnectAlert}
                                     onChange={v => setBrowserPref('disconnectAlert', v)}
                                 />
@@ -287,7 +289,7 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
 
                         {!prefs.globalEnabled && (
                             <p className="text-[11px] text-text-muted italic">
-                                All notifications are disabled. Enable the master toggle to configure.
+                                {t('notifications.allDisabled')}
                             </p>
                         )}
                     </div>
@@ -295,18 +297,18 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
 
                 {/* ═══ Section 2: Provider Alert Rules ═══ */}
                 <Section
-                    title="Provider alert rules"
+                    title={t('notifications.sectionProviderAlerts')}
                     className="mb-4"
                 >
                     <div className="flex justify-end mb-3 -mt-1">
                         <button onClick={fetchAllSettings} disabled={loading} className="machine-btn text-[11px]">
-                            {loading ? '⏳ Loading...' : '↻ Refresh'}
+                            {loading ? t('notifications.loading') : t('notifications.refresh')}
                         </button>
                     </div>
                     {onlineMachines.length === 0 ? (
-                        <p className="text-sm text-text-muted py-6 text-center">No online machines. Start ADHDev on a machine to configure provider alerts.</p>
+                        <p className="text-sm text-text-muted py-6 text-center">{t('notifications.noOnlineMachines')}</p>
                     ) : loading && allEntries.length === 0 ? (
-                        <p className="text-sm text-text-muted py-6 text-center">Loading provider settings...</p>
+                        <p className="text-sm text-text-muted py-6 text-center">{t('notifications.loadingProviderSettings')}</p>
                     ) : (
                         <div className="flex flex-col gap-5">
                             {categories.map(({ category, entries }) => {
@@ -317,7 +319,7 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                                 const keyStats = alertKeys.map(key => {
                                     const withKey = entries.filter(e => e.schema.some(s => s.key === key))
                                     const onCount = withKey.filter(e => !!(e.values[key] ?? e.schema.find(s => s.key === key)?.default)).length
-                                    return { key, label: key === 'autoApprove' ? 'Auto Approve' : key === 'approvalAlert' ? 'Approval Alert' : 'No Progress Alert', total: withKey.length, onCount }
+                                    return { key, label: key === 'autoApprove' ? t('notifications.keyStatAutoApprove') : key === 'approvalAlert' ? t('notifications.keyStatApprovalAlert') : t('notifications.keyStatNoProgressAlert'), total: withKey.length, onCount }
                                 }).filter(k => k.total > 0)
 
                                 return (
@@ -333,7 +335,7 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                                                         className="px-2 py-0.5 rounded text-[10px] font-bold"
                                                         style={{ background: color.bg, color: color.text, border: `1px solid ${color.border}` }}
                                                     >{category.toUpperCase()}</span>
-                                                    <span className="text-[11px] text-text-muted">{entries.length} providers</span>
+                                                    <span className="text-[11px] text-text-muted">{t('notifications.providerCount', { count: entries.length })}</span>
                                                 </div>
                                             </div>
                                             {keyStats.length > 0 && (
@@ -341,10 +343,10 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                                                     {keyStats.map(({ key, label, total, onCount }) => {
                                                         const allOn = onCount === total
                                                         const description = onCount === total
-                                                            ? `Enabled for all ${total} providers`
+                                                            ? t('notifications.bulkEnabledAll', { total })
                                                             : onCount === 0
-                                                                ? `Disabled for all ${total} providers`
-                                                                : `Enabled for ${onCount} of ${total} providers`
+                                                                ? t('notifications.bulkDisabledAll', { total })
+                                                                : t('notifications.bulkEnabledSome', { onCount, total })
                                                         return (
                                                             <ToggleRow
                                                                 key={key}
@@ -391,6 +393,7 @@ function ProviderCategoryDetail({ entries, multiMachine, savingKey, onSet }: {
     savingKey: string | null
     onSet: (machineId: string, providerType: string, key: string, value: unknown) => Promise<void>
 }) {
+    const { t } = useTranslation('common')
     const [expanded, setExpanded] = useState(false)
 
     return (
@@ -399,7 +402,7 @@ function ProviderCategoryDetail({ entries, multiMachine, savingKey, onSet }: {
                 onClick={() => setExpanded(!expanded)}
                 className="machine-btn text-[10px] mb-2"
             >
-                {expanded ? '▾ Hide details' : '▸ Show per-provider details'} ({entries.length})
+                {expanded ? t('notifications.hideDetails') : t('notifications.showDetails', { count: entries.length })}
             </button>
 
             {expanded && (
@@ -440,6 +443,7 @@ function ProviderCategoryDetail({ entries, multiMachine, savingKey, onSet }: {
 /* ─── Sound Effects toggle (self-contained) ─── */
 
 function SoundToggle() {
+    const { t } = useTranslation('common')
     const [soundEnabled, setSoundEnabled] = useState(() => {
         try { return localStorage.getItem('adhdev_sound') !== '0' } catch { return true }
     })
@@ -451,8 +455,8 @@ function SoundToggle() {
 
     return (
         <ToggleRow
-            label={<span className="flex items-center gap-1.5"><IconVolume size={15} /> Sound Effects</span>}
-            description="Play a sound when agent completes or needs approval"
+            label={<span className="flex items-center gap-1.5"><IconVolume size={15} /> {t('notifications.soundEffectsLabel')}</span>}
+            description={t('notifications.soundEffectsDesc')}
             checked={soundEnabled}
             onChange={handleToggle}
         />

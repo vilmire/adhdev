@@ -22,6 +22,7 @@ function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive
     icon: string; name: string; status: string; statusTone?: 'active' | 'waiting' | 'idle' | 'offline'; workspace?: string
     isActive: boolean; hidden?: boolean; onClick: () => void
 }) {
+    const { t } = useTranslation('common')
     const statusDotColor = statusTone === 'active'
         ? '#f97316'
         : statusTone === 'waiting'
@@ -45,8 +46,8 @@ function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive
                 {hidden && (
                     <span
                         className="inline-flex shrink-0 text-text-muted"
-                        title="Hidden"
-                        aria-label="Hidden"
+                        title={t('machine.card.hidden')}
+                        aria-label={t('machine.card.hidden')}
                     >
                         <IconEyeOff size={11} />
                     </span>
@@ -178,13 +179,13 @@ export default function MachinesPage() {
             <div className="dashboard-header">
                 <div>
                     <h1 className="header-title flex items-center gap-2">
-                        <IconServer size={20} /> Burrows
+                        <IconServer size={20} /> {t('machine.card.pageTitle')}
                     </h1>
                     <div className="header-subtitle flex gap-3 flex-wrap">
-                        <span>{machines.length} burrow{machines.length !== 1 ? 's' : ''}</span>
-                        <span className="text-green-500">● {onlineCount} online</span>
+                        <span>{t('machine.card.burrowCount', { count: machines.length })}</span>
+                        <span className="text-green-500">● {t('machine.card.onlineCount', { count: onlineCount })}</span>
                         {allActiveAgents.length > 0 && (
-                            <span className="text-orange-500">⚡ {allActiveAgents.length} agent{allActiveAgents.length > 1 ? 's' : ''} active</span>
+                            <span className="text-orange-500">⚡ {t('machine.card.agentsActive', { count: allActiveAgents.length })}</span>
                         )}
                     </div>
                 </div>
@@ -200,7 +201,7 @@ export default function MachinesPage() {
                                 className="w-1.5 h-1.5 rounded-full bg-orange-500"
                                 style={{ animation: 'pulse-dot 1.5s infinite' }}
                             />
-                            Active Now
+                            {t('machine.card.activeNow')}
                         </div>
                         <div className="flex flex-col gap-1">
                             {allActiveAgents.map((agent, idx) => (
@@ -220,7 +221,7 @@ export default function MachinesPage() {
                                             className="w-1 h-1 rounded-full bg-orange-500"
                                             style={{ animation: 'pulse-dot 1s infinite' }}
                                         />
-                                        generating...
+                                        {t('machine.card.generating')}
                                     </span>
                                     <span className="text-[10px] text-text-muted">→</span>
                                 </div>
@@ -269,7 +270,7 @@ export default function MachinesPage() {
                                 {isBlocked ? (
                                     <div className="p2p-overlay">
                                         <div className="text-[11px] font-semibold tracking-tight text-red-400">
-                                            Connection failed
+                                            {t('machine.card.connectionFailed')}
                                         </div>
                                         <div className="text-[10px] text-text-muted">
                                             {machine.nickname || machine.hostname}
@@ -279,7 +280,7 @@ export default function MachinesPage() {
                                                 onClick={(e) => { e.stopPropagation(); retryConnection(machine.machineId) }}
                                                 className="mt-1 px-3 py-1 rounded-md text-[10px] font-semibold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors"
                                             >
-                                                Reconnect
+                                                {t('machine.card.reconnect')}
                                             </button>
                                         )}
                                     </div>
@@ -297,7 +298,7 @@ export default function MachinesPage() {
                                             className="text-[11px] font-semibold tracking-tight"
                                             style={{ color: 'var(--accent-primary-light)' }}
                                         >
-                                            Connecting...
+                                            {t('machine.card.connecting')}
                                         </div>
                                         <div className="text-[10px] text-text-muted">
                                             {machine.nickname || machine.hostname}
@@ -332,7 +333,7 @@ export default function MachinesPage() {
                                                     {typeof machine.system?.cpus === 'number' && typeof machine.system?.totalMem === 'number' && (
                                                         <span className="opacity-30">·</span>
                                                     )}
-                                                    {machine.system && <span>{typeof machine.system.uptime === 'number' ? formatUptime(machine.system.uptime) : 'Runtime polling'}</span>}
+                                                    {machine.system && <span>{typeof machine.system.uptime === 'number' ? formatUptime(machine.system.uptime) : t('machine.card.runtimePolling')}</span>}
                                                 </div>
                                             </div>
                                         </div>
@@ -352,7 +353,7 @@ export default function MachinesPage() {
                                                             ? 'bg-orange-500/[0.08] border border-orange-500/20 text-orange-400'
                                                             : 'bg-green-500/[0.08] border border-green-500/20 text-green-500'
                                                     }`}
-                                                    title={transport === 'relay' ? 'TURN relay — direct connection failed' : 'Direct connection (STUN/host)'}
+                                                    title={transport === 'relay' ? t('machine.card.transportRelay') : t('machine.card.transportDirect')}
                                                 >
                                                     {transport === 'relay' ? '🔀 relay' : '🔗 direct'}
                                                 </span>
@@ -381,7 +382,7 @@ export default function MachinesPage() {
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.ideSessions.map(ide => {
                                                     const active = isAgentActive(ide.agents, ide.childSessions, ide.activeChat)
-                                                    const statusText = active ? 'generating'
+                                                    const statusText = active ? t('machine.card.generating')
                                                         : isManagedStatusWaiting(ide.activeChat?.status, { activeModal: ide.activeChat?.activeModal }) ? 'approval'
                                                         : 'idle'
                                                     const statusTone = active
@@ -421,7 +422,7 @@ export default function MachinesPage() {
                                                                                 isManagedStatusWorking(stream.status)
                                                                                     ? 'text-orange-400' : 'text-text-muted'
                                                                             }`}>
-                                                                                {isManagedStatusWorking(stream.status) ? '⚡ generating' : normalizeManagedStatus(stream.status)}
+                                                                                {isManagedStatusWorking(stream.status) ? `⚡ ${t('machine.card.generating')}` : normalizeManagedStatus(stream.status)}
                                                                             </span>
                                                                         </div>
                                                                     ))}
@@ -451,7 +452,7 @@ export default function MachinesPage() {
                                                             key={cli.id}
                                                             icon={getIcon(cli.cliType)}
                                                             name={cli.cliName}
-                                                            status={active ? 'generating' : normalizeManagedStatus(cli.status)}
+                                                            status={active ? t('machine.card.generating') : normalizeManagedStatus(cli.status)}
                                                             statusTone={statusTone}
                                                             workspace={getWorkspaceDisplayLabel(cli.workspace)}
                                                             isActive={!!active}
@@ -481,7 +482,7 @@ export default function MachinesPage() {
                                                             key={acp.id}
                                                             icon={getIcon(acp.acpType)}
                                                             name={acp.acpName}
-                                                            status={active ? 'generating' : normalizeManagedStatus(acp.status)}
+                                                            status={active ? t('machine.card.generating') : normalizeManagedStatus(acp.status)}
                                                             statusTone={statusTone}
                                                             workspace={getWorkspaceDisplayLabel(acp.workspace)}
                                                             isActive={!!active}
@@ -497,11 +498,11 @@ export default function MachinesPage() {
                                     {/* Nothing running */}
                                     {totalAgents === 0 && isOnline && (
                                         <div className="text-[11px] text-text-muted italic">
-                                            No agents running yet ·{' '}
+                                            {t('machine.card.noAgentsRunning')} ·{' '}
                                             <span
                                                 onClick={(e) => { e.stopPropagation(); navigate(`/machines/${machine.machineId}`) }}
                                                 className="text-violet-500 cursor-pointer not-italic"
-                                            >Launch →</span>
+                                            >{t('machine.card.launchCta')}</span>
                                         </div>
                                     )}
                                 </div>

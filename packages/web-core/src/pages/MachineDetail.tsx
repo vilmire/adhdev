@@ -429,23 +429,23 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     // ─── Loading / Not Found ─────────────────────────
     if (!machine) {
         if (!initialLoaded) {
-            return <div className="p-10 text-center text-text-muted"><p>⏳ Loading machine...</p></div>
+            return <div className="p-10 text-center text-text-muted"><p>{t('machine.detail.loading')}</p></div>
         }
         return (
             <div className="p-10 text-center text-text-muted">
                 <h2 className="text-text-primary">{t('machine.detail.notFound')}</h2>
-                <p className="mt-3">The machine may be offline or not yet connected.</p>
-                <button onClick={handleBack} className="machine-btn-back">← Back</button>
+                <p className="mt-3">{t('machine.detail.offlineHint')}</p>
+                <button onClick={handleBack} className="machine-btn-back">{t('machine.detail.back')}</button>
             </div>
         )
     }
 
     const TABS: { id: TabId; label: string | ReactNode; count?: number }[] = [
-        { id: 'workspace', label: <span className="flex items-center gap-1.5"><IconMonitor size={14} /> Workspace</span>, count: ideSessions.length + cliSessions.length + acpSessions.length },
-        { id: 'session-host', label: <span className="flex items-center gap-1.5"><IconServer size={14} /> Hosted Runtimes</span> },
-        { id: 'providers', label: <span className="flex items-center gap-1.5"><IconSettings size={14} /> Providers</span> },
-        { id: 'overview', label: <span className="flex items-center gap-1.5"><IconBarChart size={14} /> System</span> },
-        { id: 'logs', label: <span className="flex items-center gap-1.5"><IconClipboard size={14} /> Logs</span> },
+        { id: 'workspace', label: <span className="flex items-center gap-1.5"><IconMonitor size={14} /> {t('machine.detail.tabWorkspace')}</span>, count: ideSessions.length + cliSessions.length + acpSessions.length },
+        { id: 'session-host', label: <span className="flex items-center gap-1.5"><IconServer size={14} /> {t('machine.detail.tabHostedRuntimes')}</span> },
+        { id: 'providers', label: <span className="flex items-center gap-1.5"><IconSettings size={14} /> {t('machine.detail.tabProviders')}</span> },
+        { id: 'overview', label: <span className="flex items-center gap-1.5"><IconBarChart size={14} /> {t('machine.detail.tabSystem')}</span> },
+        { id: 'logs', label: <span className="flex items-center gap-1.5"><IconClipboard size={14} /> {t('machine.detail.tabLogs')}</span> },
     ]
 
     return (
@@ -463,7 +463,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                     <h1
                                         className="text-xl md:text-2xl font-bold text-text-primary cursor-pointer truncate hover:text-accent-primary transition-colors"
                                         onClick={() => { actions.setEditingNickname(true); actions.setNicknameInput(machine.machineNickname || '') }}
-                                        title="Click to set nickname"
+                                        title={t('machine.detail.clickToSetNickname')}
                                     >
                                         {displayName}
                                     </h1>
@@ -474,7 +474,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                             value={actions.nicknameInput}
                                             onChange={e => actions.setNicknameInput(e.target.value)}
                                             onKeyDown={e => { if (e.key === 'Enter') actions.handleSaveNickname(); if (e.key === 'Escape') actions.setEditingNickname(false) }}
-                                            placeholder="Machine nickname..."
+                                            placeholder={t('machine.detail.nicknamePlaceholder')}
                                             className="px-2.5 py-1 rounded-md border border-violet-500/30 bg-bg-secondary text-text-primary text-sm font-semibold w-[140px] md:w-[200px]"
                                         />
                                         <button onClick={actions.handleSaveNickname} className="flex items-center justify-center px-3 py-1 rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 text-sm font-medium transition-colors">{t('machine.detail.save')}</button>
@@ -489,7 +489,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                                 onClick={() => daemonCtx.retryConnection!(machineId)}
                                                 className="px-2.5 py-0.5 rounded text-[11px] font-semibold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors"
                                             >
-                                                Reconnect
+                                                {t('machine.detail.reconnect')}
                                             </button>
                                         )}
                                     </>
@@ -499,10 +499,10 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                             </div>
                             <div className="flex flex-wrap gap-x-3 gap-y-1 items-center mt-1.5 text-xs text-text-secondary opacity-80">
                                 <span className="font-mono bg-[#ffffff08] px-1.5 py-0.5 rounded">{machine.platform} · {machine.arch}</span>
-                                <span>{machine.cpus} cores</span>
+                                <span>{t('machine.detail.coresCount', { count: machine.cpus })}</span>
                                 {machineEntry?.version && <span>v{machineEntry.version}</span>}
                                 {machine.p2p.available && (
-                                    <span>P2P {machine.p2p.state === 'connected' ? 'connected' : machine.p2p.state}</span>
+                                    <span>{t('machine.detail.p2pState', { state: machine.p2p.state === 'connected' ? t('machine.detail.p2pConnected') : machine.p2p.state })}</span>
                                 )}
                                 {machine.machineNickname && (
                                     <span className="text-text-muted opacity-60 shrink-0">{machine.hostname}</span>
