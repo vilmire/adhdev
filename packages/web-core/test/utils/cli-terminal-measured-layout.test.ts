@@ -251,8 +251,8 @@ describe('CLI terminal measured layout plumbing', () => {
 
     // Ctrl-C stays hard-wired to the raw SIGINT byte for muscle memory.
     expect(paneSource.includes("sendTerminalControlInput('\\u0003')")).toBe(true)
-    // Ctrl-D (and any other Ctrl+letter) is now reachable via the Ctrl sticky toggle + letter grid.
-    expect(paneSource.includes("'abcdefghijklmnopqrstuvwxyz0123456789'.split('').map((key) => (")).toBe(true)
+    // Letter and digit grid removed; physical keyboard used for Ctrl+letter combinations.
+    expect(paneSource.includes("'abcdefghijklmnopqrstuvwxyz0123456789'.split('').map((key) => (")).toBe(false)
   })
 
   it('encodes hard-to-type popover keys correctly via the shared terminal key encoder (regression intent of the fixed sequences)', () => {

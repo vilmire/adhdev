@@ -692,19 +692,6 @@ export default function CliTerminalPane({
                                         </button>
                                     ))}
                                 </div>
-                                {/* Letter + digit grid — sends the active modifier combo, then clears it. */}
-                                <div className="grid grid-cols-6 gap-1">
-                                    {'abcdefghijklmnopqrstuvwxyz0123456789'.split('').map((key) => (
-                                        <button
-                                            key={key}
-                                            type="button"
-                                            className="h-8 rounded-md border border-white/10 bg-white/[0.06] text-[12px] font-semibold uppercase hover:bg-white/[0.12]"
-                                            onClick={() => sendEncodedKey(key)}
-                                        >
-                                            {key}
-                                        </button>
-                                    ))}
-                                </div>
                                 <div className="my-2 h-px bg-white/10" />
                                 {/* Function keys — also modifier-aware (e.g. Ctrl+Arrow, Shift+Tab). */}
                                 <div className="grid grid-cols-3 gap-1.5">
