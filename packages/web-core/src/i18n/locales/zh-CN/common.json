@@ -2509,8 +2509,8 @@
     },
     "hero": {
       "badge": "多厂商、多机器的智能体控制平面",
-      "title": "运行十个智能体谁都会。ADHDev 让成果落地到 main。",
-      "subtitle": "从浏览器驱动任何本地编码智能体 —— Claude Code、Codex、Cursor ——然后让 Refinery <em>无人值守</em>地将完成的工作合并回 main：使用你仓库自己的门禁、补丁等价性检查、仅 fast-forward、绝不 force-push。你只需与一个协调器对话；它会在你自己的机器上异步运行并行智能体 —— 无需照看任何会话。代码始终留在你的机器上 —— P2P，端到端。",
+      "title": "在浏览器中驱动每一个本地编码智能体 —— 并行运行。",
+      "subtitle": "从浏览器驱动任何 CLI 智能体 —— Claude Code、Codex、Gemini —— 然后扩展：在你自己机器上的隔离 git 工作树中编排多个智能体，让 Refinery <em>无人值守</em>地把完成的工作安全落地到 main —— 使用你仓库自己的门禁、补丁等价性检查、仅 fast-forward、绝不 force-push。你只需与一个协调器对话；它会异步运行这些并行智能体，无需照看任何会话。P2P —— 代码始终留在你的机器上。",
       "selectOs": "选择操作系统",
       "osUnix": "macOS / Linux",
       "osWindows": "Windows",

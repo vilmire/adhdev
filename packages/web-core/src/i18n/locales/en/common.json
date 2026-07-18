@@ -2509,8 +2509,8 @@
     },
     "hero": {
       "badge": "The multi-vendor, multi-machine agent control plane",
-      "title": "Anyone can run ten agents. ADHDev lands the work on main.",
-      "subtitle": "Drive any local coding agent — Claude Code, Codex, Cursor — from your browser, then let the Refinery merge finished work back to main <em>unattended</em>: your repo's own gates, patch-equivalence checks, fast-forward only, no force-push. You talk to one coordinator; it runs parallel agents across your own machines asynchronously — no sessions to babysit. Code stays on your machine — P2P, end to end.",
+      "title": "Run every local coding agent from the web — in parallel.",
+      "subtitle": "Drive any CLI agent — Claude Code, Codex, Gemini — from your browser, then scale: orchestrate multiple agents across isolated git worktrees on your own machines and let the Refinery land finished work safely on main <em>unattended</em> — your repo's own gates, patch-equivalence checks, fast-forward only, no force-push. You talk to one coordinator; it runs the parallel agents asynchronously, so there are no sessions to babysit. P2P — code stays on your machine.",
       "selectOs": "Select OS",
       "osUnix": "macOS / Linux",
       "osWindows": "Windows",

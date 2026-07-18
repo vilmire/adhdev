@@ -2509,8 +2509,8 @@
     },
     "hero": {
       "badge": "멀티 벤더, 멀티 머신 에이전트 컨트롤 플레인",
-      "title": "누구나 에이전트 열 개를 돌릴 수 있습니다. ADHDev는 그 결과를 main에 착지시킵니다.",
-      "subtitle": "Claude Code, Codex, Cursor 등 어떤 로컬 코딩 에이전트든 브라우저에서 구동하고, Refinery가 완료된 작업을 main으로 자동 머지합니다 — 여러분 레포의 게이트, 패치 동등성 검사, fast-forward만, force-push 없이. 코디네이터 하나에 지시하면 여러 머신에서 에이전트들이 비동기로 실행됩니다. 세션을 지켜볼 필요 없습니다. 코드는 P2P로 여러분 머신에만 머뭅니다.",
+      "title": "로컬 코딩 에이전트를 웹에서 — 병렬로 구동하세요.",
+      "subtitle": "Claude Code, Codex, Gemini 등 어떤 CLI 에이전트든 브라우저에서 구동하고, 그다음 확장하세요: 여러분의 머신에서 격리된 git 워크트리 전반에 여러 에이전트를 오케스트레이션하고, Refinery가 완료된 작업을 <em>무인</em>으로 main에 안전하게 착지시킵니다 — 여러분 레포의 게이트, 패치 동등성 검사, fast-forward만, force-push 없이. 코디네이터 하나에 지시하면 병렬 에이전트들이 비동기로 실행되어 지켜볼 세션이 없습니다. P2P — 코드는 여러분 머신에만 머뭅니다.",
       "selectOs": "OS 선택",
       "osUnix": "macOS / Linux",
       "osWindows": "Windows",

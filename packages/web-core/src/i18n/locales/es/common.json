@@ -2509,8 +2509,8 @@
     },
     "hero": {
       "badge": "El plano de control de agentes multiproveedor y multimáquina",
-      "title": "Cualquiera puede ejecutar diez agentes. ADHDev hace que el trabajo aterrice en main.",
-      "subtitle": "Controla cualquier agente de codificación local —Claude Code, Codex, Cursor— desde tu navegador y luego deja que Refinery fusione el trabajo terminado de vuelta a main de forma <em>desatendida</em>: las propias comprobaciones de tu repositorio, verificaciones de equivalencia de parches, solo fast-forward, sin force-push. Hablas con un único coordinador; este ejecuta agentes en paralelo por tus propias máquinas de forma asíncrona, sin sesiones que vigilar. El código permanece en tu máquina —P2P, de extremo a extremo.",
+      "title": "Ejecuta cada agente de codificación local desde la web — en paralelo.",
+      "subtitle": "Controla cualquier agente CLI —Claude Code, Codex, Gemini— desde tu navegador y luego escala: orquesta varios agentes en árboles de trabajo git aislados en tus propias máquinas y deja que Refinery haga aterrizar el trabajo terminado en main de forma <em>desatendida</em> —las propias comprobaciones de tu repositorio, verificaciones de equivalencia de parches, solo fast-forward, sin force-push. Hablas con un único coordinador; este ejecuta los agentes en paralelo de forma asíncrona, sin sesiones que vigilar. P2P —el código permanece en tu máquina.",
       "selectOs": "Seleccionar SO",
       "osUnix": "macOS / Linux",
       "osWindows": "Windows",
