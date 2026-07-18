@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Trans, useTranslation } from 'react-i18next'
 import { useTransport } from '../../context/TransportContext'
 
 interface PromptEntry {
@@ -42,6 +43,7 @@ const DEFAULT_KNOWN_CLI_TYPES = [
 ]
 
 export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DEFAULT_KNOWN_CLI_TYPES }: Props) {
+    const { t } = useTranslation('common')
     const { sendCommand } = useTransport()
     const [drafts, setDrafts] = useState<Record<string, PromptEntry>>({})
     const [savedSnapshot, setSavedSnapshot] = useState<Record<string, PromptEntry>>({})
@@ -122,9 +124,9 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                     sessions get. <span className="font-mono text-[11px]">{dir || '~/.adhdev/coordinator-prompts/'}</span>
                 </p>
                 <p className="mt-1">
-                    <strong>Override</strong> replaces the daemon's built-in base prompt for that CLI.
+                    <Trans i18nKey="settings.coordinatorPrompts.overrideDesc" ns="common" components={{ strong: <strong /> }} />
                     {' '}
-                    <strong>Append</strong> stacks after whichever base wins.
+                    <Trans i18nKey="settings.coordinatorPrompts.appendDesc" ns="common" components={{ strong: <strong /> }} />
                     Leave a field empty + Save to remove it (reset to default).
                     Supports placeholders: {'{{meshName}}'}, {'{{repo}}'}, {'{{nodes}}'}, {'{{rules}}'}, etc.
                 </p>
@@ -138,7 +140,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                     <div key={key} className="rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
                         <div className="text-[13px] font-semibold mb-2">{key}</div>
 
-                        <label className="block text-[11px] uppercase tracking-wide text-text-muted mb-1">Override</label>
+                        <label className="block text-[11px] uppercase tracking-wide text-text-muted mb-1">{t('settings.coordinatorPrompts.overrideLabel')}</label>
                         <textarea
                             className="w-full px-3 py-2 rounded bg-bg-secondary border border-border-subtle text-[12px] font-mono text-text-primary"
                             rows={4}
@@ -158,7 +160,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                             </button>
                         </div>
 
-                        <label className="block text-[11px] uppercase tracking-wide text-text-muted mb-1">Append</label>
+                        <label className="block text-[11px] uppercase tracking-wide text-text-muted mb-1">{t('settings.coordinatorPrompts.appendLabel')}</label>
                         <textarea
                             className="w-full px-3 py-2 rounded bg-bg-secondary border border-border-subtle text-[12px] font-mono text-text-primary"
                             rows={3}

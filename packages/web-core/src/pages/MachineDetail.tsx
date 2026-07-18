@@ -13,6 +13,7 @@
  * Shared types: ./machine/types.ts
  */
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
@@ -69,6 +70,7 @@ type MachineDaemonEntry = DaemonData & {
 }
 
 export default function MachineDetail({ onNicknameSynced }: MachineDetailProps = {}) {
+    const { t } = useTranslation('common')
     const { id: machineId } = useParams<{ id: string }>()
     const navigate = useNavigate()
     const location = useLocation()
@@ -431,7 +433,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         }
         return (
             <div className="p-10 text-center text-text-muted">
-                <h2 className="text-text-primary">Machine not found</h2>
+                <h2 className="text-text-primary">{t('machine.detail.notFound')}</h2>
                 <p className="mt-3">The machine may be offline or not yet connected.</p>
                 <button onClick={handleBack} className="machine-btn-back">← Back</button>
             </div>
@@ -475,8 +477,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                             placeholder="Machine nickname..."
                                             className="px-2.5 py-1 rounded-md border border-violet-500/30 bg-bg-secondary text-text-primary text-sm font-semibold w-[140px] md:w-[200px]"
                                         />
-                                        <button onClick={actions.handleSaveNickname} className="flex items-center justify-center px-3 py-1 rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 text-sm font-medium transition-colors">Save</button>
-                                        <button onClick={() => actions.setEditingNickname(false)} className="flex items-center justify-center px-3 py-1 rounded bg-[#ffffff0a] text-text-muted hover:bg-[#ffffff14] hover:text-text-primary text-sm font-medium transition-colors">Cancel</button>
+                                        <button onClick={actions.handleSaveNickname} className="flex items-center justify-center px-3 py-1 rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 text-sm font-medium transition-colors">{t('machine.detail.save')}</button>
+                                        <button onClick={() => actions.setEditingNickname(false)} className="flex items-center justify-center px-3 py-1 rounded bg-[#ffffff0a] text-text-muted hover:bg-[#ffffff14] hover:text-text-primary text-sm font-medium transition-colors">{t('machine.detail.cancel')}</button>
                                     </div>
                                 )}
                                 {isMachineBlocked ? (

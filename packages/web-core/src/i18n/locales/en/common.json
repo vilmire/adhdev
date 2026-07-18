@@ -450,7 +450,20 @@
       "upstreamUnverified": "unverified",
       "upstreamUnavailable": "unavailable",
       "needsFollowUp": "needs follow-up",
-      "refined": "refined"
+      "refined": "refined",
+      "tooltipLocalChanges": "Local changes",
+      "tooltipHasConflicts": "Has conflicts",
+      "tooltipOutOfSync": "Out of sync",
+      "tooltipNeedsFollowUp": "Needs follow-up",
+      "tooltipUpstreamUnverified": "Upstream unverified",
+      "tooltipStartedNotReported": "Started: not reported",
+      "tooltipRefineCompleted": "refine completed",
+      "tooltipRefinedBranch": "refined {{branch}}",
+      "tooltipP2PRelayed": "P2P link relayed through TURN (slower path)",
+      "tooltipP2PRtt": "P2P round-trip latency",
+      "tooltipPrefixStatus": "Status:",
+      "tooltipPrefixBranch": "Branch:",
+      "tooltipPrefixNote": "Note:"
     },
     "obs": {
       "tabOverview": "Overview",
@@ -499,6 +512,29 @@
       "meshConnecting": "mesh connecting...",
       "connecting": "connecting...",
       "providerUnknown": "provider unknown"
+    },
+    "dialog": {
+      "kicker": "Mesh observability",
+      "showDetails": "Show mesh details",
+      "hideDetails": "Hide mesh details",
+      "refreshedAt": "Refreshed {{time}}",
+      "liveMetadata": "Live daemon metadata",
+      "metadataUnavailable": "Metadata subscription unavailable",
+      "refreshTitle": "Refresh live mesh graph",
+      "refresh": "Refresh",
+      "refreshing": "Refreshing…",
+      "loadingStatus": "Loading live mesh status…",
+      "noGraph": "No live mesh graph is available for this coordinator yet.",
+      "errorNoMeshId": "This coordinator does not expose a live mesh id.",
+      "errorUnexpectedPayload": "mesh_status returned an unexpected payload."
+    },
+    "health": {
+      "panelTitle": "Mesh Health Panel",
+      "lastActivity": "Last activity",
+      "refineJobs": "Refine jobs",
+      "failedTasks": "Failed tasks",
+      "staleWork": "Stale work",
+      "sessions": "Sessions"
     }
   },
   "repoMesh": {
@@ -2149,6 +2185,24 @@
       "cdpConnected": "CDP connected",
       "cdpConnecting": "CDP connecting...",
       "connecting": "connecting..."
+    },
+    "card": {
+      "sectionIDEs": "IDEs",
+      "sectionCLIs": "CLIs",
+      "sectionACPAgents": "ACP Agents",
+      "emptyHeadline": "Welcome to ADHDev",
+      "emptyBody": "Connect your first machine to the dashboard. Run setup once, then start ADHDev on that machine:",
+      "emptyDocsLink": "📚 Read the documentation →"
+    },
+    "detail": {
+      "notFound": "Machine not found",
+      "save": "Save",
+      "cancel": "Cancel"
+    },
+    "commandCenter": {
+      "currentChats": "Current Chats",
+      "recentLaunches": "Recent Launches",
+      "daemonUpdate": "Daemon Update"
     }
   },
   "settings": {
@@ -2183,6 +2237,24 @@
       "labelBubbleRadius": "Bubble radius",
       "resetToDefaults": "Reset to defaults",
       "customLabel": "🎨 Custom"
+    },
+    "providerPriority": {
+      "available": "available",
+      "notOnMachine": "not on this machine",
+      "remove": "Remove",
+      "addCliLabel": "Add available CLI provider",
+      "addProvider": "Add provider"
+    },
+    "coordinatorPrompts": {
+      "overrideDesc": "<strong>Override</strong> replaces the daemon's built-in base prompt for that CLI.",
+      "appendDesc": "<strong>Append</strong> stacks after whichever base wins.",
+      "overrideLabel": "Override",
+      "appendLabel": "Append"
+    },
+    "appearance": {
+      "modeLabel": "Mode",
+      "themeLabel": "Theme",
+      "mobileLabel": "Mobile"
     }
   },
   "historyModal": {

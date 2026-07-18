@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import type { DaemonData } from '../../types'
 import { formatRelativeTime } from '../../utils/time'
@@ -48,6 +49,7 @@ export default function MachineCommandCenter({
     onOpenRecent,
     onOpenConversation,
 }: MachineCommandCenterProps) {
+    const { t } = useTranslation('common')
     const topCurrentConversations = currentConversations.slice(0, 6)
     const topRecentLaunches = recentLaunches.slice(0, 4)
     const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
@@ -57,7 +59,7 @@ export default function MachineCommandCenter({
         <div className="flex flex-col gap-4 md:min-w-[300px] md:max-w-[360px] shrink-0 md:h-full overflow-y-auto">
             {topCurrentConversations.length > 0 && (
                 <div className="flex flex-col gap-2">
-                    <SectionTitle icon={<IconChat size={13} />}>Current Chats</SectionTitle>
+                    <SectionTitle icon={<IconChat size={13} />}>{t('machine.commandCenter.currentChats')}</SectionTitle>
                     <SectionCard>
                         <div className="flex flex-col gap-1.5">
                             {topCurrentConversations.map(conversation => {
@@ -92,7 +94,7 @@ export default function MachineCommandCenter({
 
             {topRecentLaunches.length > 0 && (
                 <div className="flex flex-col gap-2">
-                    <SectionTitle icon={<IconClock size={13} />}>Recent Launches</SectionTitle>
+                    <SectionTitle icon={<IconClock size={13} />}>{t('machine.commandCenter.recentLaunches')}</SectionTitle>
                     <SectionCard>
                         <div className="flex flex-col gap-1.5">
                             {topRecentLaunches.map(launch => {
@@ -127,7 +129,7 @@ export default function MachineCommandCenter({
 
             {updateStatus.visible && (
                 <div className="flex flex-col gap-2">
-                    <SectionTitle icon={<IconWarning size={13} />}>Daemon Update</SectionTitle>
+                    <SectionTitle icon={<IconWarning size={13} />}>{t('machine.commandCenter.daemonUpdate')}</SectionTitle>
                     <SectionCard className={updateStatus.tone === 'good' ? 'border-emerald-500/20 bg-emerald-500/5' : updateStatus.tone === 'info' ? 'border-sky-500/20 bg-sky-500/5' : 'border-amber-500/20 bg-amber-500/5'}>
                         <div className="flex flex-col gap-3">
                             <div className="text-sm font-semibold text-text-primary">

@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { useDaemons } from '../compat'
@@ -72,6 +73,7 @@ function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive
 
 // ─── Page ────────────────────────────────────────────
 export default function MachinesPage() {
+    const { t } = useTranslation('common')
     const navigate = useNavigate()
     const daemonCtx = useDaemons()
     const { ides: daemons } = daemonCtx
@@ -375,7 +377,7 @@ export default function MachinesPage() {
                                     {/* Compact Agent List — IDEs */}
                                     {machine.ideSessions.length > 0 && (
                                         <div className="mb-1.5">
-                                            <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">IDEs</div>
+                                            <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">{t('machine.card.sectionIDEs')}</div>
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.ideSessions.map(ide => {
                                                     const active = isAgentActive(ide.agents, ide.childSessions, ide.activeChat)
@@ -435,7 +437,7 @@ export default function MachinesPage() {
                                     {/* Compact Agent List — CLIs */}
                                     {machine.cliSessions.length > 0 && (
                                         <div className="mb-1.5">
-                                            <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">CLIs</div>
+                                            <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">{t('machine.card.sectionCLIs')}</div>
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.cliSessions.map(cli => {
                                                     const active = isManagedStatusWorking(cli.status)
@@ -465,7 +467,7 @@ export default function MachinesPage() {
                                     {/* Compact Agent List — ACP Agents */}
                                     {machine.acpSessions.length > 0 && (
                                         <div className="mb-1.5">
-                                            <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">ACP Agents</div>
+                                            <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">{t('machine.card.sectionACPAgents')}</div>
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.acpSessions.map(acp => {
                                                     const active = isManagedStatusWorking(acp.status)
@@ -512,16 +514,16 @@ export default function MachinesPage() {
                         <div className="col-span-full py-16 px-10 text-center bg-bg-secondary border-2 border-dashed border-border-subtle rounded-[20px] shadow-sm relative overflow-hidden">
                             <div className="absolute inset-0 bg-gradient-to-b from-violet-500/5 to-transparent pointer-events-none" />
                             <img src="/otter-logo.png" alt="ADHDev" className="w-14 h-14 object-contain mb-5 mx-auto opacity-90 animate-bounce" style={{ animationDuration: '3s' }} />
-                            <h3 className="text-text-primary mb-2 text-xl font-bold tracking-tight">Welcome to ADHDev</h3>
+                            <h3 className="text-text-primary mb-2 text-xl font-bold tracking-tight">{t('machine.card.emptyHeadline')}</h3>
                             <p className="text-[13px] text-text-muted max-w-[420px] mx-auto leading-relaxed mb-6">
-                                Connect your first machine to the dashboard. Run setup once, then start ADHDev on that machine:
+                                {t('machine.card.emptyBody')}
                             </p>
                             
                             <InstallCommand />
                             
                             <p className="text-[12px] text-text-muted mt-8">
                                 <a href="https://docs.adhf.dev" target="_blank" rel="noopener noreferrer" className="text-accent font-semibold hover:underline flex items-center justify-center gap-1">
-                                    📚 Read the documentation →
+                                    {t('machine.card.emptyDocsLink')}
                                 </a>
                             </p>
                         </div>

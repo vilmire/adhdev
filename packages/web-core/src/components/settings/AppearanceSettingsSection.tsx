@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { GeneralThemeSection } from './GeneralThemeSection'
 import { ChatThemeSection } from './ChatThemeSection'
 import { MobileDashboardModeSection } from './MobileDashboardModeSection'
@@ -32,17 +33,18 @@ export function AppearanceSettingsSection({
     mobileDescription = DEFAULT_MOBILE_DESCRIPTION,
     fontsSlot,
 }: AppearanceSettingsSectionProps) {
+    const { t } = useTranslation('common')
     return (
         <div className="flex flex-col gap-5">
             {/* Mode */}
             <div>
-                <div className="text-xs text-text-muted mb-2 font-medium">Mode</div>
+                <div className="text-xs text-text-muted mb-2 font-medium">{t('settings.appearance.modeLabel')}</div>
                 <GeneralThemeSection />
             </div>
 
             {/* Theme */}
             <div className="border-t border-border-subtle pt-4">
-                <div className="text-xs text-text-muted mb-1 font-medium">Theme</div>
+                <div className="text-xs text-text-muted mb-1 font-medium">{t('settings.appearance.themeLabel')}</div>
                 <p className="text-[11px] text-text-muted mb-3">{themeDescription}</p>
                 <ChatThemeSection />
             </div>
@@ -52,7 +54,7 @@ export function AppearanceSettingsSection({
 
             {/* Mobile */}
             <div className="border-t border-border-subtle pt-4">
-                <div className="text-xs text-text-muted mb-1 font-medium">Mobile</div>
+                <div className="text-xs text-text-muted mb-1 font-medium">{t('settings.appearance.mobileLabel')}</div>
                 <p className="text-[11px] text-text-muted mb-3">{mobileDescription}</p>
                 <MobileDashboardModeSection />
             </div>

@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   addProviderPriorityItem,
   moveProviderPriorityItem,
@@ -40,6 +41,7 @@ export default function ProviderPriorityEditor({
   disabled = false,
   saveButton,
 }: ProviderPriorityEditorProps) {
+  const { t } = useTranslation('common')
   const [addType, setAddType] = useState('')
   const availableByType = useMemo(() => new Map(availableProviders.map(provider => [provider.type, provider])), [availableProviders])
   // Show the FULL saved order (not just detected providers) so the operator can
@@ -73,9 +75,9 @@ export default function ProviderPriorityEditor({
                   {provider?.icon && <span aria-hidden="true">{provider.icon}</span>}
                   <span className={`font-mono text-[12px] ${detected ? 'text-text-primary' : 'text-text-muted'}`}>{type}</span>
                   {detected ? (
-                    <span className="rounded border border-green-500/20 bg-green-500/10 px-1.5 py-px text-[9px] font-semibold text-green-400">available</span>
+                    <span className="rounded border border-green-500/20 bg-green-500/10 px-1.5 py-px text-[9px] font-semibold text-green-400">{t('settings.providerPriority.available')}</span>
                   ) : (
-                    <span className="rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-px text-[9px] font-semibold text-amber-400">not on this machine</span>
+                    <span className="rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-px text-[9px] font-semibold text-amber-400">{t('settings.providerPriority.notOnMachine')}</span>
                   )}
                 </div>
                 <div className="mt-1 text-[10px] text-text-muted">
@@ -103,7 +105,7 @@ export default function ProviderPriorityEditor({
                 >
                   <IconChevron direction="down" />
                 </button>
-                <button type="button" className="btn btn-secondary btn-sm text-red-400" disabled={disabled} onClick={() => onChange(removeProviderPriorityItem(orderedValue, type))}>Remove</button>
+                <button type="button" className="btn btn-secondary btn-sm text-red-400" disabled={disabled} onClick={() => onChange(removeProviderPriorityItem(orderedValue, type))}>{t('settings.providerPriority.remove')}</button>
               </div>
             </div>
           )
@@ -111,7 +113,7 @@ export default function ProviderPriorityEditor({
       </div>
       <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
         <label className="flex-1 text-[11px] text-text-secondary">
-          <span className="mb-1 block font-medium text-text-primary">Add available CLI provider</span>
+          <span className="mb-1 block font-medium text-text-primary">{t('settings.providerPriority.addCliLabel')}</span>
           <select
             className="w-full rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-sm text-text-primary"
             value={addType}
@@ -124,7 +126,7 @@ export default function ProviderPriorityEditor({
             ))}
           </select>
         </label>
-        <button type="button" className="btn btn-secondary btn-sm" disabled={disabled || !addType} onClick={handleAdd}>Add provider</button>
+        <button type="button" className="btn btn-secondary btn-sm" disabled={disabled || !addType} onClick={handleAdd}>{t('settings.providerPriority.addProvider')}</button>
         {saveButton}
       </div>
       <div className="mt-2 text-[11px] text-text-muted">
