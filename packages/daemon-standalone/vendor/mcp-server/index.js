@@ -2431,7 +2431,7 @@ function assignFullGitSnapshot(entry, status) {
   entry.git = status;
 }
 var COMPACT_DETAILED_NODES_BYTE_BUDGET = 9e3;
-var COMPACT_NODES_TOTAL_BYTE_BUDGET = 13e3;
+var COMPACT_NODES_TOTAL_BYTE_BUDGET = 11500;
 var COMPACT_MISSIONS_BYTE_BUDGET = 6e3;
 function extractLaunchPayload(value) {
   return findNestedPayload(value, (payload) => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
