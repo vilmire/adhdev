@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import type {
     RepoMeshLedgerSummaryStatus,
     RepoMeshQueueSummary,
@@ -47,6 +48,7 @@ export function MeshHealthPanel({
         return null
     }
 
+    const { t } = useTranslation('common')
     const dk = meshTheme.isDark
     const sepClass = `border-t ${dk ? 'border-white/8' : 'border-slate-200'}`
     const subDetailsClass = `group w-full rounded-lg border text-xs ${dk ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`
@@ -101,7 +103,7 @@ export function MeshHealthPanel({
             {/* Last activity */}
             {ledgerSummary.lastActivityAt && (
                 <div className={`flex items-center justify-between ${meshTheme.textMuted}`}>
-                    <span>Last activity</span>
+                    <span>{t('meshGraph.health.lastActivity')}</span>
                     <span className="font-mono text-[10px]">{ledgerSummary.lastActivityAt.slice(5, 16)}</span>
                 </div>
             )}
@@ -139,7 +141,7 @@ export function MeshHealthPanel({
                 <div className={`pt-2.5 ${sepClass}`}>
                     <details className={subDetailsClass}>
                         <summary className={subSummaryClass}>
-                            <span className="flex-1">Refine jobs</span>
+                            <span className="flex-1">{t('meshGraph.health.refineJobs')}</span>
                             <span className={`tabular-nums ${dk ? 'text-slate-400' : 'text-slate-500'}`}>{asyncRefineJobs.length}</span>
                             {failedRefineJobs.length > 0 && <span className={dk ? 'text-rose-300' : 'text-rose-600'}>{failedRefineJobs.length} failed</span>}
                         </summary>
@@ -166,7 +168,7 @@ export function MeshHealthPanel({
                 <div className={asyncRefineJobs && asyncRefineJobs.length > 0 ? '' : `pt-2.5 ${sepClass}`}>
                     <details className={subDetailsClass}>
                         <summary className={subSummaryClass}>
-                            <span className={`flex-1 ${dk ? 'text-rose-300' : 'text-rose-600'}`}>Failed tasks</span>
+                            <span className={`flex-1 ${dk ? 'text-rose-300' : 'text-rose-600'}`}>{t('meshGraph.health.failedTasks')}</span>
                             <span className={`tabular-nums ${dk ? 'text-rose-400' : 'text-rose-500'}`}>{failedQueueTasks.length}</span>
                         </summary>
                         <div className="flex flex-col gap-1 px-2.5 pb-2">
@@ -187,7 +189,7 @@ export function MeshHealthPanel({
             {/* Stale work */}
             {hasStaleWork && (
                 <div className={`flex items-center justify-between pt-2.5 ${sepClass}`}>
-                    <span className={meshTheme.textMuted}>Stale work</span>
+                    <span className={meshTheme.textMuted}>{t('meshGraph.health.staleWork')}</span>
                     <span className={`tabular-nums ${dk ? 'text-amber-300' : 'text-amber-600'}`}>{staleWork!.count}</span>
                 </div>
             )}
@@ -197,7 +199,7 @@ export function MeshHealthPanel({
                 <div className={`pt-2.5 ${sepClass}`}>
                     <details className={subDetailsClass}>
                         <summary className={subSummaryClass}>
-                            <span className="flex-1">Sessions</span>
+                            <span className="flex-1">{t('meshGraph.health.sessions')}</span>
                             <span className={`tabular-nums ${dk ? 'text-slate-400' : 'text-slate-500'}`}>{sessionEntries.length}</span>
                         </summary>
                         <div className="flex flex-col gap-0.5 px-2.5 pb-2">
@@ -222,7 +224,7 @@ export function MeshHealthPanel({
     return (
         <details className={`rounded-2xl border text-xs ${meshTheme.isDark ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
             <summary className={`flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-medium [&::-webkit-details-marker]:hidden ${meshTheme.textSecondary}`}>
-                <span className="flex-1">Mesh Health Panel</span>
+                <span className="flex-1">{t('meshGraph.health.panelTitle')}</span>
                 {activeRefineJobs.length > 0 && (
                     <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-sky-400/25 bg-sky-500/10 text-sky-200' : 'border-sky-300 bg-sky-50 text-sky-700'}`}>
                         {activeRefineJobs.length} refining

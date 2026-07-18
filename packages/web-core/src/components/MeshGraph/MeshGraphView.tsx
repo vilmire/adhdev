@@ -376,10 +376,10 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 style={{ width: getMeshGraphNodeCardWidth(node, true) }}
                 title={[
                     node.label,
-                    node.branch ? `Branch: ${node.branch}` : null,
+                    node.branch ? `${t('meshGraph.panel.tooltipPrefixBranch')} ${node.branch}` : null,
                     node.machineLabel ? `Machine: ${node.machineLabel}` : null,
                     node.workspace ? `Workspace: ${node.workspace}` : null,
-                    attentionBadge ? `Status: ${attentionBadge.label}` : null,
+                    attentionBadge ? `${t('meshGraph.panel.tooltipPrefixStatus')} ${attentionBadge.label}` : null,
                     getNodeSummaryForLayout(node),
                     ...sessionTooltipLines,
                 ].filter(Boolean).join('\n')}
@@ -432,7 +432,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                 title={[
                                     `Session ID: ${session.sessionId}`,
                                     session.providerType ? `Provider: ${session.providerType}` : null,
-                                    `Status: ${formatSessionStatusLabel(session)}`,
+                                    `${t('meshGraph.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,
                                     `Role: ${getSessionRoleLabel(session)}`,
                                 ].filter(Boolean).join('\n')}
                             >
@@ -460,15 +460,15 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const tooltipLines = [
         node.label,
         subtitle,
-        attentionBadge ? `Status: ${attentionBadge.label}` : null,
+        attentionBadge ? `${t('meshGraph.panel.tooltipPrefixStatus')} ${attentionBadge.label}` : null,
         getNodeSummaryForLayout(node),
-        node.branch ? `Branch: ${node.branch}` : null,
-        node.dirty ? (isSubmoduleNode ? 'Local changes' : `${node.dirtyFiles} dirty`) : null,
-        node.hasConflicts ? 'Has conflicts' : null,
-        node.outOfSync ? 'Out of sync' : null,
-        !isSubmoduleNode && node.upstream && node.upstreamStatus !== 'fresh' ? 'Upstream unverified' : null,
-        node.isOrphan ? 'Needs follow-up' : null,
-        shouldShowCallout && calloutText ? `Note: ${calloutText}` : null,
+        node.branch ? `${t('meshGraph.panel.tooltipPrefixBranch')} ${node.branch}` : null,
+        node.dirty ? (isSubmoduleNode ? t('meshGraph.panel.tooltipLocalChanges') : `${node.dirtyFiles} dirty`) : null,
+        node.hasConflicts ? t('meshGraph.panel.tooltipHasConflicts') : null,
+        node.outOfSync ? t('meshGraph.panel.tooltipOutOfSync') : null,
+        !isSubmoduleNode && node.upstream && node.upstreamStatus !== 'fresh' ? t('meshGraph.panel.tooltipUpstreamUnverified') : null,
+        node.isOrphan ? t('meshGraph.panel.tooltipNeedsFollowUp') : null,
+        shouldShowCallout && calloutText ? `${t('meshGraph.panel.tooltipPrefixNote')} ${calloutText}` : null,
         ...sessionTooltipLines,
     ].filter(Boolean).join('\n')
 
@@ -531,7 +531,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                 title={[
                                     `Session ID: ${session.sessionId}`,
                                     session.providerType ? `Provider: ${session.providerType}` : null,
-                                    `Status: ${formatSessionStatusLabel(session)}`,
+                                    `${t('meshGraph.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,
                                     `Role: ${roleLabel}`,
                                 ].filter(Boolean).join('\n')}
                             >
@@ -582,7 +582,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     {connectionTransport && (
                         <span
                             className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('meta', meshTheme.isDark)}`}
-                            title={connectionTransport === 'relay' ? 'P2P link relayed through TURN (slower path)' : `P2P transport: ${connectionTransport}`}
+                            title={connectionTransport === 'relay' ? t('meshGraph.panel.tooltipP2PRelayed') : `P2P transport: ${connectionTransport}`}
                         >
                             {connectionTransport}
                         </span>
@@ -590,7 +590,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     {connectionRtt && (
                         <span
                             className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('meta', meshTheme.isDark)}`}
-                            title="P2P round-trip latency"
+                            title={t('meshGraph.panel.tooltipP2PRtt')}
                         >
                             {connectionRtt}
                         </span>
@@ -628,7 +628,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     {/* The attention badge above already surfaces in-progress/failed refine state;
                         the card only adds the recent-completed case it does not show. */}
                     {!isSubmoduleNode && node.refineJobStatus === 'completed' && (
-                        <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('refineDone', meshTheme.isDark)}`} title={node.refineJobBranch ? `refined ${node.refineJobBranch}${node.refineJobInto ? ` → ${node.refineJobInto}` : ''}` : 'refine completed'}>
+                        <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('refineDone', meshTheme.isDark)}`} title={node.refineJobBranch ? t('meshGraph.panel.tooltipRefinedBranch', { branch: `${node.refineJobBranch}${node.refineJobInto ? ` → ${node.refineJobInto}` : ''}` }) : t('meshGraph.panel.tooltipRefineCompleted')}>
                             {t('meshGraph.panel.refined')}
                         </span>
                     )}
@@ -654,10 +654,10 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                         title={[
                                             `Session ID: ${session.sessionId}`,
                                             session.providerType ? `Provider: ${session.providerType}` : null,
-                                            `Status: ${formatSessionStatusLabel(session)}`,
+                                            `${t('meshGraph.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,
                                             `Role: ${roleLabel}`,
-                                            startedAt ? `Started: ${startedAt}` : 'Started: not reported',
-                                            session.statusNote ? `Note: ${session.statusNote}` : null,
+                                            startedAt ? `Started: ${startedAt}` : t('meshGraph.panel.tooltipStartedNotReported'),
+                                            session.statusNote ? `${t('meshGraph.panel.tooltipPrefixNote')} ${session.statusNote}` : null,
                                         ].filter(Boolean).join('\n')}
                                     >
                                         <div className="flex min-w-0 items-center justify-between gap-2">

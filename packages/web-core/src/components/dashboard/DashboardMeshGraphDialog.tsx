@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { getConversationTitle } from './conversation-presenters'
 import type { ActiveConversation } from './types'
@@ -62,6 +63,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     const daemonId = activeConv.daemonId ?? null
     const cacheKey = dashboardMeshGraphStatusCacheKey(daemonId, meshId)
     const initialMeshStatus = cacheKey ? dashboardMeshGraphStatusCache.get(cacheKey) ?? null : null
+    const { t } = useTranslation('common')
     const meshOverrides = useDashboardMeshOverrides()
     const { sendData } = useTransport()
     const { theme } = useTheme()
@@ -128,7 +130,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
 
     const loadGraph = useCallback(async (refresh = false, isAutoRetry = false) => {
         if (!daemonId || !meshId) {
-            setError('This coordinator does not expose a live mesh id.')
+            setError(t('meshGraph.dialog.errorNoMeshId'))
             setMeshStatus(null)
             return
         }
@@ -165,7 +167,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                 : await sendDaemonCommand(daemonId, 'mesh_status', { meshId, refresh })
             const status = extractRepoMeshStatus(response)
             if (!status) {
-                setError('mesh_status returned an unexpected payload.')
+                setError(t('meshGraph.dialog.errorUnexpectedPayload'))
                 return
             }
             if (cacheKey) dashboardMeshGraphStatusCache.set(cacheKey, status)
@@ -257,8 +259,8 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     })
     const lastLoadedLabel = lastLoadedAt ? new Date(lastLoadedAt).toLocaleTimeString() : null
     const emptyMessage = useMemo(
-        () => (loading ? 'Loading live mesh status…' : 'No live mesh graph is available for this coordinator yet.'),
-        [loading],
+        () => (loading ? t('meshGraph.dialog.loadingStatus') : t('meshGraph.dialog.noGraph')),
+        [loading, t],
     )
 
     return (
@@ -290,7 +292,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                                 <div className="flex flex-wrap items-center gap-2">
                                     <h2 className={meshTheme.dialogTitleClass}>{detailLabel}</h2>
                                     <span className={meshTheme.dialogKickerClass}>
-                                        Mesh observability
+                                        {t('meshGraph.dialog.kicker')}
                                     </span>
                                     {/* Mobile-only disclosure toggle for the secondary
                                         metadata (repo path + status chips). Sits right
@@ -300,9 +302,9 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                                         type="button"
                                         onClick={() => setShowHeaderMeta(prev => !prev)}
                                         aria-expanded={showHeaderMeta}
-                                        aria-label={showHeaderMeta ? 'Hide mesh details' : 'Show mesh details'}
+                                        aria-label={showHeaderMeta ? t('meshGraph.dialog.hideDetails') : t('meshGraph.dialog.showDetails')}
                                         className="btn btn-secondary btn-sm rounded-lg px-1.5 py-1 md:hidden"
-                                        title={showHeaderMeta ? 'Hide mesh details' : 'Show mesh details'}
+                                        title={showHeaderMeta ? t('meshGraph.dialog.hideDetails') : t('meshGraph.dialog.showDetails')}
                                     >
                                         <IconInfo size={14} />
                                     </button>
@@ -336,14 +338,14 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             <span
                                 className={`${meshTheme.dialogRefreshedChipClass} ${showHeaderMeta ? 'inline-flex' : 'hidden'} md:inline-flex`}
                             >
-                                {`Refreshed ${lastLoadedLabel}`}
+                                {t('meshGraph.dialog.refreshedAt', { time: lastLoadedLabel })}
                             </span>
                         )}
                         {!refreshing && meshStatus && (
                             <span
                                 className={`${meshTheme.dialogRefreshedChipClass} ${showHeaderMeta ? 'inline-flex' : 'hidden'} md:inline-flex`}
                             >
-                                {sendData && !error ? 'Live daemon metadata' : 'Metadata subscription unavailable'}
+                                {sendData && !error ? t('meshGraph.dialog.liveMetadata') : t('meshGraph.dialog.metadataUnavailable')}
                             </span>
                         )}
                         <button
@@ -353,9 +355,9 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             }}
                             disabled={loading || refreshing}
                             className="btn btn-secondary btn-sm rounded-xl px-3.5"
-                            title="Refresh live mesh graph"
+                            title={t('meshGraph.dialog.refreshTitle')}
                         >
-                            {loading || refreshing ? 'Refreshing…' : 'Refresh'}
+                            {loading || refreshing ? t('meshGraph.dialog.refreshing') : t('meshGraph.dialog.refresh')}
                         </button>
                     </div>
                 </div>
