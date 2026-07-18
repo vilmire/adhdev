@@ -60,8 +60,9 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(dialogSource).not.toContain('MESH_GRAPH_RECONNECTING_BACKGROUND_REFRESH_MS')
     expect(dialogSource).not.toContain('loadGraph(true, { background: true })')
     expect(dialogSource).not.toContain('setInterval(')
-    expect(dialogSource).toContain('Live daemon metadata')
-    expect(dialogSource).toContain('Metadata subscription unavailable')
+    // The header metadata chip copy is now i18n-wired; assert the translation keys are used.
+    expect(dialogSource).toContain("t('meshGraph.dialog.liveMetadata')")
+    expect(dialogSource).toContain("t('meshGraph.dialog.metadataUnavailable')")
     expect(hookSource).toContain('mergeMeshGraphLiveSessionStatusIntoMeshStatus(status, liveMeshSessions)')
     expect(dialogSource).not.toContain('if (!refresh && meshOverrides?.loadMeshStatus)')
     expect(dialogSource).toContain('<MeshObservabilitySurface')

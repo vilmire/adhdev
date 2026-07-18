@@ -40,7 +40,8 @@ describe('InteractivePromptModal multi-select rendering', () => {
 
   it('shows a "Select all that apply" hint for multi-select questions', () => {
     const source = readSource(MODAL)
-    expect(source).toContain('Select all that apply')
+    // The literal copy is now i18n-wired; assert the translation key is used.
+    expect(source).toContain("t('interactivePrompt.selectAllThatApply')")
   })
 
   it('toggle logic still accumulates selections for multi-select (regression guard)', () => {
