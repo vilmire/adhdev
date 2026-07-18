@@ -1,4 +1,5 @@
 import { useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import type { ActiveConversation } from './types'
 import { IconMonitor, IconPlug, IconServer, IconLayers } from '../Icons'
@@ -28,6 +29,7 @@ export default function ConversationMetaChips({
     interactive = true,
     meshOnly = false,
 }: ConversationMetaChipsProps) {
+    const { t } = useTranslation('common')
     const navigate = useNavigate()
     const machineId = getConversationMachineId(conversation)
     const machineLabel = meshOnly ? null : getConversationMachineLabel(conversation)
@@ -118,7 +120,7 @@ export default function ConversationMetaChips({
             {isMeshNode && (
                 <span className="conversation-meta-chip" title="Mesh node">
                     <IconServer size={12} />
-                    <span>Mesh Node</span>
+                    <span>{t('dashboard.metaChips.meshNode')}</span>
                 </span>
             )}
             {isMeshCoordinator && meshQueueStats && (

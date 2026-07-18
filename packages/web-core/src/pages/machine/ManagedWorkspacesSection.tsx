@@ -11,6 +11,7 @@
  *   - Remove a saved workspace
  */
 import { useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import Card from '../../components/Card'
 import { IconFolder } from '../../components/Icons'
@@ -48,6 +49,7 @@ export default function ManagedWorkspacesSection({
         handleWorkspaceAdd, handleWorkspaceRemove, handleWorkspaceSetDefault,
     } = actions
 
+    const { t } = useTranslation('common')
     const [browseDialogOpen, setBrowseDialogOpen] = useState(false)
     const [browseCurrentPath, setBrowseCurrentPath] = useState('')
     const [browseDirectories, setBrowseDirectories] = useState<BrowseDirectoryEntry[]>([])
@@ -140,7 +142,7 @@ export default function ManagedWorkspacesSection({
                                         className="text-[10px] text-red-400/90 hover:underline shrink-0"
                                         disabled={workspaceBusy}
                                         onClick={() => void handleWorkspaceRemove(w.id)}
-                                    >Remove</button>
+                                    >{t('machine.managedWorkspaces.remove')}</button>
                                 </li>
                             )
                         })}

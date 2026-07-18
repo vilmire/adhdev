@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import {
   buildInteractivePromptResponse,
@@ -87,6 +88,7 @@ export default function InteractivePromptModal({
   onSubmit,
   onCancel,
 }: InteractivePromptModalProps) {
+  const { t } = useTranslation('common')
   const [selection, setSelection] = useState<InteractivePromptSelection>(() => defaultSelection(promptSession))
   const [currentStep, setCurrentStep] = useState(0)
   // Gate that blocks Submit for a short window right after a new prompt renders.
@@ -230,7 +232,7 @@ export default function InteractivePromptModal({
                   {!isSingleQuestion ? `${currentStep + 1}. ` : ''}{currentQuestion.question}
                 </div>
                 {currentQuestion.multiSelect && currentQuestion.options.length > 0 && (
-                  <div className="mt-0.5 text-xs text-text-muted">Select all that apply</div>
+                  <div className="mt-0.5 text-xs text-text-muted">{t('interactivePrompt.selectAllThatApply')}</div>
                 )}
               </div>
 
@@ -254,7 +256,7 @@ export default function InteractivePromptModal({
 
               {currentQuestion.allowFreeform && (
                 <label className="block">
-                  <span className="mb-1 block text-xs font-semibold text-text-muted">Other</span>
+                  <span className="mb-1 block text-xs font-semibold text-text-muted">{t('interactivePrompt.other')}</span>
                   <textarea
                     value={selection[currentQuestion.questionId]?.freeformText || ''}
                     disabled={isSubmitting}

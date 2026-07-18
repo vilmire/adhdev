@@ -76,6 +76,23 @@
       "unread": "Unread",
       "read": "Read",
       "empty": "No pending activity."
+    },
+    "metaChips": {
+      "meshNode": "Mesh Node"
+    },
+    "versionBanner": {
+      "required": "required",
+      "retry": "retry"
+    },
+    "remoteDialog": {
+      "history": "History"
+    },
+    "sourceTimeline": {
+      "colWhen": "When",
+      "colEvent": "Event",
+      "colFrom": "From",
+      "colTo": "To",
+      "colCause": "Cause"
     }
   },
   "cliStop": {
@@ -847,7 +864,9 @@
     "daemonDescription": "Start the ADHDev daemon to connect this dashboard. Once it is online, you can launch sessions with any installed provider.",
     "installDescription": "Install ADHDev on a machine, sign in, and it will show up here.",
     "newSession": "New session",
-    "newSessionDescription": "A connected machine is ready. Start a new session with any installed provider — CLI, ACP, or IDE."
+    "newSessionDescription": "A connected machine is ready. Start a new session with any installed provider — CLI, ACP, or IDE.",
+    "noTabsInGroup": "No tabs in this group",
+    "pressEscToCancel": "Press Esc to cancel"
   },
   "terminal": {
     "loadOlderOutput": "Load older terminal output",
@@ -1874,7 +1893,10 @@
     "fit": "FIT",
     "directP2PTitle": "Direct P2P connection",
     "turnRelayTitle": "TURN relay in use",
-    "dailyTurnTitle": "Daily TURN relay usage"
+    "dailyTurnTitle": "Daily TURN relay usage",
+    "waitingState": {
+      "turnRelayActive": "TURN relay active"
+    }
   },
   "sessionInfo": {
     "title": "Session info",
@@ -2203,6 +2225,12 @@
       "currentChats": "Current Chats",
       "recentLaunches": "Recent Launches",
       "daemonUpdate": "Daemon Update"
+    },
+    "workspaceBrowse": {
+      "currentFolder": "Current folder"
+    },
+    "managedWorkspaces": {
+      "remove": "Remove"
     }
   },
   "settings": {
@@ -2503,6 +2531,25 @@
       "privacy": "Privacy",
       "contact": "Contact",
       "copyright": "© {{year}} RacoLab. All rights reserved."
+    }
+  },
+  "interactivePrompt": {
+    "selectAllThatApply": "Select all that apply",
+    "other": "Other"
+  },
+  "git": {
+    "changeList": {
+      "binaryBadge": "bin",
+      "truncatedNote": "File list truncated — run <code>git status</code> locally for full output."
+    },
+    "statusDialog": {
+      "conflicts": "conflicts",
+      "clean": "clean"
+    }
+  },
+  "ide": {
+    "header": {
+      "back": "Back"
     }
   }
 }

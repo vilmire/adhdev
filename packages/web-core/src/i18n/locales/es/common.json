@@ -28,7 +28,9 @@
     "daemonDescription": "Inicia el daemon de ADHDev para conectar este panel. Una vez en línea, puedes iniciar sesiones con cualquier proveedor instalado.",
     "installDescription": "Instala ADHDev en una máquina, inicia sesión y aparecerá aquí.",
     "newSession": "Nueva sesión",
-    "newSessionDescription": "Una máquina conectada está lista. Inicia una nueva sesión con cualquier proveedor instalado — CLI, ACP o IDE."
+    "newSessionDescription": "Una máquina conectada está lista. Inicia una nueva sesión con cualquier proveedor instalado — CLI, ACP o IDE.",
+    "noTabsInGroup": "No tabs in this group",
+    "pressEscToCancel": "Press Esc to cancel"
   },
   "terminal": {
     "loadOlderOutput": "Cargar salida de terminal anterior",
@@ -1180,7 +1182,10 @@
     "fit": "FIT",
     "directP2PTitle": "Direct P2P connection",
     "turnRelayTitle": "TURN relay in use",
-    "dailyTurnTitle": "Daily TURN relay usage"
+    "dailyTurnTitle": "Daily TURN relay usage",
+    "waitingState": {
+      "turnRelayActive": "TURN relay active"
+    }
   },
   "sessionInfo": {
     "title": "Session info",
@@ -1509,6 +1514,12 @@
       "currentChats": "Current Chats",
       "recentLaunches": "Recent Launches",
       "daemonUpdate": "Daemon Update"
+    },
+    "workspaceBrowse": {
+      "currentFolder": "Current folder"
+    },
+    "managedWorkspaces": {
+      "remove": "Remove"
     }
   },
   "settings": {
@@ -1809,6 +1820,44 @@
       "privacy": "Privacy",
       "contact": "Contact",
       "copyright": "© {{year}} RacoLab. All rights reserved."
+    }
+  },
+  "interactivePrompt": {
+    "selectAllThatApply": "Select all that apply",
+    "other": "Other"
+  },
+  "dashboard": {
+    "metaChips": {
+      "meshNode": "Mesh Node"
+    },
+    "versionBanner": {
+      "required": "required",
+      "retry": "retry"
+    },
+    "remoteDialog": {
+      "history": "History"
+    },
+    "sourceTimeline": {
+      "colWhen": "When",
+      "colEvent": "Event",
+      "colFrom": "From",
+      "colTo": "To",
+      "colCause": "Cause"
+    }
+  },
+  "git": {
+    "changeList": {
+      "binaryBadge": "bin",
+      "truncatedNote": "File list truncated — run <code>git status</code> locally for full output."
+    },
+    "statusDialog": {
+      "conflicts": "conflicts",
+      "clean": "clean"
+    }
+  },
+  "ide": {
+    "header": {
+      "back": "Back"
     }
   }
 }

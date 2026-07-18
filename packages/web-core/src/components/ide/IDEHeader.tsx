@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { IconChat, IconMonitor, IconScroll } from '../Icons'
 
 interface IDEHeaderProps {
@@ -24,6 +25,7 @@ export default function IDEHeader({
     headerActions,
     onBack,
 }: IDEHeaderProps) {
+    const { t } = useTranslation('common')
     return (
         <header className="ide-header">
             <div className="ide-header-left">
@@ -70,7 +72,7 @@ export default function IDEHeader({
                     className="btn btn-primary btn-sm flex items-center justify-center shrink-0"
                     onClick={onBack}
                 >
-                    ←<span className="hidden md:inline ml-1">Back</span>
+                    ←<span className="hidden md:inline ml-1">{t('ide.header.back')}</span>
                 </button>
             </div>
         </header>

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import type { DaemonData } from '../../types'
 import { IconRefresh, IconX } from '../Icons'
 import { getMachineDisplayName } from '../../utils/daemon-utils'
@@ -20,6 +21,7 @@ export default function DashboardVersionBanner({
     onUpgrade,
     onDismiss,
 }: DashboardVersionBannerProps) {
+    const { t } = useTranslation('common')
     if (daemons.length === 0) return null
 
     return (
@@ -66,7 +68,7 @@ export default function DashboardVersionBanner({
                             <span className="font-medium text-text-primary">{name}</span>
                             <span className="text-[10px] text-text-muted">v{currentVersion}</span>
                             {isRequired && (
-                                <span className="text-[10px]" style={{ color: 'var(--status-danger)' }}>required</span>
+                                <span className="text-[10px]" style={{ color: 'var(--status-danger)' }}>{t('dashboard.versionBanner.required')}</span>
                             )}
                             {state === 'upgrading' ? (
                                 <span className="text-[10px] animate-pulse" style={{ color: isRequired ? 'var(--status-danger)' : 'var(--status-warning)' }}>upgrading…</span>
@@ -76,7 +78,7 @@ export default function DashboardVersionBanner({
                                 <button
                                     className="text-[10px] text-red-400 hover:text-red-300 underline cursor-pointer"
                                     onClick={() => onUpgrade(daemon.id)}
-                                >retry</button>
+                                >{t('dashboard.versionBanner.retry')}</button>
                             ) : (
                                 <button
                                     className="text-[10px] font-semibold cursor-pointer px-1.5 py-px rounded transition-colors"

@@ -28,7 +28,9 @@
     "daemonDescription": "ADHDevデーモンを起動してこのダッシュボードに接続してください。オンラインになると、インストールされたプロバイダーでセッションを開始できます。",
     "installDescription": "マシンにADHDevをインストールしてサインインすると、ここに表示されます。",
     "newSession": "新しいセッション",
-    "newSessionDescription": "接続されたマシンの準備ができています。CLI、ACP、またはIDEのインストール済みプロバイダーで新しいセッションを開始してください。"
+    "newSessionDescription": "接続されたマシンの準備ができています。CLI、ACP、またはIDEのインストール済みプロバイダーで新しいセッションを開始してください。",
+    "noTabsInGroup": "No tabs in this group",
+    "pressEscToCancel": "Press Esc to cancel"
   },
   "terminal": {
     "loadOlderOutput": "古いターミナル出力を読み込む",
@@ -1180,7 +1182,10 @@
     "fit": "FIT",
     "directP2PTitle": "Direct P2P connection",
     "turnRelayTitle": "TURN relay in use",
-    "dailyTurnTitle": "Daily TURN relay usage"
+    "dailyTurnTitle": "Daily TURN relay usage",
+    "waitingState": {
+      "turnRelayActive": "TURN relay active"
+    }
   },
   "sessionInfo": {
     "title": "Session info",
@@ -1509,6 +1514,12 @@
       "currentChats": "Current Chats",
       "recentLaunches": "Recent Launches",
       "daemonUpdate": "Daemon Update"
+    },
+    "workspaceBrowse": {
+      "currentFolder": "Current folder"
+    },
+    "managedWorkspaces": {
+      "remove": "Remove"
     }
   },
   "settings": {
@@ -1809,6 +1820,44 @@
       "privacy": "Privacy",
       "contact": "Contact",
       "copyright": "© {{year}} RacoLab. All rights reserved."
+    }
+  },
+  "interactivePrompt": {
+    "selectAllThatApply": "Select all that apply",
+    "other": "Other"
+  },
+  "dashboard": {
+    "metaChips": {
+      "meshNode": "Mesh Node"
+    },
+    "versionBanner": {
+      "required": "required",
+      "retry": "retry"
+    },
+    "remoteDialog": {
+      "history": "History"
+    },
+    "sourceTimeline": {
+      "colWhen": "When",
+      "colEvent": "Event",
+      "colFrom": "From",
+      "colTo": "To",
+      "colCause": "Cause"
+    }
+  },
+  "git": {
+    "changeList": {
+      "binaryBadge": "bin",
+      "truncatedNote": "File list truncated — run <code>git status</code> locally for full output."
+    },
+    "statusDialog": {
+      "conflicts": "conflicts",
+      "clean": "clean"
+    }
+  },
+  "ide": {
+    "header": {
+      "back": "Back"
     }
   }
 }

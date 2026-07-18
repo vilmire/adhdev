@@ -28,7 +28,9 @@
     "daemonDescription": "启动ADHDev守护进程以连接此仪表板。一旦在线，您可以使用任何已安装的提供商启动会话。",
     "installDescription": "在机器上安装ADHDev并登录，它将显示在这里。",
     "newSession": "新建会话",
-    "newSessionDescription": "已连接的机器已就绪。使用任何已安装的提供商（CLI、ACP或IDE）开始新会话。"
+    "newSessionDescription": "已连接的机器已就绪。使用任何已安装的提供商（CLI、ACP或IDE）开始新会话。",
+    "noTabsInGroup": "No tabs in this group",
+    "pressEscToCancel": "Press Esc to cancel"
   },
   "terminal": {
     "loadOlderOutput": "加载较旧的终端输出",
@@ -1180,7 +1182,10 @@
     "fit": "FIT",
     "directP2PTitle": "Direct P2P connection",
     "turnRelayTitle": "TURN relay in use",
-    "dailyTurnTitle": "Daily TURN relay usage"
+    "dailyTurnTitle": "Daily TURN relay usage",
+    "waitingState": {
+      "turnRelayActive": "TURN relay active"
+    }
   },
   "sessionInfo": {
     "title": "Session info",
@@ -1509,6 +1514,12 @@
       "currentChats": "Current Chats",
       "recentLaunches": "Recent Launches",
       "daemonUpdate": "Daemon Update"
+    },
+    "workspaceBrowse": {
+      "currentFolder": "Current folder"
+    },
+    "managedWorkspaces": {
+      "remove": "Remove"
     }
   },
   "settings": {
@@ -1809,6 +1820,44 @@
       "privacy": "Privacy",
       "contact": "Contact",
       "copyright": "© {{year}} RacoLab. All rights reserved."
+    }
+  },
+  "interactivePrompt": {
+    "selectAllThatApply": "Select all that apply",
+    "other": "Other"
+  },
+  "dashboard": {
+    "metaChips": {
+      "meshNode": "Mesh Node"
+    },
+    "versionBanner": {
+      "required": "required",
+      "retry": "retry"
+    },
+    "remoteDialog": {
+      "history": "History"
+    },
+    "sourceTimeline": {
+      "colWhen": "When",
+      "colEvent": "Event",
+      "colFrom": "From",
+      "colTo": "To",
+      "colCause": "Cause"
+    }
+  },
+  "git": {
+    "changeList": {
+      "binaryBadge": "bin",
+      "truncatedNote": "File list truncated — run <code>git status</code> locally for full output."
+    },
+    "statusDialog": {
+      "conflicts": "conflicts",
+      "clean": "clean"
+    }
+  },
+  "ide": {
+    "header": {
+      "back": "Back"
     }
   }
 }

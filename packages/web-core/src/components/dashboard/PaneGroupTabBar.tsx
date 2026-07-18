@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace'
 import { useTabShortcuts } from '../../hooks/useTabShortcuts'
 import type { ActiveConversation } from './types'
@@ -267,6 +268,7 @@ export default function PaneGroupTabBar({
     isGroupActive,
     allowTabShortcuts = true,
 }: PaneGroupTabBarProps) {
+    const { t } = useTranslation('common')
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabKey: string } | null>(null)
     const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
     const tabBarRef = useRef<HTMLDivElement>(null)
@@ -359,7 +361,7 @@ export default function PaneGroupTabBar({
                         />
                     ))}
                     {conversations.length === 0 && (
-                        <div className="p-2 text-xs opacity-40">No tabs in this group</div>
+                        <div className="p-2 text-xs opacity-40">{t('paneGroup.noTabsInGroup')}</div>
                     )}
                 </div>
             </div>
@@ -434,7 +436,7 @@ export default function PaneGroupTabBar({
                         <div className="text-lg font-mono text-accent animate-pulse">
                             Listening...
                         </div>
-                        <div className="text-[10px] text-text-muted mt-3">Press Esc to cancel</div>
+                        <div className="text-[10px] text-text-muted mt-3">{t('paneGroup.pressEscToCancel')}</div>
                     </div>
                 </div>
             )}

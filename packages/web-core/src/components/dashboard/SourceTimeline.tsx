@@ -11,6 +11,7 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 
 export interface SourceTimelineTransition {
   fromState: string;
@@ -45,6 +46,7 @@ function iconForEvent(event: string): string {
 }
 
 export function SourceTimeline(props: SourceTimelineProps): React.JSX.Element {
+  const { t: tl } = useTranslation('common')
   const transitions = props.transitions || [];
   const formatTimestamp = props.formatTimestamp || defaultFormatTimestamp;
   if (transitions.length === 0) {
@@ -58,11 +60,11 @@ export function SourceTimeline(props: SourceTimelineProps): React.JSX.Element {
     <table className={['source-timeline', props.className || ''].filter(Boolean).join(' ')}>
       <thead>
         <tr>
-          <th className="source-timeline-at">When</th>
-          <th className="source-timeline-event">Event</th>
-          <th className="source-timeline-from">From</th>
-          <th className="source-timeline-to">To</th>
-          <th className="source-timeline-cause">Cause</th>
+          <th className="source-timeline-at">{tl('dashboard.sourceTimeline.colWhen')}</th>
+          <th className="source-timeline-event">{tl('dashboard.sourceTimeline.colEvent')}</th>
+          <th className="source-timeline-from">{tl('dashboard.sourceTimeline.colFrom')}</th>
+          <th className="source-timeline-to">{tl('dashboard.sourceTimeline.colTo')}</th>
+          <th className="source-timeline-cause">{tl('dashboard.sourceTimeline.colCause')}</th>
         </tr>
       </thead>
       <tbody>

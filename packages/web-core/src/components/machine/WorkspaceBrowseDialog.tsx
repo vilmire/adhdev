@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { IconChevronLeft, IconFolder, IconX } from '../Icons'
 import type { BrowseDirectoryEntry } from './workspaceBrowse'
 import { getParentBrowsePath } from './workspaceBrowse'
@@ -30,6 +31,7 @@ export default function WorkspaceBrowseDialog({
 }: WorkspaceBrowseDialogProps) {
     const [pathInput, setPathInput] = useState(currentPath)
 
+    const { t } = useTranslation('common')
     useEffect(() => {
         setPathInput(currentPath)
     }, [currentPath])
@@ -78,7 +80,7 @@ export default function WorkspaceBrowseDialog({
                         Parent
                     </button>
                     <div className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2">
-                        <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">Current folder</div>
+                        <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">{t('machine.workspaceBrowse.currentFolder')}</div>
                         <div className="flex items-center gap-2">
                             <input
                                 type="text"

@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { GitDiffSummary, GitFileChange } from '@adhdev/daemon-core'
 import { useTransport } from '../../context/TransportContext'
 import { useGitRemoteUrl } from '../../hooks/useGitRemoteUrl'
@@ -39,6 +40,7 @@ function buildPRSummary(branch: string | null, diffSummary: GitDiffSummary): str
 }
 
 export default function GitStatusDialog({ daemonId, workspace, onClose }: GitStatusDialogProps) {
+    const { t } = useTranslation('common')
     const { sendCommand } = useTransport()
     const { status, diffSummary, loading, error, refresh } = useWorkspaceGitStatus({
         daemonId,
@@ -214,8 +216,8 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                         {status.untracked > 0 && <span>{status.untracked} untracked</span>}
                         {status.deleted > 0 && <span className="text-status-error">{status.deleted} deleted</span>}
                         {status.stashCount > 0 && <span>{status.stashCount} stashed</span>}
-                        {status.hasConflicts && <span className="font-bold text-status-error">conflicts</span>}
-                        {totalChanged === 0 && !status.error && <span className="text-status-online">clean</span>}
+                        {status.hasConflicts && <span className="font-bold text-status-error">{t('git.statusDialog.conflicts')}</span>}
+                        {totalChanged === 0 && !status.error && <span className="text-status-online">{t('git.statusDialog.clean')}</span>}
                         {diffSummary && diffSummary.files.length > 0 && (
                             <span className="text-text-secondary">
                                 {diffSummary.files.length} file{diffSummary.files.length !== 1 ? 's' : ''}

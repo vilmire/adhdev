@@ -1,3 +1,4 @@
+import { Trans, useTranslation } from 'react-i18next'
 import type { GitFileChange, GitFileChangeStatus } from '@adhdev/daemon-core'
 
 export interface GitChangeListProps {
@@ -38,6 +39,7 @@ function dirname(path: string): string {
 }
 
 export default function GitChangeList({ files, truncated, onFileClick, selectedPath, className = '' }: GitChangeListProps) {
+    const { t } = useTranslation('common')
     if (files.length === 0) {
         return <p className="px-3 py-2 text-xs text-text-secondary">No changed files.</p>
     }
@@ -79,14 +81,14 @@ export default function GitChangeList({ files, truncated, onFileClick, selectedP
                                     {file.deletions > 0 && <span className="text-status-error">-{file.deletions}</span>}
                                 </span>
                             )}
-                            {file.binary && <span className="shrink-0 text-[10px] text-text-secondary">bin</span>}
+                            {file.binary && <span className="shrink-0 text-[10px] text-text-secondary">{t('git.changeList.binaryBadge')}</span>}
                         </li>
                     )
                 })}
             </ul>
             {truncated && (
                 <p className="px-3 py-1.5 text-[10px] text-text-secondary">
-                    File list truncated — run <code className="font-mono">git status</code> locally for full output.
+                    <Trans i18nKey="git.changeList.truncatedNote" ns="common" components={{ code: <code className="font-mono" /> }} />
                 </p>
             )}
         </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { Dispatch, MouseEvent as ReactMouseEvent, SetStateAction } from 'react'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
@@ -51,6 +52,7 @@ export default function DashboardRemoteDialog({
     onConversationChange,
     onClose,
 }: DashboardRemoteDialogProps) {
+    const { t } = useTranslation('common')
     const [viewMode, setViewMode] = useState<RemoteDialogViewMode>('split')
     const [dialogChatTab, setDialogChatTab] = useState<string>(() => (
         isNativeConversation(activeConv) ? 'native' : activeConv.tabKey
@@ -226,7 +228,7 @@ export default function DashboardRemoteDialog({
                             title="Chat History"
                         >
                             <IconScroll size={14} className="md:mr-1.5" />
-                            <span className="hidden md:inline">History</span>
+                            <span className="hidden md:inline">{t('dashboard.remoteDialog.history')}</span>
                         </button>
                         <button className="hidden md:inline-flex btn btn-primary btn-sm h-8 px-4 rounded-lg font-bold" onClick={onClose}>
                             Close
