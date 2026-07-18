@@ -1852,6 +1852,124 @@
         flex-shrink: 0;
     }
 
+    /* ── Language switcher popover ─────────────────────── */
+    .lang-switch {
+        position: relative;
+    }
+
+    /* Sidebar trigger reuses .nav-item; this only lays out the row. */
+    .lang-switch-trigger--sidebar {
+        width: 100%;
+        background: transparent;
+        text-align: left;
+        font: inherit;
+    }
+
+    .lang-switch-trigger--sidebar .lang-switch-caret {
+        margin-left: auto;
+        color: var(--text-muted);
+    }
+
+    /* Landing trigger: compact pill that reads well on the landing nav. */
+    .lang-switch-trigger--landing {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-glass, transparent);
+        color: var(--text-secondary);
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all var(--transition);
+    }
+
+    .lang-switch-trigger--landing:hover {
+        color: var(--text-primary);
+        border-color: var(--border-accent);
+        background: var(--bg-glass-hover);
+    }
+
+    .lang-switch-trigger--landing .lang-switch-icon {
+        width: 16px;
+        height: 16px;
+    }
+
+    .lang-switch-caret {
+        transition: transform var(--transition);
+        flex-shrink: 0;
+    }
+
+    .lang-switch-caret.open {
+        transform: rotate(180deg);
+    }
+
+    .lang-switch-menu {
+        position: absolute;
+        z-index: 60;
+        min-width: 168px;
+        margin: 0;
+        padding: 6px;
+        list-style: none;
+        background: var(--bg-elevated, var(--bg-secondary));
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow-lg, 0 12px 32px rgba(0, 0, 0, 0.28));
+        outline: none;
+    }
+
+    /* Sidebar footer sits at the bottom → open upward, aligned to the row. */
+    .lang-switch-menu--sidebar {
+        bottom: calc(100% + 6px);
+        left: 0;
+        right: 0;
+    }
+
+    /* Landing nav sits at the top → open downward, right-aligned. */
+    .lang-switch-menu--landing {
+        top: calc(100% + 8px);
+        right: 0;
+    }
+
+    .lang-switch-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border-radius: var(--radius-sm, 6px);
+        color: var(--text-secondary);
+        font-size: 13px;
+        line-height: 1.2;
+        cursor: pointer;
+        transition: background var(--transition), color var(--transition);
+    }
+
+    .lang-switch-option.is-active {
+        background: var(--bg-glass-hover);
+        color: var(--text-primary);
+    }
+
+    .lang-switch-option.is-selected {
+        color: var(--accent-primary-light);
+        font-weight: 600;
+    }
+
+    .lang-switch-check {
+        width: 14px;
+        height: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        color: var(--accent-primary-light);
+    }
+
+    .lang-switch-option-label {
+        white-space: nowrap;
+    }
+
     /* Sidebar + main transition for collapse animation */
     .sidebar {
         transition: width 0.2s ease, padding 0.2s ease;
