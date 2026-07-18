@@ -54,6 +54,7 @@ export interface CliAdapter {
     clearHistory?(): void;
     resolveAction?(data: unknown): Promise<void>;
     resolveModal?(buttonIndex: number): void;
+    resolveModalMatched?(buttonIndex: number): boolean;
     isApprovalRecentlyResolved?(): boolean;
     setOnPtyData?(callback: (data: string) => void): void;
     writeRaw?(data: string): void;

@@ -688,3 +688,73 @@ describe('collectPendingApprovals', () => {
         expect(approvals[0]).toMatchObject({ nodeId: 'node-1', sessionId: 'session-1', status: 'awaiting_approval' });
     });
 });
+
+// APPROVAL-INBOX-BLINDSPOT (Fix A.2): a QUEUE-dispatched worker sitting at an approval
+// modal must surface in the pending-approvals inbox, exactly like a direct dispatch does.
+// The queue loop previously reported the raw DB status ('assigned') verbatim while direct
+// dispatches consulted the live session status — so a queue task's approval was recorded
+// 'assigned', collectPendingApprovals (status==='awaiting_approval') never counted it, and
+// mesh_list_pending_approvals returned 0. These pin the live-status overlay for queue rows.
+describe('buildMeshActiveWork — queue task live-status overlay (Fix A.2)', () => {
+    const queueTask = (overrides: Record<string, unknown> = {}) => ({
+        id: 'qtask-1',
+        meshId: 'mesh-1',
+        message: 'do the queued work',
+        status: 'assigned',
+        assignedNodeId: 'node-1',
+        assignedSessionId: 'session-1',
+        dispatchTimestamp: '2026-05-26T00:00:00.000Z',
+        createdAt: '2026-05-26T00:00:00.000Z',
+        ...overrides,
+    }) as any;
+
+    it('promotes an ASSIGNED queue task to awaiting_approval when its live session is at an approval modal', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            queue: [queueTask()],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-1', providerType: 'antigravity-cli', status: 'waiting_approval' }] }],
+        });
+        const queueRecord = result.activeWork.find(r => r.source === 'queue');
+        expect(queueRecord?.status).toBe('awaiting_approval');
+
+        const approvals = collectPendingApprovals(result.activeWork);
+        expect(approvals).toHaveLength(1);
+        expect(approvals[0]).toMatchObject({ nodeId: 'node-1', sessionId: 'session-1', status: 'awaiting_approval' });
+    });
+
+    it('promotes an ASSIGNED queue task to generating when its live session is generating', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            queue: [queueTask()],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-1', providerType: 'antigravity-cli', status: 'generating' }] }],
+        });
+        expect(result.activeWork.find(r => r.source === 'queue')?.status).toBe('generating');
+    });
+
+    it('keeps the DB status when the live session is idle or absent (no false promotion / demotion)', () => {
+        const idle = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            queue: [queueTask()],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-1', status: 'idle' }] }],
+        });
+        expect(idle.activeWork.find(r => r.source === 'queue')?.status).toBe('assigned');
+
+        const absent = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            queue: [queueTask()],
+            nodes: [{ id: 'node-1', sessions: [] }],
+        });
+        expect(absent.activeWork.find(r => r.source === 'queue')?.status).toBe('assigned');
+    });
+
+    it('does not consult live status for a PENDING queue task (no bound session yet)', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            queue: [queueTask({ status: 'pending', assignedSessionId: undefined, targetSessionId: 'session-1' })],
+            // Even if some session on the node happens to be at approval, a pending task has
+            // not been bound to it — it must keep its 'pending' status.
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-1', status: 'waiting_approval' }] }],
+        });
+        expect(result.activeWork.find(r => r.source === 'queue')?.status).toBe('pending');
+    });
+});

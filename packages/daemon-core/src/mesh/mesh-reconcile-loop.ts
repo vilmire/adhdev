@@ -81,6 +81,7 @@ import {
     autoPruneStaleDirectDispatches,
     pollAssignedTaskTerminalEvidence,
 } from './mesh-completion-synthesis.js';
+import { sessionStatusFromNodes } from './mesh-active-work.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
 // the reconcile-loop test suite) keep their `from './mesh-reconcile-loop.js'` paths.
@@ -726,6 +727,28 @@ export function __resetReclaimUnknownStreakForTests(): void {
     deliveredUnconsumedUnknownStreak.clear();
 }
 
+// APPROVAL-INBOX-BLINDSPOT (Fix A.3): true when the assigned row's bound session is, per the
+// LIVE mesh-node snapshots, sitting at an approval modal (waiting_approval). A REMOTE worker
+// blocked on an approval reads UNKNOWN from resolveSessionBusyVerdict (it is not in THIS
+// daemon's local instance map), so without this guard the delivered-no-turn / delivered-not-
+// consumed UNKNOWN streak advances toward a false reclaim that tears the worker off a task it
+// is legitimately paused on awaiting the coordinator's mesh_approve. The live status is read
+// from the same node session snapshots mesh_status / the active-work builder use, so it is
+// positive cross-daemon evidence (not a local-only observation). When present it HOLDS the row
+// without accruing the streak; the reclaim resumes normally once the approval clears.
+function assignedRowLiveStatusIsAwaitingApproval(
+    mesh: { nodes?: any[] },
+    nodeId?: string | null,
+    sessionId?: string | null,
+): boolean {
+    if (!nodeId || !sessionId) return false;
+    try {
+        return sessionStatusFromNodes(mesh.nodes, nodeId, sessionId).status === 'awaiting_approval';
+    } catch {
+        return false;
+    }
+}
+
 // PHASE 2.5 — assigned-stranded dispatch watchdog (Bug B). claimNextTask atomically
 // flips a row to 'assigned' BEFORE the fire-and-forget dispatch runs. If that dispatch
 // neither rejects (→ no .catch requeue) nor is confirmed delivered — a relay that hangs
@@ -809,6 +832,20 @@ async function recoverStrandedAssignedDispatches(
             } else {
                 if (verdict === 'IDLE_CONFIRMED') {
                     deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
+                } else if (assignedRowLiveStatusIsAwaitingApproval(mesh, row.assignedNodeId, row.assignedSessionId)) {
+                    // APPROVAL-INBOX-BLINDSPOT (Fix A.3): the UNKNOWN (remote) worker is live and
+                    // sitting at an approval modal — it is legitimately paused awaiting the
+                    // coordinator's mesh_approve, NOT a lost delivery. HOLD without advancing the
+                    // streak so a genuine approval-blocked worker is never re-driven out from
+                    // under its pending approval.
+                    traceMeshEventDrop('short_redrive_deferred_awaiting_approval', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:waiting_approval',
+                    }, 'live_awaiting_approval');
+                    continue;
                 } else {
                     const streak = (deliveredUnconsumedUnknownStreak.get(shortStreakKey) ?? 0) + 1;
                     deliveredUnconsumedUnknownStreak.set(shortStreakKey, streak);
@@ -899,6 +936,21 @@ async function recoverStrandedAssignedDispatches(
             if (verdict === 'IDLE_CONFIRMED') {
                 deliveredNoTurnUnknownStreak.delete(streakKey);
                 reclaimReason = 'delivered_no_turn_deadline';
+            } else if (assignedRowLiveStatusIsAwaitingApproval(mesh, row.assignedNodeId, row.assignedSessionId)) {
+                // APPROVAL-INBOX-BLINDSPOT (Fix A.3): the UNKNOWN (remote) worker is live and
+                // sitting at an approval modal — legitimately paused awaiting the coordinator's
+                // mesh_approve, NOT a delivered-but-lost completion. HOLD without advancing the
+                // streak so a genuine approval-blocked worker is never reclaimed at the
+                // delivered-no-turn deadline. The reclaim resumes normally once the approval
+                // clears (the live status leaves waiting_approval).
+                traceMeshEventDrop('reclaim_deferred_awaiting_approval', {
+                    taskId: row.id,
+                    sessionId: row.assignedSessionId,
+                    nodeId: row.assignedNodeId,
+                    meshId,
+                    event: 'agent:waiting_approval',
+                }, 'live_awaiting_approval');
+                continue;
             } else {
                 // UNKNOWN — defer and accumulate the consecutive-UNKNOWN streak.
                 const streak = (deliveredNoTurnUnknownStreak.get(streakKey) ?? 0) + 1;

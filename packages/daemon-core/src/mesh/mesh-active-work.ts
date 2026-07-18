@@ -102,7 +102,7 @@ function elapsedSince(value: string | undefined, now: number): number {
     return Number.isFinite(started) ? Math.max(0, now - started) : 0;
 }
 
-function sessionStatusFromNodes(nodes: any[] | undefined, nodeId?: string, sessionId?: string): { status?: MeshActiveWorkStatus; staleReason?: string } {
+export function sessionStatusFromNodes(nodes: any[] | undefined, nodeId?: string, sessionId?: string): { status?: MeshActiveWorkStatus; staleReason?: string } {
     if (!Array.isArray(nodes)) return {};
     if (!nodeId) return { staleReason: 'direct task has no node id' };
     const node = nodes.find(item => meshNodeIdMatches(item, nodeId));
@@ -365,12 +365,30 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
     for (const task of opts.queue || []) {
         if (task.status !== 'pending' && task.status !== 'assigned') continue;
         const { title, summary } = summarizeMessage(task.message || '');
+        const queueNodeId = task.assignedNodeId || task.targetNodeId;
+        const queueSessionId = task.assignedSessionId || task.targetSessionId;
+        // APPROVAL-INBOX-BLINDSPOT (Fix A.2): a queue task previously reported its raw DB
+        // status (pending|assigned) verbatim, while direct dispatches consulted the live
+        // session status via sessionStatusFromNodes. That asymmetry meant a queue-dispatched
+        // worker sitting on an approval modal was recorded as 'assigned', so
+        // collectPendingApprovals (which filters status==='awaiting_approval') never counted
+        // it and mesh_list_pending_approvals returned 0. Overlay the live session status for
+        // an ASSIGNED queue task so an approval (or an active generation) on its bound session
+        // is reflected — the exact promotion the direct-dispatch path already does. A 'pending'
+        // task has no bound session yet, so it keeps its queue status.
+        const queueLive = task.status === 'assigned'
+            ? sessionStatusFromNodes(opts.nodes, queueNodeId ?? undefined, queueSessionId ?? undefined)
+            : {};
+        const queueStatus: MeshActiveWorkStatus = queueLive.status === 'awaiting_approval'
+            || queueLive.status === 'generating'
+            ? queueLive.status
+            : task.status;
         records.push({
             taskId: task.id,
             source: 'queue',
-            status: task.status,
-            nodeId: task.assignedNodeId || task.targetNodeId,
-            sessionId: task.assignedSessionId || task.targetSessionId,
+            status: queueStatus,
+            nodeId: queueNodeId,
+            sessionId: queueSessionId,
             taskTitle: title,
             taskSummary: summary,
             message: task.message,

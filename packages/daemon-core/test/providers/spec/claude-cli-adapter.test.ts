@@ -128,8 +128,14 @@ describe('SpecCliAdapter — FSM state is authoritative for status', () => {
 
     const status = adapter.getStatus();
     expect(status.status).toBe('waiting_approval');
-    // activeModal carries the semantic modal `kind` through to the auto-approve gate.
-    expect(status.activeModal).toEqual({ message: 'Proceed?', buttons: ['Yes', 'No'], kind: 'approval' });
+    // activeModal carries the semantic modal `kind` through to the auto-approve gate, plus
+    // buttonMeta preserving each label's real FSM display index (BUTTON-INDEX-MISMAP Fix C.1).
+    expect(status.activeModal).toEqual({
+      message: 'Proceed?',
+      buttons: ['Yes', 'No'],
+      buttonMeta: [{ index: 0, label: 'Yes' }, { index: 1, label: 'No' }],
+      kind: 'approval',
+    });
   });
 
   it('surfaces a picker modal as waiting_approval but tags it kind=picker (so it is NOT auto-answered)', () => {

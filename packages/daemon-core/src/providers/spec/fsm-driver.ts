@@ -118,6 +118,13 @@ export interface ISpecDriver {
     subscribe(listener: (ev: DashboardEvent) => void): () => void;
     start(): void;
     dispatch(cmd: DashboardCommand): void;
+    /**
+     * BUTTON-INDEX-MISMAP (Fix C.3): click a modal button by its FSM display index and report
+     * whether a button was actually matched and its confirm keys dispatched. Unlike the
+     * fire-and-forget `dispatch('click_modal_button')`, callers that need to know the click
+     * landed (mesh_approve → SpecCliAdapter.resolveModalMatched) can observe a miss.
+     */
+    clickModalButton(index: number): boolean;
     updateMeta(meta: Record<string, unknown>, replace?: boolean): void;
     snapshot(): string;
     getCursorPosition(): { row: number; col: number };
@@ -428,7 +435,7 @@ export class FsmDriver implements ISpecDriver {
             case 'send_message': this.handleSendMessage(cmd.text); return;
             case 'pty_write': this.adapter.send_keys(cmd.data); return;
             case 'click_control': this.handleClickControl(cmd.control_id, cmd.payload); return;
-            case 'click_modal_button': this.handleClickModalButton(cmd.index); return;
+            case 'click_modal_button': this.clickModalButton(cmd.index); return;
             case 'attach_image': this.handleAttachImage(cmd.blob, cmd.mime); return;
             case 'resize': this.adapter.resize(cmd.cols, cmd.rows); return;
             case 'cancel': this.adapter.send_keys('\x03'); return;
@@ -1318,11 +1325,25 @@ export class FsmDriver implements ISpecDriver {
         }
     }
 
-    private handleClickModalButton(index: number): void {
+    /**
+     * BUTTON-INDEX-MISMAP (Fix C.3): public modal-click entry that returns whether a button
+     * matching the requested FSM display index was actually found and its confirm keys were
+     * dispatched. The old private handleClickModalButton silently `return`ed on a miss (no
+     * modal captured, or no button whose `.index` equals the requested display index), so a
+     * mis-mapped index looked identical to a successful press. Callers that need to know
+     * whether the click landed (mesh_approve → resolveModal) can now observe the miss instead
+     * of reporting success into the void. The generic `dispatch('click_modal_button')` path
+     * keeps ignoring the return (fire-and-forget UI clicks).
+     */
+    clickModalButton(index: number): boolean {
+        return this.handleClickModalButton(index);
+    }
+
+    private handleClickModalButton(index: number): boolean {
         const m = this.currentEval?.modal;
-        if (!m) return;
+        if (!m) return false;
         const btn = m.buttons.find(b => b.index === index);
-        if (!btn) return;
+        if (!btn) return false;
 
         const rule = stateById(this.spec, this.currentStateId)?.extract?.buttons;
         if (rule?.select_mode === 'arrow_keys') {
@@ -1343,9 +1364,10 @@ export class FsmDriver implements ISpecDriver {
             const confirm = (rule.key_for_index || '\r').replace(/\{index\}/g, '') || '\r';
             if (nav) this.adapter.send_keys(nav);
             this.submitModalConfirm(confirm);
-            return;
+            return true;
         }
         this.submitModalConfirm(btn.key);
+        return true;
     }
 
     /**

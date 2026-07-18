@@ -204,8 +204,21 @@ export class SpecCliAdapter implements CliAdapter {
                 // modal this frame still stays waiting_approval (no activeModal yet).
                 // `kind` carries the semantic modal class through to the auto-approve
                 // gate so a /model picker (kind='picker') is never auto-answered.
+                // BUTTON-INDEX-MISMAP (Fix C.1): keep `buttons` as the label list every
+                // existing consumer (pickApprovalButton, mesh_approve, auto-approve) reads,
+                // but ALSO surface `buttonMeta` carrying each button's real FSM display index
+                // alongside its label. A partial/non-contiguous modal (display indices [1,3,4]
+                // at array positions [0,1,2]) then no longer loses the index → label mapping
+                // once it leaves the adapter: a consumer that has an array position can recover
+                // the true FSM index without re-parsing. resolveModal() below relies on the same
+                // ordered list to translate an array position to the correct FSM index.
                 activeModal: modal
-                    ? { message: modal.title ?? state.label, buttons: modal.buttons.map(b => b.label), kind: modal.kind ?? null }
+                    ? {
+                        message: modal.title ?? state.label,
+                        buttons: modal.buttons.map(b => b.label),
+                        buttonMeta: modal.buttons.map(b => ({ index: b.index, label: b.label })),
+                        kind: modal.kind ?? null,
+                    }
                     : null,
                 activeInteractivePrompt: this.activeInteractivePrompt,
                 ...sessionFields,
@@ -420,8 +433,29 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     resolveModal(buttonIndex: number): void {
-        // CliAdapter buttonIndex is 0-based; spec buttons are 1-based.
-        this.driver.dispatch({ kind: 'click_modal_button', index: buttonIndex + 1 });
+        this.resolveModalMatched(buttonIndex);
+    }
+
+    resolveModalMatched(buttonIndex: number): boolean {
+        // BUTTON-INDEX-MISMAP (Fix C): `buttonIndex` is an ARRAY POSITION into the
+        // label list this adapter surfaced via getStatus().activeModal.buttons (the
+        // same order pickApprovalButton / mesh_approve pick from). The FSM matches a
+        // click by the button's DISPLAYED number (evaluator sets button.index =
+        // Number(m[1])), which is NOT `arrayPos + 1` for a partial / non-contiguous
+        // modal — e.g. a "1. Yes / 3. Always / 4. No" set parses to display indices
+        // [1,3,4] at array positions [0,1,2]. Blindly sending `arrayPos + 1` then
+        // targets a non-existent display index (2) and handleClickModalButton finds
+        // no button → nothing is pressed. Look up the real FSM display index from the
+        // same ordered button list instead, and fall back to the legacy +1 only when
+        // no modal is captured (defensive; the driver's own guard rejects a miss).
+        const buttons = this.latestModal?.buttons ?? [];
+        const target = (buttonIndex >= 0 && buttonIndex < buttons.length)
+            ? buttons[buttonIndex].index
+            : buttonIndex + 1;
+        // clickModalButton returns whether the FSM actually found a button for `target`
+        // and dispatched its confirm keys — surfaced so mesh_approve can distinguish a
+        // real press from a silent miss (the exact false-success the mis-map produced).
+        return this.driver.clickModalButton(target);
     }
 
     async resolveAction(data: unknown): Promise<void> {

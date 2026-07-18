@@ -110,6 +110,16 @@ export class CliProviderInstance implements ProviderInstance {
     private static readonly AUTO_APPROVE_SETTLE_MS = 600;
 
     /**
+     * APPROVAL-INBOX-BLINDSPOT (Fix A): how long after a LOCAL auto-approve fire the mesh
+     * event forwarder still treats the modal as "being resolved locally" and suppresses the
+     * coordinator notification. Chosen to comfortably cover the resolveModal → PTY absorb →
+     * status-leaves-approval round trip (incl. the win32 CR-resend loop) while staying short
+     * enough that a modal which auto-approve fired at but did NOT resolve re-surfaces to the
+     * coordinator on the next event. Aligned with the adapter's own approval cooldown scale.
+     */
+    private static readonly APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS = 8000;
+
+    /**
      * Busy-side hysteresis for the settle gate. A momentary `generating` flip
      * while the SAME approval modal's button block is still on screen (its
      * question line scrolled out of the captured frame, only the buttons + a
@@ -387,6 +397,16 @@ export class CliProviderInstance implements ProviderInstance {
     // signature) while a genuinely closed modal — buttons empty continuously past
     // the continuity window — is still recognised and resets the gate.
     private autoApproveLastModalSeenAt = 0;
+    // APPROVAL-INBOX-BLINDSPOT (Fix A): wall-clock of the last time this session actually
+    // FIRED a local auto-approve resolveModal (the settle gate passed → resolveModal
+    // dispatched). The mesh event forwarder keys its agent:waiting_approval suppression on
+    // this + a cooldown so it only drops the coordinator notification when we can positively
+    // confirm the modal was (or is being) resolved LOCALLY. If auto-approve is merely
+    // *configured* on but has NOT recently fired for this modal, the raw waiting_approval is
+    // forwarded so a task_approval_needed ledger row is created and the coordinator/inbox is
+    // told — closing the blind spot where a never-resolving worker approval was silently
+    // dropped just because settings.autoApprove===true.
+    private lastAutoApproveFiredAt = 0;
     // AUTOAPPROVE-FLAP-INBOX-MISSING sticky-approval overlay (see APPROVAL_STICKY_FLAP_MS).
     // The wall-clock of the last frame where the RAW adapter reported waiting_approval with
     // a CONCRETE modal (buttons present), the cached modal to re-present across a busy blip,
@@ -1097,6 +1117,34 @@ export class CliProviderInstance implements ProviderInstance {
             return 'waiting_approval';
         }
         return null;
+    }
+
+    /**
+     * APPROVAL-INBOX-BLINDSPOT (Fix A): true when this session's approval modal was — or is
+     * being — resolved LOCALLY within the recent cooldown. Two independent positive signals:
+     *   (1) auto-approve fired its resolveModal within APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS
+     *       (lastAutoApproveFiredAt), or
+     *   (2) the underlying adapter reports isApprovalRecentlyResolved() — its own resolve
+     *       cooldown, which also covers a dashboard / mesh_approve resolution.
+     * The mesh event forwarder uses this to decide whether an agent:waiting_approval from an
+     * auto-approving worker can be safely SUPPRESSED (a local resolution is in flight) or must
+     * be FORWARDED (auto-approve is configured but has NOT actually resolved this modal, so the
+     * coordinator/inbox must be told). Keying suppression on real resolution — not just the
+     * autoApprove *intent* — is the blind-spot fix: a never-resolving worker approval is no
+     * longer silently dropped.
+     */
+    approvalRecentlyResolvedLocally(now = Date.now()): boolean {
+        if (this.lastAutoApproveFiredAt
+            && now - this.lastAutoApproveFiredAt < CliProviderInstance.APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS) {
+            return true;
+        }
+        try {
+            const adapter = this.adapter as { isApprovalRecentlyResolved?: () => boolean };
+            if (typeof adapter.isApprovalRecentlyResolved === 'function') {
+                return adapter.isApprovalRecentlyResolved() === true;
+            }
+        } catch { /* adapter gone / transient */ }
+        return false;
     }
 
     /**
@@ -3139,8 +3187,34 @@ export class CliProviderInstance implements ProviderInstance {
             this.lastAutoApprovalSignature = '';
         }, 5000);
         this.recordAutoApproval(modal?.message, buttonLabel, now);
+        // APPROVAL-INBOX-BLINDSPOT (Fix A) + BUTTON-INDEX-MISMAP (Fix C): stamp the
+        // local-resolution clock so the mesh forwarder can distinguish "auto-approve just
+        // fired / is firing" (suppress the coordinator notification — modal is being resolved
+        // locally) from "auto-approve is merely configured but has not fired for this modal"
+        // (forward it so the coordinator is told and a task_approval_needed ledger row is
+        // created). Only stamp when the click actually MATCHED a button: resolveModalMatched
+        // maps the array position to the real FSM display index and reports whether a button
+        // was pressed, so a mis-mapped/never-pressed modal does NOT falsely mark itself
+        // locally-resolved (which would suppress the coordinator notification for a modal that
+        // never got answered — the exact blind spot). Legacy adapters keep the void resolveModal.
+        this.lastAutoApproveFiredAt = now;
         setTimeout(() => {
-            this.adapter.resolveModal(buttonIndex);
+            const adapter = this.adapter as {
+                resolveModalMatched?: (i: number) => boolean;
+                resolveModal?: (i: number) => void;
+            };
+            if (typeof adapter.resolveModalMatched === 'function') {
+                const matched = adapter.resolveModalMatched(buttonIndex);
+                if (!matched) {
+                    // Click did not land on any button — undo the local-resolution stamp so the
+                    // next agent:waiting_approval is FORWARDED to the coordinator/inbox rather
+                    // than suppressed as "resolved locally".
+                    if (this.lastAutoApproveFiredAt === now) this.lastAutoApproveFiredAt = 0;
+                    LOG.warn('CLI', `[${this.type}] auto-approve resolveModal matched no button (index ${buttonIndex}) — surfacing approval to coordinator`);
+                }
+            } else {
+                adapter.resolveModal?.(buttonIndex);
+            }
         }, 0);
         return autoApproveActive;
     }

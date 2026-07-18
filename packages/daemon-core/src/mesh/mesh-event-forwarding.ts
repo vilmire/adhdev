@@ -727,25 +727,39 @@ function evaluateMeshEventSuppression(
 }
 
 /**
- * True when the worker session that emitted this event has auto-approve enabled
- * (a MAGI/delegated worker is launched with autoApprove:true). Such a worker
- * resolves its own approval modals locally, so an agent:waiting_approval event
- * from it is transient noise for the coordinator: forwarding it injects a
- * "[System] … is waiting for approval, use mesh_approve" turn that the
- * coordinator cannot usefully act on (the modal is already auto-resolving) and,
- * mid-MAGI-collect, HIJACKS the coordinator's synthesis turn — the observed
- * failure where a replica's repeated auto-approvals drowned out the completion
- * events and the coordinator answered about approvals instead of the RCA. Only
- * suppress when we can positively confirm the source worker auto-approves; a
- * worker that genuinely needs a human/coordinator approval (autoApprove off)
- * still forwards so the coordinator is told.
+ * APPROVAL-INBOX-BLINDSPOT (Fix A): decide whether an agent:waiting_approval from an
+ * auto-approving worker can be SUPPRESSED (never forwarded to the coordinator).
+ *
+ * A MAGI/delegated worker launched with autoApprove:true resolves its own approval modals
+ * locally, so a forwarded agent:waiting_approval is transient noise: it injects a
+ * "[System] … is waiting for approval, use mesh_approve" turn the coordinator cannot usefully
+ * act on (the modal is already auto-resolving) and, mid-MAGI-collect, HIJACKS the
+ * coordinator's synthesis turn — the observed failure where a replica's repeated
+ * auto-approvals drowned out the completion events.
+ *
+ * BUT the OLD gate suppressed on the autoApprove *intent* alone (settings.autoApprove===true),
+ * which is the blind spot: if the worker's local resolveModal never actually fired/resolved
+ * (button-index mismatch, a modal auto-approve declined to answer, an unattended stall), the
+ * event was STILL dropped — so no task_approval_needed ledger row was created,
+ * mesh_list_pending_approvals stayed 0, the coordinator was never told, and the remote
+ * UNKNOWN-grace reclaim eventually tore the worker off its task. This tightens the gate:
+ * suppress ONLY when auto-approve is on AND we can positively confirm the modal was — or is
+ * being — resolved LOCALLY within the recent cooldown (approvalRecentlyResolvedLocally). If
+ * auto-approve is configured but has NOT actually resolved this modal, we FORWARD so the
+ * coordinator/inbox is told and can act.
  */
-function sourceWorkerAutoApproves(components: DaemonComponents, sessionId: string): boolean {
+function shouldSuppressAutoApprovingWorkerApproval(components: DaemonComponents, sessionId: string): boolean {
     if (!sessionId) return false;
     try {
-        const state = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
+        const instance = components.instanceManager?.getInstance?.(sessionId);
+        const state = instance?.getState?.();
         const settings = (state?.settings as Record<string, unknown>) || {};
-        return settings.autoApprove === true;
+        if (settings.autoApprove !== true) return false;
+        // Positive local-resolution signal required to suppress. Absent it, forward so the
+        // coordinator is told and a task_approval_needed ledger row is created.
+        const resolvedLocally = (instance as { approvalRecentlyResolvedLocally?: () => boolean } | undefined)
+            ?.approvalRecentlyResolvedLocally;
+        return typeof resolvedLocally === 'function' ? resolvedLocally.call(instance) === true : false;
     } catch {
         return false;
     }
@@ -1016,14 +1030,18 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
 
     const eventTimestamp = readEventTimestamp(args.metadataEvent.timestamp);
 
-    // Auto-approving worker: never forward its approval prompts to the coordinator.
-    // The daemon resolves the modal locally, so the "[System] … waiting for
-    // approval" injection is pure noise that hijacks the coordinator's turn — the
-    // observed MAGI failure where a replica's repeated auto-approvals flooded the
-    // coordinator and derailed its final synthesis. A worker without auto-approve
-    // (genuinely blocked on a human/coordinator decision) still forwards.
-    if (args.event === 'agent:waiting_approval' && sourceWorkerAutoApproves(components, eventSessionId)) {
-        LOG.info('MeshEvents', `Suppressed agent:waiting_approval for auto-approving worker session ${eventSessionId || '(unknown)'} (mesh ${args.meshId}) — modal is resolved locally, coordinator not notified`);
+    // Auto-approving worker: suppress its approval prompt ONLY when the modal was — or is
+    // being — resolved LOCALLY within the recent cooldown. The daemon resolving the modal
+    // locally makes the "[System] … waiting for approval" injection pure noise that hijacks
+    // the coordinator's turn (the observed MAGI failure where a replica's repeated
+    // auto-approvals flooded the coordinator and derailed its final synthesis). But a worker
+    // whose auto-approve is merely CONFIGURED on and did NOT actually resolve this modal
+    // (button-index mismatch, an unattended stall, a modal auto-approve declined to answer)
+    // must still forward — otherwise no task_approval_needed ledger row is created, the
+    // coordinator/inbox is never told, and the remote UNKNOWN-grace reclaim eventually tears
+    // the worker off its task (APPROVAL-INBOX-BLINDSPOT, Fix A).
+    if (args.event === 'agent:waiting_approval' && shouldSuppressAutoApprovingWorkerApproval(components, eventSessionId)) {
+        LOG.info('MeshEvents', `Suppressed agent:waiting_approval for auto-approving worker session ${eventSessionId || '(unknown)'} (mesh ${args.meshId}) — modal resolved locally within cooldown, coordinator not notified`);
         traceMeshEventDrop('waiting_approval_auto_approving_worker', traceCtx);
         return { success: true, forwarded: 0, suppressed: true, autoApprovingWorkerApproval: true };
     }

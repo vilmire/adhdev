@@ -3226,6 +3226,100 @@ describe('runMeshReconcileTick', () => {
         cleanup(meshId)
       }
     })
+
+    // ── APPROVAL-INBOX-BLINDSPOT (Fix A.3) ──────────────────────────────────────
+    // A REMOTE worker (UNKNOWN local busy verdict — not in this daemon's instance map) that
+    // is legitimately paused at an approval modal must NOT be reclaimed by the delivered-no-turn
+    // watchdog. The live mesh-node session snapshot reports waiting_approval, which the guard
+    // reads as positive cross-daemon evidence the worker is blocked awaiting mesh_approve — so
+    // the row is HELD without advancing the UNKNOWN reclaim streak. Prior to the fix the UNKNOWN
+    // streak accrued and, after the grace, tore the worker off a task it was only paused on.
+    it('Fix A.3: does NOT reclaim a delivered-no-turn remote row whose live session is awaiting_approval', async () => {
+      const meshId = `mesh_phase25_awaiting_approval_hold_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-remote-at-approval'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        backdateDispatch(meshId, claimed.id, DELIVERED_NO_TURN_MS)
+        // Confirmed delivery, never acked — the long delivered-no-turn branch is reached.
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+
+        // No local instance for the session → resolveSessionBusyVerdict = UNKNOWN (remote worker).
+        // The mesh node carries a LIVE session snapshot at waiting_approval — the positive
+        // cross-daemon signal the guard keys on. commandHandler is present so we can prove the
+        // transcript poll is NEVER reached (the guard short-circuits before it).
+        const readChat = vi.fn(async () => ({ success: true, status: 'waiting_approval', messages: [] }))
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+        const mesh = {
+          id: meshId,
+          nodes: [{
+            id: nodeId,
+            workspace: '/repo/w',
+            sessions: [{ id: sessionId, providerType: 'antigravity-cli', status: 'waiting_approval' }],
+          }],
+        }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        // Run well past the UNKNOWN grace (3 ticks) — the approval guard must hold on EVERY tick,
+        // never accruing the streak, so no reclaim ever fires.
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe(sessionId)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+        // The transcript poll is never reached — the guard short-circuits before it.
+        expect(readChat).not.toHaveBeenCalled()
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('Fix A.3 (control): once the live session leaves approval (UNKNOWN, idle-not-observed), the reclaim resumes', async () => {
+      const meshId = `mesh_phase25_approval_cleared_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-remote-was-at-approval'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        backdateDispatch(meshId, claimed.id, DELIVERED_NO_TURN_MS)
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+
+        // Live session no longer at approval and no local instance (UNKNOWN). No transcript
+        // turn-end evidence → the normal UNKNOWN-grace reclaim runs to completion.
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd !== 'read_chat') return { success: true }
+          return { success: true, status: 'idle', providerSessionId: 'p', messages: [{ role: 'user', content: 'do work', timestamp: Date.now() - DELIVERED_NO_TURN_MS + 1_000 }] }
+        })
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+        const mesh = {
+          id: meshId,
+          nodes: [{ id: nodeId, workspace: '/repo/w', sessions: [{ id: sessionId, status: 'idle' }] }],
+        }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false) // still within grace
+        await runMeshReconcileTick(components)
+
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(true)
+      } finally {
+        cleanup(meshId)
+      }
+    })
   })
 })
 

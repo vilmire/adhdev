@@ -795,7 +795,21 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
             LOG.info('Command', `[resolveAction] CLI PTY → stale_prompt (already resolved within cooldown)`);
             return { success: true, stalePrompt: true, buttonIndex, button: buttons[buttonIndex] ?? button };
         }
-        if (typeof adapter.resolveModal === 'function') {
+        // BUTTON-INDEX-MISMAP (Fix C.3): prefer resolveModalMatched — it maps the array
+        // position to the real FSM display index AND reports whether a button was actually
+        // matched. The old path called the void resolveModal and unconditionally returned
+        // success:true, so a mis-mapped index (partial/non-contiguous modal) that pressed
+        // NOTHING still reported success and left the worker wedged at the modal. When the
+        // adapter tells us no button matched, report failure so mesh_approve / the coordinator
+        // sees the miss instead of a false success. Legacy adapters without resolveModalMatched
+        // keep the prior void-resolveModal behaviour.
+        if (typeof adapter.resolveModalMatched === 'function') {
+            const matched = adapter.resolveModalMatched(buttonIndex);
+            if (!matched) {
+                LOG.warn('Command', `[resolveAction] CLI PTY → no button matched for buttonIndex=${buttonIndex} "${buttons[buttonIndex] ?? '?'}" (modal not resolved)`);
+                return { success: false, error: 'Approval button index did not map to a visible modal button', buttonIndex, button: buttons[buttonIndex] ?? button };
+            }
+        } else if (typeof adapter.resolveModal === 'function') {
             adapter.resolveModal(buttonIndex);
         } else {
             const keys = '\x1B[B'.repeat(Math.max(0, buttonIndex)) + '\r';

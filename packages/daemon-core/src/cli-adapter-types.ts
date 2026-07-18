@@ -16,6 +16,16 @@ export interface CliAdapterStatus {
         message: string;
         buttons: string[];
         /**
+         * BUTTON-INDEX-MISMAP (Fix C.1): each button's label paired with its real FSM
+         * DISPLAYED index (evaluator's Number(m[1])). `buttons` above is the label-only list
+         * every existing consumer reads (array position === pick order); `buttonMeta` preserves
+         * the index → label mapping so a partial / non-contiguous modal (display indices [1,3,4]
+         * at array positions [0,1,2]) does not lose its true indices once the modal leaves the
+         * adapter. Present only on spec/FSM adapters; absent for adapters that surface labels
+         * alone.
+         */
+        buttonMeta?: { index: number; label: string }[];
+        /**
          * Semantic modal class, when the adapter knows it (spec/FSM path):
          * 'approval' = tool/command/trust consent (auto-approve may fire);
          * 'picker' = a selection menu the user opened (/model, /mode — must NOT
@@ -155,6 +165,13 @@ export interface CliAdapter {
     resolveAction?(data: unknown): Promise<void>;
     setInteractivePromptResponse?(response: InteractivePromptResponse): Promise<void>;
     resolveModal?(buttonIndex: number): void;
+    // BUTTON-INDEX-MISMAP (Fix C.3): resolve a modal button by ARRAY POSITION and report
+    // whether a real button was matched (the FSM found a button for the mapped display index
+    // and dispatched its confirm keys). A `false` verdict means the requested position mapped
+    // to no button — the caller (mesh_approve) must then NOT report success. Optional so
+    // legacy adapters that only expose the void resolveModal keep working (the caller falls
+    // back to resolveModal + the resolution-cooldown check).
+    resolveModalMatched?(buttonIndex: number): boolean;
     isApprovalRecentlyResolved?(): boolean;
  // Raw PTY I/O (for terminal view)
     setOnPtyData?(callback: (data: string) => void): void;
