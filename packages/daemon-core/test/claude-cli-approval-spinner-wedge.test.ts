@@ -177,6 +177,73 @@ maybe('claude-cli 4.0 approval ✻-spinner wedge', () => {
     expect(r.fired?.to).not.toBe('busy')
   })
 
+  /**
+   * APPROVAL-ENTRY-WEDGE (busy→approval blocked by residual spinner, observed
+   * 2026-07-18, session 52e5df0a). The exact MIRROR of the approval→busy cases
+   * above: the FSM is still in `busy` from the prior turn when a fresh edit-
+   * approval modal renders. The footer section correctly carries the choice
+   * block (`❯ 1. Yes`) and the "Do you want to make this edit …" question, so
+   * the entry transition's cond 1 & 2 match — but a prior-turn spinner line
+   * (`✶ Galloping… ↓ 24.8k tokens`) that the CLI never cleared still lingers on
+   * the corrupted grid. The unsectioned busy-spinner NOT-guard (cond 3) matched
+   * that stale spinner, so `busy→approval` never fired: the FSM stayed in
+   * `busy`/`generating`, `activeModal` was never populated, the approval never
+   * reached mesh_list_pending_approvals, delegatedWorkerAutoApprove never fired,
+   * and mesh_approve rejected with "Not in approval state".
+   *
+   * Fix: cond 3 became an `any` — the definitive numbered choice block
+   * (`1. … 2. …`, the same discriminator the approval→busy guards trust) now
+   * DOMINATES a co-rendered residual spinner, so an open approval modal enters
+   * `approval` regardless of leftover generating cues. cond 1 & 2 still gate
+   * entry, so a bare spinner without a real modal cannot spuriously enter.
+   */
+  it('ENTERS busy → approval when the choice block is open despite a residual prior-turn spinner', () => {
+    // Reconstructed from the live wedge screen (debug bundle
+    // chat-debug-20260718T063214420Z-…-52e5df0a): a fresh Edit-approval modal
+    // with two stale prior-turn spinner lines (⏺ Tempering…, ✶ Galloping…) still
+    // painted above it on the corrupted grid.
+    const modalOpenFromBusy = [
+      '⏺ Tempering… (7m 52s · ↓ 24.3k tokens)',
+      '',
+      '❯       Read: ~/Work/.adhdev-worktrees/s ·743.6k tokens',
+      '─'.repeat(80),
+      ' Edit file',
+      '✶ Galloping… (8m 15s · ↓ 24.8k tokens)',
+      '─'.repeat(80),
+      ' ../../packages/web-cloud/src/pages/admin/AdminAudit.tsx',
+      '╌'.repeat(80),
+      ' 79 +                    {t(\'cloud.adminAudit.filter\')}',
+      '╌'.repeat(80),
+      ' Do you want to make this edit to AdminAudit.tsx?',
+      ' ❯ 1. Yes',
+      '   2. Yes, allow all edits during this session (shift+tab)',
+      '   3. No',
+      '',
+      ' Esc to cancel · Tab to amend',
+    ].join('\n')
+    // Held past the entry transition's hold; cursor on the choice row.
+    const r = evaluateFsm(spec, 'busy', modalOpenFromBusy, { row: 12, col: 3 }, undefined, clock(5_000))
+    expect(r.fired?.to).toBe('approval')
+  })
+
+  it('does NOT enter busy → approval on a bare residual spinner with no real modal (entry guard intact)', () => {
+    // Only a generating spinner + shell prompt, no choice block / question. The
+    // any-guard must not open approval here — cond 1 & 2 (footer `1.`/`Esc`/`Do
+    // you want`) fail, so the transition stays closed.
+    const spinnerNoModal = [
+      '⏺ Working on the edit.',
+      '',
+      '✶ Galloping… (1m 02s · ↓ 4.0k tokens)',
+      '',
+      '─'.repeat(80),
+      '❯',
+      '─'.repeat(80),
+      '  ➜ spec-notif-magi-manual git:(spec/notif-magi-manual)',
+    ].join('\n')
+    const r = evaluateFsm(spec, 'busy', spinnerNoModal, { row: 5, col: 0 }, undefined, clock(5_000))
+    expect(r.fired?.to).not.toBe('approval')
+  })
+
   it('leaves approval → busy once the choice block is gone even if a body numbered list remains', () => {
     // Answered/resumed: the modal choice block is gone (footer is a bare ❯) and
     // generation resumed with a live spinner. A lone `1.`-style numbered list in
