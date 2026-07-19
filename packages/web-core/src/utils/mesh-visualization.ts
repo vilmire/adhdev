@@ -791,7 +791,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 id: submoduleNodeId,
                 type: 'submoduleNode',
                 label: submoduleLabel,
-                workspace: submodule.repoPath,
+                workspace: submodule.repoPath ?? submodule.path,
                 branch: null,
                 upstream: null,
                 upstreamStatus: null,

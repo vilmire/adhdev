@@ -121,14 +121,14 @@ export function useConversationPrefs(
         const sessionId = conversation.sessionId
         const pending = sessionId ? pendingRef.current.get(sessionId) : undefined
         if (pending?.muted !== undefined) return pending.muted
-        return getConversationLiveInboxState(conversation, liveSessionInboxState).muted
+        return getConversationLiveInboxState(conversation, liveSessionInboxState).muted ?? false
     }, [liveSessionInboxState])
 
     const isHidden = useCallback((conversation: ActiveConversation) => {
         const sessionId = conversation.sessionId
         const pending = sessionId ? pendingRef.current.get(sessionId) : undefined
         if (pending?.hidden !== undefined) return pending.hidden
-        return getConversationLiveInboxState(conversation, liveSessionInboxState).surfaceHidden
+        return getConversationLiveInboxState(conversation, liveSessionInboxState).surfaceHidden ?? false
     }, [liveSessionInboxState])
 
     const send = useCallback((conversation: ActiveConversation, prefs: { muted?: boolean; hidden?: boolean }) => {

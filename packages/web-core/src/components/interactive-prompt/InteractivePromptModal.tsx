@@ -32,7 +32,7 @@ function defaultSelection(promptSession: InteractivePromptSession | null): Inter
 }
 
 function hasAnswer(question: InteractiveQuestion, answer: InteractivePromptSelection[string] | undefined): boolean {
-  return !!answer?.freeformText?.trim() || (answer?.selectedLabels?.length || 0) > 0 || (question.options.length === 0 && question.allowFreeform)
+  return !!answer?.freeformText?.trim() || (answer?.selectedLabels?.length || 0) > 0 || (question.options.length === 0 && !!question.allowFreeform)
 }
 
 function OptionButton({

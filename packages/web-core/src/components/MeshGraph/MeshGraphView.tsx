@@ -768,7 +768,7 @@ function buildOrthogonalRoutePath(points: MeshGraphLayoutEdgePoint[]): { d: stri
 }
 
 function getEdgePath(args: EdgeProps<FlowEdge>): [string, number, number] {
-    const routePoints = args.data.routePoints
+    const routePoints = args.data?.routePoints
     if (routePoints && routePoints.length >= 2) {
         const built = buildOrthogonalRoutePath(routePoints)
         if (built) return [built.d, built.labelX, built.labelY]
@@ -782,11 +782,11 @@ function getEdgePath(args: EdgeProps<FlowEdge>): [string, number, number] {
         targetY: args.targetY,
         targetPosition: args.targetPosition,
     }
-    const graphEdge = args.data.graphEdge
+    const graphEdge = args.data?.graphEdge
 
     let result: ReturnType<typeof getBezierPath>
-    if (graphEdge.type === 'parentBranch') result = getStraightPath(pathParams)
-    else if (graphEdge.type === 'worktreeLink' || graphEdge.type === 'submoduleLink' || graphEdge.type === 'cloneLink') result = getSmoothStepPath(pathParams)
+    if (graphEdge?.type === 'parentBranch') result = getStraightPath(pathParams)
+    else if (graphEdge?.type === 'worktreeLink' || graphEdge?.type === 'submoduleLink' || graphEdge?.type === 'cloneLink') result = getSmoothStepPath(pathParams)
     else result = getBezierPath(pathParams)
     return [result[0], result[1], result[2]]
 }
@@ -819,7 +819,7 @@ function getEdgeLabelClasses(edge: MeshGraphEdge, isDark: boolean): string {
 
 function MeshGraphEdgeLine(args: EdgeProps<FlowEdge>) {
     const meshTheme = useContext(MeshGraphThemeContext)
-    const graphEdge = args.data.graphEdge
+    const graphEdge = args.data?.graphEdge
     const [edgePath, labelX, labelY] = getEdgePath(args)
     const labelTitle = typeof args.label === 'string' ? args.label : undefined
 
@@ -832,7 +832,7 @@ function MeshGraphEdgeLine(args: EdgeProps<FlowEdge>) {
                 style={args.style}
                 interactionWidth={24}
             />
-            {args.label && (
+            {args.label && graphEdge && (
                 <EdgeLabelRenderer>
                     <div
                         className={getEdgeLabelClasses(graphEdge, meshTheme.isDark)}
