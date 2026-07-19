@@ -13,7 +13,6 @@ import { IconBell, IconChat, IconScroll, IconMonitor, IconEyeOff, IconX, IconPlu
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import CliViewModeToggle from './CliViewModeToggle';
 import { getConversationMetaText, getConversationTitle } from './conversation-presenters';
-import { DASHBOARD_NEW_SESSION_LABEL } from './dashboard-session-cta';
 import type { DashboardActionShortcutId } from '../../hooks/useActionShortcuts';
 import { formatRelativeTime } from '../../utils/time';
 import type { DashboardNotificationRecord } from '../../utils/dashboard-notifications';
@@ -359,8 +358,8 @@ export default function DashboardHeader({
                                     type="button"
                                     onClick={onOpenNewSession}
                                     className="btn btn-secondary btn-sm ml-2"
-                                    title={`${DASHBOARD_NEW_SESSION_LABEL}${actionShortcuts?.openNewSession ? ` (${actionShortcuts.openNewSession})` : ''}`}
-                                    aria-label={DASHBOARD_NEW_SESSION_LABEL}
+                                    title={`${t('paneGroup.newSession')}${actionShortcuts?.openNewSession ? ` (${actionShortcuts.openNewSession})` : ''}`}
+                                    aria-label={t('paneGroup.newSession')}
                                 >
                                     <IconPlus size={14} />
                                 </button>

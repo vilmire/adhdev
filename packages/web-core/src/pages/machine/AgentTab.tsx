@@ -513,10 +513,12 @@ export default function AgentTab({
     ])
 
     const primaryActionLabel = getLaunchPrimaryActionLabel(
+        t,
         isIde ? 'ide' : isAcp ? 'acp' : 'cli',
         !isIde && !isAcp && !!selectedResumeSessionId,
     )
     const primaryBusyLabel = getLaunchPrimaryBusyLabel(
+        t,
         isIde ? 'ide' : isAcp ? 'acp' : 'cli',
         !isIde && !isAcp && !!selectedResumeSessionId,
     )
@@ -532,8 +534,8 @@ export default function AgentTab({
             currentWorkspacePath: resolvedWorkspacePath,
         })
         openLaunchConfirm({
-            title: isCliResume ? getRecentHistoryResumeConfirmTitle(providerName) : getMachineLaunchConfirmTitle('start-fresh', providerName),
-            description: isCliResume ? getRecentHistoryResumeConfirmDescription() : getMachineLaunchConfirmDescription('start-fresh'),
+            title: isCliResume ? getRecentHistoryResumeConfirmTitle(t, providerName) : getMachineLaunchConfirmTitle(t, 'start-fresh', providerName),
+            description: isCliResume ? getRecentHistoryResumeConfirmDescription(t) : getMachineLaunchConfirmDescription(t, 'start-fresh'),
             confirmLabel: primaryActionLabel,
             busyLabel: primaryBusyLabel,
             workspaceOptions: options,
@@ -963,10 +965,10 @@ export default function AgentTab({
                                                             currentWorkspacePath: restartWorkspace,
                                                         })
                                                         openLaunchConfirm({
-                                                            title: getMachineLaunchConfirmTitle('restart-ide', formatIdeType(entry.type)),
-                                                            description: getMachineLaunchConfirmDescription('restart-ide'),
-                                                            confirmLabel: getMachineLaunchConfirmLabel('restart-ide'),
-                                                            busyLabel: getMachineLaunchBusyLabel('restart-ide'),
+                                                            title: getMachineLaunchConfirmTitle(t, 'restart-ide', formatIdeType(entry.type)),
+                                                            description: getMachineLaunchConfirmDescription(t, 'restart-ide'),
+                                                            confirmLabel: getMachineLaunchConfirmLabel(t, 'restart-ide'),
+                                                            busyLabel: getMachineLaunchBusyLabel(t, 'restart-ide'),
                                                             workspaceOptions: options,
                                                             selectedWorkspaceKey: selectedKey,
                                                             details: [
@@ -1040,10 +1042,10 @@ export default function AgentTab({
                                                         currentWorkspacePath: workspacePath,
                                                     })
                                                     openLaunchConfirm({
-                                                        title: getMachineLaunchConfirmTitle('restart-stopped', providerName),
-                                                        description: getMachineLaunchConfirmDescription('restart-stopped'),
-                                                        confirmLabel: getMachineLaunchConfirmLabel('restart-stopped'),
-                                                        busyLabel: getMachineLaunchBusyLabel('restart-stopped'),
+                                                        title: getMachineLaunchConfirmTitle(t, 'restart-stopped', providerName),
+                                                        description: getMachineLaunchConfirmDescription(t, 'restart-stopped'),
+                                                        confirmLabel: getMachineLaunchConfirmLabel(t, 'restart-stopped'),
+                                                        busyLabel: getMachineLaunchBusyLabel(t, 'restart-stopped'),
                                                         workspaceOptions: options,
                                                         selectedWorkspaceKey: selectedKey,
                                                         details: [
