@@ -2545,7 +2545,8 @@
       "tryMesh": "Probar Repo Mesh →",
       "seePlans": "Ver planes",
       "availableOn": "Disponible en Pro y superiores. Contrólalo desde la página de <strong>Repo Mesh</strong> una vez conectado.",
-      "readGuide": "Leer la guía"
+      "readGuide": "Leer la guía",
+      "graphAlt": "Observabilidad del mesh tras un workstream convergido real: historial de misiones, actividad del ledger append-only, la cola de tareas y los trabajos del Refinery — feat/get-todo-by-id integrado en main por fast-forward"
     },
     "compare": {
       "sectionTitle": "Los agentes en paralelo están por todas partes ahora. ¿Dónde aterriza realmente el trabajo?",
@@ -2733,7 +2734,8 @@
       "point2": "Un toque para aprobar o rechazar",
       "point3": "Continúa con una instrucción de chat y guarda el móvil",
       "notificationLabel": "Notificación push móvil para la aprobación de un agente",
-      "resumeLabel": "Aprobando y continuando desde el panel móvil"
+      "resumeLabel": "Aprobando y continuando desde el panel móvil",
+      "point4": "Sin port forwarding, VPN ni DMZ — P2P con relé TURN conecta desde cafeterías, hotspots o cualquier red con internet"
     },
     "brain": {
       "sectionTitle": "Modelos baratos para lo fácil. Los caros solo cuando es difícil.",
@@ -2748,7 +2750,10 @@
       "point1": "La misma pregunta, réplicas independientes de máquina × modelo",
       "point2": "Muestra acuerdo, desacuerdo y evidencia única",
       "point3": "Detecta al agente que se equivoca con seguridad",
-      "origin": "La verificación cruzada multimodelo estaba en Repo Mesh antes de que se pusiera de moda."
+      "origin": "La verificación cruzada multimodelo estaba en Repo Mesh antes de que se pusiera de moda.",
+      "diagramAlt": "Diagrama MAGI: una pregunta de solo lectura se distribuye a réplicas independientes de máquina × modelo y se sintetiza en acuerdos, discrepancias y afirmaciones únicas",
+      "synthesisAlt": "Síntesis MAGI real en el chat del coordinador: causa raíz consensuada con evidencia file:line, una réplica fallida reportada con honestidad y la conclusión principal marcada como source-coupled",
+      "mediaCaption": "Salida real de una ejecución MAGI — la réplica fallida y la marca source-coupled son honestidad, no un error."
     }
   },
   "interactivePrompt": {

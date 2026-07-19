@@ -2545,11 +2545,12 @@
       "tryMesh": "Repo Mesh 사용해보기 →",
       "seePlans": "요금제 보기",
       "availableOn": "Pro 이상에서 사용 가능합니다. 연결 후 <strong>Repo Mesh</strong> 페이지에서 구동하세요.",
-      "readGuide": "가이드 읽기"
+      "readGuide": "가이드 읽기",
+      "graphAlt": "실제 수렴 워크스트림 직후의 메시 옵저버빌리티: 미션 히스토리, append-only 원장 활동, 태스크 큐, Refinery 잡 — feat/get-todo-by-id가 main으로 fast-forward됨"
     },
     "compare": {
       "sectionTitle": "병렬 에이전트는 이제 어디에나 있습니다. 그 결과물은 실제로 어디에 착지하나요?",
-      "sectionSubtitle": "합당한 질문입니다. 로컬 CLI는 서브에이전트를 생성하고, 데스크톱 오케스트레이터는 세련된 네이티브 UI로 워크트리에 작업을 분배합니다. 둘 다 브랜치에서 멈춥니다. 우리가 그들보다 나은 점과 부족한 점을 솔직하게 정리했습니다.",
+      "sectionSubtitle": "합당한 질문입니다. 로컬 CLI는 서브에이전트를 생성하고, 데스크톱 오케스트레이터는 세련된 네이티브 UI로 워크트리에 작업을 분배합니다. 둘 다 브랜치에서 멈춥니다. 각 도구 대비 나은 점과 부족한 점을 솔직하게 정리했습니다.",
       "colLocalCli": "로컬 CLI + 서브에이전트",
       "colDesktop": "데스크톱 오케스트레이터",
       "colAdhdev": "ADHDev Repo Mesh",
@@ -2617,7 +2618,7 @@
       "sectionTitle": "지원 에이전트",
       "sectionSubtitle": "{{ides}}개 내장 IDE 통합, {{clis}}개 내장 CLI 에이전트, {{extensions}}개 IDE 내장 익스텐션 에이전트, {{acp}}개 이상의 ACP(stdio MCP) 에이전트. 프로바이더 스크립트는 <code>adhdev-providers/</code>에 있으며 <code>~/.adhdev/providers/</code>에 직접 추가할 수 있습니다.",
       "tierTested": "Tested",
-      "tierTestedDesc": "실제 앱 + 버전으로 검증됨",
+      "tierTestedDesc": "실제 앱·고정 버전에서 검증됨",
       "tierCommunity": "Community",
       "tierCommunityDesc": "내장 및 커뮤니티 지원",
       "groupIdes": "IDE",
@@ -2733,7 +2734,8 @@
       "point2": "한 번의 탭으로 승인 또는 거부",
       "point3": "채팅으로 후속 지시하고, 폰을 내려놓으세요",
       "notificationLabel": "에이전트 승인을 위한 모바일 푸시 알림",
-      "resumeLabel": "모바일 대시보드에서 승인 후 후속 지시"
+      "resumeLabel": "모바일 대시보드에서 승인 후 후속 지시",
+      "point4": "포트포워딩·VPN·DMZ 설정 없음 — P2P와 TURN 릴레이로 카페든 핫스팟이든, 인터넷만 되면 어디서든 연결됩니다"
     },
     "brain": {
       "sectionTitle": "쉬운 작업은 싼 모델로, 어려운 작업만 비싼 모델로.",
@@ -2748,7 +2750,10 @@
       "point1": "같은 질문, 독립적인 머신 × 모델 레플리카",
       "point2": "일치·이견·고유 증거를 함께 드러냄",
       "point3": "자신만만하게 틀린 에이전트 하나를 잡아냄",
-      "origin": "멀티모델 교차 검증은, 그것이 유행이 되기 전부터 Repo Mesh에 내장돼 있었습니다."
+      "origin": "멀티모델 교차 검증은, 그것이 유행이 되기 전부터 Repo Mesh에 내장돼 있었습니다.",
+      "diagramAlt": "MAGI 팬아웃 다이어그램: 하나의 읽기 전용 질문을 독립 머신×모델 리플리카에 분배하고, 합의·이견·단독 주장으로 합성",
+      "synthesisAlt": "코디네이터 채팅에 도착한 실제 MAGI 합성: file:line 근거가 달린 합의 결론, 실패한 리플리카의 정직한 보고, source-coupled 플래그",
+      "mediaCaption": "실제 MAGI 실행 결과 그대로입니다 — 실패한 리플리카와 source-coupled 플래그까지, 연출이 아니라 정직함입니다."
     }
   },
   "interactivePrompt": {

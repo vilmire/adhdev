@@ -2545,7 +2545,8 @@
       "tryMesh": "试用 Repo Mesh →",
       "seePlans": "查看方案",
       "availableOn": "Pro 及以上方案可用。连接后从 <strong>Repo Mesh</strong> 页面进行操作。",
-      "readGuide": "阅读指南"
+      "readGuide": "阅读指南",
+      "graphAlt": "真实收敛工作流之后的网格可观测性:任务史、只追加账本活动、任务队列与 Refinery 作业 —— feat/get-todo-by-id 已 fast-forward 进 main"
     },
     "compare": {
       "sectionTitle": "如今并行智能体无处不在。工作究竟落地在哪里？",
@@ -2733,7 +2734,8 @@
       "point2": "一键批准或拒绝",
       "point3": "在聊天里追加指示，然后收起手机",
       "notificationLabel": "用于智能体批准的移动推送通知",
-      "resumeLabel": "在移动端仪表盘上批准并追加指示"
+      "resumeLabel": "在移动端仪表盘上批准并追加指示",
+      "point4": "无需端口转发、VPN 或 DMZ —— P2P 加 TURN 中继,咖啡馆、手机热点,只要能上网就能连接"
     },
     "brain": {
       "sectionTitle": "简单活儿用便宜模型，只有难题才用贵的。",
@@ -2748,7 +2750,10 @@
       "point1": "同一问题，独立的机器 × 模型副本",
       "point2": "呈现一致、分歧与独有证据",
       "point3": "抓出那个自信却出错的智能体",
-      "origin": "多模型交叉验证，在它成为潮流之前就已内建于 Repo Mesh。"
+      "origin": "多模型交叉验证，在它成为潮流之前就已内建于 Repo Mesh。",
+      "diagramAlt": "MAGI 扇出示意图:同一个只读问题分发给独立的机器×模型副本,再综合为共识、争议与孤立主张",
+      "synthesisAlt": "协调器聊天中的真实 MAGI 综合结果:带 file:line 证据的共识结论、如实报告的失败副本,以及 source-coupled 标记",
+      "mediaCaption": "MAGI 真实运行结果,未经修饰 —— 失败的副本和 source-coupled 标记不是 bug,而是诚实。"
     }
   },
   "interactivePrompt": {

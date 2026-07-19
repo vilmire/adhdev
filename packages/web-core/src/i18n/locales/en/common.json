@@ -2545,7 +2545,8 @@
       "tryMesh": "Try Repo Mesh →",
       "seePlans": "See plans",
       "availableOn": "Available on Pro and above. Drive it from the <strong>Repo Mesh</strong> page once connected.",
-      "readGuide": "Read the guide"
+      "readGuide": "Read the guide",
+      "graphAlt": "Mesh observability after a real converged workstream: mission history, append-only ledger activity, the task queue, and Refinery jobs — feat/get-todo-by-id fast-forwarded into main"
     },
     "compare": {
       "sectionTitle": "Parallel agents are everywhere now. Where does the work actually land?",
@@ -2733,7 +2734,8 @@
       "point2": "One tap to approve or reject",
       "point3": "Follow up with a chat instruction, then put your phone away",
       "notificationLabel": "Mobile push notification for an agent approval",
-      "resumeLabel": "Approving and following up from the mobile dashboard"
+      "resumeLabel": "Approving and following up from the mobile dashboard",
+      "point4": "No port forwarding, no VPN, no DMZ — P2P with TURN relay connects from cafés, hotspots, anywhere with internet"
     },
     "brain": {
       "sectionTitle": "Cheap models for easy work. Expensive ones only when it's hard.",
@@ -2748,7 +2750,10 @@
       "point1": "Same question, independent machine × model replicas",
       "point2": "Surfaces agreement, disagreement, and unique evidence",
       "point3": "Catches the one agent that's confidently wrong",
-      "origin": "Multi-model cross-checking was built into Repo Mesh before it became a trend."
+      "origin": "Multi-model cross-checking was built into Repo Mesh before it became a trend.",
+      "diagramAlt": "MAGI fan-out diagram: one read-only question dispatched to independent machine × model replicas, synthesized into agreed, contested, and singleton claims",
+      "synthesisAlt": "Real MAGI synthesis in the coordinator chat: consensus root cause with file:line evidence, one failed replica reported honestly, and the main conclusion flagged as source-coupled",
+      "mediaCaption": "Real output from a MAGI run — the failed replica and the source-coupled flag are the honesty, not a bug."
     }
   },
   "interactivePrompt": {

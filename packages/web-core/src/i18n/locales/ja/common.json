@@ -2545,7 +2545,8 @@
       "tryMesh": "Repo Mesh を試す →",
       "seePlans": "プランを見る",
       "availableOn": "Pro 以上で利用可能。接続後は <strong>Repo Mesh</strong> ページから操作できます。",
-      "readGuide": "ガイドを読む"
+      "readGuide": "ガイドを読む",
+      "graphAlt": "実際に収束したワークストリーム直後のメッシュ可観測性: ミッション履歴、追記専用の台帳アクティビティ、タスクキュー、Refinery ジョブ — feat/get-todo-by-id が main に fast-forward 済み"
     },
     "compare": {
       "sectionTitle": "並列エージェントはいまやどこにでもあります。作業は実際どこに着地するのでしょう？",
@@ -2733,7 +2734,8 @@
       "point2": "ワンタップで承認または却下",
       "point3": "チャットで続きを指示したら、スマホをしまう",
       "notificationLabel": "エージェント承認のためのモバイルプッシュ通知",
-      "resumeLabel": "モバイルダッシュボードから承認して続きを指示"
+      "resumeLabel": "モバイルダッシュボードから承認して続きを指示",
+      "point4": "ポート開放・VPN・DMZ は不要 — P2P と TURN リレーで、カフェでもテザリングでも、ネットさえあればどこからでも"
     },
     "brain": {
       "sectionTitle": "簡単な作業は安いモデルで、難しい作業だけ高いモデルで。",
@@ -2748,7 +2750,10 @@
       "point1": "同じ問い、独立したマシン × モデルのレプリカ",
       "point2": "一致・不一致・固有の証拠を明らかにする",
       "point3": "自信満々に間違えている 1 つのエージェントを捕まえる",
-      "origin": "マルチモデルのクロスチェックは、それがトレンドになる前から Repo Mesh に組み込まれていました。"
+      "origin": "マルチモデルのクロスチェックは、それがトレンドになる前から Repo Mesh に組み込まれていました。",
+      "diagramAlt": "MAGI ファンアウト図: 1つの読み取り専用の質問を独立したマシン×モデルのレプリカへ配布し、合意・不一致・単独主張に合成",
+      "synthesisAlt": "コーディネーターのチャットに届いた実際の MAGI 合成: file:line の根拠付き合意、失敗レプリカの正直な報告、source-coupled フラグ",
+      "mediaCaption": "実際の MAGI 実行結果そのままです — 失敗したレプリカも source-coupled フラグも、演出ではなく誠実さです。"
     }
   },
   "interactivePrompt": {
