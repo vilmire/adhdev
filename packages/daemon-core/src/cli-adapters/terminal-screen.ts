@@ -53,6 +53,7 @@ export class TerminalScreen {
     }
 
     getCursorPosition(): { col: number; row: number } {
+        if (typeof this.terminal.getCursorPosition !== 'function') return { col: 0, row: 0 };
         return this.terminal.getCursorPosition();
     }
 

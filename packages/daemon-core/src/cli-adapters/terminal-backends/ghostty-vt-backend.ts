@@ -157,6 +157,7 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
 
     getCursorPosition(): { col: number; row: number } {
         if (this.disposed) return { col: 0, row: 0 };
+        if (typeof this.terminal.getCursorPosition !== 'function') return { col: 0, row: 0 };
         return this.terminal.getCursorPosition();
     }
 
