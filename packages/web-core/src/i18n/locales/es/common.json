@@ -2510,7 +2510,7 @@
     "hero": {
       "badge": "El plano de control de agentes multiproveedor y multimáquina",
       "title": "Ejecuta cada agente de codificación local desde la web — en paralelo.",
-      "subtitle": "Controla cualquier agente CLI —Claude Code, Codex, Gemini— desde tu navegador y luego escala: orquesta varios agentes en árboles de trabajo git aislados en tus propias máquinas y deja que Refinery haga aterrizar el trabajo terminado en main de forma <em>desatendida</em> —las propias comprobaciones de tu repositorio, verificaciones de equivalencia de parches, solo fast-forward, sin force-push. Hablas con un único coordinador; este ejecuta los agentes en paralelo de forma asíncrona, sin sesiones que vigilar. P2P —el código permanece en tu máquina.",
+      "subtitle": "Controla cualquier agente CLI —Claude Code, Codex, Gemini— desde tu navegador y luego escala: orquesta varios agentes en árboles de trabajo git aislados en tus propias máquinas y deja que Refinery haga aterrizar el trabajo terminado en main de forma <em>desatendida</em>. Hablas con un único coordinador; este ejecuta los agentes en paralelo de forma asíncrona, sin sesiones que vigilar. P2P —el código permanece en tu máquina.",
       "selectOs": "Seleccionar SO",
       "osUnix": "macOS / Linux",
       "osWindows": "Windows",
@@ -2520,7 +2520,7 @@
       "getStarted": "Comenzar",
       "openSource": "Código abierto en GitHub",
       "joinDiscord": "Unirse a Discord",
-      "selfHost": "Aloja tú mismo",
+      "selfHost": "Autoaloja si quieres",
       "demoDesktop": "Centro de mando de ADHDev controlando sesiones de agentes en vivo en varias máquinas",
       "demoPush": "Notificación push móvil de ADHDev y aprobación con un toque"
     },
@@ -2576,7 +2576,7 @@
       "rowBrowserAdhdev": "Prioridad web: controla sesiones y aprueba desde cualquier navegador o teléfono",
       "rowNativeApp": "Aplicación de escritorio nativa",
       "rowNativeAppLocalCli": "Solo terminal",
-      "rowNativeAppDesktop": "Ventana nativa pulida: genuinamente más agradable para trabajar frente a ella",
+      "rowNativeAppDesktop": "Ventana nativa pulida: genuinamente más agradable de usar",
       "rowNativeAppAdhdev": "Somos de prioridad web: una pestaña del navegador, no una aplicación nativa",
       "rowRestarts": "Sobrevive a reinicios y pérdida de contexto",
       "rowRestartsLocalCli": "El estado vive en una sesión: ciérrala y desaparece",
@@ -2646,7 +2646,7 @@
         },
         "pro": {
           "period": "/mes",
-          "tagline": "Ejecuta agentes en un par de máquinas, con la fiabilidad que necesitan los planes de pago.",
+          "tagline": "Dos máquinas, más sesiones simultáneas y TURN para redes restrictivas, más Repo Mesh para orquestar agentes en ambas.",
           "cta": "Empezar prueba Pro de 7 días",
           "features": {
             "machines": "2 máquinas: ejecuta agentes en ambas",
@@ -2681,7 +2681,7 @@
       "copyInstall": "Copiar comando de instalación: {{cmd}}",
       "copied": "Copiado",
       "copy": "Copiar",
-      "platformNote": "macOS y Windows son las rutas de instalación validadas. Linux ejecuta el mismo script de Unix y cuenta con pruebas de la comunidad.",
+      "platformNote": "macOS y Windows son las rutas de instalación validadas. Linux ejecuta el mismo script de Unix y cuenta con la validación de la comunidad.",
       "arrow": "→",
       "steps": {
         "step1": {
@@ -2700,7 +2700,7 @@
     },
     "cta": {
       "headline": "Deja de hacer malabares con las pestañas. Controla cada agente desde un único panel.",
-      "subtitle": "Un comando curl, un daemon, cada agente que ya usas. Contrólalos todos desde la web: Cloud ya está disponible.",
+      "subtitle": "Un comando curl, un daemon, cada agente que ya usas. Contrólalos todos desde la web ahora mismo.",
       "getStarted": "Empezar →",
       "github": "GitHub",
       "discord": "Discord"
@@ -2714,6 +2714,38 @@
       "privacy": "Privacidad",
       "contact": "Contacto",
       "copyright": "© {{year}} RacoLab. Todos los derechos reservados."
+    },
+    "imagePaste": {
+      "sectionTitle": "Pega una captura. Un agente de terminal en otra máquina la ve al instante.",
+      "sectionSubtitle": "Captura una imagen en tu portátil o móvil, pégala en el chat y un agente CLI que corre en la terminal de otra máquina la recibe como contexto visual —sin mover archivos ni SSH. Pega, arrastra y suelta, o sube hasta 5 imágenes (10 MB cada una) a la vez.",
+      "point1": "Pega desde el portapapeles, arrastra y suelta, o sube",
+      "point2": "Hasta 5 imágenes, 10 MB cada una",
+      "point3": "Llega a un agente de terminal PTY en cualquiera de tus máquinas",
+      "demoCaption": "Pegando una captura en un agente de terminal remoto"
+    },
+    "mobile": {
+      "sectionTitle": "Deja tu escritorio. Tus agentes siguen trabajando.",
+      "sectionSubtitle": "Una notificación push llega a tu móvil cuando un agente necesita aprobación o termina. Tócala, aprueba o rechaza, y luego continúa en el chat —todo desde el panel móvil, estés donde estés.",
+      "point1": "Notificación push al aprobar o completar",
+      "point2": "Un toque para aprobar o rechazar",
+      "point3": "Continúa con una instrucción de chat y guarda el móvil",
+      "notificationLabel": "Notificación push móvil para la aprobación de un agente",
+      "resumeLabel": "Aprobando y continuando desde el panel móvil"
+    },
+    "brain": {
+      "sectionTitle": "Modelos baratos para lo fácil. Los caros solo cuando es difícil.",
+      "sectionSubtitle": "Etiqueta una tarea como fácil, media o difícil y la malla aplica un preset acorde: proveedor, modelo y presupuesto de razonamiento. El trabajo rutinario corre en un modelo barato y rápido; solo las tareas difíciles recurren al caro. Gastas tokens donde importan.",
+      "point1": "Presets por dificultad: fácil / media / difícil",
+      "point2": "Cada preset elige proveedor, modelo y nivel de razonamiento",
+      "point3": "Ahorra tokens sin ajustar cada tarea a mano"
+    },
+    "magi": {
+      "sectionTitle": "MAGI: Multi-Agent Ground-truth Insight",
+      "sectionSubtitle": "Lanza la misma consulta de solo lectura a un panel de agentes independientes en distintas máquinas y modelos, y luego sintetiza dónde coinciden y dónde divergen —para que la alucinación segura de un modelo no se cuele como respuesta.",
+      "point1": "La misma pregunta, réplicas independientes de máquina × modelo",
+      "point2": "Muestra acuerdo, desacuerdo y evidencia única",
+      "point3": "Detecta al agente que se equivoca con seguridad",
+      "origin": "La verificación cruzada multimodelo estaba en Repo Mesh antes de que se pusiera de moda."
     }
   },
   "interactivePrompt": {

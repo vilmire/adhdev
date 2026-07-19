@@ -2510,7 +2510,7 @@
     "hero": {
       "badge": "The multi-vendor, multi-machine agent control plane",
       "title": "Run every local coding agent from the web — in parallel.",
-      "subtitle": "Drive any CLI agent — Claude Code, Codex, Gemini — from your browser, then scale: orchestrate multiple agents across isolated git worktrees on your own machines and let the Refinery land finished work safely on main <em>unattended</em> — your repo's own gates, patch-equivalence checks, fast-forward only, no force-push. You talk to one coordinator; it runs the parallel agents asynchronously, so there are no sessions to babysit. P2P — code stays on your machine.",
+      "subtitle": "Drive any CLI agent — Claude Code, Codex, Gemini — from your browser, then scale: orchestrate multiple agents across isolated git worktrees on your own machines and let the Refinery land finished work safely on main, <em>unattended</em>. You talk to one coordinator; it runs the parallel agents asynchronously, so there are no sessions to babysit. P2P — code stays on your machine.",
       "selectOs": "Select OS",
       "osUnix": "macOS / Linux",
       "osWindows": "Windows",
@@ -2646,7 +2646,7 @@
         },
         "pro": {
           "period": "/mo",
-          "tagline": "Run agents across a couple of machines, with the reliability paid plans need.",
+          "tagline": "Two machines, more concurrent sessions, and TURN for restrictive networks — plus Repo Mesh to orchestrate agents across both.",
           "cta": "Start 7-day Pro trial",
           "features": {
             "machines": "2 machines — run agents on both",
@@ -2714,6 +2714,38 @@
       "privacy": "Privacy",
       "contact": "Contact",
       "copyright": "© {{year}} RacoLab. All rights reserved."
+    },
+    "imagePaste": {
+      "sectionTitle": "Paste a screenshot. A terminal agent on another machine sees it instantly.",
+      "sectionSubtitle": "Grab a screenshot on your laptop or phone, paste it into the chat, and a CLI agent running in a terminal on a different machine gets it as visual context — no file juggling, no SSH. Paste, drag & drop, or upload up to 5 images (10MB each) at once.",
+      "point1": "Paste from clipboard, drag & drop, or upload",
+      "point2": "Up to 5 images, 10MB each",
+      "point3": "Lands in a PTY terminal agent on any of your machines",
+      "demoCaption": "Pasting a screenshot into a remote terminal agent"
+    },
+    "mobile": {
+      "sectionTitle": "Leave your desk. Your agents keep going.",
+      "sectionSubtitle": "A push notification hits your phone when an agent needs approval or finishes. Tap it, approve or reject, then follow up in chat — all from the mobile dashboard, wherever you are.",
+      "point1": "Push notification on approval or completion",
+      "point2": "One tap to approve or reject",
+      "point3": "Follow up with a chat instruction, then put your phone away",
+      "notificationLabel": "Mobile push notification for an agent approval",
+      "resumeLabel": "Approving and following up from the mobile dashboard"
+    },
+    "brain": {
+      "sectionTitle": "Cheap models for easy work. Expensive ones only when it's hard.",
+      "sectionSubtitle": "Tag a task easy, medium, or difficult and the mesh applies a matching preset — provider, model, and thinking budget. Routine work runs on a cheap fast model; only the hard tasks reach for the expensive one. You spend tokens where they matter.",
+      "point1": "Difficulty-based presets: easy / medium / difficult",
+      "point2": "Each preset picks provider, model, and thinking level",
+      "point3": "Save tokens without hand-tuning every task"
+    },
+    "magi": {
+      "sectionTitle": "MAGI: Multi-Agent Ground-truth Insight",
+      "sectionSubtitle": "Fan the same read-only question out to a panel of independent agents across different machines and models, then synthesize where they agree and where they diverge — so one model's confident hallucination doesn't slip through as the answer.",
+      "point1": "Same question, independent machine × model replicas",
+      "point2": "Surfaces agreement, disagreement, and unique evidence",
+      "point3": "Catches the one agent that's confidently wrong",
+      "origin": "Multi-model cross-checking was built into Repo Mesh before it became a trend."
     }
   },
   "interactivePrompt": {

@@ -89,6 +89,15 @@ export function initI18n() {
         interpolation: { escapeValue: false },
         // Empty catalog strings should fall back to `en`, not render "".
         returnEmptyString: false,
+        react: {
+            // <Trans> renders these HTML tags directly instead of leaking the
+            // literal markup. react-i18next's default set is
+            // ['br','strong','i','p']; we add 'em' so <em> emphasis in any
+            // translated string (e.g. the landing hero subtitle) renders as
+            // real emphasis without each call-site having to pass
+            // `components={{ em: <em/> }}`.
+            transKeepBasicHtmlNodesFor: ['br', 'strong', 'i', 'p', 'em'],
+        },
     })
 
     applyDocumentLanguage(lng)
