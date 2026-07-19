@@ -2505,7 +2505,8 @@
       "docs": "Documentación",
       "getStarted": "Comenzar",
       "toggleMenu": "Alternar menú",
-      "mainNavigation": "Navegación principal"
+      "mainNavigation": "Navegación principal",
+      "magi": "MAGI"
     },
     "hero": {
       "badge": "El plano de control de agentes multiproveedor y multimáquina",

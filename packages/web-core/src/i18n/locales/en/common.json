@@ -2505,7 +2505,8 @@
       "docs": "Docs",
       "getStarted": "Get started",
       "toggleMenu": "Toggle menu",
-      "mainNavigation": "Main navigation"
+      "mainNavigation": "Main navigation",
+      "magi": "MAGI"
     },
     "hero": {
       "badge": "The multi-vendor, multi-machine agent control plane",

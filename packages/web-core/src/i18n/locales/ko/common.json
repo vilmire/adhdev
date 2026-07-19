@@ -2505,7 +2505,8 @@
       "docs": "문서",
       "getStarted": "시작하기",
       "toggleMenu": "메뉴 토글",
-      "mainNavigation": "주 내비게이션"
+      "mainNavigation": "주 내비게이션",
+      "magi": "MAGI"
     },
     "hero": {
       "badge": "멀티 벤더, 멀티 머신 에이전트 컨트롤 플레인",

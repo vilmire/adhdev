@@ -2505,7 +2505,8 @@
       "docs": "文档",
       "getStarted": "开始使用",
       "toggleMenu": "切换菜单",
-      "mainNavigation": "主导航"
+      "mainNavigation": "主导航",
+      "magi": "MAGI"
     },
     "hero": {
       "badge": "多厂商、多机器的智能体控制平面",

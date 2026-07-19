@@ -2505,7 +2505,8 @@
       "docs": "ドキュメント",
       "getStarted": "始める",
       "toggleMenu": "メニューを切り替え",
-      "mainNavigation": "メインナビゲーション"
+      "mainNavigation": "メインナビゲーション",
+      "magi": "MAGI"
     },
     "hero": {
       "badge": "マルチベンダー・マルチマシン対応のエージェント制御プレーン",
