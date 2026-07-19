@@ -15,16 +15,34 @@
  * without depending on a real browser environment. `en` is also the fallback,
  * so any locale would resolve the same values, but pinning keeps output stable.
  */
-import { DEFAULT_LANGUAGE, initI18n } from '../src/i18n/config'
+import { initI18n } from '../src/i18n/config'
 
-// initI18n() reads localStorage('lang') first; provide a minimal in-memory stub
-// that returns `en` so the boot is deterministic and browser-free.
-if (typeof (globalThis as { localStorage?: Storage }).localStorage === 'undefined') {
-    ;(globalThis as { localStorage?: Partial<Storage> }).localStorage = {
-        getItem: (key: string) => (key === 'lang' ? DEFAULT_LANGUAGE : null),
-        setItem: () => {},
-        removeItem: () => {},
-    }
+// initI18n() → resolveInitialLanguage() reads localStorage('lang') first, then
+// falls back to navigator.language. Under vitest's node environment `navigator`
+// is defined (e.g. `ko-KR` on a Korean host), so without a pinned stored language
+// the harness would boot a non-`en` catalog and every guard test that asserts the
+// English source-of-truth copy would fail nondeterministically per host locale.
+//
+// We must pin the language to `en` unconditionally. The previous guard only
+// installed the stub when `localStorage` was `undefined`, but vitest v4 already
+// exposes a `localStorage` object whose `getItem('lang')` returns `undefined`, so
+// the guard never fired and `navigator.language` leaked through. Install an
+// in-memory stub that always returns `en` for the language key regardless of any
+// pre-existing `localStorage`, so the boot is deterministic and browser/host-free.
+//
+// The stub uses the literal `'lang'`/`'en'` values on purpose: importing the
+// LANG_STORAGE_KEY / DEFAULT_LANGUAGE constants and referencing them inside the
+// getItem closure hits a vite SSR live-binding ordering issue (the binding reads
+// back `undefined` when the closure runs during setup), which silently defeats
+// the pin. These literals match src/i18n/languages.ts (DEFAULT_LANGUAGE='en') and
+// src/i18n/config.ts (LANG_STORAGE_KEY='lang').
+//
+// This pins ONLY the test-harness locale to the `en` source of truth; it does not
+// touch the production default locale.
+;(globalThis as { localStorage?: Partial<Storage> }).localStorage = {
+    getItem: (key: string) => (key === 'lang' ? 'en' : null),
+    setItem: () => {},
+    removeItem: () => {},
 }
 
 initI18n()
