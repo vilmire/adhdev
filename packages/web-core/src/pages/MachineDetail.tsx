@@ -389,25 +389,25 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         setRecentLaunchWorkspaceKey(selectedKey)
         setRecentLaunchConfirm({
             title: session.kind === 'ide'
-                ? getMachineLaunchConfirmTitle('restart-ide', session.label)
+                ? getMachineLaunchConfirmTitle(t, 'restart-ide', session.label)
                 : session.providerSessionId
-                    ? getRecentHistoryResumeConfirmTitle(session.label)
-                    : getMachineLaunchConfirmTitle('start-fresh', session.label),
+                    ? getRecentHistoryResumeConfirmTitle(t, session.label)
+                    : getMachineLaunchConfirmTitle(t, 'start-fresh', session.label),
             description: session.kind === 'ide'
-                ? getMachineLaunchConfirmDescription('restart-ide')
+                ? getMachineLaunchConfirmDescription(t, 'restart-ide')
                 : session.providerSessionId
-                    ? getRecentHistoryResumeConfirmDescription()
-                    : getMachineLaunchConfirmDescription('start-fresh'),
+                    ? getRecentHistoryResumeConfirmDescription(t)
+                    : getMachineLaunchConfirmDescription(t, 'start-fresh'),
             confirmLabel: session.kind === 'ide'
-                ? getMachineLaunchConfirmLabel('restart-ide')
+                ? getMachineLaunchConfirmLabel(t, 'restart-ide')
                 : session.providerSessionId
-                    ? getCliLaunchPrimaryActionLabel(true)
-                    : getMachineLaunchConfirmLabel('start-fresh'),
+                    ? getCliLaunchPrimaryActionLabel(t, true)
+                    : getMachineLaunchConfirmLabel(t, 'start-fresh'),
             busyLabel: session.kind === 'ide'
-                ? getMachineLaunchBusyLabel('restart-ide')
+                ? getMachineLaunchBusyLabel(t, 'restart-ide')
                 : session.providerSessionId
-                    ? getCliLaunchBusyLabel(true)
-                    : getMachineLaunchBusyLabel('start-fresh'),
+                    ? getCliLaunchBusyLabel(t, true)
+                    : getMachineLaunchBusyLabel(t, 'start-fresh'),
             workspaceOptions: options,
             details: [
                 { label: 'Mode', value: session.kind.toUpperCase() },
