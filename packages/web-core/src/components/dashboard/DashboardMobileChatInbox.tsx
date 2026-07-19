@@ -11,10 +11,6 @@ import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, bu
 import { eventManager } from '../../managers/EventManager'
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
 import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands'
-import {
-    DASHBOARD_NEW_SESSION_DESCRIPTION,
-    DASHBOARD_NEW_SESSION_LABEL,
-} from './dashboard-session-cta'
 import GitStatusPill from '../git/GitStatusPill'
 
 type MobileInboxDebugBundleCollector = (conversation: ActiveConversation) => void | Promise<void>
@@ -659,18 +655,18 @@ export default function DashboardMobileChatInbox({
                                         </div>
                                     }
                                     title={t('mobileInbox.noConversations')}
-                                    subtitle={DASHBOARD_NEW_SESSION_DESCRIPTION}
+                                    subtitle={t('paneGroup.newSessionDescription')}
                                 >
                                     {onOpenNewSession && (
                                         <button
                                             type="button"
                                             className="btn btn-secondary btn-sm inline-flex items-center gap-2 mt-4"
                                             onClick={onOpenNewSession}
-                                            aria-label={DASHBOARD_NEW_SESSION_LABEL}
-                                            title={DASHBOARD_NEW_SESSION_LABEL}
+                                            aria-label={t('paneGroup.newSession')}
+                                            title={t('paneGroup.newSession')}
                                         >
                                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                                            <span>{DASHBOARD_NEW_SESSION_LABEL}</span>
+                                            <span>{t('paneGroup.newSession')}</span>
                                         </button>
                                     )}
                                 </MobileEmptyHero>
@@ -711,8 +707,8 @@ export default function DashboardMobileChatInbox({
                     className="fixed right-5 bottom-[calc(env(safe-area-inset-bottom,0px)+64px+20px)] z-50 flex items-center justify-center w-14 h-14 rounded-full hover:scale-105 active:scale-95 transition-transform"
                     style={{ background: 'var(--accent-primary)', color: 'var(--accent-on-primary)', boxShadow: 'var(--shadow-md)' }}
                     onClick={onOpenNewSession}
-                    aria-label={DASHBOARD_NEW_SESSION_LABEL}
-                    title={DASHBOARD_NEW_SESSION_LABEL}
+                    aria-label={t('paneGroup.newSession')}
+                    title={t('paneGroup.newSession')}
                 >
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                 </button>
