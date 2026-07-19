@@ -783,10 +783,14 @@ function getEdgePath(args: EdgeProps<FlowEdge>): [string, number, number] {
         targetPosition: args.targetPosition,
     }
     const graphEdge = args.data?.graphEdge
+    if (!graphEdge) {
+        const fallback = getBezierPath(pathParams)
+        return [fallback[0], fallback[1], fallback[2]]
+    }
 
     let result: ReturnType<typeof getBezierPath>
-    if (graphEdge?.type === 'parentBranch') result = getStraightPath(pathParams)
-    else if (graphEdge?.type === 'worktreeLink' || graphEdge?.type === 'submoduleLink' || graphEdge?.type === 'cloneLink') result = getSmoothStepPath(pathParams)
+    if (graphEdge.type === 'parentBranch') result = getStraightPath(pathParams)
+    else if (graphEdge.type === 'worktreeLink' || graphEdge.type === 'submoduleLink' || graphEdge.type === 'cloneLink') result = getSmoothStepPath(pathParams)
     else result = getBezierPath(pathParams)
     return [result[0], result[1], result[2]]
 }
