@@ -207,7 +207,7 @@
         "restoreAll": "全部恢复",
         "hide": "隐藏",
         "hideTitle": "隐藏 {{title}}？",
-        “hideDescription”: “这将在你登录的所有地方的收件箱中隐藏该对话。你可以从”隐藏的标签页”中恢复它。”,
+        "hideDescription": "这将在你登录的所有地方的收件箱中隐藏该对话。你可以从“隐藏的标签页”中恢复它。",
         "reconnectingItem": "正在重新连接…",
         "connectingItem": "正在连接…",
         "actionNeeded": "需要操作",
