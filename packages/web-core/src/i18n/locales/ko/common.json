@@ -207,7 +207,7 @@
         "restoreAll": "모두 복원",
         "hide": "숨기기",
         "hideTitle": "{{title}}을(를) 숨길까요?",
-        "hideDescription": "채팅이 로컬에서만 접힙니다. 숨긴 탭에서 다시 복원할 수 있습니다.",
+        "hideDescription": "이 대화가 로그인된 모든 곳의 받은편지함에서 숨겨집니다. 숨긴 탭에서 다시 복원할 수 있습니다.",
         "reconnectingItem": "재연결 중…",
         "connectingItem": "연결 중…",
         "actionNeeded": "조치 필요",

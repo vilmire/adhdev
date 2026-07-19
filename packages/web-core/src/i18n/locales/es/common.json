@@ -207,7 +207,7 @@
         "restoreAll": "Restaurar todo",
         "hide": "Ocultar",
         "hideTitle": "¿Ocultar {{title}}?",
-        "hideDescription": "Esto solo contrae el chat localmente. Puedes restaurarlo desde Pestañas ocultas.",
+        "hideDescription": "Esto oculta la conversación de tu bandeja de entrada en todos los lugares donde has iniciado sesión. Puedes restaurarla desde Pestañas ocultas.",
         "reconnectingItem": "Reconectando…",
         "connectingItem": "Conectando…",
         "actionNeeded": "Se requiere acción",

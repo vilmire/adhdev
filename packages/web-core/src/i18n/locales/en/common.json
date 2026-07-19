@@ -207,7 +207,7 @@
         "restoreAll": "Restore all",
         "hide": "Hide",
         "hideTitle": "Hide {{title}}?",
-        "hideDescription": "This only collapses the chat locally. You can restore it from Hidden tabs.",
+        "hideDescription": "This hides the conversation from your inbox everywhere you're signed in. You can restore it from Hidden tabs.",
         "reconnectingItem": "Reconnecting…",
         "connectingItem": "Connecting…",
         "actionNeeded": "Action needed",

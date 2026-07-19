@@ -207,7 +207,7 @@
         "restoreAll": "すべて復元",
         "hide": "非表示",
         "hideTitle": "{{title}} を非表示にしますか？",
-        "hideDescription": "これはチャットをローカルで折りたたむだけです。「非表示のタブ」から復元できます。",
+        "hideDescription": "ログイン中のすべての場所の受信トレイからこの会話が非表示になります。「非表示のタブ」から復元できます。",
         "reconnectingItem": "再接続しています…",
         "connectingItem": "接続しています…",
         "actionNeeded": "操作が必要です",
