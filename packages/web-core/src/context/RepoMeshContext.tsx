@@ -76,6 +76,12 @@ export interface RepoMeshFeatures {
      * keeps the original fast poll.
      */
     meshStatePushRefresh?: boolean
+    /**
+     * Maximum number of meshes the user may create. When set, the mesh list
+     * disables "Create Mesh" once this count is reached and shows an upgrade nudge.
+     * Omit (or -1) for unlimited. Cloud sets this to 1 on the free plan.
+     */
+    maxMeshes?: number
 }
 
 // ─── Context value ───────────────────────────────────────────────

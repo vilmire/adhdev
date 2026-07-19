@@ -587,7 +587,9 @@
             "createFirst": "첫 메시 생성",
             "noRepoIdentity": "리포 식별자 없음",
             "repoMeshFallback": "Repo Mesh",
-            "nodesSuffix": "노드"
+            "nodesSuffix": "노드",
+            "meshLimitReached": "Free 플랜에는 메시 {{max}}개가 포함됩니다. 더 많이 사용하려면 Pro로 업그레이드하세요.",
+            "meshLimitBanner": "Free 플랜에는 Repo Mesh 1개가 포함됩니다. 더 만들려면 Pro로 업그레이드하세요."
         },
         "detail": {
             "back": "← 뒤로",
@@ -2647,7 +2649,8 @@
                         "p2p": "P2P 채팅, 명령어, 스크린샷, 원격 입력",
                         "providers": "모든 프로바이더 — CLI, IDE, ACP 에이전트",
                         "push": "승인 및 완료 푸시 알림",
-                        "share": "공유 세션 링크 하나"
+                        "share": "공유 세션 링크 하나",
+                        "mesh": "Repo Mesh 1개"
                     }
                 },
                 "pro": {

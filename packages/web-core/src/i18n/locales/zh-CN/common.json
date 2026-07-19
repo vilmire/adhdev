@@ -587,7 +587,9 @@
             "createFirst": "创建第一个网格",
             "noRepoIdentity": "无仓库标识",
             "repoMeshFallback": "Repo Mesh",
-            "nodesSuffix": "个节点"
+            "nodesSuffix": "个节点",
+            "meshLimitReached": "Free 计划包含 {{max}} 个 Repo Mesh。升级到 Pro 可创建更多。",
+            "meshLimitBanner": "Free 计划包含 1 个 Repo Mesh。如需创建更多，请升级到 Pro。"
         },
         "detail": {
             "back": "← 返回",
@@ -2647,7 +2649,8 @@
                         "p2p": "P2P 聊天、命令、截图、远程输入",
                         "providers": "全部提供方 — CLI、IDE 和 ACP 代理",
                         "push": "审批和完成的推送通知",
-                        "share": "一个共享会话链接"
+                        "share": "一个共享会话链接",
+                        "mesh": "1 个 Repo Mesh"
                     }
                 },
                 "pro": {

@@ -67,14 +67,20 @@ export function MeshListView({
     onCancelCreate,
 }: Props) {
     const { t } = useTranslation('common')
+    const atMeshLimit = features.maxMeshes != null && meshes.length >= features.maxMeshes
     return (
         <AppPage
             icon={<IconMesh />}
             title={t('repoMesh.list.title')}
             subtitle={t('repoMesh.list.count', { count: meshes.length })}
             widthClassName="max-w-5xl"
-            actions={<button className="btn btn-primary btn-sm" onClick={onToggleCreate}>{t('repoMesh.list.createMesh')}</button>}
+            actions={<button className="btn btn-primary btn-sm" onClick={onToggleCreate} disabled={atMeshLimit} title={atMeshLimit ? t('repoMesh.list.meshLimitReached', { max: features.maxMeshes }) : undefined}>{t('repoMesh.list.createMesh')}</button>}
         >
+            {atMeshLimit && (
+                <AlertBanner variant="info" className="mb-4">
+                    {t('repoMesh.list.meshLimitBanner', { max: features.maxMeshes })}
+                </AlertBanner>
+            )}
             {error && <AlertBanner variant="error" onDismiss={onDismissError} className="mb-4">{error}</AlertBanner>}
 
             {showCreate && (

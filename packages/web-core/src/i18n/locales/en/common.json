@@ -587,7 +587,9 @@
             "createFirst": "Create First Mesh",
             "noRepoIdentity": "No repo identity",
             "repoMeshFallback": "Repo Mesh",
-            "nodesSuffix": "node(s)"
+            "nodesSuffix": "node(s)",
+            "meshLimitReached": "Free plan includes {{max}} mesh. Upgrade to Pro for unlimited meshes.",
+            "meshLimitBanner": "Free plan includes 1 Repo Mesh. Upgrade to Pro to create more."
         },
         "detail": {
             "back": "← Back",
@@ -2647,7 +2649,8 @@
                         "p2p": "P2P chat, commands, screenshots, remote input",
                         "providers": "Every provider — CLI, IDE, and ACP agents",
                         "push": "Push notifications for approvals & completions",
-                        "share": "One shared session link"
+                        "share": "One shared session link",
+                        "mesh": "1 Repo Mesh"
                     }
                 },
                 "pro": {

@@ -574,7 +574,7 @@ export default function RepoMesh() {
                 error={error}
                 onDismissError={() => setError(null)}
                 daemons={daemons}
-                features={{ createDaemonPicker: features.createDaemonPicker }}
+                features={{ createDaemonPicker: features.createDaemonPicker, maxMeshes: features.maxMeshes }}
                 showCreate={showCreate}
                 onToggleCreate={() => setShowCreate(!showCreate)}
                 createName={createName}

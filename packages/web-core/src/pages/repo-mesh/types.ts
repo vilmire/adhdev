@@ -170,6 +170,8 @@ export function readMeshPolicy(mesh: MeshEntry | null): Record<string, any> {
 // Feature flags shape used by MeshListView
 export interface MeshListViewFeatures {
     createDaemonPicker: boolean
+    /** When set, cap mesh creation at this count and show an upgrade nudge. */
+    maxMeshes?: number
 }
 
 // Feature flags shape used by MeshNodeList

@@ -587,7 +587,9 @@
             "createFirst": "Crear la primera malla",
             "noRepoIdentity": "Sin identidad de repositorio",
             "repoMeshFallback": "Repo Mesh",
-            "nodesSuffix": "nodo(s)"
+            "nodesSuffix": "nodo(s)",
+            "meshLimitReached": "El plan Free incluye {{max}} Repo Mesh. Actualiza a Pro para más.",
+            "meshLimitBanner": "El plan Free incluye 1 Repo Mesh. Actualiza a Pro para crear más."
         },
         "detail": {
             "back": "← Atrás",
@@ -2647,7 +2649,8 @@
                         "p2p": "Chat, comandos, capturas y entrada remota por P2P",
                         "providers": "Todos los proveedores: agentes CLI, IDE y ACP",
                         "push": "Notificaciones push para aprobaciones y finalizaciones",
-                        "share": "Un enlace de sesión compartida"
+                        "share": "Un enlace de sesión compartida",
+                        "mesh": "1 Repo Mesh"
                     }
                 },
                 "pro": {

@@ -587,7 +587,9 @@
             "createFirst": "最初のメッシュを作成",
             "noRepoIdentity": "リポジトリ識別子なし",
             "repoMeshFallback": "Repo Mesh",
-            "nodesSuffix": "ノード"
+            "nodesSuffix": "ノード",
+            "meshLimitReached": "Free プランには {{max}} つの Repo Mesh が含まれます。Pro にアップグレードすると制限なく使えます。",
+            "meshLimitBanner": "Free プランでは Repo Mesh を 1 つ利用できます。追加作成は Pro にアップグレードしてください。"
         },
         "detail": {
             "back": "← 戻る",
@@ -2647,7 +2649,8 @@
                         "p2p": "P2P チャット、コマンド、スクリーンショット、リモート入力",
                         "providers": "すべてのプロバイダー — CLI、IDE、ACP エージェント",
                         "push": "承認・完了のプッシュ通知",
-                        "share": "共有セッションリンク 1 つ"
+                        "share": "共有セッションリンク 1 つ",
+                        "mesh": "Repo Mesh 1 つ"
                     }
                 },
                 "pro": {
