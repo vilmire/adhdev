@@ -127,6 +127,14 @@ export class SpecCliAdapter implements CliAdapter {
      *  MCP config), so this routing keeps the dashboard honest until
      *  hermes ships a runtime MCP override. */
     private spawnedEnv: Record<string, string> = {};
+    /** Wall clock at the moment an approval modal was last resolved (auto-approve,
+     *  dashboard, or mesh_approve) via a successful button press. Powers
+     *  isApprovalRecentlyResolved() — the second suppression signal the mesh event
+     *  forwarder uses to drop a duplicate agent:waiting_approval re-emitted across
+     *  the approval↔busy TUI flap window (AUTOAPPROVE-FLAP). Mirrors the
+     *  cli-state-engine's lastApprovalResolvedAt for the spec-driven adapter path
+     *  (claude-cli specs/4.0.json), which previously stubbed the method to false. */
+    private lastApprovalResolvedAt = 0;
 
     constructor(
         specPath: string,
@@ -312,6 +320,11 @@ export class SpecCliAdapter implements CliAdapter {
     // the char count still looks safe.
     private static readonly TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
     private static readonly TERMINAL_SNAPSHOT_ABSOLUTE_MAX_BYTES = 64 * 1024;
+    /** Window during which isApprovalRecentlyResolved() reports a just-resolved
+     *  approval. Matches CliProviderInstance.APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS
+     *  (8000) — the same auto-approve suppression window signal1 uses — so a modal
+     *  re-emitted within the approval↔busy flap is suppressed by signal2 too. */
+    private static readonly APPROVAL_RESOLVED_COOLDOWN_MS = 8000;
 
     /**
      * MESH-READ-TERMINAL (feature 2: RAW terminal read). Least-privilege read
@@ -455,7 +468,18 @@ export class SpecCliAdapter implements CliAdapter {
         // clickModalButton returns whether the FSM actually found a button for `target`
         // and dispatched its confirm keys — surfaced so mesh_approve can distinguish a
         // real press from a silent miss (the exact false-success the mis-map produced).
-        return this.driver.clickModalButton(target);
+        const pressed = this.driver.clickModalButton(target);
+        // AUTOAPPROVE-FLAP (signal2): stamp the resolve time ONLY on a real press of an
+        // approval-class modal. This is the resolution path for auto-approve, dashboard,
+        // and mesh_approve alike, so isApprovalRecentlyResolved() then suppresses a
+        // duplicate agent:waiting_approval re-emitted across the approval↔busy flap.
+        // Gate on the authoritative FSM status (approval) — a picker/confirm press must
+        // NOT arm the approval cooldown. A silent miss (pressed=false) leaves the modal
+        // unresolved, so it must not stamp either.
+        if (pressed && this.latestState?.status === 'approval') {
+            this.lastApprovalResolvedAt = Date.now();
+        }
+        return pressed;
     }
 
     async resolveAction(data: unknown): Promise<void> {
@@ -494,7 +518,10 @@ export class SpecCliAdapter implements CliAdapter {
         this.statusCallback?.();
     }
 
-    isApprovalRecentlyResolved(): boolean { return false; }
+    isApprovalRecentlyResolved(): boolean {
+        return !!(this.lastApprovalResolvedAt
+            && (Date.now() - this.lastApprovalResolvedAt) < SpecCliAdapter.APPROVAL_RESOLVED_COOLDOWN_MS);
+    }
     clearHistory(): void { /* no transcript buffer yet */ }
     updateRuntimeSettings(): void { /* no runtime settings in spec model yet */ }
     setServerConn(): void { /* server conn unused by SpecDriver */ }
