@@ -2725,7 +2725,10 @@
       "point1": "从剪贴板粘贴、拖放，或上传",
       "point2": "最多 5 张图片，每张 10MB",
       "point3": "送达你任意机器上的 PTY 终端智能体",
-      "demoCaption": "把截图粘贴到远程终端智能体"
+      "demoCaption": "把截图粘贴到远程终端智能体",
+      "step1Label": "粘贴图片,输入问题",
+      "step2Label": "发送 —— 智能体立即处理",
+      "step3Label": "看到图片并给出回答"
     },
     "mobile": {
       "sectionTitle": "离开工位，智能体照样继续。",

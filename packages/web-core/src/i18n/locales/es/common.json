@@ -2725,7 +2725,10 @@
       "point1": "Pega desde el portapapeles, arrastra y suelta, o sube",
       "point2": "Hasta 5 imágenes, 10 MB cada una",
       "point3": "Llega a un agente de terminal PTY en cualquiera de tus máquinas",
-      "demoCaption": "Pegando una captura en un agente de terminal remoto"
+      "demoCaption": "Pegando una captura en un agente de terminal remoto",
+      "step1Label": "Pega la imagen y escribe una pregunta",
+      "step2Label": "Enviado — el agente lo procesa",
+      "step3Label": "Vio la imagen y respondió"
     },
     "mobile": {
       "sectionTitle": "Deja tu escritorio. Tus agentes siguen trabajando.",

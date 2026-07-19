@@ -2725,7 +2725,10 @@
       "point1": "Paste from clipboard, drag & drop, or upload",
       "point2": "Up to 5 images, 10MB each",
       "point3": "Lands in a PTY terminal agent on any of your machines",
-      "demoCaption": "Pasting a screenshot into a remote terminal agent"
+      "demoCaption": "Pasting a screenshot into a remote terminal agent",
+      "step1Label": "Paste the image, type a question",
+      "step2Label": "Sent — the agent picks it up",
+      "step3Label": "It saw the image and answered"
     },
     "mobile": {
       "sectionTitle": "Leave your desk. Your agents keep going.",
