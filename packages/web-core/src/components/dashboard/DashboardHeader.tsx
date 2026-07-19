@@ -455,7 +455,7 @@ export default function DashboardHeader({
                 )}
                 <div className="dashboard-header-inbox" ref={inboxRef}>
                     <div
-                        className={`dashboard-header-hidden${isHiddenDropTarget ? ' is-drop-target' : ''}${hiddenSpawnAnim ? ' hidden-spawn-flash' : ''}`}
+                        className={`dashboard-header-hidden${isHiddenDropTarget ? ' is-drop-target' : ''}${hiddenSpawnAnim ? ' hidden-spawn-flash' : ''}${(hiddenConversations ?? []).some(c => c.status === 'generating') ? ' hidden-generating-spin' : ''}`}
                         onAnimationEnd={handleHiddenSpawnAnimEnd}
                         ref={hiddenRef}
                         onDragEnter={event => {
