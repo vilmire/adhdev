@@ -1250,11 +1250,11 @@
                 "freeFeature1": "머신 1개",
                 "freeFeature2": "실시간 채팅 릴레이",
                 "freeFeature3": "로컬 에이전트 웹 제어",
-                "freeFeature4": "커뮤니티 지원",
+                "freeFeature4": "Repo Mesh 1개",
                 "proFeature1": "머신 2개",
                 "proFeature2": "AI 에이전트 무제한",
                 "proFeature3": "P2P 원격 보기",
-                "proFeature4": "7일 무료 체험",
+                "proFeature4": "Repo Mesh 무제한",
                 "ultraFeature1": "머신 5개 — 고정 가격, 좌석당 아님",
                 "ultraFeature2": "Pro의 모든 것 포함",
                 "ultraFeature3": "더 높은 동시성 및 사용 한도",
@@ -2662,7 +2662,7 @@
                         "p2p": "더 많은 동시 P2P 세션",
                         "push": "무제한 푸시 알림",
                         "turn": "제한적 네트워크를 위한 TURN 릴레이",
-                        "mesh": "Repo Mesh — 머신 간 에이전트 오케스트레이션",
+                        "mesh": "Repo Mesh 무제한",
                         "share": "더 많은 공유 세션"
                     }
                 },

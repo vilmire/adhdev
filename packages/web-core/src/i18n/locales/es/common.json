@@ -1250,11 +1250,11 @@
                 "freeFeature1": "1 máquina",
                 "freeFeature2": "Relé de chat en tiempo real",
                 "freeFeature3": "Control web de tus agentes locales",
-                "freeFeature4": "Soporte de la comunidad",
+                "freeFeature4": "1 Repo Mesh",
                 "proFeature1": "2 máquinas",
                 "proFeature2": "Agentes de IA ilimitados",
                 "proFeature3": "Vista remota P2P",
-                "proFeature4": "Prueba gratuita de 7 días",
+                "proFeature4": "Repo Meshes ilimitados",
                 "ultraFeature1": "5 máquinas — tarifa plana, no por puesto",
                 "ultraFeature2": "Todo lo de Pro",
                 "ultraFeature3": "Mayor concurrencia y límites de uso",
@@ -2662,7 +2662,7 @@
                         "p2p": "Más sesiones P2P simultáneas",
                         "push": "Notificaciones push ilimitadas",
                         "turn": "Relay TURN para redes restrictivas",
-                        "mesh": "Repo Mesh: orquesta agentes entre máquinas",
+                        "mesh": "Repo Meshes ilimitados",
                         "share": "Más sesiones compartidas"
                     }
                 },

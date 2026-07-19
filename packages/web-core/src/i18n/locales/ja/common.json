@@ -1250,11 +1250,11 @@
                 "freeFeature1": "1 マシン",
                 "freeFeature2": "リアルタイムチャットリレー",
                 "freeFeature3": "ローカルエージェントの Web 操作",
-                "freeFeature4": "コミュニティサポート",
+                "freeFeature4": "Repo Mesh 1 つ",
                 "proFeature1": "2 マシン",
                 "proFeature2": "AI エージェント無制限",
                 "proFeature3": "P2P リモートビュー",
-                "proFeature4": "7 日間無料トライアル",
+                "proFeature4": "Repo Mesh 無制限",
                 "ultraFeature1": "5 マシン — シート単位ではなく定額",
                 "ultraFeature2": "Pro のすべての機能",
                 "ultraFeature3": "より高い同時実行数と使用上限",
@@ -2662,7 +2662,7 @@
                         "p2p": "同時 P2P セッション数の増加",
                         "push": "無制限のプッシュ通知",
                         "turn": "制限の厳しいネットワーク向けの TURN リレー",
-                        "mesh": "Repo Mesh — マシンをまたいでエージェントを統括",
+                        "mesh": "Repo Mesh 無制限",
                         "share": "共有セッション数の増加"
                     }
                 },

@@ -1250,11 +1250,11 @@
                 "freeFeature1": "1 台机器",
                 "freeFeature2": "实时聊天转发",
                 "freeFeature3": "本地代理的网页控制",
-                "freeFeature4": "社区支持",
+                "freeFeature4": "1 个 Repo Mesh",
                 "proFeature1": "2 台机器",
                 "proFeature2": "无限 AI 代理",
                 "proFeature3": "P2P 远程查看",
-                "proFeature4": "7 天免费试用",
+                "proFeature4": "Repo Mesh 无限制",
                 "ultraFeature1": "5 台机器 — 统一定价，非按席位",
                 "ultraFeature2": "包含 Pro 的全部功能",
                 "ultraFeature3": "更高的并发和用量上限",
@@ -2662,7 +2662,7 @@
                         "p2p": "更多并发 P2P 会话",
                         "push": "无限推送通知",
                         "turn": "为受限网络提供 TURN 中继",
-                        "mesh": "Repo Mesh — 跨机器编排代理",
+                        "mesh": "Repo Mesh 无限制",
                         "share": "更多共享会话"
                     }
                 },
