@@ -1277,18 +1277,25 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // indexed status column, so an idle mesh costs one cheap query per tick.
     // claimNextQueueTask is atomic, so racing the event-driven path can only have
     // one winner; double-claiming is impossible.
-    for (const mesh of listMeshes()) {
-        const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
-        if (!daemonHostsMesh(mesh, selfIds)) continue;
-        if (store) {
+    // The mesh work-queue is SQLite-only (claimNextQueueTask/countQueueStatus all go
+    // through MeshRuntimeStore — there is no JSONL fallback for the QUEUE, only for
+    // pending EVENTS drained in PHASE 1/2). So when SQLite is unavailable (store
+    // undefined, e.g. better-sqlite3 native load failure on a clean install),
+    // triggerMeshQueue can do no useful work — it would only re-throw inside the
+    // store and emit the WARN below every tick × mesh count, flooding the logs. Skip
+    // the phase entirely in that case; the JSONL event-delivery path is unaffected.
+    if (store) {
+        for (const mesh of listMeshes()) {
+            const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+            if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
                 if (store.pendingQueueTaskCount(mesh.id) === 0) continue;
             } catch { /* fall through and let triggerMeshQueue decide */ }
-        }
-        try {
-            await triggerMeshQueue(components, mesh.id);
-        } catch (e: any) {
-            LOG.warn('MeshReconcile', `Pending-claim recovery trigger failed for mesh ${mesh.id}: ${e?.message || e}`);
+            try {
+                await triggerMeshQueue(components, mesh.id);
+            } catch (e: any) {
+                LOG.warn('MeshReconcile', `Pending-claim recovery trigger failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
         }
     }
 

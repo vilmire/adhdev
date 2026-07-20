@@ -46,6 +46,9 @@
     "open": "^10.1.0",
     "ws": "^8.19.0"
   },
+  "optionalDependencies": {
+    "better-sqlite3": "^12.10.0"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",

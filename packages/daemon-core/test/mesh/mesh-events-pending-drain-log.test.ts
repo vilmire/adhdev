@@ -19,7 +19,7 @@ vi.mock('../../src/config/config.js', () => ({
     },
 }));
 
-import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js';
+import { drainPendingMeshCoordinatorEvents, __resetSqlitePendingDrainWarnForTests } from '../../src/mesh/mesh-events-pending.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { getLedgerDir } from '../../src/mesh/mesh-ledger.js';
 import { LOG } from '../../src/logging/logger.js';
@@ -27,6 +27,9 @@ import { LOG } from '../../src/logging/logger.js';
 describe('mesh-events-pending — SQLite drain failure is logged', () => {
     beforeEach(() => {
         if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });
+        // The SQLite-drain-failure WARN is one-shot (module-level guard) to stop the
+        // per-cycle log flood; reset it so this test always exercises the first-warn path.
+        __resetSqlitePendingDrainWarnForTests();
     });
 
     afterEach(() => {
@@ -69,5 +72,40 @@ describe('mesh-events-pending — SQLite drain failure is logged', () => {
         expect(warnSpy.mock.calls.some(([component]) => component === 'MeshEvents')).toBe(true);
         // The JSONL fallback still drained the queued event (behaviour preserved).
         expect(drained.map(e => e.event)).toContain('node_online');
+    });
+
+    it('warns only ONCE across repeated failing drains (log-once flood guard), JSONL still drains each time', () => {
+        const meshId = `mesh-drainfail-once-${randomUUID().slice(0, 8)}`;
+        const ledgerDir = getLedgerDir();
+        mkdirSync(ledgerDir, { recursive: true });
+        const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const jsonlPath = join(ledgerDir, `${safe}.pending-events.jsonl`);
+        const writeEvent = () => writeFileSync(jsonlPath, JSON.stringify({
+            event: 'node_online', meshId, nodeLabel: 'node-1', nodeId: 'node-1',
+            metadataEvent: { nodeId: 'node-1' }, queuedAt: Date.now(),
+        }) + '\n', 'utf-8');
+
+        // SQLite always throws (simulates better-sqlite3 unavailable every tick).
+        vi.spyOn(MeshRuntimeStore, 'getInstance').mockImplementation(() => {
+            throw new Error('boom: store unavailable');
+        });
+        const warnSpy = vi.spyOn(LOG, 'warn').mockImplementation(() => undefined as any);
+        const debugSpy = vi.spyOn(LOG, 'debug').mockImplementation(() => undefined as any);
+
+        const meshWarnCount = () => warnSpy.mock.calls.filter(([component, msg]) =>
+            component === 'MeshEvents' && String(msg).includes('SQLite pending-event drain failed')).length;
+        const meshDebugCount = () => debugSpy.mock.calls.filter(([component, msg]) =>
+            component === 'MeshEvents' && String(msg).includes('SQLite pending-event drain failed')).length;
+
+        // Three consecutive failing drains (JSONL re-written before each, as a live tick would).
+        for (let i = 0; i < 3; i++) {
+            writeEvent();
+            const drained = drainPendingMeshCoordinatorEvents(meshId);
+            expect(drained.map(e => e.event)).toContain('node_online'); // JSONL fallback preserved every tick
+        }
+
+        // The WARN fired exactly once; the 2nd and 3rd occurrences dropped to debug.
+        expect(meshWarnCount()).toBe(1);
+        expect(meshDebugCount()).toBe(2);
     });
 });

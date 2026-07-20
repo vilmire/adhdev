@@ -272,6 +272,22 @@ export function __resetMeshV2WarnDedupForTests(): void {
     warnedV2Violations.clear();
 }
 
+// Log-once guard for the SQLite pending-event drain failure. When better-sqlite3 is
+// unavailable (native load failure on a clean npx install with no build tools), the
+// SQLite drain throws every drain call — once per mesh, every reconcile tick (~4s) —
+// while the JSONL fallback below keeps delivering events correctly. That is the
+// intended degraded path, so the operator only needs to be told ONCE that SQLite is
+// down; repeating the WARN every cycle floods the logs (mirrors MeshRuntimeStore's
+// loggedGetInstanceFailure guard). New/different drain errors still surface: the
+// guard keys on nothing beyond "already warned", but the first occurrence is always
+// shown at WARN and every occurrence stays at debug.
+let loggedSqlitePendingDrainFailure = false;
+
+/** Test helper: reset the one-shot SQLite-drain-failure WARN guard. */
+export function __resetSqlitePendingDrainWarnForTests(): void {
+    loggedSqlitePendingDrainFailure = false;
+}
+
 /**
  * Resolve the drainer's CoordinatorIdentity for v2 routing from the daemon-id
  * argument the (untouchable) reconcile-loop already passes. The daemon ids are the
@@ -1216,7 +1232,16 @@ export function drainPendingMeshCoordinatorEvents(
         // failure here means the JSONL copy is emptied while the SQLite rows
         // survive undrained, so the next drain re-delivers the same events to the
         // coordinator (duplicate refine:completed etc.) with no diagnostic trail.
-        LOG.warn('MeshEvents', `SQLite pending-event drain failed for mesh ${meshId}; JSONL fallback only: ${e?.message || e}`);
+        // Log-once (then debug): when better-sqlite3 is unavailable this throws every
+        // tick × mesh count, and the JSONL fallback below is the intended degraded
+        // path — so warn ONCE, then keep the per-cycle repetition at debug to stop the
+        // log flood without hiding the diagnosis (see loggedSqlitePendingDrainFailure).
+        if (!loggedSqlitePendingDrainFailure) {
+            loggedSqlitePendingDrainFailure = true;
+            LOG.warn('MeshEvents', `SQLite pending-event drain failed for mesh ${meshId}; JSONL fallback only (further occurrences at debug): ${e?.message || e}`);
+        } else {
+            LOG.debug('MeshEvents', `SQLite pending-event drain failed for mesh ${meshId}; JSONL fallback only: ${e?.message || e}`);
+        }
     }
 
     // JSONL (legacy / migration path) — always drained alongside SQLite.
