@@ -12,6 +12,7 @@ import { canonicalizeRepoMeshStatus, summarizeRepoMeshCanonicalNodeDebug } from 
 import { MeshGraphThemeContext } from './MeshObservabilitySurface/meshSurfaceTheme'
 import { Badge, Row } from './MeshObservabilitySurface/meshSurfacePrimitives'
 import { MeshStatusTab } from './MeshObservabilitySurface/MeshStatusTab'
+import { MeshNotesTab } from './MeshObservabilitySurface/MeshNotesTab'
 import { MeshHealthPanel } from './MeshObservabilitySurface/MeshHealthPanel'
 import {
     EMPTY_LEDGER_SUMMARY,
@@ -58,7 +59,7 @@ type DetailSelection =
     | { kind: 'session'; nodeId: string; sessionId: string }
     | { kind: 'queue'; taskId: string }
 
-export type MeshSurfaceTab = 'overview' | 'status' | 'graph'
+export type MeshSurfaceTab = 'overview' | 'status' | 'notes' | 'graph'
 
 interface MeshObservabilitySurfaceProps {
     status: RepoMeshStatus
@@ -117,6 +118,15 @@ export function MeshSurfaceTabControls({
                     onClick={() => onActiveTabChange('status')}
                 >
                     {t('meshGraph.obs.tabStatus')}
+                </button>
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === 'notes'}
+                    className={tabButtonClass(activeTab === 'notes')}
+                    onClick={() => onActiveTabChange('notes')}
+                >
+                    {t('meshGraph.notes.tab')}
                 </button>
                 <button
                     type="button"
@@ -463,6 +473,17 @@ export default function MeshObservabilitySurface({
             {/* ── Status / Runtime tab: scheduling + per-node runtime (own scroll region) ── */}
             <div className={`${activeTab === 'status' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto`}>
                 {activeTab === 'status' && <MeshStatusTab canonicalStatus={canonicalStatus} />}
+            </div>
+
+            {/* ── Notes tab: manual coordinator operating-note CRUD (own scroll region) ── */}
+            <div className={`${activeTab === 'notes' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto`}>
+                {activeTab === 'notes' && (
+                    <MeshNotesTab
+                        meshId={canonicalStatus.meshId}
+                        daemonId={daemonId}
+                        sendDaemonCommand={sendDaemonCommand}
+                    />
+                )}
             </div>
 
             {/* ── Graph tab: existing topology card (lazily mounted) ── */}
