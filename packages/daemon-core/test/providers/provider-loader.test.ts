@@ -873,3 +873,88 @@ describe('ProviderLoader v1-manifest inline nativeHistory.source wiring', () => 
     expect(typeof (resolved?.scripts as any)?.readNativeHistory).not.toBe('function');
   });
 });
+
+describe('ProviderLoader upstream fetch cooldown vs empty upstream', () => {
+  // Regression: on a clean machine the 30-min cooldown must NOT strand the daemon
+  // at "Total: 0 providers". fetchLatest() stamps .meta.json even on a failed
+  // attempt, so a recent timestamp with an EMPTY .upstream would otherwise skip
+  // every subsequent fetch forever. The gate must be bypassed when the upstream
+  // holds zero providers, and still honored once at least one provider is present.
+  const RECENT = 5 * 60 * 1000; // 5 min < 30 min cooldown
+  // RFC 6761 reserved TLD — guaranteed to fail DNS fast, so the HEAD probe errors
+  // out immediately and we only assert which gate branch the code took.
+  const UNREACHABLE = 'https://adhdev-provider-loader-test.invalid/providers.tar.gz';
+  let tmpRoot = '';
+  let upstreamDir = ''; // always {home}/.adhdev/providers/.upstream — the loader fixes this
+  let homeBefore: string | undefined;
+  let userProfileBefore: string | undefined;
+
+  function seedRecentMeta(dir: string) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, '.meta.json'),
+      JSON.stringify({ etag: 'seed-etag', timestamp: Date.now() - RECENT, lastCheck: 'seed' }),
+      'utf-8',
+    );
+  }
+
+  function newLoader(logs: string[]) {
+    // upstreamDir is derived from os.homedir(), not from a userDir option, so we
+    // redirect HOME/USERPROFILE to the temp root (done in beforeEach) rather than
+    // passing a userDir here.
+    return new ProviderLoader({
+      providerTarballUrl: UNREACHABLE,
+      logFn: (msg) => logs.push(msg),
+    });
+  }
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'adhdev-loader-cooldown-'));
+    homeBefore = process.env.HOME;
+    userProfileBefore = process.env.USERPROFILE;
+    process.env.HOME = tmpRoot;
+    process.env.USERPROFILE = tmpRoot; // win32 os.homedir() reads USERPROFILE
+    upstreamDir = join(tmpRoot, '.adhdev', 'providers', '.upstream');
+    mkdirSync(join(tmpRoot, '.adhdev', 'providers'), { recursive: true });
+  });
+
+  afterEach(() => {
+    if (homeBefore === undefined) delete process.env.HOME;
+    else process.env.HOME = homeBefore;
+    if (userProfileBefore === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = userProfileBefore;
+    if (tmpRoot && existsSync(tmpRoot)) rmSync(tmpRoot, { recursive: true, force: true });
+    tmpRoot = upstreamDir = '';
+  });
+
+  it('bypasses the 30-min cooldown when the upstream has zero providers', async () => {
+    seedRecentMeta(upstreamDir); // recent timestamp, but no providers on disk
+    const logs: string[] = [];
+
+    const result = await newLoader(logs).fetchLatest();
+
+    // Gate was bypassed: it did NOT log the "skipped" line and instead proceeded
+    // to a real (failing) fetch against the unreachable host.
+    expect(logs.some((l) => l.includes('Upstream check skipped'))).toBe(false);
+    expect(logs.some((l) => l.includes('forcing fetch despite <30min cooldown'))).toBe(true);
+    expect(logs.some((l) => l.includes('Upstream fetch failed'))).toBe(true);
+    expect(result.updated).toBe(false);
+  });
+
+  it('still honors the 30-min cooldown when at least one provider is present', async () => {
+    seedRecentMeta(upstreamDir);
+    writeProvider(upstreamDir, 'cli', 'seeded', {
+      type: 'seeded',
+      name: 'Seeded',
+      category: 'cli',
+      spawn: { command: 'seeded' },
+    });
+    const logs: string[] = [];
+
+    const result = await newLoader(logs).fetchLatest();
+
+    expect(logs.some((l) => l.includes('Upstream check skipped'))).toBe(true);
+    expect(logs.some((l) => l.includes('forcing fetch'))).toBe(false);
+    expect(result.updated).toBe(false);
+  });
+});

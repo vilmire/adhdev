@@ -1706,11 +1706,25 @@ export class ProviderLoader {
       }
     } catch { }
 
- // Minimum 30-minute interval (prevent excessive checks)
+ // Minimum 30-minute interval (prevent excessive checks). BUT the cooldown must
+ // never strand a clean machine with zero providers: fetchLatest() stamps the
+ // timestamp even on a failed/ETag-unchanged attempt (to avoid retry storms), so
+ // if the very first attempt hiccups the upstream dir stays empty yet every later
+ // boot within 30min is skipped — leaving "Total: 0 providers" forever. When the
+ // upstream currently has NO providers we bypass the cooldown and force a fetch;
+ // the normal 30min throttle still applies once at least one provider is present.
     const MIN_INTERVAL_MS = 30 * 60 * 1000;
-    if (prevTimestamp && (Date.now() - prevTimestamp) < MIN_INTERVAL_MS) {
+    const upstreamProviderCount = this.countProviders(this.upstreamDir);
+    if (
+      upstreamProviderCount > 0 &&
+      prevTimestamp &&
+      (Date.now() - prevTimestamp) < MIN_INTERVAL_MS
+    ) {
       this.log('Upstream check skipped (last check < 30min ago)');
       return { updated: false };
+    }
+    if (upstreamProviderCount === 0 && prevTimestamp && (Date.now() - prevTimestamp) < MIN_INTERVAL_MS) {
+      this.log('Upstream empty (0 providers) — forcing fetch despite <30min cooldown');
     }
 
     // Resolve the tarball target (config → env → vendor default) once so the
@@ -1753,8 +1767,11 @@ export class ProviderLoader {
         req.end();
       });
 
- // Compare ETag — skip if unchanged
-      if (etag && etag === prevEtag) {
+ // Compare ETag — skip if unchanged, but only when providers are actually on
+ // disk. A stale .meta.json etag can match while .upstream is empty (first-boot
+ // hiccup, or the dir was cleared under a persisted meta); short-circuiting then
+ // would leave the machine at 0 providers, so fall through to a real download.
+      if (etag && etag === prevEtag && upstreamProviderCount > 0) {
  // Update timestamp only
         this.writeMeta(metaPath, prevEtag, Date.now());
         this.log('Upstream unchanged (ETag match)');
