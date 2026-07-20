@@ -1288,7 +1288,8 @@
             "logoutConfirm": "¿Seguro que quieres cerrar sesión?",
             "logout": "Cerrar sesión",
             "machineLimitBanner": "Has alcanzado el límite de {{count}} máquina{{plural}} del plan Free. Mejora para añadir más.",
-            "upgradeArrow": "Mejorar →"
+            "upgradeArrow": "Mejorar →",
+            "pushBudget": "Notificaciones {{used}}/{{limit}}"
         },
         "settings": {
             "title": "Ajustes",

@@ -1288,7 +1288,8 @@
             "logoutConfirm": "确定要退出登录吗？",
             "logout": "退出登录",
             "machineLimitBanner": "您已达到 Free 套餐 {{count}} 台机器{{plural}}的上限。升级以添加更多。",
-            "upgradeArrow": "升级 →"
+            "upgradeArrow": "升级 →",
+            "pushBudget": "通知 {{used}}/{{limit}}"
         },
         "settings": {
             "title": "设置",

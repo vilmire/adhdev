@@ -1288,7 +1288,8 @@
             "logoutConfirm": "ログアウトしてもよろしいですか？",
             "logout": "ログアウト",
             "machineLimitBanner": "Free プランの上限である {{count}} 台{{plural}}のマシンに達しました。追加するにはアップグレードしてください。",
-            "upgradeArrow": "アップグレード →"
+            "upgradeArrow": "アップグレード →",
+            "pushBudget": "通知 {{used}}/{{limit}}"
         },
         "settings": {
             "title": "設定",

@@ -1288,7 +1288,8 @@
             "logoutConfirm": "정말 로그아웃하시겠습니까?",
             "logout": "로그아웃",
             "machineLimitBanner": "Free 플랜 머신 한도({{count}}개{{plural}})에 도달했습니다. 더 추가하려면 업그레이드하세요.",
-            "upgradeArrow": "업그레이드 →"
+            "upgradeArrow": "업그레이드 →",
+            "pushBudget": "알림 {{used}}/{{limit}}"
         },
         "settings": {
             "title": "설정",

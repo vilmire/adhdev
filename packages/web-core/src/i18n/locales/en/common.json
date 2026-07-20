@@ -1288,7 +1288,8 @@
             "logoutConfirm": "Are you sure you want to logout?",
             "logout": "Logout",
             "machineLimitBanner": "You've reached your Free plan limit of {{count}} machine{{plural}}. Upgrade to add more.",
-            "upgradeArrow": "Upgrade →"
+            "upgradeArrow": "Upgrade →",
+            "pushBudget": "Notifications {{used}}/{{limit}}"
         },
         "settings": {
             "title": "Settings",
