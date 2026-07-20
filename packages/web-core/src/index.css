@@ -1973,6 +1973,15 @@
     /* Sidebar + main transition for collapse animation */
     .sidebar {
         transition: width 0.2s ease, padding 0.2s ease;
+        /* Paint-isolate the collapse: `will-change: width` promotes the sidebar to its
+           own compositor layer so its 0.2s width transition is not re-rasterized
+           together with the heavy .main-content dashboard tree, and `contain: layout`
+           stops the sidebar's internal re-renders (e.g. a footer daemon-count update on
+           a ~2s status flush) from invalidating the main content's layout mid-transition.
+           This kills the cloud-dashboard collapse jank without changing the visual/timing
+           (same 0.2s ease width). See AppShell.tsx sidebar memoization for the JS half. */
+        will-change: width;
+        contain: layout;
     }
 
     .main-content {
@@ -1994,6 +2003,19 @@
     @media (max-width: 768px) {
         .sidebar-collapsed .main-content {
             margin-left: 0;
+        }
+    }
+
+    /* Honor OS reduced-motion: no collapse animation → drop the transition AND the
+       compositor-layer hint (an idle will-change needlessly holds a layer). Collapse
+       still toggles instantly (correct), just without the 0.2s tween. */
+    @media (prefers-reduced-motion: reduce) {
+        .sidebar {
+            transition: none;
+            will-change: auto;
+        }
+        .main-content {
+            transition: none;
         }
     }
 
