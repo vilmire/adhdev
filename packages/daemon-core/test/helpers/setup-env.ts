@@ -39,3 +39,24 @@ if (!process.env.ADHDEV_CONFIG_DIR) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-daemon-core-test-config-'))
   process.env.ADHDEV_CONFIG_DIR = dir
 }
+
+// git 2.43+ spawns a background `gc --auto` child after receiving a push into a
+// bare repo. Tests that call rmSync(root, {recursive, force}) in finally can race
+// that gc process writing into objects/ — rmdir throws ENOTEMPTY because force:true
+// only suppresses ENOENT, not ENOTEMPTY. Disable auto-gc globally for all git
+// subprocesses spawned by the test suite via the GIT_CONFIG_COUNT env protocol.
+if (!process.env.GIT_CONFIG_COUNT) {
+  process.env.GIT_CONFIG_COUNT = '2'
+  process.env.GIT_CONFIG_KEY_0 = 'gc.auto'
+  process.env.GIT_CONFIG_VALUE_0 = '0'
+  process.env.GIT_CONFIG_KEY_1 = 'receive.autogc'
+  process.env.GIT_CONFIG_VALUE_1 = 'false'
+} else {
+  // Extend an existing GIT_CONFIG_COUNT set by the caller rather than overwriting.
+  const base = parseInt(process.env.GIT_CONFIG_COUNT, 10)
+  process.env.GIT_CONFIG_COUNT = String(base + 2)
+  process.env[`GIT_CONFIG_KEY_${base}`] = 'gc.auto'
+  process.env[`GIT_CONFIG_VALUE_${base}`] = '0'
+  process.env[`GIT_CONFIG_KEY_${base + 1}`] = 'receive.autogc'
+  process.env[`GIT_CONFIG_VALUE_${base + 1}`] = 'false'
+}
