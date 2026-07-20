@@ -2881,6 +2881,15 @@ export class CliProviderInstance implements ProviderInstance {
             ...(opts.evidenceLevel !== undefined ? { evidenceLevel: opts.evidenceLevel } : {}),
             ...(opts.completionDiagnostic !== undefined ? { completionDiagnostic: opts.completionDiagnostic } : {}),
         });
+        // COORDINATOR-SILENT-IDLE one-shot consume: this completion's snapshot rides the
+        // armed mute (resolveMuted honors settings.silentNextIdlePush for the idle status
+        // above), so the routine idle push is suppressed for THIS completion only. Clear
+        // the arm now — AFTER the completion event was pushed — so the NEXT turn notifies
+        // normally. Redundant with the TTL leak-guard, but the deterministic clear is the
+        // primary one-shot mechanism; the TTL only covers a worker that never completes.
+        if (this.settings?.silentNextIdlePush === true) {
+            this.updateSettings({ silentNextIdlePush: undefined, silentNextIdlePushArmedAt: undefined });
+        }
     }
 
     /**

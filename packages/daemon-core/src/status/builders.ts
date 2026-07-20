@@ -25,6 +25,7 @@ import {
     type NormalizeActiveChatOptions,
 } from './normalize.js';
 import { getMeshQueueStats } from '../mesh/mesh-work-queue.js';
+import { SILENT_IDLE_PUSH_TTL_MS } from '../repo-mesh-types.js';
 import { getCoordinatorForSession } from '../mesh/coordinator-registry.js';
 import { normalizeProviderStateControlValues } from '../providers/provider-patch-state.js';
 import { normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
@@ -64,12 +65,50 @@ export function resolveSurfaceHidden(settings: Record<string, any> | undefined):
 }
 
 /**
- * A session is muted (attention side-effects suppressed, but still shown in the
- * list) when the user muted it, OR a coordinator-spawned worker defaults muted.
- * userMuted === false is an explicit un-mute overriding the worker default.
+ * Whether a one-shot silent-idle-push arm is currently ACTIVE for this session's
+ * completion snapshot. Set on a coordinator-dispatched worker when the mesh policy
+ * is `coordinatorIdlePushPolicy: 'auto_silent_on_dispatch'` (see arm sites in
+ * mesh-queue-assignment). Guardrails baked in here:
+ *  - status-gated to `idle`: the arm mutes ONLY the routine completion snapshot, so
+ *    an approval-needed / failure / long-running notification in the SAME turn (which
+ *    the worker emits with a non-idle status) is NEVER suppressed.
+ *  - TTL leak-guard: an arm older than SILENT_IDLE_PUSH_TTL_MS is treated as expired,
+ *    so a worker whose completion never arrives cannot strand its session muted.
+ * The arm itself is one-shot: emitGeneratingCompleted clears it after the completion
+ * so the following turn notifies normally.
  */
-export function resolveMuted(settings: Record<string, any> | undefined): boolean {
+function isSilentIdlePushArmActive(
+    settings: Record<string, any> | undefined,
+    status: string | undefined,
+): boolean {
+    if (!settings || settings.silentNextIdlePush !== true) return false;
+    if (status !== 'idle') return false;
+    const armedAt = Number(settings.silentNextIdlePushArmedAt);
+    if (!Number.isFinite(armedAt) || armedAt <= 0) {
+        // No/invalid arm timestamp: honor the flag (fail-safe toward the explicit
+        // arm) but it will be one-shot-cleared at the completion emission.
+        return true;
+    }
+    return (Date.now() - armedAt) <= SILENT_IDLE_PUSH_TTL_MS;
+}
+
+/**
+ * A session is muted (attention side-effects suppressed, but still shown in the
+ * list) when the user muted it, OR a coordinator-spawned worker defaults muted, OR
+ * a one-shot silent-idle-push arm is active for this completion snapshot (see
+ * isSilentIdlePushArmActive — status-gated + TTL-bounded so approval/failure pushes
+ * and never-completing workers are unaffected). userMuted === false is an explicit
+ * un-mute overriding the worker/policy default — but NOT the one-shot arm, which is a
+ * coordinator-driven per-completion decision that a stale manual un-mute must not
+ * defeat.
+ *
+ * `status` is the session's resolved status for the snapshot being built; omit it
+ * (undefined) for callers that only have mesh-attribution fields (the cloud mirror),
+ * where the one-shot never applies.
+ */
+export function resolveMuted(settings: Record<string, any> | undefined, status?: string): boolean {
     if (!settings) return false;
+    if (isSilentIdlePushArmActive(settings, status)) return true;
     if (settings.userMuted === true) return true;
     if (settings.userMuted === false) return false;
     return isCoordinatorSpawnedHiddenWorker(settings);
@@ -365,6 +404,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
     const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
     const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: 'coordinator' as const } : undefined;
     const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : undefined;
+    const resolvedStatus = resolveSessionStatus(activeChat, state.status);
     return {
         id: state.instanceId,
         parentId: null,
@@ -373,7 +413,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         providerSessionId: state.providerSessionId,
         kind: 'agent',
         transport: 'pty',
-        status: resolveSessionStatus(activeChat, state.status),
+        status: resolvedStatus,
         title: activeChat?.title || state.name,
         workspace,
         ...(git && { git }),
@@ -412,7 +452,9 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         // `!== undefined` fields, so an absent field on false never overwrote a prior true —
         // the toggle-off direction silently stuck. See session-entry-merge.ts.
         surfaceHidden: resolveSurfaceHidden(state.settings),
-        muted: resolveMuted(state.settings),
+        // status-gated so a one-shot silent-idle arm mutes ONLY the idle/completion
+        // snapshot, never an approval/generating frame in the same turn.
+        muted: resolveMuted(state.settings, resolvedStatus),
     };
 }
 
@@ -430,6 +472,7 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
     const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
     const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: 'coordinator' as const } : undefined;
     const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : undefined;
+    const resolvedStatus = resolveSessionStatus(activeChat, state.status);
     return {
         id: state.instanceId,
         parentId: null,
@@ -437,7 +480,7 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
         providerName: state.name,
         kind: 'agent',
         transport: 'acp',
-        status: resolveSessionStatus(activeChat, state.status),
+        status: resolvedStatus,
         title: activeChat?.title || state.name,
         workspace,
         ...(git && { git }),
@@ -457,7 +500,8 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
         // Emit explicitly (including false) so un-hide/un-mute clears a prior true downstream —
         // see buildCliSession above and session-entry-merge.ts.
         surfaceHidden: resolveSurfaceHidden(state.settings),
-        muted: resolveMuted(state.settings),
+        // status-gated one-shot silent-idle arm — see buildCliSession above.
+        muted: resolveMuted(state.settings, resolvedStatus),
     };
 }
 

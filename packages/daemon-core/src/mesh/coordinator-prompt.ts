@@ -724,6 +724,10 @@ function buildPolicySection(policy: RepoMeshPolicy): string {
 
     rules.push(`- Maximum **${policy.maxParallelTasks}** tasks running in parallel`);
 
+    if (policy.coordinatorIdlePushPolicy === 'auto_silent_on_dispatch') {
+        rules.push('- Delegated-worker completions are **auto-silenced**: the routine idle/completion push for a task you dispatch is suppressed once (approval-needed, failure, and long-running alerts still notify the owner normally)');
+    }
+
     return `## Policy\n${rules.join('\n')}`;
 }
 

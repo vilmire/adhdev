@@ -399,6 +399,27 @@ export interface RepoMeshPolicy {
      * Set to false to suppress the reminder entirely.
      */
     idleActiveMissionReminder?: boolean;
+    /**
+     * Whether a coordinator-dispatched worker's routine idle/completion push
+     * notification is delivered to the owner every time ('always', the default —
+     * historical behavior, byte-for-byte unchanged), or auto-silenced for the single
+     * completion that follows a coordinator dispatch ('auto_silent_on_dispatch').
+     *
+     * When 'auto_silent_on_dispatch', dispatching a task to a worker arms a ONE-SHOT
+     * transient mute (settings.silentNextIdlePush) on that worker session. The next
+     * agent:generating_completed rides a muted status snapshot, so the server push
+     * gate (which already honors session.muted) suppresses ONLY that routine
+     * completion push; the flag auto-clears afterward so subsequent turns notify
+     * normally, and it is status-gated to `idle` so an approval-needed / long-running
+     * / failure notification in the SAME turn is NEVER suppressed. A stale one-shot
+     * self-expires (SILENT_IDLE_PUSH_TTL_MS) so a worker that never completes cannot
+     * strand its session permanently muted.
+     *
+     * Coordinator-spawned HIDDEN workers already default muted (they emit no owner
+     * push), so this only changes behavior for VISIBLE / manually-unmuted delegated
+     * workers. Defaults to 'always' — zero behavior change unless the mesh opts in.
+     */
+    coordinatorIdlePushPolicy?: 'always' | 'auto_silent_on_dispatch';
 }
 
 export interface RepoMeshRelatedRepo {
@@ -540,7 +561,35 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     // Nudge the coordinator when the mesh is fully idle but active missions linger,
     // so a mission is never left drifting in `active` after its work is really done.
     idleActiveMissionReminder: true,
+    // Conservative default: every coordinator-dispatched worker completion still
+    // notifies the owner. Opt into 'auto_silent_on_dispatch' to one-shot-silence the
+    // routine idle push for a coordinator-driven task (approval/failure notifications
+    // are never affected — see coordinatorIdlePushPolicy).
+    coordinatorIdlePushPolicy: 'always',
 };
+
+/**
+ * TTL for the one-shot silent-idle-push arm (settings.silentNextIdlePushArmedAt).
+ * A dispatched worker whose completion never arrives (crash, offline, dropped event)
+ * must not leave its session muted forever — after this window the arm is treated as
+ * expired and stops muting, so the session self-heals to normal notification behavior.
+ * Ten minutes comfortably covers a long delegated turn while still bounding the leak.
+ */
+export const SILENT_IDLE_PUSH_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Resolve the effective coordinator idle-push policy from a mesh policy, defaulting
+ * to 'always' (notify) for a missing/invalid value so a typo can never silently
+ * disable owner completion notifications. Mirrors the other policy resolvers so the
+ * arm site and any future consumer read one source of truth.
+ */
+export function resolveCoordinatorIdlePushPolicy(
+    meshPolicy?: Pick<RepoMeshPolicy, 'coordinatorIdlePushPolicy'> | null,
+): 'always' | 'auto_silent_on_dispatch' {
+    return meshPolicy?.coordinatorIdlePushPolicy === 'auto_silent_on_dispatch'
+        ? 'auto_silent_on_dispatch'
+        : 'always';
+}
 
 // ─── Policy normalization (single source of truth) ──────────────────────────
 //
@@ -726,6 +775,15 @@ export function mergeAndNormalizePolicy(
         policy.autoConvergeCodeChange = true;
     } else {
         delete policy.autoConvergeCodeChange;
+    }
+    // Coordinator idle-push policy: strict opt-in. Only persist the explicit
+    // 'auto_silent_on_dispatch' value; any other/invalid value normalizes to the
+    // 'always' default and is dropped so existing meshes.json stays byte-for-byte
+    // untouched (a typo cannot silently disable owner completion notifications).
+    if (policy.coordinatorIdlePushPolicy === 'auto_silent_on_dispatch') {
+        policy.coordinatorIdlePushPolicy = 'auto_silent_on_dispatch';
+    } else {
+        delete policy.coordinatorIdlePushPolicy;
     }
     return policy;
 }

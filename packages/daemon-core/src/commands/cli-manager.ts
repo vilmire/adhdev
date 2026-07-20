@@ -1739,6 +1739,26 @@ export class DaemonCliManager {
                         if (stampResult && stampResult.stamped === false && stampResult.reason === 'task_already_stamped_on_live_instance') {
                             throw new Error(`Refusing duplicate mesh dispatch: task ${meshContext.taskId} is already being worked by a live session on this daemon`);
                         }
+                        // COORDINATOR-SILENT-IDLE (opt-in): the coordinator's mesh policy is
+                        // 'auto_silent_on_dispatch', so arm a ONE-SHOT transient mute on THIS
+                        // worker session for the single completion that follows this dispatch.
+                        // resolveMuted honors it only for an idle snapshot within
+                        // SILENT_IDLE_PUSH_TTL_MS, so the routine completion push is suppressed
+                        // while approval/failure/long-running notifications (non-idle status) and
+                        // a worker that never completes (TTL expiry) are unaffected. Re-armed on
+                        // every dispatch (fresh armedAt) and one-shot-cleared at the completion
+                        // emission (emitGeneratingCompleted) so subsequent turns notify normally.
+                        if ((meshContext as any).silentIdlePush === true) {
+                            try {
+                                const workerInst = this.deps.getInstanceManager()?.getInstance(targetInstanceId);
+                                if (workerInst && typeof workerInst.updateSettings === 'function') {
+                                    workerInst.updateSettings({
+                                        silentNextIdlePush: true,
+                                        silentNextIdlePushArmedAt: Date.now(),
+                                    });
+                                }
+                            } catch { /* best-effort — silent-idle is a notification nicety, never fail the dispatch */ }
+                        }
                     }
                     const input = normalizeInputEnvelope(args?.input ? { input: args.input } : args);
                     const provider = this.providerLoader.resolve(agentType) || this.providerLoader.getMeta(agentType);

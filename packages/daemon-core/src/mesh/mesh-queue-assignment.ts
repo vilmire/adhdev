@@ -13,7 +13,7 @@ import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-deliv
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
-import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks } from '../repo-mesh-types.js';
+import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveCoordinatorIdlePushPolicy } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
@@ -612,6 +612,17 @@ export function tryAssignQueueTask(
     // failure / cancel / reclaim).
     beginTaskDispatchInFlight(meshId, task.id);
 
+    // COORDINATOR-SILENT-IDLE (opt-in): when the mesh policy is
+    // 'auto_silent_on_dispatch', carry a one-shot silent-idle-push signal in the
+    // dispatch meshContext. The worker stamps settings.silentNextIdlePush on its own
+    // live session (cli-manager send_chat), so the SINGLE completion that follows this
+    // dispatch rides a muted status snapshot and the server suppresses ONLY that
+    // routine idle push. Status-gated + TTL-bounded downstream (see resolveMuted), so
+    // approval/failure/long-running notifications and never-completing workers are
+    // unaffected. Default 'always' → this stays undefined and nothing changes.
+    const silentIdlePushOnDispatch =
+        resolveCoordinatorIdlePushPolicy(mesh?.policy) === 'auto_silent_on_dispatch';
+
     // CANON-IDENTITY: read the remote daemon id through the normalizing helper so a node
     // whose daemonId arrives in a non-top-level-camelCase serialization form (daemon_id /
     // machine.daemonId / lastProbe.machine.daemon_id / …) is still recognized as remote.
@@ -648,6 +659,7 @@ export function tryAssignQueueTask(
                         ...(typeof task.dispatchNonce === 'number' ? { dispatchNonce: task.dispatchNonce } : {}),
                         ...(localDaemonIdForDispatch ? { coordinatorDaemonId: localDaemonIdForDispatch } : {}),
                         ...(sourceCoordinatorSessionId ? { coordinatorSessionId: sourceCoordinatorSessionId } : {}),
+                        ...(silentIdlePushOnDispatch ? { silentIdlePush: true } : {}),
                     },
                 }),
                 {
@@ -730,6 +742,7 @@ export function tryAssignQueueTask(
                 ...(typeof task.dispatchNonce === 'number' ? { dispatchNonce: task.dispatchNonce } : {}),
                 ...(localCoordinatorDaemonId() ? { coordinatorDaemonId: localCoordinatorDaemonId() } : {}),
                 ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { coordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
+                ...(silentIdlePushOnDispatch ? { silentIdlePush: true } : {}),
             },
         }),
         {
