@@ -47,7 +47,7 @@
   "author": "vilmire",
   "license": "AGPL-3.0-or-later",
   "dependencies": {
-    "@adhdev/mesh-shared": "0.9.82-rc.373",
+    "@adhdev/mesh-shared": "*",
     "@adhdev/session-host-core": "*",
     "@agentclientprotocol/sdk": "^0.16.1",
     "ajv": "^8.20.0",
