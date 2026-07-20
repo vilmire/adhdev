@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import AppPage from '../../components/ui/AppPage'
@@ -68,6 +69,12 @@ export function MeshListView({
 }: Props) {
     const { t } = useTranslation('common')
     const atMeshLimit = features.maxMeshes != null && meshes.length >= features.maxMeshes
+    // UI-only presentation state (form values stay in props). The identity field is an
+    // edge-case input — the primary URL field auto-derives the identity — so it starts
+    // collapsed behind an "advanced" toggle. Auto-expand when identity already has a
+    // value so a pre-populated/typed value is never hidden.
+    const [showAdvancedIdentity, setShowAdvancedIdentity] = useState(false)
+    const advancedIdentityOpen = showAdvancedIdentity || !!createRepoIdentity.trim()
     return (
         <AppPage
             icon={<IconMesh />}
@@ -117,9 +124,25 @@ export function MeshListView({
                     <FormField label={t('repoMesh.list.remoteUrl')} hint={t('repoMesh.list.remoteUrlHint')}>
                         <Input value={createRepoRemoteUrl} onChange={e => onCreateRepoRemoteUrlChange(e.target.value)} placeholder="https://github.com/user/repo" />
                     </FormField>
-                    <FormField label={t('repoMesh.list.repoIdentity')} hint={t('repoMesh.list.remoteUrlHint')}>
-                        <Input value={createRepoIdentity} onChange={e => onCreateRepoIdentityChange(e.target.value)} placeholder="github.com/user/repo" />
-                    </FormField>
+
+                    {/* Identity is auto-derived from the URL above; it's only needed for a
+                        repo with no remote or a per-machine-differing URL. Collapsed behind an
+                        advanced toggle by default so new users see one clear field. The
+                        one-of-required validation (URL OR identity) is unchanged — see the
+                        create button's disabled predicate below. */}
+                    {advancedIdentityOpen ? (
+                        <FormField label={t('repoMesh.list.repoIdentity')} hint={t('repoMesh.list.repoIdentityHint')}>
+                            <Input value={createRepoIdentity} onChange={e => onCreateRepoIdentityChange(e.target.value)} placeholder="github.com/user/repo" />
+                        </FormField>
+                    ) : (
+                        <button
+                            type="button"
+                            className="text-xs text-text-muted hover:text-text-primary underline underline-offset-2 mb-5"
+                            onClick={() => setShowAdvancedIdentity(true)}
+                        >
+                            {t('repoMesh.list.advancedIdentityToggle')}
+                        </button>
+                    )}
 
                     <div className="flex gap-2 mt-3">
                         <button className="btn btn-primary btn-sm" onClick={onCreate}
