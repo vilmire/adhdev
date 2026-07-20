@@ -1,6 +1,7 @@
 /**
  * LaunchPickModal — Workspace selection dialog for CLI/ACP launch.
  */
+import { useTranslation } from 'react-i18next'
 import type { MachineData } from './types'
 import type { LaunchPickState } from './useMachineActions'
 import type { useMachineActions } from './useMachineActions'
@@ -12,6 +13,7 @@ interface LaunchPickModalProps {
 }
 
 export default function LaunchPickModal({ machine, launchPick, actions }: LaunchPickModalProps) {
+    const { t } = useTranslation('common')
     const { runLaunchCliCore, setLaunchPick } = actions
 
     return (
@@ -68,7 +70,7 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                             })
                         }}
                     >
-                        Default workspace
+                        {t('newSession.defaultWorkspace')}
                     </button>
                     <button
                         type="button"
@@ -83,7 +85,7 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                             })
                         }}
                     >
-                        Home directory
+                        {t('newSession.homeDirectory')}
                     </button>
                     <button
                         type="button"

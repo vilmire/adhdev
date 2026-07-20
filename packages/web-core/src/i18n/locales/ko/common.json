@@ -170,7 +170,9 @@
         "errorManualMcpSetup": "이 프로바이더가 메시 코디네이터로 작동하려면 수동 MCP 설정이 필요합니다.",
         "errorStartMeshCoordinator": "메시 코디네이터를 시작할 수 없습니다",
         "errorStartSession": "세션을 시작할 수 없습니다",
-        "errorResumeSession": "세션을 재개할 수 없습니다"
+        "errorResumeSession": "세션을 재개할 수 없습니다",
+        "errorWorkspaceContextRequired": "실행하기 전에 워크스페이스를 선택하세요 — 디렉터리, 저장된/기본 워크스페이스, 또는 홈 디렉터리 중 하나.",
+        "defaultWorkspace": "기본 워크스페이스"
     },
     "mobileInbox": {
         "machines": "머신",

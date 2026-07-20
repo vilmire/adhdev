@@ -170,7 +170,9 @@
         "errorManualMcpSetup": "このプロバイダーをメッシュコーディネーターとして使用するには、事前に手動での MCP セットアップが必要です。",
         "errorStartMeshCoordinator": "メッシュコーディネーターを起動できませんでした",
         "errorStartSession": "セッションを開始できませんでした",
-        "errorResumeSession": "セッションを再開できませんでした"
+        "errorResumeSession": "セッションを再開できませんでした",
+        "errorWorkspaceContextRequired": "起動する前にワークスペースを選択してください — ディレクトリ、保存済み/デフォルトのワークスペース、またはホームディレクトリのいずれか。",
+        "defaultWorkspace": "デフォルトのワークスペース"
     },
     "mobileInbox": {
         "machines": "マシン",

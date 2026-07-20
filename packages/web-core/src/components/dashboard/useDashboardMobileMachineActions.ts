@@ -135,6 +135,9 @@ export function useDashboardMobileMachineActions({
         opts?: {
             workspaceId?: string | null
             workspacePath?: string | null
+            // Explicit home-directory launch (workspaceId:null + workspacePath:null) —
+            // maps to daemon useHome:true. See useDashboardCommandActions LaunchProviderOptions.
+            useHome?: boolean
             resumeSessionId?: string | null
             args?: string | null
             model?: string | null
@@ -157,6 +160,9 @@ export function useDashboardMobileMachineActions({
             const payload: Record<string, unknown> = { cliType: providerType }
             if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
             else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
+            // Home-directory launch: only when no dir/workspaceId set (mirrors AgentTab /
+            // useMachineActions). Fixes the "Choose a workspace…" error when picking Home.
+            else if (opts?.useHome) payload.useHome = true
             if (opts?.resumeSessionId) payload.resumeSessionId = opts.resumeSessionId
             if (opts?.args?.trim()) payload.cliArgs = opts.args.trim().split(/\s+/).filter(Boolean)
             if (opts?.model?.trim()) payload.initialModel = opts.model.trim()
@@ -287,8 +293,12 @@ export function useDashboardMobileMachineActions({
             return
         }
         if ((session.kind === 'cli' || session.kind === 'acp') && session.providerType) {
+            const recentWorkspace = session.workspace?.trim() || ''
             await handleLaunchWorkspaceProvider(machineId, session.kind, session.providerType, {
-                workspacePath: session.workspace || null,
+                workspacePath: recentWorkspace || null,
+                // A recent launch with no recorded workspace was a home-directory launch —
+                // replay it as useHome:true instead of sending an empty context.
+                useHome: !recentWorkspace,
                 resumeSessionId: session.providerSessionId || null,
             })
         }

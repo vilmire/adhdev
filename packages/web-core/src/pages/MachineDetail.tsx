@@ -355,6 +355,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         const { options, selectedKey } = buildLaunchWorkspaceOptions({
             machine,
             currentWorkspacePath: session.workspace,
+            homeLabel: t('newSession.homeDirectory'),
+            homeDescription: t('newSession.launchWithoutWorkspace'),
         })
         const openWorkspaceFallback = async () => {
             setWorkspaceCategoryHint(session.kind)

@@ -170,7 +170,9 @@
         "errorManualMcpSetup": "Manual MCP setup required before this provider can act as mesh coordinator.",
         "errorStartMeshCoordinator": "Could not start mesh coordinator",
         "errorStartSession": "Could not start session",
-        "errorResumeSession": "Could not resume session"
+        "errorResumeSession": "Could not resume session",
+        "errorWorkspaceContextRequired": "Choose a workspace — a directory, a saved/default workspace, or your home directory — before launching.",
+        "defaultWorkspace": "Default workspace"
     },
     "mobileInbox": {
         "machines": "Machines",

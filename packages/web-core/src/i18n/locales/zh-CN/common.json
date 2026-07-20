@@ -170,7 +170,9 @@
         "errorManualMcpSetup": "该提供方需先完成手动 MCP 设置，才能作为 mesh 协调器运行。",
         "errorStartMeshCoordinator": "无法启动 mesh 协调器",
         "errorStartSession": "无法启动会话",
-        "errorResumeSession": "无法恢复会话"
+        "errorResumeSession": "无法恢复会话",
+        "errorWorkspaceContextRequired": "启动前请选择一个工作区 — 目录、已保存/默认工作区，或你的主目录。",
+        "defaultWorkspace": "默认工作区"
     },
     "mobileInbox": {
         "machines": "机器",

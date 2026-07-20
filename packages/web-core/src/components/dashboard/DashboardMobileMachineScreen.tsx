@@ -55,7 +55,7 @@ interface DashboardMobileMachineScreenProps {
     onLaunchDetectedIde: (ideType: string, opts?: { workspacePath?: string | null }) => void
     onAddWorkspace: (path: string, opts?: { createIfMissing?: boolean }) => void
     onBrowseDirectory: (path: string) => Promise<BrowseDirectoryResult>
-    onLaunchWorkspaceProvider: (kind: Extract<WorkspaceLaunchKind, 'cli' | 'acp'>, providerType: string, opts?: { workspaceId?: string | null; workspacePath?: string | null; args?: string; model?: string; resumeSessionId?: string | null }) => void
+    onLaunchWorkspaceProvider: (kind: Extract<WorkspaceLaunchKind, 'cli' | 'acp'>, providerType: string, opts?: { workspaceId?: string | null; workspacePath?: string | null; useHome?: boolean; args?: string; model?: string; resumeSessionId?: string | null }) => void
     onListSavedSessions?: (providerType: string) => Promise<any[]>
 }
 
@@ -115,6 +115,8 @@ export default function DashboardMobileMachineScreen({
                         defaultWorkspaceId: launcher.defaultWorkspaceId,
                     },
                     currentWorkspacePath: session.workspace,
+                    homeLabel: t('newSession.homeDirectory'),
+                    homeDescription: t('newSession.launchWithoutWorkspace'),
                 })
                 launcher.openLaunchConfirm({
                     title: session.kind === 'ide'
@@ -381,6 +383,8 @@ export default function DashboardMobileMachineScreen({
                                                         },
                                                         currentWorkspaceId: launcher.workspaceChoice !== '__custom__' ? launcher.workspaceChoice : null,
                                                         currentWorkspacePath: launcher.resolvedWorkspacePath,
+                                                        homeLabel: t('newSession.homeDirectory'),
+                                                        homeDescription: t('newSession.launchWithoutWorkspace'),
                                                     })
                                                     launcher.openLaunchConfirm({
                                                         title: `Launch ${ide.name}?`,
@@ -421,6 +425,8 @@ export default function DashboardMobileMachineScreen({
                                                         },
                                                         currentWorkspaceId: launcher.workspaceChoice !== '__custom__' ? launcher.workspaceChoice : null,
                                                         currentWorkspacePath: launcher.resolvedWorkspacePath,
+                                                        homeLabel: t('newSession.homeDirectory'),
+                                                        homeDescription: t('newSession.launchWithoutWorkspace'),
                                                     })
                                                     launcher.openLaunchConfirm({
                                                         title: `Launch ${provider.displayName}?`,
@@ -443,6 +449,8 @@ export default function DashboardMobileMachineScreen({
                                                         onLaunchWorkspaceProvider(launchKind, provider.type, {
                                                             workspaceId: selectedOption?.workspaceId ?? null,
                                                             workspacePath: selectedOption?.workspacePath ?? null,
+                                                            // "Home directory" option (null id + null path) → useHome:true.
+                                                            useHome: !selectedOption?.workspaceId && !selectedOption?.workspacePath,
                                                             args: launcher.launchConfirmArgs,
                                                             model: launcher.launchConfirmModel,
                                                             resumeSessionId: launcher.launchConfirmResumeId || null,

@@ -170,7 +170,9 @@
         "errorManualMcpSetup": "Se requiere una configuración manual de MCP antes de que este proveedor pueda actuar como coordinador del mesh.",
         "errorStartMeshCoordinator": "No se pudo iniciar el coordinador del mesh",
         "errorStartSession": "No se pudo iniciar la sesión",
-        "errorResumeSession": "No se pudo reanudar la sesión"
+        "errorResumeSession": "No se pudo reanudar la sesión",
+        "errorWorkspaceContextRequired": "Elige un espacio de trabajo — un directorio, un espacio guardado/predeterminado o tu directorio de inicio — antes de lanzar.",
+        "defaultWorkspace": "Espacio de trabajo predeterminado"
     },
     "mobileInbox": {
         "machines": "Máquinas",

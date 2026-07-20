@@ -15,20 +15,27 @@ export function buildLaunchWorkspaceOptions(args: {
     currentWorkspacePath?: string | null
     currentWorkspaceId?: string | null
     includeHome?: boolean
+    // Localized "Home directory" label + description for the __home__ option. Optional
+    // so existing non-i18n callers keep the English defaults; component callers pass
+    // t('newSession.homeDirectory') / t('newSession.launchWithoutWorkspace').
+    homeLabel?: string
+    homeDescription?: string
 }): { options: LaunchWorkspaceOption[]; selectedKey: string } {
     const {
         machine,
         currentWorkspacePath,
         currentWorkspaceId,
         includeHome = true,
+        homeLabel = 'Home directory',
+        homeDescription = 'Launch without a workspace',
     } = args
 
     const options: LaunchWorkspaceOption[] = []
     if (includeHome) {
         options.push({
             key: '__home__',
-            label: 'Home directory',
-            description: 'Launch without a workspace',
+            label: homeLabel,
+            description: homeDescription,
             workspaceId: null,
             workspacePath: null,
         })

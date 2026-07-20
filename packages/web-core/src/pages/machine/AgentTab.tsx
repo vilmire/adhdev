@@ -532,6 +532,8 @@ export default function AgentTab({
             machine,
             currentWorkspaceId: selectedWorkspace && selectedWorkspace !== '__custom__' ? selectedWorkspace : null,
             currentWorkspacePath: resolvedWorkspacePath,
+            homeLabel: t('newSession.homeDirectory'),
+            homeDescription: t('newSession.launchWithoutWorkspace'),
         })
         openLaunchConfirm({
             title: isCliResume ? getRecentHistoryResumeConfirmTitle(t, providerName) : getMachineLaunchConfirmTitle(t, 'start-fresh', providerName),
@@ -963,6 +965,8 @@ export default function AgentTab({
                                                         const { options, selectedKey } = buildLaunchWorkspaceOptions({
                                                             machine,
                                                             currentWorkspacePath: restartWorkspace,
+                                                            homeLabel: t('newSession.homeDirectory'),
+                                                            homeDescription: t('newSession.launchWithoutWorkspace'),
                                                         })
                                                         openLaunchConfirm({
                                                             title: getMachineLaunchConfirmTitle(t, 'restart-ide', formatIdeType(entry.type)),
@@ -1040,6 +1044,8 @@ export default function AgentTab({
                                                     const { options, selectedKey } = buildLaunchWorkspaceOptions({
                                                         machine,
                                                         currentWorkspacePath: workspacePath,
+                                                        homeLabel: t('newSession.homeDirectory'),
+                                                        homeDescription: t('newSession.launchWithoutWorkspace'),
                                                     })
                                                     openLaunchConfirm({
                                                         title: getMachineLaunchConfirmTitle(t, 'restart-stopped', providerName),

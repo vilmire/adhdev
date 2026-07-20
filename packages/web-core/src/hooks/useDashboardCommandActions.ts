@@ -32,6 +32,12 @@ export interface LaunchResult {
 interface LaunchProviderOptions {
   workspaceId?: string | null
   workspacePath?: string | null
+  // Explicit "run in the home directory" choice (the dashboard "Home directory"
+  // workspace option, which carries workspaceId:null + workspacePath:null by design).
+  // Maps to the daemon's useHome:true launch arg (resolveLaunchDirectory → os.homedir()).
+  // Without this the null/null selection sent {cliType} only and the daemon rejected it
+  // with WORKSPACE_LAUNCH_CONTEXT_REQUIRED.
+  useHome?: boolean
   resumeSessionId?: string | null
   cliArgs?: string[]
   initialModel?: string | null
@@ -117,6 +123,10 @@ export function useDashboardCommandActions({
       const payload: Record<string, unknown> = { cliType: providerType }
       if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
       else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
+      // Home-directory launch: only when no dir/workspaceId is set (mirrors AgentTab /
+      // useMachineActions). Gated on the explicit opts.useHome flag so a directory /
+      // saved-workspace / default-workspace selection is never swallowed.
+      else if (opts?.useHome) payload.useHome = true
       if (opts?.resumeSessionId?.trim()) payload.resumeSessionId = opts.resumeSessionId.trim()
       if (Array.isArray(opts?.cliArgs) && opts.cliArgs.length > 0) payload.cliArgs = opts.cliArgs
       if (opts?.initialModel?.trim()) payload.initialModel = opts.initialModel.trim()
@@ -147,7 +157,9 @@ export function useDashboardCommandActions({
         })
         return { ok: true }
       }
-      return { ok: false, error: res?.error || result?.error || `Could not launch ${kind.toUpperCase()} session` }
+      // Surface the daemon error code (e.g. WORKSPACE_LAUNCH_CONTEXT_REQUIRED) so the
+      // caller can map it to a localized message instead of showing the raw string.
+      return { ok: false, error: res?.error || result?.error || `Could not launch ${kind.toUpperCase()} session`, code: res?.code || result?.code || undefined }
     } catch (error) {
       if (isP2PLaunchTimeout(error)) {
         trackPendingLaunch({

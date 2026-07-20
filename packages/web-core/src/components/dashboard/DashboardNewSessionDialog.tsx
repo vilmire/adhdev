@@ -45,7 +45,7 @@ interface DashboardNewSessionDialogProps {
     onClose: () => void
     onBrowseDirectory: (machineId: string, path: string) => Promise<BrowseDirectoryResult>
     onSaveWorkspace: (machineId: string, path: string) => Promise<{ ok: boolean; error?: string }>
-    onLaunchIde: (machineId: string, ideType: string, opts?: { workspacePath?: string | null }) => Promise<{ ok: boolean; error?: string }>
+    onLaunchIde: (machineId: string, ideType: string, opts?: { workspacePath?: string | null }) => Promise<{ ok: boolean; error?: string; code?: string }>
     onLaunchProvider: (
         machineId: string,
         kind: 'cli' | 'acp',
@@ -53,12 +53,13 @@ interface DashboardNewSessionDialogProps {
         opts?: {
             workspaceId?: string | null
             workspacePath?: string | null
+            useHome?: boolean
             resumeSessionId?: string | null
             cliArgs?: string[]
             initialModel?: string | null
             initialThinkingLevel?: string | null
         },
-    ) => Promise<{ ok: boolean; error?: string }>
+    ) => Promise<{ ok: boolean; error?: string; code?: string }>
     onListMeshes: (machineId: string) => Promise<MeshLaunchOption[]>
     onLaunchMeshCoordinator: (
         machineId: string,
@@ -478,13 +479,16 @@ export default function DashboardNewSessionDialog({
     const resolveSavedSessionLaunchTarget = useCallback((session: SavedSessionOption) => {
         const sessionWorkspace = String(session.workspace || '').trim()
         if (!sessionWorkspace) {
-            return { workspaceId: null, workspacePath: null }
+            // Saved session with no recorded workspace → resume in the home directory.
+            // Send useHome:true so the launch handler doesn't fall through to the daemon's
+            // workspace-required rejection (same null/null defect as the "Home directory" pick).
+            return { workspaceId: null, workspacePath: null, useHome: true }
         }
         const matchedWorkspace = workspaceRows.find(workspace => normalizePath(workspace.path) === normalizePath(sessionWorkspace))
         if (matchedWorkspace) {
-            return { workspaceId: matchedWorkspace.id, workspacePath: null }
+            return { workspaceId: matchedWorkspace.id, workspacePath: null, useHome: false }
         }
-        return { workspaceId: null, workspacePath: sessionWorkspace }
+        return { workspaceId: null, workspacePath: sessionWorkspace, useHome: false }
     }, [workspaceRows])
 
     const selectedSavedSession = useMemo(
@@ -626,6 +630,9 @@ export default function DashboardNewSessionDialog({
             : await onLaunchProvider(selectedMachine.id, activeKind, selectedTarget, {
                 workspaceId: workspaceChoice !== '__home__' && workspaceChoice !== '__custom__' ? workspaceChoice : null,
                 workspacePath: workspaceChoice === '__custom__' ? resolvedWorkspacePath || null : null,
+                // "Home directory" choice carries null id + null path; send useHome:true so the
+                // daemon resolves os.homedir() instead of rejecting with the workspace-required error.
+                useHome: workspaceChoice === '__home__',
                 resumeSessionId: activeKind === 'cli' && selectedResumeSessionId ? selectedResumeSessionId : null,
                 cliArgs: parsedArgs,
                 initialModel: initialModel.trim() ? initialModel.trim() : null,
@@ -634,7 +641,9 @@ export default function DashboardNewSessionDialog({
         setBusy(false)
         if (!result.ok) {
             setMessageTone('error')
-            setMessage(result.error || t('newSession.errorStartSession'))
+            setMessage(result.code === 'WORKSPACE_LAUNCH_CONTEXT_REQUIRED'
+                ? t('newSession.errorWorkspaceContextRequired')
+                : (result.error || t('newSession.errorStartSession')))
             return
         }
         if (activeKind !== 'ide' && launchArgs.trim()) {
@@ -1133,11 +1142,14 @@ export default function DashboardNewSessionDialog({
                         void onLaunchProvider(selectedMachine.id, 'cli', selectedTarget, {
                             workspaceId: launchTarget.workspaceId,
                             workspacePath: launchTarget.workspacePath,
+                            useHome: launchTarget.useHome,
                             resumeSessionId: session.providerSessionId,
                         }).then((result) => {
                             if (!result.ok) {
                                 setMessageTone('error')
-                                setMessage(result.error || t('newSession.errorResumeSession'))
+                                setMessage(result.code === 'WORKSPACE_LAUNCH_CONTEXT_REQUIRED'
+                                    ? t('newSession.errorWorkspaceContextRequired')
+                                    : (result.error || t('newSession.errorResumeSession')))
                                 return
                             }
                             onClose()
