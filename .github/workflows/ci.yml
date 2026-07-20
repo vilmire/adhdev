@@ -183,6 +183,15 @@ jobs:
       - name: Bundle vendored runtime deps into daemon-standalone
         run: npm run bundle:vendor -w packages/daemon-standalone
 
+      - name: Build @adhdev/mesh-shared
+        run: npm run build -w packages/mesh-shared
+
+      - name: Publish @adhdev/mesh-shared
+        if: env.NODE_AUTH_TOKEN != ''
+        run: cd packages/mesh-shared && npm publish --access public --ignore-scripts || echo '⚠️ mesh-shared publish skipped (version may already exist)'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Publish @adhdev/session-host-core
         if: env.NODE_AUTH_TOKEN != ''
         run: cd packages/session-host-core && npm publish --access public --ignore-scripts || echo '⚠️ session-host-core publish skipped (version may already exist)'

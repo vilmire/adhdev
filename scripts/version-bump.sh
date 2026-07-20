@@ -102,6 +102,7 @@ echo "📝 Bumping to: $NEW_VERSION"
 
 PACKAGES=(
     "package.json"
+    "packages/mesh-shared/package.json"
     "packages/daemon-core/package.json"
     "packages/daemon-standalone/package.json"
     "packages/mcp-server/package.json"
@@ -192,7 +193,7 @@ echo "✅ Tag v$NEW_VERSION confirmed on remote"
 
 echo ""
 echo "✅ OSS v$NEW_VERSION released!"
-echo "   → CI will publish session-host-core, mcp-server, daemon-core, and daemon-standalone to npm"
+echo "   → CI will publish mesh-shared, session-host-core, mcp-server, daemon-core, and daemon-standalone to npm"
 echo "   → ghostty-vt-node is published too when its release paths changed"
 echo ""
 echo "⚠️  IMPORTANT: Wait for OSS CI to complete before deploying Cloud!"
