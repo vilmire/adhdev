@@ -1196,6 +1196,16 @@
             "statMachines": "Machines",
             "statTeam": "Team",
             "statTurnPerDay": "TURN min/day",
+            "planLimitsTitle": "Plan limits",
+            "limitApiCalls": "API Calls",
+            "limitSharedSessions": "Shared Sessions",
+            "limitScreenshotMinutes": "Screenshot Minutes",
+            "limitDescMachines": "Machines connected at once",
+            "limitDescPush": "Push notifications per day",
+            "limitDescWebhooks": "Registered webhook endpoints",
+            "limitDescApiCalls": "REST API calls per month",
+            "limitDescSharedSessions": "Concurrent shared sessions",
+            "limitDescScreenshotMinutes": "Screenshot streaming minutes per day",
             "monthly": "Monthly",
             "yearly": "Yearly",
             "savePercent": "Save 17%",
@@ -1313,7 +1323,9 @@
             "logout": "Logout",
             "machineLimitBanner": "You've reached your Free plan limit of {{count}} machine{{plural}}. Upgrade to add more.",
             "upgradeArrow": "Upgrade →",
-            "pushBudget": "Notifications {{used}}/{{limit}}"
+            "machineLimitBadge": "Machines full",
+            "machineLimitBadgeTitle": "You've reached your plan limit of {{count}} machine{{plural}} — open billing to upgrade",
+            "pushBudget": "Daily notifications {{used}}/{{limit}}"
         },
         "settings": {
             "title": "Settings",

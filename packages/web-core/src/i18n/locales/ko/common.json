@@ -1196,6 +1196,16 @@
             "statMachines": "머신",
             "statTeam": "팀",
             "statTurnPerDay": "TURN 분/일",
+            "planLimitsTitle": "플랜 한도",
+            "limitApiCalls": "API 호출",
+            "limitSharedSessions": "공유 세션",
+            "limitScreenshotMinutes": "스크린샷 시간",
+            "limitDescMachines": "동시에 연결하는 머신 수",
+            "limitDescPush": "하루 푸시 알림 수",
+            "limitDescWebhooks": "등록된 웹훅 엔드포인트",
+            "limitDescApiCalls": "월간 REST API 호출 수",
+            "limitDescSharedSessions": "동시 공유 세션 수",
+            "limitDescScreenshotMinutes": "하루 스크린샷 스트리밍 분",
             "monthly": "월간",
             "yearly": "연간",
             "savePercent": "17% 절약",
@@ -1313,7 +1323,9 @@
             "logout": "로그아웃",
             "machineLimitBanner": "Free 플랜 머신 한도({{count}}개{{plural}})에 도달했습니다. 더 추가하려면 업그레이드하세요.",
             "upgradeArrow": "업그레이드 →",
-            "pushBudget": "알림 {{used}}/{{limit}}"
+            "machineLimitBadge": "머신 한도",
+            "machineLimitBadgeTitle": "플랜 머신 한도({{count}}개{{plural}})에 도달했습니다 — 결제 페이지에서 업그레이드",
+            "pushBudget": "일일 알림 {{used}}/{{limit}}"
         },
         "settings": {
             "title": "설정",

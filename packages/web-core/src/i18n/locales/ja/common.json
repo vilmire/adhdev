@@ -1196,6 +1196,16 @@
             "statMachines": "マシン",
             "statTeam": "チーム",
             "statTurnPerDay": "TURN 分/日",
+            "planLimitsTitle": "プランの上限",
+            "limitApiCalls": "API 呼び出し",
+            "limitSharedSessions": "共有セッション",
+            "limitScreenshotMinutes": "スクリーンショット時間",
+            "limitDescMachines": "同時に接続するマシン数",
+            "limitDescPush": "1日のプッシュ通知数",
+            "limitDescWebhooks": "登録済み Webhook エンドポイント",
+            "limitDescApiCalls": "月間 REST API 呼び出し数",
+            "limitDescSharedSessions": "同時共有セッション数",
+            "limitDescScreenshotMinutes": "1日のスクリーンショット配信分数",
             "monthly": "月額",
             "yearly": "年額",
             "savePercent": "17% お得",
@@ -1313,7 +1323,9 @@
             "logout": "ログアウト",
             "machineLimitBanner": "Free プランの上限である {{count}} 台{{plural}}のマシンに達しました。追加するにはアップグレードしてください。",
             "upgradeArrow": "アップグレード →",
-            "pushBudget": "通知 {{used}}/{{limit}}"
+            "machineLimitBadge": "マシン上限",
+            "machineLimitBadgeTitle": "プランのマシン上限（{{count}} 台{{plural}}）に達しました — 請求ページでアップグレード",
+            "pushBudget": "1日の通知 {{used}}/{{limit}}"
         },
         "settings": {
             "title": "設定",

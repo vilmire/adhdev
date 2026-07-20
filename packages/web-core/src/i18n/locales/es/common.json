@@ -1196,6 +1196,16 @@
             "statMachines": "Máquinas",
             "statTeam": "Equipo",
             "statTurnPerDay": "min TURN/día",
+            "planLimitsTitle": "Límites del plan",
+            "limitApiCalls": "Llamadas API",
+            "limitSharedSessions": "Sesiones compartidas",
+            "limitScreenshotMinutes": "Minutos de captura",
+            "limitDescMachines": "Máquinas conectadas a la vez",
+            "limitDescPush": "Notificaciones push por día",
+            "limitDescWebhooks": "Endpoints de webhook registrados",
+            "limitDescApiCalls": "Llamadas a la API REST por mes",
+            "limitDescSharedSessions": "Sesiones compartidas simultáneas",
+            "limitDescScreenshotMinutes": "Minutos de transmisión de capturas por día",
             "monthly": "Mensual",
             "yearly": "Anual",
             "savePercent": "Ahorra un 17 %",
@@ -1313,7 +1323,9 @@
             "logout": "Cerrar sesión",
             "machineLimitBanner": "Has alcanzado el límite de {{count}} máquina{{plural}} del plan Free. Mejora para añadir más.",
             "upgradeArrow": "Mejorar →",
-            "pushBudget": "Notificaciones {{used}}/{{limit}}"
+            "machineLimitBadge": "Máquinas llenas",
+            "machineLimitBadgeTitle": "Has alcanzado el límite de {{count}} máquina{{plural}} de tu plan — abre facturación para mejorar",
+            "pushBudget": "Notificaciones diarias {{used}}/{{limit}}"
         },
         "settings": {
             "title": "Ajustes",
