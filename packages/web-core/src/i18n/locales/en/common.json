@@ -1110,6 +1110,7 @@
             "limitMachines": "Machines",
             "limitP2P": "P2P Connections",
             "limitWebhooks": "Webhooks",
+            "limitPushNotifications": "Daily Push Notifications",
             "limitTurnRelay": "TURN Relay",
             "enabled": "Enabled",
             "disabled": "Disabled",

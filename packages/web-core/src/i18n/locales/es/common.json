@@ -1110,6 +1110,7 @@
             "limitMachines": "Máquinas",
             "limitP2P": "Conexiones P2P",
             "limitWebhooks": "Webhooks",
+            "limitPushNotifications": "Notificaciones push diarias",
             "limitTurnRelay": "Relé TURN",
             "enabled": "Habilitado",
             "disabled": "Deshabilitado",

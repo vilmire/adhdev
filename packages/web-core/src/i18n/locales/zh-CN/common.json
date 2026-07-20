@@ -1110,6 +1110,7 @@
             "limitMachines": "机器",
             "limitP2P": "P2P 连接",
             "limitWebhooks": "Webhook",
+            "limitPushNotifications": "每日推送通知",
             "limitTurnRelay": "TURN 中继",
             "enabled": "已启用",
             "disabled": "已禁用",

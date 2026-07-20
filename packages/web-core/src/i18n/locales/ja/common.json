@@ -1110,6 +1110,7 @@
             "limitMachines": "マシン",
             "limitP2P": "P2P 接続",
             "limitWebhooks": "Webhook",
+            "limitPushNotifications": "1日のプッシュ通知",
             "limitTurnRelay": "TURN リレー",
             "enabled": "有効",
             "disabled": "無効",

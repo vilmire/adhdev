@@ -1110,6 +1110,7 @@
             "limitMachines": "머신",
             "limitP2P": "P2P 연결",
             "limitWebhooks": "웹훅",
+            "limitPushNotifications": "일별 푸시 알림",
             "limitTurnRelay": "TURN 릴레이",
             "enabled": "사용",
             "disabled": "사용 안 함",
