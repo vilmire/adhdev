@@ -58,6 +58,37 @@ export interface SessionBufferState {
 
 export type SessionHostSurfaceKind = 'live_runtime' | 'recovery_snapshot' | 'inactive_record';
 
+/**
+ * Compact, secret-free record of how a session's PTY process terminated.
+ *
+ * Preserves the nullable/unknown exitCode and signal exactly as observed from
+ * the first node-pty `onExit` — an `exitCode` of `null` means "unknown" (the
+ * process was terminated by a signal, or the exit code was otherwise not
+ * reported) and MUST NOT be collapsed to 0. Persisted as a tombstone so
+ * termination diagnostics remain inspectable after the live runtime and its
+ * transport adapter are torn down.
+ */
+export interface SessionTermination {
+  /** Exit code exactly as observed; `null` = unknown / signal-terminated. Never fabricated to 0. */
+  exitCode: number | null;
+  /** Signal number that terminated the process, if any; `null` when not signalled. */
+  signal: number | null;
+  /** Classification derived from (exitCode, signal): clean exit vs. failure vs. unknown. */
+  reason: 'exit' | 'signal' | 'failed' | 'unknown';
+  /** Lifecycle recorded for this termination (`stopped` | `failed`). */
+  lifecycle: Extract<SessionLifecycle, 'stopped' | 'failed'>;
+  /** Wall-clock time the termination was observed. */
+  terminatedAt: number;
+  /** OS pid of the terminated process, if it was known. */
+  osPid?: number;
+  /** Lifecycle the session was in immediately before termination. */
+  previousLifecycle?: SessionLifecycle;
+  /** Last time output was observed from the session, if known. */
+  lastOutputAt?: number;
+  /** Whether the termination followed an explicit stop/delete request, and which. */
+  requestedStop?: 'stop' | 'delete' | 'restart' | 'prune';
+}
+
 export interface SessionHostRecord {
   sessionId: string;
   runtimeKey: string;
@@ -78,6 +109,8 @@ export interface SessionHostRecord {
   attachedClients: SessionAttachedClient[];
   buffer: SessionBufferState;
   meta: Record<string, unknown>;
+  /** Termination tombstone, stamped when the PTY process exits. Retained for post-mortem inspection. */
+  termination?: SessionTermination;
 }
 
 export interface CreateSessionPayload {
@@ -307,7 +340,7 @@ export type SessionHostEvent =
   | { type: 'session_resumed'; sessionId: string; pid?: number }
   | { type: 'session_output'; sessionId: string; seq: number; data: string }
   | { type: 'session_cleared'; sessionId: string }
-  | { type: 'session_exit'; sessionId: string; exitCode: number | null }
+  | { type: 'session_exit'; sessionId: string; exitCode: number | null; signal?: number | null; termination?: SessionTermination }
   | { type: 'session_stopped'; sessionId: string }
   | { type: 'session_deleted'; sessionId: string }
   | { type: 'session_resized'; sessionId: string; cols: number; rows: number }

@@ -16,6 +16,7 @@ import type {
   ReleaseWritePayload,
   SessionAttachedClient,
   SessionHostRecord,
+  SessionTermination,
 } from './types.js';
 import { SessionRingBuffer } from './buffer.js';
 import { resolveSessionHostCols, resolveSessionHostRows } from './defaults.js';
@@ -237,10 +238,11 @@ export class SessionHostRegistry {
     return this.cloneRecord(state.record);
   }
 
-  markStopped(sessionId: string, lifecycle: 'stopped' | 'failed' = 'stopped'): SessionHostRecord {
+  markStopped(sessionId: string, lifecycle: 'stopped' | 'failed' = 'stopped', termination?: SessionTermination): SessionHostRecord {
     const state = this.requireSession(sessionId);
     state.record.lifecycle = lifecycle;
     state.record.lastActivityAt = Date.now();
+    if (termination) state.record.termination = termination;
     return this.cloneRecord(state.record);
   }
 

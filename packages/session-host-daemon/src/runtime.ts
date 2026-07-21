@@ -80,7 +80,7 @@ export interface PtyRuntimeOptions {
   sessionId: string;
   payload: CreateSessionPayload;
   onData: (data: string) => void;
-  onExit: (exitCode: number | null) => void;
+  onExit: (exitCode: number | null, signal: number | null) => void;
 }
 
 // Use shared spawn env sanitizer — alias for backward compat within this file
@@ -299,7 +299,7 @@ export class PtySessionRuntime {
   private pasteMode = false;
   private scrollRegion: { top: number; bot: number };
   private onDataCallback: (data: string) => void;
-  private onExitCallback: (exitCode: number | null) => void;
+  private onExitCallback: (exitCode: number | null, signal: number | null) => void;
 
   constructor(options: PtyRuntimeOptions) {
     this.sessionId = options.sessionId;
@@ -350,13 +350,19 @@ export class PtySessionRuntime {
       this.onDataCallback(data);
     });
 
-    this.ptyProcess.onExit(({ exitCode }) => {
+    this.ptyProcess.onExit(({ exitCode, signal }) => {
       this.ptyProcess = null;
       this.screenMirror?.dispose();
       this.screenMirror = null;
       this.pendingQueryScanTail = '';
       this.terminalModeScanTail = '';
-      this.onExitCallback(exitCode ?? null);
+      // Preserve the nullable/unknown exitCode and signal exactly as node-pty
+      // reports them: a signal-terminated process arrives as exitCode=null and
+      // must stay distinguishable from a clean exit 0.
+      this.onExitCallback(
+        typeof exitCode === 'number' ? exitCode : null,
+        typeof signal === 'number' ? signal : null,
+      );
     });
 
     return this.ptyProcess.pid;

@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as net from 'net';
 import {
   SessionHostRegistry,
+  classifyTermination,
   createLineParser,
   createResponseEnvelope,
   getDefaultSessionHostEndpoint,
@@ -21,6 +22,7 @@ import type {
   SessionHostRequest,
   SessionHostRuntimeTransition,
   SessionHostResponse,
+  SessionTermination,
 } from '@adhdev/session-host-core';
 import { PtySessionRuntime } from './runtime.js';
 import { SessionHostStorage } from './storage.js';
@@ -61,6 +63,9 @@ export class SessionHostServer extends EventEmitter {
   private recentTransitions: SessionHostRuntimeTransition[] = [];
   private exitWaiters = new Map<string, Array<(exitCode: number | null) => void>>();
   private lastNoOutputInputWarnAt = new Map<string, number>();
+  // Records the most recent explicit stop/delete/restart/prune request per
+  // session so the termination diagnostic can attribute the exit to it.
+  private stopRequests = new Map<string, SessionTermination['requestedStop']>();
 
   constructor(options: SessionHostServerOptions = {}) {
     super();
@@ -271,6 +276,7 @@ export class SessionHostServer extends EventEmitter {
           return { success: true, result: this.registry.getSession(request.payload.sessionId) };
         }
         case 'stop_session': {
+          this.stopRequests.set(request.payload.sessionId, 'stop');
           this.registry.setLifecycle(request.payload.sessionId, 'stopping');
           this.persistNow(request.payload.sessionId);
           this.requireRuntime(request.payload.sessionId).stop();
@@ -285,6 +291,7 @@ export class SessionHostServer extends EventEmitter {
             if (!request.payload.force) {
               return { success: false, error: `Session ${record.sessionId} is still running; pass force to stop and delete it` };
             }
+            this.stopRequests.set(record.sessionId, 'delete');
             this.registry.setLifecycle(record.sessionId, 'stopping');
             this.persistNow(record.sessionId);
             this.requireRuntime(record.sessionId).stop();
@@ -294,6 +301,8 @@ export class SessionHostServer extends EventEmitter {
           }
           this.registry.deleteSession(record.sessionId);
           this.storage.remove(record.sessionId);
+          this.storage.removeTombstone(record.sessionId);
+          this.stopRequests.delete(record.sessionId);
           this.emitEvent({ type: 'session_deleted', sessionId: record.sessionId });
           this.recordRuntimeTransition(record.sessionId, 'delete_session', record.lifecycle, undefined, true);
           return { success: true, result: { sessionId: record.sessionId, deleted: true } };
@@ -651,6 +660,7 @@ export class SessionHostServer extends EventEmitter {
     }
 
     if (this.runtimes.has(sessionId)) {
+      this.stopRequests.set(sessionId, 'restart');
       this.registry.setLifecycle(sessionId, 'stopping');
       this.persistNow(sessionId);
       this.recordRuntimeTransition(sessionId, 'restart_requested', 'stopping', undefined, true);
@@ -737,6 +747,7 @@ export class SessionHostServer extends EventEmitter {
     );
 
     if (this.runtimes.has(record.sessionId)) {
+      this.stopRequests.set(record.sessionId, 'prune');
       this.registry.setLifecycle(record.sessionId, 'stopping');
       this.persistNow(record.sessionId);
       this.requireRuntime(record.sessionId).stop();
@@ -747,6 +758,8 @@ export class SessionHostServer extends EventEmitter {
 
     this.registry.deleteSession(record.sessionId);
     this.storage.remove(record.sessionId);
+    this.storage.removeTombstone(record.sessionId);
+    this.stopRequests.delete(record.sessionId);
   }
 
   private startRuntime(
@@ -762,23 +775,7 @@ export class SessionHostServer extends EventEmitter {
         this.schedulePersist(record.sessionId);
         this.emitEvent({ type: 'session_output', sessionId: record.sessionId, seq, data });
       },
-      onExit: (exitCode) => {
-        this.registry.markStopped(record.sessionId, exitCode === 0 ? 'stopped' : 'failed');
-        this.runtimes.delete(record.sessionId);
-        this.resolveExitWaiters(record.sessionId, exitCode);
-        this.persistNow(record.sessionId);
-        this.emitEvent({ type: 'session_exit', sessionId: record.sessionId, exitCode });
-        this.recordRuntimeTransition(
-          record.sessionId,
-          'session_exit',
-          exitCode === 0 ? 'stopped' : 'failed',
-          undefined,
-          exitCode === 0,
-          exitCode === 0 ? undefined : `exitCode=${exitCode}`,
-        );
-        // Clean up persistence file after a brief delay (allow post-mortem reads)
-        setTimeout(() => this.storage.remove(record.sessionId), 5_000);
-      },
+      onExit: (exitCode, signal) => this.handleRuntimeExit(record, exitCode, signal),
     });
 
     this.registry.setLifecycle(record.sessionId, 'starting');
@@ -789,5 +786,65 @@ export class SessionHostServer extends EventEmitter {
     this.emitEvent({ type: startEventType, sessionId: record.sessionId, pid });
     this.recordRuntimeTransition(record.sessionId, startEventType, startedRecord.lifecycle, `pid=${pid}`, true);
     return startedRecord;
+  }
+
+  /**
+   * Handle a PTY termination: classify the (exitCode, signal) pair, stamp the
+   * record + tombstone, emit exactly one structured diagnostic, and schedule
+   * cleanup of the live persistence file (the tombstone is retained).
+   */
+  private handleRuntimeExit(record: SessionHostRecord, exitCode: number | null, signal: number | null): SessionTermination {
+    // Capture pre-termination context BEFORE mutating the record.
+    const priorRecord = this.registry.getSession(record.sessionId);
+    const termination = classifyTermination({
+      exitCode,
+      signal,
+      osPid: priorRecord?.osPid,
+      previousLifecycle: priorRecord?.lifecycle,
+      lastOutputAt: priorRecord?.lastActivityAt,
+      requestedStop: this.stopRequests.get(record.sessionId),
+      terminatedAt: Date.now(),
+    });
+    this.stopRequests.delete(record.sessionId);
+
+    this.registry.markStopped(record.sessionId, termination.lifecycle, termination);
+    this.runtimes.delete(record.sessionId);
+    this.resolveExitWaiters(record.sessionId, exitCode);
+    this.persistNow(record.sessionId);
+    // Persist a tombstone that survives live-record cleanup so the termination
+    // stays inspectable after the 5s removal below.
+    this.storage.saveTombstone(record.sessionId, termination);
+    this.emitEvent({ type: 'session_exit', sessionId: record.sessionId, exitCode, signal, termination });
+    const summary = `reason=${termination.reason} exitCode=${termination.exitCode === null ? 'unknown' : termination.exitCode} signal=${termination.signal ?? 'none'}`;
+    // Exactly one structured, secret-free termination diagnostic.
+    this.recordHostLog(
+      termination.lifecycle === 'stopped' ? 'info' : 'warn',
+      `session terminated: ${summary}`,
+      record.sessionId,
+      {
+        runtimeKey: record.runtimeKey,
+        providerType: record.providerType,
+        osPid: termination.osPid,
+        exitCode: termination.exitCode,
+        signal: termination.signal,
+        reason: termination.reason,
+        previousLifecycle: termination.previousLifecycle,
+        lifecycle: termination.lifecycle,
+        lastOutputAt: termination.lastOutputAt,
+        requestedStop: termination.requestedStop,
+      },
+    );
+    this.recordRuntimeTransition(
+      record.sessionId,
+      'session_exit',
+      termination.lifecycle,
+      summary,
+      termination.lifecycle === 'stopped',
+      termination.lifecycle === 'stopped' ? undefined : summary,
+    );
+    // Clean up the live persistence file after a brief delay (allow post-mortem
+    // reads). The tombstone written above is retained.
+    setTimeout(() => this.storage.remove(record.sessionId), 5_000).unref?.();
+    return termination;
   }
 }

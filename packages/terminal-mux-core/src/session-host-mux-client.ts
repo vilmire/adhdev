@@ -612,7 +612,14 @@ export class SessionHostMuxClient {
           pane.record = { ...pane.record, lifecycle: 'running', osPid: event.pid ?? pane.record.osPid };
           break;
         case 'session_exit':
-          pane.record = { ...pane.record, lifecycle: event.exitCode === 0 ? 'stopped' : 'failed' };
+          // Prefer the authoritative termination classification (which never
+          // treats an unknown/null exit as a clean stop); fall back to the raw
+          // exitCode only for older hosts that don't emit a tombstone.
+          pane.record = {
+            ...pane.record,
+            lifecycle: event.termination?.lifecycle ?? (event.exitCode === 0 ? 'stopped' : 'failed'),
+            termination: event.termination ?? pane.record.termination,
+          };
           break;
         case 'session_stopped':
           pane.record = { ...pane.record, lifecycle: 'stopped' };

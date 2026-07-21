@@ -41,12 +41,14 @@ export type {
   SessionLifecycle,
   SessionOwnerType,
   SessionTransport,
+  SessionTermination,
   SessionHostWireEnvelope,
   SessionWriteOwner,
   StopSessionPayload,
 } from './types.js';
 
 export { SESSION_HOST_SUPPORTED_REQUEST_TYPES } from './types.js';
+export { classifyTermination } from './termination.js';
 
 export { DEFAULT_SESSION_RING_BUFFER_MAX_BYTES, SessionRingBuffer } from './buffer.js';
 export type { SessionRingBufferOptions } from './buffer.js';

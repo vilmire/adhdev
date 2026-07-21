@@ -42,7 +42,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
 
     private readonly client: SessionHostClient;
     private readonly dataCallbacks = new Set<(data: string) => void>();
-    private readonly exitCallbacks = new Set<(info: { exitCode: number }) => void>();
+    private readonly exitCallbacks = new Set<(info: { exitCode: number | null; signal?: number | null }) => void>();
     private readonly pendingOutput: string[] = [];
     private operationChain = Promise.resolve();
     private unsubscribe: (() => void) | null = null;
@@ -79,7 +79,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         }
     }
 
-    onExit(callback: (info: { exitCode: number }) => void): void {
+    onExit(callback: (info: { exitCode: number | null; signal?: number | null }) => void): void {
         this.exitCallbacks.add(callback);
     }
 
@@ -361,8 +361,13 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
             return;
         }
         if (event.type === 'session_exit') {
+            // Preserve the nullable/unknown exitCode and signal exactly as the
+            // session host reported them — never collapse null to 0, which would
+            // make a signal-terminated process indistinguishable from a clean exit.
+            const exitCode = typeof event.exitCode === 'number' ? event.exitCode : null;
+            const signal = typeof event.signal === 'number' ? event.signal : null;
             for (const callback of this.exitCallbacks) {
-                callback({ exitCode: event.exitCode ?? 0 });
+                callback({ exitCode, signal });
             }
             void this.closeClient(false);
         }

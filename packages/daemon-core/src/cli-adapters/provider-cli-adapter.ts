@@ -707,8 +707,10 @@ export class ProviderCliAdapter implements CliAdapter {
             }
         });
 
-        this.ptyProcess.onExit(({ exitCode }: { exitCode: number }) => {
-            LOG.info('CLI', `[${this.cliType}] Exit code ${exitCode}`);
+        this.ptyProcess.onExit(({ exitCode, signal }: { exitCode: number | null; signal?: number | null }) => {
+            // Preserve the unknown case: a null exitCode (signal-terminated or
+            // otherwise unreported) is logged as "unknown", never as exit 0.
+            LOG.info('CLI', `[${this.cliType}] Exit code ${exitCode === null || exitCode === undefined ? 'unknown' : exitCode}${signal ? ` (signal ${signal})` : ''}`);
             this.flushPendingOutputParse();
             this.ptyProcess = null;
             this.engine.onPtyExit();

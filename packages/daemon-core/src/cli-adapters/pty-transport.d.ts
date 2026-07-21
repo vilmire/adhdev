@@ -37,7 +37,8 @@ export interface PtyRuntimeTransport {
     getMetadata?(): PtyRuntimeMetadata | null;
     onData(callback: (data: string) => void): void;
     onExit(callback: (info: {
-        exitCode: number;
+        exitCode: number | null;
+        signal?: number | null;
     }) => void): void;
 }
 export interface PtyTransportFactory {
