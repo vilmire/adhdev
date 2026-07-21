@@ -443,142 +443,227 @@ describe('CliStateEngine', () => {
 
         it('applyWaitingApproval bumps approvalEntrySeq for each fresh distinct approval', () => {
             // The seq must actually advance through the real FSM entry path so
-            // the signature/cooldown discriminator has a value to key off of.
+            // the signature discriminator has a value to key off of.
             const { engine, transport } = buildEngine()
             transport.getApprovalKeyForIndex = () => '\r'
-            transport.runParseApproval = () => null
+            transport.getSnapshot = () => makeSnap({ screenText: 'Allow Bash command?\n1. Yes' })
+            transport.runParseSession = () => ({
+                status: 'waiting_approval',
+                messages: [],
+                activeModal: { message: 'Allow Bash command?', buttons: ['Yes'] },
+            })
             engine.isWaitingForResponse = true
 
-            const evalApproval = (message: string) => {
-                // Drive the settled-eval approval branch directly.
-                ;(engine as any).applyWaitingApproval({ modal: { message, buttons: ['Yes'] } })
-            }
-
-            evalApproval('Allow Bash command?')
+            engine.evaluateSettled(transport.getSnapshot())
             const seqAfterFirst = engine.approvalEntrySeq
             expect(seqAfterFirst).toBeGreaterThan(0)
 
-            // Resolve #1, then a brand new approval (same text) enters the FSM.
+            // Resolve #1, then a brand new approval (same text, genuinely new
+            // screen content) enters the FSM.
             engine.resolveModal(0)
-            evalApproval('Allow Bash command?')
+            vi.advanceTimersByTime(1000) // past resolveModal's responseSettleIgnoreUntil window
+            transport.getSnapshot = () => makeSnap({ screenText: 'Ran previous command.\n\nAllow Bash command?\n1. Yes' })
+            engine.evaluateSettled(transport.getSnapshot())
             expect(engine.approvalEntrySeq).toBeGreaterThan(seqAfterFirst)
         })
     })
 
     // ── Stale-resolved-approval re-latch guard (Live Run C mirror) ──────────
     //
-    // Regression (observed live on kimi-code v0.28.1/K3, standalone probe Run C):
-    // after resolving a real approval modal (command approved, transport wrote the
-    // key, kimi ran the command and finished the turn), a LATER settle pass
-    // re-parsed the identical already-answered question text and re-latched
-    // waiting_approval — with NO further PTY output ever arriving afterward, so
-    // nothing triggered a correcting re-evaluation. The dashboard stayed pinned to
-    // "waiting for approval" for minutes (until the 5-minute maxResponse watchdog),
-    // even though recentOutputBuffer/responseBuffer/screenText no longer contained
-    // any trace of the modal — proving the recapture read stale/transitional
-    // buffer content, not a genuinely re-presented prompt.
-    describe('applyWaitingApproval — stale-resolved-modal re-latch guard', () => {
-        function resolveThenReparse(overrides: {
-            reparseMessage?: string
-            advanceMs?: number
-            lastNonEmptyOutputAt: number
-        }) {
-            const { engine, transport } = buildEngine()
+    // Regression (observed live on kimi-code v0.28.1/K3, standalone probes Run C
+    // and Phase 4): after resolving a real approval modal (command approved,
+    // transport wrote the key, kimi ran the command and finished the turn), a
+    // LATER settle pass re-parsed the identical already-answered question text
+    // and re-latched waiting_approval. An output-TIMESTAMP discriminator ("has
+    // any PTY byte arrived since the resolve") was tried first and found
+    // insufficient: a live dense-polling repro showed kimi's own idle-screen
+    // chrome (status bar, context meter, blank-line repaint) advances the
+    // output timestamp within ~300ms of the resolve even though NOTHING
+    // approval-relevant changed — the guard stopped protecting almost
+    // immediately instead of for as long as the staleness actually persisted
+    // (observed 30s+). The fix is content-based: computeApprovalContentSignature
+    // strips blank-line padding and any manifest-declared chrome
+    // (tui.transcriptPty.chromePatterns / tui.spinner.patterns) from the screen
+    // before comparing, so ordinary repaint noise cannot masquerade as fresh
+    // content, while genuinely new conversation/tool-output text always changes
+    // the signature.
+    describe('applyWaitingApproval — content-based stale-modal guard', () => {
+        // A representative declarative tui block, modeled on the real shipped
+        // kimi manifest: a status-bar/context-meter chrome line and a braille
+        // spinner tick, both "known irrelevant repaint noise" per the manifest's
+        // own declarations — reused generically, no kimi-specific code in the
+        // engine itself.
+        const CHROME_TUI = {
+            transcriptPty: {
+                chromePatterns: [
+                    { regex: 'K3 thinking:.*context: \\d+%' },
+                ],
+            },
+            spinner: {
+                patterns: [
+                    { regex: '^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working\\.\\.\\.$' },
+                ],
+            },
+        }
+
+        const MODAL = { message: 'Run this command?', buttons: ['Approve once', 'Reject'] }
+
+        function resolveApproval(chromeFooter: string) {
+            const { engine, transport } = buildEngine({ tui: CHROME_TUI as any })
             transport.getApprovalKeyForIndex = () => '\r'
             engine.approvalEntrySeq = 1
-            engine.activeModal = { message: 'Run this command?', buttons: ['Approve once', 'Reject'] }
+            engine.activeModal = { ...MODAL }
+            transport.getSnapshot = () => makeSnap({
+                screenText: [
+                    '✨ Run the shell command: echo MARKER1',
+                    '● Ran a command',
+                    '  $ echo MARKER1',
+                    '▶ Run this command?',
+                    '1. Approve once',
+                    '2. Reject',
+                    chromeFooter,
+                ].join('\n'),
+            })
 
             engine.resolveModal(0)
             expect(engine.activeModal).toBe(null)
             expect(engine.currentStatus).toBe('generating')
-
-            const advanceMs = overrides.advanceMs ?? 50
-            vi.advanceTimersByTime(advanceMs)
-
-            ;(engine as any).applyWaitingApproval({
-                modal: { message: overrides.reparseMessage ?? 'Run this command?', buttons: ['Approve once', 'Reject'] },
-                now: Date.now(),
-                lastNonEmptyOutputAt: overrides.lastNonEmptyOutputAt,
-            })
-
             return { engine, transport }
         }
 
-        it('rejects the identical already-resolved modal re-parsed shortly after with no new output since resolve', () => {
-            const resolvedAt = Date.now()
-            const { engine } = resolveThenReparse({
-                advanceMs: 50,
-                // No PTY activity since the resolve — the classic stale-buffer repro.
-                lastNonEmptyOutputAt: resolvedAt,
+        function reparse(engine: CliStateEngine, transport: ReturnType<typeof buildEngine>['transport'], screenText: string) {
+            const snap = makeSnap({ screenText })
+            transport.getSnapshot = () => snap
+            transport.runParseSession = () => ({
+                status: 'waiting_approval',
+                messages: [],
+                activeModal: { ...MODAL },
             })
+            engine.isWaitingForResponse = true
+            engine.evaluateSettled(snap)
+        }
 
-            // Must NOT re-latch: activeModal stays clear, status stays 'generating'
-            // (whatever resolveModal already committed), not bounced back to
-            // 'waiting_approval'.
+        it('stays suppressed for >30s of pure chrome/footer repaint (identical approval-relevant content)', () => {
+            const { engine, transport } = resolveApproval('K3 thinking: high  context: 0%')
+
+            vi.advanceTimersByTime(35_000)
+
+            // Same modal text/buttons, same conversation content — only the
+            // declared-chrome footer line differs (context% ticked, a spinner
+            // frame rendered). This must NOT be treated as new content.
+            reparse(engine, transport, [
+                '✨ Run the shell command: echo MARKER1',
+                '● Ran a command',
+                '  $ echo MARKER1',
+                '▶ Run this command?',
+                '1. Approve once',
+                '2. Reject',
+                '⠙ working...',
+                'K3 thinking: high  context: 3%',
+            ].join('\n'))
+
             expect(engine.activeModal).toBe(null)
             expect(engine.currentStatus).toBe('generating')
         })
 
-        // Regression (kimi-code v0.28.1/K3 live standalone repro): the guard used
-        // to also require being within `timeouts.approvalCooldown` (a few seconds)
-        // of the resolve. The real observed staleness window outlasted that bound
-        // by a wide margin (30s+, tied to K3's "high" effort settle timing), so
-        // the guard's protection expired before the stale content actually
-        // cleared and the FSM re-latched anyway. The guard must now suppress the
-        // stale repaint indefinitely — for as long as no genuinely new PTY output
-        // has arrived — with no time cap at all.
-        it('still rejects the identical already-resolved modal re-parsed 30+ seconds later with no new output', () => {
-            const resolvedAt = Date.now()
-            const { engine } = resolveThenReparse({
-                advanceMs: 45_000, // far past any plausible fixed cooldown
-                lastNonEmptyOutputAt: resolvedAt, // still no new output, ever
-            })
+        it('captures a genuinely new identical-text approval once real new content (tool output + a fresh request) appears', () => {
+            const { engine, transport } = resolveApproval('K3 thinking: high  context: 0%')
 
-            expect(engine.activeModal).toBe(null)
-            expect(engine.currentStatus).toBe('generating')
-        })
+            vi.advanceTimersByTime(2_000)
 
-        it('captures a genuinely new approval with the SAME message text once fresh output has arrived', () => {
-            // The load-bearing discriminator: consecutive real approvals sharing
-            // identical text (a documented prior fix — see "writes the key for
-            // consecutive distinct approvals that share message text within
-            // cooldown") must keep working. A real follow-up approval necessarily
-            // means the CLI produced new output first (ran the previous tool, then
-            // asked again), so lastNonEmptyOutputAt advances past the resolve time.
-            const resolvedAt = Date.now()
-            const { engine } = resolveThenReparse({
-                advanceMs: 50,
-                lastNonEmptyOutputAt: resolvedAt + 25, // fresh output arrived after resolve
-            })
+            // Real new content: the first command's result landed, and a
+            // genuinely new (second) approval request followed — same modal
+            // text/buttons as before, but the surrounding conversation grew.
+            reparse(engine, transport, [
+                '✨ Run the shell command: echo MARKER1',
+                '● Ran a command',
+                '  $ echo MARKER1',
+                '   Command executed successfully.',
+                '   Approved: Running: echo MARKER1',
+                '● Done.',
+                '',
+                '✨ Run the shell command: echo MARKER2',
+                '▶ Run this command?',
+                '1. Approve once',
+                '2. Reject',
+                'K3 thinking: high  context: 8%',
+            ].join('\n'))
 
-            expect(engine.activeModal).toEqual({ message: 'Run this command?', buttons: ['Approve once', 'Reject'] })
+            expect(engine.activeModal).toEqual(MODAL)
             expect(engine.currentStatus).toBe('waiting_approval')
         })
 
-        it('captures a genuinely new SAME-text approval even long after the resolve, as long as fresh output arrived', () => {
-            // Mirrors the 30s+ rejection case above, but with genuinely fresh
-            // output — proves the guard is governed purely by output freshness,
-            // not elapsed time, in both directions.
-            const resolvedAt = Date.now()
-            const { engine } = resolveThenReparse({
-                advanceMs: 45_000,
-                lastNonEmptyOutputAt: resolvedAt + 44_000, // fresh output arrived, well after resolve
-            })
+        it('always captures a genuinely different modal (different message) regardless of chrome or elapsed time', () => {
+            const { engine, transport } = resolveApproval('K3 thinking: high  context: 0%')
 
-            expect(engine.activeModal).toEqual({ message: 'Run this command?', buttons: ['Approve once', 'Reject'] })
-            expect(engine.currentStatus).toBe('waiting_approval')
-        })
+            vi.advanceTimersByTime(35_000)
 
-        it('always captures a genuinely different modal regardless of output freshness or elapsed time', () => {
-            const resolvedAt = Date.now()
-            const { engine } = resolveThenReparse({
-                reparseMessage: 'Apply this edit?',
-                advanceMs: 45_000,
-                lastNonEmptyOutputAt: resolvedAt, // no new output, but a different question
+            const snap = makeSnap({
+                screenText: [
+                    '✨ Please apply this file edit',
+                    '▶ Apply this edit?',
+                    '1. Approve once',
+                    '2. Reject',
+                    'K3 thinking: high  context: 0%',
+                ].join('\n'),
             })
+            transport.getSnapshot = () => snap
+            transport.runParseSession = () => ({
+                status: 'waiting_approval',
+                messages: [],
+                activeModal: { message: 'Apply this edit?', buttons: ['Approve once', 'Reject'] },
+            })
+            engine.isWaitingForResponse = true
+            engine.evaluateSettled(snap)
 
             expect(engine.activeModal).toEqual({ message: 'Apply this edit?', buttons: ['Approve once', 'Reject'] })
             expect(engine.currentStatus).toBe('waiting_approval')
+        })
+
+        it('captures an identical-text approval in the NEXT turn even against a stale-looking screen', () => {
+            const { engine, transport } = resolveApproval('K3 thinking: high  context: 0%')
+
+            // A brand new user turn starts — onTurnStarted must clear the
+            // resolve-time bookkeeping so this turn's approval (even sharing
+            // text with the prior turn's already-resolved one) is captured.
+            engine.onTurnStarted({ prompt: 'do it again', startedAt: Date.now(), bufferStart: 0, rawBufferStart: 0 })
+            vi.advanceTimersByTime(1000) // past resolveModal's responseSettleIgnoreUntil window
+
+            reparse(engine, transport, [
+                '✨ Run the shell command: echo MARKER1', // identical prior text
+                '● Ran a command',
+                '  $ echo MARKER1',
+                '▶ Run this command?',
+                '1. Approve once',
+                '2. Reject',
+                'K3 thinking: high  context: 0%', // even the chrome looks identical
+            ].join('\n'))
+
+            expect(engine.activeModal).toEqual(MODAL)
+            expect(engine.currentStatus).toBe('waiting_approval')
+        })
+
+        it('bounded memory: resolve-time bookkeeping clears on session teardown (onPtyExit)', () => {
+            const { engine } = resolveApproval('K3 thinking: high  context: 0%')
+            expect(engine.lastApprovalResolvedAt).toBeGreaterThan(0)
+            expect(engine.lastApprovalResolvedContentSignature).not.toBe('')
+
+            engine.onPtyExit()
+
+            expect(engine.lastApprovalResolvedAt).toBe(0)
+            expect(engine.lastResolvedModalMessage).toBe('')
+            expect(engine.lastApprovalResolvedContentSignature).toBe('')
+        })
+
+        it('existing provider-authority immediate-generating behavior is unchanged by the new guard', () => {
+            // transcriptAuthority:'provider' onTurnStarted promotion (a separate,
+            // already-shipped fix) must keep working now that onTurnStarted also
+            // clears approval-resolution memory.
+            const { engine } = buildEngine({ transcriptAuthority: 'provider', tui: CHROME_TUI as any })
+            engine.onTurnStarted({ prompt: 'hi', startedAt: Date.now(), bufferStart: 0, rawBufferStart: 0 })
+            expect(engine.currentStatus).toBe('generating')
+            const history = engine.getStatusHistory()
+            expect(history.at(-1)).toMatchObject({ status: 'generating', trigger: 'turn_started' })
         })
     })
 

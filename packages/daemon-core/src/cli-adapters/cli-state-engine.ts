@@ -94,10 +94,6 @@ interface SettledEvalContext {
     lastParsedAssistant: CliChatMessage | undefined;
     parsedStatus: string | null;
     prevStatus: string;
-    /** snap.lastNonEmptyOutputAt at evaluation time — used to tell a genuinely
-     *  fresh modal apart from a stale re-parse of an already-resolved one (see
-     *  applyWaitingApproval's isStaleResolvedRepaint guard). */
-    lastNonEmptyOutputAt: number;
 }
 
 // ─── Constants ─────────────────────────────────────────────────────────────
@@ -159,6 +155,22 @@ export class CliStateEngine {
     // ── Approval ─────────────────────────────────────
     lastApprovalResolvedAt = 0;
     lastResolvedModalMessage = '';
+    /**
+     * Normalized approval-context signature captured at resolve time (see
+     * `computeApprovalContentSignature`) — the screen text with blank-line
+     * padding and any manifest-declared chrome (transcriptPty.chromePatterns,
+     * spinner.patterns) stripped out. Used by applyWaitingApproval's
+     * isStaleResolvedRepaint check to tell "the same already-answered modal,
+     * re-parsed from a screen that has not meaningfully changed" apart from
+     * "a genuinely new approval" — content-based, not time-based, because
+     * ordinary TUI chrome (status bar, context meter, blank-line repaint)
+     * keeps producing fresh PTY bytes on an otherwise-unchanged screen and
+     * defeats any output-timestamp discriminator within a few hundred ms.
+     * Cleared whenever a turn starts or the session tears down (see
+     * onTurnStarted / resetActiveTurnState / onPtyExit) so a next-turn
+     * approval is never compared against stale prior-turn state.
+     */
+    lastApprovalResolvedContentSignature = '';
     /**
      * Monotonic counter bumped every time the FSM *enters* waiting_approval
      * with a freshly captured modal (see `applyWaitingApproval`). It is the
@@ -308,6 +320,12 @@ export class CliStateEngine {
         // anchor its window on dispatch time rather than completion time.
         this.currentTurnStartedAt = Date.now();
         this.responseEpoch += 1;
+        // A new turn's own prompt echo is real new content, so the stale-repaint
+        // guard's signature would naturally drift anyway — but clear the
+        // resolve-time bookkeeping explicitly here too, so a next-turn approval
+        // that happens to share message text with a previous turn's already-
+        // resolved one is never compared against stale prior-turn state.
+        this.clearApprovalResolutionMemory();
         // (fix: kimi K3 send→idle-looking→generating lag / missed-generating on
         // fast tool turns) For transcriptAuthority:'provider' providers (kimi,
         // and other native-transcript sources), the PTY-scanned parser always
@@ -341,6 +359,7 @@ export class CliStateEngine {
     onPtyExit(): void {
         this.clearAllTimers();
         this.setStatus('stopped', 'pty_exit');
+        this.clearApprovalResolutionMemory();
     }
 
     /** Called when adapter starts up successfully */
@@ -413,6 +432,11 @@ export class CliStateEngine {
         this.activeModal = null;
         this.lastApprovalResolvedAt = Date.now();
         this.lastResolvedModalMessage = currentModalMessage;
+        // Snapshot the chrome-stripped screen at the moment of resolve — the
+        // baseline applyWaitingApproval's isStaleResolvedRepaint check compares
+        // against to tell a stale re-parse of THIS modal apart from a
+        // genuinely new one, regardless of how much wall-clock time passes.
+        this.lastApprovalResolvedContentSignature = this.computeApprovalContentSignature(snap);
         this.lastResolvedEntrySeq = this.approvalEntrySeq;
         this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
         if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
@@ -530,6 +554,7 @@ export class CliStateEngine {
         this.pendingScriptStatusSince = 0;
         this.approvalResumeDeferSince = 0;
         this.approvalResumeDeferEpoch = -1;
+        this.clearApprovalResolutionMemory();
     }
 
     clearIdleFinishCandidate(reason: string): void {
@@ -712,7 +737,6 @@ export class CliStateEngine {
         const prevStatus = this.currentStatus;
         const ctx: SettledEvalContext = {
             now, modal, status, parsedMessages, lastParsedAssistant, parsedStatus: parsedStatus || null, prevStatus,
-            lastNonEmptyOutputAt: snap.lastNonEmptyOutputAt,
         };
 
         if (!this.applyPendingScriptStatusDebounce(ctx)) return;
@@ -777,7 +801,7 @@ export class CliStateEngine {
             this.applyError(ctx, session);
             return;
         }
-        if (status === 'waiting_approval') { this.applyWaitingApproval(ctx); return; }
+        if (status === 'waiting_approval') { this.applyWaitingApproval(ctx, snap); return; }
         if (status === 'generating') { this.applyGenerating(ctx); return; }
         if (status === 'idle') { this.applyIdle(ctx, snap, now); }
     }
@@ -835,7 +859,7 @@ export class CliStateEngine {
         this.callbacks.onStatusChange();
     }
 
-    private applyWaitingApproval(ctx: SettledEvalContext): void {
+    private applyWaitingApproval(ctx: SettledEvalContext, snap: CliBufferSnapshot): void {
         const { modal } = ctx;
         this.clearIdleFinishCandidate('waiting_approval');
         const inCooldown = this.lastApprovalResolvedAt
@@ -935,39 +959,45 @@ export class CliStateEngine {
             // settle pass, even though resolveModal() already wrote the key and
             // cleared activeModal. Reproduced live: after approving a tool call,
             // the FSM re-latched `waiting_approval` on the identical
-            // already-answered question with NO further PTY output ever
-            // arriving afterward — nothing left to trigger a later
-            // re-evaluation, so the dashboard stayed wedged on "waiting for
-            // approval" until the 5-minute maxResponse watchdog forced a recheck.
+            // already-answered question with NO further genuinely new content
+            // ever arriving afterward — the dashboard stayed wedged on "waiting
+            // for approval" until the 5-minute maxResponse watchdog forced a
+            // recheck.
+            //
+            // An output-TIMESTAMP discriminator ("has any PTY byte arrived since
+            // the resolve") was tried first and found insufficient: a live
+            // standalone repro showed kimi's own idle-screen chrome (status bar,
+            // context meter, blank-line repaint) advances lastNonEmptyOutputAt
+            // within ~300ms of the resolve even though NOTHING approval-relevant
+            // changed, so the guard stopped protecting almost immediately instead
+            // of for as long as the staleness actually persisted (observed 30s+).
             //
             // Reject a recapture only when ALL of: (a) this is the first capture
             // since the last resolve (`!this.activeModal` — a genuinely repeated
-            // approval re-enters this branch too, since resolveModal always
-            // nulls activeModal), (b) the message text matches the one we just
-            // resolved, AND (c) no genuinely new PTY output has arrived since
-            // the resolve. (c) is the load-bearing condition — deliberately NOT
-            // time-bounded. A live standalone repro (kimi-code v0.28.1/K3) showed
-            // the stale-buffer window can outlast an arbitrary cooldown by a wide
-            // margin (observed 30s+, tied to K3's "high" effort settle timing),
-            // so gating this on approvalCooldown let the guard's protection
-            // expire before the stale content actually cleared and the FSM
-            // re-latched anyway. Output freshness alone is both necessary and
-            // sufficient regardless of elapsed time: it only stops rejecting once
-            // fresh output genuinely arrives, and it keeps consecutive-approvals-
-            // with-identical-text (e.g. two back-to-back "Allow Bash command?"
-            // prompts) working correctly, since a real follow-up approval
-            // necessarily requires the CLI to have produced fresh output first
-            // (running the previous tool, then asking again) — lastNonEmptyOutputAt
-            // always advances past lastApprovalResolvedAt for any genuinely new
-            // approval, regardless of shared message text or how much time passed.
+            // approval re-enters this branch too, since resolveModal always nulls
+            // activeModal), (b) the message text matches the one we just
+            // resolved, AND (c) the chrome-stripped approval-context signature
+            // (computeApprovalContentSignature — screen text with blank-line
+            // padding and manifest-declared chrome removed) is UNCHANGED from
+            // the signature captured at resolve time. (c) is the load-bearing,
+            // content-based condition, deliberately not time-bounded: it keeps
+            // rejecting for as long as nothing approval-relevant changes,
+            // regardless of how many chrome-only repaints occur or how much
+            // wall-clock time passes, and it stops rejecting the instant real
+            // new content (tool output, a fresh conversational turn) appears.
+            // This also keeps consecutive-approvals-with-identical-text (e.g.
+            // two back-to-back "Allow Bash command?" prompts) working correctly:
+            // a real follow-up approval necessarily means the CLI produced real
+            // new output first (running the previous tool, then asking again),
+            // which changes the signature regardless of shared message text.
             const normalizedMessage = typeof modal.message === 'string' ? modal.message.trim() : '';
             const isStaleResolvedRepaint = !this.activeModal
                 && this.lastApprovalResolvedAt > 0
                 && normalizedMessage.length > 0
                 && normalizedMessage === this.lastResolvedModalMessage
-                && ctx.lastNonEmptyOutputAt <= this.lastApprovalResolvedAt;
+                && this.computeApprovalContentSignature(snap) === this.lastApprovalResolvedContentSignature;
             if (isStaleResolvedRepaint) {
-                LOG.debug('CLI', `[${this.provider.type}] ignoring stale re-parsed approval matching the just-resolved modal (no new output since resolve)`);
+                LOG.debug('CLI', `[${this.provider.type}] ignoring stale re-parsed approval matching the just-resolved modal (approval-context signature unchanged)`);
                 return;
             }
             this.modalLostAt = 0;
@@ -1333,6 +1363,68 @@ export class CliStateEngine {
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
+
+    /**
+     * Derive a stable approval-context signature from the current screen,
+     * with blank-line padding and any manifest-declared chrome stripped out.
+     *
+     * Generic by design — no kimi- or provider-specific hardcoding: it reads
+     * whatever `tui.transcriptPty.chromePatterns` and `tui.spinner.patterns`
+     * the ACTIVE provider's own manifest already declares (present on any
+     * declarative-TUI provider; simply absent/empty for scripted providers,
+     * in which case this degrades to blank-line stripping only — never worse
+     * than comparing the raw screen). Those pattern lists exist precisely to
+     * name "known volatile repaint noise" (status bar, context meter, spinner
+     * ticks, banners) — reusing them here means the SAME declared knowledge
+     * that governs transcript-chrome stripping also governs staleness
+     * detection, instead of re-encoding provider knowledge into daemon-core.
+     *
+     * Deliberately NOT a hash of the whole screen/buffer: an ordinary TUI
+     * repaints its footer/status/context-meter chrome continuously even while
+     * genuinely idle, so a raw whole-screen or whole-buffer fingerprint (or a
+     * mere "did any bytes arrive" timestamp) changes on every repaint tick
+     * regardless of whether anything approval-relevant actually happened.
+     * Stripping the declared chrome first yields a signature that only
+     * changes when the surrounding conversation/tool-output content itself
+     * changes — exactly the discriminator applyWaitingApproval's
+     * isStaleResolvedRepaint check needs.
+     */
+    private computeApprovalContentSignature(snap: CliBufferSnapshot): string {
+        const screenText = snap.screenText || snap.accumulatedBuffer || '';
+        if (!screenText) return '';
+        const tui = (this.provider as { tui?: Record<string, any> }).tui;
+        const patternSpecs: Array<{ regex?: unknown; flags?: unknown }> = [
+            ...(Array.isArray(tui?.transcriptPty?.chromePatterns) ? tui!.transcriptPty.chromePatterns : []),
+            ...(Array.isArray(tui?.spinner?.patterns) ? tui!.spinner.patterns : []),
+        ];
+        const chromeRegexes: RegExp[] = [];
+        for (const spec of patternSpecs) {
+            if (spec && typeof spec.regex === 'string') {
+                try {
+                    chromeRegexes.push(new RegExp(spec.regex, typeof spec.flags === 'string' ? spec.flags : ''));
+                } catch {
+                    // Ignore an unparseable manifest regex — signature just skips that filter.
+                }
+            }
+        }
+        const kept: string[] = [];
+        for (const rawLine of screenText.split('\n')) {
+            const line = rawLine.trim();
+            if (!line) continue; // strip blank-line repaint padding
+            if (chromeRegexes.some((re) => re.test(line))) continue; // strip declared chrome
+            kept.push(line);
+        }
+        return kept.join('\n');
+    }
+
+    /** Clear all resolve-time approval bookkeeping (message, timestamp, content
+     *  signature) — called at turn/session boundaries so a next-turn or
+     *  next-session approval is never compared against stale prior state. */
+    private clearApprovalResolutionMemory(): void {
+        this.lastApprovalResolvedAt = 0;
+        this.lastResolvedModalMessage = '';
+        this.lastApprovalResolvedContentSignature = '';
+    }
 
     /**
      * Schedule one more settled evaluation while pinned to `waiting_approval`
