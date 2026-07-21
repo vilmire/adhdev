@@ -942,22 +942,27 @@ export class CliStateEngine {
             //
             // Reject a recapture only when ALL of: (a) this is the first capture
             // since the last resolve (`!this.activeModal` — a genuinely repeated
-            // approval within cooldown still re-enters this branch, since
-            // resolveModal always nulls activeModal), (b) the message text
-            // matches the one we just resolved, (c) we're still inside the
-            // approvalCooldown grace window, AND (d) no genuinely new PTY output
-            // has arrived since the resolve. (d) is the load-bearing condition
-            // that keeps this from regressing consecutive-approvals-with-
-            // identical-text (e.g. two back-to-back "Allow Bash command?"
-            // prompts): a real follow-up approval necessarily requires the CLI
-            // to have produced fresh output first (running the previous tool,
-            // then asking again), so lastNonEmptyOutputAt will have advanced
-            // past lastApprovalResolvedAt for any genuinely new approval,
-            // regardless of shared message text.
+            // approval re-enters this branch too, since resolveModal always
+            // nulls activeModal), (b) the message text matches the one we just
+            // resolved, AND (c) no genuinely new PTY output has arrived since
+            // the resolve. (c) is the load-bearing condition — deliberately NOT
+            // time-bounded. A live standalone repro (kimi-code v0.28.1/K3) showed
+            // the stale-buffer window can outlast an arbitrary cooldown by a wide
+            // margin (observed 30s+, tied to K3's "high" effort settle timing),
+            // so gating this on approvalCooldown let the guard's protection
+            // expire before the stale content actually cleared and the FSM
+            // re-latched anyway. Output freshness alone is both necessary and
+            // sufficient regardless of elapsed time: it only stops rejecting once
+            // fresh output genuinely arrives, and it keeps consecutive-approvals-
+            // with-identical-text (e.g. two back-to-back "Allow Bash command?"
+            // prompts) working correctly, since a real follow-up approval
+            // necessarily requires the CLI to have produced fresh output first
+            // (running the previous tool, then asking again) — lastNonEmptyOutputAt
+            // always advances past lastApprovalResolvedAt for any genuinely new
+            // approval, regardless of shared message text or how much time passed.
             const normalizedMessage = typeof modal.message === 'string' ? modal.message.trim() : '';
             const isStaleResolvedRepaint = !this.activeModal
                 && this.lastApprovalResolvedAt > 0
-                && (ctx.now - this.lastApprovalResolvedAt) < this.timeouts.approvalCooldown
                 && normalizedMessage.length > 0
                 && normalizedMessage === this.lastResolvedModalMessage
                 && ctx.lastNonEmptyOutputAt <= this.lastApprovalResolvedAt;

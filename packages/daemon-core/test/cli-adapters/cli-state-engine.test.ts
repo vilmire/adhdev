@@ -480,7 +480,7 @@ describe('CliStateEngine', () => {
     describe('applyWaitingApproval — stale-resolved-modal re-latch guard', () => {
         function resolveThenReparse(overrides: {
             reparseMessage?: string
-            withinGraceMs?: number
+            advanceMs?: number
             lastNonEmptyOutputAt: number
         }) {
             const { engine, transport } = buildEngine()
@@ -492,7 +492,7 @@ describe('CliStateEngine', () => {
             expect(engine.activeModal).toBe(null)
             expect(engine.currentStatus).toBe('generating')
 
-            const advanceMs = overrides.withinGraceMs ?? 50
+            const advanceMs = overrides.advanceMs ?? 50
             vi.advanceTimersByTime(advanceMs)
 
             ;(engine as any).applyWaitingApproval({
@@ -504,10 +504,10 @@ describe('CliStateEngine', () => {
             return { engine, transport }
         }
 
-        it('rejects the identical already-resolved modal re-parsed within grace with no new output since resolve', () => {
+        it('rejects the identical already-resolved modal re-parsed shortly after with no new output since resolve', () => {
             const resolvedAt = Date.now()
             const { engine } = resolveThenReparse({
-                withinGraceMs: 50,
+                advanceMs: 50,
                 // No PTY activity since the resolve — the classic stale-buffer repro.
                 lastNonEmptyOutputAt: resolvedAt,
             })
@@ -519,7 +519,26 @@ describe('CliStateEngine', () => {
             expect(engine.currentStatus).toBe('generating')
         })
 
-        it('still captures a genuinely new approval with the SAME message text once fresh output has arrived', () => {
+        // Regression (kimi-code v0.28.1/K3 live standalone repro): the guard used
+        // to also require being within `timeouts.approvalCooldown` (a few seconds)
+        // of the resolve. The real observed staleness window outlasted that bound
+        // by a wide margin (30s+, tied to K3's "high" effort settle timing), so
+        // the guard's protection expired before the stale content actually
+        // cleared and the FSM re-latched anyway. The guard must now suppress the
+        // stale repaint indefinitely — for as long as no genuinely new PTY output
+        // has arrived — with no time cap at all.
+        it('still rejects the identical already-resolved modal re-parsed 30+ seconds later with no new output', () => {
+            const resolvedAt = Date.now()
+            const { engine } = resolveThenReparse({
+                advanceMs: 45_000, // far past any plausible fixed cooldown
+                lastNonEmptyOutputAt: resolvedAt, // still no new output, ever
+            })
+
+            expect(engine.activeModal).toBe(null)
+            expect(engine.currentStatus).toBe('generating')
+        })
+
+        it('captures a genuinely new approval with the SAME message text once fresh output has arrived', () => {
             // The load-bearing discriminator: consecutive real approvals sharing
             // identical text (a documented prior fix — see "writes the key for
             // consecutive distinct approvals that share message text within
@@ -528,7 +547,7 @@ describe('CliStateEngine', () => {
             // asked again), so lastNonEmptyOutputAt advances past the resolve time.
             const resolvedAt = Date.now()
             const { engine } = resolveThenReparse({
-                withinGraceMs: 50,
+                advanceMs: 50,
                 lastNonEmptyOutputAt: resolvedAt + 25, // fresh output arrived after resolve
             })
 
@@ -536,23 +555,26 @@ describe('CliStateEngine', () => {
             expect(engine.currentStatus).toBe('waiting_approval')
         })
 
-        it('still captures the identical modal once the grace window has fully elapsed, even with no new output', () => {
+        it('captures a genuinely new SAME-text approval even long after the resolve, as long as fresh output arrived', () => {
+            // Mirrors the 30s+ rejection case above, but with genuinely fresh
+            // output — proves the guard is governed purely by output freshness,
+            // not elapsed time, in both directions.
             const resolvedAt = Date.now()
             const { engine } = resolveThenReparse({
-                withinGraceMs: DEFAULT_TIMEOUTS.approvalCooldown + 10,
-                lastNonEmptyOutputAt: resolvedAt, // still no new output
+                advanceMs: 45_000,
+                lastNonEmptyOutputAt: resolvedAt + 44_000, // fresh output arrived, well after resolve
             })
 
             expect(engine.activeModal).toEqual({ message: 'Run this command?', buttons: ['Approve once', 'Reject'] })
             expect(engine.currentStatus).toBe('waiting_approval')
         })
 
-        it('always captures a genuinely different modal within grace regardless of output freshness', () => {
+        it('always captures a genuinely different modal regardless of output freshness or elapsed time', () => {
             const resolvedAt = Date.now()
             const { engine } = resolveThenReparse({
                 reparseMessage: 'Apply this edit?',
-                withinGraceMs: 50,
-                lastNonEmptyOutputAt: resolvedAt, // no new output, but different question
+                advanceMs: 45_000,
+                lastNonEmptyOutputAt: resolvedAt, // no new output, but a different question
             })
 
             expect(engine.activeModal).toEqual({ message: 'Apply this edit?', buttons: ['Approve once', 'Reject'] })

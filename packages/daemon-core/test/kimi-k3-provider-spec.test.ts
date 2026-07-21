@@ -70,15 +70,24 @@ maybe('kimi provider.v1.json — K3 fixture coverage', () => {
         expect(result.errors).toEqual([])
     })
 
-    it('exposes the K3 model for selection via modelOptions', () => {
-        // Live-verified: kimi-code v0.28.1's config.toml already ships
-        // default_model="kimi-code/k3" and `-m k3` (the bare alias, matching
-        // the existing "kimi-for-coding" naming convention) launches correctly
-        // through the interactive/TUI path the daemon actually uses — the
-        // fully-qualified "kimi-code/k3" print-mode identifier is NOT what
-        // ships here on purpose.
-        expect(raw.modelOptions).toContain('k3')
-        expect(raw.modelOptions).not.toContain('kimi-code/k3')
+    it('exposes the K3 model for selection via the fully-qualified modelOptions identifier', () => {
+        // Live-verified against the real kimi-code v0.28.1 binary: a bare
+        // model name (e.g. "k3", or the pre-existing "kimi-for-coding") is
+        // accepted at CLI startup with no validation — the welcome banner
+        // shows "Model: k3" — but EVERY subsequent generation request then
+        // fails with config.invalid: Model "k3" is not configured in
+        // config.toml. Only the fully-qualified "kimi-code/<alias>" form
+        // (matching config.toml's top-level model table keys) actually
+        // resolves and generates. This affects `-m` in both interactive/TUI
+        // mode (the daemon's real launch path) and non-interactive -p mode.
+        expect(raw.modelOptions).toEqual([
+            'kimi-code/kimi-for-coding',
+            'kimi-code/kimi-for-coding-highspeed',
+            'kimi-code/k3',
+        ])
+        expect(raw.modelOptions).not.toContain('k3')
+        expect(raw.modelOptions).not.toContain('kimi-for-coding')
+        expect(raw.modelOptions).not.toContain('kimi-for-coding-highspeed')
     })
 
     describe('declarative detectStatus against live-captured K3 screens', () => {
