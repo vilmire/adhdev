@@ -1906,9 +1906,14 @@
         transform: rotate(180deg);
     }
 
+    /* The menu is portaled to <body> and positioned `fixed` inline (see
+       LanguageSelector.tsx / languageMenuPosition.ts) so it escapes the sidebar's
+       `overflow`/`contain` clipping — this is what made the popover invisible when
+       the sidebar was collapsed. Position (top/left/max-height) is set inline; this
+       rule only carries the visual chrome. `--z-popover` is the canonical popover
+       layer, replacing the old ad-hoc z-index: 60. */
     .lang-switch-menu {
-        position: absolute;
-        z-index: 60;
+        z-index: var(--z-popover);
         min-width: 168px;
         margin: 0;
         padding: 6px;
@@ -1918,19 +1923,6 @@
         border-radius: var(--radius-md);
         box-shadow: var(--shadow-lg, 0 12px 32px rgba(0, 0, 0, 0.28));
         outline: none;
-    }
-
-    /* Sidebar footer sits at the bottom → open upward, aligned to the row. */
-    .lang-switch-menu--sidebar {
-        bottom: calc(100% + 6px);
-        left: 0;
-        right: 0;
-    }
-
-    /* Landing nav sits at the top → open downward, right-aligned. */
-    .lang-switch-menu--landing {
-        top: calc(100% + 8px);
-        right: 0;
     }
 
     .lang-switch-option {

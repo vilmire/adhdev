@@ -21,11 +21,13 @@
  * ThemeToggle's nav-item, "landing" is a compact pill for the landing header.
  * The popover markup/behaviour is identical across variants.
  */
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
 import { useLanguage } from '../i18n/useLanguage'
 import { LANGUAGE_OPTIONS, type SupportedLanguage } from '../i18n/languages'
+import { computeLanguageMenuPosition, type LangMenuStyle } from './languageMenuPosition'
 import { IconGlobe, IconCheck } from './Icons'
 
 type LanguageSelectorVariant = 'sidebar' | 'landing'
@@ -69,6 +71,36 @@ export default function LanguageSelector({ collapsed, variant = 'sidebar' }: Lan
     const listRef = useRef<HTMLUListElement>(null)
     const baseId = useId()
 
+    // The menu is portaled to <body> and positioned `fixed`, so it escapes the
+    // sidebar's `overflow`/`contain` clipping (which is what hid it when the
+    // sidebar was collapsed to 56px). Position is computed from the trigger rect.
+    const [menuStyle, setMenuStyle] = useState<LangMenuStyle | null>(null)
+
+    const updatePosition = useCallback(() => {
+        const trigger = triggerRef.current
+        if (!trigger) return
+        const rect = trigger.getBoundingClientRect()
+        const list = listRef.current
+        // Fall back to sensible natural dimensions before the list has laid out.
+        const menuWidth = Math.max(list?.offsetWidth ?? 0, 168)
+        const menuHeight = list?.scrollHeight ?? LANGUAGE_OPTIONS.length * 36 + 12
+        setMenuStyle(
+            computeLanguageMenuPosition({
+                trigger: {
+                    top: rect.top,
+                    left: rect.left,
+                    right: rect.right,
+                    bottom: rect.bottom,
+                    width: rect.width,
+                    height: rect.height,
+                },
+                viewport: { width: window.innerWidth, height: window.innerHeight },
+                menu: { width: menuWidth, height: menuHeight },
+                variant,
+            }),
+        )
+    }, [variant])
+
     const currentIndex = Math.max(
         0,
         LANGUAGE_OPTIONS.findIndex((option) => option.code === language),
@@ -99,14 +131,18 @@ export default function LanguageSelector({ collapsed, variant = 'sidebar' }: Lan
         [setLanguage, closeMenu],
     )
 
-    // Close on outside pointer-down / focus leaving the widget.
+    // Close on outside pointer-down / focus leaving the widget. The menu is
+    // portaled outside `rootRef`, so "inside" means either the trigger's root or
+    // the portaled listbox.
     useEffect(() => {
         if (!open) return
+        const isInside = (node: Node | null) =>
+            !!(rootRef.current?.contains(node) || listRef.current?.contains(node))
         const onPointerDown = (event: PointerEvent) => {
-            if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+            if (!isInside(event.target as Node)) setOpen(false)
         }
         const onFocusIn = (event: FocusEvent) => {
-            if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+            if (!isInside(event.target as Node)) setOpen(false)
         }
         document.addEventListener('pointerdown', onPointerDown, true)
         document.addEventListener('focusin', onFocusIn, true)
@@ -116,10 +152,31 @@ export default function LanguageSelector({ collapsed, variant = 'sidebar' }: Lan
         }
     }, [open])
 
-    // Move DOM focus to the listbox when it opens so it captures key events.
+    // Compute the fixed position when opening, and keep it anchored while the
+    // page scrolls or resizes (the trigger rect can move under a fixed menu).
+    useLayoutEffect(() => {
+        if (!open) {
+            setMenuStyle(null)
+            return
+        }
+        updatePosition()
+        const onReflow = () => updatePosition()
+        window.addEventListener('resize', onReflow)
+        // capture:true so we also react to scrolls in nested containers.
+        window.addEventListener('scroll', onReflow, true)
+        return () => {
+            window.removeEventListener('resize', onReflow)
+            window.removeEventListener('scroll', onReflow, true)
+        }
+    }, [open, updatePosition])
+
+    // Move DOM focus to the listbox once it opens AND has been positioned. The
+    // menu renders `visibility: hidden` until `menuStyle` is computed (so it never
+    // flashes at 0,0); a hidden element can't take focus, so gate on menuStyle —
+    // otherwise the keyboard handlers (arrows/Enter/Escape) never receive events.
     useEffect(() => {
-        if (open) listRef.current?.focus()
-    }, [open])
+        if (open && menuStyle) listRef.current?.focus()
+    }, [open, menuStyle])
 
     const onListKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
         const last = LANGUAGE_OPTIONS.length - 1
@@ -190,38 +247,49 @@ export default function LanguageSelector({ collapsed, variant = 'sidebar' }: Lan
                 {showLabel && <Caret open={open} />}
             </button>
 
-            {open && (
-                <ul
-                    ref={listRef}
-                    role="listbox"
-                    tabIndex={-1}
-                    aria-label={selectLabel}
-                    aria-activedescendant={optionId(activeIndex)}
-                    className={`lang-switch-menu lang-switch-menu--${variant}`}
-                    onKeyDown={onListKeyDown}
-                >
-                    {LANGUAGE_OPTIONS.map((option, index) => {
-                        const selected = option.code === current.code
-                        const active = index === activeIndex
-                        return (
-                            <li
-                                key={option.code}
-                                id={optionId(index)}
-                                role="option"
-                                aria-selected={selected}
-                                className={`lang-switch-option${active ? ' is-active' : ''}${selected ? ' is-selected' : ''}`}
-                                onMouseEnter={() => setActiveIndex(index)}
-                                onClick={() => choose(index)}
-                            >
-                                <span className="lang-switch-check" aria-hidden="true">
-                                    {selected ? <IconCheck size={14} /> : null}
-                                </span>
-                                <span className="lang-switch-option-label">{option.label}</span>
-                            </li>
-                        )
-                    })}
-                </ul>
-            )}
+            {open && typeof document !== 'undefined' &&
+                createPortal(
+                    <ul
+                        ref={listRef}
+                        role="listbox"
+                        tabIndex={-1}
+                        aria-label={selectLabel}
+                        aria-activedescendant={optionId(activeIndex)}
+                        className={`lang-switch-menu lang-switch-menu--${variant}`}
+                        style={{
+                            position: 'fixed',
+                            top: menuStyle?.top ?? 0,
+                            left: menuStyle?.left ?? 0,
+                            maxHeight: menuStyle?.maxHeight,
+                            overflowY: 'auto',
+                            // Hidden until positioned so it never flashes at 0,0.
+                            visibility: menuStyle ? 'visible' : 'hidden',
+                        }}
+                        onKeyDown={onListKeyDown}
+                    >
+                        {LANGUAGE_OPTIONS.map((option, index) => {
+                            const selected = option.code === current.code
+                            const active = index === activeIndex
+                            return (
+                                <li
+                                    key={option.code}
+                                    id={optionId(index)}
+                                    role="option"
+                                    aria-selected={selected}
+                                    className={`lang-switch-option${active ? ' is-active' : ''}${selected ? ' is-selected' : ''}`}
+                                    onMouseEnter={() => setActiveIndex(index)}
+                                    onClick={() => choose(index)}
+                                >
+                                    <span className="lang-switch-check" aria-hidden="true">
+                                        {selected ? <IconCheck size={14} /> : null}
+                                    </span>
+                                    <span className="lang-switch-option-label">{option.label}</span>
+                                </li>
+                            )
+                        })}
+                    </ul>,
+                    document.body,
+                )}
         </div>
     )
 }
