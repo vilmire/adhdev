@@ -2,8 +2,23 @@ import type { ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+// The module under test imports `execFileSync` as a named binding, so spying on
+// the `child_process` namespace after import cannot intercept it. Partial-mock
+// the module up front and make `execFileSync` delegate to the real impl by
+// default, so full-flow tests keep spawning the real staged CLI while the
+// install-hook env test can override behaviour for a single call.
+vi.mock('child_process', async (importActual) => {
+  const actual = await importActual<typeof import('child_process')>()
+  const execFileSync = vi.fn(actual.execFileSync)
+  return { ...actual, execFileSync, default: { ...actual, execFileSync } }
+})
+
+// eslint-disable-next-line import/first
+import * as child_process from 'child_process'
 import {
+  createDefaultWindowsAtomicHooks,
   performWindowsAtomicUpgrade,
   resolveWindowsInstallerLayout,
   type WindowsAtomicUpgradeHooks,
@@ -45,6 +60,11 @@ function installPackage(prefix: string, version: string, marker?: string): void 
   fs.writeFileSync(cli, `${marker ? `require('fs').writeFileSync(${JSON.stringify(marker)}, process.execPath);` : ''} console.log(${JSON.stringify(version)});\n`)
   fs.writeFileSync(path.join(prefix, 'adhdev.cmd'), 'npm cmd')
   fs.writeFileSync(path.join(prefix, 'adhdev.ps1'), 'npm ps1')
+  // node-pty ships this prebuild; the upgrade must keep it to avoid a daemon
+  // boot crash. Place it in every successful staged install by default.
+  const conptyPath = path.join(prefix, 'node_modules', 'adhdev', 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node')
+  fs.mkdirSync(path.dirname(conptyPath), { recursive: true })
+  fs.writeFileSync(conptyPath, 'conpty.node placeholder')
 }
 
 function child(pid = 4242): ChildProcess {
@@ -196,5 +216,58 @@ describe('Windows installer-managed atomic upgrade', () => {
     expect(fs.readFileSync(nextLayout.pointerPath, 'utf8')).toBe(path.basename(stable.stagedPrefix))
     const pkg = JSON.parse(fs.readFileSync(path.join(stable.stagedPrefix, 'node_modules', 'adhdev', 'package.json'), 'utf8'))
     expect(pkg.version).toBe('1.0.18')
+  })
+
+  it('forces build-from-source=false in the install hook env for both npm config spellings', () => {
+    const execMock = child_process.execFileSync as unknown as ReturnType<typeof vi.fn>
+    execMock.mockClear()
+    // Swallow the staged `npm install` so the assertion doesn't spawn a real node.
+    execMock.mockReturnValueOnce('' as any)
+    const atomicHooks = createDefaultWindowsAtomicHooks({
+      packageName: 'adhdev',
+      targetVersion: '1.0.18-rc.4',
+      npmCliPath: '/tools/node22/npm-cli.js',
+      restartArgv: [],
+      cwd: '/',
+      env: { USER_VAR: '1', npm_config_build_from_source: 'true' },
+      log: () => {},
+    })
+    atomicHooks.install('/staged/prefix', '/tools/node22/node.exe')
+    expect(execMock).toHaveBeenCalledTimes(1)
+    const passedEnv = execMock.mock.calls[0][2]?.env as NodeJS.ProcessEnv
+    expect(passedEnv['npm_config_build_from_source']).toBe('false')
+    expect(passedEnv['npm_config_build-from-source']).toBe('false')
+    expect(passedEnv['ADHDEV_BOOTSTRAP']).toBe('1')
+    expect(passedEnv['USER_VAR']).toBe('1')
+    expect(passedEnv['Path']).toMatch(/^\/tools\/node22;/)
+  })
+
+  it('refuses activation when the staged conpty.node prebuild is missing', async () => {
+    const { layout, oldCmd, oldPs1 } = fixture()
+    let rollbackRestarted = false
+    await expect(performWindowsAtomicUpgrade({
+      layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.4', portableNode: process.execPath,
+      hooks: hooks({
+        install: (prefix) => {
+          installPackage(prefix, '1.0.18-rc.4')
+          fs.rmSync(path.join(prefix, 'node_modules', 'adhdev', 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node'), { force: true })
+        },
+        restartOld: () => { rollbackRestarted = true },
+      }),
+    })).rejects.toThrow('conpty.node')
+    expect(rollbackRestarted).toBe(true)
+    expect(fs.readFileSync(layout.pointerPath, 'utf8')).toBe('version-old')
+    expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev.cmd'), 'utf8')).toBe(oldCmd)
+    expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev.ps1'), 'utf8')).toBe(oldPs1)
+  })
+
+  it('proceeds with activation when the staged conpty.node prebuild is present', async () => {
+    const { layout } = fixture()
+    const result = await performWindowsAtomicUpgrade({
+      layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.4', portableNode: process.execPath,
+      hooks: hooks({ install: (prefix) => installPackage(prefix, '1.0.18-rc.4') }),
+    })
+    expect(fs.existsSync(path.join(result.stagedPrefix, 'node_modules', 'adhdev', 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node'))).toBe(true)
+    expect(fs.readFileSync(layout.pointerPath, 'utf8')).toBe(path.basename(result.stagedPrefix))
   })
 })

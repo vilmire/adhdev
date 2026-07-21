@@ -114,6 +114,28 @@ function packageRootForPrefix(prefix: string, packageName: string): string {
   return path.join(prefix, 'node_modules', ...packageName.split('/'));
 }
 
+// node-pty ships a Windows x64 prebuild. If npm rebuilds from source (because a
+// .npmrc sets build-from-source=true), the install script deletes the prebuild
+// and may leave no conpty.node on machines without build tools. Verify it
+// survived before we ever activate the staged prefix.
+const CONPTY_PREBUILD_RELATIVE_PATH = path.join(
+  'node_modules', 'adhdev', 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node'
+);
+
+function resolveStagedConptyPrebuildPath(stagedPrefix: string): string {
+  return path.join(stagedPrefix, CONPTY_PREBUILD_RELATIVE_PATH);
+}
+
+function verifyStagedConptyPrebuild(stagedPrefix: string): void {
+  const conptyPath = resolveStagedConptyPrebuildPath(stagedPrefix);
+  if (!fs.existsSync(conptyPath)) {
+    throw new Error(
+      `Staged install is missing required native addon: ${conptyPath}. ` +
+      'Aborting activation to prevent a daemon boot crash.'
+    );
+  }
+}
+
 function readPackageCliEntry(prefix: string, packageName: string, targetVersion: string): string {
   const packageRoot = packageRootForPrefix(prefix, packageName);
   const packageJsonPath = path.join(packageRoot, 'package.json');
@@ -259,6 +281,7 @@ export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeO
   try {
     hooks.log(`Installing ${packageName}@${targetVersion} into inactive prefix ${stagedPrefix}`);
     await hooks.install(stagedPrefix, portableNode);
+    verifyStagedConptyPrebuild(stagedPrefix);
     const stagedCliEntry = readPackageCliEntry(stagedPrefix, packageName, targetVersion);
     pinStagedShims(stagedPrefix, portableNode, stagedCliEntry);
     validateStagedCli(portableNode, stagedCliEntry, targetVersion);
@@ -321,7 +344,12 @@ export function createDefaultWindowsAtomicHooks(options: {
 }): WindowsAtomicUpgradeHooks {
   return {
     install: (stagedPrefix, portableNode) => {
-      const env: NodeJS.ProcessEnv = { ...options.env, ADHDEV_BOOTSTRAP: '1' };
+      const env: NodeJS.ProcessEnv = {
+        ...options.env,
+        ADHDEV_BOOTSTRAP: '1',
+        npm_config_build_from_source: 'false',
+        'npm_config_build-from-source': 'false',
+      };
       const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'Path';
       env[pathKey] = `${path.dirname(portableNode)};${env[pathKey] || ''}`;
       execFileSync(portableNode, [
