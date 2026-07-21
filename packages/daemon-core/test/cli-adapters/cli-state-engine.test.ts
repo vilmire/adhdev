@@ -266,6 +266,77 @@ describe('CliStateEngine', () => {
         })
     })
 
+    // ── Kimi K3: send→generating promptness (Live Run B mirror) ─────────────
+    //
+    // Regression (observed live on kimi-code v0.28.1/K3, Kimi standalone probe
+    // Run A/B): transcriptAuthority:'provider' providers always parse messages:[]
+    // from the PTY (the provider owns the transcript), so shouldHoldGenerating's
+    // fast-path exception can never release early and recent_activity_hold ends up
+    // carrying the entire "is this turn generating" signal — but that fallback only
+    // fires once a settle tick runs, which needs PTY output to schedule. Kimi K3's
+    // silent "high" thinking effort left the dashboard looking idle for 12-20s after
+    // send, and a fast yolo/tool-use turn that completed within one settle debounce
+    // window went idle→idle with NO generating transition ever recorded at all
+    // (Run B: single 'idle' statusHistory entry across the whole 120s tool-use turn).
+    describe('onTurnStarted — immediate generating for transcriptAuthority:"provider"', () => {
+        it('sets status to generating immediately on turn start (no PTY output needed)', () => {
+            const { engine } = buildEngine({ transcriptAuthority: 'provider' })
+            engine.onTurnStarted({ prompt: 'do the thing', startedAt: Date.now(), bufferStart: 0, rawBufferStart: 0 })
+
+            expect(engine.currentStatus).toBe('generating')
+            const history = engine.getStatusHistory()
+            expect(history.at(-1)).toMatchObject({ status: 'generating', trigger: 'turn_started' })
+        })
+
+        it('a turn that completes within one settle window still surfaces a generating transition before idle', () => {
+            // Mirrors Run B: send a yolo tool-use turn, then immediately confirm
+            // completion (no intervening PTY-driven evaluateSettled). Without the
+            // turn_started promotion, statusHistory would jump straight from
+            // 'idle' to 'idle' with the turn's generating phase never observed.
+            const { engine, transport } = buildEngine({ transcriptAuthority: 'provider' })
+            engine.setStatus('idle')
+
+            engine.onTurnStarted({ prompt: 'write a file and run it', startedAt: Date.now(), bufferStart: 0, rawBufferStart: 0 })
+            expect(engine.currentStatus).toBe('generating')
+
+            // Authoritative completion evidence arrives and finishes the turn —
+            // the promotion above did not weaken or bypass real completion detection.
+            transport.runParseSession = vi.fn(() => ({
+                status: 'idle',
+                messages: [
+                    { role: 'user', content: 'write a file and run it' },
+                    { role: 'assistant', kind: 'standard', content: 'Done.', meta: {} },
+                ],
+                activeModal: null,
+            }))
+            engine.finishResponse()
+            // finishResponse defers the actual generating→idle flip by
+            // IDLE_CONFIRMATION_GRACE_MS (2s) so the dashboard keeps the
+            // spinner through short paint-blip windows; advance past it.
+            vi.advanceTimersByTime(2050)
+
+            expect(engine.currentStatus).toBe('idle')
+            const history = engine.getStatusHistory()
+            expect(history.some(h => h.status === 'generating' && h.trigger === 'turn_started')).toBe(true)
+        })
+
+        it('does NOT immediately flip to generating for PTY-authoritative providers (no transcriptAuthority)', () => {
+            // Scoped fix: providers whose spinner/settled-prompt script already
+            // drives generating promptly from real PTY evidence are unaffected.
+            const { engine } = buildEngine()
+            const before = engine.currentStatus
+            engine.onTurnStarted({ prompt: 'hi', startedAt: Date.now(), bufferStart: 0, rawBufferStart: 0 })
+            expect(engine.currentStatus).toBe(before)
+        })
+
+        it('does not override an already-active waiting_approval status', () => {
+            const { engine } = buildEngine({ transcriptAuthority: 'provider' })
+            engine.setStatus('waiting_approval', 'script_detect')
+            engine.onTurnStarted({ prompt: 'hi', startedAt: Date.now(), bufferStart: 0, rawBufferStart: 0 })
+            expect(engine.currentStatus).toBe('waiting_approval')
+        })
+    })
+
     // ── Modal / approval ────────────────────────────────────────────────────
 
     describe('resolveModal', () => {
@@ -391,6 +462,101 @@ describe('CliStateEngine', () => {
             engine.resolveModal(0)
             evalApproval('Allow Bash command?')
             expect(engine.approvalEntrySeq).toBeGreaterThan(seqAfterFirst)
+        })
+    })
+
+    // ── Stale-resolved-approval re-latch guard (Live Run C mirror) ──────────
+    //
+    // Regression (observed live on kimi-code v0.28.1/K3, standalone probe Run C):
+    // after resolving a real approval modal (command approved, transport wrote the
+    // key, kimi ran the command and finished the turn), a LATER settle pass
+    // re-parsed the identical already-answered question text and re-latched
+    // waiting_approval — with NO further PTY output ever arriving afterward, so
+    // nothing triggered a correcting re-evaluation. The dashboard stayed pinned to
+    // "waiting for approval" for minutes (until the 5-minute maxResponse watchdog),
+    // even though recentOutputBuffer/responseBuffer/screenText no longer contained
+    // any trace of the modal — proving the recapture read stale/transitional
+    // buffer content, not a genuinely re-presented prompt.
+    describe('applyWaitingApproval — stale-resolved-modal re-latch guard', () => {
+        function resolveThenReparse(overrides: {
+            reparseMessage?: string
+            withinGraceMs?: number
+            lastNonEmptyOutputAt: number
+        }) {
+            const { engine, transport } = buildEngine()
+            transport.getApprovalKeyForIndex = () => '\r'
+            engine.approvalEntrySeq = 1
+            engine.activeModal = { message: 'Run this command?', buttons: ['Approve once', 'Reject'] }
+
+            engine.resolveModal(0)
+            expect(engine.activeModal).toBe(null)
+            expect(engine.currentStatus).toBe('generating')
+
+            const advanceMs = overrides.withinGraceMs ?? 50
+            vi.advanceTimersByTime(advanceMs)
+
+            ;(engine as any).applyWaitingApproval({
+                modal: { message: overrides.reparseMessage ?? 'Run this command?', buttons: ['Approve once', 'Reject'] },
+                now: Date.now(),
+                lastNonEmptyOutputAt: overrides.lastNonEmptyOutputAt,
+            })
+
+            return { engine, transport }
+        }
+
+        it('rejects the identical already-resolved modal re-parsed within grace with no new output since resolve', () => {
+            const resolvedAt = Date.now()
+            const { engine } = resolveThenReparse({
+                withinGraceMs: 50,
+                // No PTY activity since the resolve — the classic stale-buffer repro.
+                lastNonEmptyOutputAt: resolvedAt,
+            })
+
+            // Must NOT re-latch: activeModal stays clear, status stays 'generating'
+            // (whatever resolveModal already committed), not bounced back to
+            // 'waiting_approval'.
+            expect(engine.activeModal).toBe(null)
+            expect(engine.currentStatus).toBe('generating')
+        })
+
+        it('still captures a genuinely new approval with the SAME message text once fresh output has arrived', () => {
+            // The load-bearing discriminator: consecutive real approvals sharing
+            // identical text (a documented prior fix — see "writes the key for
+            // consecutive distinct approvals that share message text within
+            // cooldown") must keep working. A real follow-up approval necessarily
+            // means the CLI produced new output first (ran the previous tool, then
+            // asked again), so lastNonEmptyOutputAt advances past the resolve time.
+            const resolvedAt = Date.now()
+            const { engine } = resolveThenReparse({
+                withinGraceMs: 50,
+                lastNonEmptyOutputAt: resolvedAt + 25, // fresh output arrived after resolve
+            })
+
+            expect(engine.activeModal).toEqual({ message: 'Run this command?', buttons: ['Approve once', 'Reject'] })
+            expect(engine.currentStatus).toBe('waiting_approval')
+        })
+
+        it('still captures the identical modal once the grace window has fully elapsed, even with no new output', () => {
+            const resolvedAt = Date.now()
+            const { engine } = resolveThenReparse({
+                withinGraceMs: DEFAULT_TIMEOUTS.approvalCooldown + 10,
+                lastNonEmptyOutputAt: resolvedAt, // still no new output
+            })
+
+            expect(engine.activeModal).toEqual({ message: 'Run this command?', buttons: ['Approve once', 'Reject'] })
+            expect(engine.currentStatus).toBe('waiting_approval')
+        })
+
+        it('always captures a genuinely different modal within grace regardless of output freshness', () => {
+            const resolvedAt = Date.now()
+            const { engine } = resolveThenReparse({
+                reparseMessage: 'Apply this edit?',
+                withinGraceMs: 50,
+                lastNonEmptyOutputAt: resolvedAt, // no new output, but different question
+            })
+
+            expect(engine.activeModal).toEqual({ message: 'Apply this edit?', buttons: ['Approve once', 'Reject'] })
+            expect(engine.currentStatus).toBe('waiting_approval')
         })
     })
 

@@ -94,6 +94,10 @@ interface SettledEvalContext {
     lastParsedAssistant: CliChatMessage | undefined;
     parsedStatus: string | null;
     prevStatus: string;
+    /** snap.lastNonEmptyOutputAt at evaluation time — used to tell a genuinely
+     *  fresh modal apart from a stale re-parse of an already-resolved one (see
+     *  applyWaitingApproval's isStaleResolvedRepaint guard). */
+    lastNonEmptyOutputAt: number;
 }
 
 // ─── Constants ─────────────────────────────────────────────────────────────
@@ -304,6 +308,33 @@ export class CliStateEngine {
         // anchor its window on dispatch time rather than completion time.
         this.currentTurnStartedAt = Date.now();
         this.responseEpoch += 1;
+        // (fix: kimi K3 send→idle-looking→generating lag / missed-generating on
+        // fast tool turns) For transcriptAuthority:'provider' providers (kimi,
+        // and other native-transcript sources), the PTY-scanned parser always
+        // returns messages:[] — the provider owns the transcript, not the PTY —
+        // so evaluateSettled's shouldHoldGenerating fast-path exception
+        // (hasFinalCurrentTurnAssistant) can never release early and
+        // recent_activity_hold ends up carrying the ENTIRE "is this turn still
+        // generating" signal for these providers regardless of what the spinner
+        // script does. That fallback only fires once a settle tick actually
+        // runs, which needs PTY output to schedule — for a model that "thinks"
+        // silently for many seconds before its first repaint (observed 12-20s
+        // for Kimi K3's default "high" effort), the dashboard looks idle for
+        // that whole window even though the turn was already accepted. Worse,
+        // a turn that fully completes (tool calls + reply) within a single
+        // settle debounce window can go straight idle→idle with no visible
+        // generating state at all (observed live with a yolo tool-use turn).
+        // onTurnStarted is the authoritative "a turn was just submitted" signal
+        // — promote to generating immediately instead of waiting on PTY-driven
+        // detection. This does not weaken completion detection: applyIdle /
+        // finishResponse (authoritative settled evidence) still own the actual
+        // idle transition, unchanged. Scoped to transcriptAuthority:'provider'
+        // only, so PTY-authoritative providers (whose spinner/settled parsing
+        // already drives generating promptly) are unaffected.
+        if (this.provider.transcriptAuthority === 'provider' && this.currentStatus !== 'waiting_approval') {
+            this.setStatus('generating', 'turn_started');
+            this.callbacks.onStatusChange();
+        }
     }
 
     /** Called when PTY exits */
@@ -679,7 +710,10 @@ export class CliStateEngine {
         if (!status) return;
 
         const prevStatus = this.currentStatus;
-        const ctx: SettledEvalContext = { now, modal, status, parsedMessages, lastParsedAssistant, parsedStatus: parsedStatus || null, prevStatus };
+        const ctx: SettledEvalContext = {
+            now, modal, status, parsedMessages, lastParsedAssistant, parsedStatus: parsedStatus || null, prevStatus,
+            lastNonEmptyOutputAt: snap.lastNonEmptyOutputAt,
+        };
 
         if (!this.applyPendingScriptStatusDebounce(ctx)) return;
 
@@ -890,6 +924,45 @@ export class CliStateEngine {
                         this.armModalLostRecheck();
                     }
                 }
+                return;
+            }
+            // (fix: kimi stale-approval re-latch, observed live on kimi-code
+            // v0.28.1/K3) A freshly-*parsed* modal is not proof the CLI is
+            // presenting it right now — parseApproval scans an accumulated
+            // raw-output window (recentOutputBuffer / window-around-question
+            // scope), which can still contain the text of an approval that was
+            // ALREADY resolved a moment ago and re-surface it on the very next
+            // settle pass, even though resolveModal() already wrote the key and
+            // cleared activeModal. Reproduced live: after approving a tool call,
+            // the FSM re-latched `waiting_approval` on the identical
+            // already-answered question with NO further PTY output ever
+            // arriving afterward — nothing left to trigger a later
+            // re-evaluation, so the dashboard stayed wedged on "waiting for
+            // approval" until the 5-minute maxResponse watchdog forced a recheck.
+            //
+            // Reject a recapture only when ALL of: (a) this is the first capture
+            // since the last resolve (`!this.activeModal` — a genuinely repeated
+            // approval within cooldown still re-enters this branch, since
+            // resolveModal always nulls activeModal), (b) the message text
+            // matches the one we just resolved, (c) we're still inside the
+            // approvalCooldown grace window, AND (d) no genuinely new PTY output
+            // has arrived since the resolve. (d) is the load-bearing condition
+            // that keeps this from regressing consecutive-approvals-with-
+            // identical-text (e.g. two back-to-back "Allow Bash command?"
+            // prompts): a real follow-up approval necessarily requires the CLI
+            // to have produced fresh output first (running the previous tool,
+            // then asking again), so lastNonEmptyOutputAt will have advanced
+            // past lastApprovalResolvedAt for any genuinely new approval,
+            // regardless of shared message text.
+            const normalizedMessage = typeof modal.message === 'string' ? modal.message.trim() : '';
+            const isStaleResolvedRepaint = !this.activeModal
+                && this.lastApprovalResolvedAt > 0
+                && (ctx.now - this.lastApprovalResolvedAt) < this.timeouts.approvalCooldown
+                && normalizedMessage.length > 0
+                && normalizedMessage === this.lastResolvedModalMessage
+                && ctx.lastNonEmptyOutputAt <= this.lastApprovalResolvedAt;
+            if (isStaleResolvedRepaint) {
+                LOG.debug('CLI', `[${this.provider.type}] ignoring stale re-parsed approval matching the just-resolved modal (no new output since resolve)`);
                 return;
             }
             this.modalLostAt = 0;
