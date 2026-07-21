@@ -221,7 +221,7 @@
         "mutedTitle": "음소거됨 — 알림이 차단되었습니다. 탭하여 해제하세요.",
         "muteNotifications": "알림 음소거",
         "hideConversationAria": "{{title}} 숨기기",
-        "hideConversationTitle": "대화 숨기기",
+        "hideConversationTitle": "받은편지함에서 숨기기",
         "stopSessionAria": "{{title}} 세션 중지",
         "stopSessionTitle": "세션 중지 (에이전트를 종료합니다)"
     },

@@ -6,6 +6,13 @@ import { getConversationMachineId } from './conversation-selectors'
 import { getConversationMachineCardPreview } from './conversation-presenters'
 import { getSessionChatTailSnapshotForConversation } from './session-chat-tail-controller'
 
+export interface MobileInboxBuckets {
+    attentionItems: MobileConversationListItem[]
+    unreadItems: MobileConversationListItem[]
+    workingItems: MobileConversationListItem[]
+    completedItems: MobileConversationListItem[]
+}
+
 export function sortMobileInboxItems(items: MobileConversationListItem[]) {
     return [...items].sort((left, right) => {
         const timestampDiff = right.timestamp - left.timestamp
@@ -28,6 +35,23 @@ export function sortStableMobileLiveItems(
     }
 
     return sortMobileInboxItems(items)
+}
+
+export function groupMobileInboxItems(
+    items: MobileConversationListItem[],
+    previousLiveOrder: string[] = [],
+): MobileInboxBuckets {
+    const attentionItems = items.filter(item => item.requiresAction)
+    const unreadItems = items.filter(item => item.unread && !item.requiresAction)
+    const workingCandidates = items.filter(item => !item.unread && !item.requiresAction && item.isWorking)
+    const completedItems = items.filter(item => !item.unread && !item.requiresAction && !item.isWorking)
+
+    return {
+        attentionItems: sortMobileInboxItems(attentionItems),
+        unreadItems: sortMobileInboxItems(unreadItems),
+        workingItems: sortStableMobileLiveItems(workingCandidates, previousLiveOrder),
+        completedItems: sortMobileInboxItems(completedItems),
+    }
 }
 
 export function getMobileMachineConnectionLabel(machineEntry: DaemonData): 'Connected' | 'Connecting' | 'Offline' {

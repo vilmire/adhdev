@@ -22,8 +22,8 @@ import { compareMachineEntries } from '../../utils/daemon-utils'
 import {
     buildMobileMachineCards,
     buildSelectedMachineRecentLaunches,
-    sortMobileInboxItems,
-    sortStableMobileLiveItems,
+    groupMobileInboxItems,
+    type MobileInboxBuckets,
 } from './dashboard-mobile-chat-mode-helpers'
 import { useDashboardMobileChatEffects } from './useDashboardMobileChatEffects'
 import { useDashboardMobileMachineActions } from './useDashboardMobileMachineActions'
@@ -206,29 +206,18 @@ export default function DashboardMobileChatMode({
     // the daemon snapshot.
     const { isMuted: isConversationMuted, toggleMute } = useConversationPrefs(liveSessionInboxState, sendDaemonCommand)
 
-    const attentionItems = useMemo(
-        () => sortMobileInboxItems(items.filter(item => item.requiresAction && !isConversationMuted(item.conversation))),
-        [items, isConversationMuted],
-    )
-
-    const unreadItems = useMemo(
-        () => sortMobileInboxItems(items.filter(item => item.unread && !item.requiresAction && !isConversationMuted(item.conversation))),
-        [items, isConversationMuted],
-    )
-    const workingItems = useMemo(
-        () => sortStableMobileLiveItems(
-            items.filter(item => !item.unread && !item.requiresAction && item.isWorking),
-            liveWorkingOrderRef.current,
-        ),
+    const {
+        attentionItems,
+        unreadItems,
+        workingItems,
+        completedItems,
+    } = useMemo<MobileInboxBuckets>(
+        () => groupMobileInboxItems(items, liveWorkingOrderRef.current),
         [items],
     )
     useEffect(() => {
         liveWorkingOrderRef.current = workingItems.map(item => item.conversation.tabKey)
     }, [workingItems])
-    const completedItems = useMemo(
-        () => sortMobileInboxItems(items.filter(item => !item.unread && !item.requiresAction && !item.isWorking)),
-        [items],
-    )
     const selectedMachineConversations = useMemo(
         () => selectedMachineEntry
             ? items.filter(item => getConversationMachineId(item.conversation) === selectedMachineEntry.id)

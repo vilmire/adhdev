@@ -6,6 +6,7 @@ import {
     buildMobileMachineCards,
     buildSelectedMachineRecentLaunches,
     getMobileMachineConnectionLabel,
+    groupMobileInboxItems,
     sortMobileInboxItems,
     sortStableMobileLiveItems,
 } from '../../../src/components/dashboard/dashboard-mobile-chat-mode-helpers'
@@ -46,15 +47,29 @@ function createConversation(overrides: Partial<ActiveConversation> = {}): Active
     } as ActiveConversation
 }
 
-function createItem(tabKey: string, timestamp: number): MobileConversationListItem {
+function createItem(
+    tabKey: string,
+    timestamp: number,
+    overrides: Partial<MobileConversationListItem> = {},
+): MobileConversationListItem {
+    const machineId = overrides.conversation?.daemonId || 'machine-1'
+    const { conversation: conversationOverrides, ...itemOverrides } = overrides
     return {
-        conversation: createConversation({ tabKey, sessionId: tabKey, displayPrimary: tabKey }),
+        conversation: createConversation({
+            tabKey,
+            sessionId: tabKey,
+            displayPrimary: tabKey,
+            daemonId: machineId,
+            ideId: `${machineId}:ide:cursor-1`,
+            ...conversationOverrides,
+        }),
         timestamp,
         preview: `${tabKey} preview`,
         unread: false,
         requiresAction: false,
         isWorking: true,
         inboxBucket: 'working',
+        ...itemOverrides,
     }
 }
 
@@ -178,5 +193,118 @@ describe('dashboard mobile chat mode helpers', () => {
                 workspace: '/repo',
             },
         ])
+    })
+
+    describe('groupMobileInboxItems bucketing', () => {
+        it('places muted requiresAction items in attentionItems and no other bucket', () => {
+            const mutedAttention = createItem('muted-attention', 100, {
+                unread: true,
+                requiresAction: true,
+                isWorking: false,
+                inboxBucket: 'action_needed',
+            })
+            const buckets = groupMobileInboxItems([mutedAttention])
+
+            expect(buckets.attentionItems.map(item => item.conversation.tabKey)).toEqual(['muted-attention'])
+            expect(buckets.unreadItems).toHaveLength(0)
+            expect(buckets.workingItems).toHaveLength(0)
+            expect(buckets.completedItems).toHaveLength(0)
+        })
+
+        it('places muted unread items in unreadItems and no other bucket', () => {
+            const mutedUnread = createItem('muted-unread', 200, {
+                unread: true,
+                requiresAction: false,
+                isWorking: false,
+                inboxBucket: 'unread',
+            })
+            const buckets = groupMobileInboxItems([mutedUnread])
+
+            expect(buckets.attentionItems).toHaveLength(0)
+            expect(buckets.unreadItems.map(item => item.conversation.tabKey)).toEqual(['muted-unread'])
+            expect(buckets.workingItems).toHaveLength(0)
+            expect(buckets.completedItems).toHaveLength(0)
+        })
+
+        it('buckets every visible conversation into exactly one list', () => {
+            const items = [
+                createItem('attention-muted', 100, { unread: true, requiresAction: true, isWorking: false, inboxBucket: 'action_needed' }),
+                createItem('attention-unmuted', 110, { unread: false, requiresAction: true, isWorking: false, inboxBucket: 'action_needed' }),
+                createItem('unread-muted', 200, { unread: true, requiresAction: false, isWorking: false, inboxBucket: 'unread' }),
+                createItem('unread-unmuted', 210, { unread: true, requiresAction: false, isWorking: false, inboxBucket: 'unread' }),
+                createItem('working-muted', 300, { unread: false, requiresAction: false, isWorking: true, inboxBucket: 'working' }),
+                createItem('working-unmuted', 310, { unread: false, requiresAction: false, isWorking: true, inboxBucket: 'working' }),
+                createItem('completed-muted', 400, { unread: false, requiresAction: false, isWorking: false, inboxBucket: 'idle' }),
+                createItem('completed-unmuted', 410, { unread: false, requiresAction: false, isWorking: false, inboxBucket: 'idle' }),
+            ]
+
+            const buckets = groupMobileInboxItems(items)
+            const bucketed = [
+                ...buckets.attentionItems,
+                ...buckets.unreadItems,
+                ...buckets.workingItems,
+                ...buckets.completedItems,
+            ]
+
+            expect(bucketed).toHaveLength(items.length)
+            expect(new Set(bucketed.map(item => item.conversation.tabKey)).size).toBe(items.length)
+            expect(buckets.attentionItems.map(item => item.conversation.tabKey).sort()).toEqual(['attention-muted', 'attention-unmuted'])
+            expect(buckets.unreadItems.map(item => item.conversation.tabKey).sort()).toEqual(['unread-muted', 'unread-unmuted'])
+            expect(buckets.workingItems.map(item => item.conversation.tabKey).sort()).toEqual(['working-muted', 'working-unmuted'])
+            expect(buckets.completedItems.map(item => item.conversation.tabKey).sort()).toEqual(['completed-muted', 'completed-unmuted'])
+        })
+
+        it('reconciles Chats bucket totals with machine card totals including muted rows', () => {
+            const machineA = createMachine({ id: 'machine-a', hostname: 'Mac A' })
+            const machineB = createMachine({ id: 'machine-b', hostname: 'Mac B' })
+            const items = [
+                createItem('a-attention-muted', 100, {
+                    conversation: { daemonId: 'machine-a' },
+                    unread: true,
+                    requiresAction: true,
+                    isWorking: false,
+                    inboxBucket: 'action_needed',
+                }),
+                createItem('a-unread-unmuted', 110, {
+                    conversation: { daemonId: 'machine-a' },
+                    unread: true,
+                    requiresAction: false,
+                    isWorking: false,
+                    inboxBucket: 'unread',
+                }),
+                createItem('a-working-muted', 120, {
+                    conversation: { daemonId: 'machine-a' },
+                    unread: false,
+                    requiresAction: false,
+                    isWorking: true,
+                    inboxBucket: 'working',
+                }),
+                createItem('b-completed-unmuted', 200, {
+                    conversation: { daemonId: 'machine-b' },
+                    unread: false,
+                    requiresAction: false,
+                    isWorking: false,
+                    inboxBucket: 'idle',
+                }),
+            ]
+
+            const buckets = groupMobileInboxItems(items)
+            const visibleTotal = [
+                ...buckets.attentionItems,
+                ...buckets.unreadItems,
+                ...buckets.workingItems,
+                ...buckets.completedItems,
+            ].length
+
+            const cards = buildMobileMachineCards([machineA, machineB], items)
+            const machineTotal = cards.reduce((sum, card) => sum + card.total, 0)
+            const machineUnread = cards.reduce((sum, card) => sum + card.unread, 0)
+            const chatsUnread = buckets.attentionItems.length + buckets.unreadItems.length
+
+            expect(visibleTotal).toBe(items.length)
+            expect(machineTotal).toBe(items.length)
+            expect(machineUnread).toBe(chatsUnread)
+            expect(machineUnread).toBe(2)
+        })
     })
 })

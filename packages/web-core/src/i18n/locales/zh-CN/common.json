@@ -221,7 +221,7 @@
         "mutedTitle": "已静音 — 通知已关闭。点按以取消静音。",
         "muteNotifications": "静音通知",
         "hideConversationAria": "隐藏 {{title}}",
-        "hideConversationTitle": "隐藏会话",
+        "hideConversationTitle": "从收件箱隐藏",
         "stopSessionAria": "停止 {{title}} 会话",
         "stopSessionTitle": "停止会话（终止该智能体）"
     },

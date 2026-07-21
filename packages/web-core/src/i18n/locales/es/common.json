@@ -221,7 +221,7 @@
         "mutedTitle": "Silenciado — notificaciones desactivadas. Toca para reactivar el sonido.",
         "muteNotifications": "Silenciar notificaciones",
         "hideConversationAria": "Ocultar {{title}}",
-        "hideConversationTitle": "Ocultar conversación",
+        "hideConversationTitle": "Ocultar de la bandeja",
         "stopSessionAria": "Detener la sesión de {{title}}",
         "stopSessionTitle": "Detener la sesión (termina el agente)"
     },

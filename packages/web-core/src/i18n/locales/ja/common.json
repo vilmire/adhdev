@@ -221,7 +221,7 @@
         "mutedTitle": "ミュート中 — 通知が停止されています。タップしてミュートを解除します。",
         "muteNotifications": "通知をミュート",
         "hideConversationAria": "{{title}} を非表示",
-        "hideConversationTitle": "会話を非表示",
+        "hideConversationTitle": "受信トレイから非表示",
         "stopSessionAria": "{{title}} セッションを停止",
         "stopSessionTitle": "セッションを停止（エージェントを終了します）"
     },
