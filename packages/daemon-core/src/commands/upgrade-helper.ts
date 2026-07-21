@@ -3,6 +3,12 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import {
+  createDefaultWindowsAtomicHooks,
+  findPortableNode22,
+  performWindowsAtomicUpgrade,
+  resolveWindowsInstallerLayout,
+} from './windows-atomic-upgrade.js';
 
 const UPGRADE_HELPER_ENV = 'ADHDEV_DAEMON_UPGRADE_HELPER';
 
@@ -32,17 +38,16 @@ export interface PinnedGlobalInstallCommand {
 
 export type NpmExecOptions = { shell: boolean; windowsHide?: boolean };
 
-function getUpgradeLogPath(): string {
-  const home = os.homedir();
+function getUpgradeLogPath(home: string = os.homedir()): string {
   const dir = path.join(home, '.adhdev');
   fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, 'daemon-upgrade.log');
 }
 
-function appendUpgradeLog(message: string): void {
+function appendUpgradeLog(message: string, homeDir: string = os.homedir()): void {
   const line = `[${new Date().toISOString()}] ${message}\n`;
   try {
-    fs.appendFileSync(getUpgradeLogPath(), line, 'utf8');
+    fs.appendFileSync(getUpgradeLogPath(homeDir), line, 'utf8');
   } catch {
     // noop
   }
@@ -437,8 +442,7 @@ export async function stopForeignNativeAddonHolders(
   return results;
 }
 
-function getUpgradeFailureNoticePath(): string {
-  const home = os.homedir();
+function getUpgradeFailureNoticePath(home: string = os.homedir()): string {
   const dir = path.join(home, '.adhdev');
   try {
     fs.mkdirSync(dir, { recursive: true });
@@ -459,11 +463,11 @@ function buildManualRecoveryCommand(installCommand: PinnedGlobalInstallCommand):
  * log line: the pids/commandlines still holding the lock and a paste-ready
  * recovery command. Written to a stable path the CLI can surface on next boot.
  */
-function emitUpgradeFailureNotice(lines: string[]): void {
+export function emitUpgradeFailureNotice(lines: string[], homeDir: string = os.homedir()): void {
   const body = lines.join('\n');
-  appendUpgradeLog(`Upgrade blocked — user action required:\n${body}`);
+  appendUpgradeLog(`Upgrade blocked — user action required:\n${body}`, homeDir);
   try {
-    fs.writeFileSync(getUpgradeFailureNoticePath(), `[${new Date().toISOString()}]\n${body}\n`, 'utf8');
+    fs.writeFileSync(getUpgradeFailureNoticePath(homeDir), `[${new Date().toISOString()}]\n${body}\n`, 'utf8');
   } catch {
     // noop
   }
@@ -582,6 +586,39 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
 
   await stopSessionHostProcesses(sessionHostAppName);
   removeDaemonPidFile();
+  const windowsInstallerLayout = resolveWindowsInstallerLayout({
+    homeDir: os.homedir(),
+    installPrefix: installCommand.surface.installPrefix,
+  });
+  if (windowsInstallerLayout) {
+    const portableNode = findPortableNode22(os.homedir());
+    if (!portableNode) {
+      throw new Error('installer-managed Windows update requires the portable Node.js 22 runtime');
+    }
+    const npmCliPath = path.join(path.dirname(portableNode), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    if (!fs.existsSync(npmCliPath)) {
+      throw new Error(`portable Node.js 22 npm CLI is missing: ${npmCliPath}`);
+    }
+    appendUpgradeLog(`Installer-managed pointer layout detected; active prefix will remain untouched: ${windowsInstallerLayout.activePrefix}`);
+    await performWindowsAtomicUpgrade({
+      layout: windowsInstallerLayout,
+      packageName: payload.packageName,
+      targetVersion: payload.targetVersion,
+      portableNode,
+      hooks: createDefaultWindowsAtomicHooks({
+        packageName: payload.packageName,
+        targetVersion: payload.targetVersion,
+        npmCliPath,
+        restartArgv,
+        cwd: payload.cwd || process.cwd(),
+        env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== UPGRADE_HELPER_ENV)),
+        log: appendUpgradeLog,
+      }),
+    });
+    try { fs.unlinkSync(getUpgradeFailureNoticePath()); } catch { /* no previous failure notice */ }
+    appendUpgradeLog('Installer-managed Windows atomic upgrade completed');
+    return;
+  }
   // Kill any *foreign* process still holding this install's conpty.node mapped
   // (the session-host stop above only covers the single managed pid). Do this
   // BEFORE the staging GC so the just-released file can also be cleaned up now
@@ -671,6 +708,7 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
   } else {
     appendUpgradeLog('No restart argv provided; upgrade completed without restart');
   }
+  try { fs.unlinkSync(getUpgradeFailureNoticePath()); } catch { /* no previous failure notice */ }
 }
 
 export async function maybeRunDaemonUpgradeHelperFromEnv(): Promise<boolean> {
@@ -683,7 +721,12 @@ export async function maybeRunDaemonUpgradeHelperFromEnv(): Promise<boolean> {
     await runDaemonUpgradeHelper(payload);
     process.exit(0);
   } catch (error: any) {
-    appendUpgradeLog(`Upgrade helper failed: ${error?.stack || error?.message || String(error)}`);
+    const detail = error?.stack || error?.message || String(error);
+    appendUpgradeLog(`Upgrade helper failed: ${detail}`);
+    emitUpgradeFailureNotice([
+      `adhdev upgrade failed: ${error?.message || String(error)}`,
+      `See ${getUpgradeLogPath()} for details. The previous installer-managed version was preserved or restored when available.`,
+    ]);
     process.exit(1);
   }
 }
