@@ -159,6 +159,23 @@ maybe('kimi provider.v1.json — K3 fixture coverage', () => {
             expect(matchesAny('  ⠙ working...')).toBe(true)
         })
 
+        // Regression: the context-meter pattern required a decimal point
+        // (\d+\.\d+%), but kimi-code v0.28.1 renders the context percentage as
+        // a plain integer ("context: 3%", no decimal) for the low percentages
+        // seen in ordinary sessions — the pattern never actually matched the
+        // real status bar, so this volatile counter was never stripped from
+        // the approval-context signature (cli-state-engine.ts
+        // computeApprovalContentSignature), causing the signature to drift on
+        // every token-usage tick and defeating the stale-approval guard live.
+        it('matches the live-observed plain-integer context meter (no decimal required)', () => {
+            expect(matchesAny('K3 thinking: high  context: 0% (0/1M)')).toBe(true)
+            expect(matchesAny('K3 thinking: high  context: 3% (20.7k/1M)')).toBe(true)
+        })
+
+        it('still matches a decimal-form context meter (no regression)', () => {
+            expect(matchesAny('context: 3.5%')).toBe(true)
+        })
+
         it('does not match ordinary assistant/user content (no over-broad regex)', () => {
             expect(matchesAny('391 + 100 = 491.')).toBe(false)
             expect(matchesAny('Created hello.txt containing HELLO.')).toBe(false)

@@ -1072,7 +1072,19 @@ export class ProviderCliAdapter implements CliAdapter {
 
     getStatus(options: { allowParse?: boolean } = {}): CliSessionStatus {
         const allowParse = options.allowParse !== false;
-        const startupModal = allowParse && this.startupParseGate ? this.runParseApproval(this.recentOutputBuffer) : null;
+        let startupModal = allowParse && this.startupParseGate ? this.runParseApproval(this.recentOutputBuffer) : null;
+        // (fix: kimi startup-gate stale-approval bypass) startupParseGate can
+        // still be open by the time a real approval is requested AND resolved
+        // — this ad-hoc parse of recentOutputBuffer runs independently of the
+        // settled-eval loop and previously had no staleness protection at all,
+        // so it kept re-surfacing the identical already-resolved modal for as
+        // long as its text remained anywhere in the rolling buffer, bypassing
+        // engine.activeModal (which resolveModal() had already correctly
+        // cleared). Reuse the SAME discriminator the settle loop uses instead
+        // of inventing a second one here.
+        if (startupModal && this.engine.isStaleResolvedApproval(startupModal, { screenText: this.terminalScreen.getText(), accumulatedBuffer: this.accumulatedBuffer })) {
+            startupModal = null;
+        }
         const startupDetectedStatus = allowParse && this.startupParseGate && !startupModal
             ? this.runDetectStatus(this.recentOutputBuffer || this.terminalScreen.getText())
             : null;
@@ -1179,7 +1191,20 @@ export class ProviderCliAdapter implements CliAdapter {
                 // and let a later evaluate find the complete modal.
                 const buttonsOk = liveModal && Array.isArray(liveModal.buttons)
                     && liveModal.buttons.some((b: any) => typeof b === 'string' && b.trim());
-                if (liveModal && buttonsOk) {
+                // (fix: kimi live-detect stale-approval bypass) This fallback is
+                // NOT gated by startupParseGate — it runs on every getStatus()
+                // call (including the periodic background status heartbeat)
+                // for as long as isWaitingForResponse stays true, which for a
+                // provider that keeps "thinking" after the approved tool call
+                // can be the whole rest of the turn. Its own unguarded re-parse
+                // of recentOutputBuffer/terminalScreen previously kept
+                // re-writing engine.activeModal directly — bypassing setStatus
+                // (so rawStatus never even flipped) and bypassing
+                // applyWaitingApproval's staleness guard entirely, silently
+                // re-corrupting the engine's own state moments after
+                // resolveModal() had correctly cleared it. Reuse the same
+                // engine-owned discriminator here too.
+                if (liveModal && buttonsOk && !this.engine.isStaleResolvedApproval(liveModal, { screenText: this.terminalScreen.getText(), accumulatedBuffer: this.accumulatedBuffer })) {
                     effectiveModal = liveModal;
                     if (!this.engine.activeModal) this.engine.activeModal = liveModal;
                 }
@@ -2474,7 +2499,14 @@ export class ProviderCliAdapter implements CliAdapter {
 
     getDebugState(): Record<string, any> {
         const screenText = sanitizeTerminalText(this.terminalScreen.getText());
-        const startupModal = this.startupParseGate ? this.runParseApproval(this.recentOutputBuffer) : null;
+        let startupModal = this.startupParseGate ? this.runParseApproval(this.recentOutputBuffer) : null;
+        // (fix: kimi startup-gate stale-approval bypass) See the matching
+        // comment in getStatus() — this ad-hoc startup-gate parse bypassed
+        // engine.activeModal's staleness protection entirely. Reuse the same
+        // engine-owned discriminator rather than duplicating it here.
+        if (startupModal && this.engine.isStaleResolvedApproval(startupModal, { screenText: this.terminalScreen.getText(), accumulatedBuffer: this.accumulatedBuffer })) {
+            startupModal = null;
+        }
         const startupDetectedStatus = this.startupParseGate && !startupModal
             ? this.runDetectStatus(this.recentOutputBuffer || screenText)
             : null;

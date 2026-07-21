@@ -86,6 +86,18 @@ interface IdleFinishCandidate {
     assistantLength: number;
 }
 
+/**
+ * Minimal shape computeApprovalContentSignature / isStaleResolvedApproval
+ * actually need — deliberately narrower than the full CliBufferSnapshot so
+ * callers outside the settled-eval loop (e.g. the adapter's startup-gate
+ * modal parse in getStatus/getDebugState) can supply just these two fields
+ * without having to fabricate an entire snapshot.
+ */
+interface ApprovalSignatureSnapshot {
+    screenText?: string;
+    accumulatedBuffer?: string;
+}
+
 interface SettledEvalContext {
     now: number;
     modal: { message: string; buttons: string[] } | null;
@@ -990,12 +1002,7 @@ export class CliStateEngine {
             // a real follow-up approval necessarily means the CLI produced real
             // new output first (running the previous tool, then asking again),
             // which changes the signature regardless of shared message text.
-            const normalizedMessage = typeof modal.message === 'string' ? modal.message.trim() : '';
-            const isStaleResolvedRepaint = !this.activeModal
-                && this.lastApprovalResolvedAt > 0
-                && normalizedMessage.length > 0
-                && normalizedMessage === this.lastResolvedModalMessage
-                && this.computeApprovalContentSignature(snap) === this.lastApprovalResolvedContentSignature;
+            const isStaleResolvedRepaint = !this.activeModal && this.isStaleResolvedApproval(modal, snap);
             if (isStaleResolvedRepaint) {
                 LOG.debug('CLI', `[${this.provider.type}] ignoring stale re-parsed approval matching the just-resolved modal (approval-context signature unchanged)`);
                 return;
@@ -1389,7 +1396,7 @@ export class CliStateEngine {
      * changes — exactly the discriminator applyWaitingApproval's
      * isStaleResolvedRepaint check needs.
      */
-    private computeApprovalContentSignature(snap: CliBufferSnapshot): string {
+    private computeApprovalContentSignature(snap: ApprovalSignatureSnapshot): string {
         const screenText = snap.screenText || snap.accumulatedBuffer || '';
         if (!screenText) return '';
         const tui = (this.provider as { tui?: Record<string, any> }).tui;
@@ -1415,6 +1422,30 @@ export class CliStateEngine {
             kept.push(line);
         }
         return kept.join('\n');
+    }
+
+    /**
+     * True when `modal` is a stale re-parse of an already-resolved approval:
+     * same message text, and the chrome-stripped approval-context signature
+     * of `snap` is unchanged from the signature captured at resolve time.
+     *
+     * Public and reused verbatim by BOTH the settled-eval capture path
+     * (applyWaitingApproval, below) and any OUTSIDE re-parse the adapter
+     * performs independently of the settle loop — e.g. provider-cli-adapter's
+     * getStatus()/getDebugState() startup-gate modal detection, which reads
+     * `recentOutputBuffer` directly while `startupParseGate` is open and can
+     * re-surface the same already-resolved modal before the gate closes.
+     * Centralizing the discriminator here means there is exactly ONE
+     * definition of "stale" for the whole session — no divergent duplicate
+     * heuristic re-implemented per call site.
+     */
+    isStaleResolvedApproval(modal: { message: string; buttons: string[] } | null, snap: ApprovalSignatureSnapshot): boolean {
+        if (!modal) return false;
+        const normalizedMessage = typeof modal.message === 'string' ? modal.message.trim() : '';
+        if (!normalizedMessage) return false;
+        return this.lastApprovalResolvedAt > 0
+            && normalizedMessage === this.lastResolvedModalMessage
+            && this.computeApprovalContentSignature(snap) === this.lastApprovalResolvedContentSignature;
     }
 
     /** Clear all resolve-time approval bookkeeping (message, timestamp, content
