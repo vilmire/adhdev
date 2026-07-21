@@ -4,11 +4,18 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  ADHDEV_OWNED_MARKERS,
   createDefaultWindowsAtomicHooks,
   findPortableNode22,
   performWindowsAtomicUpgrade,
   resolveWindowsInstallerLayout,
 } from './windows-atomic-upgrade.js';
+import {
+  getProcessCommandLine,
+  killProcess,
+  stopOwnedProcessesForPrefixes,
+  waitForPidExit,
+} from './process-lifecycle.js';
 
 const UPGRADE_HELPER_ENV = 'ADHDEV_DAEMON_UPGRADE_HELPER';
 
@@ -235,75 +242,9 @@ export function execNpmCommandSync(
   );
 }
 
-function killPid(pid: number): boolean {
-  try {
-    if (process.platform === 'win32') {
-      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    } else {
-      process.kill(pid, 'SIGTERM');
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function getWindowsProcessCommandLine(pid: number): string | null {
-  const pidFilter = `ProcessId=${pid}`;
-  try {
-    const psOut = execFileSync('powershell.exe', [
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy', 'Bypass',
-      '-Command',
-      `(Get-CimInstance Win32_Process -Filter "${pidFilter}").CommandLine`,
-    ], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
-    if (psOut) return psOut;
-  } catch {
-    // fall through to wmic fallback
-  }
-
-  try {
-    const wmicOut = execFileSync('wmic', [
-      'process', 'where', pidFilter, 'get', 'CommandLine',
-    ], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
-    if (wmicOut) return wmicOut;
-  } catch {
-    // noop
-  }
-  return null;
-}
-
-function getProcessCommandLine(pid: number): string | null {
-  if (!Number.isFinite(pid) || pid <= 0) return null;
-  if (process.platform === 'win32') return getWindowsProcessCommandLine(pid);
-  try {
-    const text = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], {
-      encoding: 'utf8',
-      timeout: 3000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    return text || null;
-  } catch {
-    return null;
-  }
-}
-
 function isManagedSessionHostPid(pid: number): boolean {
   const commandLine = getProcessCommandLine(pid);
   return !!commandLine && /session-host-daemon/i.test(commandLine);
-}
-
-async function waitForPidExit(pid: number, timeoutMs: number): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      process.kill(pid, 0);
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    } catch {
-      return;
-    }
-  }
 }
 
 export async function stopSessionHostProcesses(appName: string): Promise<void> {
@@ -313,7 +254,7 @@ export async function stopSessionHostProcesses(appName: string): Promise<void> {
     if (fs.existsSync(pidFile)) {
       const pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
       if (Number.isFinite(pid) && pid !== process.pid && isManagedSessionHostPid(pid)) {
-        if (killPid(pid)) killedPid = pid;
+        if (killProcess(pid)) killedPid = pid;
       }
     }
   } catch {
@@ -430,7 +371,7 @@ export async function stopForeignNativeAddonHolders(
     appendUpgradeLog(
       `Foreign native-addon holder found: pid ${holder.pid}${holder.commandLine ? ` — ${holder.commandLine}` : ''}`,
     );
-    const killed = killPid(holder.pid);
+    const killed = killProcess(holder.pid);
     if (killed) {
       await waitForPidExit(holder.pid, 15000);
       appendUpgradeLog(`Terminated foreign native-addon holder pid ${holder.pid}`);
@@ -600,11 +541,31 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
       throw new Error(`portable Node.js 22 npm CLI is missing: ${npmCliPath}`);
     }
     appendUpgradeLog(`Installer-managed pointer layout detected; active prefix will remain untouched: ${windowsInstallerLayout.activePrefix}`);
+
+    // Terminate any ADHDev-owned process still executing from the current active
+    // prefix or the legacy stable shim tree before activation. The parent daemon
+    // and this helper itself are excluded: the parent is already exiting, and the
+    // helper must survive to complete the upgrade.
+    const upgradePids = [process.pid, payload.parentPid].filter((n): n is number => Number.isFinite(n) && n > 0);
+    const preStop = await stopOwnedProcessesForPrefixes({
+      prefixes: [windowsInstallerLayout.activePrefix, windowsInstallerLayout.stablePrefix],
+      excludePids: upgradePids,
+      markers: Array.from(ADHDEV_OWNED_MARKERS),
+      waitMs: 15_000,
+      log: appendUpgradeLog,
+    });
+    if (preStop.survivors.length > 0) {
+      throw new Error(
+        `Cannot upgrade: owned processes still running under current prefix: ${preStop.survivors.map((s) => s.pid).join(', ')}`
+      );
+    }
+
     await performWindowsAtomicUpgrade({
       layout: windowsInstallerLayout,
       packageName: payload.packageName,
       targetVersion: payload.targetVersion,
       portableNode,
+      excludePids: upgradePids,
       hooks: createDefaultWindowsAtomicHooks({
         packageName: payload.packageName,
         targetVersion: payload.targetVersion,

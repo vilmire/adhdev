@@ -2,10 +2,20 @@ import { execFileSync, spawn, spawnSync, type ChildProcess } from 'child_process
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
+import { stopOwnedProcessesForPrefixes } from './process-lifecycle.js';
 
 const POINTER_NAME = '.adhdev-current';
 const STABLE_FILES = [POINTER_NAME, 'adhdev.cmd', 'adhdev.ps1', 'adhdev'] as const;
 const DEFAULT_HEALTH_PORT = 19222;
+
+// Markers that identify a Node process as ADHDev-owned when its command line
+// also lives under a versioned install prefix. This deliberately excludes
+// arbitrary user scripts that happen to be located under ~/.adhdev.
+export const ADHDEV_OWNED_MARKERS = [
+    'session-host-daemon',
+    'node_modules/adhdev',
+    'node_modules/@adhdev/daemon-standalone',
+] as const;
 
 export interface WindowsInstallerLayout {
   homeDir: string;
@@ -22,7 +32,7 @@ export interface WindowsAtomicUpgradeHooks {
   restartOld: (portableNode: string) => void;
   waitForHealth: (pid: number, targetVersion: string) => Promise<boolean>;
   stopProcess: (pid: number) => void;
-  cleanup: (layout: WindowsInstallerLayout, activePrefix: string) => void;
+  cleanup: (layout: WindowsInstallerLayout, activePrefix: string) => void | Promise<void>;
   log: (message: string) => void;
 }
 
@@ -32,6 +42,8 @@ export interface WindowsAtomicUpgradeOptions {
   targetVersion: string;
   portableNode: string;
   hooks: WindowsAtomicUpgradeHooks;
+  /** PIDs that must never be terminated during prefix sweeps (helper + parent daemon). */
+  excludePids?: number[];
 }
 
 export interface WindowsAtomicUpgradeResult {
@@ -252,6 +264,25 @@ export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeO
     validateStagedCli(portableNode, stagedCliEntry, targetVersion);
     hooks.log(`Validated staged CLI and portable Node 22 shims in ${stagedPrefix}`);
 
+    // Stop every ADHDev-owned process still executing from the current active
+    // prefix or the legacy stable shim tree before moving the pointer. A stale
+    // session-host left running here keeps node-pty's native addon mapped from
+    // the old tree and resolves lazy requires against a deleted prefix after
+    // activation. Survivors block activation so the pointer is never corrupted.
+    const excludedPids = new Set([process.pid, ...(options.excludePids ?? [])].filter((n) => Number.isFinite(n) && n > 0));
+    const preStop = await stopOwnedProcessesForPrefixes({
+      prefixes: [layout.activePrefix, layout.stablePrefix],
+      excludePids: Array.from(excludedPids),
+      markers: Array.from(ADHDEV_OWNED_MARKERS),
+      waitMs: 15_000,
+      log: hooks.log,
+    });
+    if (preStop.survivors.length > 0) {
+      throw new Error(
+        `Cannot activate ${versionName}: ${preStop.survivors.length} owned process(es) still running under the current prefix`
+      );
+    }
+
     activated = true;
     publishStableShimsAndPointer(layout, versionName);
     hooks.log(`Atomically activated ${versionName}`);
@@ -261,7 +292,7 @@ export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeO
       throw new Error('replacement daemon did not pass the health/version gate');
     }
     hooks.log(`Replacement daemon pid ${daemonPid} passed health for ${targetVersion}`);
-    hooks.cleanup(layout, stagedPrefix);
+    await hooks.cleanup(layout, stagedPrefix);
     return { stagedPrefix, stagedCliEntry, daemonPid };
   } catch (error) {
     if (restarted?.pid) hooks.stopProcess(restarted.pid);
@@ -274,7 +305,7 @@ export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeO
       }
     }
     try { hooks.restartOld(portableNode); } catch { hooks.log('Failed to restart the previous daemon during rollback'); }
-    try { hooks.cleanup(layout, layout.activePrefix); } catch { /* failure path must preserve original error */ }
+    try { await hooks.cleanup(layout, layout.activePrefix); } catch { /* failure path must preserve original error */ }
     throw error;
   }
 }
@@ -353,7 +384,14 @@ export function createDefaultWindowsAtomicHooks(options: {
     stopProcess: (pid) => {
       try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); } catch { /* noop */ }
     },
-    cleanup: (layout, activePrefix) => boundedCleanupInactivePrefixes(layout, activePrefix, options.log),
+    cleanup: async (layout, activePrefix) => cleanupInactivePrefixesWithGuard({
+      layout,
+      activePrefix,
+      excludePids: [process.pid],
+      markers: Array.from(ADHDEV_OWNED_MARKERS),
+      waitMs: 15_000,
+      log: options.log,
+    }),
     log: options.log,
   };
 }
@@ -382,4 +420,58 @@ export function boundedCleanupInactivePrefixes(
     '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded,
   ], { timeout: 5000, windowsHide: true, stdio: 'ignore' });
   if (result.error || result.status !== 0) log('Bounded inactive-prefix cleanup was incomplete; future updates will retry');
+}
+
+export async function cleanupInactivePrefixesWithGuard(options: {
+  layout: WindowsInstallerLayout;
+  activePrefix: string;
+  excludePids?: number[];
+  markers?: readonly string[];
+  waitMs?: number;
+  log?: (message: string) => void;
+}): Promise<void> {
+  const { layout, activePrefix, log } = options;
+  let candidates: string[] = [];
+  try {
+    candidates = fs.readdirSync(layout.installRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith('version-'))
+      .map((entry) => path.join(layout.installRoot, entry.name))
+      .filter((entry) => normalizeForCompare(entry) !== normalizeForCompare(activePrefix))
+      .sort()
+      .slice(0, 8);
+  } catch {
+    return;
+  }
+  if (candidates.length === 0) return;
+
+  for (const candidate of candidates) {
+    const stopResult = await stopOwnedProcessesForPrefixes({
+      prefixes: [candidate],
+      excludePids: options.excludePids,
+      markers: options.markers,
+      waitMs: options.waitMs ?? 15_000,
+      log,
+    });
+    if (stopResult.survivors.length > 0) {
+      log?.(`Skipping cleanup of ${candidate}: ${stopResult.survivors.length} owned process(es) could not be stopped`);
+      continue;
+    }
+    removeInactivePrefix(candidate, log);
+  }
+}
+
+function removeInactivePrefix(target: string, log?: (message: string) => void): void {
+  try {
+    const escaped = quotePowerShellLiteral(target);
+    const script = `if (Test-Path -LiteralPath ${escaped}) { Remove-Item -LiteralPath ${escaped} -Recurse -Force }`;
+    const encoded = Buffer.from(script, 'utf16le').toString('base64');
+    const result = spawnSync('powershell.exe', [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded,
+    ], { timeout: 5000, windowsHide: true, stdio: 'ignore' });
+    if (result.error || result.status !== 0) {
+      log?.(`Failed to remove inactive prefix ${target}: ${result.error?.message || `exit ${result.status}`}`);
+    }
+  } catch (error: any) {
+    log?.(`Failed to remove inactive prefix ${target}: ${error?.message || String(error)}`);
+  }
 }

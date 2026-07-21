@@ -8,6 +8,8 @@ import {
     type SessionHostEndpoint,
     type SessionHostRequestType,
 } from '@adhdev/session-host-core';
+import { getProcessCommandLine, parseNodeScriptPath } from '../commands/process-lifecycle.js';
+import { LOG } from '../logging/logger.js';
 import { ensureSessionHostReady as ensureSharedSessionHostReady } from './runtime-support.js';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../runtime-defaults.js';
 
@@ -97,6 +99,16 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         return require.resolve('@adhdev/session-host-daemon');
     }
 
+    function pathsEquivalent(left: string, right: string): boolean {
+        return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+    }
+
+    function getRunningSessionHostScriptPath(pid: number): string | null {
+        const commandLine = getProcessCommandLine(pid);
+        if (!commandLine || !/session-host-daemon/i.test(commandLine)) return null;
+        return parseNodeScriptPath(commandLine);
+    }
+
     function getPidFile(): string {
         return path.join(os.homedir(), '.adhdev', `${appName}-session-host.pid`);
     }
@@ -178,6 +190,28 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
 
     async function ensureReady(): Promise<SessionHostEndpoint> {
         options.beforeEnsureReady?.();
+
+        // Defensive guard: on Windows the daemon may have been restarted from a
+        // new versioned prefix while a session-host from the old prefix is still
+        // running. Because the old host is reachable on the same socket endpoint,
+        // `ensureSharedSessionHostReady` would reuse it and lazy requires would
+        // resolve against the deleted tree. Detect the mismatch and stop the stale
+        // host before it can be reused; a matching or unreadable host is left alone.
+        if (process.platform === 'win32') {
+            const existingPid = getPid();
+            if (existingPid !== null) {
+                const runningPath = getRunningSessionHostScriptPath(existingPid);
+                const currentEntry = resolveEntry();
+                if (runningPath && !pathsEquivalent(runningPath, currentEntry)) {
+                    LOG.warn(
+                        'SessionHost',
+                        `Detected stale host pid ${existingPid} running from ${runningPath}; restarting from ${currentEntry}`,
+                    );
+                    stopManagedSessionHostProcess();
+                }
+            }
+        }
+
         try {
             return await ensureSharedSessionHostReady({
                 appName,
