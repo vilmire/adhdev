@@ -2795,7 +2795,7 @@
             "point3": "Follow up with a chat instruction, then put your phone away",
             "notificationLabel": "Mobile push notification for an agent approval",
             "resumeLabel": "Approving and following up from the mobile dashboard",
-            "point4": "No port forwarding, no VPN, no DMZ — P2P with TURN relay connects from cafés, hotspots, anywhere with internet"
+            "point4": "No port forwarding, no VPN, no DMZ — P2P with TURN relay connects from cafés, hotspots, desktop or laptop, anywhere with internet"
         },
         "brain": {
             "sectionTitle": "Cheap models for easy work. Expensive ones only when it's hard.",
