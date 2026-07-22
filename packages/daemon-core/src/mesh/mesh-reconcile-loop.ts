@@ -75,7 +75,7 @@ import {
     resolvePendingHeldDrainEscalateMs,
     resolveReconcileIntervalMs,
 } from './mesh-reconcile-config.js';
-import { pullRemoteNodeQueues } from './mesh-remote-event-pull.js';
+import { pullRemoteNodeQueues, pullPendingEventsFromNode } from './mesh-remote-event-pull.js';
 import { runDiskRetentionSweep, detectAndSignalOrphanWorktrees } from './mesh-disk-retention.js';
 import {
     reconcileUnterminatedDirectDispatches,
@@ -781,6 +781,8 @@ async function recoverStrandedAssignedDispatches(
     components: DaemonComponents,
     mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
     store: MeshRuntimeStore,
+    localDaemonId?: string,
+    selfIds: string[] = [],
 ): Promise<void> {
     const meshId = mesh.id;
     const assigned = getQueue(meshId, { status: ['assigned'] });
@@ -831,6 +833,45 @@ async function recoverStrandedAssignedDispatches(
                 const status = terminal.kind === 'task_completed' ? 'completed' : 'failed';
                 updateTaskStatus(meshId, row.id, status);
                 continue;
+            }
+            // GENERATING-STARTED-CONSUME-RACE (fix B): the delivery-consume that clears this
+            // gate (delivered → acked) runs ONLY when the coordinator pulls the worker's queued
+            // agent:generating_started in PHASE 1 (handleMeshForwardEvent → consumeSessionDelivery).
+            // A worker may have emitted generating_started ALREADY, but if PHASE 1 has not yet
+            // pulled that specific event (a skipped/slow peer tick, or the event was queued after
+            // this tick's pull ran), the delivery row still reads 'delivered' here and the redrive
+            // below tears a genuinely-generating remote worker off its task and re-injects the
+            // prompt (the delivered_not_consumed_redrive symptom). Close the race by issuing a
+            // TARGETED, in-process last-chance pull of THIS node's queue right now, then
+            // re-reading taskDeliveryConsumed(): if the worker's generating_started was waiting to
+            // be pulled, the pull consumes the delivery this tick and we skip the redrive entirely.
+            // Best-effort and self-scoped (the same skip/peer guards as PHASE 1) — a miss just
+            // falls through to the existing UNKNOWN-streak grace, so this only ever removes false
+            // redrives, never adds one. A local (co-hosted) worker has nothing to pull (the node's
+            // daemon is a self id) and this is a fast no-op.
+            const assignedNode = row.assignedNodeId
+                ? mesh.nodes?.find(n => meshNodeIdMatches(n, row.assignedNodeId))
+                : undefined;
+            if (assignedNode?.daemonId) {
+                try {
+                    await pullPendingEventsFromNode(
+                        components,
+                        meshId,
+                        assignedNode,
+                        localDaemonId,
+                        selfIds,
+                        selfIds.length > 0
+                            ? selfIds.map(id => ({ meshId, coordinatorDaemonId: id }))
+                            : [{ meshId }],
+                    );
+                } catch { /* best-effort last-chance pull */ }
+                if (store.taskDeliveryConsumed(meshId, row.id)) {
+                    // The pull delivered the worker's generating_started (or a terminal event) and
+                    // consumed the delivery — the task is genuinely live/handled. Reset any accrued
+                    // streak and leave the row to PHASE 4's completion reconcile.
+                    deliveredUnconsumedUnknownStreak.delete(`${meshId}::${row.id}`);
+                    continue;
+                }
             }
             const shortStreakKey = `${meshId}::${row.id}`;
             const verdict = row.assignedSessionId
@@ -1227,7 +1268,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
-                await recoverStrandedAssignedDispatches(components, mesh, store);
+                await recoverStrandedAssignedDispatches(components, mesh, store, localDaemonId, selfIds);
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Assigned-stranded watchdog failed for mesh ${mesh.id}: ${e?.message || e}`);
             }

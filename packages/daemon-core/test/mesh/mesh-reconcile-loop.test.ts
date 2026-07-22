@@ -2989,6 +2989,76 @@ describe('runMeshReconcileTick', () => {
       }
     })
 
+    // ── GENERATING-STARTED-CONSUME-RACE (fix B) ──────────────────────────────────
+    // The delivery-consume that clears the redrive gate runs only when the coordinator
+    // PULLS the worker's queued agent:generating_started (PHASE 1 handleMeshForwardEvent →
+    // consumeSessionDelivery). If that pull has not yet delivered THIS event, the row still
+    // reads 'delivered' at the redrive gate and a genuinely-generating remote worker is torn
+    // off its task ("delivered but no generating_started in Ns"). The fix issues a TARGETED,
+    // in-process last-chance pull of the assigned node right before re-driving, so the queued
+    // generating_started is consumed THIS tick and the redrive is skipped.
+    it('fix B: consumes a still-queued generating_started via the in-process last-chance pull and does NOT re-drive', async () => {
+      const meshId = `mesh_phase25_genstart_race_${Date.now()}`
+      const nodeId = 'node_remote'
+      const sessionId = 'sess-remote-generating'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        // Delivered-but-unconsumed remote row, past the UNKNOWN grace: without the fix the very
+        // next tick would re-drive it.
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+
+        // The worker HAS emitted generating_started; it sits in the worker daemon's pending
+        // queue. The first get_pending_mesh_events call (PHASE 1) returns nothing (the event is
+        // not yet drainable on that pull) — modelling the race — so ONLY the redrive gate's
+        // targeted last-chance pull (a later call) recovers it. If the fix's pull is absent, the
+        // delivery stays 'delivered' and the row is re-driven.
+        const generatingStartedEvent = {
+          event: 'agent:generating_started',
+          meshId,
+          nodeLabel: `Node '${nodeId}'`,
+          nodeId,
+          metadataEvent: { sessionId, taskId: claimed.id, providerType: 'kimi', timestamp: Date.now() },
+          queuedAt: Date.now(),
+        }
+        let pullCount = 0
+        const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string) => {
+          if (command === 'get_pending_mesh_events' && daemonId === 'remote-daemon') {
+            pullCount += 1
+            // PHASE 1 (first pull) misses; the redrive gate's targeted pull (later) hits.
+            return pullCount >= 2 ? { success: true, events: [generatingStartedEvent] } : { success: true, events: [] }
+          }
+          return { success: true, events: [] }
+        })
+
+        // Mesh: a self coordinator node (proves this daemon hosts the mesh) + the remote worker node.
+        const mesh = {
+          id: meshId,
+          nodes: [
+            { id: 'node_coord', workspace: '/repo/coord', daemonId: 'test-machine', machineId: 'test-machine' },
+            { id: nodeId, workspace: '/repo/remote', daemonId: 'remote-daemon' },
+          ],
+        }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        const components = makeComponents([], dispatchMeshCommand)
+
+        await runMeshReconcileTick(components)
+
+        // The targeted last-chance pull consumed the delivery (delivered → acked) …
+        expect(MeshRuntimeStore.getInstance().taskDeliveryConsumed(meshId, claimed.id)).toBe(true)
+        // … so the redrive gate skipped the reclaim: the row stays assigned, no reclaim ledger.
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe(sessionId)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
     it('does NOT re-drive a delivered row that WAS consumed (acked) inside the short grace', async () => {
       const meshId = `mesh_phase25_consumed_${Date.now()}`
       const nodeId = 'node_w'
