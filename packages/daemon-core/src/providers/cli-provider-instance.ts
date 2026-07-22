@@ -371,6 +371,16 @@ export class CliProviderInstance implements ProviderInstance {
     private generatingDebounceTimer: NodeJS.Timeout | null = null;
     private generatingDebouncePending: { chatTitle: string; timestamp: number } | null = null;
     private lastApprovalEventFingerprint = '';
+    // INTERACTIVE-PROMPT-PUSH: edge-trigger key for the AskUserQuestion / waiting_choice
+    // notification. An AskUserQuestion prompt is surfaced only as a display-only
+    // `waiting_choice` overlay in getState(); the raw adapter status stays idle/generating,
+    // so detectStatusTransition()'s status-keyed arms never fire and no push-worthy
+    // agent:* event is emitted — the owner misses the "ACTION REQUIRED" prompt when the
+    // app is backgrounded. We emit one agent:waiting_approval on ENTRY into the prompt
+    // state (reusing the existing server push path, no cloud change) and dedupe on this
+    // key so repeated status ticks with the same prompt do not re-fire. '' means no
+    // prompt is currently active (cleared when the prompt is answered/gone).
+    private lastInteractivePromptEventKey = '';
     private autoApproveBusy = false;
     private autoApproveBusyTimer: NodeJS.Timeout | null = null;
     private lastAutoApprovalSignature = '';
@@ -3948,6 +3958,47 @@ export class CliProviderInstance implements ProviderInstance {
                 this.pushEvent({ event: 'agent:stopped', chatTitle, timestamp: now });
             }
             this.lastStatus = newStatus;
+        }
+
+        // INTERACTIVE-PROMPT-PUSH: fire a push-worthy notification when the session
+        // ENTERS an AskUserQuestion / waiting_choice state. This is orthogonal to the
+        // status-change block above: an AskUserQuestion prompt is surfaced only as a
+        // display-only `waiting_choice` overlay in getState() (mirrored here off
+        // adapterStatus.activeInteractivePrompt, the exact signal getState uses), while
+        // the raw adapter status stays idle/generating — so none of the status-keyed
+        // arms above ever emit an agent:* event for it and the owner gets no web-push.
+        //
+        // We REUSE agent:waiting_approval (the question message as modalMessage, the
+        // choice labels as modalButtons) so the existing server push path fires with
+        // zero cloud change — the semantics ("the agent needs your input") match.
+        //
+        // Edge-triggered: emit exactly once on entry, keyed on promptId + question text,
+        // and reset the key when the prompt clears so a fresh prompt re-fires and a later
+        // real completion still flows through the idle arm normally. We do NOT emit when
+        // the session is ALSO in a genuine approval state (newStatus === 'waiting_approval'):
+        // that arm already emits agent:waiting_approval, and firing here too would double
+        // up on the same modal.
+        const interactivePrompt = adapterStatus.activeInteractivePrompt ?? null;
+        if (interactivePrompt && newStatus !== 'waiting_approval') {
+            const firstQuestion = interactivePrompt.questions?.[0];
+            const promptKey = `${interactivePrompt.promptId}::${firstQuestion?.question ?? ''}`;
+            if (promptKey !== this.lastInteractivePromptEventKey) {
+                this.lastInteractivePromptEventKey = promptKey;
+                const modalMessage = firstQuestion
+                    ? (firstQuestion.header
+                        ? `${firstQuestion.header}: ${firstQuestion.question}`
+                        : firstQuestion.question)
+                    : undefined;
+                const modalButtons = firstQuestion?.options?.map((option: { label: string }) => option.label);
+                this.pushEvent({
+                    event: 'agent:waiting_approval', chatTitle, timestamp: now,
+                    modalMessage,
+                    modalButtons,
+                });
+            }
+        } else if (!interactivePrompt && this.lastInteractivePromptEventKey) {
+            // Prompt answered / gone — reset so the next AskUserQuestion re-fires.
+            this.lastInteractivePromptEventKey = '';
         }
 
         // GENERATING-BOUNDARY idle-stayed collapse (R4b): the starting→idle
