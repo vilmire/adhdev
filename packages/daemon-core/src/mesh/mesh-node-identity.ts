@@ -907,6 +907,55 @@ export function isMeshNodeHealthLaunchable(node: any): boolean {
     return health === 'online' || health === 'unknown';
 }
 
+/** Resolve the git telemetry object a node carries, in the same precedence
+ *  resolveEffectiveMeshNodeHealth uses: a fresh `node.git`, else the cached inline
+ *  status git (`node.cachedStatus.git`). Returns an empty record when neither is
+ *  present (no telemetry). */
+function resolveEffectiveNodeGit(node: any): Record<string, any> {
+    const git = readObjectRecord(node?.git);
+    if (Object.keys(git).length > 0) return git;
+    const cachedStatus = readObjectRecord(node?.cachedStatus);
+    return readObjectRecord(cachedStatus.git);
+}
+
+/**
+ * Launch FRESHNESS gate — distinct from the health gate above.
+ *
+ * `deriveMeshNodeHealthFromGit` reports a clean-tree node with `behind > 0` as
+ * 'online', so the health gate (isMeshNodeHealthLaunchable) happily lets a STALE
+ * node — one whose branch is N commits behind its upstream — win auto-launch fitness
+ * routing and run a fresh worker against out-of-date code. `behind` is deliberately
+ * NOT folded into deriveMeshNodeHealthFromGit because "behind" is not universally
+ * unhealthy (the MAGI planner and other callers share that resolver); it is only
+ * unhealthy for *spawning new work*. This gate encodes exactly that launch-time axis.
+ *
+ * Returns false (NOT fresh → skip / de-rank) only when git telemetry is PRESENT and
+ * proves staleness:
+ *   - behind count exceeds `maxBehind` (default 0 — any behind blocks), OR
+ *   - a submodule is out of sync (gitlink points off upstream — cannot be caught up
+ *     by a simple worktree ff and would launch against a mismatched submodule).
+ *
+ * When telemetry is absent it returns true (fresh), preserving the online/unknown-pass
+ * philosophy: we never block on missing data, only on data that proves the node stale.
+ */
+export function isMeshNodeFreshEnoughToLaunch(node: any, opts?: { maxBehind?: number }): boolean {
+    const git = resolveEffectiveNodeGit(node);
+    // No git telemetry at all → cannot prove stale → do not block.
+    if (Object.keys(git).length === 0) return true;
+    // Not a git repo / no branch: leave this to the health gate (it returns 'degraded'
+    // and blocks there); freshness has nothing to add.
+    if (readBooleanValue(git.isGitRepo) === false) return true;
+    const submoduleDrift = getGitSubmoduleDriftState(git);
+    if (submoduleDrift.outOfSync) return false;
+    const behind = readNumberValue(git.behind);
+    // No behind datum reported → treat as fresh (don't infer staleness from absence).
+    if (behind === undefined) return true;
+    const maxBehind = Number.isFinite(opts?.maxBehind as number) && (opts?.maxBehind as number) >= 0
+        ? Math.floor(opts!.maxBehind as number)
+        : 0;
+    return behind <= maxBehind;
+}
+
 function readMeshNodeLabel(status: Record<string, unknown>, node: any): string {
     return readStringValue(status.nodeId, normalizeMeshNodeId(node)) ?? 'unknown';
 }

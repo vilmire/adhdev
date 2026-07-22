@@ -66,6 +66,15 @@ export type CompletedFinalizationBlock = {
     // preamble summary (evidenceLevel=insufficient) into the append-only ledger before the
     // worker's next approval turn resumes. Independent of valley length.
     holdForTranscript?: boolean;
+    // (CANON-C EARLY-EMIT FLOOR) Set on a missing_final_assistant block whose provider has NO
+    // external transcript source to trail — a PTY-parsed provider (codex-cli) or one that merely
+    // requires a final assistant before idle. For those the CANON-C decoupled-immediate emit is a
+    // pure timing guess (no separate transcript will land to upgrade it), so it must observe the
+    // CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS floor rather than fire at the ~13s first-poll
+    // waitedMs. A native-source block (claude-cli external-native, where the transcript legitimately
+    // trails the idle transition by a write) deliberately does NOT set this — its immediate emit is
+    // correct and is upgraded by the transcript reconcile.
+    noExternalTranscriptSource?: boolean;
 };
 
 export type CompletionFinalAssistantEvidence = {
@@ -87,6 +96,25 @@ export type ExternalTranscriptProbe = {
 
 export const COMPLETED_FINALIZATION_RETRY_MS = 1000;
 export const COMPLETED_FINALIZATION_MAX_WAIT_MS = 30_000;
+// (CANON-C EARLY-EMIT FLOOR) Minimum elapsed time before the CANON-C transcript-evidence
+// gate (allowTimeout blocks) may fire its decoupled-immediate completion for a block that
+// has NO final-assistant evidence (missing_final_assistant, finalAssistantPresent=false).
+//
+// CANON-C deliberately decouples the idle NOTIFICATION from the transcript's final-assistant
+// turn: for a native-source worker whose transcript write merely trails the idle transition,
+// emitting immediately (weak, later upgraded) is correct. But the SAME allowTimeout path also
+// carries codex/antigravity PLAIN terminal blocks whose on-screen "final" assistant never
+// landed — there the immediate emit fires at whatever tiny waitedMs the first completion-gate
+// poll observed (~13s live), stamping evidenceLevel=insufficient and racing the transcript
+// before it can catch up or the 180s mesh-worker stall watchdog can arm. Requiring a minimum
+// dwell gives the transcript a window to land (clearing the block for a GENUINE emit) and lets
+// the stall watchdog own long turns, while still emitting a weak completion promptly once the
+// floor is met so a genuinely-answerless turn is never wedged. A block WITH final-assistant
+// evidence present is unaffected (it takes the normal emit path, not this floor). Scoped (at
+// the call site) to the missing_final_assistant transcript-evidence gate on mesh workers.
+// Sized so a short transcript-write lag resolves under it while staying well below the 30s
+// COMPLETED_FINALIZATION_MAX_WAIT_MS cap that force-releases the weak completion regardless.
+export const CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS = 20_000;
 // (FALSEIDLE-BGCHILD-a) Minimum generating→idle settle window for native-history mesh worker
 // sessions. Native-history providers (e.g. claude-cli) normally flush the completion with
 // flushDelay=0 — the transcript is authoritative, so there is no reason to wait. But a worker
