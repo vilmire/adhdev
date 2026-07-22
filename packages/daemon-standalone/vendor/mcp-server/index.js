@@ -1171,7 +1171,15 @@ var MESH_RECORD_NOTE_TOOL = {
       category: {
         type: "string",
         enum: ["provider_quirk", "pattern_to_avoid", "recovery_lesson"],
-        description: "Optional classification: provider_quirk (a provider/runtime behaves unexpectedly), pattern_to_avoid (an approach that caused problems), recovery_lesson (how a failure was recovered)."
+        description: "Optional classification: provider_quirk (a provider/runtime behaves unexpectedly), pattern_to_avoid (an approach that caused problems), recovery_lesson (how a failure was recovered). Category also governs default read-side retention: recovery_lesson ages out of the injected prompt after ~14 days, pattern_to_avoid after ~30, provider_quirk and uncategorized are durable (never age out). The ledger entry is always kept for audit regardless."
+      },
+      pinned: {
+        type: "boolean",
+        description: "Pin this note so it ALWAYS rides into every coordinator prompt: never dropped by TTL expiry and kept ahead of unpinned notes when the injection cap is hit. Use for durable, high-value operating knowledge you never want to lose from the prompt."
+      },
+      ttl_days: {
+        type: "number",
+        description: "Optional explicit read-side lifespan in days. Resolved to an absolute expiry at record time; after it passes an UNPINNED note is hidden from the injected prompt (but retained in the ledger for audit). Overrides the category default TTL. Ignored when pinned is true."
       }
     },
     required: ["text"]
@@ -4353,6 +4361,13 @@ async function meshRecordNote(ctx, args) {
   }
   const category = args.category === "provider_quirk" || args.category === "pattern_to_avoid" || args.category === "recovery_lesson" ? args.category : void 0;
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
+  const pinned = args.pinned === true ? true : void 0;
+  let expiresAt;
+  if (typeof args.expiresAt === "string" && !Number.isNaN(new Date(args.expiresAt).getTime())) {
+    expiresAt = new Date(args.expiresAt).toISOString();
+  } else if (typeof args.ttl_days === "number" && Number.isFinite(args.ttl_days) && args.ttl_days > 0) {
+    expiresAt = new Date(new Date(createdAt).getTime() + args.ttl_days * 24 * 60 * 60 * 1e3).toISOString();
+  }
   const sourceCoordinator = ctx.coordinatorSessionId || ctx.localDaemonId || ctx.coordinatorHostname || void 0;
   const entry = (0, import_daemon_core4.appendLedgerEntry)(mesh.id, {
     kind: "coordinator_operating_note",
@@ -4361,14 +4376,16 @@ async function meshRecordNote(ctx, args) {
       text,
       ...category ? { category } : {},
       createdAt,
-      ...sourceCoordinator ? { sourceCoordinator } : {}
+      ...sourceCoordinator ? { sourceCoordinator } : {},
+      ...pinned ? { pinned } : {},
+      ...expiresAt ? { expiresAt } : {}
     }
   });
   return JSON.stringify({
     success: true,
     meshId: mesh.id,
     noteId: entry.id,
-    recorded: { text, category: category ?? null, createdAt },
+    recorded: { text, category: category ?? null, createdAt, pinned: pinned ?? false, expiresAt: expiresAt ?? null },
     note: 'Recorded to the mesh ledger. Future coordinators on this mesh will see it under "## Operating Notes" at launch.'
   }, null, 2);
 }
