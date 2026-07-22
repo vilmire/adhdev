@@ -160,6 +160,10 @@ function normalizeOperatingNote(value: unknown): CoordinatorOperatingNote | null
         ...(category ? { category } : {}),
         ...(typeof value.createdAt === 'string' ? { createdAt: value.createdAt } : {}),
         ...(typeof value.sourceCoordinator === 'string' ? { sourceCoordinator: value.sourceCoordinator } : {}),
+        // Operating-notes lifecycle: a repo-declared note may pin itself or set an
+        // explicit expiry, same as a runtime-recorded one.
+        ...(value.pinned === true ? { pinned: true } : {}),
+        ...(typeof value.expiresAt === 'string' ? { expiresAt: value.expiresAt } : {}),
     };
 }
 

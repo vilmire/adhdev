@@ -536,8 +536,8 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).not.toContain('x'.repeat(400))
     expect(prompt).toContain('[truncated]')
 
-    // Omitted-count line for the 30 dropped notes.
-    expect(prompt).toContain('30 older notes omitted (kept in ledger; prune with `mesh_forget_note`)')
+    // Omitted-count line for the 30 dropped notes (lower-priority tail beyond the cap).
+    expect(prompt).toContain('30 lower-priority notes omitted (kept in ledger')
   })
 
   it('6-4: windowMinutes overrides the hardcoded "last 30 min" phrasing', () => {

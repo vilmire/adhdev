@@ -121,7 +121,7 @@ export async function meshLedgerQuery(
 
 export async function meshRecordNote(
     ctx: MeshContext,
-    args: { text?: string; category?: string },
+    args: { text?: string; category?: string; pinned?: boolean; ttl_days?: number; expiresAt?: string },
 ): Promise<string> {
     const { mesh } = ctx;
     const text = typeof args.text === 'string' ? args.text.trim() : '';
@@ -132,6 +132,17 @@ export async function meshRecordNote(
         ? args.category
         : undefined;
     const createdAt = new Date().toISOString();
+    // Operating-notes lifecycle: pinned notes always ride the prompt and never
+    // expire. An optional ttl_days (or explicit expiresAt) sets a read-side
+    // expiry; ttl_days is resolved to an absolute expiresAt at record time so the
+    // note ages deterministically regardless of when it is later injected.
+    const pinned = args.pinned === true ? true : undefined;
+    let expiresAt: string | undefined;
+    if (typeof args.expiresAt === 'string' && !Number.isNaN(new Date(args.expiresAt).getTime())) {
+        expiresAt = new Date(args.expiresAt).toISOString();
+    } else if (typeof args.ttl_days === 'number' && Number.isFinite(args.ttl_days) && args.ttl_days > 0) {
+        expiresAt = new Date(new Date(createdAt).getTime() + args.ttl_days * 24 * 60 * 60 * 1000).toISOString();
+    }
     // sourceCoordinator: best-effort identity of the recording coordinator so a
     // future coordinator can attribute the note. Session id is the most precise;
     // fall back to the daemon/hostname.
@@ -144,13 +155,15 @@ export async function meshRecordNote(
             ...(category ? { category } : {}),
             createdAt,
             ...(sourceCoordinator ? { sourceCoordinator } : {}),
+            ...(pinned ? { pinned } : {}),
+            ...(expiresAt ? { expiresAt } : {}),
         },
     });
     return JSON.stringify({
         success: true,
         meshId: mesh.id,
         noteId: entry.id,
-        recorded: { text, category: category ?? null, createdAt },
+        recorded: { text, category: category ?? null, createdAt, pinned: pinned ?? false, expiresAt: expiresAt ?? null },
         note: 'Recorded to the mesh ledger. Future coordinators on this mesh will see it under "## Operating Notes" at launch.',
     }, null, 2);
 }

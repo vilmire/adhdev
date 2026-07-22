@@ -131,6 +131,11 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                                         category,
                                         createdAt: typeof p.createdAt === 'string' ? p.createdAt : e.timestamp,
                                         sourceCoordinator: typeof p.sourceCoordinator === 'string' ? p.sourceCoordinator : undefined,
+                                        // Operating-notes lifecycle: thread pinned/expiresAt so the
+                                        // injection-side selection can honor them. Legacy notes lack
+                                        // these → pinned defaults false, expiry governed by category TTL.
+                                        pinned: p.pinned === true,
+                                        ...(typeof p.expiresAt === 'string' ? { expiresAt: p.expiresAt } : {}),
                                     };
                                 })
                                 .filter((n): n is NonNullable<typeof n> => n !== null);

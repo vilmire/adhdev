@@ -34,6 +34,7 @@ import type {
 import { mergeAndNormalizePolicy, resolveProviderMaxParallel } from '../repo-mesh-types.js';
 import { getDifficultyBrains } from '../config/mesh-config.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
+import { isNoteExpired, OPERATING_NOTE_CATEGORY_TTL_DAYS } from './mesh-ledger.js';
 import { MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
 import type { MagiKindPanelMap, MagiSlot, MagiTaskKind } from '@adhdev/mesh-shared';
 
@@ -84,6 +85,20 @@ export interface CoordinatorOperatingNote {
     category?: 'provider_quirk' | 'pattern_to_avoid' | 'recovery_lesson';
     createdAt?: string;
     sourceCoordinator?: string;
+    /**
+     * Operating-notes lifecycle (minimal first cut). When true the note ALWAYS
+     * rides into the coordinator prompt — it is never dropped by TTL expiry and
+     * survives the injection cap ahead of unpinned notes. Legacy notes without
+     * this field default to false.
+     */
+    pinned?: boolean;
+    /**
+     * Optional explicit expiry ISO timestamp. When set and in the past, an
+     * UNPINNED note is dropped from the injected prompt (read-side only — the
+     * ledger entry is never pruned by age). When absent, the category→TTL map
+     * (see isNoteExpired) governs expiry; pinned notes never expire regardless.
+     */
+    expiresAt?: string;
 }
 
 // ─── Prompt Builder ─────────────────────────────
@@ -582,11 +597,65 @@ function buildRecentActivitySection(activity?: CoordinatorRecentActivity): strin
 const OPERATING_NOTES_PROMPT_CAP = 20;
 const OPERATING_NOTE_MAX_CHARS = 300;
 
-function buildOperatingNotesSection(notes?: CoordinatorOperatingNote[]): string {
+/**
+ * A category is "durable" (survives the cap ahead of recency) when it has no
+ * TTL entry — provider_quirk, uncategorized, or any unknown category. This
+ * mirrors isNoteExpired's durability rule so ranking and expiry agree.
+ */
+function isDurableCategory(category?: string): boolean {
+    if (!category) return true;
+    return !(category in OPERATING_NOTE_CATEGORY_TTL_DAYS);
+}
+
+/**
+ * Operating-notes lifecycle selection (read-side, minimal first cut). Given the
+ * effective notes (oldest-first, ledger order) and the current time, produce the
+ * ordered, capped list that rides into the prompt:
+ *   (i)   ALWAYS include pinned notes.
+ *   (ii)  drop expired UNPINNED notes (per category TTL / explicit expiresAt).
+ *   (iii) rank pinned-first, then durable-category, then recency (newest first).
+ *   (iv)  apply the existing OPERATING_NOTES_PROMPT_CAP to the ranked list.
+ * Pure + deterministic given `now`. Returns { shown, omittedCount }.
+ *
+ * Ranking is stable on the original ledger index so, within a tier, the original
+ * oldest-first order is preserved before the recency comparison flips it — i.e.
+ * newest notes lead each tier. The cap keeps the leading (highest-priority) N.
+ */
+export function selectOperatingNotesForPrompt(
+    notes: CoordinatorOperatingNote[],
+    now: number,
+    cap: number = OPERATING_NOTES_PROMPT_CAP,
+): { shown: CoordinatorOperatingNote[]; omittedCount: number } {
     const valid = Array.isArray(notes)
         ? notes.filter(n => n && typeof n.text === 'string' && n.text.trim())
         : [];
-    if (valid.length === 0) return '';
+
+    // (i)+(ii): keep pinned always; drop expired unpinned. Retain original index
+    // for a stable recency tiebreak (later index == newer, ledger is oldest-first).
+    const kept = valid
+        .map((note, index) => ({ note, index }))
+        .filter(({ note }) => note.pinned || !isNoteExpired(note as any, now));
+
+    // (iii): rank pinned > durable > recency (newest first within a tier).
+    const rank = (n: CoordinatorOperatingNote): number =>
+        n.pinned ? 0 : isDurableCategory(n.category) ? 1 : 2;
+    kept.sort((a, b) => {
+        const r = rank(a.note) - rank(b.note);
+        if (r !== 0) return r;
+        return b.index - a.index; // newer (higher index) first
+    });
+
+    // (iv): apply the existing cap to the ranked list.
+    const omittedCount = Math.max(0, kept.length - cap);
+    const shown = (omittedCount > 0 ? kept.slice(0, cap) : kept).map(k => k.note);
+    return { shown, omittedCount };
+}
+
+function buildOperatingNotesSection(notes?: CoordinatorOperatingNote[], now: number = Date.now()): string {
+    const hasAny = Array.isArray(notes)
+        ? notes.some(n => n && typeof n.text === 'string' && n.text.trim())
+        : false;
+    if (!hasAny) return '';
 
     const categoryLabel: Record<string, string> = {
         provider_quirk: 'provider quirk',
@@ -594,21 +663,23 @@ function buildOperatingNotesSection(notes?: CoordinatorOperatingNote[]): string 
         recovery_lesson: 'recovery lesson',
     };
 
-    // Keep only the most recent OPERATING_NOTES_PROMPT_CAP notes in the prompt.
-    // `valid` is oldest-first (ledger order), so the newest are at the tail.
-    const omittedCount = Math.max(0, valid.length - OPERATING_NOTES_PROMPT_CAP);
-    const shown = omittedCount > 0 ? valid.slice(-OPERATING_NOTES_PROMPT_CAP) : valid;
+    // Lifecycle selection: pinned-always + expired-unpinned-dropped + rank
+    // (pinned > durable > recency) THEN the existing cap. `shown` is already
+    // highest-priority-first; the cap kept the leading N.
+    const { shown, omittedCount } = selectOperatingNotesForPrompt(notes ?? [], now);
+    if (shown.length === 0) return '';
 
     const lines: string[] = ['## Operating Notes', ''];
     lines.push('Lessons earlier coordinators on this mesh recorded via `mesh_record_note`. Treat them as accumulated operating knowledge — apply them. When you learn a durable lesson (a provider quirk, a pattern to avoid, a recovery lesson), record it with `mesh_record_note` so future coordinators inherit it.');
     lines.push('');
     for (const n of shown) {
+        const pin = n.pinned ? '📌 ' : '';
         const cat = n.category && categoryLabel[n.category] ? `[${categoryLabel[n.category]}] ` : '';
-        lines.push(`- ${cat}${truncateNote(n.text.trim())}`);
+        lines.push(`- ${pin}${cat}${truncateNote(n.text.trim())}`);
     }
     if (omittedCount > 0) {
         lines.push('');
-        lines.push(`_${omittedCount} older note${omittedCount === 1 ? '' : 's'} omitted (kept in ledger; prune with \`mesh_forget_note\`)._`);
+        lines.push(`_${omittedCount} lower-priority note${omittedCount === 1 ? '' : 's'} omitted (kept in ledger; expired-and-unpinned notes are also hidden from this list but retained for audit; prune with \`mesh_forget_note\`)._`);
     }
     return lines.join('\n');
 }

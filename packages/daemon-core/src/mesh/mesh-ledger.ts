@@ -325,6 +325,70 @@ export const OPERATING_NOTE_DEDUPE_WINDOW = 40;
 // a coordinator actually sees while still capping unbounded store growth.
 export const OPERATING_NOTE_KEEP_LATEST = 100;
 
+// ─── Operating-note lifecycle: category TTL + expiry (read-side only) ──────────
+// Minimal first cut of the operating-notes lifecycle. Expiry is READ/INJECTION
+// side ONLY — the store prune (keep-latest-100 above) stays purely count-based
+// and NEVER deletes by age, so audit history is preserved. isNoteExpired decides
+// whether an UNPINNED note still rides into a coordinator prompt.
+//
+// Per-category retention (days). A category not listed here — including the
+// uncategorized case — is durable (never expires). provider_quirk is durable
+// because a runtime quirk stays true until the provider changes.
+export const OPERATING_NOTE_CATEGORY_TTL_DAYS: Readonly<Record<string, number>> = {
+    recovery_lesson: 14,
+    pattern_to_avoid: 30,
+    // provider_quirk: durable (intentionally absent → never expires)
+};
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Shape isNoteExpired reads. Structural so mesh-ledger stays free of a
+ * coordinator-prompt import (CoordinatorOperatingNote satisfies this).
+ */
+export interface OperatingNoteExpiryInput {
+    category?: string;
+    pinned?: boolean;
+    createdAt?: string;
+    /** Explicit expiry override; wins over the category TTL when parseable. */
+    expiresAt?: string;
+    /** Fallback creation time (ledger entry timestamp) when createdAt absent. */
+    timestamp?: string;
+}
+
+/**
+ * Pure helper: is this UNPINNED operating note expired as of `now` (epoch ms)?
+ *
+ * Rules:
+ *  - pinned notes NEVER expire (always false).
+ *  - an explicit, parseable `expiresAt` in the past → expired.
+ *  - otherwise the category TTL applies; a durable category (provider_quirk,
+ *    uncategorized, or any category not in the TTL map) never expires.
+ *  - age is measured from createdAt, falling back to `timestamp` (ledger entry
+ *    time). If neither is a valid date, the note is treated as NOT expired
+ *    (never silently drop a note we cannot age).
+ */
+export function isNoteExpired(note: OperatingNoteExpiryInput, now: number): boolean {
+    if (!note || note.pinned) return false;
+
+    // Explicit expiresAt wins when present and parseable.
+    if (typeof note.expiresAt === 'string') {
+        const exp = new Date(note.expiresAt).getTime();
+        if (!Number.isNaN(exp)) return exp <= now;
+    }
+
+    const ttlDays = note.category ? OPERATING_NOTE_CATEGORY_TTL_DAYS[note.category] : undefined;
+    if (typeof ttlDays !== 'number' || !Number.isFinite(ttlDays)) {
+        // Durable category (provider_quirk / uncategorized / unknown) → never expires.
+        return false;
+    }
+
+    const created = new Date(note.createdAt ?? note.timestamp ?? '').getTime();
+    if (Number.isNaN(created)) return false; // cannot age → keep
+
+    return now - created >= ttlDays * MS_PER_DAY;
+}
+
 // ─── Path Helpers ───────────────────────────────
 
 export function getLedgerDir(): string {
