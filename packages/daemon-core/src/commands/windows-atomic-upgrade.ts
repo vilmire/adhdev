@@ -8,6 +8,15 @@ const POINTER_NAME = '.adhdev-current';
 const STABLE_FILES = [POINTER_NAME, 'adhdev.cmd', 'adhdev.ps1', 'adhdev'] as const;
 const DEFAULT_HEALTH_PORT = 19222;
 
+// How long to wait for the replacement daemon to report the target version
+// before deterministically rolling back. status.version only appears AFTER the
+// daemon fully boots its components — a separate session-host process, node-pty/
+// conpty, CDP, and providers — which on a Windows cold self-upgrade routinely
+// exceeds the old 30s ceiling. Live Windows logs showed every rollback clustering
+// at 33–35s (30s timeout + poll overhead), so the gate was tripping on slow-boot,
+// not on genuine failure. 120s reflects real Windows self-upgrade cold-start time.
+export const DEFAULT_HEALTH_TIMEOUT_MS = 120_000;
+
 function fetchLocalJson(port: number, pathname: string): Promise<{ ok: boolean; body: string }> {
   return new Promise((resolve) => {
     const req = http.get(`http://127.0.0.1:${port}${pathname}`, { timeout: 1500 }, (res) => {
@@ -432,7 +441,7 @@ export function createDefaultWindowsAtomicHooks(options: {
   healthTimeoutMs?: number;
 }): WindowsAtomicUpgradeHooks {
   const healthPort = options.healthPort ?? DEFAULT_HEALTH_PORT;
-  const healthTimeoutMs = options.healthTimeoutMs ?? 30000;
+  const healthTimeoutMs = options.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
   return {
     install: (stagedPrefix, portableNode) => {
       const env: NodeJS.ProcessEnv = {
@@ -483,8 +492,17 @@ export function createDefaultWindowsAtomicHooks(options: {
       child.unref();
     },
     waitForHealth: async (pid, targetVersion) => {
-      const deadline = Date.now() + healthTimeoutMs;
+      const startedAt = Date.now();
+      const deadline = startedAt + healthTimeoutMs;
+      let attempt = 0;
+      // Log the transition milestones exactly once so the daemon log shows how far
+      // the replacement got before the gate resolved: not-yet-alive → alive but
+      // version-not-yet-ready (components still booting) → version matched. This is
+      // what pins down which boot stage the full-boot budget is being spent in.
+      let loggedAlive = false;
+      let loggedVersionPending = false;
       while (Date.now() < deadline) {
+        attempt += 1;
         // Liveness + pid identity come from GET /health, whose body is
         // {ok, pid, wsPath, port} — it carries NO version. The running version
         // lives only in GET /api/v1/status → payload.status.version, so the
@@ -494,9 +512,22 @@ export function createDefaultWindowsAtomicHooks(options: {
         const liveness = await fetchLocalHealth(healthPort);
         const alive = liveness.ok && liveness.pid === pid;
         const version = alive ? await fetchLocalStatusVersion(healthPort) : undefined;
-        if (alive && version === targetVersion) return true;
+        const elapsedMs = Date.now() - startedAt;
+        if (alive && version === targetVersion) {
+          options.log(`Health gate passed after ${elapsedMs}ms (${attempt} probe(s)): pid ${pid} reports ${targetVersion}`);
+          return true;
+        }
+        if (alive && !loggedAlive) {
+          loggedAlive = true;
+          options.log(`Health gate: replacement pid ${pid} is alive at ${elapsedMs}ms; awaiting status.version (components still booting)`);
+        }
+        if (alive && version && version !== targetVersion && !loggedVersionPending) {
+          loggedVersionPending = true;
+          options.log(`Health gate: replacement reports version ${version} (want ${targetVersion}) at ${elapsedMs}ms`);
+        }
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
+      options.log(`Health gate timed out after ${Date.now() - startedAt}ms (${attempt} probe(s), budget ${healthTimeoutMs}ms) waiting for pid ${pid} to report ${targetVersion}`);
       return false;
     },
     stopProcess: (pid) => {
@@ -531,13 +562,19 @@ export function boundedCleanupInactivePrefixes(
     return;
   }
   if (candidates.length === 0) return;
-  const escaped = candidates.map((candidate) => quotePowerShellLiteral(candidate)).join(',');
-  const script = `$ErrorActionPreference='Stop'; @(${escaped}) | ForEach-Object { if (Test-Path -LiteralPath $_) { Remove-Item -LiteralPath $_ -Recurse -Force } }`;
-  const encoded = Buffer.from(script, 'utf16le').toString('base64');
-  const result = spawnSync('powershell.exe', [
-    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded,
-  ], { timeout: 5000, windowsHide: true, stdio: 'ignore' });
-  if (result.error || result.status !== 0) log('Bounded inactive-prefix cleanup was incomplete; future updates will retry');
+  // Delete in-process (see removeInactivePrefix) rather than via a powershell.exe
+  // Remove-Item batch under a 5000ms spawnSync timeout, which ETIMEDOUT'd on
+  // Windows and left orphan version-* prefixes behind. best-effort: a failure
+  // here never blocks the upgrade success/failure signal.
+  let incomplete = false;
+  for (const candidate of candidates) {
+    try {
+      fs.rmSync(candidate, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch {
+      incomplete = true;
+    }
+  }
+  if (incomplete) log('Bounded inactive-prefix cleanup was incomplete; future updates will retry');
 }
 
 export async function cleanupInactivePrefixesWithGuard(options: {
@@ -579,16 +616,15 @@ export async function cleanupInactivePrefixesWithGuard(options: {
 }
 
 function removeInactivePrefix(target: string, log?: (message: string) => void): void {
+  // Delete in-process with fs.rmSync instead of shelling out to powershell.exe.
+  // A version prefix holds thousands of small files (node_modules, node-pty
+  // prebuilds); Remove-Item -Recurse -Force over that, plus PowerShell 5.1's
+  // cold-start, routinely blew past the old 5000ms spawnSync timeout on Windows
+  // — every candidate then failed with ETIMEDOUT and orphan version-* dirs
+  // accumulated. fs.rmSync has no process spawn, no timeout, and retries the
+  // transient EBUSY/EPERM/ENOTEMPTY that a just-stopped process can leave behind.
   try {
-    const escaped = quotePowerShellLiteral(target);
-    const script = `if (Test-Path -LiteralPath ${escaped}) { Remove-Item -LiteralPath ${escaped} -Recurse -Force }`;
-    const encoded = Buffer.from(script, 'utf16le').toString('base64');
-    const result = spawnSync('powershell.exe', [
-      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded,
-    ], { timeout: 5000, windowsHide: true, stdio: 'ignore' });
-    if (result.error || result.status !== 0) {
-      log?.(`Failed to remove inactive prefix ${target}: ${result.error?.message || `exit ${result.status}`}`);
-    }
+    fs.rmSync(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   } catch (error: any) {
     log?.(`Failed to remove inactive prefix ${target}: ${error?.message || String(error)}`);
   }

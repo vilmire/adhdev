@@ -100,6 +100,115 @@ describe('upgrade helper install surface', () => {
     ])
   })
 
+  it('FIX C: forces a win32 legacy node22-prefix install to converge on the dispatcher prefix', () => {
+    // Simulate the running adhdev living under ~/.adhdev/tools/node22/<node>/
+    // node_modules/adhdev — the legacy layout a `npm i -g` under portable node22
+    // produces. Self-upgrade must NOT reuse that prefix (it self-perpetuates and
+    // shadows the dispatcher); it must redirect to ~/.adhdev/npm-installs/version-*.
+    const home = real(fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-fixc-home-')))
+    tempRoots.push(home)
+    const node22Dir = path.join(home, '.adhdev', 'tools', 'node22', 'node-v22.23.1-win-x64')
+    const packageRoot = path.join(node22Dir, 'node_modules', 'adhdev')
+    const cliPath = path.join(packageRoot, 'dist', 'cli', 'index.js')
+    const nodePath = path.join(node22Dir, 'node.exe')
+    const npmCliPath = path.join(node22Dir, 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    fs.mkdirSync(path.dirname(cliPath), { recursive: true })
+    fs.mkdirSync(path.dirname(npmCliPath), { recursive: true })
+    fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'adhdev', version: '0.0.0-test' }))
+    fs.writeFileSync(cliPath, '// cli\n')
+    fs.writeFileSync(nodePath, '')
+    fs.writeFileSync(npmCliPath, '')
+
+    const surface = resolveCurrentGlobalInstallSurface({
+      packageName: 'adhdev',
+      currentCliPath: cliPath,
+      nodeExecutable: nodePath,
+      platform: 'win32',
+      homeDir: home,
+    })
+
+    // No dispatcher pointer yet → migration sentinel under npm-installs.
+    const expectedPrefix = path.join(home, '.adhdev', 'npm-installs', 'version-legacy-migrate')
+    expect(surface.installPrefix).toBe(expectedPrefix)
+    expect(surface.installPrefix).not.toContain(path.join('tools', 'node22'))
+  })
+
+  it('FIX C: converges a win32 legacy node22-prefix install onto the existing dispatcher pointer version', () => {
+    const home = real(fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-fixc-ptr-')))
+    tempRoots.push(home)
+    const node22Dir = path.join(home, '.adhdev', 'tools', 'node22', 'node-v22.23.1-win-x64')
+    const packageRoot = path.join(node22Dir, 'node_modules', 'adhdev')
+    const cliPath = path.join(packageRoot, 'dist', 'cli', 'index.js')
+    const nodePath = path.join(node22Dir, 'node.exe')
+    fs.mkdirSync(path.dirname(cliPath), { recursive: true })
+    fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'adhdev', version: '0.0.0-test' }))
+    fs.writeFileSync(cliPath, '// cli\n')
+    fs.writeFileSync(nodePath, '')
+    // An existing dispatcher pointer names the active version.
+    const npmGlobal = path.join(home, '.adhdev', 'npm-global')
+    fs.mkdirSync(npmGlobal, { recursive: true })
+    fs.writeFileSync(path.join(npmGlobal, '.adhdev-current'), 'version-1700000000000-42-abcdef\n')
+
+    const surface = resolveCurrentGlobalInstallSurface({
+      packageName: 'adhdev',
+      currentCliPath: cliPath,
+      nodeExecutable: nodePath,
+      platform: 'win32',
+      homeDir: home,
+    })
+
+    expect(surface.installPrefix).toBe(path.join(home, '.adhdev', 'npm-installs', 'version-1700000000000-42-abcdef'))
+  })
+
+  it('FIX C: leaves a genuine win32 dispatcher prefix untouched (no false convergence)', () => {
+    const home = real(fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-fixc-disp-')))
+    tempRoots.push(home)
+    const versionPrefix = path.join(home, '.adhdev', 'npm-installs', 'version-1700000000000-7-deadbeef')
+    const packageRoot = path.join(versionPrefix, 'node_modules', 'adhdev')
+    const cliPath = path.join(packageRoot, 'dist', 'cli', 'index.js')
+    const nodePath = path.join(home, '.adhdev', 'tools', 'node22', 'node-v22.23.1-win-x64', 'node.exe')
+    fs.mkdirSync(path.dirname(cliPath), { recursive: true })
+    fs.mkdirSync(path.dirname(nodePath), { recursive: true })
+    fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'adhdev', version: '0.0.0-test' }))
+    fs.writeFileSync(cliPath, '// cli\n')
+    fs.writeFileSync(nodePath, '')
+
+    const surface = resolveCurrentGlobalInstallSurface({
+      packageName: 'adhdev',
+      currentCliPath: cliPath,
+      nodeExecutable: nodePath,
+      platform: 'win32',
+      homeDir: home,
+    })
+
+    // Already a dispatcher version- prefix → used as-is, never rewritten.
+    expect(surface.installPrefix).toBe(real(versionPrefix))
+  })
+
+  it('FIX C: does not converge a node22-prefix install on non-win32 (scoped to Windows only)', () => {
+    const home = real(fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-fixc-posix-')))
+    tempRoots.push(home)
+    const node22Dir = path.join(home, '.adhdev', 'tools', 'node22', 'node-v22.23.1-linux-x64')
+    const packageRoot = path.join(node22Dir, 'node_modules', 'adhdev')
+    const cliPath = path.join(packageRoot, 'dist', 'cli', 'index.js')
+    const nodePath = path.join(node22Dir, 'node')
+    fs.mkdirSync(path.dirname(cliPath), { recursive: true })
+    fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'adhdev', version: '0.0.0-test' }))
+    fs.writeFileSync(cliPath, '// cli\n')
+    fs.writeFileSync(nodePath, '')
+
+    const surface = resolveCurrentGlobalInstallSurface({
+      packageName: 'adhdev',
+      currentCliPath: cliPath,
+      nodeExecutable: nodePath,
+      platform: 'linux',
+      homeDir: home,
+    })
+
+    // POSIX keeps the reverse-resolved prefix (node22 dir) untouched.
+    expect(surface.installPrefix).toBe(real(node22Dir))
+  })
+
   it('runs Windows npm through npm-cli.js without shelling out to npm.cmd', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-upgrade-surface-win-'))
     tempRoots.push(tempRoot)

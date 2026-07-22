@@ -144,19 +144,68 @@ function resolveInstallPrefixFromPackageRoot(packageRoot: string, packageName: s
   return maybeLibDir;
 }
 
+// True when `prefix` is the bin dir of a portable Node 22 the installer manages
+// under ~/.adhdev/tools/node22/<node-vX>/. A `npm i -g adhdev` run while that
+// portable node is the active `node` installs adhdev into node's own default
+// global prefix (= that dir) — a "legacy node22-prefix" install that lives at
+// the FRONT of PATH (Enable-NodePath prepends node22) and shadows the canonical
+// dispatcher shims in ~/.adhdev/npm-global. Because self-upgrade reuses the
+// running prefix, that install then re-installs into the same node22 dir forever
+// and never converts to the dispatcher. Detecting it lets us force convergence.
+function isPortableNode22Prefix(prefix: string | null, homeDir: string): boolean {
+  if (!prefix) return false;
+  const portableRoot = path.join(homeDir, '.adhdev', 'tools', 'node22');
+  const normalizedPrefix = path.resolve(prefix).replace(/[\\/]+$/, '').toLowerCase();
+  const normalizedRoot = path.resolve(portableRoot).replace(/[\\/]+$/, '').toLowerCase();
+  return normalizedPrefix === normalizedRoot || normalizedPrefix.startsWith(`${normalizedRoot}${path.sep.toLowerCase()}`);
+}
+
+// Redirect a legacy node22-prefix install to the canonical dispatcher install
+// root so resolveWindowsInstallerLayout accepts it and the atomic-upgrade
+// publishes the ~/.adhdev/npm-global pointer + shims. Prefer the version the
+// dispatcher pointer already names (so we sit on the real active dispatcher
+// prefix); otherwise synthesize a stable migration sentinel under npm-installs.
+// resolveWindowsInstallerLayout only requires a `npm-installs/version-*` path —
+// performWindowsAtomicUpgrade stages a fresh version- prefix of its own and uses
+// this only as the "old prefix" to stop/clean, so a non-existent path is a no-op.
+function canonicalDispatcherInstallPrefix(homeDir: string): string {
+  const installRoot = path.join(homeDir, '.adhdev', 'npm-installs');
+  const pointerPath = path.join(homeDir, '.adhdev', 'npm-global', '.adhdev-current');
+  try {
+    const activeVersion = fs.readFileSync(pointerPath, 'utf8').trim();
+    if (activeVersion.startsWith('version-')) return path.join(installRoot, activeVersion);
+  } catch {
+    // No dispatcher pointer yet (first migration off the legacy layout).
+  }
+  return path.join(installRoot, 'version-legacy-migrate');
+}
+
 export function resolveCurrentGlobalInstallSurface(options: {
   packageName: string;
   currentCliPath?: string;
   nodeExecutable?: string;
   platform?: NodeJS.Platform;
+  homeDir?: string;
 }): CurrentGlobalInstallSurface {
   const packageRoot = findCurrentPackageRoot(options.currentCliPath || process.argv[1], options.packageName);
   const npmInvocation = resolveSiblingNpmInvocation(options.nodeExecutable || process.execPath, options.platform);
+  const platform = options.platform || process.platform;
+  const homeDir = options.homeDir || os.homedir();
+  let installPrefix = packageRoot ? resolveInstallPrefixFromPackageRoot(packageRoot, options.packageName) : null;
+  // FIX C: on Windows, never let a self-upgrade perpetuate the legacy
+  // node22-prefix install. If the running adhdev lives under ~/.adhdev/tools/
+  // node22, force the install onto the canonical dispatcher prefix so the update
+  // converges to the ~/.adhdev/npm-global pointer + shims. Scoped to win32 AND a
+  // tools/node22 prefix so npm-linked dev / standalone / real dispatcher installs
+  // are untouched.
+  if (platform === 'win32' && isPortableNode22Prefix(installPrefix, homeDir)) {
+    installPrefix = canonicalDispatcherInstallPrefix(homeDir);
+  }
   return {
     npmExecutable: npmInvocation.executable,
     npmArgsPrefix: npmInvocation.argsPrefix,
     packageRoot,
-    installPrefix: packageRoot ? resolveInstallPrefixFromPackageRoot(packageRoot, options.packageName) : null,
+    installPrefix,
     execOptions: npmInvocation.execOptions,
   };
 }

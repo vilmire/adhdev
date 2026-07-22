@@ -22,6 +22,9 @@ import {
   createDefaultWindowsAtomicHooks,
   performWindowsAtomicUpgrade,
   resolveWindowsInstallerLayout,
+  cleanupInactivePrefixesWithGuard,
+  boundedCleanupInactivePrefixes,
+  DEFAULT_HEALTH_TIMEOUT_MS,
   type WindowsAtomicUpgradeHooks,
   type WindowsInstallerLayout,
 } from '../../src/commands/windows-atomic-upgrade'
@@ -363,7 +366,7 @@ describe('Windows installer-managed atomic upgrade', () => {
     let server: http.Server | null = null
     let boundPort = 0
 
-    function makeHooks(targetVersion: string, healthTimeoutMs = 30000) {
+    function makeHooks(targetVersion: string, healthTimeoutMs = 30000, log: (m: string) => void = () => {}) {
       return createDefaultWindowsAtomicHooks({
         packageName: 'adhdev',
         targetVersion,
@@ -371,7 +374,7 @@ describe('Windows installer-managed atomic upgrade', () => {
         restartArgv: [],
         cwd: '/',
         env: {},
-        log: () => {},
+        log,
         // Bind the gate to the ephemeral stub port instead of the daemon's real
         // 19222 IPC port, which the coordinator's own live daemon occupies.
         healthPort: boundPort,
@@ -437,6 +440,34 @@ describe('Windows installer-managed atomic upgrade', () => {
       const ok = await makeHooks('1.0.18-rc.7', 1000).waitForHealth(4242, '1.0.18-rc.7')
       expect(ok).toBe(false)
     })
+
+    it('FIX A: logs a passing milestone with elapsed time when the gate is satisfied', async () => {
+      const daemonPid = 5152
+      await startStubDaemon(daemonPid, '1.0.18-rc.7')
+      const logs: string[] = []
+      const ok = await makeHooks('1.0.18-rc.7', 5000, (m) => logs.push(m)).waitForHealth(daemonPid, '1.0.18-rc.7')
+      expect(ok).toBe(true)
+      expect(logs.some((l) => /Health gate passed after \d+ms/.test(l))).toBe(true)
+    })
+
+    it('FIX A: logs a timeout diagnostic naming the budget when the gate never satisfies', async () => {
+      await startStubDaemon(4321, '1.0.6') // version never matches the target
+      const logs: string[] = []
+      const ok = await makeHooks('1.0.18-rc.7', 700, (m) => logs.push(m)).waitForHealth(4321, '1.0.18-rc.7')
+      expect(ok).toBe(false)
+      // The timeout log must report the budget so a slow-boot rollback is diagnosable.
+      expect(logs.some((l) => /Health gate timed out after \d+ms.*budget 700ms/.test(l))).toBe(true)
+      // It reached the daemon (alive) but the version stayed stale — the exact
+      // "components still booting" shape FIX A is meant to make visible.
+      expect(logs.some((l) => /is alive at \d+ms; awaiting status\.version/.test(l))).toBe(true)
+    })
+  })
+
+  it('FIX A: defaults the health-gate budget to 120s (Windows full-boot headroom, up from 30s)', () => {
+    // Deterministic regression guard for the 30s→120s default bump. Live Windows
+    // logs clustered every rollback at 33–35s because status.version only lands
+    // after a full component boot that regularly exceeds 30s; 120s gives headroom.
+    expect(DEFAULT_HEALTH_TIMEOUT_MS).toBe(120_000)
   })
 
   it('refuses activation when the staged conpty.node prebuild is missing', async () => {
@@ -466,5 +497,51 @@ describe('Windows installer-managed atomic upgrade', () => {
     })
     expect(fs.existsSync(path.join(result.stagedPrefix, 'node_modules', 'adhdev', 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node'))).toBe(true)
     expect(fs.readFileSync(layout.pointerPath, 'utf8')).toBe(path.basename(result.stagedPrefix))
+  })
+
+  // FIX B: cleanup deletes inactive version-* prefixes in-process with fs.rm
+  // instead of shelling out to powershell.exe under a 5000ms spawnSync timeout,
+  // which ETIMEDOUT'd on Windows and left orphan version-* dirs accumulating.
+  function seedVersionPrefix(installRoot: string, name: string): string {
+    const prefix = path.join(installRoot, name)
+    // Nested files mimic node_modules — the deep tree that blew the old timeout.
+    const deep = path.join(prefix, 'node_modules', 'adhdev', 'dist')
+    fs.mkdirSync(deep, { recursive: true })
+    fs.writeFileSync(path.join(deep, 'index.js'), 'x')
+    fs.writeFileSync(path.join(prefix, 'adhdev.cmd'), 'x')
+    return prefix
+  }
+
+  it('FIX B: cleanupInactivePrefixesWithGuard removes inactive version-* prefixes via fs.rm', async () => {
+    const { layout } = fixture()
+    const active = seedVersionPrefix(layout.installRoot, 'version-active')
+    const stale1 = seedVersionPrefix(layout.installRoot, 'version-stale-1')
+    const stale2 = seedVersionPrefix(layout.installRoot, 'version-stale-2')
+
+    await cleanupInactivePrefixesWithGuard({
+      layout,
+      activePrefix: active,
+      excludePids: [process.pid],
+      waitMs: 100,
+    })
+
+    // The active prefix is preserved; every inactive version-* is gone.
+    expect(fs.existsSync(active)).toBe(true)
+    expect(fs.existsSync(stale1)).toBe(false)
+    expect(fs.existsSync(stale2)).toBe(false)
+  })
+
+  it('FIX B: boundedCleanupInactivePrefixes removes inactive version-* prefixes via fs.rm', () => {
+    const { layout } = fixture()
+    const active = seedVersionPrefix(layout.installRoot, 'version-active')
+    const stale = seedVersionPrefix(layout.installRoot, 'version-stale')
+    const logs: string[] = []
+
+    boundedCleanupInactivePrefixes(layout, active, (m) => logs.push(m))
+
+    expect(fs.existsSync(active)).toBe(true)
+    expect(fs.existsSync(stale)).toBe(false)
+    // Clean run → no "incomplete" retry warning (the ETIMEDOUT-era symptom).
+    expect(logs.some((l) => /incomplete/.test(l))).toBe(false)
   })
 })
