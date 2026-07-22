@@ -391,6 +391,7 @@ var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_restart_daemon",
   "mesh_checkpoint",
   "mesh_approve",
+  "mesh_answer_question",
   "mesh_list_pending_approvals",
   "mesh_clone_node",
   "mesh_remove_node",
@@ -1075,6 +1076,38 @@ var MESH_APPROVE_TOOL = {
     required: ["node_id", "session_id", "action"]
   }
 };
+var MESH_ANSWER_QUESTION_TOOL = {
+  name: "mesh_answer_question",
+  description: 'Answer a multi-choice QUESTION (AskUserQuestion) a delegated agent session is waiting on. This is the counterpart to mesh_approve: a QUESTION (surfaced as an agent:waiting_choice event / status "awaiting_choice") is NOT a yes/no approval \u2014 it offers labelled options (optionally multi-select, optionally a freeform "Type something") and must be answered here, never with mesh_approve. Supply the promptId from the waiting_choice event and one answer per question. Each answer selects option(s) by their exact label OR 1-based index; for a multi-select question pass an array of selections; a freeform answer passes text instead. The daemon drives the correct keystrokes into the provider TUI to submit the selection.',
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Target node ID (from the waiting_choice event / mesh_list_nodes)." },
+      session_id: { type: "string", description: "Agent session ID that is awaiting the question answer." },
+      promptId: { type: "string", description: "The InteractivePrompt promptId from the agent:waiting_choice event. Ensures the answer matches the active prompt." },
+      answers: {
+        type: "array",
+        description: "One entry per question in the prompt (in question order). Each entry answers a single question by selecting option label(s)/index(es), or by supplying freeform text.",
+        items: {
+          type: "object",
+          properties: {
+            questionId: { type: "string", description: "Optional question id from the prompt payload. When omitted, entries are matched to the prompt questions by array position." },
+            select: {
+              description: "The chosen option(s): an option label (string), a 1-based option index (number), or an array of labels/indices for a multi-select question.",
+              oneOf: [
+                { type: "string" },
+                { type: "number" },
+                { type: "array", items: { type: ["string", "number"] } }
+              ]
+            },
+            freeform: { type: "string", description: 'Freeform text answer (for a "Type something" option). Mutually exclusive with select.' }
+          }
+        }
+      }
+    },
+    required: ["node_id", "session_id", "promptId", "answers"]
+  }
+};
 var MESH_LIST_PENDING_APPROVALS_TOOL = {
   name: "mesh_list_pending_approvals",
   description: "List every session across the mesh that is currently awaiting an approval decision (status awaiting_approval) \u2014 the mesh-wide approval inbox. mesh_approve resolves ONE (node_id, session_id) at a time; this read-only tool enumerates the full pending set so you can see all blocked sessions at once and drive a mesh_approve for each. Each row carries nodeId, sessionId, providerType, taskTitle, and how long it has been waiting (waitingSince/waitingMs), longest-waiting first. Does not mutate anything.",
@@ -1508,6 +1541,7 @@ var ALL_MESH_TOOLS = [
   MESH_RESTART_DAEMON_TOOL,
   MESH_CHECKPOINT_TOOL,
   MESH_APPROVE_TOOL,
+  MESH_ANSWER_QUESTION_TOOL,
   MESH_LIST_PENDING_APPROVALS_TOOL,
   MESH_CLONE_NODE_TOOL,
   MESH_REMOVE_NODE_TOOL,
@@ -7075,6 +7109,25 @@ async function meshApprove(ctx, args) {
   });
   return JSON.stringify(result, null, 2);
 }
+async function meshAnswerQuestion(ctx, args) {
+  const node = await findNodeWithRefresh(ctx, args.node_id);
+  if (!args.promptId || typeof args.promptId !== "string") {
+    return JSON.stringify({ success: false, error: "promptId is required (from the agent:waiting_choice event)." }, null, 2);
+  }
+  if (!Array.isArray(args.answers)) {
+    return JSON.stringify({ success: false, error: "answers must be an array (one entry per question)." }, null, 2);
+  }
+  const result = await commandForNode(ctx, node, "interactive_prompt_response", {
+    targetSessionId: args.session_id,
+    sessionId: args.session_id,
+    workspace: node.workspace,
+    response: {
+      promptId: args.promptId,
+      answers: args.answers
+    }
+  });
+  return JSON.stringify(result, null, 2);
+}
 async function meshListPendingApprovals(ctx, _args = {}) {
   (0, import_daemon_core4.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_list_pending_approvals" });
   await refreshMeshFromDaemon(ctx);
@@ -8690,6 +8743,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_approve":
             text = await meshApprove(meshCtx, a);
+            break;
+          case "mesh_answer_question":
+            text = await meshAnswerQuestion(meshCtx, a);
             break;
           case "mesh_list_pending_approvals":
             text = await meshListPendingApprovals(meshCtx, a);
