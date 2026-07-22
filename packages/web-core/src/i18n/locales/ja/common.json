@@ -2599,7 +2599,7 @@
             "crossDesc": "同じ読み取り専用の調査を複数のマシン × プロバイダーのレプリカにファンアウトし、一致する点と分岐する点を統合します（MAGI）。1 体のエージェントの見解より信頼できます。",
             "tryMesh": "Repo Mesh を試す →",
             "seePlans": "プランを見る",
-            "availableOn": "Pro 以上で利用可能。接続後は <strong>Repo Mesh</strong> ページから操作できます。",
+            "availableOn": "マシンを接続したら、<strong>Repo Mesh</strong> ページからすぐに始められます。",
             "readGuide": "ガイドを読む",
             "graphAlt": "実際に収束したワークストリーム直後のメッシュ可観測性: ミッション履歴、追記専用の台帳アクティビティ、タスクキュー、Refinery ジョブ — feat/get-todo-by-id が main に fast-forward 済み"
         },

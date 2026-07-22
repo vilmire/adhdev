@@ -2600,7 +2600,7 @@
             "crossDesc": "같은 읽기 전용 질문을 여러 머신과 모델에 동시에 던지고, 어디서 일치하고 어디서 갈리는지 확인합니다(MAGI). 에이전트 하나의 답보다 신뢰할 수 있습니다.",
             "tryMesh": "Repo Mesh 사용해보기 →",
             "seePlans": "요금제 보기",
-            "availableOn": "Pro 이상에서 사용 가능합니다. 연결 후 <strong>Repo Mesh</strong> 페이지에서 구동하세요.",
+            "availableOn": "머신을 연결하고 <strong>Repo Mesh</strong> 페이지에서 바로 시작하세요.",
             "readGuide": "가이드 읽기",
             "graphAlt": "실제 수렴 워크스트림 직후의 메시 옵저버빌리티: 미션 히스토리, append-only 원장 활동, 태스크 큐, Refinery 잡 — feat/get-todo-by-id가 main으로 fast-forward됨"
         },

@@ -2600,7 +2600,7 @@
             "crossDesc": "Ask the same read-only question to several machines and models at once, then see where they agree and disagree (MAGI) — more trustworthy than one agent's answer.",
             "tryMesh": "Try Repo Mesh →",
             "seePlans": "See plans",
-            "availableOn": "Available on Pro and above. Drive it from the <strong>Repo Mesh</strong> page once connected.",
+            "availableOn": "Connect a machine and open the <strong>Repo Mesh</strong> page to get started.",
             "readGuide": "Read the guide",
             "graphAlt": "Mesh observability after a real converged workstream: mission history, append-only ledger activity, the task queue, and Refinery jobs — feat/get-todo-by-id fast-forwarded into main"
         },

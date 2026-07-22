@@ -2599,7 +2599,7 @@
             "crossDesc": "Distribuye la misma investigación de solo lectura a varias réplicas de máquina × proveedor y sintetiza dónde coinciden y dónde divergen (MAGI). Más fiable que la opinión de un solo agente.",
             "tryMesh": "Probar Repo Mesh →",
             "seePlans": "Ver planes",
-            "availableOn": "Disponible en Pro y superiores. Contrólalo desde la página de <strong>Repo Mesh</strong> una vez conectado.",
+            "availableOn": "Conecta una máquina y abre la página de <strong>Repo Mesh</strong> para empezar.",
             "readGuide": "Leer la guía",
             "graphAlt": "Observabilidad del mesh tras un workstream convergido real: historial de misiones, actividad del ledger append-only, la cola de tareas y los trabajos del Refinery — feat/get-todo-by-id integrado en main por fast-forward"
         },

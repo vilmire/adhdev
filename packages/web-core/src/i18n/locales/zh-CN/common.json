@@ -2599,7 +2599,7 @@
             "crossDesc": "将同一个只读调查扇出到多个机器 × 提供方副本，并综合它们一致与分歧之处（MAGI）。比单个智能体的看法更可靠。",
             "tryMesh": "试用 Repo Mesh →",
             "seePlans": "查看方案",
-            "availableOn": "Pro 及以上方案可用。连接后从 <strong>Repo Mesh</strong> 页面进行操作。",
+            "availableOn": "连接机器后，在 <strong>Repo Mesh</strong> 页面即可开始使用。",
             "readGuide": "阅读指南",
             "graphAlt": "真实收敛工作流之后的网格可观测性:任务史、只追加账本活动、任务队列与 Refinery 作业 —— feat/get-todo-by-id 已 fast-forward 进 main"
         },
