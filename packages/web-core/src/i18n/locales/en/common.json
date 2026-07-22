@@ -206,6 +206,8 @@
         "hiddenTabs": "Hidden tabs",
         "collapsedCount_one": "{{count}} collapsed conversation",
         "collapsedCount_other": "{{count}} collapsed conversations",
+        "generatingCount": "{{count}} generating",
+        "collapsedGeneratingSuffix": " · {{count}} generating",
         "restoreAll": "Restore all",
         "hide": "Hide",
         "hideTitle": "Hide {{title}}?",

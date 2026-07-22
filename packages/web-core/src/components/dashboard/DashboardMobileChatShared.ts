@@ -18,6 +18,13 @@ export interface MobileMachineCard {
     subtitle: string
     unread: number
     total: number
+    /**
+     * Number of conversations on this machine that are currently generating,
+     * including hidden/collapsed ones. Surfaces "still working" activity even
+     * when the underlying chat is folded away. Derived via the centralized
+     * `getConversationViewStates` predicate so it matches every other surface.
+     */
+    generatingCount: number
     latestConversation: ActiveConversation | null
     latestTimestamp?: number
     fallbackActivityAt?: number
@@ -77,6 +84,25 @@ export function getConversationViewStates(conversation: { status?: string, conne
         || conversation.status === 'streaming'
     const isWaiting = conversation.status === 'waiting_approval'
     return { isReconnecting, isConnecting, isGenerating, isWaiting }
+}
+
+/**
+ * Centralized "is this conversation generating" test — the single source of
+ * truth for every surface (mobile machine cards, mobile hidden group, desktop
+ * hidden indicator). Always route through `getConversationViewStates` so the
+ * generating status set stays defined in exactly one place.
+ */
+export function isConversationGenerating(conversation: { status?: string, connectionState?: string }): boolean {
+    return getConversationViewStates(conversation).isGenerating
+}
+
+/** Count how many of the given conversations are currently generating. */
+export function countGeneratingConversations(conversations: { status?: string, connectionState?: string }[]): number {
+    let count = 0
+    for (const conversation of conversations) {
+        if (isConversationGenerating(conversation)) count++
+    }
+    return count
 }
 
 export function buildLiveSessionInboxStateMap(ides: DaemonData[]) {

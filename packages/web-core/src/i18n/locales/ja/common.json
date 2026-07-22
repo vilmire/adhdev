@@ -206,6 +206,8 @@
         "hiddenTabs": "非表示のタブ",
         "collapsedCount_one": "折りたたまれた会話 {{count}} 件",
         "collapsedCount_other": "折りたたまれた会話 {{count}} 件",
+        "generatingCount": "{{count}} 件生成中",
+        "collapsedGeneratingSuffix": " · {{count}} 件生成中",
         "restoreAll": "すべて復元",
         "hide": "非表示",
         "hideTitle": "{{title}} を非表示にしますか？",

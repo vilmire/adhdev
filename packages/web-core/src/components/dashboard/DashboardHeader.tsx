@@ -13,6 +13,7 @@ import { IconBell, IconChat, IconScroll, IconMonitor, IconEyeOff, IconX, IconPlu
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import CliViewModeToggle from './CliViewModeToggle';
 import { getConversationMetaText, getConversationTitle } from './conversation-presenters';
+import { isConversationGenerating } from './DashboardMobileChatShared';
 import type { DashboardActionShortcutId } from '../../hooks/useActionShortcuts';
 import { formatRelativeTime } from '../../utils/time';
 import type { DashboardNotificationRecord } from '../../utils/dashboard-notifications';
@@ -454,7 +455,7 @@ export default function DashboardHeader({
                 )}
                 <div className="dashboard-header-inbox" ref={inboxRef}>
                     <div
-                        className={`dashboard-header-hidden${isHiddenDropTarget ? ' is-drop-target' : ''}${hiddenSpawnAnim ? ' hidden-spawn-flash' : ''}${(hiddenConversations ?? []).some(c => c.status === 'generating') ? ' hidden-generating-spin' : ''}`}
+                        className={`dashboard-header-hidden${isHiddenDropTarget ? ' is-drop-target' : ''}${hiddenSpawnAnim ? ' hidden-spawn-flash' : ''}${(hiddenConversations ?? []).some(isConversationGenerating) ? ' hidden-generating-spin' : ''}`}
                         onAnimationEnd={handleHiddenSpawnAnimEnd}
                         ref={hiddenRef}
                         onDragEnter={event => {
@@ -546,7 +547,7 @@ export default function DashboardHeader({
                                                 }}
                                             >
                                                 <span className="dashboard-header-inbox-item-title">
-                                                    {conversation.status === 'generating' && (
+                                                    {isConversationGenerating(conversation) && (
                                                         <span className="tab-spinner dashboard-header-inbox-item-spinner" aria-label={t('dashboard.header.generating')} />
                                                     )}
                                                     {getConversationTitle(conversation)}

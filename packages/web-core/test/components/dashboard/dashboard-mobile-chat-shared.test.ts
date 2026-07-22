@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
 import type { LiveSessionInboxState } from '../../../src/components/dashboard/DashboardMobileChatShared'
 import {
+  countGeneratingConversations,
   getConversationInboxSurfaceState,
   getConversationViewStates,
+  isConversationGenerating,
   isConversationTaskCompleteUnread,
 } from '../../../src/components/dashboard/DashboardMobileChatShared'
 
@@ -79,5 +81,25 @@ describe('DashboardMobileChatShared', () => {
     expect(getConversationViewStates({ status: 'no_progress' }).isGenerating).toBe(true)
     expect(getConversationViewStates({ status: 'long_generating' }).isGenerating).toBe(true)
     expect(getConversationViewStates({ status: 'streaming' }).isGenerating).toBe(true)
+  })
+
+  it('centralizes the generating predicate across the full status set (desktop hidden indicator uses this)', () => {
+    for (const status of ['generating', 'no_progress', 'long_generating', 'streaming']) {
+      expect(isConversationGenerating(createConversation({ status }))).toBe(true)
+    }
+    expect(isConversationGenerating(createConversation({ status: 'idle' }))).toBe(false)
+    expect(isConversationGenerating(createConversation({ status: 'waiting_approval' }))).toBe(false)
+  })
+
+  it('counts generating conversations for collapsed/hidden surfaces', () => {
+    const conversations = [
+      createConversation({ status: 'generating' }),
+      createConversation({ status: 'streaming' }),
+      createConversation({ status: 'idle' }),
+      createConversation({ status: 'no_progress' }),
+    ]
+    expect(countGeneratingConversations(conversations)).toBe(3)
+    expect(countGeneratingConversations([])).toBe(0)
+    expect(countGeneratingConversations([createConversation({ status: 'idle' })])).toBe(0)
   })
 })

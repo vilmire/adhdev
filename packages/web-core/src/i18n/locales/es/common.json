@@ -206,6 +206,8 @@
         "hiddenTabs": "Pestañas ocultas",
         "collapsedCount_one": "{{count}} conversación contraída",
         "collapsedCount_other": "{{count}} conversaciones contraídas",
+        "generatingCount": "{{count}} generando",
+        "collapsedGeneratingSuffix": " · {{count}} generando",
         "restoreAll": "Restaurar todo",
         "hide": "Ocultar",
         "hideTitle": "¿Ocultar {{title}}?",

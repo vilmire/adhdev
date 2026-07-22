@@ -206,6 +206,8 @@
         "hiddenTabs": "隐藏的标签页",
         "collapsedCount_one": "{{count}} 个已折叠的会话",
         "collapsedCount_other": "{{count}} 个已折叠的会话",
+        "generatingCount": "{{count}} 个生成中",
+        "collapsedGeneratingSuffix": " · {{count}} 个生成中",
         "restoreAll": "全部恢复",
         "hide": "隐藏",
         "hideTitle": "隐藏 {{title}}？",

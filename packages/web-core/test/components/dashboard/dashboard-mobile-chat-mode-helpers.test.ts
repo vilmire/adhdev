@@ -161,6 +161,42 @@ describe('dashboard mobile chat mode helpers', () => {
         })
     })
 
+    it('counts hidden generating conversations in the machine card generating count', () => {
+        const machine = createMachine()
+        // Visible item: idle (not generating). Card total counts only visible rows.
+        const items = [createItem('visible-idle', 100, {
+            conversation: { status: 'idle', daemonId: 'machine-1' },
+        })]
+        // Hidden conversations are excluded from `items` but can still be generating.
+        const hidden = [
+            createConversation({ tabKey: 'hidden-gen', sessionId: 'hidden-gen', daemonId: 'machine-1', status: 'generating' }),
+            createConversation({ tabKey: 'hidden-stream', sessionId: 'hidden-stream', daemonId: 'machine-1', status: 'streaming' }),
+            createConversation({ tabKey: 'hidden-idle', sessionId: 'hidden-idle', daemonId: 'machine-1', status: 'idle' }),
+        ]
+
+        const cards = buildMobileMachineCards([machine], items, hidden)
+
+        expect(cards).toHaveLength(1)
+        // total only counts the single visible row; generatingCount spans hidden work.
+        expect(cards[0]).toMatchObject({ total: 1, generatingCount: 2 })
+    })
+
+    it('reports zero generating count when nothing is generating', () => {
+        const items = [createItem('visible-idle', 100, {
+            conversation: { status: 'idle', daemonId: 'machine-1' },
+        })]
+        const cards = buildMobileMachineCards([createMachine()], items, [])
+        expect(cards[0]?.generatingCount).toBe(0)
+    })
+
+    it('includes visible generating conversations in the generating count', () => {
+        const items = [createItem('visible-gen', 100, {
+            conversation: { status: 'generating', daemonId: 'machine-1' },
+        })]
+        const cards = buildMobileMachineCards([createMachine()], items, [])
+        expect(cards[0]).toMatchObject({ total: 1, generatingCount: 1 })
+    })
+
     it('uses live summary metadata for ACP fallback recent-launch subtitles', () => {
         const machine = createMachine({ recentLaunches: [] })
         const sessions = [

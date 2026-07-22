@@ -3,7 +3,7 @@ import type { MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { IconBell, IconBellOff, IconSettings, IconChat, IconEyeOff, IconMesh, IconX } from '../Icons'
 import InstallCommand from '../InstallCommand'
-import { formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
+import { countGeneratingConversations, formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 import { getConversationMetaText, getConversationStatusHint, getConversationTitle, isMeshGraphConversation } from './conversation-presenters'
@@ -337,11 +337,28 @@ function DashboardMobileChatItem({
 function MobileSpinner({ size = 32 }: { size?: number }) {
     return (
         <div className="flex flex-col items-center gap-2.5">
-            <div 
+            <div
                 className="rounded-full animate-spin border-[2.5px] border-accent-primary/20 border-t-accent-primary-light"
                 style={{ width: size, height: size }}
             />
         </div>
+    )
+}
+
+/**
+ * Compact "generating" indicator (pulsing dot + count) used to surface active
+ * work on collapsed/hidden surfaces where the chat body itself isn't visible.
+ */
+function MobileGeneratingIndicator({ count, label }: { count: number; label: string }) {
+    if (count <= 0) return null
+    return (
+        <span className="inline-flex items-center gap-1.5 text-accent-primary" aria-live="polite">
+            <span className="relative flex h-2 w-2 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent-primary/60" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-accent-primary" />
+            </span>
+            <span className="font-semibold">{label}</span>
+        </span>
     )
 }
 
@@ -510,14 +527,22 @@ export default function DashboardMobileChatInbox({
                                         <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                                             <div className="flex items-center justify-between gap-2">
                                                 <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{machine.label}</span>
-                                                <span className="text-[11px] font-medium text-text-muted shrink-0">
+                                                <span className="flex items-center gap-2 text-[11px] font-medium text-text-muted shrink-0">
+                                                    <MobileGeneratingIndicator
+                                                        count={machine.generatingCount}
+                                                        label={t('mobileInbox.generatingCount', { count: machine.generatingCount })}
+                                                    />
                                                     {machine.unread > 0 ? <span className="text-accent-primary">{t('mobileInbox.newCount', { count: machine.unread })}</span> : machine.total > 0 ? t('mobileInbox.chatCount', { count: machine.total }) : t('mobileInbox.idle')}
                                                 </span>
                                             </div>
                                             <div className="text-[12px] font-medium text-text-secondary truncate">{machine.subtitle}</div>
                                             {machine.total > 0 ? (
                                                 <div className="text-[13px] text-text-muted mt-0.5">
-                                                    {t('mobileInbox.chatCount', { count: machine.total })}{machine.unread > 0 ? t('mobileInbox.unreadSuffix', { count: machine.unread }) : ''}
+                                                    {t('mobileInbox.chatCount', { count: machine.total })}{machine.unread > 0 ? t('mobileInbox.unreadSuffix', { count: machine.unread }) : ''}{machine.generatingCount > 0 ? t('mobileInbox.collapsedGeneratingSuffix', { count: machine.generatingCount }) : ''}
+                                                </div>
+                                            ) : machine.generatingCount > 0 ? (
+                                                <div className="text-[13px] text-accent-primary mt-0.5 font-medium">
+                                                    {t('mobileInbox.generatingCount', { count: machine.generatingCount })}
                                                 </div>
                                             ) : (
                                                 <div className="text-[13px] text-text-muted mt-0.5 italic opacity-70">
@@ -679,14 +704,23 @@ export default function DashboardMobileChatInbox({
                     </section>
                 )}
 
-                {section === 'chats' && hiddenConversations.length > 0 && (
+                {section === 'chats' && hiddenConversations.length > 0 && (() => {
+                    const hiddenGeneratingCount = countGeneratingConversations(hiddenConversations)
+                    return (
                     <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
                         <InboxListSection className="mt-4 border-dashed bg-bg-secondary/20">
                             <div className="flex items-center justify-between gap-3 px-4 py-3 text-left">
                                 <div className="min-w-0">
-                                    <div className="text-[12px] font-bold uppercase tracking-wider text-text-secondary">{t('mobileInbox.hiddenTabs')}</div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[12px] font-bold uppercase tracking-wider text-text-secondary">{t('mobileInbox.hiddenTabs')}</span>
+                                        <MobileGeneratingIndicator
+                                            count={hiddenGeneratingCount}
+                                            label={t('mobileInbox.generatingCount', { count: hiddenGeneratingCount })}
+                                        />
+                                    </div>
                                     <div className="mt-0.5 text-[13px] text-text-muted">
                                         {t('mobileInbox.collapsedCount', { count: hiddenConversations.length })}
+                                        {hiddenGeneratingCount > 0 ? t('mobileInbox.collapsedGeneratingSuffix', { count: hiddenGeneratingCount }) : ''}
                                     </div>
                                 </div>
                                 <button
@@ -699,7 +733,8 @@ export default function DashboardMobileChatInbox({
                             </div>
                         </InboxListSection>
                     </section>
-                )}
+                    )
+                })()}
             </div>
 
             {section === 'chats' && onOpenNewSession && hasAnyConversation && (

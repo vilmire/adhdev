@@ -2,6 +2,8 @@ import type { DaemonData } from '../../types'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
 import { getDaemonEntryActivityAt, getMachineDisplayName, getProviderSummaryLine, isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
+import { isConversationGenerating } from './DashboardMobileChatShared'
+import type { ActiveConversation } from './types'
 import { getConversationMachineId } from './conversation-selectors'
 import { getConversationMachineCardPreview } from './conversation-presenters'
 import { getSessionChatTailSnapshotForConversation } from './session-chat-tail-controller'
@@ -120,6 +122,7 @@ export function buildSelectedMachineRecentLaunches(
 export function buildMobileMachineCards(
     machineEntries: DaemonData[],
     items: MobileConversationListItem[],
+    hiddenConversations: ActiveConversation[] = [],
 ): MobileMachineCard[] {
     const groupedItems = new Map<string, MobileConversationListItem[]>()
 
@@ -130,12 +133,29 @@ export function buildMobileMachineCards(
         else groupedItems.set(key, [item])
     }
 
+    // Hidden conversations are excluded from `items` (visible inbox rows), but a
+    // hidden chat can still be generating. Group them per machine separately so
+    // the card's generating count reflects folded-away work too.
+    const groupedHidden = new Map<string, ActiveConversation[]>()
+    for (const conversation of hiddenConversations) {
+        const key = getConversationMachineId(conversation)
+        const bucket = groupedHidden.get(key)
+        if (bucket) bucket.push(conversation)
+        else groupedHidden.set(key, [conversation])
+    }
+
     return machineEntries.map((machineEntry) => {
         const machineItems = groupedItems.get(machineEntry.id) || []
+        const machineHidden = groupedHidden.get(machineEntry.id) || []
         const latestItem = [...machineItems].sort((a, b) => b.timestamp - a.timestamp)[0] || null
         const latestConversation = latestItem?.conversation || null
         const fallbackActivityAt = getDaemonEntryActivityAt(machineEntry)
         const unread = machineItems.filter(item => item.unread || item.requiresAction).length
+        // Generating count spans both visible and hidden conversations so the
+        // card signals "still working" even when every active chat is folded.
+        const generatingCount =
+            machineItems.filter(item => isConversationGenerating(item.conversation)).length
+            + machineHidden.filter(isConversationGenerating).length
         const statusLabel = getMobileMachineConnectionLabel(machineEntry)
         const subtitleParts = [
             machineEntry.platform || 'machine',
@@ -148,6 +168,7 @@ export function buildMobileMachineCards(
             subtitle: subtitleParts.join(' · '),
             unread,
             total: machineItems.length,
+            generatingCount,
             latestConversation,
             latestTimestamp: latestItem?.timestamp || 0,
             fallbackActivityAt,

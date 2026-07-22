@@ -256,8 +256,8 @@ export default function DashboardMobileChatMode({
     )
 
     const machineCards = useMemo<MobileMachineCard[]>(
-        () => buildMobileMachineCards(machineEntries, items),
-        [items, machineEntries],
+        () => buildMobileMachineCards(machineEntries, items, hiddenConversations),
+        [items, machineEntries, hiddenConversations],
     )
 
     const handleOpenRecent = useCallback(async (session: MachineRecentLaunch) => {

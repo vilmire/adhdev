@@ -206,6 +206,8 @@
         "hiddenTabs": "숨긴 탭",
         "collapsedCount_one": "접힌 대화 {{count}}개",
         "collapsedCount_other": "접힌 대화 {{count}}개",
+        "generatingCount": "{{count}}개 진행 중",
+        "collapsedGeneratingSuffix": " · {{count}}개 진행 중",
         "restoreAll": "모두 복원",
         "hide": "숨기기",
         "hideTitle": "{{title}}을(를) 숨길까요?",
