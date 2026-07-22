@@ -6,7 +6,7 @@ import { getMesh } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
-import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-delivery-policy.js';
@@ -929,6 +929,105 @@ function isTargetNodeTransientlyUnresolved(mesh: any, task: MeshWorkQueueEntry):
         return true;
     }
     return isWithinCloneBootstrapGrace(targetNodeId);
+}
+
+// ---------------------------------------------------------------------------
+// DEAD-TARGET-SELFHEAL: unpin a queue task hard-pinned to a session/node that has
+// died (absent from the live mesh) so a live idle session can claim it, instead of
+// leaving it stranded 'pending' forever behind the target_session_constraint skip.
+// ---------------------------------------------------------------------------
+
+// Conservative age gate before a pinned-but-dead target is unpinned. A target that is
+// merely briefly unassigned or momentarily reconnecting must not be reclaimed on the
+// tick it drops out of view; we require the task to have been idle (no updatedAt bump)
+// for at least this window first. Sized to comfortably outlast a transient P2P blip /
+// reconnect while staying well inside the reclaim cadence of the rest of the file
+// (AUTO_LAUNCH_AWAIT_CLAIM_MS is 90s; the stranded-reclaim watchdog fires on similar
+// scales), so a real reconnect wins the race and the self-heal only fires on a target
+// that is genuinely gone.
+const DEAD_TARGET_GRACE_MS = 60_000;
+
+interface DeadTargetVerdict {
+    /** The pinned target is confirmed dead and past the grace window → safe to unpin. */
+    dead: boolean;
+    /** True when the target NODE itself is absent from the live mesh (clear targetNodeId too). */
+    nodeDead: boolean;
+    /** Short reason string for the ledger/requeue. */
+    reason: string;
+}
+
+/**
+ * Decide whether a task's hard target pin (targetSessionId and/or targetNodeId) points at
+ * something that has DIED — i.e. is absent from the live mesh snapshot — and has been so
+ * long enough (DEAD_TARGET_GRACE_MS since the task's last update) that unpinning is safe.
+ *
+ * Two definitive death signals, deliberately conservative to never race a reconnecting node:
+ *
+ *  (1) NODE dead — the task pins a targetNodeId that matches NO node in the live mesh
+ *      (the same `meshNodeIdMatches`-over-mesh.nodes signal the targetPinUnmatched relabel
+ *      uses at the empty-candidate site). A pinned session on an absent node is unreachable
+ *      regardless, so the session pin is dead too. `nodeDead` ⇒ clear targetNodeId as well.
+ *      Excluded: a target that is only TRANSIENTLY unresolved (a freshly-cloned worktree
+ *      still propagating / bootstrapping) — isTargetNodeTransientlyUnresolved gates it out.
+ *
+ *  (2) SESSION dead on a LIVE LOCAL node — the target node IS present and is THIS daemon's
+ *      node, but the pinned session is absent from the local instance manager
+ *      (resolveSessionBusyVerdict === 'UNKNOWN'). Local session visibility is complete, so
+ *      absence here is genuine death, not a busy/generating flip. We KEEP targetNodeId (only
+ *      the session died; the node is healthy and can host a replacement claim).
+ *
+ * A live REMOTE node whose session is not in our idle view is NOT treated as dead: absence
+ * from the remote-idle mirror is explicitly UNKNOWN liveness (the session may be busy or its
+ * agent:ready pull merely lost), so unpinning it could race healthy in-flight work. Returns
+ * dead=false in that case, leaving the existing skip in place.
+ */
+function resolveDeadTargetVerdict(components: DaemonComponents, meshId: string, mesh: any, task: MeshWorkQueueEntry): DeadTargetVerdict {
+    const NOT_DEAD: DeadTargetVerdict = { dead: false, nodeDead: false, reason: '' };
+    const targetSessionId = readNonEmptyString(task.targetSessionId);
+    const targetNodeId = readNonEmptyString(task.targetNodeId);
+    if (!targetSessionId && !targetNodeId) return NOT_DEAD;
+
+    // Age gate: never reclaim a pin younger than the grace window (guards against a target
+    // that has only just dropped out of view for a momentary reconnect).
+    const lastUpdateMs = Date.parse(task.updatedAt || task.createdAt || '');
+    if (Number.isFinite(lastUpdateMs) && Date.now() - lastUpdateMs < DEAD_TARGET_GRACE_MS) return NOT_DEAD;
+
+    const nodes: any[] = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
+
+    // (1) NODE-dead — a pinned node absent from the live mesh, and NOT merely transiently
+    // unresolved (a propagating/bootstrapping clone). This is a permanent routing miss.
+    if (targetNodeId) {
+        const nodePresent = nodes.some(n => meshNodeIdMatches(n, targetNodeId));
+        if (!nodePresent) {
+            if (isTargetNodeTransientlyUnresolved(mesh, task)) return NOT_DEAD;
+            return { dead: true, nodeDead: true, reason: 'dead_target_node_absent' };
+        }
+    }
+
+    // (2) SESSION-dead on a LIVE LOCAL node. Only meaningful when a session is pinned.
+    if (targetSessionId) {
+        // Resolve the pinned target's node (if any) to decide whether we can trust local
+        // absence. Without a targetNodeId, fall back to whichever live node hosts the session
+        // is unknowable here; treat that as a LOCAL check only (a session id we cannot see
+        // locally on a node we cannot resolve remotely stays UNKNOWN → not dead).
+        const node = targetNodeId
+            ? nodes.find(n => meshNodeIdMatches(n, targetNodeId))
+            : undefined;
+        // A pinned session on a REMOTE live node: absence from our view is UNKNOWN, not death.
+        // Only a LOCAL node (or no node pin at all — same-daemon assumption) lets us conclude
+        // death from local instance-manager absence.
+        const nodeIsLocal = node ? isLocalAutoLaunchNode(node) : true;
+        if (nodeIsLocal) {
+            const verdict = resolveSessionBusyVerdict(components, targetSessionId);
+            if (verdict === 'UNKNOWN') {
+                // Session absent from the complete local session view → genuinely gone.
+                return { dead: true, nodeDead: false, reason: 'dead_target_session_absent' };
+            }
+            // GENERATING / IDLE_CONFIRMED → the session is alive (possibly busy). Never disturb.
+        }
+    }
+
+    return NOT_DEAD;
 }
 
 /**
@@ -1929,6 +2028,32 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
             continue;
         }
         if (task.targetSessionId) {
+            // DEAD-TARGET-SELFHEAL: before the unconditional target_session_constraint skip,
+            // check whether the pinned session/node has DIED (absent from the live mesh). A
+            // hard-pinned task whose target is gone can NEVER re-enter 'assigned' (the claim
+            // gate refuses every non-matching session) and this skip fires forever with no
+            // liveness check — the triple-walled stranded-pending defect. If the pin is
+            // confirmed dead past the grace window, requeue it (clearing the dead session
+            // pin, and the node pin too when the NODE itself is gone) so a live idle session
+            // can claim it. requeueTask counts toward maxTaskRetries → bounded self-heal that
+            // auto-fails past the cap (the desired terminal state, unblocking dependents).
+            const deadTarget = resolveDeadTargetVerdict(components, meshId, mesh, task);
+            if (deadTarget.dead) {
+                const requeued = requeueTask(meshId, task.id, {
+                    reason: deadTarget.reason,
+                    clearTargetSession: true,
+                    // Keep the node pin if only the SESSION died on a still-live node; clear it
+                    // when the NODE itself is absent (nothing to pin to).
+                    clearTargetNode: deadTarget.nodeDead,
+                });
+                if (requeued) {
+                    LOG.warn('MeshQueue', `DEAD-TARGET-SELFHEAL: task ${task.id} (mesh ${meshId}) was pinned to a dead target (${deadTarget.reason}); requeued${deadTarget.nodeDead ? ' and unpinned node' : ''} (requeueCount=${requeued.requeueCount ?? '?'}, status=${requeued.status}).`);
+                }
+                // Keep the skip for THIS tick (the requeue already flipped the row to
+                // pending/failed); a later tick assigns/launches the now-unpinned task.
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_dead_requeued' });
+                continue;
+            }
             markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_constraint' });
             continue;
         }
