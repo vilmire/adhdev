@@ -1050,7 +1050,12 @@ describe('refine_mesh_node validation gate', () => {
     }
   }, 90000)
 
-  it('adds an actionable hint when patch equivalence fails on a submodule conflict', async () => {
+  // DS3: a diverged submodule gitlink is auto-converged (rebased onto base) when the
+  // submodule content is non-conflicting; the block below is only reached when the
+  // submodule content GENUINELY conflicts, so both sides edit the SAME line of
+  // README.md here. (The auto-converge success path is covered by
+  // refine-diverged-gitlink-converge.test.ts.)
+  it('adds an actionable hint when patch equivalence fails on a genuinely conflicting submodule divergence', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-submodule-conflict-hint-'))
     const repo = join(root, 'repo')
     const submoduleOrigin = join(root, 'submodule-origin')
@@ -1064,8 +1069,10 @@ describe('refine_mesh_node validation gate', () => {
 
       execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: join(repo, 'oss') })
       execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: join(repo, 'oss') })
-      writeFileSync(join(repo, 'oss', 'BASE_SIDE.md'), 'base side\n', 'utf-8')
-      execFileSync('git', ['add', 'BASE_SIDE.md'], { cwd: join(repo, 'oss') })
+      // Base side edits README.md line 1 → conflicts with the branch-side edit below,
+      // so the submodule rebase cannot converge and the historical block is preserved.
+      writeFileSync(join(repo, 'oss', 'README.md'), 'submodule base side edit\n', 'utf-8')
+      execFileSync('git', ['add', 'README.md'], { cwd: join(repo, 'oss') })
       execFileSync('git', ['commit', '-q', '-m', 'base side submodule commit'], { cwd: join(repo, 'oss') })
       const baseSideCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(repo, 'oss'), encoding: 'utf-8' }).trim()
       execFileSync('git', ['add', 'oss'], { cwd: repo })
@@ -1077,8 +1084,9 @@ describe('refine_mesh_node validation gate', () => {
       execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', 'oss'], { cwd: worktree })
       execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: join(worktree, 'oss') })
       execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: join(worktree, 'oss') })
-      writeFileSync(join(worktree, 'oss', 'BRANCH_SIDE.md'), 'branch side\n', 'utf-8')
-      execFileSync('git', ['add', 'BRANCH_SIDE.md'], { cwd: join(worktree, 'oss') })
+      // Branch side edits the SAME README.md line 1 differently → genuine content conflict.
+      writeFileSync(join(worktree, 'oss', 'README.md'), 'submodule branch side edit\n', 'utf-8')
+      execFileSync('git', ['add', 'README.md'], { cwd: join(worktree, 'oss') })
       execFileSync('git', ['commit', '-q', '-m', 'branch side submodule commit'], { cwd: join(worktree, 'oss') })
       const branchSideCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(worktree, 'oss'), encoding: 'utf-8' }).trim()
       execFileSync('git', ['add', 'oss'], { cwd: worktree })

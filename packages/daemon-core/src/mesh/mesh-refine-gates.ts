@@ -1201,6 +1201,306 @@ export function collectFastForwardGitlinkPaths(repoRoot: string, baseHead: strin
 }
 
 /**
+ * Whether both commits exist locally in the submodule repo AND neither is an
+ * ancestor of the other — i.e. a genuine sibling divergence off a shared merge
+ * base. `baseCommit` ancestor-of `branchCommit` (strict fast-forward) returns
+ * false: that case needs no rebase (the gate excludes it). Equal commits, a
+ * missing commit, or a non-submodule path all return false (nothing to converge
+ * / ambiguity stays "not divergent").
+ */
+function isSubmoduleDivergedSibling(submoduleRepoPath: string, baseCommit: string, branchCommit: string): boolean {
+    if (!baseCommit || !branchCommit || baseCommit === branchCommit) return false;
+    try {
+        if (!fs.existsSync(submoduleRepoPath)) return false;
+        execFileSync(GIT, ['cat-file', '-e', `${baseCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        execFileSync(GIT, ['cat-file', '-e', `${branchCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
+    } catch {
+        return false; // one of the commits is not available locally — cannot judge divergence
+    }
+    // base ancestor-of branch ⇒ pure fast-forward, not a sibling divergence.
+    try {
+        execFileSync(GIT, ['merge-base', '--is-ancestor', baseCommit, branchCommit], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        return false;
+    } catch { /* not a fast-forward → keep checking */ }
+    // branch ancestor-of base ⇒ branch is strictly behind (base already contains
+    // it); no branch-side commits to replay, not our case.
+    try {
+        execFileSync(GIT, ['merge-base', '--is-ancestor', branchCommit, baseCommit], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        return false;
+    } catch { /* neither ancestor of the other → genuine divergence */ }
+    // Require a real shared merge base so the rebase has a sane replay range.
+    try {
+        const mb = execFileSync(GIT, ['merge-base', baseCommit, branchCommit], { cwd: submoduleRepoPath, encoding: 'utf8' }).trim();
+        return !!mb;
+    } catch {
+        return false;
+    }
+}
+
+export type SubmoduleGitlinkConvergeResult = {
+    /** True when at least one diverged gitlink submodule was rebased onto its base-side commit. */
+    converged: boolean;
+    /**
+     * Set when convergence was declined/aborted (fail-safe → caller keeps the
+     * original defer→blocked_review path). One of:
+     *   no_changed_gitlinks — no gitlink differs base↔branch
+     *   not_diverged        — the gitlink is ff/behind/equal (gate handles it)
+     *   rebase_conflict     — replaying branch-side onto base-side hit a real
+     *                         content conflict inside the submodule (aborted)
+     */
+    reason?: string;
+    /**
+     * Converged gitlinks: path → the rebased submodule commit (SUBNEW) that the
+     * root rebase must resolve the gitlink conflict to. Only populated for paths
+     * whose submodule was successfully rebased (base-side is now a strict ancestor).
+     */
+    resolutions: Array<{ path: string; baseCommit: string; branchCommit: string; rebasedCommit: string }>;
+    /** Per-path outcome for observability/logging. */
+    gitlinks: Array<{
+        path: string;
+        baseCommit?: string;
+        branchCommit?: string;
+        rebasedCommit?: string;
+        action: 'rebased' | 'skipped_not_diverged' | 'rebase_conflict';
+    }>;
+};
+
+/**
+ * Best-effort: ensure `commit` exists in the submodule repo at `submoduleRepoPath`
+ * by fetching it from the base repo's submodule checkout (a sibling working copy on
+ * the same machine) when it is missing. A no-op when the commit is already present
+ * or when the source path does not exist. Never throws — a fetch failure just
+ * leaves the commit missing and the caller's ancestry check declines to converge.
+ */
+function ensureSubmoduleCommitLocal(submoduleRepoPath: string, baseSubmoduleRepoPath: string, commit: string): void {
+    if (!commit) return;
+    try {
+        execFileSync(GIT, ['cat-file', '-e', `${commit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        return; // already present
+    } catch { /* missing → try to fetch it */ }
+    try {
+        if (!fs.existsSync(submoduleRepoPath) || !fs.existsSync(baseSubmoduleRepoPath)) return;
+        // Fetch the exact object from the base repo's submodule by absolute path. `file://`
+        // fetch of an explicit sha requires uploadpack.allowAnySHA1InWant on some gits;
+        // fetching the base submodule's HEAD/all refs is the portable way to bring the
+        // reachable object in, so fetch all branches and tags from the local path.
+        execFileSync(GIT, ['-c', 'protocol.file.allow=always', 'fetch', '-q', baseSubmoduleRepoPath, '+refs/heads/*:refs/adhdev-refine-base/*'], {
+            cwd: submoduleRepoPath,
+            stdio: ['ignore', 'ignore', 'pipe'],
+        });
+    } catch { /* best-effort; ancestry check will simply decline if still missing */ }
+}
+
+/**
+ * STEP 1 of auto-converging diverged oss-style submodule gitlinks: rebase the
+ * branch-side submodule commit(s) onto the base-side submodule commit INSIDE the
+ * worktree's submodule checkout (detached HEAD), so the base-side commit becomes a
+ * strict ancestor of the rebased tip. Returns the rebased commit per path so the
+ * caller's root rebase can resolve the gitlink conflict to it (STEP 2, see
+ * {@link rootRebaseResolvingGitlinks}). This automates the documented manual
+ * strict-fast-forward bypass and keeps the landed submodule history linear rather
+ * than masking a divergence.
+ *
+ * Fail-safe by construction: it only touches gitlinks that are a genuine sibling
+ * divergence (both commits local, neither an ancestor of the other, shared merge
+ * base). A submodule rebase content conflict aborts, restores the branch-side
+ * checkout, and returns `converged:false` (caller keeps defer→blocked_review). It
+ * never commits the root and NEVER pushes — remote publish is the merge/
+ * reachability stage's job; this stage is local reconciliation only.
+ *
+ * @param worktreeRoot the branch worktree root (its `<path>` submodule checkout is rebased)
+ * @param baseRepoRoot the source/base repo root (reads the base-side gitlink commit)
+ * @param baseHead     the fetched base head (root ref) — source of base-side gitlink commits
+ * @param branchHead   the worktree branch head (root ref) — source of branch-side gitlink commits
+ */
+export function convergeDivergedSubmoduleGitlinks(
+    worktreeRoot: string,
+    baseRepoRoot: string,
+    baseHead: string,
+    branchHead: string,
+): SubmoduleGitlinkConvergeResult {
+    const changed = readChangedGitlinkPaths(worktreeRoot, baseHead, branchHead);
+    if (changed.length === 0) {
+        return { converged: false, reason: 'no_changed_gitlinks', resolutions: [], gitlinks: [] };
+    }
+
+    const gitlinks: SubmoduleGitlinkConvergeResult['gitlinks'] = [];
+    const resolutions: SubmoduleGitlinkConvergeResult['resolutions'] = [];
+    let sawDiverged = false;
+
+    for (const path of changed) {
+        // Base-side commit comes from the base repo's tree; branch-side from the worktree's.
+        const baseCommit = readTreeObject(baseRepoRoot, baseHead, path);
+        const branchCommit = readTreeObject(worktreeRoot, branchHead, path);
+        const submoduleRepoPath = pathResolve(worktreeRoot, path);
+
+        // The base-side submodule commit is recorded by the base workspace but may not
+        // yet exist in the worktree's submodule object store (it was committed locally
+        // in base/<path> and not necessarily fetched here). Make it available via a
+        // best-effort local fetch from the base repo's own submodule checkout so the
+        // ancestry check and rebase can see it. Without this, a genuinely-convergeable
+        // divergence would look "not local" and fall through to blocked_review.
+        if (baseCommit) {
+            ensureSubmoduleCommitLocal(submoduleRepoPath, pathResolve(baseRepoRoot, path), baseCommit);
+        }
+
+        if (!baseCommit || !branchCommit || !isSubmoduleDivergedSibling(submoduleRepoPath, baseCommit, branchCommit)) {
+            gitlinks.push({ path, baseCommit, branchCommit, action: 'skipped_not_diverged' });
+            continue;
+        }
+        sawDiverged = true;
+
+        // Rebase the branch-side submodule commit(s) onto the base-side commit in a
+        // DETACHED HEAD (never move a submodule branch ref). A conflict aborts and
+        // restores the submodule checkout to the branch-side commit.
+        let rebasedCommit: string | undefined;
+        try {
+            execFileSync(GIT, ['checkout', '-q', '--detach', branchCommit], { cwd: submoduleRepoPath, stdio: ['ignore', 'ignore', 'pipe'] });
+            execFileSync(GIT, ['rebase', baseCommit], { cwd: submoduleRepoPath, stdio: ['ignore', 'pipe', 'pipe'] });
+            rebasedCommit = execFileSync(GIT, ['rev-parse', 'HEAD'], { cwd: submoduleRepoPath, encoding: 'utf8' }).trim();
+        } catch {
+            try { execFileSync(GIT, ['rebase', '--abort'], { cwd: submoduleRepoPath, stdio: 'ignore' }); } catch { /* ignore */ }
+            try { execFileSync(GIT, ['checkout', '-q', '--detach', branchCommit], { cwd: submoduleRepoPath, stdio: 'ignore' }); } catch { /* ignore */ }
+            gitlinks.push({ path, baseCommit, branchCommit, action: 'rebase_conflict' });
+            // Real submodule content conflict → do NOT converge; caller keeps blocked_review.
+            return { converged: false, reason: 'rebase_conflict', resolutions: [], gitlinks };
+        }
+
+        gitlinks.push({ path, baseCommit, branchCommit, rebasedCommit, action: 'rebased' });
+        resolutions.push({ path, baseCommit, branchCommit, rebasedCommit: rebasedCommit! });
+    }
+
+    if (!sawDiverged) {
+        return { converged: false, reason: 'not_diverged', resolutions: [], gitlinks };
+    }
+    return { converged: resolutions.length > 0, resolutions, gitlinks };
+}
+
+export type RootRebaseGitlinkResolveResult = {
+    /** True when the root rebase completed (with gitlink conflicts resolved to the converged commits). */
+    ok: boolean;
+    /** New root HEAD after the rebase (only meaningful when ok). */
+    branchHead?: string;
+    /**
+     * Set when the rebase was aborted (fail-safe). One of:
+     *   non_gitlink_conflict — a conflict on a non-submodule path (genuine content conflict)
+     *   unexpected_gitlink   — a gitlink conflicted that we have no converged commit for
+     *   rebase_error         — the rebase failed for a non-conflict reason
+     */
+    reason?: string;
+    /** The paths that conflicted at the point of abort (for diagnostics). */
+    conflictPaths?: string[];
+};
+
+/**
+ * STEP 2 of auto-converging diverged submodule gitlinks: rebase the worktree root
+ * branch onto `baseHead`, resolving each submodule-gitlink conflict to the
+ * pre-converged commit from {@link convergeDivergedSubmoduleGitlinks}. git's
+ * recursive merge refuses to auto-merge a diverged gitlink ("Recursive merging
+ * with submodules currently only supports trivial cases"), so we drive the rebase
+ * ourselves: on each stop, if the ONLY unmerged paths are gitlinks we have a
+ * converged commit for, we stage those to the converged commit and `--continue`.
+ * Any non-gitlink conflict (or a gitlink with no converged commit) aborts the
+ * rebase and returns `ok:false` → caller keeps the defer→blocked_review path.
+ *
+ * On success the base-side gitlink is a strict ancestor of the resolved branch-side
+ * commit, so the downstream patch-equivalence gate treats it as a trivial
+ * fast-forward and passes.
+ */
+export function rootRebaseResolvingGitlinks(
+    worktreeRoot: string,
+    baseHead: string,
+    resolutions: Array<{ path: string; rebasedCommit: string }>,
+): RootRebaseGitlinkResolveResult {
+    const resolveByPath = new Map(resolutions.map(r => [r.path, r.rebasedCommit]));
+
+    const runRebase = (args: string[]): { ok: boolean } => {
+        try {
+            execFileSync(GIT, args, {
+                cwd: worktreeRoot,
+                stdio: ['ignore', 'pipe', 'pipe'],
+                // A rebase editor prompt would hang; keep it non-interactive.
+                env: { ...process.env, GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' },
+            });
+            return { ok: true };
+        } catch {
+            return { ok: false };
+        }
+    };
+
+    const unmergedPaths = (): string[] => {
+        try {
+            return execFileSync(GIT, ['diff', '--name-only', '--diff-filter=U'], { cwd: worktreeRoot, encoding: 'utf8' })
+                .split('\n').map(s => s.trim()).filter(Boolean);
+        } catch {
+            return [];
+        }
+    };
+
+    const abort = (reason: string, conflictPaths?: string[]): RootRebaseGitlinkResolveResult => {
+        try { execFileSync(GIT, ['rebase', '--abort'], { cwd: worktreeRoot, stdio: 'ignore' }); } catch { /* ignore */ }
+        return { ok: false, reason, conflictPaths };
+    };
+
+    let progress = runRebase(['rebase', baseHead]);
+    let guard = 0;
+    while (!progress.ok) {
+        if (guard++ > 100) return abort('rebase_error');
+        const conflicts = unmergedPaths();
+        if (conflicts.length === 0) {
+            // Failed but no recorded conflicts — a non-conflict rebase error.
+            return abort('rebase_error');
+        }
+        // Every conflicting path must be a gitlink we have a converged commit for.
+        const unresolvable = conflicts.filter(p => !resolveByPath.has(p));
+        if (unresolvable.length > 0) {
+            // Distinguish a genuine (non-gitlink) content conflict from a gitlink we
+            // simply have no converged commit for. `ls-files --stage` reports mode
+            // 160000 for a gitlink at any conflict stage.
+            const unresolvableGitlink = unresolvable.some(p => {
+                try {
+                    const staged = execFileSync(GIT, ['ls-files', '--stage', '--', p], { cwd: worktreeRoot, encoding: 'utf8' });
+                    return /^160000\s/m.test(staged);
+                } catch {
+                    return false;
+                }
+            });
+            const allGitlink = unresolvable.every(p => {
+                try {
+                    const staged = execFileSync(GIT, ['ls-files', '--stage', '--', p], { cwd: worktreeRoot, encoding: 'utf8' });
+                    return /^160000\s/m.test(staged);
+                } catch {
+                    return false;
+                }
+            });
+            // A non-gitlink conflict is the fail-safe case that must clearly signal a
+            // genuine content conflict; a gitlink-only miss is the (rarer) case where a
+            // gitlink conflicted that STEP 1 did not converge.
+            return abort(allGitlink && unresolvableGitlink ? 'unexpected_gitlink' : 'non_gitlink_conflict', conflicts);
+        }
+        // Stage every conflicting gitlink to its converged commit, then continue.
+        for (const p of conflicts) {
+            const commit = resolveByPath.get(p)!;
+            try {
+                execFileSync(GIT, ['checkout', '-q', '--detach', commit], { cwd: pathResolve(worktreeRoot, p), stdio: 'ignore' });
+            } catch { /* the checkout is best-effort; the `add` below stamps the index either way */ }
+            try {
+                execFileSync(GIT, ['add', p], { cwd: worktreeRoot, stdio: 'ignore' });
+            } catch {
+                return abort('rebase_error', conflicts);
+            }
+        }
+        progress = runRebase(['rebase', '--continue']);
+    }
+
+    let branchHead: string | undefined;
+    try {
+        branchHead = execFileSync(GIT, ['rev-parse', 'HEAD'], { cwd: worktreeRoot, encoding: 'utf8' }).trim();
+    } catch { /* leave undefined */ }
+    return { ok: true, branchHead };
+}
+
+/**
  * Decide whether a merge-tree submodule conflict between base and branch is a
  * trivial gitlink fast-forward (and nothing else).
  *

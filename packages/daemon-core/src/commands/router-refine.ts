@@ -36,8 +36,10 @@ import {
     RefineExecFileAsync,
     RefineStageOutcome,
     classifyPatchEquivalenceFailure,
+    convergeDivergedSubmoduleGitlinks,
     recordMeshRefineStage,
     resolveRefineryAutoPublishSubmoduleMainCommits,
+    rootRebaseResolvingGitlinks,
     runMeshRefineEffectiveDiffGate,
     runMeshRefinePatchEquivalenceGate,
     runMeshRefineSubmoduleReachabilityGate,
@@ -539,6 +541,9 @@ async function computeBranchBaseDivergence(
 export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
             const { repoRoot, baseHead, node, branch, baseBranch, refineStages, execFileAsync } = ctx;
             let branchHead = ctx.branchHead;
+            // Converged submodule gitlink resolutions (path → rebased commit) from STEP 1;
+            // consumed by the gitlink-aware root rebase (STEP 2) to resolve gitlink conflicts.
+            let gitlinkResolutions: Array<{ path: string; rebasedCommit: string }> = [];
             const syncStarted = Date.now();
             const divergence = await computeBranchBaseDivergence(execFileAsync, node.workspace, baseHead, branchHead);
 
@@ -571,25 +576,87 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
                 const preRebasePe = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
                 const alreadyMerged = !preRebasePe.actualPatchId && !!preRebasePe.expectedPatchId;
                 const submoduleConflict = preRebasePe.actionableHint?.kind === 'submodule_conflict';
-                if (alreadyMerged || submoduleConflict) {
+                if (alreadyMerged) {
                     recordMeshRefineStage(refineStages, 'sync_base', 'passed', syncStarted, {
                         ahead: divergence.ahead,
                         behind: divergence.behind,
                         rebased: false,
-                        reason: alreadyMerged ? 'already_merged_via_other_path_skip_rebase' : 'submodule_conflict_defer_to_patch_equivalence',
+                        reason: 'already_merged_via_other_path_skip_rebase',
                     });
                     return { kind: 'continue', ctx };
+                }
+                if (submoduleConflict) {
+                    // DS3: a "submodule conflict" here means base and branch advanced the
+                    // SAME submodule to DIVERGED sibling commits (neither an ancestor of the
+                    // other), so the gitlink stays in the diff and patch-equivalence fails.
+                    // Attempt to auto-converge it (STEP 1): rebase the branch-side submodule
+                    // commit onto the base-side commit INSIDE the worktree submodule, so the
+                    // base-side commit becomes a strict ancestor of the rebased tip. The root
+                    // rebase below (STEP 2) then resolves the gitlink conflict to that rebased
+                    // commit. Together this automates the documented manual strict-ff bypass
+                    // and keeps the landed oss history linear. On any real submodule content
+                    // conflict it backs out cleanly → we FALL BACK to the historical
+                    // defer→patch_equivalence path below.
+                    const converge = convergeDivergedSubmoduleGitlinks(node.workspace, repoRoot, baseHead, branchHead);
+                    if (converge.converged) {
+                        gitlinkResolutions = converge.resolutions;
+                        recordMeshRefineStage(refineStages, 'submodule_gitlink_converge', 'passed', syncStarted, {
+                            reason: 'submodule_diverged_auto_rebased',
+                            gitlinks: converge.gitlinks,
+                        });
+                        LOG.info('Mesh', `[Refinery] Auto-converged diverged submodule gitlink(s) onto base for node ${node.id}: `
+                            + converge.resolutions.map(r => `${r.path}→${r.rebasedCommit.slice(0, 12)}`).join(', '));
+                        // Fall through (do NOT return) → the gitlink-aware root rebase below runs.
+                    } else {
+                        // Fail-safe: convergence declined (conflict / unreachable / not a real
+                        // divergence) → preserve the historical defer→blocked_review behavior.
+                        recordMeshRefineStage(refineStages, 'submodule_gitlink_converge', 'skipped', syncStarted, {
+                            reason: 'submodule_conflict_defer_to_patch_equivalence',
+                            convergeReason: converge.reason,
+                            gitlinks: converge.gitlinks,
+                        });
+                        recordMeshRefineStage(refineStages, 'sync_base', 'passed', syncStarted, {
+                            ahead: divergence.ahead,
+                            behind: divergence.behind,
+                            rebased: false,
+                            reason: 'submodule_conflict_defer_to_patch_equivalence',
+                        });
+                        return { kind: 'continue', ctx };
+                    }
                 }
             } catch { /* fail-open: on gate error, fall through to the rebase */ }
 
             // behind>0: strictly-behind OR diverged. Rebase the branch onto the pinned
             // baseHead. A conflict aborts and terminates blocked_review (retryable=false —
             // a real content conflict needs human resolution, not a base-movement retry).
+            //
+            // When STEP 1 converged a diverged submodule gitlink, use the gitlink-aware
+            // root rebase (STEP 2): git's recursive merge refuses to auto-merge the still-
+            // diverged intermediate gitlink, so we drive the rebase and resolve each
+            // submodule-gitlink conflict to the converged commit. A non-gitlink conflict
+            // aborts and falls through to the same blocked_review handling as a plain
+            // rebase conflict below (via the thrown gitlinkRebaseError).
             const rebaseStarted = Date.now();
             try {
-                execFileSync('git', ['rebase', baseHead], { cwd: node.workspace, stdio: ['ignore', 'pipe', 'pipe'] });
+                if (gitlinkResolutions.length > 0) {
+                    const gitlinkRebase = rootRebaseResolvingGitlinks(node.workspace, baseHead, gitlinkResolutions);
+                    if (!gitlinkRebase.ok) {
+                        // Surface as a rebase failure so the shared blocked_review handling
+                        // (submodule-hint recovery included) runs — nothing was left mid-rebase
+                        // (rootRebaseResolvingGitlinks aborts on failure).
+                        const err: any = new Error(`gitlink-aware rebase aborted: ${gitlinkRebase.reason || 'unknown'}`);
+                        err.gitlinkRebaseReason = gitlinkRebase.reason;
+                        err.gitlinkRebaseConflicts = gitlinkRebase.conflictPaths;
+                        err.alreadyAborted = true;
+                        throw err;
+                    }
+                } else {
+                    execFileSync('git', ['rebase', baseHead], { cwd: node.workspace, stdio: ['ignore', 'pipe', 'pipe'] });
+                }
             } catch (rebaseErr: any) {
-                try { execFileSync('git', ['rebase', '--abort'], { cwd: node.workspace, stdio: 'ignore' }); } catch { /* ignore */ }
+                if (!rebaseErr?.alreadyAborted) {
+                    try { execFileSync('git', ['rebase', '--abort'], { cwd: node.workspace, stdio: 'ignore' }); } catch { /* ignore */ }
+                }
                 // A rebase conflict on a submodule/gitlink divergence is a SPECIAL case the
                 // patch-equivalence gate describes with a rich actionable hint (which
                 // submodule, base vs branch commit, how to resolve). Run that gate against
