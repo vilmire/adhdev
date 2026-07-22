@@ -37,6 +37,7 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_restart_daemon',
     'mesh_checkpoint',
     'mesh_approve',
+    'mesh_answer_question',
     'mesh_list_pending_approvals',
     'mesh_clone_node',
     'mesh_remove_node',

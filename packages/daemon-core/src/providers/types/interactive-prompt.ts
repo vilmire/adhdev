@@ -117,6 +117,83 @@ export function normalizeInteractivePromptResponse(raw: unknown): InteractivePro
   return { promptId, answers };
 }
 
+/**
+ * Resolve a coordinator-friendly answer form into the strict, questionId-keyed
+ * InteractivePromptResponse the TUI/answer machinery consumes (mission f1d25e11).
+ *
+ * mesh_answer_question lets the coordinator answer against the option LABELS or
+ * 1-based INDEXES it saw in the agent:waiting_choice event, without having to
+ * reconstruct the exact questionId → selectedLabels map. This resolves that
+ * ergonomic form against the AUTHORITATIVE active prompt (the daemon holds it),
+ * so index/label resolution and question ordering are correct by construction.
+ *
+ * Accepted `raw` shapes:
+ *   - The strict form ({ promptId, answers: { [questionId]: { selectedLabels } } })
+ *     — passed straight to normalizeInteractivePromptResponse (back-compat).
+ *   - The friendly form ({ promptId, answers: [ { questionId?, select?, freeform? } ] })
+ *     — entries map to questions by questionId, else by array position. `select`
+ *     is a label (string) / 1-based index (number) / array of either.
+ */
+export function resolveInteractivePromptResponse(
+  prompt: InteractivePrompt,
+  raw: unknown,
+): InteractivePromptResponse {
+  if (!raw || typeof raw !== 'object') throw new Error('Interactive prompt response must be an object');
+  const record = raw as Record<string, unknown>;
+  const promptId = readString(record.promptId);
+  if (!promptId) throw new Error('promptId must be a non-empty string');
+  if (promptId !== prompt.promptId) throw new Error('Interactive prompt response does not match active prompt');
+  // Strict (keyed-object) form → existing normalizer.
+  if (record.answers && typeof record.answers === 'object' && !Array.isArray(record.answers)) {
+    return normalizeInteractivePromptResponse(record);
+  }
+  if (!Array.isArray(record.answers)) throw new Error('answers must be an array or a questionId-keyed object');
+
+  const resolveOneLabel = (question: InteractiveQuestion, sel: unknown): string => {
+    if (typeof sel === 'number' && Number.isFinite(sel)) {
+      const idx = Math.trunc(sel) - 1; // 1-based
+      const option = question.options[idx];
+      if (!option) throw new Error(`Option index ${sel} out of range for ${question.questionId}`);
+      return option.label;
+    }
+    const label = readString(sel);
+    if (!label) throw new Error(`Empty selection for ${question.questionId}`);
+    // Exact label match first; fall back to a numeric string index.
+    const exact = question.options.find((o) => o.label === label);
+    if (exact) return exact.label;
+    const asIndex = Number(label);
+    if (Number.isInteger(asIndex)) {
+      const option = question.options[asIndex - 1];
+      if (option) return option.label;
+    }
+    throw new Error(`Unknown option for ${question.questionId}: ${label}`);
+  };
+
+  const answers: Record<string, InteractiveAnswer> = {};
+  const entries = record.answers as unknown[];
+  entries.forEach((entryRaw, index) => {
+    if (!entryRaw || typeof entryRaw !== 'object' || Array.isArray(entryRaw)) return;
+    const entry = entryRaw as Record<string, unknown>;
+    const questionId = readString(entry.questionId);
+    const question = (questionId ? prompt.questions.find((q) => q.questionId === questionId) : undefined)
+      ?? prompt.questions[index];
+    if (!question) throw new Error(`No matching question for answer entry ${index}`);
+    const freeformText = readString(entry.freeform) ?? readString(entry.freeformText);
+    const selectedLabels: string[] = [];
+    const select = entry.select;
+    if (Array.isArray(select)) {
+      for (const sel of select) selectedLabels.push(resolveOneLabel(question, sel));
+    } else if (select !== undefined && select !== null) {
+      selectedLabels.push(resolveOneLabel(question, select));
+    }
+    answers[question.questionId] = {
+      selectedLabels,
+      ...(freeformText ? { freeformText } : {}),
+    };
+  });
+  return { promptId, answers };
+}
+
 export function buildClaudeInteractiveToolResult(response: InteractivePromptResponse): string {
     return JSON.stringify({
     type: 'user',

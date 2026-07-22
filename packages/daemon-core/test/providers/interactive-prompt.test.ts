@@ -7,7 +7,9 @@ import {
   interactivePromptFromClaudeAskUserQuestion,
   normalizeInteractivePrompt,
   normalizeInteractivePromptResponse,
+  resolveInteractivePromptResponse,
 } from '../../src/providers/types/interactive-prompt.js';
+import type { InteractivePrompt } from '../../src/providers/types/interactive-prompt.js';
 
 describe('interactive prompt schema', () => {
   it('normalizes and serializes prompt payloads', () => {
@@ -676,5 +678,79 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
     ], { promptId: 'single-no-fp', createdAt: 1234 });
 
     expect(prompt?.questions[0]?.multiSelect).toBe(false);
+  });
+});
+
+// mesh_answer_question (mission f1d25e11): the coordinator answers by option
+// LABEL or 1-based INDEX against the prompt it saw in the waiting_choice event;
+// resolveInteractivePromptResponse turns that friendly form into the strict,
+// questionId-keyed selectedLabels the TUI answer machinery consumes.
+describe('resolveInteractivePromptResponse (mesh_answer_question)', () => {
+  const PROMPT: InteractivePrompt = {
+    promptId: 'ask-1',
+    origin: 'cli',
+    providerType: 'claude-cli',
+    createdAt: 1,
+    questions: [
+      {
+        questionId: 'scope',
+        header: 'Scope',
+        question: 'Which scope?',
+        multiSelect: false,
+        options: [{ label: 'unicast' }, { label: 'broadcast' }, { label: 'system' }],
+      },
+      {
+        questionId: 'langs',
+        header: 'Langs',
+        question: 'Which languages?',
+        multiSelect: true,
+        options: [{ label: 'TypeScript' }, { label: 'Python' }, { label: 'Go' }],
+      },
+    ],
+  };
+
+  it('resolves a positional label answer to questionId-keyed selectedLabels', () => {
+    const resolved = resolveInteractivePromptResponse(PROMPT, {
+      promptId: 'ask-1',
+      answers: [{ select: 'broadcast' }, { select: ['TypeScript', 'Go'] }],
+    });
+    expect(resolved.promptId).toBe('ask-1');
+    expect(resolved.answers.scope.selectedLabels).toEqual(['broadcast']);
+    expect(resolved.answers.langs.selectedLabels).toEqual(['TypeScript', 'Go']);
+  });
+
+  it('resolves 1-based numeric indexes to option labels', () => {
+    const resolved = resolveInteractivePromptResponse(PROMPT, {
+      promptId: 'ask-1',
+      answers: [{ questionId: 'scope', select: 3 }, { questionId: 'langs', select: [1, 2] }],
+    });
+    expect(resolved.answers.scope.selectedLabels).toEqual(['system']);
+    expect(resolved.answers.langs.selectedLabels).toEqual(['TypeScript', 'Python']);
+  });
+
+  it('carries a freeform answer through', () => {
+    const resolved = resolveInteractivePromptResponse(PROMPT, {
+      promptId: 'ask-1',
+      answers: [{ questionId: 'scope', freeform: 'anycast' }],
+    });
+    expect(resolved.answers.scope.freeformText).toBe('anycast');
+    expect(resolved.answers.scope.selectedLabels).toEqual([]);
+  });
+
+  it('accepts the strict questionId-keyed form unchanged (back-compat)', () => {
+    const resolved = resolveInteractivePromptResponse(PROMPT, {
+      promptId: 'ask-1',
+      answers: { scope: { selectedLabels: ['unicast'] } },
+    });
+    expect(resolved.answers.scope.selectedLabels).toEqual(['unicast']);
+  });
+
+  it('rejects a promptId mismatch and an out-of-range index', () => {
+    expect(() => resolveInteractivePromptResponse(PROMPT, { promptId: 'other', answers: [] }))
+      .toThrow(/does not match/);
+    expect(() => resolveInteractivePromptResponse(PROMPT, {
+      promptId: 'ask-1',
+      answers: [{ questionId: 'scope', select: 9 }],
+    })).toThrow(/out of range/);
   });
 });

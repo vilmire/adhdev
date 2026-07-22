@@ -1229,6 +1229,42 @@ export async function meshApprove(
 }
 
 /**
+ * mesh_answer_question — answer a delegated session's AskUserQuestion (waiting_choice).
+ *
+ * The counterpart to mesh_approve (mission f1d25e11): a multi-choice QUESTION is NOT a
+ * yes/no approval and cannot be resolved with resolve_action. It is answered by driving the
+ * chosen option(s) into the provider TUI via the daemon's existing interactive_prompt_response
+ * machinery (high-family handler → setInteractivePromptResponse → buildClaudeInteractiveTuiAnswerSteps).
+ *
+ * This handler is a thin forwarder: it passes the coordinator's promptId + friendly answer
+ * array straight to the owning daemon, which resolves the option labels/indexes against its
+ * AUTHORITATIVE active prompt (resolveInteractivePromptResponse). interactive_prompt_response is
+ * in MESH_FORWARDABLE_SESSION_COMMANDS so it reaches a REMOTE worker's owning daemon.
+ */
+export async function meshAnswerQuestion(
+    ctx: MeshContext,
+    args: { node_id: string; session_id: string; promptId: string; answers: unknown },
+): Promise<string> {
+    const node = await findNodeWithRefresh(ctx, args.node_id); // membership check
+    if (!args.promptId || typeof args.promptId !== 'string') {
+        return JSON.stringify({ success: false, error: 'promptId is required (from the agent:waiting_choice event).' }, null, 2);
+    }
+    if (!Array.isArray(args.answers)) {
+        return JSON.stringify({ success: false, error: 'answers must be an array (one entry per question).' }, null, 2);
+    }
+    const result = await commandForNode(ctx, node, 'interactive_prompt_response', {
+        targetSessionId: args.session_id,
+        sessionId: args.session_id,
+        workspace: node.workspace,
+        response: {
+            promptId: args.promptId,
+            answers: args.answers,
+        },
+    });
+    return JSON.stringify(result, null, 2);
+}
+
+/**
  * mesh_list_pending_approvals — read-only mesh-wide approval inbox.
  *
  * mesh_approve resolves a SINGLE (node_id, session_id) action; before this tool there was

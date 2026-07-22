@@ -12,7 +12,7 @@ import * as fs from 'fs';
 import { normalizeInputEnvelope, type ProviderModule, flattenContent, type InputEnvelope } from './contracts.js';
 import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } from './provider-input-support.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
-import { normalizeInteractivePrompt, normalizeInteractivePromptResponse, type InteractivePrompt } from './types/interactive-prompt.js';
+import { normalizeInteractivePrompt, normalizeInteractivePromptResponse, resolveInteractivePromptResponse, type InteractivePrompt } from './types/interactive-prompt.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import { shortHash } from '../system/hash.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
@@ -376,10 +376,12 @@ export class CliProviderInstance implements ProviderInstance {
     // `waiting_choice` overlay in getState(); the raw adapter status stays idle/generating,
     // so detectStatusTransition()'s status-keyed arms never fire and no push-worthy
     // agent:* event is emitted — the owner misses the "ACTION REQUIRED" prompt when the
-    // app is backgrounded. We emit one agent:waiting_approval on ENTRY into the prompt
-    // state (reusing the existing server push path, no cloud change) and dedupe on this
-    // key so repeated status ticks with the same prompt do not re-fire. '' means no
-    // prompt is currently active (cleared when the prompt is answered/gone).
+    // app is backgrounded. We emit one agent:waiting_choice on ENTRY into the prompt
+    // state (its own coordinator event, NOT the approval channel — a multi-choice
+    // question is answered with mesh_answer_question, never mesh_approve) carrying the
+    // FULL InteractivePrompt payload, and dedupe on this key so repeated status ticks
+    // with the same prompt do not re-fire. '' means no prompt is currently active
+    // (cleared when the prompt is answered/gone).
     private lastInteractivePromptEventKey = '';
     private autoApproveBusy = false;
     private autoApproveBusyTimer: NodeJS.Timeout | null = null;
@@ -1272,7 +1274,16 @@ export class CliProviderInstance implements ProviderInstance {
             }
         } else if (event === 'interactive_prompt_response' && data) {
             try {
-                const response = normalizeInteractivePromptResponse(data);
+                // mesh_answer_question (mission f1d25e11) sends a coordinator-friendly answer
+                // form (per-question select by label/index) that must be resolved against the
+                // AUTHORITATIVE active prompt held here. When the active prompt is present and
+                // the promptId matches, resolve it; otherwise fall back to the strict keyed
+                // form (dashboard local answers already send that shape).
+                const response = (this.activeInteractivePrompt
+                    && this.activeInteractivePrompt.promptId === (data as { promptId?: unknown })?.promptId
+                    && Array.isArray((data as { answers?: unknown })?.answers))
+                    ? resolveInteractivePromptResponse(this.activeInteractivePrompt, data)
+                    : normalizeInteractivePromptResponse(data);
                 if (this.activeInteractivePrompt?.promptId === response.promptId) {
                     this.activeInteractivePrompt = null;
                 }
@@ -3960,24 +3971,38 @@ export class CliProviderInstance implements ProviderInstance {
             this.lastStatus = newStatus;
         }
 
-        // INTERACTIVE-PROMPT-PUSH: fire a push-worthy notification when the session
-        // ENTERS an AskUserQuestion / waiting_choice state. This is orthogonal to the
-        // status-change block above: an AskUserQuestion prompt is surfaced only as a
+        // INTERACTIVE-QUESTION-EMIT: fire a coordinator/push-worthy notification when the
+        // session ENTERS an AskUserQuestion / waiting_choice state. This is orthogonal to
+        // the status-change block above: an AskUserQuestion prompt is surfaced only as a
         // display-only `waiting_choice` overlay in getState() (mirrored here off
         // adapterStatus.activeInteractivePrompt, the exact signal getState uses), while
         // the raw adapter status stays idle/generating — so none of the status-keyed
         // arms above ever emit an agent:* event for it and the owner gets no web-push.
         //
-        // We REUSE agent:waiting_approval (the question message as modalMessage, the
-        // choice labels as modalButtons) so the existing server push path fires with
-        // zero cloud change — the semantics ("the agent needs your input") match.
+        // MESH-QUESTION-ANSWER-PATH (mission f1d25e11): this used to REUSE
+        // agent:waiting_approval (question as modalMessage, choice labels as modalButtons).
+        // That mis-classified a multi-choice QUESTION as an approval — the coordinator saw
+        // a task_approval_needed ledger row and tried mesh_approve, which cannot answer a
+        // question (it resolves a yes/no modal). We now emit a DISTINCT
+        // agent:waiting_choice event carrying the FULL InteractivePrompt payload
+        // (promptId + every question's header/question/multiSelect and each option's
+        // label/description) so the coordinator can render the choices and answer with the
+        // dedicated mesh_answer_question tool. The rich payload survives the cross-machine
+        // relay (see buildRelayMetadataEvent) so a REMOTE worker's question reaches the
+        // coordinator with its options intact.
+        //
+        // We keep modalMessage/modalButtons on the event too so the existing server
+        // web-push path (which reads those two fields) still fires with no cloud change —
+        // but the payload's `interactivePrompt` is the authoritative, structured signal.
         //
         // Edge-triggered: emit exactly once on entry, keyed on promptId + question text,
         // and reset the key when the prompt clears so a fresh prompt re-fires and a later
         // real completion still flows through the idle arm normally. We do NOT emit when
         // the session is ALSO in a genuine approval state (newStatus === 'waiting_approval'):
-        // that arm already emits agent:waiting_approval, and firing here too would double
-        // up on the same modal.
+        // that arm already emits agent:waiting_approval. A question (waiting_choice) and a
+        // real approval (waiting_approval) therefore NEVER both fire for the same tick —
+        // the approval arm wins and this arm yields (owner requirement: the two are
+        // mutually exclusive).
         const interactivePrompt = adapterStatus.activeInteractivePrompt ?? null;
         if (interactivePrompt && newStatus !== 'waiting_approval') {
             const firstQuestion = interactivePrompt.questions?.[0];
@@ -3991,7 +4016,14 @@ export class CliProviderInstance implements ProviderInstance {
                     : undefined;
                 const modalButtons = firstQuestion?.options?.map((option: { label: string }) => option.label);
                 this.pushEvent({
-                    event: 'agent:waiting_approval', chatTitle, timestamp: now,
+                    event: 'agent:waiting_choice', chatTitle, timestamp: now,
+                    // Structured, authoritative payload — the coordinator renders these and
+                    // answers via mesh_answer_question. Carried whole (all questions, all
+                    // options) so multi-question / multi-select prompts round-trip fully.
+                    interactivePrompt,
+                    promptId: interactivePrompt.promptId,
+                    multiSelect: firstQuestion?.multiSelect === true,
+                    // Push-notification-friendly projection (server push path reads these).
                     modalMessage,
                     modalButtons,
                 });

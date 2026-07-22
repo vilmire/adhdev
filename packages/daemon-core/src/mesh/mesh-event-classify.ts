@@ -8,6 +8,11 @@ const MESH_COORDINATOR_EVENTS = new Set([
     'agent:generating_started',
     'agent:generating_completed',
     'agent:waiting_approval',
+    // A worker parked on an AskUserQuestion multi-choice prompt. DISTINCT from
+    // agent:waiting_approval (a yes/no tool-consent modal): a question is answered
+    // with mesh_answer_question, never mesh_approve (mission f1d25e11). Carries the
+    // full InteractivePrompt payload so the coordinator can render + answer.
+    'agent:waiting_choice',
     'agent:stopped',
     'agent:ready',
     'monitor:no_progress',
@@ -26,6 +31,7 @@ const MESH_COORDINATOR_EVENTS = new Set([
 export const EVENT_TO_LEDGER_KIND: Record<string, MeshLedgerKind> = {
     'agent:generating_completed': 'task_completed',
     'agent:waiting_approval': 'task_approval_needed',
+    'agent:waiting_choice': 'task_question_pending',
     'agent:stopped': 'task_failed',
     'monitor:no_progress': 'task_stalled',
 };
@@ -45,6 +51,11 @@ export const MESH_FORCE_INJECT_EVENTS: ReadonlySet<string> = new Set([
     'agent:generating_completed',
     'agent:stopped',
     'agent:waiting_approval',
+    // A worker's question (waiting_choice) is real-time and the coordinator may be
+    // generating when it arrives; force-inject it like approval so the busy coordinator
+    // learns it must answer (mesh_answer_question) rather than the nudge sitting in the
+    // adapter's outbound queue until the coordinator idles on its own (mission f1d25e11).
+    'agent:waiting_choice',
     'refine:completed',
     'refine:failed',
     'worktree_bootstrap_complete',
@@ -71,6 +82,14 @@ export function shouldForceInjectMeshEvent(eventName: unknown): boolean {
 //     require, and why a stale/resolved approval nudge can simply be dropped.
 export const MESH_APPROVAL_EVENTS: ReadonlySet<string> = new Set([
     'agent:waiting_approval',
+    // agent:waiting_choice (a worker's AskUserQuestion) shares the approval class's
+    // real-time-nudge / level-backed contract: its authoritative state is recorded at
+    // LEVEL the moment it is processed (task_question_pending → mesh_status
+    // awaiting_choice), so the pending event is only a NUDGE and can be delivered to a
+    // busy coordinator's inbox (and dropped) without data loss — the level state
+    // re-derives it. It is therefore exempt from the idle-edge hold completions require,
+    // exactly like an approval nudge (mission f1d25e11).
+    'agent:waiting_choice',
 ]);
 
 export function isMeshApprovalEvent(eventName: unknown): boolean {

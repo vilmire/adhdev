@@ -1007,7 +1007,8 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_fast_forward_node\` | Safely dry-run or explicitly execute an obvious clean fast-forward without launching an agent session |
 | \`mesh_restart_daemon\` | Update a node's daemon to the latest published version on its channel and restart it (the dashboard "preview update" path, as a mesh command) |
 | \`mesh_checkpoint\` | Create a git checkpoint on a node |
-| \`mesh_approve\` | Approve/reject a pending agent action |
+| \`mesh_approve\` | Approve/reject a pending agent action (a yes/no tool-consent modal) |
+| \`mesh_answer_question\` | Answer a delegated session's multi-choice QUESTION (AskUserQuestion / status awaiting_choice). NOT an approval — it offers labelled options (possibly multi-select or freeform). Pass the promptId from the agent:waiting_choice event + one answer per question (select by option label or 1-based index). Use this, never mesh_approve, for a question |
 | \`mesh_list_pending_approvals\` | List every session across the mesh awaiting an approval decision (the approval inbox) — read-only; enumerate all blocked sessions at once, then drive a mesh_approve for each |
 | \`mesh_clone_node\` | Create a worktree node for isolated parallel branch work |
 | \`mesh_refine_node\` | Validate and merge a completed worktree node back into its base branch |
