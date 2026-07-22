@@ -310,10 +310,39 @@ function snapshotStableFiles(stablePrefix: string): Map<string, FileSnapshot> {
   return snapshots;
 }
 
-function restoreStableFiles(snapshots: Map<string, FileSnapshot>): void {
+// Rollback must never leave PATH `adhdev` broken. Two failure modes made the old
+// "restore-or-delete" logic dangerous:
+//   1. If a stable shim (adhdev.cmd/.ps1/no-ext) did not exist at snapshot time —
+//      a first/partial install, or a stable tree that never had the launcher —
+//      deleting it leaves `where.exe adhdev` / `spawnSync('adhdev')` resolving to
+//      nothing (ENOENT). `adhdev doctor` then reports the runtime surface broken.
+//   2. If the pointer (.adhdev-current) was absent at snapshot time, deleting it
+//      strands the re-published shims with no version to redirect to.
+// So rollback (re)guarantees a valid launcher surface: existing snapshots restore
+// their original bytes atomically; missing shims are re-issued from the canonical
+// pointer-redirect launcher contents; and the pointer, when it has no snapshot,
+// is re-written to the last-known-good active version instead of removed.
+function restoreStableFiles(snapshots: Map<string, FileSnapshot>, layout: WindowsInstallerLayout): void {
+  const shims = stableShimContents();
   for (const [target, snapshot] of snapshots) {
-    if (snapshot.exists && snapshot.data) atomicWrite(target, snapshot.data.toString('binary'), 'binary');
-    else try { fs.unlinkSync(target); } catch { /* noop */ }
+    if (snapshot.exists && snapshot.data) {
+      atomicWrite(target, snapshot.data.toString('binary'), 'binary');
+      continue;
+    }
+    const name = path.basename(target);
+    if (name === 'adhdev.cmd' || name === 'adhdev.ps1' || name === 'adhdev') {
+      // Re-issue a valid pointer-redirect launcher rather than deleting it, so
+      // PATH `adhdev` always resolves after a rollback.
+      atomicWrite(target, shims[name].content, shims[name].encoding);
+    } else if (name === POINTER_NAME) {
+      // Preserve the last-successful (currently active) version so the redirect
+      // launchers still reach a real prefix. Only fall back to deleting when we
+      // have no active version to point at.
+      if (layout.activeVersionName) atomicWrite(target, layout.activeVersionName, 'ascii');
+      else try { fs.unlinkSync(target); } catch { /* noop */ }
+    } else {
+      try { fs.unlinkSync(target); } catch { /* noop */ }
+    }
   }
 }
 
@@ -377,7 +406,7 @@ export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeO
     if (restarted?.pid) hooks.stopProcess(restarted.pid);
     if (activated) {
       try {
-        restoreStableFiles(snapshots);
+        restoreStableFiles(snapshots, layout);
         hooks.log(`Rolled back activation to ${layout.activeVersionName}`);
       } catch (rollbackError: any) {
         hooks.log(`Stable-file rollback failed: ${rollbackError?.message || String(rollbackError)}`);

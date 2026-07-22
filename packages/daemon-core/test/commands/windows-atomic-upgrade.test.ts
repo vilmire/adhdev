@@ -258,6 +258,64 @@ describe('Windows installer-managed atomic upgrade', () => {
     expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev'), 'utf8')).toBe(oldNoExt)
   })
 
+  it('re-issues valid launchers and preserves the active pointer on rollback when the stable shims were absent at snapshot time', async () => {
+    const { layout } = fixture()
+    // Simulate a partial/first install: the stable launcher surface is missing
+    // entirely at the moment the upgrade snapshots it. The old logic deleted the
+    // (nonexistent) targets on rollback, leaving PATH `adhdev` broken (ENOENT).
+    fs.unlinkSync(path.join(layout.stablePrefix, 'adhdev.cmd'))
+    fs.unlinkSync(path.join(layout.stablePrefix, 'adhdev.ps1'))
+    fs.unlinkSync(path.join(layout.stablePrefix, 'adhdev'))
+    fs.unlinkSync(layout.pointerPath)
+
+    let restartedOld = 0
+    await expect(performWindowsAtomicUpgrade({
+      layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.1', portableNode: process.execPath,
+      hooks: hooks({
+        install: (prefix) => installPackage(prefix, '1.0.18-rc.1'),
+        // Force a post-activation rollback so restoreStableFiles runs.
+        waitForHealth: async () => false,
+        restartOld: () => { restartedOld++ },
+      }),
+    })).rejects.toThrow('health/version gate')
+    expect(restartedOld).toBe(1)
+
+    // All three launchers exist again and redirect through the pointer — never
+    // deleted, never left broken.
+    const cmd = fs.readFileSync(path.join(layout.stablePrefix, 'adhdev.cmd'), 'utf8')
+    const ps1 = fs.readFileSync(path.join(layout.stablePrefix, 'adhdev.ps1'), 'utf8')
+    const noExt = fs.readFileSync(path.join(layout.stablePrefix, 'adhdev'), 'utf8')
+    expect(cmd).toContain('.adhdev-current')
+    expect(ps1).toContain('.adhdev-current')
+    expect(noExt).toContain('.adhdev-current')
+    // The pointer is restored to the last-known-good active version, not deleted,
+    // so the redirect launchers reach a real prefix.
+    expect(fs.readFileSync(layout.pointerPath, 'utf8')).toBe(layout.activeVersionName)
+  })
+
+  it('always leaves the three shims and pointer valid on rollback even when only some were present at snapshot time', async () => {
+    const { layout, oldCmd } = fixture()
+    // Mixed state: .cmd present, .ps1 and no-ext absent, pointer present.
+    fs.unlinkSync(path.join(layout.stablePrefix, 'adhdev.ps1'))
+    fs.unlinkSync(path.join(layout.stablePrefix, 'adhdev'))
+
+    await expect(performWindowsAtomicUpgrade({
+      layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.1', portableNode: process.execPath,
+      hooks: hooks({
+        install: (prefix) => installPackage(prefix, '1.0.18-rc.1'),
+        waitForHealth: async () => false,
+      }),
+    })).rejects.toThrow('health/version gate')
+
+    // Present-at-snapshot .cmd restores its original bytes; the two absent shims
+    // are re-issued as valid pointer-redirect launchers.
+    expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev.cmd'), 'utf8')).toBe(oldCmd)
+    expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev.ps1'), 'utf8')).toContain('.adhdev-current')
+    expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev'), 'utf8')).toContain('.adhdev-current')
+    // Pointer (present at snapshot) restores to its original value.
+    expect(fs.readFileSync(layout.pointerPath, 'utf8')).toBe('version-old')
+  })
+
   it('supports preview-to-stable switching and repeated updates with fresh prefixes', async () => {
     const first = fixture()
     const preview = await performWindowsAtomicUpgrade({
