@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process'
+import http from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -298,6 +299,86 @@ describe('Windows installer-managed atomic upgrade', () => {
     expect(passedEnv['ADHDEV_BOOTSTRAP']).toBe('1')
     expect(passedEnv['USER_VAR']).toBe('1')
     expect(passedEnv['Path']).toMatch(/^\/tools\/node22;/)
+  })
+
+  describe('createDefaultWindowsAtomicHooks().waitForHealth version gate', () => {
+    let server: http.Server | null = null
+    let boundPort = 0
+
+    function makeHooks(targetVersion: string, healthTimeoutMs = 30000) {
+      return createDefaultWindowsAtomicHooks({
+        packageName: 'adhdev',
+        targetVersion,
+        npmCliPath: '/tools/node22/npm-cli.js',
+        restartArgv: [],
+        cwd: '/',
+        env: {},
+        log: () => {},
+        // Bind the gate to the ephemeral stub port instead of the daemon's real
+        // 19222 IPC port, which the coordinator's own live daemon occupies.
+        healthPort: boundPort,
+        healthTimeoutMs,
+      })
+    }
+
+    // Serve the REAL local-IPC response shapes: /health = {ok, pid, wsPath, port}
+    // (no version), version only under /api/v1/status → payload.status.version.
+    function startStubDaemon(daemonPid: number, reportedVersion: string): Promise<void> {
+      const srv = http.createServer((req, res) => {
+        const url = (req.url || '/').split('?')[0]
+        res.setHeader('content-type', 'application/json')
+        if (url === '/health') {
+          res.statusCode = 200
+          res.end(JSON.stringify({ ok: true, pid: daemonPid, wsPath: '/ipc', port: boundPort }))
+          return
+        }
+        if (url === '/api/v1/status') {
+          res.statusCode = 200
+          res.end(JSON.stringify({ ok: true, pid: daemonPid, wsPath: '/ipc', port: boundPort, status: { version: reportedVersion } }))
+          return
+        }
+        res.statusCode = 404
+        res.end(JSON.stringify({ error: 'Not found' }))
+      })
+      server = srv
+      return new Promise((resolve, reject) => {
+        srv.once('error', reject)
+        srv.listen(0, '127.0.0.1', () => {
+          const addr = srv.address()
+          boundPort = typeof addr === 'object' && addr ? addr.port : 0
+          resolve()
+        })
+      })
+    }
+
+    afterEach(async () => {
+      if (server) {
+        await new Promise<void>((resolve) => server!.close(() => resolve()))
+        server = null
+      }
+    })
+
+    it('passes the gate only when /api/v1/status version matches the target (not /health body)', async () => {
+      const daemonPid = 5150
+      await startStubDaemon(daemonPid, '1.0.18-rc.7')
+      const ok = await makeHooks('1.0.18-rc.7').waitForHealth(daemonPid, '1.0.18-rc.7')
+      expect(ok).toBe(true)
+    })
+
+    it('fails the gate when the live status version does not match the target', async () => {
+      const daemonPid = 5151
+      // /health is fully healthy for this pid, but the running version is stale —
+      // the version must be read from /api/v1/status, so the gate must NOT pass.
+      await startStubDaemon(daemonPid, '1.0.6')
+      const ok = await makeHooks('1.0.18-rc.7', 1000).waitForHealth(daemonPid, '1.0.18-rc.7')
+      expect(ok).toBe(false)
+    })
+
+    it('fails the gate when the live pid differs even if the version matches', async () => {
+      await startStubDaemon(9999, '1.0.18-rc.7')
+      const ok = await makeHooks('1.0.18-rc.7', 1000).waitForHealth(4242, '1.0.18-rc.7')
+      expect(ok).toBe(false)
+    })
   })
 
   it('refuses activation when the staged conpty.node prebuild is missing', async () => {

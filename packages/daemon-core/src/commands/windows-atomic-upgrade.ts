@@ -8,6 +8,44 @@ const POINTER_NAME = '.adhdev-current';
 const STABLE_FILES = [POINTER_NAME, 'adhdev.cmd', 'adhdev.ps1', 'adhdev'] as const;
 const DEFAULT_HEALTH_PORT = 19222;
 
+function fetchLocalJson(port: number, pathname: string): Promise<{ ok: boolean; body: string }> {
+  return new Promise((resolve) => {
+    const req = http.get(`http://127.0.0.1:${port}${pathname}`, { timeout: 1500 }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve({ ok: res.statusCode === 200, body }));
+    });
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolve({ ok: false, body: '' }));
+  });
+}
+
+// Liveness + pid identity: GET /health returns {ok, pid, wsPath, port}.
+async function fetchLocalHealth(port: number): Promise<{ ok: boolean; pid?: number }> {
+  const { ok, body } = await fetchLocalJson(port, '/health');
+  if (!ok) return { ok: false };
+  try {
+    const pid = Number(JSON.parse(body)?.pid);
+    return { ok: true, pid: Number.isFinite(pid) ? pid : undefined };
+  } catch {
+    return { ok: false };
+  }
+}
+
+// Running version: GET /api/v1/status exposes it at payload.status.version.
+// /health carries no version, so the upgrade version gate must read this.
+async function fetchLocalStatusVersion(port: number): Promise<string | undefined> {
+  const { ok, body } = await fetchLocalJson(port, '/api/v1/status');
+  if (!ok) return undefined;
+  try {
+    const version = (JSON.parse(body) as { status?: { version?: unknown } })?.status?.version;
+    return typeof version === 'string' ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Markers that identify a Node process as ADHDev-owned when its command line
 // also lives under a versioned install prefix. This deliberately excludes
 // arbitrary user scripts that happen to be located under ~/.adhdev.
@@ -359,7 +397,13 @@ export function createDefaultWindowsAtomicHooks(options: {
   cwd: string;
   env: NodeJS.ProcessEnv;
   log: (message: string) => void;
+  /** Loopback IPC port to probe for health/version. Defaults to the daemon's local IPC port. */
+  healthPort?: number;
+  /** How long to poll for the replacement daemon to report the target version. */
+  healthTimeoutMs?: number;
 }): WindowsAtomicUpgradeHooks {
+  const healthPort = options.healthPort ?? DEFAULT_HEALTH_PORT;
+  const healthTimeoutMs = options.healthTimeoutMs ?? 30000;
   return {
     install: (stagedPrefix, portableNode) => {
       const env: NodeJS.ProcessEnv = {
@@ -370,7 +414,7 @@ export function createDefaultWindowsAtomicHooks(options: {
       };
       const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'Path';
       env[pathKey] = `${path.dirname(portableNode)};${env[pathKey] || ''}`;
-      execFileSync(portableNode, [
+      const installOutput = String(execFileSync(portableNode, [
         options.npmCliPath,
         'install', '-g', `${options.packageName}@${options.targetVersion}`, '--force', '--prefer-online', '--prefix', stagedPrefix,
       ], {
@@ -379,7 +423,11 @@ export function createDefaultWindowsAtomicHooks(options: {
         maxBuffer: 20 * 1024 * 1024,
         windowsHide: true,
         env,
-      });
+      }));
+      // On failure execFileSync throws with stdout attached to the Error; on
+      // success it was previously discarded. Surface the npm output either way so
+      // a silently-succeeding-then-rolled-back upgrade leaves a diagnosable trail.
+      if (installOutput.trim()) options.log(installOutput.trim());
     },
     restart: (portableNode, stagedCliEntry) => {
       const restartArgv = options.restartArgv.map((arg, index) => index === 0 ? stagedCliEntry : arg);
@@ -406,23 +454,18 @@ export function createDefaultWindowsAtomicHooks(options: {
       child.unref();
     },
     waitForHealth: async (pid, targetVersion) => {
-      const deadline = Date.now() + 30000;
+      const deadline = Date.now() + healthTimeoutMs;
       while (Date.now() < deadline) {
-        const result = await new Promise<{ ok: boolean; pid?: number; body?: string }>((resolve) => {
-          const req = http.get(`http://127.0.0.1:${DEFAULT_HEALTH_PORT}/health`, { timeout: 1500 }, (res) => {
-            let body = '';
-            res.setEncoding('utf8');
-            res.on('data', (chunk) => { body += chunk; });
-            res.on('end', () => {
-              let responsePid: number | undefined;
-              try { responsePid = Number(JSON.parse(body)?.pid); } catch { /* noop */ }
-              resolve({ ok: res.statusCode === 200, pid: responsePid, body });
-            });
-          });
-          req.on('timeout', () => req.destroy());
-          req.on('error', () => resolve({ ok: false }));
-        });
-        if (result.ok && result.pid === pid && result.body?.includes(targetVersion)) return true;
+        // Liveness + pid identity come from GET /health, whose body is
+        // {ok, pid, wsPath, port} — it carries NO version. The running version
+        // lives only in GET /api/v1/status → payload.status.version, so the
+        // version gate must fetch that endpoint separately. Requiring the raw
+        // /health body to include targetVersion is unsatisfiable and silently
+        // rolls every upgrade back.
+        const liveness = await fetchLocalHealth(healthPort);
+        const alive = liveness.ok && liveness.pid === pid;
+        const version = alive ? await fetchLocalStatusVersion(healthPort) : undefined;
+        if (alive && version === targetVersion) return true;
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
       return false;

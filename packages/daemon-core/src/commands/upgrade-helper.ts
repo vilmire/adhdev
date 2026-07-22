@@ -560,22 +560,36 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
       );
     }
 
-    await performWindowsAtomicUpgrade({
-      layout: windowsInstallerLayout,
-      packageName: payload.packageName,
-      targetVersion: payload.targetVersion,
-      portableNode,
-      excludePids: upgradePids,
-      hooks: createDefaultWindowsAtomicHooks({
+    try {
+      await performWindowsAtomicUpgrade({
+        layout: windowsInstallerLayout,
         packageName: payload.packageName,
         targetVersion: payload.targetVersion,
-        npmCliPath,
-        restartArgv,
-        cwd: payload.cwd || process.cwd(),
-        env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== UPGRADE_HELPER_ENV)),
-        log: appendUpgradeLog,
-      }),
-    });
+        portableNode,
+        excludePids: upgradePids,
+        hooks: createDefaultWindowsAtomicHooks({
+          packageName: payload.packageName,
+          targetVersion: payload.targetVersion,
+          npmCliPath,
+          restartArgv,
+          cwd: payload.cwd || process.cwd(),
+          env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== UPGRADE_HELPER_ENV)),
+          log: appendUpgradeLog,
+        }),
+      });
+    } catch (error: any) {
+      // performWindowsAtomicUpgrade already rolled the pointer/shims back to the
+      // prior version before rethrowing. Without a durable notice that rollback
+      // was silent — the daemon simply kept running the old version (the rc.6
+      // stuck-upgrade defect). Leave an actionable last-error file naming the
+      // target that failed its health/version gate.
+      emitUpgradeFailureNotice([
+        `adhdev ${payload.packageName}@${payload.targetVersion} upgrade failed and was rolled back: ${error?.message || String(error)}`,
+        `Previous version preserved (active prefix: ${windowsInstallerLayout.activePrefix}).`,
+        'See daemon-upgrade.log for the full install/health trace. The next daemon start will retry.',
+      ]);
+      throw error;
+    }
     try { fs.unlinkSync(getUpgradeFailureNoticePath()); } catch { /* no previous failure notice */ }
     appendUpgradeLog('Installer-managed Windows atomic upgrade completed');
     return;
