@@ -120,6 +120,31 @@ export const NATIVE_HISTORY_MESH_IDLE_SETTLE_MS = 4000;
 // met. Scoped (at the call site) to autonomous mesh sessions, so interactive sessions are
 // untouched.
 export const PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS = 1200;
+// (ANTIGRAVITY-30S-CAP-PREMATURE) Minimum PTY quiet dwell required before the
+// COMPLETED_FINALIZATION_MAX_WAIT_MS (30s) cap may RELEASE an antigravity `holdForTranscript`
+// block into the forced weak completion. Antigravity is a native-source provider: its
+// idle/generating verdict is PTY-screen-derived, but its assistant answer lands in
+// native-history and can legitimately lag past 30s on a long turn (tool phase + slow reply).
+// The 30s cap releases on ELAPSED TIME, not proof-of-idle — so on a long turn it fired a
+// premature completed/idle to the coordinator while the PTY was still generating (live-repro:
+// a routed RCA task emitted "completed" in 10s with no result). Require instead that the PTY
+// has been quiet (no raw output) for at least this long AND the adapter reports no pending
+// response before the cap may force-emit. A genuinely quiescent tool-only turn (no assistant
+// bubble) has a stable screen well past this bound and still finalizes; a turn whose PTY is
+// still producing output keeps holding past 30s (up to ANTIGRAVITY_HOLD_HARD_CAP_MS). Scoped
+// (at the call site) to antigravity-cli holdForTranscript blocks, so claude-cli/codex-cli
+// completion timing is untouched.
+export const ANTIGRAVITY_HOLD_QUIET_DWELL_MS = 3000;
+// (ANTIGRAVITY-30S-CAP-PREMATURE) Absolute upper bound on how long an antigravity
+// `holdForTranscript` block may be held once the 30s cap is reached but the PTY is still
+// active. The quiet-dwell gate above keeps holding while the PTY keeps emitting output, so a
+// truly runaway turn (PTY never falls quiet) must still eventually release rather than wedge
+// the session in generating forever — strictly worse than the original premature-emit bug.
+// Once a pending completion has been held this long we force-emit regardless of PTY activity.
+// Sized generously (5 min) so realistic long antigravity turns (multi-tool + slow reply)
+// finish and let the transcript land / the PTY fall quiet naturally, while still guaranteeing
+// eventual release. Mirrors BACKGROUND_TASK_HOLD_MAX_MS's escape-hatch rationale.
+export const ANTIGRAVITY_HOLD_HARD_CAP_MS = 5 * 60_000;
 // (FALSE-IDLE-BACKGROUND-CMD) Hard cap on how long a pending completion may be HELD
 // solely because the claude-cli transcript still shows an unresolved run_in_background
 // bash job (backgroundTaskActive). The hold is the correct behaviour while the job is

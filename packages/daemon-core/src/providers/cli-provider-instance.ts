@@ -58,6 +58,8 @@ import {
     COMPLETED_FINALIZATION_MAX_WAIT_MS,
     NATIVE_HISTORY_MESH_IDLE_SETTLE_MS,
     PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS,
+    ANTIGRAVITY_HOLD_QUIET_DWELL_MS,
+    ANTIGRAVITY_HOLD_HARD_CAP_MS,
     BACKGROUND_TASK_HOLD_MAX_MS,
     USER_INPUT_ACK_DEDUP_WINDOW_MS,
     STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS,
@@ -1897,6 +1899,33 @@ export class CliProviderInstance implements ProviderInstance {
         return false;
     }
 
+    // (ANTIGRAVITY-30S-CAP-PREMATURE) Discriminator gating the 30s-cap release of an antigravity
+    // `holdForTranscript` block. Antigravity's idle verdict is PTY-screen-derived but its assistant
+    // answer lands in native-history, which can legitimately lag past COMPLETED_FINALIZATION_MAX_WAIT_MS
+    // (30s) on a long turn. The cap releases on elapsed time, not proof-of-idle, so it force-emitted a
+    // premature weak completion WHILE THE PTY WAS STILL GENERATING. Returns true when the PTY is still
+    // active — i.e. the adapter reports a pending response OR raw PTY output arrived within the last
+    // ANTIGRAVITY_HOLD_QUIET_DWELL_MS — meaning the 30s cap must KEEP HOLDING (the turn is not proven
+    // over). Returns false when the PTY is genuinely quiescent (no pending response AND no recent
+    // output), so a real tool-only turn with no assistant bubble still force-emits a weak completion
+    // rather than wedging. The absolute ANTIGRAVITY_HOLD_HARD_CAP_MS bound is enforced at the call site
+    // so a runaway PTY that never falls quiet still eventually releases. Fails OPEN (returns false =
+    // allow release) when lastOutputAt is unreadable, so the gate can never wedge a session.
+    private antigravityHoldPtyStillActive(): boolean {
+        if (this.hasAdapterPendingResponse()) return true;
+        try {
+            const outStatus = this.adapter.getStatus({ allowParse: false }) as any;
+            const lastOutputAt = typeof outStatus?.lastOutputAt === 'number' && Number.isFinite(outStatus.lastOutputAt)
+                ? outStatus.lastOutputAt as number
+                : undefined;
+            if (typeof lastOutputAt === 'number') {
+                const quietMs = Date.now() - lastOutputAt;
+                if (quietMs < ANTIGRAVITY_HOLD_QUIET_DWELL_MS) return true;
+            }
+        } catch { /* defensive: dwell read is best-effort — fall through to allow release */ }
+        return false;
+    }
+
     private shouldSuppressStaleParsedBusyStatus(parsedStatus: any, adapterStatus: any): boolean {
         const parsedRawStatus = typeof parsedStatus?.status === 'string' ? parsedStatus.status.trim() : '';
         const adapterRawStatus = typeof adapterStatus?.status === 'string' ? adapterStatus.status.trim() : '';
@@ -2747,6 +2776,42 @@ export class CliProviderInstance implements ProviderInstance {
                         waitedMs,
                     });
                     pending.loggedBlockReason = blockReason;
+                }
+                this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
+                return;
+            }
+            // (ANTIGRAVITY-30S-CAP-PREMATURE) The 30s cap has been reached for an antigravity
+            // `holdForTranscript` block. The cap releases on ELAPSED TIME, not proof-of-idle — but
+            // antigravity is native-source (assistant answer in native-history) with a PTY-derived
+            // idle verdict, so the transcript's final assistant bubble can legitimately land past 30s
+            // on a long turn. Releasing here would fire a premature weak completed/idle to the
+            // coordinator WHILE THE PTY IS STILL GENERATING (the live-reproduced defect). Gate the
+            // release on the PTY being genuinely quiet: if it is still active (adapter pending
+            // response OR raw output within ANTIGRAVITY_HOLD_QUIET_DWELL_MS) and we are under the
+            // absolute ANTIGRAVITY_HOLD_HARD_CAP_MS bound, KEEP HOLDING (re-probe next retry — the
+            // transcript branch above clears the block for a genuine emit once the answer lands).
+            // A genuinely quiescent tool-only turn (no assistant bubble, PTY stable) falls through
+            // to the existing weak force-emit; a runaway PTY that never quiets releases at the hard
+            // cap so it cannot wedge forever. Scoped to antigravity holdForTranscript so
+            // claude-cli/codex-cli completion timing is unchanged.
+            if (this.type === 'antigravity-cli'
+                && block.holdForTranscript === true
+                && waitedMs < ANTIGRAVITY_HOLD_HARD_CAP_MS
+                && this.antigravityHoldPtyStillActive()) {
+                if (pending.loggedBlockReason !== 'antigravity_hold_pty_active') {
+                    LOG.info('CLI', `[${this.type}] 30s cap reached but PTY still generating; holding antigravity completion past cap (waitedMs=${waitedMs} hardCap=${ANTIGRAVITY_HOLD_HARD_CAP_MS}) (${blockReason})`);
+                    if (this.isMeshWorkerSession()) {
+                        traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `antigravity_hold_pty_active waited=${waitedMs}ms`);
+                    }
+                    if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
+                        blockReason,
+                        latestVisibleStatus,
+                        terminal: block.terminal === true,
+                        holdForTranscript: true,
+                        antigravityPtyStillActive: true,
+                        waitedMs,
+                    });
+                    pending.loggedBlockReason = 'antigravity_hold_pty_active';
                 }
                 this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
                 return;
