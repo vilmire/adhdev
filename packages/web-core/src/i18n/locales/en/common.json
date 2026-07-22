@@ -2563,7 +2563,7 @@
         "hero": {
             "badge": "Run your local coding agents from anywhere",
             "title": "Manage the coding agents running on your computer — from anywhere.",
-            "subtitle": "Run and approve Claude Code, Codex, and Gemini from your browser and phone. Work across several machines runs in parallel on isolated branches and lands on <code>main</code> automatically.",
+            "subtitle": "Run and approve <roll></roll> from your browser and phone. Work across several machines runs in parallel on isolated branches and lands on <code>main</code> automatically.",
             "selectOs": "Select OS",
             "osUnix": "macOS / Linux",
             "osWindows": "Windows",

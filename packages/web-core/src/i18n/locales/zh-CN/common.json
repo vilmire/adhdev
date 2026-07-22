@@ -2563,7 +2563,7 @@
         "hero": {
             "badge": "多厂商、多机器的智能体控制平面",
             "title": "在浏览器中驱动每一个本地编码智能体 —— 并行运行。",
-            "subtitle": "从浏览器驱动任何 CLI 智能体 —— Claude Code、Codex、Gemini —— 然后扩展：在你自己机器上的隔离 git 工作树中编排多个智能体，Refinery 便会<em>无人值守</em>地把完成的工作安全落地到 main。你只需与一个协调器对话；它会异步运行这些并行智能体，无需盯着任何会话。P2P —— 代码始终留在你的机器上。",
+            "subtitle": "从浏览器和手机运行并批准 <roll></roll> 等 CLI 智能体。跨多台机器的工作在隔离分支上并行执行，并自动落地到 <code>main</code>。",
             "selectOs": "选择操作系统",
             "osUnix": "macOS / Linux",
             "osWindows": "Windows",

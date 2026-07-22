@@ -2563,7 +2563,7 @@
         "hero": {
             "badge": "El plano de control de agentes multiproveedor y multimáquina",
             "title": "Ejecuta cada agente de codificación local desde la web — en paralelo.",
-            "subtitle": "Controla cualquier agente CLI —Claude Code, Codex, Gemini— desde tu navegador y luego escala: orquesta varios agentes en árboles de trabajo git aislados en tus propias máquinas y deja que Refinery haga aterrizar el trabajo terminado en main de forma <em>desatendida</em>. Hablas con un único coordinador; este ejecuta los agentes en paralelo de forma asíncrona, sin sesiones que vigilar. P2P —el código permanece en tu máquina.",
+            "subtitle": "Ejecuta y aprueba <roll></roll> desde tu navegador y tu teléfono. El trabajo repartido entre varias máquinas corre en paralelo en ramas aisladas y aterriza en <code>main</code> automáticamente.",
             "selectOs": "Seleccionar SO",
             "osUnix": "macOS / Linux",
             "osWindows": "Windows",

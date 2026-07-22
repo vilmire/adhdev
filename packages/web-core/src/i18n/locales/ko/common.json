@@ -2563,7 +2563,7 @@
         "hero": {
             "badge": "내 컴퓨터의 코딩 에이전트를 어디서든 관리하세요",
             "title": "내 컴퓨터에서 실행 중인 코딩 에이전트를 어디서든 관리하세요.",
-            "subtitle": "Claude Code, Codex, Gemini를 브라우저와 휴대폰에서 실행하고 승인하세요. 여러 머신의 작업은 격리된 브랜치에서 병렬로 처리되고 자동으로 <code>main</code>에 합쳐집니다.",
+            "subtitle": "<roll></roll>를 브라우저와 휴대폰에서 실행하고 승인하세요. 여러 머신의 작업은 격리된 브랜치에서 병렬로 처리되고 자동으로 <code>main</code>에 합쳐집니다.",
             "selectOs": "OS 선택",
             "osUnix": "macOS / Linux",
             "osWindows": "Windows",
