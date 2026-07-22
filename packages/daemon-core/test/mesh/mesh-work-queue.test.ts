@@ -10,6 +10,7 @@ import {
     updateTaskStatus,
     updateSessionTaskStatus,
     cancelTask,
+    takeCancelledTaskAssignment,
     requeueTask,
     reclaimStrandedAssignedTask,
     getMeshQueueStats,
@@ -485,6 +486,77 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(q).to.have.length(1);
         expect(q[0].status).to.equal('cancelled');
         expect(q[0].targetSessionId).to.equal('dead-session');
+    });
+
+    describe('CANCEL-STICKY-TERMINAL (cancel < reclaim)', () => {
+        it('(a) refuses to resurrect a cancelled row via updateTaskStatus(..., pending)', () => {
+            const task = enqueueTask(meshId, 'cancel then late requeue');
+            cancelTask(meshId, task.id, { reason: 'operator cancelled' });
+            expect(getQueue(meshId).find(t => t.id === task.id)?.status).to.equal('cancelled');
+
+            // Simulate the fire-and-forget dispatch-failure .catch that resolves AFTER the cancel
+            // commits and unconditionally writes 'pending'. This must be a no-op now.
+            const result = updateTaskStatus(meshId, task.id, 'pending');
+            expect(result?.status).to.equal('cancelled');
+            expect(getQueue(meshId).find(t => t.id === task.id)?.status).to.equal('cancelled');
+        });
+
+        it('(a2) protects completed / failed rows from non-terminal resurrection too', () => {
+            const done = enqueueTask(meshId, 'completed row');
+            claimNextTask(meshId, 'node1', 'session-done');
+            updateTaskStatus(meshId, done.id, 'completed');
+            expect(updateTaskStatus(meshId, done.id, 'assigned')?.status).to.equal('completed');
+            expect(updateTaskStatus(meshId, done.id, 'pending')?.status).to.equal('completed');
+
+            const failed = enqueueTask(meshId, 'failed row');
+            claimNextTask(meshId, 'node1', 'session-fail');
+            updateTaskStatus(meshId, failed.id, 'failed');
+            expect(updateTaskStatus(meshId, failed.id, 'pending')?.status).to.equal('failed');
+        });
+
+        it('(a3) still allows terminal→terminal transitions and honors force override', () => {
+            const t = enqueueTask(meshId, 'terminal to terminal');
+            cancelTask(meshId, t.id, { reason: 'cancelled' });
+            // cancelled → failed is a terminal→terminal move; permitted.
+            expect(updateTaskStatus(meshId, t.id, 'failed')?.status).to.equal('failed');
+            // Explicit operator override may reopen a terminal row.
+            expect(updateTaskStatus(meshId, t.id, 'pending', { force: true })?.status).to.equal('pending');
+        });
+
+        it('(b) a late dispatch-failure requeue cannot revive a cancelled task into a re-claim', () => {
+            const task = enqueueTask(meshId, 'race cancel vs dispatch-failure');
+            claimNextTask(meshId, 'node1', 'session-live');
+            cancelTask(meshId, task.id, { reason: 'operator cancelled mid-dispatch' });
+
+            // The dispatch-failure .catch fires late with its unconditional pending write.
+            updateTaskStatus(meshId, task.id, 'pending');
+
+            // The row stays cancelled, so claimNextTask finds nothing to re-claim.
+            expect(getQueue(meshId).find(t => t.id === task.id)?.status).to.equal('cancelled');
+            expect(claimNextTask(meshId, 'node1', 'session-fresh')).to.be.null;
+        });
+
+        it('(c) cancelTask clears assignment ownership and surfaces the prior binding to stop the worker', () => {
+            const task = enqueueTask(meshId, 'assigned then cancelled', { targetNodeId: 'nodeW' });
+            const claimed = claimNextTask(meshId, 'nodeW', 'session-worker', undefined, { providerType: 'claude-cli' });
+            expect(claimed?.id).to.equal(task.id);
+            expect(claimed?.assignedSessionId).to.equal('session-worker');
+
+            const cancelled = cancelTask(meshId, task.id, { reason: 'stop the worker' });
+            expect(cancelled?.status).to.equal('cancelled');
+            expect(cancelled?.assignedNodeId).to.be.undefined;
+            expect(cancelled?.assignedSessionId).to.be.undefined;
+            expect(cancelled?.assignedProviderType).to.be.undefined;
+            expect(cancelled?.dispatchTimestamp).to.be.undefined;
+
+            // The prior binding is handed out-of-band to the command handler exactly once.
+            const prior = takeCancelledTaskAssignment(meshId, task.id);
+            expect(prior?.sessionId).to.equal('session-worker');
+            expect(prior?.nodeId).to.equal('nodeW');
+            expect(prior?.providerType).to.equal('claude-cli');
+            // One-shot: a second read returns nothing.
+            expect(takeCancelledTaskAssignment(meshId, task.id)).to.be.undefined;
+        });
     });
 
     it('requeues stale assigned tasks and clears dead session ownership by default', () => {
