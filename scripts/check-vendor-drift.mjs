@@ -49,7 +49,9 @@ try {
   console.error(
     `\n✗ ${VENDOR_PATH} is stale.\n` +
     `  packages/mcp-server changed but the vendored copy was not re-synced.\n` +
-    `  Fix: npm run build -w packages/mcp-server && npm run bundle:vendor -w packages/daemon-standalone\n` +
+    `  Fix (from the cloud monorepo root): npm run bundle:vendor:all\n` +
+    `       — re-syncs BOTH the daemon-cloud and daemon-standalone vendor copies.\n` +
+    `  Standalone-only (inside oss): npm run bundle:vendor -w packages/daemon-standalone\n` +
     `  then commit the updated ${VENDOR_PATH}.\n`,
   );
   process.exit(1);
