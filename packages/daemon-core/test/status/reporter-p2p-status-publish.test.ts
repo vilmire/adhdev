@@ -219,4 +219,36 @@ describe('DaemonStatusReporter P2P publish behavior', () => {
     expect(sendStatusEvent).toHaveBeenCalledWith(expectedPayload)
     expect(sendMessage).toHaveBeenCalledWith('status_event', expectedPayload)
   })
+
+  it('relays agent:waiting_choice to server and P2P (allowlisted) with its modal projection', () => {
+    // Regression: waiting_choice was previously absent from the status-event
+    // allowlist (toDaemonStatusEventName), so buildServerStatusEvent returned
+    // null and emitStatusEvent early-returned — the coordinator never got a
+    // status_event and no push fired. It must now flow through like
+    // waiting_approval.
+    const { reporter, sendStatusEvent, sendMessage } = createReporter({
+      serverConnected: true,
+      p2pConnected: true,
+    })
+
+    reporter.emitStatusEvent({
+      event: 'agent:waiting_choice',
+      timestamp: 789,
+      providerType: 'claude-cli',
+      targetSessionId: 'runtime-session-2',
+      modalMessage: 'Pick a branch strategy',
+      modalButtons: ['Rebase', 'Merge'],
+    })
+
+    const expectedPayload = expect.objectContaining({
+      event: 'agent:waiting_choice',
+      timestamp: 789,
+      providerType: 'claude-cli',
+      targetSessionId: 'runtime-session-2',
+      modalMessage: 'Pick a branch strategy',
+      modalButtons: ['Rebase', 'Merge'],
+    })
+    expect(sendStatusEvent).toHaveBeenCalledWith(expectedPayload)
+    expect(sendMessage).toHaveBeenCalledWith('status_event', expectedPayload)
+  })
 })

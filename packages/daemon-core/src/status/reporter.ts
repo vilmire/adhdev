@@ -118,6 +118,7 @@ export class DaemonStatusReporter {
         switch (value) {
             case 'agent:generating_started':
             case 'agent:waiting_approval':
+            case 'agent:waiting_choice':
             case 'agent:generating_completed':
             case 'agent:stopped':
             case 'monitor:no_progress':

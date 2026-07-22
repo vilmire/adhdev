@@ -775,6 +775,12 @@ export interface DashboardBootstrapDaemonEntry extends Partial<CloudDaemonSummar
 export type DaemonStatusEventName =
     | 'agent:generating_started'
     | 'agent:waiting_approval'
+    // A question picker (AskUserQuestion / InteractivePrompt) parks the agent
+    // awaiting a human decision — distinct from an approval modal, but equally a
+    // state the user must answer before work continues. Relayed to the server so
+    // push notifications fire (owner requirement: coordinator sessions must be
+    // pinged for pending questions).
+    | 'agent:waiting_choice'
     | 'agent:generating_completed'
     | 'agent:stopped'
     | 'monitor:no_progress'
