@@ -707,6 +707,24 @@ export class DaemonCliManager {
                     clearInterval(checkStopped);
                     setTimeout(() => {
                         if (this.adapters.has(key)) {
+                            // KIMI-MESH-COMPLETION-EMIT (axis 2): before removeInstance closes the
+                            // event-emit window, give a mesh DELEGATED worker one last chance to emit
+                            // its completion. A native-source worker (e.g. kimi) can have its PTY
+                            // killed by a false stall AFTER it finished the task (transcript written)
+                            // but BEFORE the FSM's idle→completed event fired — the instance is the
+                            // only thing that can emit that event, and it is about to be removed. The
+                            // instance-side method is a no-op for a non-mesh session or when the
+                            // turn's completion already fired (double-emit guard) or when there is no
+                            // transcript evidence of a finished turn. Best-effort — never blocks cleanup.
+                            try {
+                                const inst = instanceManager?.getInstance(key) as (ProviderInstance & { flushMeshCompletionBeforeCleanup?: () => boolean }) | undefined;
+                                if (typeof inst?.flushMeshCompletionBeforeCleanup === 'function') {
+                                    const emitted = inst.flushMeshCompletionBeforeCleanup();
+                                    if (emitted) LOG.info('CLI', `Emitted pre-cleanup mesh completion for ${cliType} session ${key} before auto-clean`);
+                                }
+                            } catch (e) {
+                                LOG.warn('CLI', `pre-cleanup mesh completion flush failed for ${key}: ${(e as Error)?.message || e}`);
+                            }
                             this.adapters.delete(key);
                             this.deps.removeAgentTracking(key);
                             sessionRegistry?.unregisterByInstanceKey(key);

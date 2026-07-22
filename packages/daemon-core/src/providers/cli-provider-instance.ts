@@ -332,6 +332,18 @@ export class CliProviderInstance implements ProviderInstance {
     // MESH_WORKER_STALL_REFIRE_COOLDOWN_MS between successive emissions across
     // anchor re-arms (the per-anchor guard only covers a single continuous stall).
     private meshStallLastFiredAt = -1;
+    // KIMI-MESH-COMPLETION-EMIT (axis 1): the native-source transcript progress
+    // fingerprint (record count + source mtime) observed the LAST time the stall
+    // watchdog checked a native-source provider (transcriptAuthority=provider — e.g.
+    // kimi wire.jsonl). A pure-PTY native-source worker running a long, screen-quiet
+    // tool (no viewport bytes for minutes) looks stalled by the lastOutputAt clock
+    // even though its transcript file is still growing. Before firing the stall, we
+    // compare the current transcript fingerprint against this snapshot; if the
+    // transcript advanced, the "stall" is a false positive of PTY-render stasis, so
+    // we re-arm the anchor instead of paging the coordinator (whose no_progress
+    // handling can lead to the worker being stopped mid-work → completion never
+    // emitted). null = not yet sampled for this session/anchor.
+    private meshStallNativeTranscriptSample: { msgCount: number; sourceMtimeMs: number } | null = null;
     // FALSE-IDLE continuity epoch: monotonically bumped on EVERY entry into a busy
     // phase (→generating or →waiting_approval). The completedDebouncePending snapshots
     // this value at arm time (busyEpochAtArm); the flush guard requires it UNCHANGED
@@ -1418,6 +1430,15 @@ export class CliProviderInstance implements ProviderInstance {
      */
     private lastCompletionSummary: { content: string; receivedAt: number; sourceTimestampMs?: number } | null = null;
 
+    // KIMI-MESH-COMPLETION-EMIT (axis 2, double-emit guard): the (taskId, wall-clock)
+    // of the most recent agent:generating_completed this instance emitted, stamped by
+    // emitGeneratingCompleted. The pre-cleanup completion flush
+    // (flushMeshCompletionBeforeCleanup, driven by cli-manager's exit monitor) reads
+    // this to refuse a SECOND completion for a turn whose completion already fired —
+    // so a worker that finished cleanly and is simply being auto-cleaned never emits a
+    // duplicate. taskId '' covers an ad-hoc (no-task) turn. null = none emitted yet.
+    private lastEmittedCompletion: { taskId: string; at: number } | null = null;
+
     private async enforceFreshSessionLaunchIfNeeded(): Promise<void> {
         const scriptName = getForcedNewSessionScriptName(this.provider, this.launchMode);
         if (!scriptName) return;
@@ -2404,6 +2425,38 @@ export class CliProviderInstance implements ProviderInstance {
         const stalledMs = now - this.meshStallAnchorAt;
         if (stalledMs < threshold) return;
 
+        // KIMI-MESH-COMPLETION-EMIT (axis 1): transcript-aware stall for native-source
+        // providers. A pure-PTY native-source worker (transcriptAuthority=provider,
+        // e.g. kimi) running a long, screen-quiet tool emits no viewport bytes for
+        // minutes, so the lastOutputAt clock above reads it as stalled — but its
+        // authoritative transcript (wire.jsonl) is still being appended. Firing
+        // monitor:no_progress here surfaces a false stall to the coordinator whose
+        // downstream handling can stop the worker mid-work, killing the emit window
+        // before the real completion propagates. So before firing, sample the native
+        // transcript's progress fingerprint: if it advanced (more records OR a fresher
+        // source mtime) since the last sample, the worker is demonstrably alive — treat
+        // it as progress. Re-arm the anchor to `now` and reset the episode so the clock
+        // restarts from this proven-live moment; only a transcript that is ALSO static
+        // falls through to the genuine-stall fire below. No-op for pure-PTY providers
+        // (sample is null → unchanged behavior).
+        const nativeSample = this.sampleNativeTranscriptProgress();
+        if (nativeSample) {
+            const prev = this.meshStallNativeTranscriptSample;
+            const advanced = !prev
+                || nativeSample.msgCount > prev.msgCount
+                || nativeSample.sourceMtimeMs > prev.sourceMtimeMs;
+            this.meshStallNativeTranscriptSample = nativeSample;
+            if (advanced) {
+                if (this.isMeshWorkerSession()) {
+                    traceMeshEventDrop('mesh_worker_stall_transcript_advancing', this.meshTraceCtx('monitor:no_progress'),
+                        `msgCount=${nativeSample.msgCount} sourceMtime=${nativeSample.sourceMtimeMs} (PTY quiet ${Math.round(stalledMs / 1000)}s but transcript advancing)`);
+                }
+                this.meshStallAnchorAt = now;
+                this.meshStallEmittedForAnchor = false;
+                return;
+            }
+        }
+
         // FALSE-STALL-WATCHDOG-OVERFIRE (fix E): per-session refire cooldown. Mark
         // this anchor emitted regardless so a still-static anchor does not re-check
         // every tick, but suppress the actual coordinator notification (and the
@@ -2454,6 +2507,116 @@ export class CliProviderInstance implements ProviderInstance {
         this.meshStallEmittedForAnchor = false;
         this.meshStallTurnActiveLast = undefined;
         this.meshStallLastFiredAt = -1;
+        this.meshStallNativeTranscriptSample = null;
+    }
+
+    /**
+     * KIMI-MESH-COMPLETION-EMIT (axis 1). For a native-source provider
+     * (transcriptAuthority=provider — its authoritative history is an on-disk
+     * transcript file, e.g. kimi's wire.jsonl), sample the transcript's current
+     * progress fingerprint (record count + source-file mtime) WITHOUT parsing the
+     * PTY. Used by the stall watchdog to distinguish "PTY render is quiet but the
+     * worker is still doing long tool work (transcript growing)" from a genuine
+     * wedge. Returns null for a pure-PTY provider (no native source) or when the
+     * source cannot be resolved this tick — the caller then falls back to the
+     * unchanged lastOutputAt-only judgment.
+     *
+     * Generalized on the provider's native-source flag, NOT a hardcoded provider
+     * type, so every current and future pure-PTY long-tool native-source provider
+     * benefits. Cheap enough for the stall path: it runs only at the stall threshold
+     * (≥180s of PTY stasis), never on the routine 5s tick.
+     */
+    private sampleNativeTranscriptProgress(): { msgCount: number; sourceMtimeMs: number } | null {
+        if (!isNativeSourceCanonicalHistory(this.provider?.nativeHistory)) return null;
+        // readExternalCompletionMessages resolves this session's OWN native-source
+        // conversation (providerSessionId / persisted pin / floor claim) and, as a
+        // side effect, refreshes this.lastExternalCompletionProbe with the source
+        // path, mtime, and message count. Reusing it keeps the resolution logic in
+        // one place and immune to the antigravity-style session-id quirks.
+        let messages: unknown[] | null = null;
+        try {
+            messages = this.readExternalCompletionMessages();
+        } catch {
+            return null; // best-effort: an unresolved transcript → fall back to PTY clock
+        }
+        const probe = this.lastExternalCompletionProbe;
+        if (!probe) return null;
+        return {
+            msgCount: typeof probe.msgCount === 'number' ? probe.msgCount : (Array.isArray(messages) ? messages.length : 0),
+            sourceMtimeMs: typeof probe.sourceMtimeMs === 'number' ? probe.sourceMtimeMs : 0,
+        };
+    }
+
+    /**
+     * KIMI-MESH-COMPLETION-EMIT (axis 2). Last-chance completion emit for a mesh
+     * DELEGATED worker whose PTY has already exited (e.g. killed by a false stall)
+     * and is about to be auto-cleaned (cli-manager.startCliExitMonitor →
+     * removeInstance closes the event-emit window forever). If the worker actually
+     * FINISHED its assigned turn — its authoritative native transcript holds a final
+     * assistant message for the injected task — but the completion event never fired
+     * (the stall-kill happened before the FSM's idle transition), emit it now so the
+     * coordinator learns the task completed instead of waiting ~180s for the reconcile
+     * transcript-poll to reclaim it.
+     *
+     * Scope & guards (must all hold to emit):
+     *   • mesh worker session only — a normal standalone session's ordinary exit is
+     *     never synthesized (isMeshWorkerSession()).
+     *   • DOUBLE-EMIT guard — refuse if this turn's completion already fired
+     *     (lastEmittedCompletion matches the current taskId). A worker that completed
+     *     cleanly and is merely being cleaned up never double-emits.
+     *   • evidence gate — reuse the same final-assistant/turn-scoped summary machinery
+     *     as the normal completion path (completionFinalSummary over the native
+     *     transcript). No in-turn assistant summary ⇒ no proof of completion ⇒ leave
+     *     the reclaim path to handle a genuinely-unfinished worker.
+     *
+     * Returns true when a synthetic completion was emitted, false otherwise. Safe to
+     * call unconditionally from the cleanup path.
+     */
+    flushMeshCompletionBeforeCleanup(): boolean {
+        if (!this.isMeshWorkerSession()) return false;
+        const taskId = this.completingTurnTaskId();
+
+        // DOUBLE-EMIT guard: this turn's completion already fired — never re-emit.
+        if (this.lastEmittedCompletion && this.lastEmittedCompletion.taskId === (taskId ?? '')) {
+            return false;
+        }
+
+        // Evidence gate: the injected task's own turn must have genuinely started
+        // (guards against synthesizing a completion off a reused session's stale tail
+        // before this task ran) and the native transcript must hold an in-turn final
+        // assistant summary. turnStartedAt anchors the turn-scoped read.
+        if (!this.injectedTaskHasStartedGenerating()) return false;
+        const turnStartedAt = typeof (this.adapter as any)?.currentTurnStartedAt === 'number'
+            ? (this.adapter as any).currentTurnStartedAt as number
+            : this.meshTaskInjectedAt || undefined;
+        let parsedMessages: unknown;
+        try {
+            parsedMessages = this.adapter?.getScriptParsedStatus?.()?.messages;
+        } catch { parsedMessages = undefined; }
+        let finalSummary: string | undefined;
+        try {
+            finalSummary = this.completionFinalSummary(parsedMessages, turnStartedAt);
+        } catch { finalSummary = undefined; }
+        // No in-turn final assistant evidence → not a proven turn-end. Defer to the
+        // coordinator's reclaim/reconcile path rather than fabricate a completion.
+        if (!finalSummary) return false;
+
+        LOG.warn('CLI', `[${this.type}] emitting pre-cleanup mesh completion for session ${this.instanceId} `
+            + `task=${taskId ?? '(none)'} — PTY exited before the completion event fired but the native transcript `
+            + `shows a finished turn; synthesizing completion so the coordinator is not left waiting for reclaim.`);
+        if (this.isMeshWorkerSession()) {
+            traceMeshEventStage('fired', this.meshTraceCtx(), 'pre_cleanup_transcript_completion');
+        }
+        this.emitGeneratingCompleted({
+            chatTitle: '',
+            duration: undefined,
+            timestamp: Date.now(),
+            taskId,
+            finalSummary,
+            evidenceLevel: 'transcript',
+            completionDiagnostic: { source: 'pre_cleanup_transcript_completion' },
+        });
+        return true;
     }
 
     /**
@@ -2997,6 +3160,10 @@ export class CliProviderInstance implements ProviderInstance {
         if (summary) {
             this.lastCompletionSummary = { content: summary, receivedAt: opts.timestamp };
         }
+        // KIMI-MESH-COMPLETION-EMIT (axis 2, double-emit guard): record that THIS turn's
+        // completion has now been emitted, keyed by its taskId, so the pre-cleanup
+        // completion flush never fires a duplicate for the same turn.
+        this.lastEmittedCompletion = { taskId: typeof opts.taskId === 'string' ? opts.taskId : '', at: Date.now() };
         this.pushEvent({
             event: 'agent:generating_completed',
             chatTitle: opts.chatTitle,

@@ -250,6 +250,71 @@ describe('CliProviderInstance.checkMeshWorkerStall', () => {
     expect(emitted).toHaveLength(1) // deduped — still just the one
   })
 
+  // ── KIMI-MESH-COMPLETION-EMIT (axis 1): native-source transcript-aware stall ──
+  //
+  // A pure-PTY native-source worker (transcriptAuthority=provider — e.g. kimi's
+  // wire.jsonl) running a long, screen-quiet tool emits no viewport bytes for
+  // minutes, so the lastOutputAt clock reads it as stalled. Before firing the false
+  // stall, the watchdog samples the transcript's progress fingerprint; if it
+  // advanced (more records OR fresher source mtime) the worker is proven alive, so
+  // the anchor re-arms instead of paging the coordinator. Only a transcript that is
+  // ALSO static falls through to the genuine-stall fire.
+
+  // Configure an instance as a native-source provider whose transcript sampling is
+  // stubbed: readExternalCompletionMessages populates lastExternalCompletionProbe,
+  // which sampleNativeTranscriptProgress reads. We drive that probe directly.
+  function makeNativeSourceInstance(opts: Parameters<typeof makeInstance>[0]) {
+    const made = makeInstance(opts)
+    const instance = made.instance
+    // Native-source provider marker (mode !== disabled/materialized-mirror →
+    // isNativeSourceCanonicalHistory true).
+    instance.provider = { nativeHistory: { mode: 'native-source' } }
+    instance.meshStallNativeTranscriptSample = null
+    // The probe the stub read populates; the test mutates it between ticks to
+    // model an advancing / static transcript.
+    const probe = { msgCount: 2, sourceMtimeMs: 1_000 }
+    instance.lastExternalCompletionProbe = probe
+    instance.readExternalCompletionMessages = () => {
+      // Real impl refreshes lastExternalCompletionProbe as a side effect; the stub
+      // leaves the test-controlled probe in place.
+      return []
+    }
+    return { ...made, probe }
+  }
+
+  it('does NOT fire when a native-source transcript keeps advancing (PTY quiet, wire.jsonl growing)', () => {
+    const outputAt = 10_000
+    const { instance, emitted, probe } = makeNativeSourceInstance({
+      settings: meshSettings, lastOutputAt: outputAt, status: 'generating', turnActive: true,
+    })
+    instance.checkMeshWorkerStall(outputAt) // arm
+    // Past the raised turn bound with NO new PTY output — but the transcript grew.
+    probe.msgCount = 5
+    instance.checkMeshWorkerStall(outputAt + TURN_STALL_MS)
+    expect(emitted).toHaveLength(0) // suppressed: transcript advancing
+    // Transcript grows again on the next crossing — still suppressed.
+    probe.sourceMtimeMs = 2_000
+    instance.checkMeshWorkerStall(outputAt + TURN_STALL_MS * 2)
+    expect(emitted).toHaveLength(0)
+  })
+
+  it('DOES fire when a native-source transcript is ALSO static (genuine wedge)', () => {
+    const outputAt = 10_000
+    const { instance, emitted } = makeNativeSourceInstance({
+      settings: meshSettings, lastOutputAt: outputAt, status: 'generating', turnActive: true,
+    })
+    instance.checkMeshWorkerStall(outputAt) // arm; first sample records the baseline
+    // First threshold crossing establishes the transcript baseline (prev == null →
+    // treated as "advanced" once) and re-arms — no emit yet.
+    instance.checkMeshWorkerStall(outputAt + TURN_STALL_MS)
+    expect(emitted).toHaveLength(0)
+    // Neither PTY output NOR the transcript advanced since — a real wedge fires.
+    instance.checkMeshWorkerStall(outputAt + TURN_STALL_MS * 2)
+    expect(emitted).toHaveLength(1)
+    expect(emitted[0].event).toBe('monitor:no_progress')
+    expect(emitted[0].meshWorkerStall).toBe(true)
+  })
+
   // (4) A genuine wedge (turn in flight, output unchanged past the raised 360s bar)
   // is STILL detected. The threshold raise and dedupe only delay/thin the signal —
   // they never fully suppress a real stall.
