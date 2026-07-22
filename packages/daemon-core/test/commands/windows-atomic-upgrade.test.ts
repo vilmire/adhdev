@@ -28,7 +28,7 @@ import { emitUpgradeFailureNotice } from '../../src/commands/upgrade-helper'
 
 const roots: string[] = []
 
-function fixture(): { layout: WindowsInstallerLayout; oldCmd: string; oldPs1: string } {
+function fixture(): { layout: WindowsInstallerLayout; oldCmd: string; oldPs1: string; oldNoExt: string } {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-atomic-win-'))
   roots.push(homeDir)
   const installRoot = path.join(homeDir, '.adhdev', 'npm-installs')
@@ -40,13 +40,16 @@ function fixture(): { layout: WindowsInstallerLayout; oldCmd: string; oldPs1: st
   fs.mkdirSync(stablePrefix, { recursive: true })
   const oldCmd = '@echo old cmd\r\n'
   const oldPs1 = '# old ps1\r\n'
+  const oldNoExt = '#!/bin/sh\n# old no-ext shim\n'
   fs.writeFileSync(pointerPath, activeVersionName)
   fs.writeFileSync(path.join(stablePrefix, 'adhdev.cmd'), oldCmd)
   fs.writeFileSync(path.join(stablePrefix, 'adhdev.ps1'), oldPs1)
+  fs.writeFileSync(path.join(stablePrefix, 'adhdev'), oldNoExt)
   return {
     layout: { homeDir, installRoot, stablePrefix, activePrefix, activeVersionName, pointerPath },
     oldCmd,
     oldPs1,
+    oldNoExt,
   }
 }
 
@@ -60,6 +63,13 @@ function installPackage(prefix: string, version: string, marker?: string): void 
   fs.writeFileSync(cli, `${marker ? `require('fs').writeFileSync(${JSON.stringify(marker)}, process.execPath);` : ''} console.log(${JSON.stringify(version)});\n`)
   fs.writeFileSync(path.join(prefix, 'adhdev.cmd'), 'npm cmd')
   fs.writeFileSync(path.join(prefix, 'adhdev.ps1'), 'npm ps1')
+  // npm's default no-extension POSIX shim falls back to the FIRST `node` on PATH
+  // via an `else exec node ...` branch. Seed that exact shape so the pin test can
+  // assert the system-node fallback is removed.
+  fs.writeFileSync(
+    path.join(prefix, 'adhdev'),
+    '#!/bin/sh\nbasedir=$(dirname "$0")\nif [ -x "$basedir/node" ]; then\n  exec "$basedir/node" "$basedir/../adhdev/dist/cli/index.js" "$@"\nelse\n  exec node "$basedir/../adhdev/dist/cli/index.js" "$@"\nfi\n',
+  )
   // node-pty ships this prebuild; the upgrade must keep it to avoid a daemon
   // boot crash. Place it in every successful staged install by default.
   const conptyPath = path.join(prefix, 'node_modules', 'adhdev', 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node')
@@ -136,8 +146,8 @@ describe('Windows installer-managed atomic upgrade', () => {
     expect(fs.readFileSync(activeSentinel, 'utf8')).toBe('old-active')
   })
 
-  it('leaves the old pointer and both stable shims intact when staging fails', async () => {
-    const { layout, oldCmd, oldPs1 } = fixture()
+  it('leaves the old pointer and all stable shims intact when staging fails', async () => {
+    const { layout, oldCmd, oldPs1, oldNoExt } = fixture()
     let rollbackRestarted = false
     await expect(performWindowsAtomicUpgrade({
       layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.1', portableNode: process.execPath,
@@ -149,6 +159,7 @@ describe('Windows installer-managed atomic upgrade', () => {
     expect(fs.readFileSync(layout.pointerPath, 'utf8')).toBe('version-old')
     expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev.cmd'), 'utf8')).toBe(oldCmd)
     expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev.ps1'), 'utf8')).toBe(oldPs1)
+    expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev'), 'utf8')).toBe(oldNoExt)
     expect(rollbackRestarted).toBe(true)
   })
 
@@ -179,8 +190,52 @@ describe('Windows installer-managed atomic upgrade', () => {
     }
   })
 
+  it('pins the no-extension adhdev shim to portable Node 22 with no system-node fallback', async () => {
+    const { layout } = fixture()
+    const result = await performWindowsAtomicUpgrade({
+      layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.1', portableNode: process.execPath,
+      hooks: hooks({ install: (prefix) => installPackage(prefix, '1.0.18-rc.1') }),
+    })
+    const noExt = fs.readFileSync(path.join(result.stagedPrefix, 'adhdev'), 'utf8')
+    // Hard-codes the pinned runtime absolute path...
+    expect(noExt).toContain(process.execPath)
+    // ...and no longer contains npm's `else exec node` system-node fallback branch.
+    expect(noExt).not.toMatch(/(^|\s)exec\s+node(\s|$)/m)
+    expect(noExt).not.toMatch(/\belse\b/)
+    // A single unconditional exec line is all that remains.
+    expect(noExt.trim().split('\n').filter((l) => l.startsWith('exec ')).length).toBe(1)
+  })
+
+  it('aborts activation and preserves the stable no-ext shim when the staged pin still has a system-node fallback', async () => {
+    const { layout, oldCmd, oldPs1, oldNoExt } = fixture()
+    let rollbackRestarted = false
+    await expect(performWindowsAtomicUpgrade({
+      layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.1', portableNode: process.execPath,
+      hooks: hooks({
+        install: (prefix) => {
+          installPackage(prefix, '1.0.18-rc.1')
+          // Simulate the staged pin being defeated: re-seed npm's fallback shim
+          // AFTER install so pinStagedShims must overwrite it. If the pin were
+          // skipped, validation would let the fallback through. Here we corrupt
+          // the pinned node path to force the validation guard to fire.
+          const pkgJson = path.join(prefix, 'node_modules', 'adhdev', 'package.json')
+          const pkg = JSON.parse(fs.readFileSync(pkgJson, 'utf8'))
+          pkg.bin = { adhdev: 'dist/cli/does-not-exist.js' }
+          fs.writeFileSync(pkgJson, JSON.stringify(pkg))
+        },
+        restartOld: () => { rollbackRestarted = true },
+      }),
+    })).rejects.toThrow()
+    // Staging failed before activation → the stable shims (incl. no-ext) are intact.
+    expect(rollbackRestarted).toBe(true)
+    expect(fs.readFileSync(layout.pointerPath, 'utf8')).toBe('version-old')
+    expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev.cmd'), 'utf8')).toBe(oldCmd)
+    expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev.ps1'), 'utf8')).toBe(oldPs1)
+    expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev'), 'utf8')).toBe(oldNoExt)
+  })
+
   it('rolls the pointer and stable shims back when the replacement daemon is unhealthy', async () => {
-    const { layout, oldCmd, oldPs1 } = fixture()
+    const { layout, oldCmd, oldPs1, oldNoExt } = fixture()
     let stopped = 0
     let restartedOld = 0
     await expect(performWindowsAtomicUpgrade({
@@ -197,6 +252,9 @@ describe('Windows installer-managed atomic upgrade', () => {
     expect(fs.readFileSync(layout.pointerPath, 'utf8')).toBe('version-old')
     expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev.cmd'), 'utf8')).toBe(oldCmd)
     expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev.ps1'), 'utf8')).toBe(oldPs1)
+    // The no-ext PATH shim must also roll back to the prior working shim — never
+    // be left pointing at the removed staged prefix (the ENOENT doctor defect).
+    expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev'), 'utf8')).toBe(oldNoExt)
   })
 
   it('supports preview-to-stable switching and repeated updates with fresh prefixes', async () => {

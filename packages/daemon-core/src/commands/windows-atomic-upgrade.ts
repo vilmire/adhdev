@@ -162,13 +162,31 @@ function quotePowerShellLiteral(value: string): string {
 function pinStagedShims(prefix: string, portableNode: string, cliEntry: string): void {
   const cmdPath = path.join(prefix, 'adhdev.cmd');
   const ps1Path = path.join(prefix, 'adhdev.ps1');
+  // The no-extension `adhdev` shim is what `where.exe adhdev` can resolve first
+  // and what git-bash / MSYS / WSL and `spawnSync('adhdev')` invoke. npm generates
+  // it as a POSIX `sh` shim whose ELSE branch falls back to the FIRST `node` on
+  // PATH (`else exec node ...`). On a box where system PATH node is v24, that
+  // fallback trips adhdev's own Node-24 guard and `adhdev doctor` reports the
+  // runtime surface broken. Rewrite it too so it hard-codes the portable Node 22
+  // absolute path with NO system-node fallback — mirroring the .cmd/.ps1 pins.
+  const noExtPath = path.join(prefix, 'adhdev');
   const cmd = `@echo off\r\n"${portableNode}" "${cliEntry}" %*\r\n`;
   const ps1 = `#!/usr/bin/env pwsh\r\n& ${quotePowerShellLiteral(portableNode)} ${quotePowerShellLiteral(cliEntry)} @args\r\nexit $LASTEXITCODE\r\n`;
+  // sh shim: single unconditional exec of the pinned node — no `if -x node` /
+  // `else exec node` branch, so PATH ordering can never shadow the runtime.
+  const noExt = `#!/bin/sh\nexec "${portableNode}" "${cliEntry}" "$@"\n`;
   fs.writeFileSync(cmdPath, cmd, 'ascii');
   fs.writeFileSync(ps1Path, ps1, 'utf8');
+  fs.writeFileSync(noExtPath, noExt, 'ascii');
   const cmdReadback = fs.readFileSync(cmdPath, 'utf8');
   const ps1Readback = fs.readFileSync(ps1Path, 'utf8');
-  if (!cmdReadback.includes(portableNode) || !ps1Readback.includes(portableNode)) {
+  const noExtReadback = fs.readFileSync(noExtPath, 'utf8');
+  if (
+    !cmdReadback.includes(portableNode)
+    || !ps1Readback.includes(portableNode)
+    || !noExtReadback.includes(portableNode)
+    || /(^|\s)exec\s+node(\s|$)/m.test(noExtReadback)
+  ) {
     throw new Error('portable Node 22 pin validation failed');
   }
 }
