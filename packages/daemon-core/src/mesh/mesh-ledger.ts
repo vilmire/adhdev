@@ -88,6 +88,14 @@ export type MeshLedgerKind =
     // payload: { keys: string[], hasDestructive: boolean, result: 'injected'|'refused'|'error',
     //            refused?: string, submits?: boolean, confirmDestructive?: boolean }
     | 'key_injection'
+    // Disk/worktree retention (mission 86def38d): DETECTION-ONLY signal that a git
+    // worktree present on disk has no matching live mesh node — an orphan cleanup
+    // candidate. The reconcile loop emits this so the coordinator can decide whether
+    // to remove it; retention NEVER auto-deletes a worktree (manual/coordinator-driven).
+    // Keyed by worktreePath so a re-emit for the same orphan is idempotent (a prior
+    // unresolved entry within the dedupe window suppresses the repeat).
+    // payload: { worktreePath, branch?, head?, reason: 'no_matching_live_node', state: 'cleanup_candidate' }
+    | 'worktree_cleanup_candidate'
     ;
 
 export interface MeshLedgerEntry {

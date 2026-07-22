@@ -39,6 +39,7 @@ import type { IdeProviderInstance } from '../providers/ide-provider-instance.js'
 import { createDefaultGitCommandServices } from '../git/git-commands.js';
 import { setupMeshEventForwarding } from '../mesh/mesh-events.js';
 import { setupMeshReconcileLoop } from '../mesh/mesh-reconcile-loop.js';
+import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
 import { applyProcessHardening } from './process-hardening.js';
 import { installProviderProcessShim } from '../providers/sdk/v1/sandbox/require-whitelist.js';
@@ -503,4 +504,13 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
         try { m.disconnect(); } catch { /* noop */ }
     }
     cdpManagers.clear();
+
+    // 7. VACUUM the mesh runtime DB. Retention prunes rows with DELETE (frees pages
+    // inside the file but never shrinks it); the mesh-runtime.db grew to hundreds of
+    // MB (mission 86def38d disk-accumulation bootstrap failure) because it was never
+    // compacted. Do this LAST, after all writers (reconcile loop, CLIs, instances)
+    // are stopped, so nothing contends for the exclusive VACUUM lock. Best-effort —
+    // vacuum() swallows its own errors; the try/catch guards the getInstance() throw
+    // when the store never opened (degraded JSONL-only mode).
+    try { MeshRuntimeStore.getInstance().vacuum(); } catch { /* store unavailable — nothing to vacuum */ }
 }

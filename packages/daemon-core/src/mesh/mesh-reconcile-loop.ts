@@ -76,6 +76,7 @@ import {
     resolveReconcileIntervalMs,
 } from './mesh-reconcile-config.js';
 import { pullRemoteNodeQueues } from './mesh-remote-event-pull.js';
+import { runDiskRetentionSweep, detectAndSignalOrphanWorktrees } from './mesh-disk-retention.js';
 import {
     reconcileUnterminatedDirectDispatches,
     autoPruneStaleDirectDispatches,
@@ -125,6 +126,16 @@ interface LiveCoordinator {
 // re-confirms a coordinator that is still parked after the restart (the exact
 // "restart does not clear it" symptom the operator needs visibility into).
 const coordinatorModalParkState = new Map<string, boolean>();
+
+// Disk/worktree retention throttle. The reconcile tick runs every ~4s, but the
+// retention sweep (fs walks + git worktree list) is far too heavy for that cadence
+// and its artifacts age in days, so it runs at most once per hour. `undefined`
+// means "never run yet" → runs on the first tick after daemon start so a long-lived
+// backlog is reclaimed promptly rather than an hour later. Per-process; a restart
+// re-runs it immediately, which is the desired behavior (a restart is exactly when
+// stale artifacts from the previous run should be swept).
+const DISK_RETENTION_INTERVAL_MS = 60 * 60 * 1000; // 1h
+let lastDiskRetentionRunAt: number | undefined;
 
 // Find live CLI coordinator instances on THIS daemon, keyed by mesh.
 function findLiveCoordinators(components: DaemonComponents): LiveCoordinator[] {
@@ -1350,6 +1361,44 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                 await autoPruneStaleDirectDispatches(components, mesh, selfIds, localDaemonId, minAgeMs);
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Auto-prune stale direct failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
+        }
+    }
+
+    // ── PHASE 6: disk / worktree retention (hourly, mission 86def38d) ──────────
+    // Legacy on-disk artifacts under ~/.adhdev accumulated with NO lifetime and grew
+    // the data volume until a refine bootstrap failed at 98% disk. This throttled pass
+    // (≤1×/hour — the artifacts age in days and the fs/git walk is too heavy for the 4s
+    // tick) reclaims them:
+    //   • JSONL ledger files older than 30d (legacy after the SQLite ledger)
+    //   • terminated session-host runtime files older than 14d (live never touched)
+    //   • mesh-runtime.db.bak-* backups older than 7d
+    //   • orphan worktree DETECTION → cleanup_candidate ledger signal (NEVER deleted).
+    // Runs BEFORE PHASE 2's early return so it fires whether or not a live CLI
+    // coordinator exists on this daemon. Isolated in try/catch so it can never kill the
+    // tick. All file deletions are defensive (age + live-runtime guards in the pure
+    // selectors); worktree cleanup stays manual/coordinator-driven.
+    {
+        const nowMs = Date.now();
+        const due = lastDiskRetentionRunAt === undefined
+            || (nowMs - lastDiskRetentionRunAt) >= DISK_RETENTION_INTERVAL_MS;
+        if (due) {
+            lastDiskRetentionRunAt = nowMs;
+            try {
+                runDiskRetentionSweep(nowMs);
+            } catch (e: any) {
+                LOG.warn('MeshReconcile', `Disk retention sweep failed: ${e?.message || e}`);
+            }
+            // Orphan-worktree detection is per-mesh (needs the mesh's base repo + node set)
+            // and only for meshes this daemon hosts (its local base checkout is the git anchor).
+            for (const mesh of listMeshes()) {
+                const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+                if (!daemonHostsMesh(mesh, selfIds)) continue;
+                try {
+                    await detectAndSignalOrphanWorktrees(mesh, nowMs);
+                } catch (e: any) {
+                    LOG.warn('MeshReconcile', `Orphan worktree detection failed for mesh ${mesh.id}: ${e?.message || e}`);
+                }
             }
         }
     }

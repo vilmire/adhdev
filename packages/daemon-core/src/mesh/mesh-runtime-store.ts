@@ -174,6 +174,27 @@ export class MeshRuntimeStore {
         this.instance = undefined;
     }
 
+    /**
+     * VACUUM the SQLite database to reclaim on-disk space. Retention prunes rows
+     * with DELETE, which frees pages inside the file but does NOT shrink it — the
+     * mesh-runtime.db grew to hundreds of MB (mission 86def38d disk-accumulation
+     * bootstrap failure) precisely because the file was never compacted. This
+     * rewrites the DB into a minimal footprint. Best-effort: a VACUUM failure (e.g.
+     * insufficient temp space, a read lock) is logged and swallowed so it can never
+     * block daemon shutdown. Called once on shutdown (see daemon-lifecycle), never
+     * on the hot path — VACUUM takes an exclusive lock and rewrites the whole file.
+     */
+    vacuum(): void {
+        try {
+            // Fold the WAL back into the main DB first so VACUUM reclaims those pages too.
+            try { this.db.pragma('wal_checkpoint(TRUNCATE)'); } catch { /* checkpoint best-effort */ }
+            this.db.exec('VACUUM;');
+            LOG.info('MeshRuntimeStore', 'VACUUM completed on shutdown');
+        } catch (err: any) {
+            LOG.warn('MeshRuntimeStore', `VACUUM on shutdown failed (ignored): ${err?.message || err}`);
+        }
+    }
+
     close(): void {
         this.db.close();
     }
