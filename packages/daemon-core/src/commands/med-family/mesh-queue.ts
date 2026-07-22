@@ -9,6 +9,67 @@
  */
 import { readStringValue } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
+import { LOG } from '../../logging/logger.js';
+import type { CancelledTaskAssignment } from '../../mesh/mesh-work-queue.js';
+
+/**
+ * CANCEL-STICKY-TERMINAL (authoritative cancel): stop the worker a just-cancelled task was
+ * bound to. Mirrors the transport-aware stop mesh-event-forwarding's stopStaleMeshWorker
+ * performs for reclaimed workers, but runs from the command layer using ctx.deps (which the
+ * pure queue-store module lacks): local adapter → stop_cli directly; otherwise resolve the
+ * worker node's daemon id from mesh config and dispatch stop_cli over P2P/relay. Fully
+ * best-effort — a failed stop only loses the belt-and-suspenders; the cancelled row is already
+ * terminal and cannot be resurrected (updateTaskStatus terminal guard).
+ */
+async function stopCancelledTaskWorker(
+    ctx: MedFamilyContext,
+    meshId: string,
+    prior: CancelledTaskAssignment,
+): Promise<void> {
+    const { sessionId, nodeId, providerType } = prior;
+    const stopArgs: Record<string, unknown> = {
+        targetSessionId: sessionId,
+        ...(providerType ? { cliType: providerType } : {}),
+        mode: 'hard',
+        reason: 'mesh_task_cancelled',
+    };
+    try {
+        const cliManager = ctx.deps.cliManager as any;
+        const isLocal = cliManager?.adapters?.has?.(sessionId) === true;
+        if (isLocal) {
+            if (!stopArgs.cliType) {
+                const localType = cliManager?.adapters?.get?.(sessionId)?.cliType;
+                if (localType) stopArgs.cliType = localType;
+            }
+            await Promise.resolve(cliManager?.handleCliCommand?.('stop_cli', stopArgs))
+                .catch((e: any) => LOG.warn('MeshQueue', `Local stop of cancelled worker ${sessionId} failed: ${e?.message || e}`));
+            return;
+        }
+        // Remote: resolve the worker node's daemon id from mesh config, then dispatch stop_cli.
+        const dispatch = ctx.deps.dispatchMeshCommand;
+        let daemonId: string | undefined;
+        if (nodeId) {
+            try {
+                const [{ getMesh }, { meshNodeIdMatches }, { readMeshNodeDaemonId }] = await Promise.all([
+                    import('../../config/mesh-config.js'),
+                    import('@adhdev/mesh-shared'),
+                    import('../../mesh/mesh-node-identity.js'),
+                ]);
+                const mesh = getMesh(meshId) as { nodes?: any[] } | undefined;
+                const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
+                daemonId = node ? readMeshNodeDaemonId(node) || undefined : undefined;
+            } catch { /* best-effort resolution */ }
+        }
+        if (daemonId && dispatch) {
+            await Promise.resolve(dispatch(daemonId, 'stop_cli', stopArgs))
+                .catch((e: any) => LOG.warn('MeshQueue', `Remote stop of cancelled worker ${sessionId} on daemon ${daemonId} failed: ${e?.message || e}`));
+        } else {
+            LOG.warn('MeshQueue', `Cannot stop cancelled worker ${sessionId}: no local adapter and no resolvable remote daemon id (node ${nodeId ?? '?'}). Row is already terminal; if the worker completes it strand-fails harmlessly.`);
+        }
+    } catch (e: any) {
+        LOG.warn('MeshQueue', `stopCancelledTaskWorker error for ${sessionId}: ${e?.message || e}`);
+    }
+}
 
 export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
     get_mesh_queue: async (_ctx: MedFamilyContext, args: any) => {
@@ -50,10 +111,22 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'queue cancellation');
         if (ownerFailure) return ownerFailure;
         try {
-            const { cancelTask } = await import('../../mesh/mesh-work-queue.js');
+            const { cancelTask, takeCancelledTaskAssignment } = await import('../../mesh/mesh-work-queue.js');
             const reason = typeof args?.reason === 'string' ? args.reason : undefined;
             const task = cancelTask(meshId, taskId, { reason });
             if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
+            // CANCEL-STICKY-TERMINAL (authoritative cancel): stop the worker that was bound to the
+            // now-cancelled task. cancelTask already cleared the queue's assignment fields (so the
+            // reclaim watchdog no longer sees it as a live assignment), but a still-running worker
+            // keeps emitting delivery/turn signals that re-ignite reclaim. cancelTask runs in the
+            // pure queue-store module (no DaemonComponents), so the transport-aware stop is done
+            // here where ctx.deps holds cliManager / dispatchMeshCommand. Best-effort: a failed
+            // stop only loses the belt-and-suspenders — the row is already terminal and un-revivable
+            // thanks to the updateTaskStatus terminal guard.
+            const prior = takeCancelledTaskAssignment(meshId, taskId);
+            if (prior?.sessionId) {
+                void stopCancelledTaskWorker(ctx, meshId, prior);
+            }
             return { success: true, task };
         } catch (e: any) {
             return { success: false, error: e.message };

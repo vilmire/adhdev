@@ -1232,6 +1232,19 @@ function propagateDependencyFailure(meshId: string, failedTaskId: string): MeshW
 const DEPENDENCY_FAILURE_TERMINALS = new Set<MeshTaskStatus>(['failed', 'cancelled']);
 
 /**
+ * CANCEL-STICKY-TERMINAL: the terminal task statuses. A row in one of these states is a
+ * historical record — no live dispatch owns it — and must NEVER be flipped back to an
+ * active (`pending`/`assigned`) state by a late writer. The canonical live example is a
+ * cancel that races the dispatch-failure `.catch` (mesh-queue-assignment.ts): that catch
+ * fires-and-forgets an unconditional `updateTaskStatus(...,'pending')`, resolving AFTER
+ * the cancel commits, which resurrected the cancelled row → it got re-claimed and the
+ * reclaim watchdog re-drove the same prompt. Guarding the write side (see
+ * {@link updateTaskStatus}) applies the same terminal-row protection
+ * {@link reclaimStrandedAssignedTask} already enforces to EVERY status writer at once.
+ */
+const TERMINAL_TASK_STATUSES = new Set<MeshTaskStatus>(['completed', 'failed', 'cancelled']);
+
+/**
  * G3 (step ①) — fire-and-forget mission_close_candidate detection for the missions of
  * the given task ids. Called after any task-status mutation (completion / failure /
  * cancel / dependency-cascade / new-task enqueue) so a mission whose tasks all just
@@ -1267,12 +1280,33 @@ export function updateTaskStatus(
     meshId: string,
     taskId: string,
     status: MeshTaskStatus,
-    opts?: MeshQueueMutationOptions,
+    opts?: {
+        /**
+         * CANCEL-STICKY-TERMINAL: operator/system override to permit a terminal→non-terminal
+         * transition (e.g. an explicit operator reopen). Without this, a write that would flip
+         * a `completed`/`failed`/`cancelled` row back to `pending`/`assigned` is refused as a
+         * no-op. Terminal→terminal and any transition FROM a non-terminal state are unaffected.
+         */
+        force?: boolean;
+    } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
     const result = withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
+        // CANCEL-STICKY-TERMINAL: never resurrect a terminal row into an active state. A late
+        // fire-and-forget writer (canonically the dispatch-failure `.catch` requeue to
+        // 'pending' in mesh-queue-assignment.ts, which resolves AFTER a cancel commits) must
+        // not undo a cancel/completion/failure — that revival let the row be re-claimed and the
+        // reclaim watchdog re-drive the same prompt. Refuse the transition as a no-op unless an
+        // explicit operator override is passed. This is the write-side sibling of the
+        // status!=='assigned' guard reclaimStrandedAssignedTask already applies.
+        if (!opts?.force
+            && TERMINAL_TASK_STATUSES.has(entry.status)
+            && !TERMINAL_TASK_STATUSES.has(status)) {
+            LOG.debug('MeshQueue', `Refusing updateTaskStatus(${taskId} → ${status}) on mesh ${meshId}: row is terminal (${entry.status}). A late writer (e.g. dispatch-failure requeue) must not resurrect a cancelled/completed/failed task. Pass force to override.`);
+            return { entry, cascaded: [] as MeshWorkQueueEntry[] };
+        }
         entry.status = status;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         // Any transition OFF `assigned` ends the single-flight dispatch window (terminal
@@ -1313,16 +1347,65 @@ export function cancelTask(
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         const now = new Date().toISOString();
+        // CANCEL-STICKY-TERMINAL (authoritative cancel): capture the prior assignment BEFORE
+        // clearing it, so the caller can stop the bound live worker. Leaving assignedNodeId/
+        // SessionId/ProviderType on the cancelled row let the still-running worker keep emitting
+        // delivery/turn signals that re-ignited the reclaim watchdog (observed: nonce 6→9,
+        // needing two cancels + a manual session stop). Clearing them also drops this row from
+        // the status==='assigned' counters so it can never be treated as live again.
+        const priorAssignment: CancelledTaskAssignment | undefined = entry.assignedSessionId
+            ? {
+                sessionId: entry.assignedSessionId,
+                nodeId: entry.assignedNodeId,
+                providerType: entry.assignedProviderType,
+            }
+            : undefined;
         entry.status = 'cancelled';
         entry.cancelledAt = now;
         if (opts?.reason) entry.cancelReason = opts.reason;
+        delete entry.assignedNodeId;
+        delete entry.assignedSessionId;
+        delete entry.assignedProviderType;
+        delete entry.dispatchTimestamp;
+        // Belt-and-suspenders: bump the dispatch nonce so any in-flight inject the
+        // now-orphaned worker later echoes carries a stale nonce and is rejected by the
+        // coordinator's stale-nonce guard — same mechanism reclaimStrandedAssignedTask uses.
+        entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         endTaskDispatchInFlight(meshId, taskId);
         const cascaded = propagateDependencyFailure(meshId, taskId);
-        return { entry, cascaded };
+        return { entry, cascaded, priorAssignment };
     });
     if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
+    // Surface the prior binding to the caller (out-of-band from the persisted row, so it is
+    // never serialized) so the cancel command handler — which holds DaemonComponents — can
+    // stop the now-orphaned worker via the transport-aware stopStaleMeshWorker helper.
+    if (result?.priorAssignment) lastCancelledTaskAssignment.set(`${meshId}::${taskId}`, result.priorAssignment);
     return result ? result.entry : null;
+}
+
+/**
+ * CANCEL-STICKY-TERMINAL: the assignment a task carried at cancel time, handed to the cancel
+ * command handler so it can stop the bound worker. cancelTask runs in the pure queue-store
+ * module (no DaemonComponents), so it records the binding here and the handler drains it.
+ */
+export interface CancelledTaskAssignment {
+    sessionId: string;
+    nodeId?: string;
+    providerType?: string;
+}
+
+const lastCancelledTaskAssignment = new Map<string, CancelledTaskAssignment>();
+
+/**
+ * Read-and-clear the assignment a just-cancelled task was bound to. Returns undefined when the
+ * cancelled task had no live assignment (nothing to stop). One-shot: the entry is deleted on read.
+ */
+export function takeCancelledTaskAssignment(meshId: string, taskId: string): CancelledTaskAssignment | undefined {
+    const key = `${meshId}::${taskId}`;
+    const value = lastCancelledTaskAssignment.get(key);
+    if (value) lastCancelledTaskAssignment.delete(key);
+    return value;
 }
 
 /**
