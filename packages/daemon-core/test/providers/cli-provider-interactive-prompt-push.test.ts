@@ -8,14 +8,24 @@ import type { InteractivePrompt } from '../../src/providers/types/interactive-pr
 // detectStatusTransition()'s status-keyed arms emit an agent:* event and NO web-push
 // fires — the owner misses the prompt when the app is backgrounded.
 //
-// The fix emits exactly one agent:waiting_approval on ENTRY into the prompt state
-// (reusing the existing server push path, no cloud change), carrying the question as
-// modalMessage and the choice labels as modalButtons. It is edge-triggered (does not
-// re-fire on identical ticks), does not double-fire against a genuine approval modal,
-// and resets cleanly when the prompt clears so a later completion still emits
-// agent:generating_completed.
+// The fix (mission f1d25e11) emits exactly one agent:waiting_choice on ENTRY into the
+// prompt state — a DISTINCT event from agent:waiting_approval, because a multi-choice
+// QUESTION is answered with mesh_answer_question, NOT mesh_approve. It carries the FULL
+// InteractivePrompt payload (promptId + questions + options) plus a modalMessage/
+// modalButtons projection for the server push path. It is edge-triggered (does not
+// re-fire on identical ticks), does not fire against a genuine approval modal (that
+// arm emits agent:waiting_approval and this arm yields — the two are mutually
+// exclusive), and resets cleanly when the prompt clears so a later completion still
+// emits agent:generating_completed.
 
-type Emitted = { event: string; modalMessage?: string; modalButtons?: string[] }
+type Emitted = {
+  event: string
+  modalMessage?: string
+  modalButtons?: string[]
+  interactivePrompt?: InteractivePrompt
+  promptId?: string
+  multiSelect?: boolean
+}
 
 function makeInstance(): {
   instance: CliProviderInstance
@@ -53,7 +63,14 @@ function makeInstance(): {
   instance.events = []
   instance.context = {
     emitProviderEvent: (e: any) => {
-      events.push({ event: e.event, modalMessage: e.modalMessage, modalButtons: e.modalButtons })
+      events.push({
+        event: e.event,
+        modalMessage: e.modalMessage,
+        modalButtons: e.modalButtons,
+        interactivePrompt: e.interactivePrompt,
+        promptId: e.promptId,
+        multiSelect: e.multiSelect,
+      })
     },
   }
   // Stub the collaborators the emit path calls so the test isolates the
@@ -93,17 +110,31 @@ const IDLE_NO_PROMPT = { status: 'idle', activeModal: null, activeInteractivePro
 const GENERATING = { status: 'generating', activeModal: null, activeInteractivePrompt: null }
 
 describe('CliProviderInstance interactive-prompt push (AskUserQuestion / waiting_choice)', () => {
-  it('emits exactly one agent:waiting_approval carrying the question + choice labels on entry', () => {
+  it('emits exactly one agent:waiting_choice carrying the FULL prompt payload on entry (NOT waiting_approval)', () => {
     const { instance, events, setAdapterStatus } = makeInstance()
     const detect = (instance as any).detectStatusTransition.bind(instance)
 
     setAdapterStatus(IDLE_WITH_PROMPT)
     detect()
 
+    // A question must NOT be surfaced as an approval — that would drive the coordinator
+    // to mesh_approve, which cannot answer a question (mission f1d25e11).
     const approvals = events.filter((e) => e.event === 'agent:waiting_approval')
-    expect(approvals.length).toBe(1)
-    expect(approvals[0].modalMessage).toBe('Scope: Which scope should I use?')
-    expect(approvals[0].modalButtons).toEqual(['unicast', 'broadcast', 'system'])
+    expect(approvals.length).toBe(0)
+
+    const choices = events.filter((e) => e.event === 'agent:waiting_choice')
+    expect(choices.length).toBe(1)
+    // Push-notification projection (server push path reads these).
+    expect(choices[0].modalMessage).toBe('Scope: Which scope should I use?')
+    expect(choices[0].modalButtons).toEqual(['unicast', 'broadcast', 'system'])
+    // Authoritative structured payload the coordinator renders + answers against.
+    expect(choices[0].promptId).toBe('ask-user-1')
+    expect(choices[0].multiSelect).toBe(false)
+    expect(choices[0].interactivePrompt).toBeTruthy()
+    expect(choices[0].interactivePrompt?.promptId).toBe('ask-user-1')
+    expect(choices[0].interactivePrompt?.questions[0].question).toBe('Which scope should I use?')
+    expect(choices[0].interactivePrompt?.questions[0].options.map((o) => o.label))
+      .toEqual(['unicast', 'broadcast', 'system'])
   })
 
   it('does NOT re-emit on subsequent identical ticks while the same prompt is showing', () => {
@@ -115,17 +146,18 @@ describe('CliProviderInstance interactive-prompt push (AskUserQuestion / waiting
     detect() // same prompt, no status change — must be a no-op
     detect()
 
-    const approvals = events.filter((e) => e.event === 'agent:waiting_approval')
-    expect(approvals.length).toBe(1)
+    const choices = events.filter((e) => e.event === 'agent:waiting_choice')
+    expect(choices.length).toBe(1)
   })
 
-  it('does NOT double-fire when the session is ALSO in a genuine approval modal', () => {
+  it('waiting_choice and waiting_approval are mutually exclusive: a genuine approval modal wins, no waiting_choice fires', () => {
     const { instance, events, setAdapterStatus } = makeInstance()
     const detect = (instance as any).detectStatusTransition.bind(instance)
 
     // A real approval modal AND an interactive prompt on the same frame: the
-    // waiting_approval arm already emits for the modal — the interactive-prompt
-    // path must NOT emit a second waiting_approval for the same tick.
+    // waiting_approval arm emits for the modal — the interactive-prompt path must
+    // NOT ALSO emit a waiting_choice for the same tick (owner requirement: the two
+    // never both trigger).
     setAdapterStatus({
       status: 'waiting_approval',
       approvalEntrySeq: 1,
@@ -135,7 +167,9 @@ describe('CliProviderInstance interactive-prompt push (AskUserQuestion / waiting
     detect()
 
     const approvals = events.filter((e) => e.event === 'agent:waiting_approval')
+    const choices = events.filter((e) => e.event === 'agent:waiting_choice')
     expect(approvals.length).toBe(1)
+    expect(choices.length).toBe(0)
     // The single emit is the genuine approval modal, not the interactive prompt.
     expect(approvals[0].modalMessage).toBe('Allow Bash command?')
   })
@@ -179,8 +213,8 @@ describe('CliProviderInstance interactive-prompt push (AskUserQuestion / waiting
     setAdapterStatus(IDLE_WITH_PROMPT)
     detect()
 
-    const approvals = events.filter((e) => e.event === 'agent:waiting_approval')
+    const choices = events.filter((e) => e.event === 'agent:waiting_choice')
     // One on the first entry, one on the re-entry after the clear.
-    expect(approvals.length).toBe(2)
+    expect(choices.length).toBe(2)
   })
 })

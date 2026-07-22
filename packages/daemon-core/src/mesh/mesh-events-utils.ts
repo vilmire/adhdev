@@ -330,6 +330,48 @@ export function buildMeshSystemMessage(args: {
     if (args.event === 'agent:waiting_approval') {
         return `[System] ${args.nodeLabel} is waiting for approval to proceed${metadata}. You may use mesh_read_chat and mesh_approve to handle it.`;
     }
+    if (args.event === 'agent:waiting_choice') {
+        // A multi-choice QUESTION (AskUserQuestion) — NOT an approval. It is answered with
+        // mesh_answer_question (never mesh_approve). Surface the question text + choices
+        // inline so the coordinator can decide without a mesh_read_chat round-trip, and
+        // name the correct tool + promptId (mission f1d25e11).
+        const prompt = args.metadataEvent.interactivePrompt as
+            | { promptId?: unknown; questions?: Array<Record<string, unknown>> }
+            | undefined;
+        const promptId = readNonEmptyString(args.metadataEvent.promptId)
+            || (prompt && readNonEmptyString(prompt.promptId));
+        const lines: string[] = [
+            `[System] ${args.nodeLabel} is asking a question and is waiting for your answer${metadata}.`,
+        ];
+        const questions = Array.isArray(prompt?.questions) ? prompt!.questions! : [];
+        if (questions.length > 0) {
+            for (const q of questions) {
+                const header = readNonEmptyString(q.header);
+                const question = readNonEmptyString(q.question);
+                const multiSelect = q.multiSelect === true;
+                if (question) {
+                    lines.push(`\n**${header ? `${header}: ` : ''}${question}**${multiSelect ? ' (select one or more)' : ''}`);
+                }
+                const options = Array.isArray(q.options) ? q.options : [];
+                options.forEach((opt, i) => {
+                    const record = (opt && typeof opt === 'object') ? opt as Record<string, unknown> : {};
+                    const label = readNonEmptyString(record.label);
+                    if (!label) return;
+                    const description = readNonEmptyString(record.description);
+                    lines.push(`  ${i + 1}. ${label}${description ? ` — ${description}` : ''}`);
+                });
+            }
+        } else {
+            const modalMessage = readNonEmptyString(args.metadataEvent.modalMessage);
+            if (modalMessage) lines.push(`\n${modalMessage}`);
+        }
+        lines.push(
+            `\nAnswer with mesh_answer_question(node_id, session_id${promptId ? `, promptId: "${promptId}"` : ''}, answers). ` +
+            `Do NOT use mesh_approve — that only resolves yes/no consent modals, not a question. ` +
+            `Use mesh_read_chat once if you need the full context first.`,
+        );
+        return lines.join('\n');
+    }
     if (args.event === 'agent:stopped') {
         const rc = args.recoveryContext;
         if (rc && rc.consecutiveNodeFailures > 0) {

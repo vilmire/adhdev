@@ -5,13 +5,13 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 44 tools (== ALL_MESH_TOOLS, kept in sync with the coordinator-prompt TOOLS table
+ * 47 tools (== ALL_MESH_TOOLS, kept in sync with the coordinator-prompt TOOLS table
  * by the 6-6 consistency test in daemon-core coordinator-prompt.test.ts):
  *   mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
  *   mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
  *   mesh_read_debug, mesh_read_terminal, mesh_send_keys, mesh_launch_session, mesh_git_status, mesh_read_node_logs,
  *   mesh_fast_forward_node, mesh_restart_daemon, mesh_checkpoint, mesh_approve,
- *   mesh_list_pending_approvals,
+ *   mesh_answer_question, mesh_list_pending_approvals,
  *   mesh_clone_node, mesh_remove_node, mesh_refine_node, mesh_refine_batch,
  *   mesh_refine_config, mesh_change_impact_config, mesh_init, mesh_reinit,
  *   mesh_write_mesh_json_config, mesh_refine_plan, mesh_cleanup_sessions,
@@ -31,6 +31,7 @@
 export {
     ALL_MESH_TOOLS,
     MESH_APPROVE_TOOL,
+    MESH_ANSWER_QUESTION_TOOL,
     MESH_CHANGE_IMPACT_CONFIG_TOOL,
     MESH_CHECKPOINT_TOOL,
     MESH_CLEANUP_SESSIONS_TOOL,
@@ -146,6 +147,7 @@ export {
 export {
     computeIdleDispatchAckRisk,
     meshApprove,
+    meshAnswerQuestion,
     meshListPendingApprovals,
     meshCleanupSessions,
     meshLaunchSession,

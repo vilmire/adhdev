@@ -754,7 +754,12 @@ function assignedRowLiveStatusIsAwaitingApproval(
 ): boolean {
     if (!nodeId || !sessionId) return false;
     try {
-        return sessionStatusFromNodes(mesh.nodes, nodeId, sessionId).status === 'awaiting_approval';
+        // Both blocked-on-input states hold the row: an approval (waiting_approval) and a
+        // question (awaiting_choice) legitimately park the worker awaiting the coordinator's
+        // mesh_approve / mesh_answer_question, so neither should accrue the reclaim streak
+        // (mission f1d25e11 extends the APPROVAL-INBOX-BLINDSPOT guard to questions).
+        const liveStatus = sessionStatusFromNodes(mesh.nodes, nodeId, sessionId).status;
+        return liveStatus === 'awaiting_approval' || liveStatus === 'awaiting_choice';
     } catch {
         return false;
     }

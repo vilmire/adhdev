@@ -5,7 +5,7 @@ import { deleteDirectDispatchesByTaskId } from './mesh-work-queue.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 
 export type MeshActiveWorkSource = 'queue' | 'direct';
-export type MeshActiveWorkStatus = 'pending' | 'assigned' | 'generating' | 'idle' | 'failed' | 'awaiting_approval';
+export type MeshActiveWorkStatus = 'pending' | 'assigned' | 'generating' | 'idle' | 'failed' | 'awaiting_approval' | 'awaiting_choice';
 
 export interface MeshActiveWorkRecord {
     taskId: string;
@@ -135,6 +135,10 @@ export function sessionStatusFromNodes(nodes: any[] | undefined, nodeId?: string
     if (!session) return { staleReason: 'direct task session is not present in live session records' };
     if (typeof session === 'string') return {};
     const raw = `${readString(session.status) || ''} ${readString(session.lifecycle) || ''} ${readString(session.state) || ''} ${readString(session.activeChat?.status) || ''}`.toLowerCase();
+    // A question picker surfaces as waiting_choice — distinct from an approval modal.
+    // Check it first so a question worker is not mislabeled awaiting_approval and
+    // pulled into the approval inbox (mission f1d25e11).
+    if (raw.includes('waiting_choice') || raw.includes('choice')) return { status: 'awaiting_choice' };
     if (raw.includes('approval')) return { status: 'awaiting_approval' };
     if (raw.includes('generating') || raw.includes('running') || raw.includes('busy')) return { status: 'generating' };
     if (raw.includes('failed') || raw.includes('stopped') || raw.includes('terminated') || raw.includes('exited')) return { status: 'failed' };
@@ -166,6 +170,10 @@ function terminalMatchesDispatch(terminal: MeshLedgerEntry, dispatch: MeshLedger
 
 function statusFromTerminal(entry: MeshLedgerEntry): MeshActiveWorkStatus {
     if (entry.kind === 'task_approval_needed') return 'awaiting_approval';
+    // A question (waiting_choice) is a distinct blocked state — kept OUT of
+    // awaiting_approval so it is not surfaced in the approval inbox / mesh_approve
+    // flow (mission f1d25e11). Answered via mesh_answer_question.
+    if (entry.kind === 'task_question_pending') return 'awaiting_choice';
     if (entry.kind === 'task_completed') return 'idle';
     return 'failed';
 }
@@ -331,6 +339,7 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
         idle: 0,
         failed: 0,
         awaiting_approval: 0,
+        awaiting_choice: 0,
     };
     const sourceCounts: Record<MeshActiveWorkSource, number> = { queue: 0, direct: 0 };
     for (const item of activeWork) {
@@ -380,6 +389,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             ? sessionStatusFromNodes(opts.nodes, queueNodeId ?? undefined, queueSessionId ?? undefined)
             : {};
         const queueStatus: MeshActiveWorkStatus = queueLive.status === 'awaiting_approval'
+            || queueLive.status === 'awaiting_choice'
             || queueLive.status === 'generating'
             ? queueLive.status
             : task.status;

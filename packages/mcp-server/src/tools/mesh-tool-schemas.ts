@@ -396,6 +396,44 @@ export const MESH_APPROVE_TOOL = {
     },
 };
 
+export const MESH_ANSWER_QUESTION_TOOL = {
+    name: 'mesh_answer_question',
+    description: 'Answer a multi-choice QUESTION (AskUserQuestion) a delegated agent session is waiting on. '
+        + 'This is the counterpart to mesh_approve: a QUESTION (surfaced as an agent:waiting_choice event / status "awaiting_choice") is NOT a yes/no approval — '
+        + 'it offers labelled options (optionally multi-select, optionally a freeform "Type something") and must be answered here, never with mesh_approve. '
+        + 'Supply the promptId from the waiting_choice event and one answer per question. Each answer selects option(s) by their exact label OR 1-based index; '
+        + 'for a multi-select question pass an array of selections; a freeform answer passes text instead. '
+        + 'The daemon drives the correct keystrokes into the provider TUI to submit the selection.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Target node ID (from the waiting_choice event / mesh_list_nodes).' },
+            session_id: { type: 'string', description: 'Agent session ID that is awaiting the question answer.' },
+            promptId: { type: 'string', description: 'The InteractivePrompt promptId from the agent:waiting_choice event. Ensures the answer matches the active prompt.' },
+            answers: {
+                type: 'array',
+                description: 'One entry per question in the prompt (in question order). Each entry answers a single question by selecting option label(s)/index(es), or by supplying freeform text.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        questionId: { type: 'string', description: 'Optional question id from the prompt payload. When omitted, entries are matched to the prompt questions by array position.' },
+                        select: {
+                            description: 'The chosen option(s): an option label (string), a 1-based option index (number), or an array of labels/indices for a multi-select question.',
+                            oneOf: [
+                                { type: 'string' },
+                                { type: 'number' },
+                                { type: 'array', items: { type: ['string', 'number'] } },
+                            ],
+                        },
+                        freeform: { type: 'string', description: 'Freeform text answer (for a "Type something" option). Mutually exclusive with select.' },
+                    },
+                },
+            },
+        },
+        required: ['node_id', 'session_id', 'promptId', 'answers'],
+    },
+};
+
 export const MESH_LIST_PENDING_APPROVALS_TOOL = {
     name: 'mesh_list_pending_approvals',
     description: 'List every session across the mesh that is currently awaiting an approval decision (status awaiting_approval) — the mesh-wide approval inbox. '
@@ -894,6 +932,7 @@ export const ALL_MESH_TOOLS = [
     MESH_RESTART_DAEMON_TOOL,
     MESH_CHECKPOINT_TOOL,
     MESH_APPROVE_TOOL,
+    MESH_ANSWER_QUESTION_TOOL,
     MESH_LIST_PENDING_APPROVALS_TOOL,
     MESH_CLONE_NODE_TOOL,
     MESH_REMOVE_NODE_TOOL,

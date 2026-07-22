@@ -1788,6 +1788,14 @@ export function buildRelayMetadataEvent(payload: Record<string, unknown>): Recor
         retryOfJobId: readNonEmptyString(payload.retryOfJobId),
         ...(relayModalMessage ? { modalMessage: relayModalMessage } : {}),
         ...(relayModalButtons && relayModalButtons.length > 0 ? { modalButtons: relayModalButtons } : {}),
+        // agent:waiting_choice (mission f1d25e11): carry the FULL structured question
+        // payload across the machine boundary so a REMOTE worker's AskUserQuestion reaches
+        // the coordinator with every question + option intact — the coordinator renders
+        // these and answers with mesh_answer_question. The local in-process forward path
+        // preserves the whole event for free; this mirrors the fields for the remote relay.
+        ...(payload.interactivePrompt && typeof payload.interactivePrompt === 'object' && !Array.isArray(payload.interactivePrompt) ? { interactivePrompt: payload.interactivePrompt } : {}),
+        ...(readNonEmptyString(payload.promptId) ? { promptId: readNonEmptyString(payload.promptId) } : {}),
+        ...(payload.multiSelect === true ? { multiSelect: true } : {}),
         ...(payload.result && typeof payload.result === 'object' && !Array.isArray(payload.result) ? { result: payload.result } : {}),
         ...(payload.completionDiagnostic && typeof payload.completionDiagnostic === 'object' && !Array.isArray(payload.completionDiagnostic) ? { completionDiagnostic: payload.completionDiagnostic } : {}),
         ...(payload.workerResult && typeof payload.workerResult === 'object' && !Array.isArray(payload.workerResult) ? { workerResult: payload.workerResult } : {}),

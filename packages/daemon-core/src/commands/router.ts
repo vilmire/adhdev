@@ -227,6 +227,14 @@ const MESH_FORWARDABLE_SESSION_COMMANDS = new Set([
     // MUTATES the worker PTY, so forwarding to the real owner (not a wrong local session) is
     // doubly important. The daemon re-enforces the destructive-key confirm gate after the forward.
     'send_keys',
+    // interactive_prompt_response (mesh_answer_question, mission f1d25e11): the coordinator
+    // answers a REMOTE worker's AskUserQuestion (waiting_choice). The answer must reach the
+    // OWNING worker session's live instance — its activeInteractivePrompt (the authoritative
+    // prompt the labels/indexes resolve against) and its adapter.setInteractivePromptResponse
+    // live only there. Without forwarding, the coordinator's local high-family handler returns
+    // 'No running instance for session …' and the question is never answered — the exact
+    // remote-worker forwarding gap of mission 6938892f, now closed for questions too.
+    'interactive_prompt_response',
 ]);
 
 function normalizeCommandSource(source: string): CommandLogEntry['source'] {

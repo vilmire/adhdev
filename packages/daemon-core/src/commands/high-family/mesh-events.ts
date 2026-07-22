@@ -93,10 +93,21 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
                 ? args.sessionId.trim()
                 : '';
         if (!sessionId) return { success: false, error: 'targetSessionId required' };
-        const response = normalizeInteractivePromptResponse(args?.response ?? args);
+        const rawResponse = args?.response ?? args;
         const instance = ctx.deps.instanceManager.getInstance(sessionId);
         if (!instance) return { success: false, error: `No running instance for session ${sessionId}` };
-        ctx.deps.instanceManager.sendEvent(sessionId, 'interactive_prompt_response', response);
+        // mesh_answer_question (mission f1d25e11) sends a coordinator-friendly answer array
+        // that is resolved against the AUTHORITATIVE active prompt inside the instance
+        // (resolveInteractivePromptResponse). Forward that shape RAW. The legacy strict
+        // (questionId-keyed) form is still validated here so a malformed dashboard-local
+        // answer is rejected before it reaches the instance.
+        const isFriendlyArrayForm = rawResponse
+            && typeof rawResponse === 'object'
+            && Array.isArray((rawResponse as { answers?: unknown }).answers);
+        const payload = isFriendlyArrayForm
+            ? rawResponse
+            : normalizeInteractivePromptResponse(rawResponse);
+        ctx.deps.instanceManager.sendEvent(sessionId, 'interactive_prompt_response', payload);
         return { success: true };
     },
 };

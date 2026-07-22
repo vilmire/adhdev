@@ -64,11 +64,12 @@ function meshWithRemoteWorkerSession(daemonId: string) {
 }
 
 describe('session-scoped command — remote mesh worker forward ([Z])', () => {
-    // read_terminal (MESH-READ-TERMINAL feature 2) + send_keys (MESH-SEND-KEYS feature 3): both
-    // new daemon verbs must be in MESH_FORWARDABLE_SESSION_COMMANDS so a read/inject against a
-    // REMOTE worker reaches the owning daemon (which holds the live viewport / PTY) instead of
-    // returning 'Session not found'.
-    for (const cmd of ['invoke_provider_script', 'resolve_action', 'set_mode', 'change_model', 'set_thought_level', 'set_conversation_prefs', 'read_terminal', 'send_keys']) {
+    // read_terminal (MESH-READ-TERMINAL feature 2) + send_keys (MESH-SEND-KEYS feature 3) +
+    // interactive_prompt_response (mesh_answer_question, mission f1d25e11): each daemon verb
+    // must be in MESH_FORWARDABLE_SESSION_COMMANDS so a read/inject/answer against a REMOTE
+    // worker reaches the owning daemon (which holds the live viewport / PTY / activeInteractive
+    // Prompt) instead of returning 'Session not found' / 'No running instance'.
+    for (const cmd of ['invoke_provider_script', 'resolve_action', 'set_mode', 'change_model', 'set_thought_level', 'set_conversation_prefs', 'read_terminal', 'send_keys', 'interactive_prompt_response']) {
         it(`forwards ${cmd} for a remote worker session to the owning worker daemon`, async () => {
             const dispatch = vi.fn(async () => ({ success: true, forwarded: true }));
             const router = createRouter({ statusInstanceId: 'daemon-coordinator', dispatchMeshCommand: dispatch });

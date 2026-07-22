@@ -78,6 +78,22 @@ function compile(re: string, flags?: string): RegExp {
   }
 }
 
+/**
+ * APPROVAL-PICKER-MISROUTE (mission f1d25e11) defense-in-depth: mirror
+ * detect-status.isAskUserQuestionPickerSignature at the button-parse layer. A
+ * multi-choice AskUserQuestion picker is not an approval modal; its numbered
+ * option rows can otherwise be extracted as approval buttons and produce a
+ * spurious approval modal. When the picker signature (claude TUI select footer +
+ * "Type something"/"Chat about this" freeform escape hatch) is present, return
+ * null early so the screen is surfaced as waiting_choice, never approval.
+ */
+function isAskUserQuestionPickerSignature(text: string): boolean {
+  if (!text) return false;
+  const hasSelectFooter = /Enter to select/i.test(text) && /Esc to cancel/i.test(text);
+  if (!hasSelectFooter) return false;
+  return /Type something\.?|Chat about this/i.test(text);
+}
+
 function findQuestionLineIndex(
   spec: ModalTuiSpec,
   lines: string[],
@@ -268,6 +284,10 @@ export function buildParseApprovalFromTui(
   return function parseApproval(input: CliApprovalInput): CliApprovalModal | null {
     const rawText = input.screenText ?? input.buffer ?? '';
     if (!rawText) return null;
+    // An AskUserQuestion picker is not an approval — never extract its option
+    // rows as approval buttons (mission f1d25e11). Check the raw text before any
+    // visible-region scoping trims the footer that identifies the picker.
+    if (isAskUserQuestionPickerSignature(rawText)) return null;
     const text = visibleRegion ? applyVisibleRegion(visibleRegion, rawText) : rawText;
     const lines = text.split('\n');
     const question = findQuestionLineIndex(spec, lines);

@@ -33,6 +33,11 @@ export type MeshLedgerKind =
     | 'task_failed'
     | 'task_stalled'
     | 'task_approval_needed'
+    // A worker is parked on an AskUserQuestion multi-choice prompt (waiting_choice) —
+    // distinct from task_approval_needed (a yes/no tool-consent modal). The coordinator
+    // answers a question with mesh_answer_question, never mesh_approve (mission f1d25e11).
+    // payload carries the full InteractivePrompt (promptId + questions + options).
+    | 'task_question_pending'
     | 'p2p_dispatch_failed'
     | 'session_launched'
     | 'session_auto_launch'

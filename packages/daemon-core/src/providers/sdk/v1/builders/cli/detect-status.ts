@@ -210,10 +210,33 @@ function buttonBlockApprovalCue(spec: ModalSpec, text: string): boolean {
   return hasNegativeApprovalOption(labels);
 }
 
+/**
+ * APPROVAL-PICKER-MISROUTE (mission f1d25e11) defense-in-depth: an
+ * AskUserQuestion multi-choice picker is NOT an approval modal. Its option rows
+ * ("❯ 1. label") can otherwise satisfy the approval button cue and get
+ * mis-classified as `waiting_approval`, so the worker's question is surfaced to
+ * the coordinator as a task_approval_needed (→ mesh_approve, which cannot answer
+ * it). The picker carries a distinctive signature the approval FSM never does:
+ * the claude TUI select footer ("Enter to select … Esc to cancel") together with
+ * the freeform escape hatch ("Type something" / "Chat about this"). When both are
+ * present the screen is a question picker — surfaced separately as
+ * waiting_choice — so the approval matchers must yield. Mirrors the legacy
+ * looksLikeSelectionPicker guard (cli-provider-instance.ts) ported to SDK-v1.
+ */
+export function isAskUserQuestionPickerSignature(text: string): boolean {
+  if (!text) return false;
+  const hasSelectFooter = /Enter to select/i.test(text) && /Esc to cancel/i.test(text);
+  if (!hasSelectFooter) return false;
+  return /Type something\.?|Chat about this/i.test(text);
+}
+
 function modalMatches(spec: ModalSpec, input: CliStatusInput): boolean {
   // Status-level modal detection is cue-only — does the question appear at all?
   // Button extraction lives in buildParseApprovalFromTui.
   const text = input.screenText ?? '';
+  // A question picker (AskUserQuestion) is never an approval — bail before any
+  // approval cue can match its numbered option rows (mission f1d25e11).
+  if (isAskUserQuestionPickerSignature(text)) return false;
   const question = compile(spec.questionPattern, spec.questionFlags ?? 'i');
   if (question.test(text)) return true;
   for (const variant of spec.questionVariants ?? []) {
