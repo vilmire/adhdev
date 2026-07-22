@@ -2595,6 +2595,7 @@
             "monoDesc": "真实的生产仓库会嵌套子模块 —— 而这恰恰是幼稚的自动合并崩溃之处。Refinery 具备子模块感知能力：它以子模块提交的可达性为门禁，判断补丁等价性，并原子地更新指针。本项目本身就是一个根 + 两个子模块的 monorepo，每天都以这种方式收敛。",
             "crossHighlight": "交叉核查",
             "crossTitle": "共识胜过单一意见",
+            "crossSubtitle": "MAGI — Multi-Agent Ground-truth Insight",
             "crossDesc": "将同一个只读调查扇出到多个机器 × 提供方副本，并综合它们一致与分歧之处（MAGI）。比单个智能体的看法更可靠。",
             "tryMesh": "试用 Repo Mesh →",
             "seePlans": "查看方案",

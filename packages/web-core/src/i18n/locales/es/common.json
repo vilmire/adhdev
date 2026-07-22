@@ -2595,6 +2595,7 @@
             "monoDesc": "Los repositorios de producción reales anidan submódulos, y ahí es justo donde falla la fusión automática ingenua. Refinery reconoce los submódulos: condiciona la fusión a la accesibilidad de los commits de submódulos, juzga la equivalencia de parches y actualiza el puntero de forma atómica. Este proyecto es en sí mismo un monorepo con una raíz y dos submódulos, convergido de esta manera cada día.",
             "crossHighlight": "Verificación cruzada",
             "crossTitle": "Consenso por encima de una sola opinión",
+            "crossSubtitle": "MAGI — Multi-Agent Ground-truth Insight",
             "crossDesc": "Distribuye la misma investigación de solo lectura a varias réplicas de máquina × proveedor y sintetiza dónde coinciden y dónde divergen (MAGI). Más fiable que la opinión de un solo agente.",
             "tryMesh": "Probar Repo Mesh →",
             "seePlans": "Ver planes",

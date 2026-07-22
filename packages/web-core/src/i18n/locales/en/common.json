@@ -2561,7 +2561,7 @@
             "magi": "MAGI"
         },
         "hero": {
-            "badge": "Run your local coding agents from anywhere",
+            "badge": "Multi-vendor, multi-machine agent control plane",
             "title": "Manage the coding agents running on your computer — from anywhere.",
             "subtitle": "Run and approve <roll></roll> from your browser and phone. Work across several machines runs in parallel on isolated branches and lands on <code>main</code> automatically.",
             "selectOs": "Select OS",
@@ -2596,6 +2596,7 @@
             "monoDesc": "Real production repos nest submodules — exactly where naive auto-merge breaks. ADHDev handles them safely: it makes sure submodule changes are published and pointed at correctly before it touches main. This project is itself a repo with two submodules, merged this way every day.",
             "crossHighlight": "Second opinion",
             "crossTitle": "Consensus over a single opinion",
+            "crossSubtitle": "MAGI — Multi-Agent Ground-truth Insight",
             "crossDesc": "Ask the same read-only question to several machines and models at once, then see where they agree and disagree (MAGI) — more trustworthy than one agent's answer.",
             "tryMesh": "Try Repo Mesh →",
             "seePlans": "See plans",
