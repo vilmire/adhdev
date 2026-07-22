@@ -513,6 +513,14 @@ export const MESH_RECORD_NOTE_TOOL = {
                 type: 'number',
                 description: 'Optional explicit read-side lifespan in days. Resolved to an absolute expiry at record time; after it passes an UNPINNED note is hidden from the injected prompt (but retained in the ledger for audit). Overrides the category default TTL. Ignored when pinned is true.',
             },
+            supersedes: {
+                type: 'string',
+                description: 'Optional version-supersede: the note_id of an earlier note this one replaces, OR a subject_key shared with earlier notes. At injection any earlier LIVE note matching this id/subject is hidden from the prompt (its ledger entry is retained for audit). Use when you record an updated lesson that makes a prior one obsolete. Pinned notes are never hidden by supersede.',
+            },
+            subject_key: {
+                type: 'string',
+                description: 'Optional stable subject key grouping notes about the same subject. Drives version-supersede targeting and read-side same-class folding (multiple live notes with the same category AND subject_key collapse to one injected entry, newest kept, older ids listed). When omitted, folding falls back to a leading [tag] bracket in the text.',
+            },
         },
         required: ['text'],
     },

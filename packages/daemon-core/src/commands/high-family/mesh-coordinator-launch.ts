@@ -115,8 +115,12 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         try {
                             const { readOperatingNotes } = await import('../../mesh/mesh-ledger.js');
                             // readOperatingNotes filters out tombstoned (forgotten) notes so a
-                            // retracted lesson never rides into the prompt. Newest last; tail 20.
-                            const noteEntries = readOperatingNotes(id, { tail: 20 });
+                            // retracted lesson never rides into the prompt. Newest last.
+                            // Phase 2 (d): the byte-budget/count cap now bounds the injected list
+                            // (selectOperatingNotesForPrompt), so read a larger candidate tail than
+                            // the old fixed 20 and let injection-side ranking + budget do the
+                            // bounding. Keep a sane store-read ceiling to avoid unbounded arrays.
+                            const noteEntries = readOperatingNotes(id, { tail: 100 });
                             const notes = noteEntries
                                 .map((e) => {
                                     const p = (e.payload || {}) as Record<string, unknown>;
@@ -136,6 +140,12 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                                         // these → pinned defaults false, expiry governed by category TTL.
                                         pinned: p.pinned === true,
                                         ...(typeof p.expiresAt === 'string' ? { expiresAt: p.expiresAt } : {}),
+                                        // Phase 2 (b)/(c): thread the ledger id + supersedes/subjectKey
+                                        // so version-supersede targeting and same-class folding work.
+                                        // Legacy notes lack them → no supersede, fold by leading [tag].
+                                        noteId: e.id,
+                                        ...(typeof p.supersedes === 'string' ? { supersedes: p.supersedes } : {}),
+                                        ...(typeof p.subjectKey === 'string' ? { subjectKey: p.subjectKey } : {}),
                                     };
                                 })
                                 .filter((n): n is NonNullable<typeof n> => n !== null);

@@ -99,6 +99,27 @@ export interface CoordinatorOperatingNote {
      * (see isNoteExpired) governs expiry; pinned notes never expire regardless.
      */
     expiresAt?: string;
+    /**
+     * Phase 2 — the ledger id of this note, when known. Threaded from the ledger
+     * entry id at launch so version-supersede can target a specific note and
+     * same-class folding can list the subsumed ids. Repo-declared notes may lack
+     * one; absent is fine (folding/supersede fall back to the subject key).
+     */
+    noteId?: string;
+    /**
+     * Phase 2 (b) version-supersede — an optional note-id or stable subject-key
+     * this note replaces. At injection, any earlier LIVE note whose `noteId` or
+     * `subjectKey` matches this value is hidden from the prompt (the ledger entry
+     * is retained for audit). Optional and lossless: absent = supersedes nothing.
+     */
+    supersedes?: string;
+    /**
+     * Phase 2 (b)/(c) — an optional stable subject-key grouping notes about the
+     * same subject. Drives version-supersede targeting and same-class folding.
+     * When absent, folding derives a key from a leading `[tag]` bracket instead,
+     * so legacy notes still collapse by their conventional tag prefix.
+     */
+    subjectKey?: string;
 }
 
 // ─── Prompt Builder ─────────────────────────────
@@ -598,6 +619,20 @@ const OPERATING_NOTES_PROMPT_CAP = 20;
 const OPERATING_NOTE_MAX_CHARS = 300;
 
 /**
+ * Phase 2 (d) — byte budget for the injected Operating Notes list. The count cap
+ * above (20) is still a ceiling, but selection now fills up to this UTF-8 byte
+ * budget on the RENDERED note lines, ranked pinned > durable > recency, so a few
+ * long notes don't crowd out many short ones and vice-versa. Pinned notes are
+ * ALWAYS kept even if they alone exceed the budget (pinned is author-opt-in and
+ * bounded by the author); the budget only bounds the unpinned tail.
+ *
+ * ~6KB ≈ the 20-note cap at typical note length, so on ordinary meshes this
+ * changes nothing — it only kicks in when notes run long. It sits well under the
+ * whole-prompt PROMPT_SOFT_CAP_BYTES (60KB) so the two caps don't fight.
+ */
+const OPERATING_NOTE_INJECTION_BYTE_BUDGET = 6 * 1024;
+
+/**
  * A category is "durable" (survives the cap ahead of recency) when it has no
  * TTL entry — provider_quirk, uncategorized, or any unknown category. This
  * mirrors isNoteExpired's durability rule so ranking and expiry agree.
@@ -608,35 +643,135 @@ function isDurableCategory(category?: string): boolean {
 }
 
 /**
- * Operating-notes lifecycle selection (read-side, minimal first cut). Given the
- * effective notes (oldest-first, ledger order) and the current time, produce the
- * ordered, capped list that rides into the prompt:
- *   (i)   ALWAYS include pinned notes.
- *   (ii)  drop expired UNPINNED notes (per category TTL / explicit expiresAt).
- *   (iii) rank pinned-first, then durable-category, then recency (newest first).
- *   (iv)  apply the existing OPERATING_NOTES_PROMPT_CAP to the ranked list.
- * Pure + deterministic given `now`. Returns { shown, omittedCount }.
+ * Phase 2 (b)/(c) — derive a note's subject key for supersede targeting and
+ * same-class folding. Precedence:
+ *   1. an explicit `subjectKey` (trimmed, lowercased) when present, else
+ *   2. a leading `[tag]` bracket, so legacy notes that follow the conventional
+ *      `[some-tag] …` prefix still group/supersede by that tag, else
+ *   3. undefined — the note has no derivable subject and never folds/supersedes
+ *      by key (it can still be targeted by exact noteId).
+ * Pure. Lowercased so `[Foo]` and `[foo]` collapse together.
+ */
+function deriveSubjectKey(note: CoordinatorOperatingNote): string | undefined {
+    const explicit = typeof note.subjectKey === 'string' ? note.subjectKey.trim().toLowerCase() : '';
+    if (explicit) return explicit;
+    const text = typeof note.text === 'string' ? note.text.trimStart() : '';
+    const m = /^\[([^\]]{1,80})\]/.exec(text);
+    const tag = m ? m[1].trim().toLowerCase() : '';
+    return tag || undefined;
+}
+
+/**
+ * Phase 2 (c) — deterministic same-class fold. Given ranked notes (already
+ * highest-priority first), collapse runs of UNPINNED notes that share the same
+ * category AND subject key into a single injected entry: keep the highest-ranked
+ * (first-seen) note and record the note-ids/count it subsumes so the rendered
+ * line can say "(+N earlier)". Pinned notes never fold — each pinned note is
+ * author-opted-in and shown verbatim. The store is untouched; this is a pure,
+ * model-free text fold at injection time.
  *
- * Ranking is stable on the original ledger index so, within a tier, the original
- * oldest-first order is preserved before the recency comparison flips it — i.e.
- * newest notes lead each tier. The cap keeps the leading (highest-priority) N.
+ * Returns the folded note list (order preserved) with per-entry subsumed info.
+ */
+interface FoldedNote {
+    note: CoordinatorOperatingNote;
+    /** note-ids of same-class notes this entry subsumes (may be empty). */
+    subsumedIds: string[];
+    /** count of subsumed notes (== subsumedIds.length, but counts id-less ones too). */
+    subsumedCount: number;
+}
+
+function foldSameClassNotes(ranked: CoordinatorOperatingNote[]): FoldedNote[] {
+    const out: FoldedNote[] = [];
+    // group key → index into `out` of the surviving (highest-ranked) entry.
+    const survivorByKey = new Map<string, number>();
+    for (const note of ranked) {
+        const subject = deriveSubjectKey(note);
+        // Only unpinned notes with a category AND a subject key are foldable —
+        // without both there is no reliable "same class/subject" signal, so we
+        // keep the note standalone (lossless for legacy/uncategorized notes).
+        const foldable = !note.pinned && !!note.category && !!subject;
+        if (foldable) {
+            const key = `${note.category} ${subject}`;
+            const existing = survivorByKey.get(key);
+            if (existing !== undefined) {
+                const survivor = out[existing];
+                survivor.subsumedCount += 1;
+                if (typeof note.noteId === 'string' && note.noteId) survivor.subsumedIds.push(note.noteId);
+                continue;
+            }
+            survivorByKey.set(key, out.length);
+        }
+        out.push({ note, subsumedIds: [], subsumedCount: 0 });
+    }
+    return out;
+}
+
+/** Estimate the UTF-8 byte cost of one rendered operating-note line (Phase 2 d). */
+function renderedNoteBytes(folded: FoldedNote): number {
+    return byteLength(renderOperatingNoteLine(folded));
+}
+
+/**
+ * Operating-notes lifecycle selection (read-side). Given the effective notes
+ * (oldest-first, ledger order) and the current time, produce the ordered list
+ * that rides into the prompt:
+ *   (i)    ALWAYS include pinned notes.
+ *   (ii)   drop expired UNPINNED notes (per category TTL / explicit expiresAt).
+ *   (iii)  Phase 2 (b) drop any note SUPERSEDED by a later live note (by noteId
+ *          or subjectKey); pinned notes are never dropped by supersede.
+ *   (iv)   rank pinned-first, then durable-category, then recency (newest first).
+ *   (v)    Phase 2 (c) fold same-category/same-subject unpinned runs into one.
+ *   (vi)   Phase 2 (d) fill up to a byte budget AND a count cap; pinned always
+ *          kept even if they alone exceed the byte budget.
+ * Pure + deterministic given `now`. Returns { shown, omittedCount } where `shown`
+ * carries per-entry fold info for the renderer.
+ *
+ * Ranking is stable on the original ledger index so, within a tier, newest notes
+ * lead. The caps keep the leading (highest-priority) entries.
  */
 export function selectOperatingNotesForPrompt(
     notes: CoordinatorOperatingNote[],
     now: number,
     cap: number = OPERATING_NOTES_PROMPT_CAP,
-): { shown: CoordinatorOperatingNote[]; omittedCount: number } {
+    byteBudget: number = OPERATING_NOTE_INJECTION_BYTE_BUDGET,
+): { shown: FoldedNote[]; omittedCount: number } {
     const valid = Array.isArray(notes)
         ? notes.filter(n => n && typeof n.text === 'string' && n.text.trim())
         : [];
 
     // (i)+(ii): keep pinned always; drop expired unpinned. Retain original index
     // for a stable recency tiebreak (later index == newer, ledger is oldest-first).
-    const kept = valid
+    let kept = valid
         .map((note, index) => ({ note, index }))
         .filter(({ note }) => note.pinned || !isNoteExpired(note as any, now));
 
-    // (iii): rank pinned > durable > recency (newest first within a tier).
+    // (iii) Phase 2 (b) version-supersede: a LATER live note may name (via
+    // `supersedes`) an earlier note's noteId or subjectKey; the earlier one is
+    // then hidden. "Later" == higher ledger index. Collect every supersede target
+    // paired with the max index that supersedes it, then drop any UNPINNED note
+    // whose id/subjectKey is superseded by a strictly-later note. Pinned notes are
+    // never dropped by supersede (pinned always wins, mirroring TTL).
+    const supersededAtIndex = new Map<string, number>();
+    for (const { note, index } of kept) {
+        const target = typeof note.supersedes === 'string' ? note.supersedes.trim().toLowerCase() : '';
+        if (!target) continue;
+        const prev = supersededAtIndex.get(target);
+        if (prev === undefined || index > prev) supersededAtIndex.set(target, index);
+    }
+    if (supersededAtIndex.size > 0) {
+        kept = kept.filter(({ note, index }) => {
+            if (note.pinned) return true;
+            const byId = typeof note.noteId === 'string' ? note.noteId.trim().toLowerCase() : '';
+            const bySubject = deriveSubjectKey(note);
+            const supIdx = Math.max(
+                byId ? (supersededAtIndex.get(byId) ?? -1) : -1,
+                bySubject ? (supersededAtIndex.get(bySubject) ?? -1) : -1,
+            );
+            return !(supIdx > index); // superseded by a strictly-later note → drop
+        });
+    }
+
+    // (iv): rank pinned > durable > recency (newest first within a tier).
     const rank = (n: CoordinatorOperatingNote): number =>
         n.pinned ? 0 : isDurableCategory(n.category) ? 1 : 2;
     kept.sort((a, b) => {
@@ -645,10 +780,56 @@ export function selectOperatingNotesForPrompt(
         return b.index - a.index; // newer (higher index) first
     });
 
-    // (iv): apply the existing cap to the ranked list.
-    const omittedCount = Math.max(0, kept.length - cap);
-    const shown = (omittedCount > 0 ? kept.slice(0, cap) : kept).map(k => k.note);
+    // (v) Phase 2 (c): fold same-class/same-subject unpinned runs into one entry.
+    const folded = foldSameClassNotes(kept.map(k => k.note));
+
+    // (vi) Phase 2 (d): fill up to the byte budget AND the count cap. Pinned
+    // entries are always kept (never dropped to fit the budget); the budget/cap
+    // bound the unpinned tail. Entries are already highest-priority first, so we
+    // walk in order and stop once an UNPINNED entry would break a bound.
+    const shown: FoldedNote[] = [];
+    let usedBytes = 0;
+    let usedCount = 0;
+    for (const entry of folded) {
+        if (entry.note.pinned) {
+            shown.push(entry);
+            usedBytes += renderedNoteBytes(entry);
+            usedCount += 1;
+            continue;
+        }
+        if (usedCount >= cap) break;
+        const bytes = renderedNoteBytes(entry);
+        if (usedCount > 0 && usedBytes + bytes > byteBudget) break;
+        shown.push(entry);
+        usedBytes += bytes;
+        usedCount += 1;
+    }
+
+    // omittedCount counts eligible (non-expired, non-superseded, post-fold) entries
+    // that did not make the cut. Folded-away duplicates are not "omitted" — they are
+    // represented by their survivor's "(+N earlier)" marker, so exclude them here.
+    const omittedCount = Math.max(0, folded.length - shown.length);
     return { shown, omittedCount };
+}
+
+/**
+ * Render one operating-note bullet line (Phase 2 c fold-aware). Shared by the
+ * byte-budget estimator and the section renderer so the budget is measured on
+ * the exact bytes that ship.
+ */
+function renderOperatingNoteLine(folded: FoldedNote): string {
+    const n = folded.note;
+    const categoryLabel: Record<string, string> = {
+        provider_quirk: 'provider quirk',
+        pattern_to_avoid: 'pattern to avoid',
+        recovery_lesson: 'recovery lesson',
+    };
+    const pin = n.pinned ? '📌 ' : '';
+    const cat = n.category && categoryLabel[n.category] ? `[${categoryLabel[n.category]}] ` : '';
+    const fold = folded.subsumedCount > 0
+        ? ` _(+${folded.subsumedCount} earlier same-subject note${folded.subsumedCount === 1 ? '' : 's'} folded${folded.subsumedIds.length ? `: ${folded.subsumedIds.join(', ')}` : ''})_`
+        : '';
+    return `- ${pin}${cat}${truncateNote(n.text.trim())}${fold}`;
 }
 
 function buildOperatingNotesSection(notes?: CoordinatorOperatingNote[], now: number = Date.now()): string {
@@ -657,29 +838,23 @@ function buildOperatingNotesSection(notes?: CoordinatorOperatingNote[], now: num
         : false;
     if (!hasAny) return '';
 
-    const categoryLabel: Record<string, string> = {
-        provider_quirk: 'provider quirk',
-        pattern_to_avoid: 'pattern to avoid',
-        recovery_lesson: 'recovery lesson',
-    };
-
-    // Lifecycle selection: pinned-always + expired-unpinned-dropped + rank
-    // (pinned > durable > recency) THEN the existing cap. `shown` is already
-    // highest-priority-first; the cap kept the leading N.
+    // Lifecycle selection: pinned-always + expired-unpinned-dropped +
+    // superseded-dropped + rank (pinned > durable > recency) + same-class fold +
+    // byte-budget/count cap. `shown` is already highest-priority-first and carries
+    // per-entry fold info; renderOperatingNoteLine emits the exact bytes the
+    // budget was measured against.
     const { shown, omittedCount } = selectOperatingNotesForPrompt(notes ?? [], now);
     if (shown.length === 0) return '';
 
     const lines: string[] = ['## Operating Notes', ''];
     lines.push('Lessons earlier coordinators on this mesh recorded via `mesh_record_note`. Treat them as accumulated operating knowledge — apply them. When you learn a durable lesson (a provider quirk, a pattern to avoid, a recovery lesson), record it with `mesh_record_note` so future coordinators inherit it.');
     lines.push('');
-    for (const n of shown) {
-        const pin = n.pinned ? '📌 ' : '';
-        const cat = n.category && categoryLabel[n.category] ? `[${categoryLabel[n.category]}] ` : '';
-        lines.push(`- ${pin}${cat}${truncateNote(n.text.trim())}`);
+    for (const entry of shown) {
+        lines.push(renderOperatingNoteLine(entry));
     }
     if (omittedCount > 0) {
         lines.push('');
-        lines.push(`_${omittedCount} lower-priority note${omittedCount === 1 ? '' : 's'} omitted (kept in ledger; expired-and-unpinned notes are also hidden from this list but retained for audit; prune with \`mesh_forget_note\`)._`);
+        lines.push(`_${omittedCount} lower-priority note${omittedCount === 1 ? '' : 's'} omitted to fit the injection cap/byte-budget (kept in ledger; expired, superseded, and same-subject-folded notes are also hidden from this list but retained for audit; prune with \`mesh_forget_note\`)._`);
     }
     return lines.join('\n');
 }

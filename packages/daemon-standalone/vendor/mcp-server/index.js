@@ -1180,6 +1180,14 @@ var MESH_RECORD_NOTE_TOOL = {
       ttl_days: {
         type: "number",
         description: "Optional explicit read-side lifespan in days. Resolved to an absolute expiry at record time; after it passes an UNPINNED note is hidden from the injected prompt (but retained in the ledger for audit). Overrides the category default TTL. Ignored when pinned is true."
+      },
+      supersedes: {
+        type: "string",
+        description: "Optional version-supersede: the note_id of an earlier note this one replaces, OR a subject_key shared with earlier notes. At injection any earlier LIVE note matching this id/subject is hidden from the prompt (its ledger entry is retained for audit). Use when you record an updated lesson that makes a prior one obsolete. Pinned notes are never hidden by supersede."
+      },
+      subject_key: {
+        type: "string",
+        description: "Optional stable subject key grouping notes about the same subject. Drives version-supersede targeting and read-side same-class folding (multiple live notes with the same category AND subject_key collapse to one injected entry, newest kept, older ids listed). When omitted, folding falls back to a leading [tag] bracket in the text."
       }
     },
     required: ["text"]
@@ -4368,6 +4376,8 @@ async function meshRecordNote(ctx, args) {
   } else if (typeof args.ttl_days === "number" && Number.isFinite(args.ttl_days) && args.ttl_days > 0) {
     expiresAt = new Date(new Date(createdAt).getTime() + args.ttl_days * 24 * 60 * 60 * 1e3).toISOString();
   }
+  const supersedes = typeof args.supersedes === "string" && args.supersedes.trim() ? args.supersedes.trim() : void 0;
+  const subjectKey = typeof args.subject_key === "string" && args.subject_key.trim() ? args.subject_key.trim() : void 0;
   const sourceCoordinator = ctx.coordinatorSessionId || ctx.localDaemonId || ctx.coordinatorHostname || void 0;
   const entry = (0, import_daemon_core4.appendLedgerEntry)(mesh.id, {
     kind: "coordinator_operating_note",
@@ -4378,14 +4388,24 @@ async function meshRecordNote(ctx, args) {
       createdAt,
       ...sourceCoordinator ? { sourceCoordinator } : {},
       ...pinned ? { pinned } : {},
-      ...expiresAt ? { expiresAt } : {}
+      ...expiresAt ? { expiresAt } : {},
+      ...supersedes ? { supersedes } : {},
+      ...subjectKey ? { subjectKey } : {}
     }
   });
   return JSON.stringify({
     success: true,
     meshId: mesh.id,
     noteId: entry.id,
-    recorded: { text, category: category ?? null, createdAt, pinned: pinned ?? false, expiresAt: expiresAt ?? null },
+    recorded: {
+      text,
+      category: category ?? null,
+      createdAt,
+      pinned: pinned ?? false,
+      expiresAt: expiresAt ?? null,
+      supersedes: supersedes ?? null,
+      subjectKey: subjectKey ?? null
+    },
     note: 'Recorded to the mesh ledger. Future coordinators on this mesh will see it under "## Operating Notes" at launch.'
   }, null, 2);
 }

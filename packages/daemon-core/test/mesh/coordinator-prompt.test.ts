@@ -513,9 +513,11 @@ describe('Repo Mesh coordinator prompt', () => {
 
   // ── 6-4: prompt-build caps ──
 
-  it('6-4: caps operating notes to the latest 20 and truncates each to 300 chars', () => {
+  it('6-4/Phase2-d: bounds operating notes by count cap + byte budget and truncates each to 300 chars', () => {
     // 50 notes, each far longer than 300 chars, tagged with a stable index so
-    // we can assert which survived the keep-latest-20 window.
+    // we can assert which survived. Phase 2 (d) replaced the pure count-20 tail
+    // with a byte-budget-bounded selection (still ranked newest-first), so with
+    // long notes FEWER than 20 survive — the newest ride, the oldest drop.
     const operatingNotes = Array.from({ length: 50 }, (_, i) => ({
       text: `note#${i} ` + 'x'.repeat(600),
     }))
@@ -525,19 +527,20 @@ describe('Repo Mesh coordinator prompt', () => {
       operatingNotes: operatingNotes as any,
     })
 
-    // Only the newest 20 (indices 30..49) are shown; older ones are gone.
+    // The newest notes ride; the oldest are gone (byte-budget cuts the tail).
     expect(prompt).toContain('note#49')
-    expect(prompt).toContain('note#30')
-    expect(prompt).not.toContain('note#29')
+    expect(prompt).toContain('note#40')
     expect(prompt).not.toContain('note#0 ')
+    expect(prompt).not.toContain('note#5 ')
 
     // Per-note truncation: no single note line carries the full 600-char run,
     // and the truncation marker is present.
     expect(prompt).not.toContain('x'.repeat(400))
     expect(prompt).toContain('[truncated]')
 
-    // Omitted-count line for the 30 dropped notes (lower-priority tail beyond the cap).
-    expect(prompt).toContain('30 lower-priority notes omitted (kept in ledger')
+    // Omitted-count line for the dropped lower-priority tail (count is now
+    // byte-budget-driven, so assert the line exists rather than an exact number).
+    expect(prompt).toMatch(/\d+ lower-priority notes? omitted[^(]*\(kept in ledger/)
   })
 
   it('6-4: windowMinutes overrides the hardcoded "last 30 min" phrasing', () => {

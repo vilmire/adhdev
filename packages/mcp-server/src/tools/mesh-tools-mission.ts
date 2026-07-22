@@ -121,7 +121,15 @@ export async function meshLedgerQuery(
 
 export async function meshRecordNote(
     ctx: MeshContext,
-    args: { text?: string; category?: string; pinned?: boolean; ttl_days?: number; expiresAt?: string },
+    args: {
+        text?: string;
+        category?: string;
+        pinned?: boolean;
+        ttl_days?: number;
+        expiresAt?: string;
+        supersedes?: string;
+        subject_key?: string;
+    },
 ): Promise<string> {
     const { mesh } = ctx;
     const text = typeof args.text === 'string' ? args.text.trim() : '';
@@ -143,6 +151,12 @@ export async function meshRecordNote(
     } else if (typeof args.ttl_days === 'number' && Number.isFinite(args.ttl_days) && args.ttl_days > 0) {
         expiresAt = new Date(new Date(createdAt).getTime() + args.ttl_days * 24 * 60 * 60 * 1000).toISOString();
     }
+    // Phase 2 (b)/(c): supersedes retires an earlier note (by its note_id or a
+    // shared subject_key); subject_key groups same-subject notes for read-side
+    // folding. Both optional and lossless — absent means supersede nothing / fold
+    // only by a leading [tag] prefix.
+    const supersedes = typeof args.supersedes === 'string' && args.supersedes.trim() ? args.supersedes.trim() : undefined;
+    const subjectKey = typeof args.subject_key === 'string' && args.subject_key.trim() ? args.subject_key.trim() : undefined;
     // sourceCoordinator: best-effort identity of the recording coordinator so a
     // future coordinator can attribute the note. Session id is the most precise;
     // fall back to the daemon/hostname.
@@ -157,13 +171,23 @@ export async function meshRecordNote(
             ...(sourceCoordinator ? { sourceCoordinator } : {}),
             ...(pinned ? { pinned } : {}),
             ...(expiresAt ? { expiresAt } : {}),
+            ...(supersedes ? { supersedes } : {}),
+            ...(subjectKey ? { subjectKey } : {}),
         },
     });
     return JSON.stringify({
         success: true,
         meshId: mesh.id,
         noteId: entry.id,
-        recorded: { text, category: category ?? null, createdAt, pinned: pinned ?? false, expiresAt: expiresAt ?? null },
+        recorded: {
+            text,
+            category: category ?? null,
+            createdAt,
+            pinned: pinned ?? false,
+            expiresAt: expiresAt ?? null,
+            supersedes: supersedes ?? null,
+            subjectKey: subjectKey ?? null,
+        },
         note: 'Recorded to the mesh ledger. Future coordinators on this mesh will see it under "## Operating Notes" at launch.',
     }, null, 2);
 }

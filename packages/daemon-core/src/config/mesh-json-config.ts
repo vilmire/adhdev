@@ -161,9 +161,13 @@ function normalizeOperatingNote(value: unknown): CoordinatorOperatingNote | null
         ...(typeof value.createdAt === 'string' ? { createdAt: value.createdAt } : {}),
         ...(typeof value.sourceCoordinator === 'string' ? { sourceCoordinator: value.sourceCoordinator } : {}),
         // Operating-notes lifecycle: a repo-declared note may pin itself or set an
-        // explicit expiry, same as a runtime-recorded one.
+        // explicit expiry, same as a runtime-recorded one. Phase 2 (b)/(c): it may
+        // also declare supersedes/subjectKey to retire an earlier note or group
+        // same-subject notes for folding.
         ...(value.pinned === true ? { pinned: true } : {}),
         ...(typeof value.expiresAt === 'string' ? { expiresAt: value.expiresAt } : {}),
+        ...(typeof value.supersedes === 'string' ? { supersedes: value.supersedes } : {}),
+        ...(typeof value.subjectKey === 'string' ? { subjectKey: value.subjectKey } : {}),
     };
 }
 
