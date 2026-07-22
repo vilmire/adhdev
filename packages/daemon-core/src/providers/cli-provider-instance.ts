@@ -56,6 +56,7 @@ import {
     STATUS_HYDRATION_TAIL_LIMIT,
     COMPLETED_FINALIZATION_RETRY_MS,
     COMPLETED_FINALIZATION_MAX_WAIT_MS,
+    CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS,
     NATIVE_HISTORY_MESH_IDLE_SETTLE_MS,
     PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS,
     ANTIGRAVITY_HOLD_QUIET_DWELL_MS,
@@ -2084,6 +2085,11 @@ export class CliProviderInstance implements ProviderInstance {
                     reason: 'missing_final_assistant',
                     terminal: (this.provider as any).requiresFinalAssistantBeforeIdle === true,
                     allowTimeout: allowMissingAssistantTimeout,
+                    // PTY-parsed provider (codex-cli): no external transcript trails the idle
+                    // transition, so the CANON-C decoupled emit must observe the min-elapsed floor
+                    // rather than fire at the first-poll waitedMs. (claude-cli's external-native
+                    // branch above is exempt — its transcript legitimately lands moments later.)
+                    noExternalTranscriptSource: true,
                 };
             }
         }
@@ -2786,6 +2792,43 @@ export class CliProviderInstance implements ProviderInstance {
                         waitedMs,
                     });
                     pending.loggedBlockReason = blockReason;
+                }
+                this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
+                return;
+            }
+            // (CANON-C EARLY-EMIT FLOOR) The transcript-evidence gate would otherwise fire its
+            // decoupled-immediate completion at ANY waitedMs — including the ~13s a codex PLAIN
+            // terminal `missing_final_assistant` block reaches on the first completion-gate poll,
+            // with NO final assistant ever observed. That stamps a weak evidenceLevel=insufficient
+            // completion the coordinator marks reviewRecommended but does not auto-hold, racing the
+            // transcript before it can land and pre-empting the 180s mesh-worker stall watchdog.
+            // Impose a minimum dwell — but ONLY for the no-external-transcript case
+            // (noExternalTranscriptSource): a PTY-parsed provider has no separate transcript that
+            // will land to upgrade the weak emit, so firing immediately is a pure timing guess. A
+            // native-source block (claude-cli external-native) is deliberately NOT floored: its
+            // transcript legitimately trails the idle transition by a write and the CANON-C
+            // immediate emit is correct (upgraded by the reconcile). Keep holding (re-probe each
+            // retry — the block clears for a GENUINE emit the moment the assistant turn lands) until
+            // either the floor is met or the 30s cap force-releases the weak completion below.
+            // Scoped to mesh worker sessions (the only place allowTimeout is set), so interactive
+            // completion timing is untouched.
+            if (isTranscriptEvidenceGate
+                && blockReason === 'missing_final_assistant'
+                && block.noExternalTranscriptSource === true
+                && waitedMs < CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS) {
+                if (pending.loggedBlockReason !== 'canon_c_min_elapsed_floor') {
+                    LOG.info('CLI', `[${this.type}] holding CANON-C decoupled emit until min-elapsed floor (waitedMs=${waitedMs} floor=${CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS}); no final assistant yet (${blockReason})`);
+                    if (this.isMeshWorkerSession()) {
+                        traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `canon_c_min_elapsed_floor waited=${waitedMs}ms`);
+                    }
+                    if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
+                        blockReason,
+                        latestVisibleStatus,
+                        terminal: block.terminal === true,
+                        canonCMinElapsedFloor: true,
+                        waitedMs,
+                    });
+                    pending.loggedBlockReason = 'canon_c_min_elapsed_floor';
                 }
                 this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
                 return;

@@ -1071,10 +1071,44 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         // C2: prefer an exact taskId match when the completion event carries one —
         // it's immune to coordinator↔worker clock skew that can hide the assigned row.
         const eventTaskId = readNonEmptyString(args.metadataEvent.taskId) || undefined;
-        const task = updateSessionTaskStatus(args.meshId, sessionId, outcome, {
-            occurredAt: occurredAtMs != null ? new Date(occurredAtMs).toISOString() : undefined,
-            taskId: eventTaskId,
-        });
+        // WEAK-QUEUE-TENTATIVE (early-completed safety net, symmetric with the direct-dispatch
+        // `tentativeIfDirect` guard below): a `completed` outcome whose evidence is WEAK — a
+        // false-idle / missing_final_assistant emit (the CANON-C decoupled-immediate path that
+        // stamps evidenceLevel=insufficient) — must NOT hard-flip a matched QUEUE row to
+        // terminal. Until this net, only DIRECT dispatches were kept tentative on weak evidence;
+        // a queue-claimed task's session flipped its row to 'completed' unconditionally, so a
+        // worker that dropped to idle ~13s in with no final assistant closed the task early even
+        // though it never produced an answer. Leaving the row 'assigned' hands it to the reconcile
+        // loop's proven net (PHASE 4 records the GENUINE completion once the transcript lands via
+        // findTerminalLedgerEvidenceForTask; PHASE 2.5 reclaims a truly-stranded row back to
+        // 'pending' for re-dispatch, bounded by MAX_STRANDED_RECLAIMS) — never a permanent wedge.
+        //
+        // CRUCIAL SCOPE: this covers only the PREMATURE decoupled-immediate emit
+        // (emittedAfterFinalizationTimeout !== true). A weak completion that already waited out the
+        // full 30s COMPLETED_FINALIZATION_MAX_WAIT_MS window (emittedAfterFinalizationTimeout=true)
+        // is a GENUINE — if answerless — terminal: the worker exhausted its finalization wait and
+        // is done, so it flips 'completed' as before (a tool-only turn that never produced an
+        // assistant bubble must still close its task). A `failed` outcome or a completion with
+        // genuine evidence flips terminal as before too.
+        const completionDiagnostic = args.metadataEvent.completionDiagnostic && typeof args.metadataEvent.completionDiagnostic === 'object'
+            ? args.metadataEvent.completionDiagnostic as Record<string, unknown>
+            : undefined;
+        const emittedAfterFinalizationTimeout = completionDiagnostic?.emittedAfterFinalizationTimeout === true;
+        const weakCompleted = outcome === 'completed'
+            && isWeakCompletionEvidence(args.metadataEvent)
+            && !emittedAfterFinalizationTimeout;
+        const task = weakCompleted
+            ? updateSessionTaskStatus(args.meshId, sessionId, 'assigned', {
+                occurredAt: occurredAtMs != null ? new Date(occurredAtMs).toISOString() : undefined,
+                taskId: eventTaskId,
+            })
+            : updateSessionTaskStatus(args.meshId, sessionId, outcome, {
+                occurredAt: occurredAtMs != null ? new Date(occurredAtMs).toISOString() : undefined,
+                taskId: eventTaskId,
+            });
+        if (weakCompleted && task) {
+            LOG.info('MeshQueue', `Weak completion (${readNonEmptyString(args.metadataEvent.evidenceLevel) || 'missing_final_assistant'}) kept queue task ${task.id} tentative (session ${sessionId}); reconcile owns the genuine terminal`);
+        }
         // Fix A (early-terminal prevention): a false-idle completion (no confirmed final
         // assistant) for a DIRECT dispatch — i.e. no work-queue row matched — must not flip the
         // dispatch row terminal. Leaving it active lets the reconcile loop (PHASE 4) re-read the

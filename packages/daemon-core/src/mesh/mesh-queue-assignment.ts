@@ -19,7 +19,7 @@ import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalD
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable } from './mesh-node-identity.js';
+import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
 import { queuePendingMeshCoordinatorEvent, retractPendingDispatchBlockedEvent, drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
 import { isWorktreeBootstrapStaleRunning, shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
@@ -1987,6 +1987,11 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
     }
     if (!pending.length) return false;
 
+    // Launch-freshness threshold: reuse the auto-fast-forward policy's maxBehind (default
+    // 0 → any behind blocks) so the launch gate and the repair path agree on how far
+    // behind is tolerable. Resolved once per pass and shared across every candidate node.
+    const freshnessGate = { maxBehind: resolveAutoFastForwardPolicy(mesh).maxBehind };
+
     // Write cap + read-only cap resolved through the shared helpers from the
     // MACHINE-LOCAL stored mesh policy (no repo-file overlay). These are the same
     // resolvers the observability projection uses, so the enforced and exposed
@@ -2208,6 +2213,18 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
             }
             if (!isLaunchableNode(node)) {
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'node_not_launch_ready', nodeId });
+                continue;
+            }
+            // FRESHNESS gate (distinct from the health gate above): a clean-tree node that
+            // is `behind` its upstream reads as 'online' and passes isLaunchableNode, so
+            // without this it could win fitness routing and run a fresh worker against
+            // stale code. Skip a node whose git telemetry proves it stale (behind >
+            // maxBehind, or a submodule out of sync). Reuse the auto-fast-forward policy's
+            // maxBehind threshold so "how far behind is tolerable" is configured in ONE
+            // place. Telemetry-absent nodes pass (never block on missing data). The 4s
+            // reconcile retries once the node's auto-ff repair path catches it up.
+            if (!isMeshNodeFreshEnoughToLaunch(node, freshnessGate)) {
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'node_stale_behind_upstream', nodeId });
                 continue;
             }
             const launchTarget = resolveAutoLaunchTarget(components, node);

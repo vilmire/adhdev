@@ -1549,6 +1549,86 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('WEAK-QUEUE-TENTATIVE: a PREMATURE weak completion (missing_final_assistant, not timed-out) keeps its queue task tentative (assigned), not completed', () => {
+    // FIX 2 (secondary) — a weak, early decoupled-immediate completion (no final assistant,
+    // emittedAfterFinalizationTimeout NOT set) must NOT hard-flip a queue-claimed row to
+    // 'completed'. The row stays 'assigned' so the reconcile net owns the genuine terminal /
+    // reclaim, symmetric with the direct-dispatch tentative guard.
+    const meshId = `mesh_weak_queue_tentative_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+
+      const queued = enqueueTask(meshId, 'weak-completion task')
+      expect(claimNextTask(meshId, 'node_child_1', 'runtime-session-1')?.id).toBe(queued.id)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        taskId: queued.id,
+        timestamp: Date.now(),
+        completionDiagnostic: {
+          blockReason: 'missing_final_assistant',
+          finalAssistantPresent: false,
+          // PREMATURE: the decoupled-immediate path, NOT the 30s force-timeout.
+          emittedAfterFinalizationTimeout: false,
+          decoupledImmediateEmit: true,
+        },
+      })
+
+      // The row is kept tentative — still 'assigned', NOT flipped 'completed'.
+      expect(getQueue(meshId).map(task => task.status)).toEqual(['assigned'])
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('WEAK-QUEUE-TENTATIVE: a weak completion that already TIMED OUT (emittedAfterFinalizationTimeout) still completes its queue task', () => {
+    // The complement: a weak completion that exhausted the full 30s finalization wait is a
+    // GENUINE (if answerless) terminal — a tool-only turn with no assistant bubble must still
+    // close its task. This is the case the same-session continuation test relies on.
+    const meshId = `mesh_weak_queue_timeout_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+
+      const queued = enqueueTask(meshId, 'timed-out weak-completion task')
+      expect(claimNextTask(meshId, 'node_child_1', 'runtime-session-1')?.id).toBe(queued.id)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        taskId: queued.id,
+        timestamp: Date.now(),
+        completionDiagnostic: {
+          blockReason: 'missing_final_assistant',
+          finalAssistantPresent: false,
+          emittedAfterFinalizationTimeout: true, // waited out the full 30s → genuine terminal
+        },
+      })
+
+      expect(getQueue(meshId).map(task => task.status)).toEqual(['completed'])
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('D1: a transient LOCAL dispatch rejection returns the task to pending with a retryable dispatch_failed ledger entry (not terminal failed)', async () => {
     // Regression: the local-dispatch catch in tryAssignQueueTask used to mark the task
     // terminal 'failed' with no ledger and no retry, while the remote-dispatch catch
