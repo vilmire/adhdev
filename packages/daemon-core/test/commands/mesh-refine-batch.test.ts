@@ -181,8 +181,10 @@ function refineConfigPolicy() {
   }
 }
 
-// Managed worktrees must live at dirname(repoRoot)/.adhdev-worktrees/<meshName>/<safeBranch>
-// or remove_mesh_node refuses cleanup (mesh_worktree_cleanup_unexpected_path).
+// Managed worktrees now default to <home>/.adhdev/worktrees/<meshName>/<safeBranch>,
+// but these tests deliberately place them at the LEGACY dirname(repoRoot)/.adhdev-worktrees
+// layout to exercise the cleanup guard's back-compat path (a legacy-located worktree must
+// still be recognized as managed, not refused with mesh_worktree_cleanup_unexpected_path).
 const MESH_NAME = 'Batch Mesh'
 
 function managedWorktreePath(repo: string, branch: string) {

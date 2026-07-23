@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { DaemonCommandRouter } from '../../src/commands/router'
 
@@ -49,7 +51,10 @@ function buildInlineMesh(nodeDaemonId: string) {
       policy: {},
       isLocalWorktree: true,
     }],
-    policy: {},
+    // The clone fails on the non-repo repoRoot, but createWorktree still mkdir's the
+    // base parent first — point it at the OS temp dir so it never touches the real
+    // <home>/.adhdev/worktrees default.
+    policy: { worktreeBaseDir: join(tmpdir(), 'adhdev-guard-test-worktrees') },
     coordinator: {},
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),

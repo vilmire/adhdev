@@ -92,7 +92,8 @@ describe('clone_mesh_node registration <-> membership consistency', () => {
         name: mesh.name,
         repoIdentity: mesh.repoIdentity,
         defaultBranch: 'main',
-        policy: {},
+        // Keep the cloned worktree inside the temp dir (default is <home>/.adhdev/worktrees).
+        policy: { worktreeBaseDir: join(dir, 'worktrees') },
         nodes: [
           { id: sourceNode!.id, daemonId: 'daemon-local', workspace: repoRoot, repoRoot, policy: {}, cachedStatus: { health: 'online' } },
         ],
@@ -196,7 +197,8 @@ describe('mesh_refine_node membership <-> inline-cache-only clone node', () => {
         name: mesh.name,
         repoIdentity: mesh.repoIdentity,
         defaultBranch: 'main',
-        policy: {},
+        // Keep the cloned worktree inside the temp dir (default is <home>/.adhdev/worktrees).
+        policy: { worktreeBaseDir: join(dir, 'worktrees') },
         nodes: [
           { id: sourceNode!.id, daemonId: 'daemon-local', workspace: repoRoot, repoRoot, policy: {}, cachedStatus: { health: 'online' } },
         ],

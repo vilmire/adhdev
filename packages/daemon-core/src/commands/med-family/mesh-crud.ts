@@ -1154,12 +1154,20 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             }
 
             const repoRoot = sourceNode.repoRoot || sourceNode.workspace;
+            // Mesh-policy override for where worktrees are physically placed. When
+            // unset, createWorktree defaults to <home>/.adhdev/worktrees. The cleanup
+            // guard resolves the same base from mesh.policy, so the override must stay
+            // set on the mesh for the node's lifetime.
+            const worktreeBaseDir = typeof mesh.policy?.worktreeBaseDir === 'string' && mesh.policy.worktreeBaseDir.trim()
+                ? mesh.policy.worktreeBaseDir.trim()
+                : undefined;
             const { createWorktree } = await import('../../git/git-worktree.js');
             const result = await createWorktree({
                 repoRoot,
                 branch,
                 baseBranch,
                 meshName: mesh.name,
+                worktreeBaseDir,
             });
             if (result.baseSync?.warning) {
                 console.warn(`[mesh] clone_mesh_node base sync (${result.baseSync.action}): ${result.baseSync.warning}`);

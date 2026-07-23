@@ -104,7 +104,8 @@ describe('mesh worktree bootstrap', () => {
         name: 'Bootstrap Mesh',
         repoIdentity: 'example/bootstrap',
         defaultBranch: 'main',
-        policy: {},
+        // Keep the cloned worktree inside the temp dir (default is <home>/.adhdev/worktrees).
+        policy: { worktreeBaseDir: join(dir, 'worktrees') },
         coordinator: {},
         nodes: [
           { id: 'node-source', workspace: repoRoot, repoRoot, daemonId: 'daemon-local', userOverrides: {}, policy: { providerPriority: ['codex-cli'] } },
@@ -148,7 +149,8 @@ describe('mesh worktree bootstrap', () => {
         name: 'Bootstrap Async Mesh',
         repoIdentity: 'example/bootstrap-async',
         defaultBranch: 'main',
-        policy: {},
+        // Keep the cloned worktree inside the temp dir (default is <home>/.adhdev/worktrees).
+        policy: { worktreeBaseDir: join(dir, 'worktrees') },
         coordinator: {},
         nodes: [
           { id: 'node-source', workspace: repoRoot, repoRoot, daemonId: 'daemon-local', userOverrides: {}, policy: { providerPriority: ['codex-cli'], initSubmodulesOnClone: false } },

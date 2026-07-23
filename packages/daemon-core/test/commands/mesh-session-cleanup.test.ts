@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { DaemonCommandRouter } from '../../src/commands/router'
-import { createWorktree, resolveWorktreePath } from '../../src/git/git-worktree'
+import { createWorktree, resolveWorktreePath, getDefaultWorktreeBaseDir } from '../../src/git/git-worktree'
 import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger'
 
 const execFileAsync = promisify(execFile)
@@ -20,7 +20,11 @@ async function createTempGitRepo(prefix: string) {
   await writeFile(join(repoRoot, 'README.md'), '# test\n')
   await execFileAsync('git', ['add', 'README.md'], { cwd: repoRoot })
   await execFileAsync('git', ['commit', '-m', 'init'], { cwd: repoRoot })
-  return { dir, repoRoot }
+  // Managed worktrees now default to <home>/.adhdev/worktrees. Point tests at a
+  // per-temp-dir base via the worktreeBaseDir override so they never pollute the
+  // real home dir and the finally { rm(dir) } fully cleans up.
+  const worktreeBaseDir = join(dir, 'worktrees')
+  return { dir, repoRoot, worktreeBaseDir }
 }
 
 async function createTempGitRepoWithSubmodule(prefix: string) {
@@ -44,7 +48,9 @@ async function createTempGitRepoWithSubmodule(prefix: string) {
   await execFileAsync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', submoduleRoot, 'vendor/submodule'], { cwd: repoRoot })
   await execFileAsync('git', ['commit', '-am', 'add submodule'], { cwd: repoRoot })
 
-  return { dir, repoRoot, submoduleRoot }
+  // Per-temp-dir worktree base (see createTempGitRepo) so home stays clean.
+  const worktreeBaseDir = join(dir, 'worktrees')
+  return { dir, repoRoot, submoduleRoot, worktreeBaseDir }
 }
 
 function createRouter(overrides: Record<string, unknown> = {}, depsOverrides: Record<string, unknown> = {}) {
@@ -545,16 +551,16 @@ describe('mesh session cleanup', () => {
   })
 
   it('uses a force fallback for clean managed worktrees that contain checked-out submodules', async () => {
-    const { dir, repoRoot } = await createTempGitRepoWithSubmodule('adhdev-mesh-submodule-worktree-')
+    const { dir, repoRoot, worktreeBaseDir } = await createTempGitRepoWithSubmodule('adhdev-mesh-submodule-worktree-')
     try {
       const branch = 'feat/submodule-worktree'
       const meshName = 'submodule-worktree-mesh'
-      const created = await createWorktree({ repoRoot, branch, meshName })
+      const created = await createWorktree({ repoRoot, branch, meshName, worktreeBaseDir })
       await execFileAsync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'], { cwd: created.worktreePath })
       const inlineMesh = {
         id: 'mesh-submodule-worktree',
         name: meshName,
-        policy: {},
+        policy: { worktreeBaseDir },
         nodes: [
           { id: 'source', workspace: repoRoot, repoRoot },
           { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
@@ -586,12 +592,12 @@ describe('mesh session cleanup', () => {
   }, 60000)
 
   it('idempotently recovers when a managed worktree was already de-registered from git but a directory residue remains', async () => {
-    const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-residue-recover-')
+    const { dir, repoRoot, worktreeBaseDir } = await createTempGitRepo('adhdev-mesh-residue-recover-')
     try {
       const branch = 'feat/residue-recover'
       const meshName = 'residue-recover-mesh'
-      const created = await createWorktree({ repoRoot, branch, meshName })
-      expect(created.worktreePath).toBe(resolveWorktreePath(repoRoot, meshName, branch))
+      const created = await createWorktree({ repoRoot, branch, meshName, worktreeBaseDir })
+      expect(created.worktreePath).toBe(resolveWorktreePath(repoRoot, meshName, branch, worktreeBaseDir))
       // Simulate the post-force-fallback re-entry state: git no longer lists the
       // worktree (de-registered) but a leftover directory residue remains on disk.
       await execFileAsync('git', ['worktree', 'remove', '--force', created.worktreePath], { cwd: repoRoot })
@@ -602,7 +608,7 @@ describe('mesh session cleanup', () => {
       const inlineMesh = {
         id: 'mesh-residue-recover',
         name: meshName,
-        policy: {},
+        policy: { worktreeBaseDir },
         nodes: [
           { id: 'source', workspace: repoRoot, repoRoot },
           { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
@@ -634,11 +640,11 @@ describe('mesh session cleanup', () => {
   }, 60000)
 
   it('drops the node from the mesh even when the worktree directory residue cannot be removed', async () => {
-    const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-residue-degate-')
+    const { dir, repoRoot, worktreeBaseDir } = await createTempGitRepo('adhdev-mesh-residue-degate-')
     try {
       const branch = 'feat/residue-degate'
       const meshName = 'residue-degate-mesh'
-      const created = await createWorktree({ repoRoot, branch, meshName })
+      const created = await createWorktree({ repoRoot, branch, meshName, worktreeBaseDir })
       await execFileAsync('git', ['worktree', 'remove', '--force', created.worktreePath], { cwd: repoRoot })
       await mkdir(created.worktreePath, { recursive: true })
       await writeFile(join(created.worktreePath, 'stuck.txt'), 'cannot-remove\n')
@@ -646,7 +652,7 @@ describe('mesh session cleanup', () => {
       const inlineMesh = {
         id: 'mesh-residue-degate',
         name: meshName,
-        policy: {},
+        policy: { worktreeBaseDir },
         nodes: [
           { id: 'source', workspace: repoRoot, repoRoot },
           { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
@@ -678,22 +684,22 @@ describe('mesh session cleanup', () => {
   }, 60000)
 
   it('blocks local worktree removal when the managed worktree has local changes AND leaves the delegated session untouched (precheck-first)', async () => {
-    const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-dirty-worktree-')
+    const { dir, repoRoot, worktreeBaseDir } = await createTempGitRepo('adhdev-mesh-dirty-worktree-')
     try {
       const branch = 'feat/dirty-worktree'
       const meshName = 'dirty-worktree-mesh'
-      const created = await createWorktree({ repoRoot, branch, meshName })
+      const created = await createWorktree({ repoRoot, branch, meshName, worktreeBaseDir })
       await writeFile(join(created.worktreePath, 'dirty.txt'), 'uncommitted\n')
       const inlineMesh = {
         id: 'mesh-dirty-worktree',
         name: meshName,
-        policy: {},
+        policy: { worktreeBaseDir },
         nodes: [
           { id: 'source', workspace: repoRoot, repoRoot },
           { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
         ],
       }
-      expect(created.worktreePath).toBe(resolveWorktreePath(repoRoot, meshName, branch))
+      expect(created.worktreePath).toBe(resolveWorktreePath(repoRoot, meshName, branch, worktreeBaseDir))
       // A live delegated session bound to the worktree workspace. The dirty-worktree
       // refusal must NOT stop/delete it — pre-fix, session cleanup ran first and
       // orphaned the session before the dirty check rejected the removal.
@@ -729,16 +735,16 @@ describe('mesh session cleanup', () => {
   })
 
   it('still removes a clean local worktree and cleans up its delegated session (precheck pass preserves the happy path)', async () => {
-    const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-clean-worktree-')
+    const { dir, repoRoot, worktreeBaseDir } = await createTempGitRepo('adhdev-mesh-clean-worktree-')
     try {
       const branch = 'feat/clean-worktree'
       const meshName = 'clean-worktree-mesh'
-      const created = await createWorktree({ repoRoot, branch, meshName })
-      expect(created.worktreePath).toBe(resolveWorktreePath(repoRoot, meshName, branch))
+      const created = await createWorktree({ repoRoot, branch, meshName, worktreeBaseDir })
+      expect(created.worktreePath).toBe(resolveWorktreePath(repoRoot, meshName, branch, worktreeBaseDir))
       const inlineMesh = {
         id: 'mesh-clean-worktree',
         name: meshName,
-        policy: {},
+        policy: { worktreeBaseDir },
         nodes: [
           { id: 'source', workspace: repoRoot, repoRoot },
           { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
@@ -1044,4 +1050,112 @@ describe('mesh session cleanup', () => {
       cleanupLedgerFile(meshId)
     }
   })
+})
+
+describe('worktree base directory (home default + override + legacy back-compat)', () => {
+  it('defaults the managed worktree base to <home>/.adhdev/worktrees', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-wt-default-base-')
+    // Unique mesh name so this real-home test never collides across runs; the
+    // finally block defensively removes + prunes the home-based worktree.
+    const meshName = `default-base-mesh-${process.pid}-${dir.length}`
+    const branch = 'feat/default-base'
+    let created: Awaited<ReturnType<typeof createWorktree>> | undefined
+    try {
+      created = await createWorktree({ repoRoot, branch, meshName })
+      // The physical worktree lives under the home base, NOT under the repo parent.
+      expect(created.worktreePath).toBe(resolveWorktreePath(repoRoot, meshName, branch))
+      expect(created.worktreePath.startsWith(getDefaultWorktreeBaseDir())).toBe(true)
+      expect(created.worktreePath).toContain(join('.adhdev', 'worktrees', meshName, 'feat-default-base'))
+      // Cleanup via remove_mesh_node accepts and removes the home-based worktree.
+      const inlineMesh = {
+        id: 'mesh-default-base',
+        name: meshName,
+        policy: {},
+        nodes: [
+          { id: 'source', workspace: repoRoot, repoRoot },
+          { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
+        ],
+      }
+      const { router } = createRouter()
+      const result: any = await router.execute('remove_mesh_node', { meshId: inlineMesh.id, nodeId: 'node-worktree', inlineMesh })
+      expect(result).toMatchObject({ success: true, removed: true, worktreeCleanup: { success: true } })
+      expect(existsSync(created.worktreePath)).toBe(false)
+    } finally {
+      // Defensive: never leave residue in the real home dir if the assertions above
+      // failed before remove_mesh_node cleaned it up. Also remove the now-empty
+      // <home>/.adhdev/worktrees/<meshName> parent dir that createWorktree mkdir'd.
+      if (created?.worktreePath && existsSync(created.worktreePath)) {
+        await execFileAsync('git', ['worktree', 'remove', '--force', created.worktreePath], { cwd: repoRoot }).catch(() => {})
+        await rm(created.worktreePath, { recursive: true, force: true }).catch(() => {})
+      }
+      await execFileAsync('git', ['worktree', 'prune'], { cwd: repoRoot }).catch(() => {})
+      await rm(join(getDefaultWorktreeBaseDir(), meshName), { recursive: true, force: true }).catch(() => {})
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('honors a worktreeBaseDir override and cleanup accepts the overridden path', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-wt-override-base-')
+    try {
+      const branch = 'feat/override-base'
+      const meshName = 'override-base-mesh'
+      const overrideBase = join(dir, 'custom-worktrees')
+      const created = await createWorktree({ repoRoot, branch, meshName, worktreeBaseDir: overrideBase })
+      // The override wins: the worktree lands under the custom base, not the home default.
+      expect(created.worktreePath).toBe(resolveWorktreePath(repoRoot, meshName, branch, overrideBase))
+      expect(created.worktreePath.startsWith(overrideBase)).toBe(true)
+      expect(created.worktreePath.startsWith(getDefaultWorktreeBaseDir())).toBe(false)
+
+      // Cleanup resolves the SAME override from mesh.policy.worktreeBaseDir, so the
+      // guard accepts the overridden path (no unexpected_path refusal) and removes it.
+      const inlineMesh = {
+        id: 'mesh-override-base',
+        name: meshName,
+        policy: { worktreeBaseDir: overrideBase },
+        nodes: [
+          { id: 'source', workspace: repoRoot, repoRoot },
+          { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
+        ],
+      }
+      const { router } = createRouter()
+      const result: any = await router.execute('remove_mesh_node', { meshId: inlineMesh.id, nodeId: 'node-worktree', inlineMesh })
+      expect(result).toMatchObject({ success: true, removed: true, worktreeCleanup: { success: true } })
+      expect(existsSync(created.worktreePath)).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('cleanup guard removes a LEGACY <repoParent>/.adhdev-worktrees worktree (back-compat)', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-wt-legacy-base-')
+    try {
+      const branch = 'feat/legacy-base'
+      const meshName = 'legacy-base-mesh'
+      // Physically create the worktree at the OLD (pre-home-dir) location that
+      // createWorktree no longer produces, then register a node pointing at it.
+      const legacyPath = join(repoRoot, '..', '.adhdev-worktrees', meshName, 'feat-legacy-base')
+      await execFileAsync('git', ['worktree', 'add', '-b', branch, legacyPath], { cwd: repoRoot })
+      expect(existsSync(legacyPath)).toBe(true)
+      // Sanity: this is NOT the current default base — it only removes via back-compat.
+      expect(legacyPath.startsWith(getDefaultWorktreeBaseDir())).toBe(false)
+
+      const inlineMesh = {
+        id: 'mesh-legacy-base',
+        name: meshName,
+        policy: {},
+        nodes: [
+          { id: 'source', workspace: repoRoot, repoRoot },
+          { id: 'node-worktree', workspace: legacyPath, repoRoot: legacyPath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
+        ],
+      }
+      const { router } = createRouter()
+      const result: any = await router.execute('remove_mesh_node', { meshId: inlineMesh.id, nodeId: 'node-worktree', inlineMesh })
+      // The legacy path must NOT be rejected as an unexpected managed path.
+      expect(result?.worktreeCleanup?.code).not.toBe('mesh_worktree_cleanup_unexpected_path')
+      expect(result).toMatchObject({ success: true, removed: true, worktreeCleanup: { success: true } })
+      expect(existsSync(legacyPath)).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60000)
 })

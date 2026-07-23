@@ -427,6 +427,15 @@ export interface RepoMeshPolicy {
      * workers. Defaults to 'always' — zero behavior change unless the mesh opts in.
      */
     coordinatorIdlePushPolicy?: 'always' | 'auto_silent_on_dispatch';
+    /**
+     * Base directory under which mesh_clone_node physically creates managed
+     * worktrees, laid out as `<worktreeBaseDir>/<meshName>/<branch>`. When unset
+     * (the default), worktrees are placed under `<home>/.adhdev/worktrees`
+     * (getDefaultWorktreeBaseDir). The cleanup guard resolves the same base from
+     * this policy, so an override applied at clone time must remain set on the mesh
+     * for the node's lifetime.
+     */
+    worktreeBaseDir?: string;
 }
 
 export interface RepoMeshRelatedRepo {

@@ -96,6 +96,8 @@ export {
   parseWorktreeListOutput,
   removeWorktree,
   resolveWorktreePath,
+  resolveWorktreeBaseDir,
+  getDefaultWorktreeBaseDir,
 } from './git-worktree.js';
 export type {
   WorktreeBaseSync,

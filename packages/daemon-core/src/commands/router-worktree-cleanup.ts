@@ -11,7 +11,7 @@
  */
 import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
-import { resolve as pathResolve } from 'path';
+import { resolve as pathResolve, dirname as pathDirname, join as pathJoin } from 'path';
 import type { DaemonCommandRouter } from './router.js';
 import { LOG } from '../logging/logger.js';
 import { meshNodeIdMatches, daemonIdsEquivalent } from '@adhdev/mesh-shared';
@@ -20,6 +20,54 @@ import { checkWorktreeChangesPatchEquivalentInRef, MeshWorktreePatchContainmentS
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
 import { DEFAULT_MESH_POLICY, magiAutoLaunchedSessionCleanupDecision } from '../repo-mesh-types.js';
+
+/**
+ * Legacy pre-home-dir worktree layout: `<repoParent>/.adhdev-worktrees/<meshName>/<branch>`.
+ * Managed worktrees are now placed under `<home>/.adhdev/worktrees` (or a policy
+ * override), but the cleanup guard must still recognize a worktree that was
+ * physically created under the OLD base — otherwise a legacy residual node would
+ * be stranded ('unexpected_path' refusal) and could never be removed. Kept as a
+ * defensive back-compat candidate even though live legacy worktree nodes are
+ * currently zero.
+ */
+const LEGACY_WORKTREE_DIR_NAME = '.adhdev-worktrees';
+
+/**
+ * Compute the set of acceptable managed worktree paths for a node, normalized.
+ * The first candidate is the current base (policy override or home default) as
+ * resolved by resolveWorktreePath; the second is the legacy `<repoParent>/.adhdev-worktrees`
+ * layout so a worktree created before the base migration is still recognized as
+ * managed. The stored `workspace` is compared against every candidate.
+ */
+function acceptableManagedWorktreePaths(
+    resolveWorktreePath: (repoRoot: string, meshName: string, branch: string, worktreeBaseDir?: string) => string,
+    normalizePath: (value: string) => string,
+    repoRoot: string,
+    meshName: string,
+    branch: string,
+    worktreeBaseDir?: string,
+): string[] {
+    const safeBranch = branch.replace(/[/\\:*?"<>|]/g, '-').replace(/^\.+|\.+$/g, '');
+    const safeMeshName = meshName.replace(/[/\\:*?"<>|]/g, '-').replace(/^\.+|\.+$/g, '');
+    const legacyPath = pathJoin(pathDirname(repoRoot), LEGACY_WORKTREE_DIR_NAME, safeMeshName, safeBranch);
+    const candidates = [
+        resolveWorktreePath(repoRoot, meshName, branch, worktreeBaseDir),
+        legacyPath,
+    ];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const c of candidates) {
+        const n = normalizePath(c);
+        if (!seen.has(n)) { seen.add(n); out.push(n); }
+    }
+    return out;
+}
+
+/** Read a mesh policy's worktreeBaseDir override, or undefined when unset/blank. */
+function meshWorktreeBaseDir(mesh: any): string | undefined {
+    const v = mesh?.policy?.worktreeBaseDir;
+    return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+}
 
 export function sessionMatchesMeshNode(self: DaemonCommandRouter, record: any, node: any, nodeId: string, sessionIds?: Set<string>): boolean {
         const sessionId = typeof record?.sessionId === 'string' ? record.sessionId : '';
@@ -141,13 +189,19 @@ export async function precheckLocalWorktreeRemovable(self: DaemonCommandRouter, 
             const resolved = pathResolve(value);
             try { return fs.realpathSync(resolved); } catch { return resolved; }
         };
-        const expectedPath = normalizePath(resolveWorktreePath(repoRoot, String(args.mesh?.name || args.mesh?.id || 'mesh'), args.node.worktreeBranch));
+        const meshName = String(args.mesh?.name || args.mesh?.id || 'mesh');
+        // Back-compat: accept the current base (policy override or home default) AND
+        // the legacy <repoParent>/.adhdev-worktrees layout, so a worktree created
+        // before the base migration is not stranded by an 'unexpected_path' refusal.
+        const expectedPaths = acceptableManagedWorktreePaths(
+            resolveWorktreePath, normalizePath, repoRoot, meshName, args.node.worktreeBranch, meshWorktreeBaseDir(args.mesh),
+        );
         const actualPath = normalizePath(workspace);
-        if (actualPath !== expectedPath) {
+        if (!expectedPaths.includes(actualPath)) {
             return {
                 ok: false,
                 code: 'mesh_worktree_cleanup_unexpected_path',
-                error: `Refusing to remove worktree '${workspace}' because it is not at the expected managed path '${expectedPath}'`,
+                error: `Refusing to remove worktree '${workspace}' because it is not at the expected managed path '${expectedPaths[0]}'`,
                 recoveryHint: 'Use git worktree list/status to inspect the path. Retry only after confirming the mesh node metadata points to an ADHDev-managed worktree.' + sessionPreservedNote,
             };
         }
@@ -249,13 +303,19 @@ export async function cleanupLocalWorktreeNode(self: DaemonCommandRouter, args: 
             const resolved = pathResolve(value);
             try { return fs.realpathSync(resolved); } catch { return resolved; }
         };
-        const expectedPath = normalizePath(resolveWorktreePath(repoRoot, String(args.mesh?.name || args.mesh?.id || 'mesh'), args.node.worktreeBranch));
+        const meshName = String(args.mesh?.name || args.mesh?.id || 'mesh');
+        // Back-compat: accept the current base (policy override or home default) AND
+        // the legacy <repoParent>/.adhdev-worktrees layout — mirrors the precheck so a
+        // legacy-located worktree is still removable rather than stranded.
+        const expectedPaths = acceptableManagedWorktreePaths(
+            resolveWorktreePath, normalizePath, repoRoot, meshName, args.node.worktreeBranch, meshWorktreeBaseDir(args.mesh),
+        );
         const actualPath = normalizePath(workspace);
-        if (actualPath !== expectedPath) {
+        if (!expectedPaths.includes(actualPath)) {
             return {
                 success: false,
                 code: 'mesh_worktree_cleanup_unexpected_path',
-                error: `Refusing to remove worktree '${workspace}' because it is not at the expected managed path '${expectedPath}'`,
+                error: `Refusing to remove worktree '${workspace}' because it is not at the expected managed path '${expectedPaths[0]}'`,
                 recoveryHint: 'Use git worktree list/status to inspect the path. Retry only after confirming the mesh node metadata points to an ADHDev-managed worktree.',
             };
         }

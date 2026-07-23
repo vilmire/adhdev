@@ -4,12 +4,16 @@
  * Used by the `clone_mesh_node` daemon command to create isolated
  * worktree-based nodes for parallel branch work within a mesh.
  *
- * Worktrees are placed outside the source repo to avoid .gitignore
- * pollution and submodule conflicts:
- *   <repoParent>/.adhdev-worktrees/<meshName>/<branch>/
+ * Worktrees are placed under a home-directory base (outside every source repo)
+ * to avoid .gitignore pollution and submodule conflicts:
+ *   <home>/.adhdev/worktrees/<meshName>/<branch>/
+ *
+ * The base can be overridden per-clone via `worktreeBaseDir` (mesh policy);
+ * see resolveWorktreeBaseDir / resolveWorktreePath.
  */
 
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
@@ -17,7 +21,17 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-const WORKTREE_DIR_NAME = '.adhdev-worktrees';
+/** Directory name (under the base) that namespaces all managed worktrees. */
+const WORKTREE_DIR_NAME = 'worktrees';
+
+/**
+ * Default base directory that holds all managed mesh worktrees.
+ * `os.homedir()` is cross-platform (%USERPROFILE% on win32), and `path.join`
+ * emits the platform-native separator, so this is correct on win32 too.
+ */
+export function getDefaultWorktreeBaseDir(): string {
+    return path.join(os.homedir(), '.adhdev', WORKTREE_DIR_NAME);
+}
 const GIT_TIMEOUT_MS = 30_000;
 const GIT_MAX_BUFFER = 4 * 1024 * 1024;
 const SUBMODULE_WORKTREE_REMOVE_RE = /working trees containing submodules cannot be moved or removed/i;
@@ -35,6 +49,13 @@ export interface WorktreeCreateOptions {
     meshName: string;
     /** Override the auto-resolved target directory */
     targetDir?: string;
+    /**
+     * Base directory under which the worktree is placed as
+     * `<worktreeBaseDir>/<meshName>/<branch>`. When omitted (or blank), defaults
+     * to `<home>/.adhdev/worktrees` (see getDefaultWorktreeBaseDir). Ignored when
+     * `targetDir` is given.
+     */
+    worktreeBaseDir?: string;
     /**
      * Remote to fetch+compare the base branch against before branching.
      * Default: 'origin'.
@@ -122,15 +143,27 @@ export interface WorktreeRemoveResult {
 // ─── Path Resolution ────────────────────────────
 
 /**
- * Resolve the target directory for a new worktree.
- * Places worktrees at: <repoParent>/.adhdev-worktrees/<meshName>/<branch>/
+ * Normalize a caller-supplied worktree base override, falling back to the
+ * home-directory default when it is missing/blank. Exported so the cleanup
+ * guard resolves the exact same base as creation did.
  */
-export function resolveWorktreePath(repoRoot: string, meshName: string, branch: string): string {
+export function resolveWorktreeBaseDir(worktreeBaseDir?: string): string {
+    const override = typeof worktreeBaseDir === 'string' ? worktreeBaseDir.trim() : '';
+    return override || getDefaultWorktreeBaseDir();
+}
+
+/**
+ * Resolve the target directory for a new worktree.
+ * Places worktrees at: <worktreeBaseDir>/<meshName>/<branch>/, where
+ * `worktreeBaseDir` defaults to `<home>/.adhdev/worktrees` (getDefaultWorktreeBaseDir).
+ * The mesh-name namespacing keeps multi-repo / multi-branch clones from colliding.
+ */
+export function resolveWorktreePath(repoRoot: string, meshName: string, branch: string, worktreeBaseDir?: string): string {
     // Sanitize branch name for filesystem (e.g. feat/auth → feat-auth)
     const safeBranch = branch.replace(/[/\\:*?"<>|]/g, '-').replace(/^\.+|\.+$/g, '');
     const safeMeshName = meshName.replace(/[/\\:*?"<>|]/g, '-').replace(/^\.+|\.+$/g, '');
-    const parentDir = path.dirname(repoRoot);
-    return path.join(parentDir, WORKTREE_DIR_NAME, safeMeshName, safeBranch);
+    const baseDir = resolveWorktreeBaseDir(worktreeBaseDir);
+    return path.join(baseDir, safeMeshName, safeBranch);
 }
 
 // ─── Base sync (anti-stale-base) ─────────────────
@@ -266,7 +299,7 @@ async function resolveWorktreeBaseStartPoint(
 export async function createWorktree(opts: WorktreeCreateOptions): Promise<WorktreeCreateResult> {
     const { repoRoot, branch, baseBranch, meshName } = opts;
     const remote = (opts.remote || 'origin').trim() || 'origin';
-    const targetDir = opts.targetDir || resolveWorktreePath(repoRoot, meshName, branch);
+    const targetDir = opts.targetDir || resolveWorktreePath(repoRoot, meshName, branch, opts.worktreeBaseDir);
 
     if (existsSync(targetDir)) {
         throw new Error(`Worktree target directory already exists: ${targetDir}`);

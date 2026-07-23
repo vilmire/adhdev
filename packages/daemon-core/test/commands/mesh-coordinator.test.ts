@@ -612,7 +612,8 @@ describe('resolveMeshCoordinatorSetup', () => {
       name: 'Inline Mesh',
       repoIdentity: 'example/repo',
       nodes: [{ id: 'node-source', workspace: repo, repoRoot: repo, daemonId: 'daemon-source', machineId: 'mreg-source', policy: { canPush: true } }],
-      policy: {},
+      // Keep the cloned worktree inside the temp dir (default is <home>/.adhdev/worktrees).
+      policy: { worktreeBaseDir: join(root, 'worktrees') },
       coordinator: {},
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

@@ -1,5 +1,12 @@
 import { promisify } from 'node:util'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import {
+  resolveWorktreePath,
+  resolveWorktreeBaseDir,
+  getDefaultWorktreeBaseDir,
+} from '../../src/git/git-worktree'
 
 type ExecResult = {
   stdout?: string
@@ -142,5 +149,37 @@ describe('createWorktree stale-base resolution', () => {
     expect(result.baseSync).toBeUndefined()
     expect(calls.map(c => c.args[0])).toEqual(['worktree'])
     expect(lastAdd(calls)).toEqual(['worktree', 'add', expect.any(String), '-b', 'task/legacy', 'main'])
+  })
+})
+
+describe('resolveWorktreePath base directory', () => {
+  it('defaults the base to <home>/.adhdev/worktrees, namespaced by mesh + branch', () => {
+    expect(getDefaultWorktreeBaseDir()).toBe(path.join(os.homedir(), '.adhdev', 'worktrees'))
+    // The base is home-derived, NOT dirname(repoRoot) as in the legacy layout.
+    const resolved = resolveWorktreePath('/some/deep/repo', 'my mesh', 'feat/auth')
+    expect(resolved).toBe(path.join(getDefaultWorktreeBaseDir(), 'my mesh', 'feat-auth'))
+    expect(resolved.startsWith(getDefaultWorktreeBaseDir())).toBe(true)
+    // repoRoot no longer contributes to the base path.
+    expect(resolved).not.toContain('/some/deep')
+  })
+
+  it('sanitizes mesh + branch segments for the filesystem', () => {
+    const resolved = resolveWorktreePath('/repo', 'Team/Mesh', 'feat/auth:v2')
+    expect(resolved).toBe(path.join(getDefaultWorktreeBaseDir(), 'Team-Mesh', 'feat-auth-v2'))
+  })
+
+  it('honors a worktreeBaseDir override for the base', () => {
+    const override = path.join('/custom', 'wt-base')
+    const resolved = resolveWorktreePath('/repo', 'm', 'feat/x', override)
+    expect(resolved).toBe(path.join(override, 'm', 'feat-x'))
+    expect(resolved.startsWith(override)).toBe(true)
+    expect(resolved.startsWith(getDefaultWorktreeBaseDir())).toBe(false)
+  })
+
+  it('resolveWorktreeBaseDir falls back to the home default for missing/blank overrides', () => {
+    expect(resolveWorktreeBaseDir(undefined)).toBe(getDefaultWorktreeBaseDir())
+    expect(resolveWorktreeBaseDir('')).toBe(getDefaultWorktreeBaseDir())
+    expect(resolveWorktreeBaseDir('   ')).toBe(getDefaultWorktreeBaseDir())
+    expect(resolveWorktreeBaseDir('/x/y')).toBe('/x/y')
   })
 })
