@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTransport } from '../../context/TransportContext'
 import type { ActiveConversation } from './types'
 import SpecFormBuilder, { type SpecModel, type FsmCond, type PreviewMap, type SectionDefModel, type SectionPreviewState } from './SpecFormBuilder'
+import { normalizeSpecSnapshot } from './spec-debug-normalize'
 
 interface StateHistoryEntry {
     stateId: string
@@ -71,6 +72,11 @@ interface SpecSnapshot {
     providerSessionId?: string | null
     messages?: Array<{ role: string; content: string; receivedAt?: number }>
     committedMessages?: Array<{ role: string; content: string; receivedAt?: number }>
+    /** True when the snapshot came from a native-source / non-FSM provider (e.g.
+     *  kimi provider.v1.json) — state-machine sections are N/A. */
+    nativeSource?: boolean
+    /** transcriptAuthority reported by the provider, when known. */
+    transcriptAuthority?: string
 }
 
 interface SpecDebugResult {
@@ -371,7 +377,10 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
         }
     }, [sendCommand, daemonId, data?.snapshot?.specPath, specSource, specModel, rawMode, validationErrors, load])
 
-    const snap = data?.snapshot
+    // Normalize whatever shape the daemon returned (spec-driven adapter OR
+    // native-source / legacy diagnostics adapter) into the panel snapshot, so a
+    // native-source provider like kimi renders instead of showing an empty body.
+    const snap = normalizeSpecSnapshot(data?.snapshot) as unknown as SpecSnapshot | null
 
     const handleSnapshot = async () => {
         let resolved = data
@@ -379,11 +388,16 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
             await load()
             resolved = data
         }
-        const s = resolved?.snapshot
+        const s = normalizeSpecSnapshot(resolved?.snapshot) as unknown as SpecSnapshot | null
         const lines: string[] = []
+        const nativeSource = s?.nativeSource === true
         lines.push('# Spec Debug Snapshot')
         lines.push(`Generated: ${new Date().toISOString()}`)
         lines.push(`Session: ${resolved?.sessionId ?? ''} (${resolved?.providerType ?? ''})`)
+        if (nativeSource) {
+            lines.push(`Provider kind: native-source (no state-machine spec — State History / FSM / Sections are N/A)`)
+            if (s?.transcriptAuthority) lines.push(`transcriptAuthority: ${s.transcriptAuthority}`)
+        }
         lines.push(`Spec: ${s?.spec_id ?? ''} (${s?.specPath ?? ''})`)
         lines.push(`Provider: ${s?.name ?? ''} (${s?.cliType ?? ''})`)
         lines.push(`Working dir: ${s?.workingDir ?? ''}`)
@@ -410,6 +424,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
         }
         lines.push('')
         lines.push('## State History (last 20)')
+        if (nativeSource) lines.push('N/A (native-source provider — no state-machine rules)')
         const history = s?.stateHistory ? [...s.stateHistory].reverse().slice(0, 20) : []
         for (const entry of history) {
             const reason = entry.reason != null ? (typeof entry.reason === 'string' ? entry.reason : JSON.stringify(entry.reason)) : ''
@@ -420,7 +435,9 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
         }
         lines.push('')
         lines.push('## Sections')
-        if (s?.sections) {
+        if (nativeSource) {
+            lines.push('N/A (native-source provider — no state-machine sections)')
+        } else if (s?.sections) {
             for (const [id, text] of Object.entries(s.sections)) {
                 const preview = text.split('\n').slice(0, 3).join('\n')
                 lines.push(`${id}: ${preview}`)
@@ -600,6 +617,23 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
 
                     {snap && (
                         <>
+                            {/* Native-source providers (e.g. kimi provider.v1.json) have no
+                                state-machine spec, so State History / FSM / Sections are N/A.
+                                Everything else — status, screen, modal, transcript — still
+                                shows. Surface the reason so the panel doesn't look broken. */}
+                            {snap.nativeSource && (
+                                <div className="text-[11px] text-text-secondary bg-surface-secondary border border-border-default rounded-md px-3 py-2">
+                                    <span className="text-accent-primary font-semibold">Native-source provider</span>
+                                    <span className="text-text-muted"> — no state-machine spec.</span>
+                                    <span className="text-text-muted"> State History, FSM transitions, and Sections are </span>
+                                    <span className="text-text-secondary font-mono">N/A</span>
+                                    <span className="text-text-muted">. Status, screen, modal, and transcript below are live.</span>
+                                    {snap.transcriptAuthority && (
+                                        <span className="text-text-muted font-mono"> (transcriptAuthority: {snap.transcriptAuthority})</span>
+                                    )}
+                                </div>
+                            )}
+
                             {/* Provider info */}
                             <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[11px] bg-surface-secondary rounded-md px-3 py-2 border border-border-default">
                                 {snap.name && (
@@ -711,7 +745,13 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                             <Divider />
 
                             {/* Sections */}
-                            {snap.sections && Object.keys(snap.sections).length > 0 && (
+                            {snap.nativeSource && (
+                                <div>
+                                    <SectionLabel>Sections</SectionLabel>
+                                    <div className="text-text-muted text-[11px] italic px-1">N/A (native-source provider)</div>
+                                </div>
+                            )}
+                            {!snap.nativeSource && snap.sections && Object.keys(snap.sections).length > 0 && (
                                 <div>
                                     <SectionLabel>Sections</SectionLabel>
                                     <div className="space-y-1">
@@ -748,7 +788,13 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                             <Divider />
 
                             {/* State history */}
-                            {snap.stateHistory && snap.stateHistory.length > 0 && (
+                            {snap.nativeSource && (
+                                <div>
+                                    <SectionLabel>State History</SectionLabel>
+                                    <div className="text-text-muted text-[11px] italic px-1">N/A (native-source provider — no state-machine rules)</div>
+                                </div>
+                            )}
+                            {!snap.nativeSource && snap.stateHistory && snap.stateHistory.length > 0 && (
                                 <div>
                                     <SectionLabel>State History ({snap.stateHistory.length})</SectionLabel>
                                     <div className="space-y-px">
