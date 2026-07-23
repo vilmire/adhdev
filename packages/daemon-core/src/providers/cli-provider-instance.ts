@@ -2108,10 +2108,45 @@ export class CliProviderInstance implements ProviderInstance {
                     if (allowMissingAssistantTimeout && pending.previousStatus === 'waiting_approval') {
                         return { reason: 'missing_final_assistant', terminal: false, holdForTranscript: true };
                     }
-                    return { reason: 'missing_final_assistant', terminal: true, allowTimeout: allowMissingAssistantTimeout };
+                    // (EARLY-EMIT FLOOR, external-native — mission f2f6da1b defect A) We reached
+                    // here because the external-native transcript probe found NO in-turn final
+                    // assistant reply (the assistant-tail branch at the top of this block already
+                    // returned null when it did). Two provider classes land here with very
+                    // different meanings:
+                    //
+                    //   • claude-cli — the transcript write merely TRAILS the (genuinely finished)
+                    //     idle transition by a fraction of a second (a background-child turn's
+                    //     answer lands moments later). CANON-C's decoupled-IMMEDIATE emit is the
+                    //     designed, correct behavior here (weak now, upgraded by the reconcile once
+                    //     the write lands) so the coordinator learns idle without delay. It stays
+                    //     UN-floored (owner decision, mission f2f6da1b).
+                    //
+                    //   • codex-cli / kimi — the SAME idle read is routinely a MID-TOOL-CALL quiet
+                    //     valley: the spec `busy→idle` fires on a ~1.5s cursor-stable window between
+                    //     tool calls with `Working (` / `esc to interrupt` momentarily off-screen.
+                    //     The turn is NOT over and no final assistant will ever land at this instant.
+                    //     Without the floor the CANON-C decoupled path fired a weak completed at the
+                    //     first ~13s poll (evidenceLevel=weak, finalAssistantPresent=false) while the
+                    //     worker was still `Working (2m+)` — the early-completion false-positive.
+                    //     Mark the block noExternalTranscriptSource so the CANON-C min-elapsed floor
+                    //     holds the weak emit until either the transcript's final assistant lands
+                    //     (block clears → genuine emit) OR the worker stays CONTINUOUSLY quiet-idle
+                    //     past the floor (a real answerless turn-end). A mid-tool-call quiet never
+                    //     reaches the floor because the next tool call's idle→busy transition cancels
+                    //     the pending.
+                    //
+                    // No provider manifest flag distinguishes write-lag from mid-tool-call, so the
+                    // scope is the concrete write-lag provider (claude-cli) vs the rest.
+                    const isWriteLagNativeSource = this.type === 'claude-cli';
+                    return {
+                        reason: 'missing_final_assistant',
+                        terminal: true,
+                        allowTimeout: allowMissingAssistantTimeout,
+                        ...(isWriteLagNativeSource ? {} : { noExternalTranscriptSource: true }),
+                    };
                 }
                 if ((this.provider as any).requiresFinalAssistantBeforeIdle === true) {
-                    return { reason: 'missing_final_assistant', terminal: true, allowTimeout: allowMissingAssistantTimeout };
+                    return { reason: 'missing_final_assistant', terminal: true, allowTimeout: allowMissingAssistantTimeout, noExternalTranscriptSource: true };
                 }
             } else {
                 LOG.debug('CLI', `[${this.type}] missing_final_assistant (not ownsExternal) requiresFinalAssistant=${!!(this.provider as any).requiresFinalAssistantBeforeIdle}`);
