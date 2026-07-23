@@ -286,7 +286,14 @@ export function isPurePtyTranscriptProvider(provider: {
     transcriptAuthority?: 'provider' | 'daemon';
     nativeHistory?: unknown;
     tui?: Record<string, unknown>;
-}): boolean {
+} | null | undefined): boolean {
+    // No provider (e.g. an instance whose module isn't set when the stall watchdog
+    // ticks) ⇒ not the pure-PTY class. Guarding here protects every caller — the
+    // stall-reconcile and turn-start paths pass this.provider unguarded, and
+    // this.provider is genuinely nullable at runtime (see this.provider?.nativeHistory
+    // in cli-provider-instance.ts). Matches resolveLocalSessionPurePty's own
+    // no-provider ⇒ not-pure-PTY contract.
+    if (!provider) return false;
     if (provider.transcriptAuthority === 'provider') return false;
     // nativeHistory is a top-level provider field not surfaced on
     // CliProviderModule; read it via the same structural shape the adapter uses.
