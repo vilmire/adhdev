@@ -69,13 +69,15 @@ import {
     resolveCoordinatorDaemonIds,
     daemonHostsMesh,
     resolveCoordinatorSelfIds,
+    daemonIdListIncludes,
 } from './mesh-reconcile-identity.js';
 import {
     resolveAutoPruneMinAgeMs,
     resolvePendingHeldDrainEscalateMs,
     resolveReconcileIntervalMs,
 } from './mesh-reconcile-config.js';
-import { pullRemoteNodeQueues, pullPendingEventsFromNode } from './mesh-remote-event-pull.js';
+import { pullRemoteNodeQueues, pullPendingEventsFromNode, reprobeWorkerStatus } from './mesh-remote-event-pull.js';
+import { isPurePtyTranscriptProvider } from '../cli-adapters/provider-cli-shared.js';
 import { runDiskRetentionSweep, detectAndSignalOrphanWorktrees } from './mesh-disk-retention.js';
 import {
     reconcileUnterminatedDirectDispatches,
@@ -787,6 +789,118 @@ function assignedRowLiveStatusIsAwaitingApproval(
     }
 }
 
+// EARLY-IDLE-COMPLETION-FALSE-POSITIVE — resolve whether the assigned session's provider is
+// the pure-PTY transcript class (kimi and kin — no native history, no provider authority), from
+// the LOCAL instance when it is present. Returns:
+//   true      → local instance is a pure-PTY provider (the class the early rescue exists for)
+//   false     → local instance is NOT pure-PTY (native / provider-authoritative)
+//   undefined → no local instance (remote worker / gone / id-form skew) — pure-PTY unknowable here
+// A remote pure-PTY worker is handled by the reprobe path (a fresh-idle read positively confirms
+// the session is settled before the streak accrues), not by this local-only capability check.
+function resolveLocalSessionPurePty(components: DaemonComponents, sessionId: string): boolean | undefined {
+    try {
+        const instances = components.instanceManager?.getByCategory?.('cli') || [];
+        const inst = instances.find((i: any) => {
+            const sid = readNonEmptyString(i?.getState?.().instanceId);
+            return sid && sessionIdsEquivalent(sid, sessionId);
+        }) as { provider?: unknown } | undefined;
+        if (!inst) return undefined; // remote / gone / id-form skew — not locally observable
+        const provider = inst.provider;
+        if (!provider || typeof provider !== 'object') return undefined;
+        return isPurePtyTranscriptProvider(provider as Parameters<typeof isPurePtyTranscriptProvider>[0]);
+    } catch {
+        return undefined;
+    }
+}
+
+// EARLY-IDLE-COMPLETION-FALSE-POSITIVE — decide whether the early transcript-evidence completion
+// streak may ACCRUE this tick for an assigned row. This hardens the original arm gate, which only
+// checked `resolveSessionBusyVerdict(...) !== 'GENERATING'` — a gate a REMOTE worker (local verdict
+// UNKNOWN, not GENERATING) passed unconditionally, so its "8s continuous idle" streak degenerated to
+// 8s of wall-clock even while the worker was genuinely mid-turn, and a startup-grace boot-window idle
+// (before the first turn ever started) also passed. The row was then early-completed off a preamble.
+//
+// Two added requirements, defense-in-depth on top of the existing confirmed-delivery / no-terminal-
+// ledger / bound-session gate the caller applies:
+//   (a) POSITIVE idle evidence, not merely "not GENERATING". A LOCAL IDLE_CONFIRMED verdict qualifies
+//       directly. A remote/UNKNOWN verdict is RE-PROBED with a fresh read_chat status this tick: only
+//       a definitively 'idle' read lets the streak accrue; any active status (generating/waiting/…),
+//       or an inconclusive read, resets it. This is what stops the remote worker's mid-turn busy from
+//       silently passing as "continuous idle".
+//   (b) TURN-START evidence, so a boot-window / never-consumed idle cannot early-complete a preamble.
+//       taskDeliveryConsumed===true (the worker emitted agent:generating_started) satisfies it. When
+//       the delivery was never consumed, only a LOCAL pure-PTY provider — the exact class that never
+//       emits generating_started and that this rescue exists for — is still allowed; a native/
+//       provider-authoritative worker that hasn't started its turn is NOT armed (it will complete via
+//       its own emit or the normal grace). A remote-not-consumed worker whose provider class is
+//       unknowable locally falls back to the reprobe: it may accrue only once (a) reads it positively
+//       idle, and the poll's post-dispatch + trailing-tool-activity guards remain the final net.
+async function evaluateEarlyIdleTranscriptArm(
+    components: DaemonComponents,
+    mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
+    store: MeshRuntimeStore,
+    row: { id: string; assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string },
+    localDaemonId?: string,
+    selfIds: string[] = [],
+): Promise<boolean> {
+    const sessionId = readNonEmptyString(row.assignedSessionId);
+    if (!sessionId) return false;
+
+    // (a) POSITIVE idle evidence.
+    const verdict = resolveSessionBusyVerdict(components, sessionId);
+    if (verdict === 'GENERATING') return false; // locally observed mid-turn — never accrue
+    if (verdict === 'UNKNOWN') {
+        // Remote / gone / id-form skew. First consult the LIVE mesh node snapshot (the same
+        // cross-daemon status feed the approval-hold guard and mesh_status use): if it already
+        // reports a definitively NON-idle status (generating / waiting_approval / awaiting_choice /
+        // …), the worker is not settled — reset the streak WITHOUT a read_chat. This keeps the
+        // streak the cheap per-tick gate for the common case and avoids probing a worker the graph
+        // already knows is busy or parked at an approval.
+        const nodeId = readNonEmptyString(row.assignedNodeId);
+        const node = (mesh.nodes ?? []).find(n => n.id === nodeId);
+        const liveStatus = nodeId
+            ? readNonEmptyString(sessionStatusFromNodes(mesh.nodes, nodeId, sessionId).status).toLowerCase()
+            : '';
+        if (liveStatus && liveStatus !== 'idle') return false; // live graph says non-idle → not a turn-end
+        if (!liveStatus) {
+            // No live snapshot for this session — re-probe the worker's own status this tick so a
+            // genuinely busy remote worker breaks the streak instead of coasting through as "not
+            // GENERATING". getInstance may be absent on some component surfaces (tests / standalone),
+            // so guard it.
+            const nodeDaemonId = readNonEmptyString(node?.daemonId);
+            const isLocalNode = !nodeDaemonId
+                || daemonIdsEquivalent(nodeDaemonId, localDaemonId)
+                || daemonIdListIncludes(selfIds, nodeDaemonId)
+                || !!components.instanceManager?.getInstance?.(sessionId);
+            const providerType = readNonEmptyString(row.assignedProviderType);
+            const readArgs: Record<string, unknown> = {
+                sessionId,
+                targetSessionId: sessionId,
+                tailLimit: 1,
+                ...(node?.workspace ? { workspace: node.workspace } : {}),
+                ...(providerType ? { agentType: providerType, providerType } : {}),
+            };
+            const probedStatus = await reprobeWorkerStatus(components, { isLocalNode, nodeDaemonId, readArgs });
+            // Only a positively-idle re-probe lets the streak accrue. A non-idle status (the worker
+            // IS busy) or an inconclusive read (null — transport error / no payload) resets it: we
+            // never treat "couldn't tell" as idle for this early-completion path.
+            if (probedStatus !== 'idle') return false;
+        }
+    }
+
+    // (b) TURN-START evidence (guards the boot-window / preamble false positive).
+    if (store.taskDeliveryConsumed(mesh.id, row.id)) return true; // worker emitted generating_started
+    // Delivery never consumed. Preserve the kimi rescue ONLY for the LOCAL pure-PTY class (which
+    // never emits generating_started); a native/provider-authoritative local worker that hasn't
+    // started its turn must NOT be armed off a boot-window idle. For a remote worker (pure-PTY
+    // unknowable here) the positive-idle reprobe in (a) is the gate — allow accrual and let the poll
+    // enforce post-dispatch + trailing-tool-activity finality.
+    const localPurePty = resolveLocalSessionPurePty(components, sessionId);
+    if (localPurePty === true) return true;   // local pure-PTY — the class this rescue targets
+    if (localPurePty === false) return false; // local native/provider-owned, turn not started — hold
+    return verdict === 'UNKNOWN';             // remote, unknowable class — trust the (a) reprobe
+}
+
 // PHASE 2.5 — assigned-stranded dispatch watchdog (Bug B). claimNextTask atomically
 // flips a row to 'assigned' BEFORE the fire-and-forget dispatch runs. If that dispatch
 // neither rejects (→ no .catch requeue) nor is confirmed delivered — a relay that hangs
@@ -840,12 +954,18 @@ async function recoverStrandedAssignedDispatches(
         // elapses. pollAssignedTaskTerminalEvidence enforces idle + final-assistant-after-dispatch, so
         // a mid-turn / stale-tail / unreadable worker is never falsely completed — a non-qualifying
         // tick clears the streak below.
-        if (
+        // EARLY-IDLE-COMPLETION-FALSE-POSITIVE: the arm gate now requires POSITIVE idle evidence
+        // (a fresh-idle reprobe for a remote/UNKNOWN worker, not merely "not GENERATING") AND
+        // turn-start evidence (delivery consumed, or the local pure-PTY class this rescue targets),
+        // so a mid-turn remote worker or a boot-window preamble can no longer coast the continuous-
+        // idle streak to a false completion. See evaluateEarlyIdleTranscriptArm.
+        const earlyArm =
             store.taskHasConfirmedDelivery(meshId, row.id)
             && !findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id })
             && readNonEmptyString(row.assignedSessionId)
-            && resolveSessionBusyVerdict(components, row.assignedSessionId!) !== 'GENERATING'
-        ) {
+                ? await evaluateEarlyIdleTranscriptArm(components, mesh, store, row, localDaemonId, selfIds)
+                : false;
+        if (earlyArm) {
             const since = assignedIdleFinalAssistantSince.get(idleTranscriptStreakKey);
             if (since === undefined) {
                 assignedIdleFinalAssistantSince.set(idleTranscriptStreakKey, nowMs);

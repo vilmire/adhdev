@@ -156,6 +156,59 @@ export function selectFinalAssistantTurnEndMessage(
   return null;
 }
 
+/**
+ * EARLY-IDLE-COMPLETION-FALSE-POSITIVE — trailing tool/terminal activity detector.
+ *
+ * True when the transcript's LAST non-empty user-facing assistant bubble is followed
+ * by one or more TOOL / TERMINAL activity bubbles (a tool_use/command the assistant
+ * fired AFTER its text) — i.e. the assistant emitted a preamble ("Let me explore…"),
+ * then started running Read/Grep, so the turn is still executing and its answer has
+ * not landed. Callers that would otherwise promote that preamble to a turn-end summary
+ * off a momentary (startup-grace / inter-tool) idle read use this as a veto.
+ *
+ * Deliberately NARROW so the pure-PTY completion rescue is preserved:
+ *   - Only TOOL/TERMINAL activity trailing the assistant vetoes. A trailing THOUGHT or
+ *     status bubble does NOT (a finished turn can end on an internal thought), matching
+ *     selectFinalAssistantTurnEndMessage's skip set minus the "still-working" signals.
+ *   - A genuinely FINISHED worker (final assistant last, no trailing tool activity —
+ *     the kimi pure-PTY continuous-idle shape) returns false, so its early completion
+ *     is untouched.
+ *
+ * Returns false when there is no final assistant bubble at all (the caller's
+ * selectFinalAssistantTurnEndMessage already handles that as "not a turn end").
+ */
+export function hasTrailingToolActivityAfterFinalAssistant(
+  messages: ChatMessage[] | null | undefined,
+): boolean {
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  let sawTrailingToolActivity = false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg) continue;
+    const classification = classifyChatMessageVisibility(msg);
+    // A trailing user-facing assistant/model bubble with real text ends the scan:
+    // whether we saw a tool AFTER it is the verdict.
+    if (classification.isUserFacing && (msg.role === 'assistant' || msg.role === 'model')) {
+      if (flattenContent(msg.content).trim()) return sawTrailingToolActivity;
+      // Empty streaming assistant bubble — keep scanning back past it, same as
+      // selectFinalAssistantTurnEndMessage (which returns null here); an empty tail
+      // isn't a turn end, so there is nothing to veto.
+      return false;
+    }
+    if (classification.isUserFacing) {
+      // A trailing user bubble (freshly dispatched task, no reply) → no assistant
+      // turn end below it to veto.
+      return false;
+    }
+    // Non-user-facing activity/internal bubble sitting AFTER the (not-yet-seen)
+    // assistant bubble. Only tool/terminal activity signals an in-flight turn.
+    if (classification.kind === 'tool' || classification.kind === 'terminal') {
+      sawTrailingToolActivity = true;
+    }
+  }
+  return false;
+}
+
 export const BUILTIN_CHAT_MESSAGE_KINDS = ['standard', 'thought', 'tool', 'terminal', 'system'] as const;
 
 export type BuiltinChatMessageKind = typeof BUILTIN_CHAT_MESSAGE_KINDS[number];

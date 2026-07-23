@@ -26,7 +26,7 @@ import { getActiveDirectDispatches, getQueue } from './mesh-work-queue.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
 import { reconcileDirectDispatchCompletionFromTranscript } from './mesh-events-stale.js';
-import { extractFinalAssistantSummaryEvidence } from '../providers/chat-message-normalization.js';
+import { extractFinalAssistantSummaryEvidence, hasTrailingToolActivityAfterFinalAssistant } from '../providers/chat-message-normalization.js';
 import type { ChatMessage } from '../types.js';
 import {
     getMeshV2BackstopCounters,
@@ -482,6 +482,17 @@ export async function pollAssignedTaskTerminalEvidence(
     const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
     const evidence = extractFinalAssistantSummaryEvidence(messages);
     if (!evidence.finalSummary) return null; // idle but no assistant result yet → not a turn-end
+
+    // EARLY-IDLE-COMPLETION-FALSE-POSITIVE (poll defense-in-depth): a momentary idle read
+    // (startup-grace, or the sliver between an assistant preamble and the tool it fires) can
+    // show an assistant "Let me explore…" bubble FOLLOWED by trailing Read/Grep tool_use — a
+    // turn that is still executing, not a turn-end. selectFinalAssistantTurnEndMessage skips
+    // those trailing tool bubbles and would promote the preamble, so guard here: if a
+    // tool/terminal activity bubble trails the final assistant message, the worker is mid-turn
+    // — refuse the completion (fall through to the caller's reclaim/grace path). A genuinely
+    // finished pure-PTY worker ends on its final assistant with no trailing tool activity, so
+    // the kimi rescue is preserved.
+    if (hasTrailingToolActivityAfterFinalAssistant(messages)) return null;
 
     // Stale-summary guard (same bar as PHASE 4): a reused session's transcript tail may hold a
     // PRIOR task's summary. Require the final assistant message to be dated at/after THIS task's

@@ -3264,6 +3264,11 @@ describe('runMeshReconcileTick', () => {
 
         const idleInstance = {
           category: 'cli',
+          // A genuine LOCAL pure-PTY provider (kimi and kin): no native history, not
+          // provider-authoritative, tui transcript scope 'buffer' — the class the early rescue
+          // exists for. The hardened arm gate (evaluateEarlyIdleTranscriptArm) recognises this
+          // and still arms even though the delivery was never 'acked' (generating_started lost).
+          provider: { type: 'kimi', category: 'cli', tui: { transcriptPty: { scope: 'buffer' } } },
           getState: () => ({ instanceId: sessionId, status: 'idle', type: 'kimi', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
         }
         const readChat = vi.fn(async (cmd: string) => {
@@ -3348,6 +3353,240 @@ describe('runMeshReconcileTick', () => {
 
         const row = getQueue(meshId).find(t => t.id === claimed.id)!
         expect(row.status).toBe('assigned') // still assigned — the row is young, no deadline hit either
+        expect(readLedgerEntries(meshId).some(
+          e => (e.payload as any)?.source === 'early_idle_transcript_evidence',
+        )).toBe(false)
+      } finally {
+        vi.useRealTimers()
+        cleanup(meshId)
+      }
+    })
+
+    // ── EARLY-IDLE-COMPLETION-FALSE-POSITIVE (arm-gate hardening + poll defense) ──────
+    // The original early-transcript arm gate only checked `resolveSessionBusyVerdict !== 'GENERATING'`.
+    // A REMOTE worker's LOCAL verdict is UNKNOWN (no local instance), which is not GENERATING — so a
+    // genuinely mid-turn remote worker (e.g. a read-only investigation worker that emitted a preamble
+    // then started running tools) passed the gate, its "8s continuous idle" streak degenerated to 8s
+    // of wall-clock, and a single momentary-idle poll early-completed the task off the preamble.
+    // These cases assert the hardened gate: (A) a remote worker that re-probes BUSY never accrues the
+    // streak; (A2) even if a momentary idle slips through, a preamble-then-trailing-tool transcript is
+    // NOT promoted to a completion; (B) a genuinely finished pure-PTY worker still completes early
+    // (rescue preserved); (C) a delivered-not-consumed remote worker transitioning busy resets.
+
+    // Wire a coordinator self-node + a remote worker node whose read_chat/status is served by
+    // dispatchMeshCommand. instanceManager has NO local cli instance for the worker (remote → verdict
+    // UNKNOWN), so the hardened gate must re-probe the worker's own status before accruing the streak.
+    function makeRemoteWorkerComponents(
+      meshId: string,
+      workerNodeDaemonId: string,
+      workerSessionId: string,
+      remoteReadChat: (args: any) => any,
+    ) {
+      const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string, args: any) => {
+        if (daemonId === workerNodeDaemonId && command === 'read_chat') return remoteReadChat(args)
+        return { success: true, events: [] }
+      })
+      const getMeshPeerConnectionStatus = vi.fn(() => ({ state: 'connected' }))
+      const components = {
+        instanceManager: {
+          getByCategory: () => [], // no LOCAL cli instance for the remote worker → verdict UNKNOWN
+          getInstance: () => undefined,
+        },
+        commandHandler: { handle: vi.fn(async () => ({ success: true })) },
+        dispatchMeshCommand,
+        statusInstanceId: 'standalone_test-machine',
+        getMeshPeerConnectionStatus,
+      } as any
+      const mesh = {
+        id: meshId,
+        nodes: [
+          { id: 'node_coord', workspace: '/repo/coord', daemonId: 'daemon_test-machine', machineId: 'test-machine' },
+          { id: 'node_remote', workspace: '/repo/remote', daemonId: workerNodeDaemonId },
+        ],
+      }
+      meshConfigMocks.listMeshes.mockReturnValue([mesh])
+      meshConfigMocks.getMesh.mockReturnValue(mesh)
+      return { components, dispatchMeshCommand }
+    }
+
+    it('EARLY-IDLE-FALSEPOS (A): a REMOTE worker that re-probes BUSY does NOT early-complete (streak never accrues)', async () => {
+      const meshId = `mesh_earlyfp_remote_busy_${Date.now()}`
+      const workerDaemonId = 'remote-daemon'
+      const sessionId = 'sess-remote-investigating'
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const dispatchAt = Date.now()
+        enqueueTask(meshId, 'investigate the bug', { targetNodeId: 'node_remote' })
+        const claimed = claimNextTask(meshId, 'node_remote', sessionId, [])!
+        // Delivered but never 'acked' (remote generating_started not yet propagated) — the exact
+        // delivered≠consumed shape that used to slip through the UNKNOWN-verdict gate.
+        createSessionDelivery({ meshId, nodeId: 'node_remote', sessionId, taskId: claimed.id, kind: 'task', message: 'investigate the bug', status: 'delivered' })
+
+        // The worker is genuinely mid-turn: it emitted a preamble then started running tools.
+        // Its OWN status read is 'generating' — the re-probe must break the streak.
+        const remoteReadChat = () => ({
+          success: true,
+          status: 'generating',
+          messages: [
+            { role: 'user', content: 'investigate the bug', timestamp: dispatchAt + 200 },
+            { role: 'assistant', content: 'Let me explore the codebase…', timestamp: dispatchAt + 1_000 },
+            { role: 'assistant', content: 'reading files', kind: 'tool', timestamp: dispatchAt + 1_200 },
+          ],
+        })
+        const { components, dispatchMeshCommand } = makeRemoteWorkerComponents(meshId, workerDaemonId, sessionId, remoteReadChat)
+
+        // Two ticks across the 8s grace: the re-probe reads 'generating' each time → no accrual.
+        await runMeshReconcileTick(components)
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned') // NOT early-completed
+        // The hardened gate re-probed the remote worker's own status (read_chat over the mesh) —
+        // this is the defense that broke the degenerate UNKNOWN streak.
+        expect(dispatchMeshCommand).toHaveBeenCalledWith(workerDaemonId, 'read_chat', expect.objectContaining({ targetSessionId: sessionId }))
+        expect(readLedgerEntries(meshId).some(
+          e => (e.payload as any)?.source === 'early_idle_transcript_evidence',
+        )).toBe(false)
+      } finally {
+        vi.useRealTimers()
+        cleanup(meshId)
+      }
+    })
+
+    it('EARLY-IDLE-FALSEPOS (A2): a momentary-idle read whose final assistant is followed by a trailing tool_use is NOT promoted', async () => {
+      const meshId = `mesh_earlyfp_trailing_tool_${Date.now()}`
+      const workerDaemonId = 'remote-daemon'
+      const sessionId = 'sess-remote-preamble'
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const dispatchAt = Date.now()
+        enqueueTask(meshId, 'investigate the bug', { targetNodeId: 'node_remote' })
+        const claimed = claimNextTask(meshId, 'node_remote', sessionId, [])!
+        createSessionDelivery({ meshId, nodeId: 'node_remote', sessionId, taskId: claimed.id, kind: 'task', message: 'investigate the bug', status: 'delivered' })
+
+        // The re-probe catches a momentary 'idle' (the inter-tool sliver), BUT the transcript shows a
+        // preamble assistant followed by a trailing tool_use — a turn still executing. The poll's
+        // trailing-tool-activity guard must refuse to promote the preamble.
+        const remoteReadChat = () => ({
+          success: true,
+          status: 'idle',
+          messages: [
+            { role: 'user', content: 'investigate the bug', timestamp: dispatchAt + 200 },
+            { role: 'assistant', content: 'Let me explore the codebase…', timestamp: dispatchAt + 1_000 },
+            { role: 'assistant', content: 'Read src/foo.ts', kind: 'tool', timestamp: dispatchAt + 1_500 },
+          ],
+        })
+        const { components } = makeRemoteWorkerComponents(meshId, workerDaemonId, sessionId, remoteReadChat)
+
+        await runMeshReconcileTick(components)
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned') // trailing tool_use → not a turn end → not completed
+        expect(readLedgerEntries(meshId).some(
+          e => (e.payload as any)?.source === 'early_idle_transcript_evidence',
+        )).toBe(false)
+      } finally {
+        vi.useRealTimers()
+        cleanup(meshId)
+      }
+    })
+
+    it('EARLY-IDLE-FALSEPOS (B): a genuinely finished pure-PTY worker (continuous idle, final assistant, NO trailing tool) STILL early-completes (rescue preserved)', async () => {
+      const meshId = `mesh_earlyfp_pure_pty_ok_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-pure-pty-done'
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const dispatchAt = Date.now()
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+
+        // LOCAL pure-PTY worker (kimi): idle, final assistant, no trailing tool — the rescue's
+        // target. Delivery never 'acked' (generating_started lost), but the pure-PTY provider class
+        // is recognised by the arm gate so it still arms.
+        const idleInstance = {
+          category: 'cli',
+          provider: { type: 'kimi', category: 'cli', tui: { transcriptPty: { scope: 'buffer' } } },
+          getState: () => ({ instanceId: sessionId, status: 'idle', type: 'kimi', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
+        }
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status: 'idle',
+            providerSessionId: 'kimi-history-1',
+            messages: [
+              { role: 'user', content: 'do work', timestamp: dispatchAt + 500 },
+              { role: 'assistant', content: 'Done — implemented and committed.', timestamp: dispatchAt + 4_000 },
+            ],
+          }
+        })
+        const components = {
+          instanceManager: {
+            getByCategory: (category: string) => (category === 'cli' ? [idleInstance] : []),
+            getInstance: (id: string) => (id === sessionId ? idleInstance : undefined),
+          },
+          commandHandler: { handle: readChat },
+        } as any
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('completed')
+        const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed')
+        expect((completed?.payload as any)?.source).toBe('early_idle_transcript_evidence')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+      } finally {
+        vi.useRealTimers()
+        cleanup(meshId)
+      }
+    })
+
+    it('EARLY-IDLE-FALSEPOS (C): a delivered-not-consumed remote worker that transitions BUSY resets the streak (no early completion)', async () => {
+      const meshId = `mesh_earlyfp_transition_busy_${Date.now()}`
+      const workerDaemonId = 'remote-daemon'
+      const sessionId = 'sess-remote-late-start'
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const dispatchAt = Date.now()
+        enqueueTask(meshId, 'investigate', { targetNodeId: 'node_remote' })
+        const claimed = claimNextTask(meshId, 'node_remote', sessionId, [])!
+        createSessionDelivery({ meshId, nodeId: 'node_remote', sessionId, taskId: claimed.id, kind: 'task', message: 'investigate', status: 'delivered' })
+
+        // Tick 1: momentary startup idle (no assistant yet). Tick 2: the worker has STARTED its turn
+        // (busy). The streak that armed on tick 1 must reset on tick 2 → never completes.
+        let probeCount = 0
+        const remoteReadChat = () => {
+          probeCount += 1
+          if (probeCount === 1) {
+            return { success: true, status: 'idle', messages: [{ role: 'user', content: 'investigate', timestamp: dispatchAt + 100 }] }
+          }
+          return {
+            success: true,
+            status: 'generating',
+            messages: [
+              { role: 'user', content: 'investigate', timestamp: dispatchAt + 100 },
+              { role: 'assistant', content: 'Looking into it…', timestamp: dispatchAt + 5_000 },
+            ],
+          }
+        }
+        const { components } = makeRemoteWorkerComponents(meshId, workerDaemonId, sessionId, remoteReadChat)
+
+        await runMeshReconcileTick(components)
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned') // busy transition reset the streak — no early completion
         expect(readLedgerEntries(meshId).some(
           e => (e.payload as any)?.source === 'early_idle_transcript_evidence',
         )).toBe(false)

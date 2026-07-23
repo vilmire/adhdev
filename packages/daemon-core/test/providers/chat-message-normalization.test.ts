@@ -19,6 +19,7 @@ import {
   normalizeChatMessageKind,
   normalizeChatMessages,
   selectFinalAssistantTurnEndMessage,
+  hasTrailingToolActivityAfterFinalAssistant,
 } from '../../src/providers/chat-message-normalization';
 
 describe('chat message normalization', () => {
@@ -243,5 +244,59 @@ describe('extractFinalAssistantSummaryEvidence — turn-finality (Defect-B)', ()
       { role: 'assistant', content: 'ran a tool', kind: 'tool' },
     ] as any;
     expect(extractFinalAssistantSummaryEvidence(messages).finalSummary).toBe('the final answer');
+  });
+});
+
+describe('hasTrailingToolActivityAfterFinalAssistant — EARLY-IDLE-COMPLETION-FALSE-POSITIVE guard', () => {
+  it('true when a tool_use bubble trails the final assistant (preamble-then-tool, turn still executing)', () => {
+    const messages = [
+      { role: 'user', content: 'investigate' },
+      { role: 'assistant', content: 'Let me explore…' },
+      { role: 'assistant', content: 'Read src/foo.ts', kind: 'tool' },
+    ] as any;
+    expect(hasTrailingToolActivityAfterFinalAssistant(messages)).toBe(true);
+  });
+
+  it('true when a trailing terminal command follows the final assistant', () => {
+    const messages = [
+      { role: 'user', content: 'run tests' },
+      { role: 'assistant', content: 'Running the suite…' },
+      { role: 'assistant', content: 'npm test', kind: 'terminal' },
+    ] as any;
+    expect(hasTrailingToolActivityAfterFinalAssistant(messages)).toBe(true);
+  });
+
+  it('false for a genuinely finished turn (final assistant last, no trailing tool) — kimi pure-PTY rescue preserved', () => {
+    const messages = [
+      { role: 'user', content: 'do work' },
+      { role: 'assistant', content: 'Done — implemented and committed.' },
+    ] as any;
+    expect(hasTrailingToolActivityAfterFinalAssistant(messages)).toBe(false);
+  });
+
+  it('false when the trailing bubble is a thought (a turn may end on an internal thought)', () => {
+    const messages = [
+      { role: 'user', content: 'do work' },
+      { role: 'assistant', content: 'All set.' },
+      { role: 'assistant', content: 'reflecting', kind: 'thought' },
+    ] as any;
+    expect(hasTrailingToolActivityAfterFinalAssistant(messages)).toBe(false);
+  });
+
+  it('false when tools precede the final assistant answer (normal completed turn)', () => {
+    const messages = [
+      { role: 'user', content: 'fix it' },
+      { role: 'assistant', content: 'Editing…', kind: 'tool' },
+      { role: 'assistant', content: 'Fixed and verified.' },
+    ] as any;
+    expect(hasTrailingToolActivityAfterFinalAssistant(messages)).toBe(false);
+  });
+
+  it('false when there is no final assistant bubble (streaming / user had last word)', () => {
+    expect(hasTrailingToolActivityAfterFinalAssistant([
+      { role: 'assistant', content: 'prior answer' },
+      { role: 'user', content: 'new task, no reply yet' },
+    ] as any)).toBe(false);
+    expect(hasTrailingToolActivityAfterFinalAssistant([] as any)).toBe(false);
   });
 });
