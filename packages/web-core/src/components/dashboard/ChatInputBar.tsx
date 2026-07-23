@@ -125,6 +125,9 @@ const ChatInputBar = memo(function ChatInputBar({
         const el = chatInputRef.current;
         if (!el) return;
         el.style.height = 'auto';
+        // Only a real draft may grow the box — with an empty value scrollHeight
+        // measures the (possibly wrapped) placeholder and balloons the input.
+        if (!draftInput) return;
         el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
     }, [draftInput]);
 

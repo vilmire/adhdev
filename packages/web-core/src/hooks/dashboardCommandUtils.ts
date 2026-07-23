@@ -39,12 +39,15 @@ export function appendWarningToast(
     }])
 }
 
+/** Short, non-wrapping placeholder for the chat input while a modal blocks sending. */
+export const SEND_BLOCKED_PLACEHOLDER = 'Waiting for approval…'
+
 export function getConversationSendBlockMessage(
     conv: Pick<ActiveConversation, 'status' | 'modalButtons'> | undefined,
 ): string | null {
     if (!conv) return null
     if (Array.isArray(conv.modalButtons) && conv.modalButtons.length > 0) {
-        return 'Resolve the pending approval prompt before sending another message.'
+        return 'Approve or reject the pending request above.'
     }
 
     return null
@@ -57,7 +60,7 @@ export function getInlineSendFailureMessage(error: unknown): string {
         return 'Message queued and will send after the current reply finishes.'
     }
     if (normalized.includes('awaiting confirmation')) {
-        return 'Resolve the pending approval prompt before sending another message.'
+        return 'Approve or reject the pending request above.'
     }
     if (normalized.includes('not ready')) {
         return 'Wait for the runtime to finish starting up before sending a message.'

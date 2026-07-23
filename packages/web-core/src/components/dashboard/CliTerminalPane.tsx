@@ -8,7 +8,7 @@ import type { CliTerminalHandle } from '../CliTerminal';
 import { useTransport } from '../../context/TransportContext';
 import { connectionManager } from '../../compat';
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
-import { getConversationSendBlockMessage } from '../../hooks/dashboardCommandUtils';
+import { getConversationSendBlockMessage, SEND_BLOCKED_PLACEHOLDER } from '../../hooks/dashboardCommandUtils';
 import ChatInputBar from './ChatInputBar';
 import {
     DEFAULT_MAX_CLI_TERMINAL_SCALE,
@@ -128,9 +128,12 @@ export default function CliTerminalPane({
     const sessionId = activeConv.sessionId || '';
     const daemonRouteId = activeConv.daemonId || activeConv.routeId?.split(':')[0] || activeConv.routeId || '';
     const sendBlockMessage = getConversationSendBlockMessage(activeConv);
+    // Placeholder carries the state as a short one-liner; the line below the
+    // input only repeats send errors the user must keep seeing while typing.
     const inputStatusMessage = !runtimeReady
         ? runtimeStatusMessage
-        : (sendFeedbackMessage || sendBlockMessage);
+        : (sendBlockMessage ? SEND_BLOCKED_PLACEHOLDER : sendFeedbackMessage);
+    const inputInlineMessage = runtimeReady ? (sendFeedbackMessage || null) : null;
     const MIN_TERMINAL_SCALE = DEFAULT_MIN_CLI_TERMINAL_SCALE;
     const MAX_TERMINAL_SCALE = DEFAULT_MAX_CLI_TERMINAL_SCALE;
     const TERMINAL_AUTO_SCALE_CHANGE_THRESHOLD = 0.05;
@@ -793,7 +796,7 @@ export default function CliTerminalPane({
                 isSending={isSendingChat}
                 isBusy={!!sendBlockMessage}
                 statusMessage={inputStatusMessage}
-                inlineStatusMessage={inputStatusMessage}
+                inlineStatusMessage={inputInlineMessage}
                 onSend={async (message) => {
                     if (sendBlockMessage) return false;
                     return handleSendChat(message);

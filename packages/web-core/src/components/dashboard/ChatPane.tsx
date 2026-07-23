@@ -31,7 +31,7 @@ import {
     getConversationProviderLabel,
     getCoordinatorRoutingHint,
 } from './conversation-selectors';
-import { getConversationSendBlockMessage } from '../../hooks/dashboardCommandUtils'
+import { getConversationSendBlockMessage, SEND_BLOCKED_PLACEHOLDER } from '../../hooks/dashboardCommandUtils'
 import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages } from './chat-visibility';
 import { useSessionChatTailController } from './session-chat-tail-controller';
 import { buildVisibleConversationMessages, getConversationLiveMessages } from './conversation-message-snapshot';
@@ -161,12 +161,15 @@ export default function ChatPane({
     const canOpenPanel = shouldShowOpenPanelAction(activeConv)
     const sendBlockMessage = getConversationSendBlockMessage(activeConv)
     const busyStatusMessage = buildBusyChatInputStatusMessage(activeConv)
-    // Messages the user must keep seeing while typing (send errors, blocked
-    // input) render on a dedicated line below the input. The busy/generating
-    // status is shown only in the placeholder to avoid a duplicate line right
-    // under it — the placeholder already surfaces it while the draft is empty.
-    const inlineStatusMessage = sendFeedbackMessage || sendBlockMessage
-    const chatInputStatusMessage = inlineStatusMessage || busyStatusMessage
+    // The blocked state lives in the placeholder as a short one-liner — the
+    // approval banner above already explains itself, and a long placeholder
+    // must never wrap and grow the box. The dedicated line below the input is
+    // reserved for send errors (kept visible while typing); the block reason
+    // reappears there via getInlineSendFailureMessage only when a send bounces.
+    const inlineStatusMessage = sendFeedbackMessage || null
+    const chatInputStatusMessage = (sendBlockMessage ? SEND_BLOCKED_PLACEHOLDER : null)
+        || sendFeedbackMessage
+        || busyStatusMessage
     const isChatInputBlocked = !!sendBlockMessage
 
     const [isLoadingMore, setIsLoadingMore] = useState(false);
