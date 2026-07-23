@@ -130,6 +130,9 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
     // so the launch envelope stamps autoApprove=true; it wins over the global
     // per-provider-type autoApprove config via the settingsOverride merge.
     autoApprove: true,
+    // delegatedWorkerAutoApproveSettings always emits the dangerous-mode opt-in
+    // decision; with no policy opt-out it is false (dangerous modes downgrade).
+    delegatedWorkerDangerousModeAllow: false,
     meshCoordinatorDaemonId: 'daemon-coordinator',
     launchedByCoordinator: true,
   });
