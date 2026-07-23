@@ -879,6 +879,46 @@
             "title": "Hermes MCP 設定",
             "description": "Hermes はリポジトリローカルの .mcp.json を自動インポートしません。この YAML を Hermes 設定の mcp_servers 配下に追加してから、新しい Hermes セッションを開始してください。",
             "fallbackProvider": "Hermes CLI"
+        },
+        "providerAutoApprove": {
+            "title": "Provider auto-approve defaults",
+            "subtitle": "Per-provider default auto-approve mode for coordinator-launched workers.",
+            "loading": "Loading provider defaults…",
+            "loadError": "Failed to load provider auto-approve defaults.",
+            "noProviders": "No CLI providers with auto-approve modes detected on the host machine.",
+            "noHostDaemon": "Connect the mesh host daemon to configure provider auto-approve defaults.",
+            "repoSection": {
+                "title": "Repository default",
+                "hint": "Committed to .adhdev/mesh.json — shared with the whole team. Sets which mode a delegated worker requests; it does not grant permission to run it.",
+                "usesProviderDefault": "Uses provider default",
+                "clear": "Use provider default"
+            },
+            "machineSection": {
+                "title": "This machine authorization",
+                "hint": "Local only (meshes.json) — never committed. Controls whether workers on THIS machine auto-approve at all, and whether dangerous modes are allowed.",
+                "autoApproveOn": "Auto-approve enabled",
+                "autoApproveOff": "Auto-approve disabled",
+                "dangerousOn": "Dangerous modes allowed",
+                "dangerousOff": "Dangerous modes not allowed (will downgrade)",
+                "editHint": "Edit these in the mesh Policy section above."
+            },
+            "effectiveSection": {
+                "title": "Effective result on this machine",
+                "hint": "What each provider actually runs here after combining the repository default with this machine's authorization.",
+                "statusRequested": "Runs: {{mode}}",
+                "statusInvalidFallback": "Requested mode not found → runs provider default: {{mode}}",
+                "statusDowngraded": "{{requested}} requested → downgraded to {{mode}}: this machine has not opted into dangerous modes.",
+                "statusDisabled": "Auto-approve disabled on this machine — worker will ask for approval.",
+                "statusNone": "No usable auto-approve mode — worker will ask for approval."
+            },
+            "dangerous": {
+                "sharedWarningTitle": "This is committed to the repository",
+                "sharedWarning": "This dangerous mode is committed to .adhdev/mesh.json and shared with the whole team. Each machine still runs it ONLY if that machine has opted into dangerous modes (delegatedWorkerDangerousModeAllow); otherwise it is downgraded to pty-parse."
+            },
+            "save": "Save to mesh.json",
+            "saving": "Saving…",
+            "saved": "Saved to .adhdev/mesh.json",
+            "saveError": "Failed to save provider defaults."
         }
     },
     "chat": {

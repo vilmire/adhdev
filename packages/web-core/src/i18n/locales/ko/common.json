@@ -879,6 +879,46 @@
             "title": "Hermes MCP 구성",
             "description": "Hermes는 리포 로컬 .mcp.json을 자동 가져오지 않습니다. Hermes 구성의 mcp_servers 아래에 이 YAML을 추가한 뒤 새 Hermes 세션을 시작하세요.",
             "fallbackProvider": "Hermes CLI"
+        },
+        "providerAutoApprove": {
+            "title": "프로바이더 자동 승인 기본값",
+            "subtitle": "코디네이터가 자동 기동한 워커의 프로바이더별 기본 자동 승인 모드.",
+            "loading": "프로바이더 기본값 불러오는 중…",
+            "loadError": "프로바이더 자동 승인 기본값을 불러오지 못했습니다.",
+            "noProviders": "호스트 머신에서 자동 승인 모드를 가진 CLI 프로바이더를 찾지 못했습니다.",
+            "noHostDaemon": "프로바이더 자동 승인 기본값을 설정하려면 메시 호스트 데몬을 연결하세요.",
+            "repoSection": {
+                "title": "저장소 기본값",
+                "hint": ".adhdev/mesh.json에 커밋되어 팀 전체와 공유됩니다. 위임 워커가 '요청'할 모드를 정할 뿐, 실행 권한을 부여하지는 않습니다.",
+                "usesProviderDefault": "프로바이더 기본값 사용",
+                "clear": "프로바이더 기본값 사용"
+            },
+            "machineSection": {
+                "title": "이 머신의 실행 권한",
+                "hint": "로컬 전용(meshes.json) — 커밋되지 않습니다. 이 머신의 워커가 자동 승인을 할지, dangerous 모드를 허용할지를 제어합니다.",
+                "autoApproveOn": "자동 승인 활성화됨",
+                "autoApproveOff": "자동 승인 비활성화됨",
+                "dangerousOn": "dangerous 모드 허용됨",
+                "dangerousOff": "dangerous 모드 미허용 (강등됨)",
+                "editHint": "위 메시 정책 섹션에서 편집하세요."
+            },
+            "effectiveSection": {
+                "title": "이 머신에서의 실제 결과",
+                "hint": "저장소 기본값과 이 머신의 실행 권한을 합쳐 각 프로바이더가 실제로 실행하는 모드입니다.",
+                "statusRequested": "실행: {{mode}}",
+                "statusInvalidFallback": "요청한 모드를 찾을 수 없음 → 프로바이더 기본값 실행: {{mode}}",
+                "statusDowngraded": "{{requested}} 요청됨 → {{mode}}로 강등: 이 머신은 dangerous 모드에 옵트인하지 않았습니다.",
+                "statusDisabled": "이 머신에서 자동 승인이 비활성화됨 — 워커가 승인을 요청합니다.",
+                "statusNone": "사용 가능한 자동 승인 모드 없음 — 워커가 승인을 요청합니다."
+            },
+            "dangerous": {
+                "sharedWarningTitle": "이 설정은 저장소에 커밋됩니다",
+                "sharedWarning": "이 dangerous 모드는 .adhdev/mesh.json에 커밋되어 팀 전체와 공유됩니다. 단, 각 머신은 dangerous 모드에 옵트인(delegatedWorkerDangerousModeAllow)한 경우에만 실행하며, 그렇지 않으면 pty-parse로 강등됩니다."
+            },
+            "save": "mesh.json에 저장",
+            "saving": "저장 중…",
+            "saved": ".adhdev/mesh.json에 저장됨",
+            "saveError": "프로바이더 기본값 저장에 실패했습니다."
         }
     },
     "chat": {

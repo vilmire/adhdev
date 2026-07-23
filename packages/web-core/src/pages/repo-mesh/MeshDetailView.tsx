@@ -15,6 +15,7 @@ import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { AvailableCliProviderOption } from '../../utils/provider-priority'
 import { MeshMissionsSection } from './MeshMissionsSection'
+import { MeshProviderAutoApproveSection } from './MeshProviderAutoApproveSection'
 import { MeshNodeList } from './MeshNodeList'
 import { MeshHostDaemonSection } from './MeshHostDaemonSection'
 import { RepoMeshHermesMcpConfig } from './MeshHermesMcpConfig'
@@ -431,6 +432,21 @@ export function MeshDetailView({
                     />
                 </Section>
             )}
+
+            {/* ── Provider auto-approve defaults (repo mesh.json providerDefaults) ──
+                 Three-section surface: repo default (committed) / this machine's
+                 authorization (local) / effective result with downgrade reasons. The
+                 host daemon carries the provider inventory (with autoApproveModes) and
+                 owns the repo workspace's .adhdev/mesh.json read/write. */}
+            <MeshProviderAutoApproveSection
+                hostDaemonId={coordinatorDaemonId}
+                hostOnline={hostOnline}
+                hostWorkspace={selectedHostNode?.workspace || ''}
+                hostProviders={(daemons.find(d => d.id === coordinatorDaemonId) as any)?.availableProviders || []}
+                machineAutoApproveEnabled={policy.delegatedWorkerAutoApprove !== false}
+                machineDangerousAllowed={policy.delegatedWorkerDangerousModeAllow === true}
+                sendCommand={sendCommand}
+            />
 
             {/* ── Missions (runtime telemetry) ── */}
             <MeshMissionsSection
