@@ -83,6 +83,217 @@ export function executeNativeHistory(cfg: NativeHistoryConfig, input: NativeHist
     return null;
 }
 
+/**
+ * One enumerated saved session. Structurally matches the fields the chat-history
+ * `list_saved_sessions` pipeline expects (`normalizeProviderNativeHistorySessionSummary`
+ * reads exactly these keys), so the executor can be wired straight into
+ * `listNativeHistory` with no daemon-side adapter.
+ */
+export interface NativeHistorySessionListItem {
+    historySessionId: string;
+    sessionTitle?: string;
+    messageCount: number;
+    firstMessageAt: number;
+    lastMessageAt: number;
+    preview?: string;
+    workspace?: string;
+    sourcePath: string;
+    sourceMtimeMs: number;
+}
+
+export interface NativeHistoryListResult {
+    sessions: NativeHistorySessionListItem[];
+}
+
+/**
+ * Enumerate every on-disk saved session for a declarative jsonl source.
+ *
+ * Where `executeNativeHistory` resolves the ONE file for a pinned/current
+ * session, this walks the whole store: it turns the source `path` template into
+ * a directory glob (per-session template vars — {session_id}, {cwd*}, the date
+ * segments — collapse to `*`) and lists every file matching the leaf pattern
+ * across all matched dirs. Each file becomes one session summary. session_id is
+ * extracted the same way the reader does (`session_id_from`), and per-session
+ * preview/messageCount/first/last come from a MINIMAL projection (first + last
+ * projected message only, no full-array build).
+ *
+ * Without this, the loader wired only the read function and dropped the list
+ * marker, so `list_saved_sessions` always returned `[]` for every v2.0
+ * declarative-source provider (claude/codex/antigravity/kimi/cursor) even with
+ * thousands of transcripts on disk.
+ */
+export function executeNativeHistoryList(cfg: NativeHistoryConfig, input?: NativeHistoryInput): NativeHistoryListResult | null {
+    if (!cfg?.source) return null;
+    // sqlite sources enumerate through their own `session_query`; only jsonl
+    // stores are file-per-session and enumerable by directory walk here.
+    if (cfg.source.kind !== 'jsonl') return null;
+    return { sessions: enumerateJsonlSessions(cfg.source, input ?? {}) };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// JSONL enumeration (list_saved_sessions)
+// ────────────────────────────────────────────────────────────────────────────
+
+function enumerateJsonlSessions(src: NativeHistoryJsonlSource, input: NativeHistoryInput): NativeHistorySessionListItem[] {
+    const files = enumerateSessionFiles(src, input);
+    const shapes = compileRecordShapes(src);
+    const out: NativeHistorySessionListItem[] = [];
+    const seen = new Set<string>();
+    for (const filePath of files) {
+        const item = summarizeSessionFile(src, filePath, shapes);
+        if (!item) continue;
+        // A store can surface the same session from more than one matched dir
+        // (glob overlap). Keep the newest-touched instance per session id.
+        const key = item.historySessionId.toLowerCase();
+        if (seen.has(key)) {
+            const existing = out.find(s => s.historySessionId.toLowerCase() === key);
+            if (existing && item.sourceMtimeMs > existing.sourceMtimeMs) {
+                out[out.indexOf(existing)] = item;
+            }
+            continue;
+        }
+        seen.add(key);
+        out.push(item);
+    }
+    out.sort((a, b) => b.lastMessageAt - a.lastMessageAt);
+    return out;
+}
+
+/**
+ * Resolve the source `path` template into every concrete transcript file on
+ * disk. Per-session template vars ({session_id}, {cwd*}, {yyyy}/{mm}/{dd})
+ * collapse to a `*` wildcard so the walk spans all sessions/workspaces/days;
+ * literal `*`/`**` segments pass through to `expandDirGlob`.
+ *
+ * When `file_pattern` is set, the whole `path` is the directory template and
+ * `file_pattern` matches the leaf file. Otherwise the last path segment is the
+ * file template (e.g. `{session_id}.jsonl`) — its template vars become `*` and
+ * it becomes the leaf matcher, while the preceding segments are the directory
+ * template.
+ */
+function enumerateSessionFiles(src: NativeHistoryJsonlSource, input: NativeHistoryInput): string[] {
+    const expandedRoot = expandTemplateRootForEnumeration(src.path, input);
+    if (!expandedRoot) return [];
+
+    let dirTemplate: string;
+    let fileRegex: RegExp;
+    if (src.file_pattern) {
+        dirTemplate = templateVarsToGlob(expandedRoot);
+        fileRegex = globToRegex(src.file_pattern);
+    } else {
+        const idx = expandedRoot.lastIndexOf('/');
+        const dirPart = idx >= 0 ? expandedRoot.slice(0, idx) : '';
+        const leaf = idx >= 0 ? expandedRoot.slice(idx + 1) : expandedRoot;
+        dirTemplate = templateVarsToGlob(dirPart);
+        fileRegex = globToRegex(templateVarsToGlob(leaf));
+    }
+
+    const dirs = expandDirGlob(dirTemplate);
+    const files: string[] = [];
+    for (const d of dirs) {
+        for (const p of listMatchingFiles(d, fileRegex)) files.push(p);
+    }
+    return files;
+}
+
+/**
+ * Expand the leading `~` and `${ENV}` portions of a path template WITHOUT
+ * substituting per-session vars, so the caller can decide which of those become
+ * enumeration wildcards. Mirrors the head of `expandPath` (tilde + env) but
+ * leaves `{...}` template markers intact.
+ */
+function expandTemplateRootForEnumeration(template: string, input: NativeHistoryInput): string {
+    if (!template) return '';
+    let out = template;
+    if (out.startsWith('~/') || out === '~') out = path.join(os.homedir(), out.slice(2));
+    out = out.replace(/\$\{([A-Z_][A-Z0-9_]*)(?::-(.*?))?\}/g, (_m, name, fallback) => {
+        const v = input.envOverrides?.[name] ?? process.env[name];
+        return v != null && v !== '' ? v : (fallback ?? '');
+    });
+    if (out.startsWith('~/')) out = path.join(os.homedir(), out.slice(2));
+    return out;
+}
+
+/** Turn every remaining `{var}` template marker into a `*` glob segment. */
+function templateVarsToGlob(template: string): string {
+    return template.replace(/\{[a-zA-Z_][a-zA-Z0-9_]*\}/g, '*');
+}
+
+/**
+ * Extract the session id from a resolved transcript file exactly the way the
+ * reader (`executeJsonl`) does, honouring `session_id_from`. Returns '' when no
+ * id can be derived so the caller can drop the file.
+ */
+function sessionIdForFile(src: NativeHistoryJsonlSource, filePath: string): string {
+    if (src.session_id_from === 'first_record' && src.session_id_path) {
+        const lines = readJsonlLines(filePath);
+        if (lines.length > 0) {
+            const v = jsonPathGet(lines[0], src.session_id_path);
+            if (typeof v === 'string' && v) return v;
+        }
+        return '';
+    }
+    if (src.session_id_from === 'dir_uuid') {
+        return dirUuid(filePath) || '';
+    }
+    // filename_uuid (explicit or default).
+    return filenameUuid(filePath);
+}
+
+/**
+ * Build one session summary from a transcript file with a MINIMAL parse: project
+ * records through the same record-shape machinery the reader uses, but keep only
+ * the running count plus the first and last projected message (no full-array
+ * materialization). preview/sessionTitle come from the last non-tool message.
+ */
+function summarizeSessionFile(
+    src: NativeHistoryJsonlSource,
+    filePath: string,
+    shapes: { pick: (record: any) => { map: NativeHistoryMessageMap } | null },
+): NativeHistorySessionListItem | null {
+    const historySessionId = sessionIdForFile(src, filePath);
+    if (!historySessionId) return null;
+
+    const mtime = safeMtimeMs(filePath);
+    const lines = readJsonlLines(filePath);
+    if (lines.length === 0) return null;
+
+    let messageCount = 0;
+    let first: NativeHistoryMessage | null = null;
+    let last: NativeHistoryMessage | null = null;
+    let lastNonTool: NativeHistoryMessage | null = null;
+    for (let i = 0; i < lines.length; i += 1) {
+        const rec = lines[i];
+        const shape = shapes.pick(rec);
+        if (!shape) continue;
+        for (const msg of projectMessages(rec, shape.map, i, lines.length, mtime)) {
+            messageCount += 1;
+            if (!first) first = msg;
+            last = msg;
+            if (msg.kind !== 'tool') lastNonTool = msg;
+        }
+    }
+    if (messageCount === 0 || !first || !last) return null;
+
+    // Workspace attribution mirrors the reader: prefer an in-transcript
+    // session_meta cwd, then a sidecar, then the (verified) input workspace.
+    const workspace = readSessionMetaWorkspace(lines)
+        ?? (src.workspace_from_sidecar ? readSidecarWorkspace(filePath, src.workspace_from_sidecar) : undefined);
+
+    const previewMsg = lastNonTool ?? last;
+    return {
+        historySessionId,
+        sessionTitle: previewMsg.content || undefined,
+        messageCount,
+        firstMessageAt: first.receivedAt || mtime,
+        lastMessageAt: last.receivedAt || first.receivedAt || mtime,
+        preview: previewMsg.content || undefined,
+        workspace,
+        sourcePath: filePath,
+        sourceMtimeMs: mtime,
+    };
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // JSONL
 // ────────────────────────────────────────────────────────────────────────────

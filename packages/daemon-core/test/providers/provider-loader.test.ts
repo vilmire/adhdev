@@ -847,6 +847,68 @@ describe('ProviderLoader v1-manifest inline nativeHistory.source wiring', () => 
     expect((resolved as any)?.nativeHistory?.mode).toBe('native-source');
     expect((resolved as any)?.nativeHistory?.format).toBe('spec-sqlite');
     expect((resolved as any)?.nativeHistory?.scripts?.readSession).toBe('readNativeHistory');
+    // sqlite enumerates through its own session_query, not a directory walk, so
+    // the loader must NOT advertise a listSessions marker (that would surface an
+    // always-empty enumerator).
+    expect((resolved as any)?.nativeHistory?.scripts?.listSessions).toBeUndefined();
+    expect((resolved?.scripts as any)?.listNativeHistory).toBeUndefined();
+  });
+
+  // Regression for the "history list always empty" defect: a declarative jsonl
+  // source must wire BOTH the reader AND the enumerator. The loader previously
+  // hardcoded `scripts: { readSession: 'readNativeHistory' }`, dropping the
+  // listSessions marker, so `getProviderNativeHistoryScript(...,'listSessions')`
+  // resolved to undefined and `list_saved_sessions` returned [] for every
+  // declarative-source provider regardless of on-disk transcripts.
+  it('wires listNativeHistory (listSessions) from an inline nativeHistory jsonl source', () => {
+    const store = mkdtempSync(join(tmpdir(), 'adhdev-nh-jsonl-store-'));
+    const projectDir = join(store, 'projects', '-workspaces-alpha');
+    mkdirSync(projectDir, { recursive: true });
+    const sessionId = 'deadbeef-1111-4111-8111-111111111111';
+    writeFileSync(
+      join(projectDir, `${sessionId}.jsonl`),
+      [
+        JSON.stringify({ type: 'user', timestamp: 1_800_000_001_000, message: { role: 'user', content: 'q' } }),
+        JSON.stringify({ type: 'assistant', timestamp: 1_800_000_002_000, message: { role: 'assistant', content: 'a' } }),
+      ].join('\n') + '\n',
+      'utf8',
+    );
+
+    writeV1Provider(userDir, 'cli', 'claudeish-fixture', {
+      type: 'claudeish-fixture',
+      name: 'Claudeish Fixture',
+      displayName: 'Claudeish Fixture',
+      category: 'cli',
+      spawn: { command: 'claudeish' },
+      transcriptAuthority: 'provider',
+      nativeHistory: {
+        mode: 'native-source',
+        source: {
+          kind: 'jsonl',
+          path: join(store, 'projects', '{cwd_claude_project}', '{session_id}.jsonl'),
+          session_id_from: 'filename_uuid',
+          message_filter: { where: "$.type == 'user' || $.type == 'assistant'" },
+          message_map: { role: '$.message.role', content: '$.message.content', timestamp_ms: '$.timestamp' },
+        },
+      },
+    });
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    const resolved = loader.resolve('claudeish-fixture');
+    expect((resolved as any)?.nativeHistory?.format).toBe('spec-jsonl');
+    expect((resolved as any)?.nativeHistory?.scripts?.readSession).toBe('readNativeHistory');
+    expect((resolved as any)?.nativeHistory?.scripts?.listSessions).toBe('listNativeHistory');
+    expect(typeof (resolved?.scripts as any)?.listNativeHistory).toBe('function');
+
+    // End-to-end: the wired lister enumerates the on-disk session.
+    const listed = (resolved?.scripts as any).listNativeHistory({});
+    expect(listed.sessions.map((s: any) => s.historySessionId)).toEqual([sessionId]);
+    expect(listed.sessions[0].messageCount).toBe(2);
+    expect(listed.sessions[0].preview).toBe('a');
+
+    rmSync(store, { recursive: true, force: true });
   });
 
   // A v1 manifest whose nativeHistory only names scripts.readSession (the shape

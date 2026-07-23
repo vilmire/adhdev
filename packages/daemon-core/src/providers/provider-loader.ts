@@ -43,7 +43,7 @@ import {
   resolveProviderTarballTarget,
 } from '../config/registry-resolver.js';
 import type { ProviderSourceConfigSnapshot, ProviderUserDirSource } from '../config/provider-source-config.js';
-import { executeNativeHistory } from './spec/native-history-executor.js';
+import { executeNativeHistory, executeNativeHistoryList } from './spec/native-history-executor.js';
 import { createNativeHistoryDispatcher, type ReaderId } from './native-history/dispatcher.js';
 
 /**
@@ -1408,11 +1408,23 @@ export class ProviderLoader {
         }
         if (nh) {
           let reader: ((input: any) => any) | null = null;
+          // lister enumerates all saved sessions for the store. Only the
+          // declarative jsonl `source` path can enumerate by directory walk;
+          // override/reader providers wire their own listSessions (or none).
+          let lister: ((input: any) => any) | null = null;
           let format = 'spec';
 
           if (nh.source) {
             format = `spec-${nh.source.kind}`;
             reader = (input: any) => executeNativeHistory(nh, input);
+            // Only jsonl stores are file-per-session and enumerable by a
+            // directory walk. sqlite sources enumerate through their own
+            // `session_query` (not implemented as a lister yet), so leave
+            // listSessions unwired there rather than advertising an enumerator
+            // that always returns empty.
+            if (nh.source.kind === 'jsonl') {
+              lister = (input: any) => executeNativeHistoryList(nh, input);
+            }
           } else if (nh.override_path) {
             const overrideFile = path.resolve(providerDir, nh.override_path);
             if (fs.existsSync(overrideFile)) {
@@ -1437,10 +1449,21 @@ export class ProviderLoader {
           if (reader) {
             resolved.scripts = { ...(resolved.scripts || {}) };
             (resolved.scripts as any).readNativeHistory = reader;
+            // Wire the enumerator alongside the reader. Without both the
+            // `scripts.listSessions` marker AND the `listNativeHistory` fn,
+            // `getProviderNativeHistoryScript(...,'listSessions')` resolves to
+            // undefined and `list_saved_sessions` returns [] for every
+            // declarative-source provider (claude/codex/antigravity/kimi/cursor)
+            // regardless of how many transcripts are on disk.
+            const scriptsMarker: { readSession: string; listSessions?: string } = { readSession: 'readNativeHistory' };
+            if (lister) {
+              (resolved.scripts as any).listNativeHistory = lister;
+              scriptsMarker.listSessions = 'listNativeHistory';
+            }
             (resolved as any).nativeHistory = {
               format,
               watchPath: undefined,
-              scripts: { readSession: 'readNativeHistory' },
+              scripts: scriptsMarker,
               mode: 'native-source',
             };
           }
