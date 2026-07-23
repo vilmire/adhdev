@@ -34,6 +34,7 @@ import type { SessionRegistry } from '../sessions/registry.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { LOG } from '../logging/logger.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
+import { findProviderAutoApproveMode, resolveProviderAutoApproveMode } from '../providers/auto-approve-modes.js';
 
 // ─── external dependency interface ──────────────────────────
 
@@ -450,6 +451,40 @@ export function expandThinkingLaunchArgs(
     if (!raw || !Array.isArray(template) || template.length === 0) return undefined;
     const mapped = (levelMap && typeof levelMap[raw] === 'string' && levelMap[raw]!.trim()) ? levelMap[raw]!.trim() : raw;
     return template.map((part) => part.includes('{{level}}') ? part.replace('{{level}}', mapped) : part);
+}
+
+function matchesRemovedLaunchArg(arg: string, removeArg: string): boolean {
+    return arg === removeArg || (removeArg.startsWith('--') && arg.startsWith(`${removeArg}=`));
+}
+
+/**
+ * Apply a selected launch-args auto-approve mode without mutating provider metadata.
+ * removeArgs only targets provider-owned base spawn.args; launchArgs are prepended to
+ * per-launch args beside model/thinking args, making conflict removal order-independent.
+ */
+export function applyAutoApproveModeLaunchArgs(
+    provider: ProviderModule | undefined,
+    cliArgs: string[] | undefined,
+    settings: Record<string, unknown> | undefined,
+): { provider: ProviderModule | undefined; cliArgs: string[] | undefined } {
+    if (!provider) return { provider, cliArgs };
+    const resolved = resolveProviderAutoApproveMode(provider, settings);
+    if (!resolved.active || resolved.strategy !== 'launch-args') return { provider, cliArgs };
+    const mode = findProviderAutoApproveMode(provider, resolved.modeId);
+    if (!mode || !Array.isArray(mode.launchArgs) || mode.launchArgs.length === 0) return { provider, cliArgs };
+
+    const removeArgs = Array.isArray(mode.removeArgs) ? mode.removeArgs : [];
+    const baseArgs = provider.spawn?.args;
+    const filteredBaseArgs = Array.isArray(baseArgs) && removeArgs.length > 0
+        ? baseArgs.filter((arg) => !removeArgs.some((removeArg) => matchesRemovedLaunchArg(arg, removeArg)))
+        : baseArgs;
+    const launchProvider = filteredBaseArgs === baseArgs
+        ? provider
+        : { ...provider, spawn: { ...provider.spawn!, args: filteredBaseArgs } };
+    return {
+        provider: launchProvider,
+        cliArgs: [...mode.launchArgs, ...(cliArgs || [])],
+    };
 }
 
 function readSubcommandSessionId(args: string[], subcommands: string[]): string | undefined {
@@ -1048,6 +1083,17 @@ export class DaemonCliManager {
             console.log(colorize('cyan', `  📦 Using provider: ${provider.name} (${provider.type})`));
         }
 
+        const launchSettings = {
+            ...this.providerLoader.getSettings(normalizedType),
+            ...(options?.settingsOverride || {}),
+        };
+        const versionResolvedProvider = provider
+            ? (this.providerLoader.resolve(cliType, { version: cliInfo.version }) || provider)
+            : undefined;
+        const autoApproveLaunch = applyAutoApproveModeLaunchArgs(versionResolvedProvider, cliArgs, launchSettings);
+        const launchProvider = autoApproveLaunch.provider || provider;
+        const cliArgsWithAutoApprove = autoApproveLaunch.cliArgs;
+
  // ─── Model axis (MAGI kind-panel): expand initialModel → launch args ───
  // For a plain CLI provider the model is selected at spawn time via the manifest's
  // modelLaunchArgs template ('{{model}}' → the requested model). ACP providers took
@@ -1055,10 +1101,10 @@ export class DaemonCliManager {
  // or no requested model, is a no-op — model selection is best-effort and must never
  // fail a launch. The model args are prepended so a caller's explicit cliArgs (e.g. a
  // resume flag) still win positionally where order matters.
-        const modelLaunchArgs = expandModelLaunchArgs(provider?.modelLaunchArgs, initialModel);
+        const modelLaunchArgs = expandModelLaunchArgs(launchProvider?.modelLaunchArgs, initialModel);
         const cliArgsWithModel = modelLaunchArgs
-            ? [...modelLaunchArgs, ...(cliArgs || [])]
-            : cliArgs;
+            ? [...modelLaunchArgs, ...(cliArgsWithAutoApprove || [])]
+            : cliArgsWithAutoApprove;
         if (initialModel && !modelLaunchArgs) {
             LOG.warn('CLI', `[${normalizedType}] initialModel='${initialModel}' requested but provider declares no modelLaunchArgs template — launching without model selection.`);
         }
@@ -1069,7 +1115,7 @@ export class DaemonCliManager {
  // Best-effort; a provider with no template (or no requested level) is a no-op. ACP
  // providers route thinking through setConfigOption('thought_level') above.
         const initialThinkingLevel = options?.initialThinkingLevel;
-        const thinkingLaunchArgs = expandThinkingLaunchArgs(provider?.thinkingLaunchArgs, initialThinkingLevel, provider?.thinkingLevelMap);
+        const thinkingLaunchArgs = expandThinkingLaunchArgs(launchProvider?.thinkingLaunchArgs, initialThinkingLevel, launchProvider?.thinkingLevelMap);
         const cliArgsWithBrain = thinkingLaunchArgs
             ? [...thinkingLaunchArgs, ...(cliArgsWithModel || [])]
             : cliArgsWithModel;
@@ -1078,13 +1124,13 @@ export class DaemonCliManager {
         }
 
  // ─── Resolve launch options → provider session binding ───
-        const sessionBinding = resolveCliSessionBinding(provider, normalizedType, cliArgsWithBrain, options?.resumeSessionId);
+        const sessionBinding = resolveCliSessionBinding(launchProvider, normalizedType, cliArgsWithBrain, options?.resumeSessionId);
         const resolvedCliArgs = sessionBinding.cliArgs;
 
  // If InstanceManager exists, manage as CliProviderInstance unified
         const instanceManager = this.deps.getInstanceManager();
-        if (provider && instanceManager) {
-            const resolvedProvider = this.providerLoader.resolve(cliType, { version: cliInfo.version }) || provider;
+        if (launchProvider && instanceManager) {
+            const resolvedProvider = launchProvider;
             await this.registerCliInstance(
                 key,
                 normalizedType,
@@ -1092,7 +1138,7 @@ export class DaemonCliManager {
                 resolvedDir,
                 resolvedCliArgs,
                 resolvedProvider,
-                { ...this.providerLoader.getSettings(normalizedType), ...(options?.settingsOverride || {}) },
+                launchSettings,
                 false,
                 {
                     providerSessionId: sessionBinding.providerSessionId,

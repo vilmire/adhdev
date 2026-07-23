@@ -75,6 +75,7 @@ import type {
 } from './cli-provider-instance-types.js';
 import { mergeConversationMessages, buildExternalTranscriptProbe } from './cli-provider-transcript-merge.js';
 import { getEffectDedupKey, formatApprovalRequestMessage, formatMarkerTimestamp } from './cli-provider-effect-format.js';
+import { resolveProviderAutoApproveMode, type ResolvedAutoApproveMode } from './auto-approve-modes.js';
 
 // Re-export moved public symbols so existing importers (index.ts, tests) keep
 // their `./cli-provider-instance.js` path. Pure move — no behavior change.
@@ -2780,7 +2781,7 @@ export class CliProviderInstance implements ProviderInstance {
      * resolveModal, so a plain turn that never saw an approval always returns false.
      */
     private inApprovalResumeGrace(now = Date.now()): boolean {
-        if (!this.isAutonomousMeshSession() || !this.shouldAutoApprove()) return false;
+        if (!this.isAutonomousMeshSession() || !this.shouldUsePtyAutoApprove()) return false;
         const resolvedAt = typeof (this.adapter as any)?.lastApprovalResolvedAt === 'number'
             ? (this.adapter as any).lastApprovalResolvedAt as number
             : 0;
@@ -2897,7 +2898,7 @@ export class CliProviderInstance implements ProviderInstance {
         }
 
         const latestStatus = this.adapter.getStatus({ allowParse: false });
-        const latestAutoApproveActive = latestStatus.status === 'waiting_approval' && this.shouldAutoApprove();
+        const latestAutoApproveActive = latestStatus.status === 'waiting_approval' && this.shouldUsePtyAutoApprove();
         const latestVisibleStatus = latestAutoApproveActive || this.autoApproveBusy ? 'generating' : latestStatus.status;
         LOG.debug('CLI', `[${this.type}] flush attempt: adapterStatus=${latestStatus.status} latestVisible=${latestVisibleStatus} generatingStartedAt=${this.generatingStartedAt} isWaitingForResponse=${!!(this.adapter as any)?.isWaitingForResponse} hasPartial=${!!this.adapter.getPartialResponse?.()}`);
         if (latestVisibleStatus !== 'idle') {
@@ -3300,7 +3301,7 @@ export class CliProviderInstance implements ProviderInstance {
     private stabilizeFlappingApprovalStatus(adapterStatus: any, now = Date.now()): any {
         // Only autonomous auto-approving mesh sessions are subject to the delegated flap;
         // never overlay for attended/foreground/non-mesh sessions.
-        if (!this.isAutonomousMeshSession() || !this.shouldAutoApprove()) return adapterStatus;
+        if (!this.isAutonomousMeshSession() || !this.shouldUsePtyAutoApprove()) return adapterStatus;
 
         const rawStatus = adapterStatus?.status;
         const resolvedAt = typeof (this.adapter as any)?.lastApprovalResolvedAt === 'number'
@@ -3347,6 +3348,13 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     private maybeAutoApproveStatus(adapterStatus: any, now = Date.now()): boolean {
+        // launch-args modes grant approval in the CLI process itself and therefore
+        // must never enter the PTY modal parser/fire/settle/mask/nudge subsystem.
+        // post-boot-command is reserved and resolves inactive in v1.
+        if (!this.shouldUsePtyAutoApprove()) {
+            this.resetPtyAutoApproveState();
+            return false;
+        }
         // Manual-attendance suppression (provider-common): when a human is
         // Manual-attendance suppression (provider-common): when a human is
         // actively driving this session from the dashboard, hold auto-approve so
@@ -3358,7 +3366,7 @@ export class CliProviderInstance implements ProviderInstance {
         // would otherwise never re-drive this decision. Background mesh workers
         // are never attended, so their delegated auto-approve is untouched.
         if (adapterStatus?.status === 'waiting_approval'
-            && this.shouldAutoApprove()
+            && this.shouldUsePtyAutoApprove()
             && this.manualAttendance.isAttended(now)) {
             this.lastAutoApprovalSignature = '';
             this.pendingAutoApprovalSignature = '';
@@ -3376,7 +3384,7 @@ export class CliProviderInstance implements ProviderInstance {
             }, this.manualAttendance.remainingMs(now) + 20);
             return false;
         }
-        const autoApproveActive = adapterStatus?.status === 'waiting_approval' && this.shouldAutoApprove();
+        const autoApproveActive = adapterStatus?.status === 'waiting_approval' && this.shouldUsePtyAutoApprove();
         // Guard re-entry: onStatusChange/getState can observe the same modal multiple
         // times while the PTY absorbs the approval key. Without this flag, repeated
         // snapshots would write stray keys into the input once the modal dismisses.
@@ -4652,15 +4660,37 @@ export class CliProviderInstance implements ProviderInstance {
     get cliType(): string { return this.type; }
     get cliName(): string { return this.provider.name; }
 
+    private resolveAutoApproveMode(): ResolvedAutoApproveMode {
+        return resolveProviderAutoApproveMode(this.provider, this.settings);
+    }
+
+    /** Legacy boolean view retained for internal/test compatibility. */
     private shouldAutoApprove(): boolean {
-        if (typeof this.settings.autoApprove === 'boolean') {
-            return this.settings.autoApprove;
+        return this.resolveAutoApproveMode().active;
+    }
+
+    private shouldUsePtyAutoApprove(): boolean {
+        const resolved = this.resolveAutoApproveMode();
+        return this.shouldAutoApprove() && resolved.strategy === 'pty-parse-default';
+    }
+
+    private resetPtyAutoApproveState(): void {
+        this.lastAutoApprovalSignature = '';
+        this.pendingAutoApprovalSignature = '';
+        this.pendingAutoApprovalSince = 0;
+        this.autoApproveInactiveSince = 0;
+        this.autoApproveMaskSince = 0;
+        this.stalledApprovalNudgeEpisode = 0;
+        this.autoApproveLastModalSeenAt = 0;
+        this.autoApproveBusy = false;
+        if (this.autoApproveSettleTimer) {
+            clearTimeout(this.autoApproveSettleTimer);
+            this.autoApproveSettleTimer = null;
         }
-        const providerDefault = this.provider.settings?.autoApprove?.default;
-        if (typeof providerDefault === 'boolean') {
-            return providerDefault;
+        if (this.autoApproveBusyTimer) {
+            clearTimeout(this.autoApproveBusyTimer);
+            this.autoApproveBusyTimer = null;
         }
-        return false;
     }
 
     /** @see ProviderInstance.noteManualInteraction */
@@ -4687,7 +4717,7 @@ export class CliProviderInstance implements ProviderInstance {
      */
     private autoApproveEffectivelyActive(status: string | undefined, now = Date.now()): boolean {
         return status === 'waiting_approval'
-            && this.shouldAutoApprove()
+            && this.shouldUsePtyAutoApprove()
             && !this.manualAttendance.isAttended(now);
     }
 
@@ -4699,7 +4729,8 @@ export class CliProviderInstance implements ProviderInstance {
     // maybeAutoApproveStatus (driven by getState + the recheck timer during a waiting episode);
     // this read is side-effect-free so getStatusMetadata can consult it too.
     private autoApproveMaskStalled(now = Date.now()): boolean {
-        return this.autoApproveMaskSince > 0
+        return this.shouldUsePtyAutoApprove()
+            && this.autoApproveMaskSince > 0
             && now - this.autoApproveMaskSince > CliProviderInstance.AUTO_APPROVE_MASK_STALL_MS;
     }
 
@@ -4725,6 +4756,7 @@ export class CliProviderInstance implements ProviderInstance {
      * mask-clock value) so a modal that flaps between parsed/unparsed states is announced once.
      */
     private maybeEmitStalledApprovalNudge(adapterStatus: any, now: number): void {
+        if (!this.shouldUsePtyAutoApprove()) return;
         if (!this.isMeshWorkerSession()) return;
         if (adapterStatus?.status !== 'waiting_approval') return;
         if (!this.autoApproveMaskStalled(now)) return;

@@ -1,4 +1,5 @@
 import type { ProviderControlDef, ProviderControlType, ProviderModule } from './contracts.js'
+import { deriveAutoApproveModeRisk } from './auto-approve-modes.js'
 import { providerHasOpenPanelSupport } from './open-panel-support.js'
 
 const VALID_CAPABILITY_MEDIA_TYPES = new Set(['text', 'image', 'audio', 'video', 'resource'])
@@ -66,6 +67,7 @@ const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'providerVersion',
   'status',
   'details',
+  'autoApproveModes',
   'modelLaunchArgs',
   'modelOptions',
   'thinkingLaunchArgs',
@@ -144,6 +146,7 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
   validateCapabilities(provider as unknown as ProviderModule, controls, errors)
   validateNativeHistory(provider.nativeHistory, errors)
   validateMeshCoordinator(provider.meshCoordinator, errors)
+  validateAutoApproveModes(provider.autoApproveModes, errors)
 
   for (const control of controls) {
     validateControl(control as ProviderControlDef, errors)
@@ -158,6 +161,86 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
   }
 
   return { errors, warnings }
+}
+
+export function validateAutoApproveModes(raw: unknown, errors: string[]): void {
+  if (raw === undefined) return
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push('autoApproveModes must be an object')
+    return
+  }
+
+  const config = raw as Record<string, unknown>
+  const defaultModeId = typeof config.default === 'string' ? config.default.trim() : ''
+  if (!defaultModeId) {
+    errors.push('autoApproveModes.default must be a non-empty string')
+  } else {
+    config.default = defaultModeId
+  }
+  if (!Array.isArray(config.modes) || config.modes.length === 0) {
+    errors.push('autoApproveModes.modes must be a non-empty array')
+    return
+  }
+
+  const ids = new Set<string>()
+  for (const [index, rawMode] of config.modes.entries()) {
+    const prefix = `autoApproveModes.modes[${index}]`
+    if (!rawMode || typeof rawMode !== 'object' || Array.isArray(rawMode)) {
+      errors.push(`${prefix} must be an object`)
+      continue
+    }
+    const mode = rawMode as Record<string, unknown>
+    const id = typeof mode.id === 'string' ? mode.id.trim() : ''
+    if (!id) {
+      errors.push(`${prefix}.id must be a non-empty string`)
+    } else if (ids.has(id)) {
+      errors.push(`${prefix}.id must be unique (duplicate: ${id})`)
+    } else {
+      ids.add(id)
+      mode.id = id
+    }
+    if (typeof mode.label !== 'string' || !mode.label.trim()) {
+      errors.push(`${prefix}.label must be a non-empty string`)
+    }
+
+    const strategy = mode.strategy
+    if (!['pty-parse-default', 'launch-args', 'post-boot-command'].includes(String(strategy))) {
+      errors.push(`${prefix}.strategy must be one of: pty-parse-default, launch-args, post-boot-command`)
+    } else if (strategy === 'post-boot-command') {
+      errors.push(`${prefix}.strategy post-boot-command is reserved and unsupported in v1`)
+    }
+
+    const risk = mode.risk
+    if (!['safe', 'caution', 'dangerous'].includes(String(risk))) {
+      errors.push(`${prefix}.risk must be one of: safe, caution, dangerous`)
+    }
+
+    for (const field of ['launchArgs', 'removeArgs'] as const) {
+      const value = mode[field]
+      if (value !== undefined && (!Array.isArray(value) || value.some((arg) => typeof arg !== 'string' || !arg.trim()))) {
+        errors.push(`${prefix}.${field} must be an array of non-empty strings when provided`)
+      }
+    }
+    if (strategy === 'launch-args' && (!Array.isArray(mode.launchArgs) || mode.launchArgs.length === 0)) {
+      errors.push(`${prefix}.launchArgs must be a non-empty array for launch-args strategy`)
+    }
+
+    // Mutate the validated provider object so downstream runtime/UI consumers see
+    // the effective risk. The runtime resolver repeats this derivation as defense-in-depth.
+    if (['safe', 'caution', 'dangerous'].includes(String(risk))
+        && deriveAutoApproveModeRisk(mode as any) === 'dangerous') {
+      mode.risk = 'dangerous'
+    }
+    if (mode.risk === 'dangerous' && (typeof mode.warning !== 'string' || !mode.warning.trim())) {
+      errors.push(`${prefix}.warning is required for dangerous modes`)
+    } else if (mode.warning !== undefined && (typeof mode.warning !== 'string' || !mode.warning.trim())) {
+      errors.push(`${prefix}.warning must be a non-empty string when provided`)
+    }
+  }
+
+  if (defaultModeId && !ids.has(defaultModeId)) {
+    errors.push(`autoApproveModes.default must reference an existing mode id: ${defaultModeId}`)
+  }
 }
 
 function validateCapabilities(provider: ProviderModule, controls: ProviderControlDef[], errors: string[]): void {

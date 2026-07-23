@@ -15,6 +15,8 @@ import type { GitRepoStatus, GitCompactSummary } from './git/git-types.js';
 import type { MeshMissionSummary, MeshMissionSlimSummary } from './mesh/mesh-missions.js';
 import type { MeshMagiActivitySummary } from './mesh/mesh-magi-status.js';
 import type { MagiKindPanelMap, DifficultyBrainMap, NodeCapabilitySlot } from '@adhdev/mesh-shared';
+import type { ProviderModule } from './providers/contracts.js';
+import { deriveAutoApproveModeRisk } from './providers/auto-approve-modes.js';
 
 // ─── Core Mesh Types ────────────────────────────
 
@@ -350,6 +352,8 @@ export interface RepoMeshPolicy {
      * A node policy may override this per-node (RepoMeshNodePolicy.delegatedWorkerAutoApprove).
      */
     delegatedWorkerAutoApprove?: boolean;
+    /** Explicit opt-in required before delegated workers may use a dangerous provider mode. */
+    delegatedWorkerDangerousModeAllow?: boolean;
     /**
      * MESH-SEND-KEYS (feature 3): opt-in to allow the coordinator to inject
      * DESTRUCTIVE keys (CTRL_C / ESC) into a worker PTY via mesh_send_keys. These
@@ -505,6 +509,8 @@ export interface RepoMeshNodePolicy {
      * precedence over the mesh-level policy for worker sessions launched onto this node.
      */
     delegatedWorkerAutoApprove?: boolean;
+    /** Per-node override for dangerous delegated worker mode authorization. */
+    delegatedWorkerDangerousModeAllow?: boolean;
     /**
      * MESH-SEND-KEYS (feature 3): per-node override for
      * RepoMeshPolicy.allowSendKeysDestructive.
@@ -550,6 +556,7 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     // any specific session manually; that override is preserved per-device.
     spawnedSessionVisibility: 'hidden',
     delegatedWorkerAutoApprove: true,
+    delegatedWorkerDangerousModeAllow: false,
     sessionCleanupOnNodeRemove: 'preserve',
     // MAGI auto-launches a worker session per pinned replica target with no idle
     // session; those stay idle-LIVE after their turn. Default ON (stop_and_delete)
@@ -776,6 +783,13 @@ export function mergeAndNormalizePolicy(
     } else {
         delete policy.autoConvergeCodeChange;
     }
+    // Dangerous delegated-worker provider modes are fail-closed and only persist
+    // when the mesh owner has explicitly opted in.
+    if (policy.delegatedWorkerDangerousModeAllow === true) {
+        policy.delegatedWorkerDangerousModeAllow = true;
+    } else {
+        delete policy.delegatedWorkerDangerousModeAllow;
+    }
     // Coordinator idle-push policy: strict opt-in. Only persist the explicit
     // 'auto_silent_on_dispatch' value; any other/invalid value normalizes to the
     // 'always' default and is dropped so existing meshes.json stays byte-for-byte
@@ -789,23 +803,62 @@ export function mergeAndNormalizePolicy(
 }
 
 /**
- * Resolve whether a delegated worker session launched onto `nodePolicy` (within a mesh
- * governed by `meshPolicy`) should auto-approve. Precedence: node override → mesh policy
- * → default true. The result is stamped into the worker launch settings envelope as
- * `autoApprove`; it wins over the global per-provider-type autoApprove config because the
- * launch path merges the envelope as a settingsOverride on top of the provider defaults.
+ * Resolve delegated worker auto-approve. Legacy providers return a boolean. Providers
+ * with modes return the default mode id, except a dangerous default is downgraded to a
+ * non-dangerous PTY mode unless mesh/node policy explicitly opts in.
  */
 export function resolveDelegatedWorkerAutoApprove(
-    meshPolicy?: Pick<RepoMeshPolicy, 'delegatedWorkerAutoApprove'> | null,
-    nodePolicy?: Pick<RepoMeshNodePolicy, 'delegatedWorkerAutoApprove'> | null,
-): boolean {
+    meshPolicy?: Pick<RepoMeshPolicy, 'delegatedWorkerAutoApprove' | 'delegatedWorkerDangerousModeAllow'> | null,
+    nodePolicy?: Pick<RepoMeshNodePolicy, 'delegatedWorkerAutoApprove' | 'delegatedWorkerDangerousModeAllow'> | null,
+    provider?: Pick<ProviderModule, 'autoApproveModes'> | null,
+): boolean | string {
+    let enabled = true;
     if (typeof nodePolicy?.delegatedWorkerAutoApprove === 'boolean') {
-        return nodePolicy.delegatedWorkerAutoApprove;
+        enabled = nodePolicy.delegatedWorkerAutoApprove;
+    } else if (typeof meshPolicy?.delegatedWorkerAutoApprove === 'boolean') {
+        enabled = meshPolicy.delegatedWorkerAutoApprove;
     }
-    if (typeof meshPolicy?.delegatedWorkerAutoApprove === 'boolean') {
-        return meshPolicy.delegatedWorkerAutoApprove;
+    if (!enabled) return false;
+
+    const modes = provider?.autoApproveModes;
+    if (!modes) return true;
+    const defaultMode = modes.modes.find((mode) => mode.id === modes.default);
+    if (!defaultMode || defaultMode.strategy === 'post-boot-command') return false;
+
+    const dangerousAllowed = resolveDelegatedWorkerDangerousModeAllow(meshPolicy, nodePolicy);
+    if (deriveAutoApproveModeRisk(defaultMode) === 'dangerous' && !dangerousAllowed) {
+        const ptyFallback = modes!.modes.find((mode) =>
+            mode.strategy === 'pty-parse-default' && deriveAutoApproveModeRisk(mode) !== 'dangerous');
+        return ptyFallback?.id || false;
     }
-    return true;
+    return defaultMode.id;
+}
+
+export function resolveDelegatedWorkerDangerousModeAllow(
+    meshPolicy?: Pick<RepoMeshPolicy, 'delegatedWorkerDangerousModeAllow'> | null,
+    nodePolicy?: Pick<RepoMeshNodePolicy, 'delegatedWorkerDangerousModeAllow'> | null,
+): boolean {
+    if (typeof nodePolicy?.delegatedWorkerDangerousModeAllow === 'boolean') {
+        return nodePolicy.delegatedWorkerDangerousModeAllow;
+    }
+    return meshPolicy?.delegatedWorkerDangerousModeAllow === true;
+}
+
+/** Shape a boolean-or-mode resolution for the settings precedence contract. */
+export function delegatedWorkerAutoApproveSettings(
+    meshPolicy?: Pick<RepoMeshPolicy, 'delegatedWorkerAutoApprove' | 'delegatedWorkerDangerousModeAllow'> | null,
+    nodePolicy?: Pick<RepoMeshNodePolicy, 'delegatedWorkerAutoApprove' | 'delegatedWorkerDangerousModeAllow'> | null,
+    provider?: Pick<ProviderModule, 'autoApproveModes'> | null,
+): {
+    autoApprove: boolean | undefined;
+    autoApproveMode: string | undefined;
+    delegatedWorkerDangerousModeAllow: boolean;
+} {
+    const resolved = resolveDelegatedWorkerAutoApprove(meshPolicy, nodePolicy, provider);
+    const delegatedWorkerDangerousModeAllow = resolveDelegatedWorkerDangerousModeAllow(meshPolicy, nodePolicy);
+    return typeof resolved === 'string'
+        ? { autoApprove: undefined, autoApproveMode: resolved, delegatedWorkerDangerousModeAllow }
+        : { autoApprove: resolved, autoApproveMode: undefined, delegatedWorkerDangerousModeAllow };
 }
 
 /**

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   DEFAULT_MESH_POLICY,
+  delegatedWorkerAutoApproveSettings,
   resolveDelegatedWorkerAutoApprove,
 } from '../../src/repo-mesh-types.js';
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js';
@@ -38,6 +39,49 @@ describe('resolveDelegatedWorkerAutoApprove', () => {
   it('DEFAULT_MESH_POLICY enables delegated worker auto-approve', () => {
     expect(DEFAULT_MESH_POLICY.delegatedWorkerAutoApprove).toBe(true);
     expect(resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined)).toBe(true);
+  });
+
+  it('downgrades a dangerous provider default to PTY parsing unless explicitly allowed', () => {
+    const provider = {
+      autoApproveModes: {
+        default: 'danger',
+        modes: [
+          { id: 'parsed', label: 'Parsed', strategy: 'pty-parse-default', risk: 'safe' },
+          {
+            id: 'danger',
+            label: 'Danger',
+            strategy: 'launch-args',
+            risk: 'safe',
+            warning: 'Sandbox and approval checks are bypassed.',
+            launchArgs: ['--dangerously-bypass-approvals-and-sandbox'],
+          },
+        ],
+      },
+    } as any;
+
+    expect(resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined, provider)).toBe('parsed');
+    expect(resolveDelegatedWorkerAutoApprove(
+      { ...DEFAULT_MESH_POLICY, delegatedWorkerDangerousModeAllow: true },
+      undefined,
+      provider,
+    )).toBe('danger');
+    expect(resolveDelegatedWorkerAutoApprove(
+      { ...DEFAULT_MESH_POLICY, delegatedWorkerDangerousModeAllow: true },
+      { delegatedWorkerDangerousModeAllow: false },
+      provider,
+    )).toBe('parsed');
+    expect(DEFAULT_MESH_POLICY.delegatedWorkerDangerousModeAllow).toBe(false);
+  });
+
+  it('clears the opposite settings key so global mode precedence cannot bypass mesh policy', () => {
+    expect(delegatedWorkerAutoApproveSettings(
+      { ...DEFAULT_MESH_POLICY, delegatedWorkerAutoApprove: false },
+      undefined,
+    )).toEqual({
+      autoApprove: false,
+      autoApproveMode: undefined,
+      delegatedWorkerDangerousModeAllow: false,
+    });
   });
 });
 

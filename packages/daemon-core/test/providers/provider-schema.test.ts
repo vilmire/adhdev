@@ -8,6 +8,109 @@ describe('validateProviderDefinition', () => {
     controls: { typedResults: true },
   }
 
+  const providerWithModes = (autoApproveModes: unknown) => ({
+    type: 'mock-modes-cli',
+    name: 'Mock Modes CLI',
+    category: 'cli',
+    spawn: { command: 'mock-modes' },
+    autoApproveModes,
+  })
+
+  it('accepts valid auto-approve modes', () => {
+    const result = validateProviderDefinition(providerWithModes({
+      default: 'parsed',
+      modes: [
+        { id: 'parsed', label: 'Parsed approvals', strategy: 'pty-parse-default', risk: 'safe' },
+        {
+          id: 'yolo',
+          label: 'Skip permissions',
+          strategy: 'launch-args',
+          risk: 'dangerous',
+          warning: 'All permission checks are disabled.',
+          launchArgs: ['--dangerously-skip-permissions'],
+          removeArgs: ['--permission-mode'],
+        },
+      ],
+    }))
+
+    expect(result.errors).toEqual([])
+    expect(result.warnings).toEqual([])
+  })
+
+  it('rejects invalid auto-approve mode defaults, enums, and required security fields', () => {
+    const missingDefault = validateProviderDefinition(providerWithModes({
+      default: 'missing',
+      modes: [{ id: 'parsed', label: 'Parsed', strategy: 'pty-parse-default', risk: 'safe' }],
+    }))
+    expect(missingDefault.errors).toContain('autoApproveModes.default must reference an existing mode id: missing')
+
+    const duplicateId = validateProviderDefinition(providerWithModes({
+      default: 'same',
+      modes: [
+        { id: 'same', label: 'First', strategy: 'pty-parse-default', risk: 'safe' },
+        { id: 'same', label: 'Second', strategy: 'pty-parse-default', risk: 'safe' },
+      ],
+    }))
+    expect(duplicateId.errors).toContain('autoApproveModes.modes[1].id must be unique (duplicate: same)')
+
+    const invalidEnums = validateProviderDefinition(providerWithModes({
+      default: 'invalid',
+      modes: [{ id: 'invalid', label: 'Invalid', strategy: 'telepathy', risk: 'extreme' }],
+    }))
+    expect(invalidEnums.errors).toContain('autoApproveModes.modes[0].strategy must be one of: pty-parse-default, launch-args, post-boot-command')
+    expect(invalidEnums.errors).toContain('autoApproveModes.modes[0].risk must be one of: safe, caution, dangerous')
+
+    const missingLaunchArgs = validateProviderDefinition(providerWithModes({
+      default: 'launch',
+      modes: [{ id: 'launch', label: 'Launch', strategy: 'launch-args', risk: 'safe' }],
+    }))
+    expect(missingLaunchArgs.errors).toContain('autoApproveModes.modes[0].launchArgs must be a non-empty array for launch-args strategy')
+
+    const missingWarning = validateProviderDefinition(providerWithModes({
+      default: 'danger',
+      modes: [{ id: 'danger', label: 'Danger', strategy: 'launch-args', risk: 'dangerous', launchArgs: ['--unsafe'] }],
+    }))
+    expect(missingWarning.errors).toContain('autoApproveModes.modes[0].warning is required for dangerous modes')
+  })
+
+  it('derives dangerous risk from known launch flags so a provider cannot disguise it as safe', () => {
+    const definition = providerWithModes({
+      default: 'disguised',
+      modes: [{
+        id: 'disguised',
+        label: 'Disguised',
+        strategy: 'launch-args',
+        risk: 'safe',
+        warning: 'This bypasses the approval sandbox.',
+        launchArgs: ['-c', 'approval_policy=never'],
+      }],
+    })
+    const result = validateProviderDefinition(definition)
+
+    expect(result.errors).toEqual([])
+    expect((definition.autoApproveModes as any).modes[0].risk).toBe('dangerous')
+
+    const missingDerivedWarning = validateProviderDefinition(providerWithModes({
+      default: 'disguised',
+      modes: [{
+        id: 'disguised',
+        label: 'Disguised',
+        strategy: 'launch-args',
+        risk: 'safe',
+        launchArgs: ['sandbox_mode=danger-full-access'],
+      }],
+    }))
+    expect(missingDerivedWarning.errors).toContain('autoApproveModes.modes[0].warning is required for dangerous modes')
+  })
+
+  it('rejects the reserved post-boot-command strategy in v1', () => {
+    const result = validateProviderDefinition(providerWithModes({
+      default: 'future',
+      modes: [{ id: 'future', label: 'Future', strategy: 'post-boot-command', risk: 'safe' }],
+    }))
+    expect(result.errors).toContain('autoApproveModes.modes[0].strategy post-boot-command is reserved and unsupported in v1')
+  })
+
   it('accepts a valid CLI provider with typed controls and explicit capabilities', () => {
     const result = validateProviderDefinition({
       type: 'foo-cli',

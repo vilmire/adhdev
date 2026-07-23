@@ -13,7 +13,7 @@ import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-deliv
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
-import { resolveDelegatedWorkerAutoApprove, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveCoordinatorIdlePushPolicy } from '../repo-mesh-types.js';
+import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveCoordinatorIdlePushPolicy } from '../repo-mesh-types.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
@@ -690,7 +690,7 @@ export function tryAssignQueueTask(
         if (inst && typeof inst.updateSettings === 'function') {
             // Adopting a (possibly manually-opened) local session as a worker: apply the
             // delegated-worker auto-approve policy here too, so a session that was launched
-            // without autoApprove still auto-approves once the coordinator dispatches a task
+            // without an auto-approve boolean/mode still resolves the delegated policy once dispatched
             // to it (the "approval notification fires only for certain delegated sessions"
             // case). updateSettings preserves runtime mesh keys; passing autoApprove keeps it.
             //
@@ -704,7 +704,11 @@ export function tryAssignQueueTask(
                 meshNodeFor: meshId,
                 meshNodeId: nodeId,
                 launchedByCoordinator: true,
-                autoApprove: resolveDelegatedWorkerAutoApprove(mesh?.policy, node?.policy),
+                ...delegatedWorkerAutoApproveSettings(
+                    mesh?.policy,
+                    node?.policy,
+                    components.providerLoader?.getMeta(providerType),
+                ),
                 ...(localDaemonId ? { meshCoordinatorDaemonId: localDaemonId } : {}),
                 // COMPLETION-PROPAGATION F5: (re)stamp the coordinator SESSION anchor from THIS
                 // task's sourceCoordinatorSessionId with PRIORITY — a manually-launched (or reused)
@@ -2318,8 +2322,12 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || 'hidden',
                     // Coordinator-dispatched worker: auto-approve unless mesh/node policy
                     // opts out (default true). Lands in settingsOverride and beats the
-                    // global per-provider-type autoApprove config (see shouldAutoApprove).
-                    autoApprove: resolveDelegatedWorkerAutoApprove(mesh?.policy, node?.policy),
+                    // global per-provider-type boolean/mode through explicit opposite-key clearing.
+                    ...delegatedWorkerAutoApproveSettings(
+                        mesh?.policy,
+                        node?.policy,
+                        components.providerLoader?.getMeta(resolved.providerType),
+                    ),
                     launchedByCoordinator: true,
                     autoLaunchedForQueueTaskId: task.id,
                 };
@@ -2984,4 +2992,3 @@ export function runIdleMaintenanceThenAssignQueue(components: DaemonComponents, 
             });
     });
 }
-

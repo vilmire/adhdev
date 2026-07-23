@@ -16,7 +16,7 @@ import { resolveMeshHostStatus } from './mesh-host-ownership.js';
 import { enqueueUnresolvedDelegateForward, nudgeUnresolvedForwardRetry } from './mesh-unresolved-forward-outbox.js';
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
-import { resolveDelegatedWorkerAutoApprove } from '../repo-mesh-types.js';
+import { delegatedWorkerAutoApproveSettings } from '../repo-mesh-types.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent, withStatusProbeMarker, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
@@ -1614,7 +1614,11 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                                     spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || 'hidden',
                                     // Coordinator-dispatched recovery relaunch: same auto-approve
                                     // policy as the primary worker launch path.
-                                    autoApprove: resolveDelegatedWorkerAutoApprove(mesh?.policy, node?.policy),
+                                    ...delegatedWorkerAutoApproveSettings(
+                                        mesh?.policy,
+                                        node?.policy,
+                                        components.providerLoader?.getMeta(recoveryContext.failedProviderType),
+                                    ),
                                     launchedByCoordinator: true,
                                 }
                             }).catch((e: any) => LOG.error('MeshRecovery', `Failed to auto-relaunch session for ${node.id}: ${e?.message}`));

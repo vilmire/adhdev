@@ -488,6 +488,28 @@ export interface ProviderCompatibilityEntry {
   scriptDir: string;
 }
 
+export type AutoApproveModeStrategy =
+  | 'pty-parse-default'
+  | 'launch-args'
+  | 'post-boot-command';
+
+export type AutoApproveModeRisk = 'safe' | 'caution' | 'dangerous';
+
+export interface AutoApproveMode {
+  id: string;
+  label: string;
+  strategy: AutoApproveModeStrategy;
+  risk: AutoApproveModeRisk;
+  warning?: string;
+  launchArgs?: string[];
+  removeArgs?: string[];
+}
+
+export interface AutoApproveModesConfig {
+  default: string;
+  modes: AutoApproveMode[];
+}
+
 export interface ProviderModule {
  /** Unique identifier (e.g. 'cline', 'cursor', 'gemini-cli') */
   type: string;
@@ -519,7 +541,9 @@ export interface ProviderModule {
   status?: string;
  /** Inventory/support detail string maintained in adhdev-providers */
   details?: string;
- /** Install instructions (shown when command is missing) */
+  /** Provider-specific auto-approve choices and their launch/runtime strategy. */
+  autoApproveModes?: AutoApproveModesConfig;
+  /** Install instructions (shown when command is missing) */
   install?: string;
  /** Custom version detection command (e.g. 'cursor --version', 'claude -v') */
   versionCommand?: ProviderVersionCommand;

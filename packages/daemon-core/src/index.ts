@@ -143,6 +143,8 @@ export type {
 export {
   DEFAULT_MESH_POLICY,
   resolveDelegatedWorkerAutoApprove,
+  delegatedWorkerAutoApproveSettings,
+  resolveDelegatedWorkerDangerousModeAllow,
   resolveAllowSendKeysDestructive,
   resolveMagiSessionCleanupMode,
   magiAutoLaunchedSessionCleanupDecision,
@@ -489,7 +491,7 @@ export { ProviderInstanceManager } from './providers/provider-instance-manager.j
 export { IdeProviderInstance } from './providers/ide-provider-instance.js';
 export { CliProviderInstance } from './providers/cli-provider-instance.js';
 export { AcpProviderInstance } from './providers/acp-provider-instance.js';
-export type { ProviderModule, CdpTargetFilter, ProviderResumeCapability, InputEnvelope, InputPart, MessagePart, ReadChatTurnStatus, ControlListResult, ControlSetResult, ControlInvokeResult } from './providers/contracts.js';
+export type { ProviderModule, AutoApproveMode, AutoApproveModesConfig, AutoApproveModeRisk, AutoApproveModeStrategy, CdpTargetFilter, ProviderResumeCapability, InputEnvelope, InputPart, MessagePart, ReadChatTurnStatus, ControlListResult, ControlSetResult, ControlInvokeResult } from './providers/contracts.js';
 export type { ProviderSourceConfigSnapshot, ProviderSourceConfigUpdate } from './config/provider-source-config.js';
 export { parseProviderSourceConfigUpdate } from './config/provider-source-config.js';
 export { normalizeInputEnvelope, normalizeMessageParts, flattenMessageParts } from './providers/io-contracts.js';
