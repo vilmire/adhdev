@@ -337,6 +337,70 @@ describe('CliStateEngine', () => {
         })
     })
 
+    // ── Kimi pure-PTY class: onTurnStarted generating promotion + completion emit ──
+    // KIMI-PURE-PTY-COMPLETION-EMIT (Fix 1): the pure-PTY full-buffer class (kimi and
+    // kin — tui.transcriptPty.scope 'buffer', NO nativeHistory, NOT
+    // transcriptAuthority:'provider') was NOT covered by the transcriptAuthority-keyed
+    // promotion above. A prompt submitted while idle collapsed idle→idle, the FSM never
+    // crossed generating→idle, and downstream (detectStatusTransition) never emitted
+    // agent:generating_completed. Promoting this class on turn-start restores the real
+    // generating→idle completion edge.
+    describe('onTurnStarted — immediate generating for the pure-PTY transcript class', () => {
+        const purePtyProvider = { tui: { transcriptPty: { scope: 'buffer' } } as any }
+
+        it('promotes to generating on turn start (no transcriptAuthority, no nativeHistory, scope=buffer)', () => {
+            const { engine } = buildEngine(purePtyProvider)
+            engine.setStatus('idle')
+            engine.onTurnStarted({ prompt: 'do it', startedAt: Date.now(), bufferStart: 0, rawBufferStart: 0 })
+
+            expect(engine.currentStatus).toBe('generating')
+            expect(engine.getStatusHistory().at(-1)).toMatchObject({ status: 'generating', trigger: 'turn_started' })
+        })
+
+        it('the promoted turn still produces a real generating→idle completion edge', () => {
+            const { engine, transport } = buildEngine(purePtyProvider)
+            engine.setStatus('idle')
+
+            engine.onTurnStarted({ prompt: 'write a file', startedAt: Date.now(), bufferStart: 0, rawBufferStart: 0 })
+            expect(engine.currentStatus).toBe('generating')
+
+            transport.runParseSession = vi.fn(() => ({
+                status: 'idle',
+                messages: [
+                    { role: 'user', content: 'write a file' },
+                    { role: 'assistant', kind: 'standard', content: 'Done.', meta: {} },
+                ],
+                activeModal: null,
+            }))
+            engine.finishResponse()
+            vi.advanceTimersByTime(2050)
+
+            expect(engine.currentStatus).toBe('idle')
+            const history = engine.getStatusHistory()
+            // Both edges observed: the turn_started generating promotion AND the idle finish,
+            // so a downstream generating|→idle detector fires agent:generating_completed.
+            expect(history.some(h => h.status === 'generating' && h.trigger === 'turn_started')).toBe(true)
+            expect(history.at(-1)?.status).toBe('idle')
+        })
+
+        it('does NOT promote a provider with nativeHistory even at scope=buffer (has an alternate transcript source)', () => {
+            const { engine } = buildEngine({
+                tui: { transcriptPty: { scope: 'buffer' } } as any,
+                nativeHistory: { format: 'jsonl' },
+            } as any)
+            const before = engine.currentStatus
+            engine.onTurnStarted({ prompt: 'hi', startedAt: Date.now(), bufferStart: 0, rawBufferStart: 0 })
+            expect(engine.currentStatus).toBe(before)
+        })
+
+        it('does NOT promote a scope!="buffer" tui provider (turn-scoped PTY parser, not pure-PTY full-buffer)', () => {
+            const { engine } = buildEngine({ tui: { transcriptPty: { scope: 'tail' } } as any } as any)
+            const before = engine.currentStatus
+            engine.onTurnStarted({ prompt: 'hi', startedAt: Date.now(), bufferStart: 0, rawBufferStart: 0 })
+            expect(engine.currentStatus).toBe(before)
+        })
+    })
+
     // ── Modal / approval ────────────────────────────────────────────────────
 
     describe('resolveModal', () => {

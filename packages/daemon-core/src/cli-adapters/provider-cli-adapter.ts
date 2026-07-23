@@ -39,6 +39,7 @@ import {
     compactPromptText,
     estimatePromptDisplayLines,
     extractPromptRetrySnippet,
+    isPurePtyTranscriptProvider,
     listCliScriptNames,
     normalizePromptText,
     normalizeScreenSnapshot,
@@ -456,12 +457,7 @@ export class ProviderCliAdapter implements CliAdapter {
      * provider-owned) so no other provider's turn-scoped parse changes.
      */
     private parsesFullPtyTranscriptFromBuffer(): boolean {
-        if (this.providerOwnsTranscript()) return false;
-        // nativeHistory is a top-level provider field not surfaced on
-        // CliProviderModule; read it via the same structural cast used for `tui`.
-        if ((this.provider as { nativeHistory?: unknown }).nativeHistory) return false;
-        const transcriptPty = (this.provider.tui as { transcriptPty?: { scope?: unknown } } | undefined)?.transcriptPty;
-        return transcriptPty?.scope === 'buffer';
+        return isPurePtyTranscriptProvider(this.provider);
     }
 
     /**

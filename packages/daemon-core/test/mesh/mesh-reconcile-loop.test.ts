@@ -3243,6 +3243,120 @@ describe('runMeshReconcileTick', () => {
       }
     })
 
+    // ── KIMI-PURE-PTY-COMPLETION-EMIT (Fix 2) ──────────────────────────────────
+    // A pure-PTY worker (kimi and kin) whose generating_completed never emitted leaves the
+    // assigned row 'assigned' with an idle worker that already rendered its answer. Instead of
+    // waiting the full 15-min DELIVERED_NO_TURN_DEADLINE, the EARLY reconcile branch marks it
+    // completed after a short continuous-idle-with-final-assistant grace
+    // (ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS, 8s). The row is only a few seconds old here — far
+    // below every reclaim deadline — so ONLY the early transcript-evidence branch can complete it.
+    it('Fix 2: EARLY-completes a delivered assigned row whose idle worker has a post-dispatch final assistant, without the 15-min deadline', async () => {
+      const meshId = `mesh_early_transcript_complete_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-pure-pty-finished'
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const dispatchAt = Date.now()
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        // Confirmed delivery but never 'acked' (pure-PTY generating_started/completed lost).
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+
+        const idleInstance = {
+          category: 'cli',
+          getState: () => ({ instanceId: sessionId, status: 'idle', type: 'kimi', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
+        }
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status: 'idle',
+            providerSessionId: 'kimi-history-1',
+            messages: [
+              { role: 'user', content: 'do work', timestamp: dispatchAt + 500 },
+              { role: 'assistant', content: 'Done — implemented and committed.', timestamp: dispatchAt + 4_000 },
+            ],
+          }
+        })
+        const components = {
+          instanceManager: {
+            getByCategory: (category: string) => (category === 'cli' ? [idleInstance] : []),
+            getInstance: (id: string) => (id === sessionId ? idleInstance : undefined),
+          },
+          commandHandler: { handle: readChat },
+        } as any
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        // Tick 1 arms the continuous-idle streak but does NOT complete (grace not yet elapsed).
+        await runMeshReconcileTick(components)
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+
+        // Advance past the 8s grace, then tick 2 polls the transcript and completes early.
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('completed')
+        expect(readChat).toHaveBeenCalledWith('read_chat', expect.objectContaining({ targetSessionId: sessionId }))
+        const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed')
+        expect(completed).toBeTruthy()
+        expect((completed?.payload as any)?.source).toBe('early_idle_transcript_evidence')
+        // No reclaim / re-drive happened — the worker was completed, not torn off its task.
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+      } finally {
+        vi.useRealTimers()
+        cleanup(meshId)
+      }
+    })
+
+    it('Fix 2: does NOT early-complete when the idle worker has no final assistant (streak resets, no premature completion)', async () => {
+      const meshId = `mesh_early_transcript_noevidence_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-pure-pty-warming'
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const dispatchAt = Date.now()
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+
+        const idleInstance = {
+          category: 'cli',
+          getState: () => ({ instanceId: sessionId, status: 'idle', type: 'kimi', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
+        }
+        // Idle but only the user prompt — no assistant result yet → poll returns null → no early complete.
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd !== 'read_chat') return { success: true }
+          return { success: true, status: 'idle', messages: [{ role: 'user', content: 'do work', timestamp: dispatchAt + 500 }] }
+        })
+        const components = {
+          instanceManager: {
+            getByCategory: (category: string) => (category === 'cli' ? [idleInstance] : []),
+            getInstance: (id: string) => (id === sessionId ? idleInstance : undefined),
+          },
+          commandHandler: { handle: readChat },
+        } as any
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned') // still assigned — the row is young, no deadline hit either
+        expect(readLedgerEntries(meshId).some(
+          e => (e.payload as any)?.source === 'early_idle_transcript_evidence',
+        )).toBe(false)
+      } finally {
+        vi.useRealTimers()
+        cleanup(meshId)
+      }
+    })
+
     it('Fix A-i: STILL re-drives a delivered-no-turn task when the transcript shows NO turn-end (idle but no final assistant)', async () => {
       const meshId = `mesh_phase25_redrive_no_evidence_${Date.now()}`
       const nodeId = 'node_w'

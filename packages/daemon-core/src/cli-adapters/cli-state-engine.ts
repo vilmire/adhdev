@@ -15,6 +15,7 @@ import {
 import {
     buildCliScreenSnapshot,
     compactPromptText,
+    isPurePtyTranscriptProvider,
     normalizePromptText,
     promptLikelyVisible,
     type CliChatMessage,
@@ -361,7 +362,22 @@ export class CliStateEngine {
         // idle transition, unchanged. Scoped to transcriptAuthority:'provider'
         // only, so PTY-authoritative providers (whose spinner/settled parsing
         // already drives generating promptly) are unaffected.
-        if (this.provider.transcriptAuthority === 'provider' && this.currentStatus !== 'waiting_approval') {
+        //
+        // (fix: kimi pure-PTY completion-emit) The pure-PTY full-buffer class
+        // (kimi and kin — see isPurePtyTranscriptProvider) is NOT
+        // transcriptAuthority:'provider', so without this it stays idle when a
+        // prompt is submitted from idle: the FSM never crosses generating→idle,
+        // detectStatusTransition's generating|waiting_approval→idle arm never
+        // runs, and agent:generating_completed is never emitted — the mesh
+        // coordinator leaves the task 'assigned' and the status-agnostic stall
+        // watchdog then false-fires task_stalled on the finished-but-idle
+        // session. Promoting this class to generating on turn-start makes the
+        // existing PTY-parsed final-assistant idle gate produce a real
+        // generating→idle completion edge. Same idle safety as above: applyIdle
+        // / finishResponse still own the actual idle transition.
+        const promoteOnTurnStart = this.provider.transcriptAuthority === 'provider'
+            || isPurePtyTranscriptProvider(this.provider);
+        if (promoteOnTurnStart && this.currentStatus !== 'waiting_approval') {
             this.setStatus('generating', 'turn_started');
             this.callbacks.onStatusChange();
         }

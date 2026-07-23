@@ -254,6 +254,47 @@ export interface CliProviderModule {
     _versionWarning?: string | null;
 }
 
+/**
+ * PURE-PTY TRANSCRIPT CLASS predicate (kimi and kin).
+ *
+ * A provider is "pure-PTY full-buffer" when it reconstructs its ENTIRE transcript
+ * from the rendered PTY buffer on every read and has NO alternate transcript
+ * source:
+ *   - transcriptAuthority !== 'provider'  (the daemon PTY parser owns the transcript,
+ *     not a provider-side canonical source)
+ *   - NO nativeHistory              (no on-disk / native-source history to fall back to)
+ *   - tui.transcriptPty.scope === 'buffer' (the parser walks the full rendered buffer)
+ *
+ * This class is invisible to two provider-authority-keyed code paths that other
+ * providers rely on for mesh completion semantics:
+ *   1. CliStateEngine.onTurnStarted only promotes to 'generating' for
+ *      transcriptAuthority==='provider' providers — so a pure-PTY session that
+ *      submits a prompt while already idle collapses idle→idle, the
+ *      generating→idle edge never occurs, and agent:generating_completed is never
+ *      emitted (the coordinator ledger leaves the task 'assigned' forever).
+ *   2. checkMeshWorkerStall's native-transcript completion reconcile is gated on
+ *      the native-source shape, so a finished pure-PTY worker's static idle is
+ *      misread as monitor:no_progress (a false task_stalled).
+ *
+ * The runtime capability, NOT any single spec field value, is authoritative: a
+ * given kimi manifest checkout may declare nativeHistory/transcriptAuthority, but
+ * the live-loaded pure-PTY session has none. Callers that only hold a
+ * CliProviderModule (the engine) share this exact predicate with the adapter
+ * (parsesFullPtyTranscriptFromBuffer) so the two never drift.
+ */
+export function isPurePtyTranscriptProvider(provider: {
+    transcriptAuthority?: 'provider' | 'daemon';
+    nativeHistory?: unknown;
+    tui?: Record<string, unknown>;
+}): boolean {
+    if (provider.transcriptAuthority === 'provider') return false;
+    // nativeHistory is a top-level provider field not surfaced on
+    // CliProviderModule; read it via the same structural shape the adapter uses.
+    if (provider.nativeHistory) return false;
+    const transcriptPty = (provider.tui as { transcriptPty?: { scope?: unknown } } | undefined)?.transcriptPty;
+    return transcriptPty?.scope === 'buffer';
+}
+
 function stripAnsi(str: string): string {
     // eslint-disable-next-line no-control-regex
     return str

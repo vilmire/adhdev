@@ -732,10 +732,32 @@ const deliveredNoTurnUnknownStreak = new Map<string, number>();
 // immediately; UNKNOWN accrues a streak and re-drives only after RECLAIM_UNKNOWN_GRACE_TICKS.
 const deliveredUnconsumedUnknownStreak = new Map<string, number>();
 
+// KIMI-PURE-PTY-COMPLETION-EMIT (Fix 2): how long a delivered assigned row whose worker is
+// CONTINUOUSLY idle-WITH-a-final-assistant-message must stay so before we short-circuit it to
+// 'completed' from transcript evidence — WITHOUT waiting the full DELIVERED_NO_TURN_DEADLINE_MS
+// (15min). A pure-PTY worker (kimi and kin — no native transcript, no provider authority) whose
+// generating_completed never emitted (the onTurnStarted idle→idle collapse Fix 1 addresses at the
+// source) leaves the row 'assigned' with an idle worker that already rendered its answer. The
+// F3 long-deadline reclaim's pollAssignedTaskTerminalEvidence would eventually recover it — but only
+// after 15min, during which the coordinator ledger wrongly shows the task in flight. This EARLY
+// reconcile applies the SAME idle-with-final-assistant-after-dispatch evidence bar (via
+// pollAssignedTaskTerminalEvidence) after a few continuous-idle ticks, so a finished worker's task
+// is marked complete promptly. Conservative by construction: the streak resets the instant a read is
+// non-idle / lacks a final summary / is unreadable, and the poll itself enforces the after-dispatch
+// stale-summary guard, so a mid-turn or warming-up worker is never falsely completed.
+const ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS = 8_000;
+
+// Per-row continuous idle-with-final-assistant streak for the early transcript-evidence completion,
+// keyed `${meshId}::${taskId}`, storing the wall-clock ms when the continuous run began. Pruned each
+// pass to the currently-assigned rows (same as the UNKNOWN streaks). A non-idle / no-summary /
+// unreadable tick clears the entry so the grace must re-accumulate from scratch.
+const assignedIdleFinalAssistantSince = new Map<string, number>();
+
 // Test hook: clear the delivered-no-turn UNKNOWN streaks between cases.
 export function __resetReclaimUnknownStreakForTests(): void {
     deliveredNoTurnUnknownStreak.clear();
     deliveredUnconsumedUnknownStreak.clear();
+    assignedIdleFinalAssistantSince.clear();
 }
 
 // APPROVAL-INBOX-BLINDSPOT (Fix A.3): true when the assigned row's bound session is, per the
@@ -799,10 +821,76 @@ async function recoverStrandedAssignedDispatches(
     for (const key of [...deliveredUnconsumedUnknownStreak.keys()]) {
         if (key.startsWith(meshKeyPrefix) && !assignedKeys.has(key)) deliveredUnconsumedUnknownStreak.delete(key);
     }
+    for (const key of [...assignedIdleFinalAssistantSince.keys()]) {
+        if (key.startsWith(meshKeyPrefix) && !assignedKeys.has(key)) assignedIdleFinalAssistantSince.delete(key);
+    }
     for (const row of assigned) {
         const dispatchedAtMs = Date.parse(row.dispatchTimestamp ?? '');
         if (!Number.isFinite(dispatchedAtMs)) continue;              // no dispatch ts → can't age it
         const ageMs = nowMs - dispatchedAtMs;
+        const idleTranscriptStreakKey = `${meshId}::${row.id}`;
+        // KIMI-PURE-PTY-COMPLETION-EMIT (Fix 2): EARLY transcript-evidence completion for a
+        // delivered assigned row whose worker is already idle with a final assistant answer, so a
+        // pure-PTY worker whose generating_completed never emitted is marked done PROMPTLY instead of
+        // sitting 'assigned' until the 15-min DELIVERED_NO_TURN_DEADLINE_MS reclaim. Gate on a
+        // CONFIRMED delivery (a never-delivered row is handled by dispatch/redrive, not completion)
+        // and a bound session, then require the worker to read idle-WITH-final-assistant continuously
+        // for ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS before polling the decisive transcript evidence.
+        // The streak is the cheap gate (avoids a read every tick); the read only runs once the grace
+        // elapses. pollAssignedTaskTerminalEvidence enforces idle + final-assistant-after-dispatch, so
+        // a mid-turn / stale-tail / unreadable worker is never falsely completed — a non-qualifying
+        // tick clears the streak below.
+        if (
+            store.taskHasConfirmedDelivery(meshId, row.id)
+            && !findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id })
+            && readNonEmptyString(row.assignedSessionId)
+            && resolveSessionBusyVerdict(components, row.assignedSessionId!) !== 'GENERATING'
+        ) {
+            const since = assignedIdleFinalAssistantSince.get(idleTranscriptStreakKey);
+            if (since === undefined) {
+                assignedIdleFinalAssistantSince.set(idleTranscriptStreakKey, nowMs);
+            } else if (nowMs - since >= ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS) {
+                const terminalEvidence = await pollAssignedTaskTerminalEvidence(components, mesh, row);
+                if (terminalEvidence) {
+                    assignedIdleFinalAssistantSince.delete(idleTranscriptStreakKey);
+                    updateTaskStatus(meshId, row.id, terminalEvidence);
+                    if (!findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id })) {
+                        try {
+                            appendLedgerEntry(meshId, {
+                                kind: terminalEvidence === 'completed' ? 'task_completed' : 'task_failed',
+                                nodeId: row.assignedNodeId,
+                                sessionId: row.assignedSessionId,
+                                providerType: row.assignedProviderType,
+                                payload: {
+                                    taskId: row.id,
+                                    event: 'agent:generating_completed',
+                                    source: 'early_idle_transcript_evidence',
+                                },
+                            });
+                        } catch { /* best-effort ledger write */ }
+                    }
+                    LOG.warn('MeshReconcile', `Early-completed assigned task ${row.id} on mesh ${meshId} `
+                        + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}): worker idle with a `
+                        + `final assistant message after dispatch for ≥${Math.round(ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS / 1000)}s — `
+                        + `the completion event was lost/late (pure-PTY provider), task is ${terminalEvidence} without waiting the 15-min deadline`);
+                    traceMeshEventDrop('assigned_early_transcript_completed', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_completed',
+                    }, terminalEvidence);
+                    continue;
+                }
+                // Poll was inconclusive (mid-turn re-check / stale tail / unreadable) — reset the
+                // streak so it must re-accumulate a fresh continuous-idle run before the next poll.
+                assignedIdleFinalAssistantSince.delete(idleTranscriptStreakKey);
+            }
+        } else {
+            // Not a qualifying tick (no confirmed delivery, generating, terminal ledger present, or
+            // no bound session) — break the continuous-idle run.
+            assignedIdleFinalAssistantSince.delete(idleTranscriptStreakKey);
+        }
         // DELIVERED-NOT-CONSUMED short-grace re-drive (remote autoLaunch delivered≠consumed gap).
         // Runs BEFORE the ASSIGNED_STRANDED_DEADLINE_MS confirm-window gate below because its whole
         // point is to recover a delivered-but-unconsumed row well inside that window. A remote
