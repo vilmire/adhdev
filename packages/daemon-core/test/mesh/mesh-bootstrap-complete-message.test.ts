@@ -25,7 +25,7 @@ describe('buildMeshSystemMessage — worktree_bootstrap_complete auto-claim bran
     expect(msg).not.toContain('use `mesh_launch_session` to start an agent')
   })
 
-  it('keeps the manual mesh_launch_session advice when no queued task targets the node', () => {
+  it('gives non-directive advice (no queued task detected) when no queued task targets the node', () => {
     const msg = buildMeshSystemMessage({
       event: 'worktree_bootstrap_complete',
       nodeLabel: "Node 'node_wt_2'",
@@ -33,17 +33,21 @@ describe('buildMeshSystemMessage — worktree_bootstrap_complete auto-claim bran
       worktreeHasQueuedTask: false,
     })
     expect(msg).toContain('worktree bootstrap completed')
-    expect(msg).toContain('use `mesh_launch_session` to start an agent')
+    // Should mention manual launch as an option but not as an imperative directive
+    expect(msg).toContain('Launch a session manually')
+    // Should acknowledge auto-launch possibility
+    expect(msg).toContain('auto-launch')
     expect(msg).not.toContain('auto-claim')
   })
 
-  it('defaults to the manual-launch advice when the flag is omitted (backward compatible)', () => {
+  it('defaults to the non-directive advice when the flag is omitted (backward compatible)', () => {
     const msg = buildMeshSystemMessage({
       event: 'worktree_bootstrap_complete',
       nodeLabel: "Node 'node_wt_3'",
       metadataEvent: {},
     })
-    expect(msg).toContain('use `mesh_launch_session` to start an agent')
+    expect(msg).toContain('Launch a session manually')
+    expect(msg).toContain('auto-launch')
     expect(msg).not.toContain('auto-claim')
   })
 })

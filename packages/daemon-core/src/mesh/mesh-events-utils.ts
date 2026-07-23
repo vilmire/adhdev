@@ -425,7 +425,7 @@ export function buildMeshSystemMessage(args: {
         if (args.worktreeHasQueuedTask) {
             return `${prefix} The worktree is ready; a queued task targeting this node will auto-claim it — no manual \`mesh_launch_session\` needed.`;
         }
-        return `${prefix} The worktree is ready — use \`mesh_launch_session\` to start an agent.`;
+        return `${prefix} The worktree is ready. If a task is already queued for this worktree, auto-launch will claim it — no action needed. Launch a session manually only if you need one and none exists yet.`;
     }
     if (args.event === 'worktree_bootstrap_failed') {
         const error = readNonEmptyString(args.metadataEvent.error);
