@@ -92,8 +92,11 @@ export function MeshProviderAutoApproveSection({
         setLoadError(null)
         try {
             const res = await sendCommand(hostDaemonId, 'read_mesh_json_config', { workspace: hostWorkspace })
-            const modes = res?.providerDefaults?.autoApproveModes
-                || res?.config?.providerDefaults?.autoApproveModes
+            // Cloud transport wraps the daemon response once as { success, result: <daemonResponse> }
+            // while standalone returns it raw; unwrap so both shapes read the same fields.
+            const body = res?.result ?? res
+            const modes = body?.providerDefaults?.autoApproveModes
+                || body?.config?.providerDefaults?.autoApproveModes
             const next: Record<string, string> = {}
             if (modes && typeof modes === 'object') {
                 for (const [type, id] of Object.entries(modes)) {
@@ -153,7 +156,10 @@ export function MeshProviderAutoApproveSection({
                 merge: false,
                 write: true,
             })
-            if (res?.success === false) throw new Error(res?.error || t('repoMesh.providerAutoApprove.saveError'))
+            // Unwrap the cloud { success, result } wrapper (standalone returns raw) so a real
+            // write failure on the daemon surfaces instead of being masked by the outer success.
+            const body = res?.result ?? res
+            if (body?.success === false) throw new Error(body?.error || t('repoMesh.providerAutoApprove.saveError'))
             setSaved(true)
             // Re-read so the UI reflects exactly what landed on disk (normalized).
             await loadDefaults()
