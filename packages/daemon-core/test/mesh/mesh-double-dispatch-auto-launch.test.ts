@@ -48,10 +48,13 @@ import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
 const NODE_ID = 'node_main'
 
 // A fake live CLI instance bound to NODE_ID for `meshId`, in the given status.
-function liveSession(meshId: string, sessionId: string, status: string) {
+// `providerType` (optional) stamps state.type — the session's launched provider, used by the
+// PROVIDER-MATCH gate to decide whether this session could claim a provider-scoped task.
+function liveSession(meshId: string, sessionId: string, status: string, providerType?: string) {
   const state = {
     instanceId: sessionId,
     status,
+    ...(providerType ? { type: providerType } : {}),
     workspace: `/repo/${NODE_ID}`,
     activeChat: null,
     settings: { meshNodeFor: meshId, meshNodeId: NODE_ID },
@@ -89,6 +92,10 @@ function createComponents(cliInstances: any[] = []) {
       resolveAlias: vi.fn((t: string) => t),
       isMachineProviderEnabled: vi.fn(() => true),
       setCliDetectionResults: vi.fn(),
+      // The auto-launch envelope reads provider meta for auto-approve defaults
+      // (delegatedWorkerAutoApproveSettings). Without this the launch throws
+      // `getMeta is not a function` and no launch_cli is dispatched.
+      getMeta: vi.fn(() => undefined),
     },
     dispatchMeshCommand: vi.fn(async () => ({ success: true })),
     statusInstanceId: 'daemon-local',
@@ -241,6 +248,95 @@ describe('DOUBLE-DISPATCH Layer (a) — auto-launch suppressed when node has a l
 
       expect(autoLaunchReason(meshId, task.id)).not.toBe('node_has_live_session_pending_claim')
       expect(launchCliCalls(components)).toBe(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+})
+
+// DISPATCH-DEADLOCK-PROVIDER-MISMATCH: nodeHasLiveSessionPendingClaim must NOT count a live
+// session as a pending claimer for a task it can never claim. A session whose providerType does
+// not satisfy the task's required_tags (e.g. a claude-cli session while the task is
+// required_tags: [provider=codex-cli]) is refused by claimNextQueueTask's nodeSatisfiesRequiredTags
+// gate — so if the skip gate treated it as a pending claimer, the required-provider worker never
+// auto-launched AND no session could claim → permanent silent deadlock. The gate must skip the
+// mismatched session (launch proceeds) yet still suppress a launch when the live session's provider
+// DOES match (genuine double-dispatch avoidance).
+describe('DISPATCH-DEADLOCK-PROVIDER-MISMATCH — pending-claim gate honours provider match', () => {
+  afterEach(() => { vi.clearAllMocks() })
+
+  // A node that can launch BOTH providers, so once the mismatched-session skip clears the
+  // required-provider (codex-cli) worker can actually launch.
+  function setMultiProviderMesh(meshId: string) {
+    meshConfigMocks.getMesh.mockReturnValue({
+      id: meshId,
+      name: 'Provider Match Mesh',
+      policy: {},
+      nodes: [{
+        id: NODE_ID,
+        workspace: `/repo/${NODE_ID}`,
+        repoRoot: `/repo/${NODE_ID}`,
+        policy: { providerPriority: ['codex-cli', 'claude-cli'] },
+      }],
+    })
+  }
+
+  it('launches (no skip) when the node\'s only live session is a DIFFERENT provider than the task requires', async () => {
+    const meshId = `mesh_pm_mismatch_${randomUUID().slice(0, 8)}`
+    try {
+      setMultiProviderMesh(meshId)
+      // Live claude-cli session (e.g. a plain worker) on the node, generating and holding no
+      // assigned task. The pending task requires provider=codex-cli — this session can NEVER
+      // claim it, so it must NOT suppress the codex-cli auto-launch.
+      const components = createComponents([liveSession(meshId, 'claude-sess', 'generating', 'claude-cli')])
+      const task = enqueueTask(meshId, 'do codex work', {
+        taskMode: 'code_change',
+        requiredTags: ['provider=codex-cli'],
+      })
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(autoLaunchReason(meshId, task.id)).not.toBe('node_has_live_session_pending_claim')
+      expect(launchCliCalls(components)).toBe(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('regression: still SUPPRESSES the launch when the live session\'s provider MATCHES the required provider (double-dispatch avoided)', async () => {
+    const meshId = `mesh_pm_match_${randomUUID().slice(0, 8)}`
+    try {
+      setMultiProviderMesh(meshId)
+      // The live session IS a claude-cli session and the task requires provider=claude-cli — it
+      // will claim this task itself on its next idle, so a second launch must be suppressed.
+      const components = createComponents([liveSession(meshId, 'claude-sess', 'generating', 'claude-cli')])
+      const task = enqueueTask(meshId, 'do claude work', {
+        taskMode: 'code_change',
+        requiredTags: ['provider=claude-cli'],
+      })
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(autoLaunchReason(meshId, task.id)).toBe('node_has_live_session_pending_claim')
+      expect(launchCliCalls(components)).toBe(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('regression: an untagged task (no required provider) is still suppressed by ANY live pending-claim session', async () => {
+    const meshId = `mesh_pm_untagged_${randomUUID().slice(0, 8)}`
+    try {
+      setMultiProviderMesh(meshId)
+      // No required_tags → the provider-match gate is a no-op and the original behaviour holds:
+      // any live unassigned session is a pending claimer.
+      const components = createComponents([liveSession(meshId, 'any-sess', 'generating', 'claude-cli')])
+      const task = enqueueTask(meshId, 'do any work', { taskMode: 'code_change' })
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(autoLaunchReason(meshId, task.id)).toBe('node_has_live_session_pending_claim')
+      expect(launchCliCalls(components)).toBe(0)
     } finally {
       cleanup(meshId)
     }

@@ -1721,8 +1721,20 @@ function liveSessionCountForNode(components: DaemonComponents, meshId: string, n
  * free claimer, and is excluded — so a read-only auto-launch onto a busy-but-no-idle node
  * is still allowed. A node with NO live mesh session at all (dead, or never launched) does
  * not match, preserving the legitimate first-session spawn.
+ *
+ * PROVIDER-MATCH gate (DISPATCH-DEADLOCK-PROVIDER-MISMATCH): a live session only suppresses
+ * this launch if it could ACTUALLY claim THIS task. A session whose providerType does not
+ * satisfy the task's requiredTags (e.g. a claude-cli coordinator/worker session on a node,
+ * while the pending task is required_tags: [provider=codex-cli]) is NOT a pending claimer for
+ * this task — claimNextQueueTask's nodeSatisfiesRequiredTags gate would reject its claim. Left
+ * unchecked, such a mismatched session made this gate return true for a task it can never claim,
+ * so the required-provider worker never auto-launched AND no session could claim → nobody made
+ * progress → permanent silent deadlock. Mirror the claim path: build the session's own
+ * capability tags (its providerType pinned onto the node) and only count it as a pending claimer
+ * when those tags satisfy task.requiredTags. `node` is passed in so the tag set reflects this
+ * node's os/arch/worktree/converge context, matching claimNextQueueTask exactly.
  */
-function nodeHasLiveSessionPendingClaim(components: DaemonComponents, meshId: string, nodeId: string): boolean {
+function nodeHasLiveSessionPendingClaim(components: DaemonComponents, meshId: string, nodeId: string, task: MeshWorkQueueEntry, node: any): boolean {
     // (A) AUTOLAUNCH-CLAIM-CHURN remote-awareness: a task whose auto-launch record targets this
     // node and is still inside its await-claim window (base or backoff) already has a session on
     // its way to claim — even when that session is REMOTE and thus invisible to the local
@@ -1761,7 +1773,20 @@ function nodeHasLiveSessionPendingClaim(components: DaemonComponents, meshId: st
         if (isTerminalSessionStatus(status)) return false; // dead → no claimer here, allow launch
         const sessionId = readNonEmptyString(state.instanceId);
         if (sessionId && busySessionIds.has(sessionId)) return false; // busy with its own assigned task
-        return true; // live + unassigned → will claim the pending task itself
+        // PROVIDER-MATCH gate (DISPATCH-DEADLOCK-PROVIDER-MISMATCH): only count this session as a
+        // pending claimer if its own provider could satisfy THIS task's requiredTags. A session
+        // whose providerType does not match (e.g. a claude-cli session while task requires
+        // provider=codex-cli) can never claim this task via claimNextQueueTask's
+        // nodeSatisfiesRequiredTags gate, so it must not suppress the required-provider launch —
+        // otherwise the task deadlocks (mismatched session blocks launch, yet cannot claim). Mirror
+        // the claim path: pin the session's providerType onto this node and check the tags.
+        if (task.requiredTags?.length) {
+            const sessionProviderType = state.type || readNonEmptyString(settings.providerType);
+            if (sessionProviderType && !nodeSatisfiesRequiredTags(task.requiredTags, buildMeshNodeCapabilityTags(node, sessionProviderType))) {
+                return false; // provider mismatch → this session can't claim this task; not a pending claimer
+            }
+        }
+        return true; // live + unassigned + provider-capable → will claim the pending task itself
     });
 }
 
@@ -2273,7 +2298,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
             // busy-but-no-idle node is still allowed. Skip with a transient (non-actionable)
             // reason so the coordinator is not paged; the 4s reconcile retries, and once the
             // existing session goes terminal this gate clears and a legitimate launch proceeds.
-            if (nodeHasLiveSessionPendingClaim(components, meshId, nodeId)) {
+            if (nodeHasLiveSessionPendingClaim(components, meshId, nodeId, task, node)) {
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'node_has_live_session_pending_claim', nodeId });
                 continue;
             }
