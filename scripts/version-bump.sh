@@ -145,6 +145,17 @@ if [ -f "$MCP_SERVER_SOURCE" ]; then
     echo "  ✅ $MCP_SERVER_SOURCE → $NEW_VERSION"
 fi
 
+# ── Re-sync vendored mcp-server (standalone) before staging ──
+# The standalone vendor embeds the mcp-server version string; re-bundle it so
+# the committed copy is consistent with the bumped version. Stage the vendor
+# output now — check:vendor (git diff working-tree vs index) must see it staged.
+echo ""
+echo "⏳ Re-syncing vendored mcp-server to v$NEW_VERSION..."
+npm run build -w packages/mcp-server
+npm run bundle:vendor -w packages/daemon-standalone
+git add -- packages/daemon-standalone/vendor/mcp-server
+echo "  ✅ packages/daemon-standalone/vendor/mcp-server staged"
+
 # ── Sync lock file after version bump ──
 
 echo "[version-bump] syncing oss/package-lock.json..."
@@ -174,7 +185,39 @@ fi
 
 echo ""
 echo "📝 Committing and tagging..."
-git add -A
+
+# Explicit allowlist: only release-relevant paths may be staged.
+# git add -A would sweep up unrelated working-tree changes.
+OSS_RELEASE_PATHS=(
+    "${PACKAGES[@]}"
+    "$MCP_SERVER_SOURCE"
+    "package-lock.json"
+    "$CHANGELOG"
+    "packages/daemon-standalone/vendor/mcp-server"
+)
+if [ "$GHOSTTY_CHANGED" -eq 1 ]; then
+    OSS_RELEASE_PATHS+=("packages/ghostty-vt-node/package.json")
+fi
+git add -- "${OSS_RELEASE_PATHS[@]}"
+
+# Abort if anything unexpected was staged (fail-closed guard).
+STAGED=$(git diff --cached --name-only)
+while IFS= read -r staged_file; do
+    [ -z "$staged_file" ] && continue
+    allowed=0
+    for allowed_path in "${OSS_RELEASE_PATHS[@]}"; do
+        if [[ "$staged_file" == "$allowed_path" || "$staged_file" == "$allowed_path/"* ]]; then
+            allowed=1
+            break
+        fi
+    done
+    if [ "$allowed" -eq 0 ]; then
+        echo "❌ Unexpected path in release commit: $staged_file"
+        echo "   Only release-intent paths should be staged. Check your working tree."
+        exit 1
+    fi
+done <<< "$STAGED"
+
 git commit -m "chore: bump version to v$NEW_VERSION"
 git tag "v$NEW_VERSION"
 git push origin main --tags
