@@ -144,6 +144,11 @@ function createQueueAutoLaunchComponents(args?: {
         resolveAlias: vi.fn((type: string) => type),
         isMachineProviderEnabled: vi.fn(() => true),
         setCliDetectionResults: vi.fn(),
+        // getMeta is a stable method on the real ProviderLoader (returns
+        // ProviderModule | undefined). The auto-launch auto-approve envelope reads
+        // it via providerLoader?.getMeta(...); without the stub the call throws
+        // "getMeta is not a function" and the launch is caught as failed.
+        getMeta: vi.fn(() => undefined),
       },
       onStatusChange: vi.fn(),
     } as any,

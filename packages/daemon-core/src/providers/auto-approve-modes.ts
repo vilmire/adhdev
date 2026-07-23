@@ -61,9 +61,15 @@ function resolveConfiguredMode(
  * mode id fails closed instead of falling through to an enabled legacy setting.
  */
 export function resolveProviderAutoApproveMode(
-  provider: ProviderModule,
+  provider: ProviderModule | null | undefined,
   settings: Record<string, unknown> | undefined,
 ): ResolvedAutoApproveMode {
+  // No provider (e.g. an instance whose module isn't set when a modal-park /
+  // auto-approve classification runs) ⇒ auto-approve is inactive. this.provider is
+  // genuinely nullable at runtime (the instance reads this.provider?.nativeHistory
+  // elsewhere), and the sibling helper findProviderAutoApproveMode already guards
+  // with provider?.autoApproveModes. Guard the entry so every caller is safe.
+  if (!provider) return inactiveMode();
   const config = provider.autoApproveModes;
   const explicitModeId = settings?.autoApproveMode;
   if (typeof explicitModeId === 'string') {
