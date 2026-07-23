@@ -12,7 +12,7 @@ describe('dashboard command utils send-state helpers', () => {
 
   it('maps pending approval to a non-transcript input warning when actionable modal buttons are present', () => {
     expect(getConversationSendBlockMessage({ status: 'idle', modalButtons: ['Approve'] } as any))
-      .toBe('Resolve the pending approval prompt before sending another message.')
+      .toBe('Approve or reject the pending request above.')
   })
 
   it('does not pre-block sends from status alone when waiting approval state has no actionable modal buttons', () => {
