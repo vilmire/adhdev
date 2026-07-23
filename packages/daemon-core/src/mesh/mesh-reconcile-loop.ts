@@ -78,6 +78,7 @@ import {
 } from './mesh-reconcile-config.js';
 import { pullRemoteNodeQueues, pullPendingEventsFromNode, reprobeWorkerStatus } from './mesh-remote-event-pull.js';
 import { isPurePtyTranscriptProvider } from '../cli-adapters/provider-cli-shared.js';
+import { isNativeSourceCanonicalHistory } from '../config/chat-history.js';
 import { runDiskRetentionSweep, detectAndSignalOrphanWorktrees } from './mesh-disk-retention.js';
 import {
     reconcileUnterminatedDirectDispatches,
@@ -813,6 +814,34 @@ function resolveLocalSessionPurePty(components: DaemonComponents, sessionId: str
     }
 }
 
+// KIMI-NATIVE-SOURCE early-idle arm — resolve whether the assigned session's provider is a
+// NATIVE-SOURCE provider (transcriptAuthority=provider + on-disk nativeHistory — e.g. kimi's
+// wire.jsonl), from the LOCAL instance when it is present. Returns:
+//   true      → local instance is a native-source provider (kimi and kin)
+//   false     → local instance is NOT native-source (pure-PTY / daemon-owned transcript)
+//   undefined → no local instance (remote worker / gone / id-form skew) — unknowable here
+// This is the mirror of resolveLocalSessionPurePty for the class that DOES have an
+// authoritative on-disk transcript: a native-source worker that collapses idle→idle (never
+// emitting generating_started so taskDeliveryConsumed stays false) would otherwise be blocked
+// by the turn-not-started hold, leaving a finished turn 'assigned' until the 15-min reclaim.
+// Allowing it to arm lets the transcript-evidence poll complete it promptly; the poll's
+// idle + final-assistant-after-dispatch guards remain the finality net.
+function resolveLocalSessionNativeSource(components: DaemonComponents, sessionId: string): boolean | undefined {
+    try {
+        const instances = components.instanceManager?.getByCategory?.('cli') || [];
+        const inst = instances.find((i: any) => {
+            const sid = readNonEmptyString(i?.getState?.().instanceId);
+            return sid && sessionIdsEquivalent(sid, sessionId);
+        }) as { provider?: { nativeHistory?: unknown } } | undefined;
+        if (!inst) return undefined; // remote / gone / id-form skew — not locally observable
+        const provider = inst.provider;
+        if (!provider || typeof provider !== 'object') return undefined;
+        return isNativeSourceCanonicalHistory((provider as { nativeHistory?: any }).nativeHistory);
+    } catch {
+        return undefined;
+    }
+}
+
 // EARLY-IDLE-COMPLETION-FALSE-POSITIVE — decide whether the early transcript-evidence completion
 // streak may ACCRUE this tick for an assigned row. This hardens the original arm gate, which only
 // checked `resolveSessionBusyVerdict(...) !== 'GENERATING'` — a gate a REMOTE worker (local verdict
@@ -897,7 +926,18 @@ async function evaluateEarlyIdleTranscriptArm(
     // enforce post-dispatch + trailing-tool-activity finality.
     const localPurePty = resolveLocalSessionPurePty(components, sessionId);
     if (localPurePty === true) return true;   // local pure-PTY — the class this rescue targets
-    if (localPurePty === false) return false; // local native/provider-owned, turn not started — hold
+    if (localPurePty === false) {
+        // Not the pure-PTY class. A NATIVE-SOURCE provider (transcriptAuthority=provider +
+        // nativeHistory — e.g. kimi) can ALSO collapse idle→idle and never emit
+        // generating_started (so taskDeliveryConsumed stays false), yet its finished turn is
+        // provable from its authoritative on-disk transcript. Arm it too so it completes via
+        // the transcript-evidence poll instead of sitting 'assigned' until the 15-min
+        // DELIVERED_NO_TURN_DEADLINE_MS reclaim. A genuinely daemon-owned / non-native worker
+        // that hasn't started its turn is still held (returns false).
+        const localNativeSource = resolveLocalSessionNativeSource(components, sessionId);
+        if (localNativeSource === true) return true; // native-source — provable via its transcript
+        return false;                                // daemon-owned, turn not started — hold
+    }
     return verdict === 'UNKNOWN';             // remote, unknowable class — trust the (a) reprobe
 }
 

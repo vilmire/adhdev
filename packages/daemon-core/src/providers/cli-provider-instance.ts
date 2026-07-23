@@ -2473,6 +2473,20 @@ export class CliProviderInstance implements ProviderInstance {
             return;
         }
 
+        // KIMI-NATIVE-SOURCE-COMPLETION-EMIT (Fix 3): the pure-PTY check above is a no-op
+        // for a native-source provider (kimi and kin — transcriptAuthority=provider +
+        // nativeHistory). For that class, a finished-but-quiet idle whose transcript has
+        // gone static (sampleNativeTranscriptProgress stopped re-arming) is otherwise
+        // misread as a wedge. Resolve the completion from the authoritative native
+        // transcript; if it proves a finished turn, emit the missing completion and
+        // SUPPRESS the stall. No-op for pure-PTY providers and for a genuinely mid-turn /
+        // wedged native-source worker with no in-turn final assistant → the real stall
+        // fires below unchanged. Mutually exclusive with the pure-PTY path.
+        if (this.tryReconcileNativeSourceCompletionForStall(observedStatus)) {
+            this.meshStallEmittedForAnchor = true;
+            return;
+        }
+
         // FALSE-STALL-WATCHDOG-OVERFIRE (fix E): per-session refire cooldown. Mark
         // this anchor emitted regardless so a still-static anchor does not re-check
         // every tick, but suppress the actual coordinator notification (and the
@@ -2708,6 +2722,86 @@ export class CliProviderInstance implements ProviderInstance {
             finalSummary,
             evidenceLevel: 'transcript',
             completionDiagnostic: { source: 'stall_pure_pty_transcript_completion' },
+        });
+        return true;
+    }
+
+    /**
+     * KIMI-NATIVE-SOURCE-COMPLETION-EMIT (Fix 3): stall-path completion reconcile for a
+     * NATIVE-SOURCE provider (transcriptAuthority=provider + nativeHistory — e.g. kimi,
+     * whose authoritative transcript is ~/.kimi-code/.../wire.jsonl). Like the pure-PTY
+     * class, a native-source worker that submits a prompt while already idle can collapse
+     * idle→idle so agent:generating_completed never emits; its PTY then goes screen-quiet
+     * the instant the answer renders, and the status-agnostic no-progress watchdog
+     * (checkMeshWorkerStall) misreads that finished-but-static idle as a wedge and would
+     * false-fire monitor:no_progress. sampleNativeTranscriptProgress only re-arms while the
+     * transcript is STILL ADVANCING; once the turn is done the transcript is static and the
+     * sample stops rescuing — so the stall path needs this decisive completion check for the
+     * finished-and-quiet case. tryReconcilePurePtyCompletionForStall does NOT cover this
+     * class (isPurePtyTranscriptProvider is false for a native-source provider), so it runs
+     * as a fallback here.
+     *
+     * Mutually exclusive with the pure-PTY path by construction: a provider is either
+     * native-source (this method) or pure-PTY (that method), never both. Called from
+     * checkMeshWorkerStall only after tryReconcilePurePtyCompletionForStall returned false.
+     *
+     * Evidence bar is identical to the pure-PTY / pre-cleanup paths: idle with nothing
+     * pending, the injected task's turn genuinely started, and an in-turn final assistant
+     * summary — here resolved from the native transcript by completionFinalSummary (its
+     * native-source branch reads readExternalCompletionMessages). No summary ⇒ no proof of
+     * completion ⇒ return false and let the real stall fire so a genuinely-wedged worker is
+     * still surfaced. Idempotent: a real/late emit writes the terminal ledger and the
+     * coordinator's reconcile makes any duplicate a no-op.
+     */
+    private tryReconcileNativeSourceCompletionForStall(observedStatus: string): boolean {
+        // Only the native-source class — the pure-PTY class is handled above.
+        if (!isNativeSourceCanonicalHistory(this.provider?.nativeHistory)) return false;
+        // A finished turn is idle with nothing pending. A generating/waiting session is
+        // mid-turn (the real stall path should evaluate it), so never complete it here.
+        if (observedStatus !== 'idle') return false;
+        if (this.hasAdapterPendingResponse()) return false;
+
+        const taskId = this.completingTurnTaskId();
+        // DOUBLE-EMIT guard: this turn's completion already fired — never re-emit.
+        if (this.lastEmittedCompletion && this.lastEmittedCompletion.taskId === (taskId ?? '')) {
+            return false;
+        }
+        // The injected task's own turn must have genuinely started (guards against a
+        // reused session's stale tail before this task ran).
+        if (!this.injectedTaskHasStartedGenerating()) return false;
+
+        const turnStartedAt = typeof (this.adapter as any)?.currentTurnStartedAt === 'number'
+            ? (this.adapter as any).currentTurnStartedAt as number
+            : this.meshTaskInjectedAt || undefined;
+        let parsedMessages: unknown;
+        try {
+            parsedMessages = this.adapter?.getScriptParsedStatus?.()?.messages;
+        } catch { parsedMessages = undefined; }
+        // completionFinalSummary reads the AUTHORITATIVE native transcript (wire.jsonl) for
+        // this native-source provider and turn-scopes it — so a stale prior-turn tail or a
+        // mid-turn worker with no in-turn final assistant yields '' → return false below.
+        let finalSummary: string | undefined;
+        try {
+            finalSummary = this.completionFinalSummary(parsedMessages, turnStartedAt);
+        } catch { finalSummary = undefined; }
+        // No in-turn final assistant evidence → not a proven turn-end. Let the real stall
+        // fire so a genuinely-wedged worker is still surfaced.
+        if (!finalSummary) return false;
+
+        LOG.warn('CLI', `[${this.type}] reconciling native-source mesh completion from the stall path for session ${this.instanceId} `
+            + `task=${taskId ?? '(none)'} — PTY is idle-quiet with an in-turn final assistant message in the native `
+            + `transcript but the completion event never fired; emitting it instead of a false monitor:no_progress.`);
+        if (this.isMeshWorkerSession()) {
+            traceMeshEventStage('fired', this.meshTraceCtx(), 'stall_native_source_transcript_completion');
+        }
+        this.emitGeneratingCompleted({
+            chatTitle: '',
+            duration: undefined,
+            timestamp: Date.now(),
+            taskId,
+            finalSummary,
+            evidenceLevel: 'transcript',
+            completionDiagnostic: { source: 'stall_native_source_transcript_completion' },
         });
         return true;
     }

@@ -3362,6 +3362,140 @@ describe('runMeshReconcileTick', () => {
       }
     })
 
+    // ── KIMI-NATIVE-SOURCE early-idle arm (Fix 2 extension) ────────────────────────────
+    // kimi is now a NATIVE-SOURCE provider (transcriptAuthority='provider' + nativeHistory —
+    // wire.jsonl), NOT pure-PTY. resolveLocalSessionPurePty returns false for it, so the
+    // ORIGINAL turn-not-started hold (`if (localPurePty === false) return false`) blocked its
+    // early arm entirely: a finished-but-idle native-source worker whose generating_started was
+    // never emitted (idle→idle collapse) sat 'assigned' until the 15-min reclaim. The extended
+    // gate recognises the native-source class via resolveLocalSessionNativeSource and arms it
+    // too, so it completes promptly off its authoritative transcript.
+    it('Fix 2 (native-source): EARLY-completes a delivered NATIVE-SOURCE kimi worker (transcriptAuthority=provider) whose generating_started was never consumed', async () => {
+      const meshId = `mesh_early_native_source_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-native-source-finished'
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const dispatchAt = Date.now()
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        // Confirmed delivery but never 'acked' — native-source kimi collapsed idle→idle so
+        // generating_started never emitted, exactly the class the extended arm now covers.
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+
+        const idleInstance = {
+          category: 'cli',
+          // NATIVE-SOURCE provider: transcriptAuthority='provider' + nativeHistory present.
+          // resolveLocalSessionPurePty → false (not pure-PTY); resolveLocalSessionNativeSource
+          // → true, so the extended gate arms it despite delivery never being 'acked'.
+          provider: {
+            type: 'kimi',
+            category: 'cli',
+            transcriptAuthority: 'provider',
+            nativeHistory: { source: { kind: 'jsonl' } },
+            tui: { transcriptPty: { scope: 'buffer' } },
+          },
+          getState: () => ({ instanceId: sessionId, status: 'idle', type: 'kimi', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
+        }
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status: 'idle',
+            providerSessionId: 'kimi-history-1',
+            messages: [
+              { role: 'user', content: 'do work', timestamp: dispatchAt + 500 },
+              { role: 'assistant', content: 'Done — implemented and committed.', timestamp: dispatchAt + 4_000 },
+            ],
+          }
+        })
+        const components = {
+          instanceManager: {
+            getByCategory: (category: string) => (category === 'cli' ? [idleInstance] : []),
+            getInstance: (id: string) => (id === sessionId ? idleInstance : undefined),
+          },
+          commandHandler: { handle: readChat },
+        } as any
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        // Tick 1 arms the streak (native-source now passes the gate); grace not yet elapsed.
+        await runMeshReconcileTick(components)
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+
+        // Advance past the 8s grace, then tick 2 polls the transcript and completes early.
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('completed')
+        const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed')
+        expect((completed?.payload as any)?.source).toBe('early_idle_transcript_evidence')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+      } finally {
+        vi.useRealTimers()
+        cleanup(meshId)
+      }
+    })
+
+    it('Fix 2 (native-source guard): a LOCAL daemon-owned (non-native, non-pure-PTY) worker whose turn never started is NOT early-armed (held)', async () => {
+      const meshId = `mesh_early_daemon_owned_hold_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-daemon-owned-warming'
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const dispatchAt = Date.now()
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+
+        // Daemon-owned transcript provider: NOT native-source (no nativeHistory) and NOT
+        // pure-PTY (no tui.transcriptPty.scope 'buffer'). resolveLocalSessionPurePty → false,
+        // resolveLocalSessionNativeSource → false. Delivery never 'acked' → the hold stands:
+        // this class completes via its own emit or the normal grace, never the early arm.
+        const idleInstance = {
+          category: 'cli',
+          provider: { type: 'someagent', category: 'cli' },
+          getState: () => ({ instanceId: sessionId, status: 'idle', type: 'someagent', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
+        }
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status: 'idle',
+            messages: [
+              { role: 'user', content: 'do work', timestamp: dispatchAt + 500 },
+              { role: 'assistant', content: 'Done.', timestamp: dispatchAt + 4_000 },
+            ],
+          }
+        })
+        const components = {
+          instanceManager: {
+            getByCategory: (category: string) => (category === 'cli' ? [idleInstance] : []),
+            getInstance: (id: string) => (id === sessionId ? idleInstance : undefined),
+          },
+          commandHandler: { handle: readChat },
+        } as any
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned') // held — never armed, never early-completed
+        expect(readLedgerEntries(meshId).some(
+          e => (e.payload as any)?.source === 'early_idle_transcript_evidence',
+        )).toBe(false)
+      } finally {
+        vi.useRealTimers()
+        cleanup(meshId)
+      }
+    })
+
     // ── EARLY-IDLE-COMPLETION-FALSE-POSITIVE (arm-gate hardening + poll defense) ──────
     // The original early-transcript arm gate only checked `resolveSessionBusyVerdict !== 'GENERATING'`.
     // A REMOTE worker's LOCAL verdict is UNKNOWN (no local instance), which is not GENERATING — so a
