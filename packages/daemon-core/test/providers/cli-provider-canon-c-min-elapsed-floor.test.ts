@@ -5,14 +5,18 @@ import { CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS } from '../../src/providers/cl
 // FIX 2 (primary) — CANON-C early-emit min-elapsed floor.
 //
 // The CANON-C transcript-evidence gate (allowTimeout missing_final_assistant blocks) emits its
-// decoupled-immediate completion at ANY waitedMs. For a native-source provider (claude-cli,
-// external-native) that is correct — the transcript merely trails the idle transition by a write
-// and a reconcile upgrades the weak emit. But a PTY-parsed provider (codex-cli) has NO external
-// transcript to trail, so an immediate emit at the ~13s first-poll waitedMs is a pure timing guess
-// that stamps a weak evidenceLevel=insufficient completion, racing before the 180s stall watchdog
-// can arm. FIX: a missing_final_assistant block carrying noExternalTranscriptSource must observe
-// the CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS floor — hold under it, emit once met. A native-source
-// block (no noExternalTranscriptSource) is unaffected.
+// decoupled-immediate completion at ANY waitedMs. For a native-source provider whose transcript
+// write merely trails the idle transition, that would be tolerable — but a block only REACHES the
+// finalization gate here when the transcript probe found NO in-turn assistant reply (a landed
+// assistant write returns null earlier for a clean emit). So every missing_final_assistant block
+// that gets this far has genuinely no answer yet — for codex-cli / kimi that is routinely a
+// mid-tool-call quiet valley (the turn is still running, `Working (` momentarily off-screen), and
+// an immediate emit at the ~13s first-poll waitedMs stamps a weak evidenceLevel=insufficient
+// completion while the worker is still generating (mission f2f6da1b, defect A). FIX: the codex/kimi
+// external-native missing_final_assistant block now carries noExternalTranscriptSource and must
+// observe the CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS floor — hold under it, emit once met.
+// claude-cli's write-lag native-source block is deliberately UN-flagged (owner decision): its
+// transcript merely trails a finished idle transition, so its decoupled-immediate emit is preserved.
 
 const NOW = 1_000_000
 
@@ -98,7 +102,10 @@ const NO_TRANSCRIPT_BLOCK = {
   allowTimeout: true,
   noExternalTranscriptSource: true,
 }
-// A native-source (claude-cli external-native) block: allowTimeout but NO noExternalTranscriptSource.
+// A legacy native-source block WITHOUT the floor flag. After the f2f6da1b fix, no live block
+// omits noExternalTranscriptSource once it reaches the finalization gate (both the codex/kimi
+// external-native path and the PTY-parsed path stamp it), so this shape only exercises the
+// still-immediate CANON-C emit for the theoretical un-flagged block.
 const NATIVE_SOURCE_BLOCK = {
   reason: 'missing_final_assistant',
   terminal: true,
@@ -129,9 +136,11 @@ describe('CliProviderInstance — CANON-C min-elapsed floor', () => {
     expect(out.scheduledRetry).toBe(false)
   })
 
-  it('does NOT floor a native-source (external-native) block — immediate CANON-C emit preserved', () => {
-    // The claude-cli native path must still emit immediately at a tiny waitedMs; its transcript
-    // legitimately trails the idle transition and a reconcile upgrades the weak emit.
+  it('does NOT floor a claude-cli write-lag native-source block — immediate CANON-C emit preserved', () => {
+    // claude-cli's external-native missing_final_assistant block is deliberately UN-flagged
+    // (owner decision, mission f2f6da1b): its transcript write merely trails the finished idle
+    // transition, so the decoupled-immediate emit must still fire at a tiny waitedMs (upgraded by
+    // the reconcile). Only codex/kimi's mid-tool-call block carries noExternalTranscriptSource.
     const h = makeInstance({
       type: 'claude-cli',
       block: NATIVE_SOURCE_BLOCK,
@@ -140,5 +149,90 @@ describe('CliProviderInstance — CANON-C min-elapsed floor', () => {
     const out = runFlush(h)
     expect(out.emitted).toBe(true)
     expect(out.scheduledRetry).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// f2f6da1b defect A regression: the external-native missing_final_assistant block that codex-cli
+// / kimi produce (transcript probed, NO in-turn assistant reply) must now carry
+// noExternalTranscriptSource so it is subject to the CANON-C min-elapsed floor — previously it was
+// emitted at the first ~13s poll while the worker was still generating between tool calls.
+// ---------------------------------------------------------------------------
+
+const TURN_START = 1_700_000_000_000
+
+function codexExternalNativeInstance(opts: { probeLastRole: string; probeContentLen: number }): any {
+  const instance = Object.create(CliProviderInstance.prototype) as any
+  instance.type = 'codex-cli'
+  instance.instanceId = 'sess-codex-en'
+  instance.workingDir = '/repo/worktree'
+  instance.generatingStartedAt = TURN_START
+  instance.busyEpoch = 3
+  instance.lastApprovalEventFingerprint = ''
+  instance.autoApproveBusy = false
+  // Mesh worker context so allowMissingAssistantTimeout is live (allowTimeout set on the block).
+  instance.settings = { meshNodeFor: 'mesh-1', meshActiveTaskId: 'task-1' }
+  instance.provider = { name: 'Codex', settings: {}, nativeHistory: {} }
+  instance.providerSessionId = 'codex-conv-1'
+  instance.startedAt = 0
+  instance.meshTaskInjectedAt = 0
+  instance.shouldAutoApprove = () => false
+  instance.completionTraceOn = () => false
+  instance.isMeshWorkerSession = () => true
+
+  // SpecCliAdapter always owns messages externally; the transcript read yields the external-native
+  // source. The probe tail is a non-assistant bubble → present=false, source='external-native'.
+  instance.adapter = {
+    chatMessagesOwnedExternally: true,
+    currentTurnStartedAt: TURN_START,
+    currentTurnScope: null,
+    isWaitingForResponse: false,
+    isProcessing: () => false,
+    getPartialResponse: () => '',
+    getStatus: () => ({ status: 'idle', lastOutputAt: TURN_START + 4_900 }),
+    getScriptParsedStatus: () => ({ status: 'idle', messages: [] }),
+    getScreenText: () => '',
+  }
+  instance.readExternalCompletionMessages = () => [
+    { role: 'user', content: 'the investigation task', timestamp: TURN_START + 100 },
+  ]
+  instance.lastVisibleAssistantSummary = () => ''
+  instance.lastExternalCompletionProbe = {
+    readAt: Date.now(),
+    msgCount: 1,
+    lastRole: opts.probeLastRole,
+    lastKind: null,
+    contentLen: opts.probeContentLen,
+    sourcePath: null,
+    sourceMtimeMs: null,
+    mtimeAgeMs: null,
+  }
+  instance.injectedTaskHasStartedGenerating = () => true
+  return instance
+}
+
+describe('CANON-C floor — codex/kimi external-native missing_final_assistant carries the floor flag', () => {
+  it('stamps noExternalTranscriptSource on the external-native missing_final_assistant block (mid-tool-call quiet)', () => {
+    const instance = codexExternalNativeInstance({ probeLastRole: 'user', probeContentLen: 0 })
+    const pending = {
+      chatTitle: 'worktree',
+      duration: 5,
+      timestamp: TURN_START + 5_000,
+      firstObservedAt: TURN_START + 5_000,
+      previousStatus: 'generating',
+      turnStartedAt: TURN_START,
+      busyEpochAtArm: 3,
+      lastOutputAtArm: TURN_START + 4_900,
+    }
+    const block = (CliProviderInstance.prototype as any).getCompletedFinalizationBlock.call(
+      instance,
+      'idle',
+      pending,
+    )
+    expect(block).not.toBeNull()
+    expect(block.reason).toBe('missing_final_assistant')
+    expect(block.allowTimeout).toBe(true)
+    // The RCA fix: this block must now be subject to the min-elapsed floor.
+    expect(block.noExternalTranscriptSource).toBe(true)
   })
 })
