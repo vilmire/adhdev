@@ -101,6 +101,20 @@ describe('validateProviderDefinition', () => {
       }],
     }))
     expect(missingDerivedWarning.errors).toContain('autoApproveModes.modes[0].warning is required for dangerous modes')
+
+    const claudeBypass = providerWithModes({
+      default: 'yolo',
+      modes: [{
+        id: 'yolo',
+        label: 'Bypass permissions',
+        strategy: 'launch-args',
+        risk: 'caution',
+        warning: 'All permission checks are bypassed.',
+        launchArgs: ['--permission-mode', 'bypassPermissions'],
+      }],
+    })
+    expect(validateProviderDefinition(claudeBypass).errors).toEqual([])
+    expect((claudeBypass.autoApproveModes as any).modes[0].risk).toBe('dangerous')
   })
 
   it('rejects the reserved post-boot-command strategy in v1', () => {

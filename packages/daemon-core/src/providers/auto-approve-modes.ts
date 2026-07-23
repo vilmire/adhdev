@@ -8,6 +8,7 @@ import type {
 const KNOWN_DANGEROUS_LAUNCH_ARGS = new Set([
   '--dangerously-skip-permissions',
   '--dangerously-bypass-approvals-and-sandbox',
+  'bypassPermissions',
   'sandbox_mode=danger-full-access',
   'approval_policy=never',
 ]);
