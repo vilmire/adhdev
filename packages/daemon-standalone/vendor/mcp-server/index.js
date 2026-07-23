@@ -6993,6 +6993,19 @@ async function meshLaunchSession(ctx, args) {
     const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
     const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
     const delegatedWorkerAutoApprove = (0, import_daemon_core4.resolveDelegatedWorkerAutoApprove)(ctx.mesh.policy, node.policy);
+    let requestedAutoApproveMode;
+    const delegatedWorkerDangerousModeAllow = (0, import_daemon_core4.resolveDelegatedWorkerDangerousModeAllow)(ctx.mesh.policy, node.policy);
+    if (delegatedWorkerAutoApprove !== false) {
+      try {
+        const ws = typeof node.workspace === "string" && node.workspace.trim() ? node.workspace.trim() : "";
+        if (ws) {
+          const repo = (0, import_daemon_core4.loadRepoMeshJsonConfig)(ws);
+          const repoMode = repo.sourceType === "repo_file" ? repo.config?.providerDefaults?.autoApproveModes?.[resolvedProviderType] : void 0;
+          if (typeof repoMode === "string" && repoMode.trim()) requestedAutoApproveMode = repoMode.trim();
+        }
+      } catch {
+      }
+    }
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
     if (node.daemonId && !isLocalNode && !coordinatorDaemonId) {
       return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
@@ -7048,7 +7061,14 @@ async function meshLaunchSession(ctx, args) {
           spawnedSessionVisibility,
           // Delegated worker auto-approval (see resolveDelegatedWorkerAutoApprove).
           // Lands in settingsOverride and beats the global per-provider autoApprove.
+          // When a repo-requested mode ID is present AND auto-approve is enabled,
+          // stamp the mode ID (validated daemon-side) alongside the boolean; the
+          // adapter's resolveProviderAutoApproveMode prefers the mode and fails
+          // closed on an unknown ID. delegatedWorkerDangerousModeAllow rides along
+          // so the adapter can honor/deny a dangerous requested mode.
           autoApprove: delegatedWorkerAutoApprove,
+          ...requestedAutoApproveMode ? { autoApproveMode: requestedAutoApproveMode } : {},
+          delegatedWorkerDangerousModeAllow,
           ...coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {},
           // (3) Stamp the originating coordinator SESSION at launch too, so a worker
           // launched via mesh_launch_session routes its completions back to the exact
