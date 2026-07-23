@@ -94,6 +94,8 @@ import {
     requeueHeldMeshCoordinatorEvents,
     resolveMeshSurfacedSessionPreview,
     resolveDelegatedWorkerAutoApprove,
+    resolveDelegatedWorkerDangerousModeAllow,
+    loadRepoMeshJsonConfig,
     resolveAllowSendKeysDestructive,
     validateMeshTaskModeRequest,
 } from '@adhdev/daemon-core';
@@ -334,6 +336,8 @@ export {
     requeueTask,
     requeueHeldMeshCoordinatorEvents,
     resolveDelegatedWorkerAutoApprove,
+    resolveDelegatedWorkerDangerousModeAllow,
+    loadRepoMeshJsonConfig,
     resolveAllowSendKeysDestructive,
     resolveMeshSurfacedSessionPreview,
     summarizeMeshAsyncRefineJobs,

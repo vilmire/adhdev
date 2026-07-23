@@ -399,6 +399,161 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         }
     },
 
+    // READ path for `.adhdev/mesh.json` — returns the currently-committed repo
+    // config (parsed + normalized) for a workspace so a UI can render/edit the
+    // existing declarative zones (notably `providerDefaults.autoApproveModes`)
+    // WITHOUT re-deriving them from the machine-local scaffold. Never writes.
+    // `config` is undefined when no repo file exists (sourceType 'unavailable') or
+    // it is unparseable (sourceType 'invalid', with the parse error surfaced).
+    read_mesh_json_config: async (_ctx: MedFamilyContext, args: any) => {
+        const workspace = typeof args?.workspace === 'string' && args.workspace.trim() ? args.workspace.trim() : process.cwd();
+        try {
+            const { loadRepoMeshJsonConfig } = await import('../../config/mesh-json-config.js');
+            const loaded = loadRepoMeshJsonConfig(workspace);
+            return {
+                success: true,
+                workspace,
+                sourceType: loaded.sourceType,
+                source: loaded.source,
+                ...(loaded.path ? { path: loaded.path } : {}),
+                ...(loaded.error ? { error: loaded.error } : {}),
+                config: loaded.config,
+                // Convenience projection so the UI does not have to reach into config.
+                providerDefaults: loaded.config?.providerDefaults,
+            };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
+    // Partial-edit WRITE path for `.adhdev/mesh.json` `providerDefaults` — a
+    // READ-MODIFY-WRITE that preserves operator hand-edits. Unlike
+    // write_mesh_json_config (which rebuilds the WHOLE file from the machine-local
+    // scaffold and can silently drop hand-edited zones), this parses the existing
+    // repo file, merges ONLY the providerDefaults.autoApproveModes zone, and
+    // re-serializes — coordinator prompt, operating notes and limits authored in
+    // the repo are carried through untouched. Defaults to dry-run.
+    //
+    // args: { workspace?, autoApproveModes: Record<providerType,modeId>, write?, merge? }
+    //   merge=true (default): per-provider merge into the existing map; a modeId of
+    //     '' | null removes that provider's entry. merge=false: REPLACE the whole
+    //     autoApproveModes map with the supplied one.
+    set_mesh_provider_defaults: async (_ctx: MedFamilyContext, args: any) => {
+        const workspace = typeof args?.workspace === 'string' && args.workspace.trim() ? args.workspace.trim() : process.cwd();
+        const write = args?.write === true;
+        const merge = args?.merge !== false; // default true
+        const inputModes = args?.autoApproveModes;
+        if (inputModes !== undefined && (typeof inputModes !== 'object' || inputModes === null || Array.isArray(inputModes))) {
+            return { success: false, error: 'autoApproveModes must be an object (providerType → modeId) when provided' };
+        }
+        try {
+            const {
+                loadRepoMeshJsonConfig,
+                normalizeRepoMeshDeclarativeConfig,
+                MESH_JSON_CONFIG_LOCATIONS,
+            } = await import('../../config/mesh-json-config.js');
+            const { existsSync, readFileSync, mkdirSync, writeFileSync } = await import('fs');
+            const { dirname, join } = await import('path');
+            const yaml = await import('js-yaml');
+
+            const relativePath = MESH_JSON_CONFIG_LOCATIONS[0];
+
+            // Read-modify-write: parse the EXISTING on-disk document (preferring the
+            // first existing json/yaml variant) so unrelated zones survive verbatim.
+            let baseDoc: Record<string, any> = { version: 1 };
+            let existingPath = join(workspace, relativePath);
+            let existedAsYaml = false;
+            for (const relative of MESH_JSON_CONFIG_LOCATIONS) {
+                const candidate = join(workspace, relative);
+                if (!existsSync(candidate)) continue;
+                try {
+                    const text = readFileSync(candidate, 'utf-8');
+                    const parsed = /\.json$/i.test(candidate) ? JSON.parse(text) : yaml.load(text);
+                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                        baseDoc = parsed as Record<string, any>;
+                        existingPath = candidate;
+                        existedAsYaml = !/\.json$/i.test(candidate);
+                    }
+                } catch (e: any) {
+                    return { success: false, error: `existing ${relative} is unparseable, refusing to overwrite: ${e?.message || e}` };
+                }
+                break;
+            }
+
+            // Merge ONLY the providerDefaults.autoApproveModes zone.
+            const existingPd = baseDoc.providerDefaults && typeof baseDoc.providerDefaults === 'object' && !Array.isArray(baseDoc.providerDefaults)
+                ? baseDoc.providerDefaults as Record<string, any>
+                : {};
+            const existingModes = existingPd.autoApproveModes && typeof existingPd.autoApproveModes === 'object' && !Array.isArray(existingPd.autoApproveModes)
+                ? { ...existingPd.autoApproveModes as Record<string, string> }
+                : {};
+
+            const nextModes: Record<string, string> = merge ? existingModes : {};
+            if (inputModes) {
+                for (const [providerType, modeId] of Object.entries(inputModes as Record<string, unknown>)) {
+                    const type = typeof providerType === 'string' ? providerType.trim() : '';
+                    if (!type) continue;
+                    const id = typeof modeId === 'string' ? modeId.trim() : '';
+                    if (id) nextModes[type] = id;
+                    else delete nextModes[type]; // '' / null → remove this provider's entry
+                }
+            }
+
+            const nextDoc: Record<string, any> = { ...baseDoc, version: 1 };
+            if (Object.keys(nextModes).length) {
+                nextDoc.providerDefaults = { ...existingPd, autoApproveModes: nextModes };
+            } else {
+                // No entries left → drop the zone entirely so we don't leave an empty stub.
+                if (nextDoc.providerDefaults) {
+                    const { autoApproveModes, ...restPd } = nextDoc.providerDefaults;
+                    if (Object.keys(restPd).length) nextDoc.providerDefaults = restPd;
+                    else delete nextDoc.providerDefaults;
+                }
+            }
+
+            // Validate the merged document before it ever touches disk.
+            const validation = normalizeRepoMeshDeclarativeConfig(nextDoc);
+            if (!validation.valid) {
+                return { success: false, error: `merged mesh.json is invalid: ${validation.errors.join('; ')}` };
+            }
+
+            // Serialize in the on-disk format (JSON unless the existing file was YAML).
+            const absolutePath = existingPath;
+            const serialized = existedAsYaml
+                ? yaml.dump(nextDoc, { indent: 2 })
+                : `${JSON.stringify(nextDoc, null, 2)}\n`;
+
+            if (!write) {
+                return {
+                    success: true,
+                    written: false,
+                    dryRun: true,
+                    path: absolutePath,
+                    relativePath,
+                    merge,
+                    providerDefaults: nextDoc.providerDefaults,
+                    preview: serialized,
+                    note: 'Dry-run: nothing written. Re-run with write=true to persist. Only the providerDefaults zone is merged; other repo zones are preserved.',
+                };
+            }
+
+            mkdirSync(dirname(absolutePath), { recursive: true });
+            writeFileSync(absolutePath, serialized, 'utf-8');
+            return {
+                success: true,
+                written: true,
+                dryRun: false,
+                path: absolutePath,
+                relativePath,
+                merge,
+                providerDefaults: nextDoc.providerDefaults,
+                note: 'Wrote providerDefaults into .adhdev/mesh.json (read-modify-write; other zones preserved). Commit it to the repo.',
+            };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
     delete_mesh: async (_ctx: MedFamilyContext, args: any) => {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };

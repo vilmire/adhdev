@@ -163,6 +163,24 @@ export {
   resolveAutoConvergeCodeChange,
 } from './repo-mesh-types.js';
 
+// ── Repo-shared declarative mesh config (.adhdev/mesh.json) ──
+export {
+  loadRepoMeshJsonConfig,
+  normalizeRepoMeshDeclarativeConfig,
+  buildMeshJsonConfigScaffold,
+  serializeMeshJsonConfigScaffold,
+  MESH_JSON_CONFIG_LOCATIONS,
+  MESH_JSON_CONFIG_SCHEMA,
+  MESH_JSON_PROVIDER_DEFAULTS_EXAMPLE,
+} from './config/mesh-json-config.js';
+export type {
+  RepoMeshDeclarativeConfig,
+  RepoMeshDeclarativeCoordinatorConfig,
+  RepoMeshDeclarativeLimits,
+  RepoMeshDeclarativeProviderDefaults,
+  RepoMeshJsonConfigLoadResult,
+} from './config/mesh-json-config.js';
+
 // ── Git Surface ──
 export * from './git/index.js';
 

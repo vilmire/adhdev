@@ -17,6 +17,9 @@ import type { MeshMagiActivitySummary } from './mesh/mesh-magi-status.js';
 import type { MagiKindPanelMap, DifficultyBrainMap, NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import type { ProviderModule } from './providers/contracts.js';
 import { deriveAutoApproveModeRisk } from './providers/auto-approve-modes.js';
+// Type-only import (no runtime cycle) — mesh-json-config imports types from this
+// module, and this direction is `import type` so tsc erases it at emit.
+import type { RepoMeshDeclarativeConfig } from './config/mesh-json-config.js';
 
 // ─── Core Mesh Types ────────────────────────────
 
@@ -804,14 +807,40 @@ export function mergeAndNormalizePolicy(
 
 /**
  * Resolve delegated worker auto-approve. Legacy providers return a boolean. Providers
- * with modes return the default mode id, except a dangerous default is downgraded to a
+ * with modes return a mode id, except a dangerous mode is downgraded to a
  * non-dangerous PTY mode unless mesh/node policy explicitly opts in.
+ *
+ * THREE EXPLICIT STAGES — do not collapse them; the ordering is a hard MAGI
+ * invariant:
+ *
+ *   ① ENABLE gate (machine-local policy only): node boolean > mesh boolean.
+ *      `enabled=false` returns `false` IMMEDIATELY, BEFORE any mode selection.
+ *      The repo `mesh.json` providerDefaults has ZERO influence here — a
+ *      node/mesh opt-out is never overridden by a repo-declared requested mode.
+ *
+ *   ② MODE selection (only when enabled === true):
+ *        task override [FUTURE — param reserved below, not yet wired] >
+ *        repo mesh.json providerDefaults.autoApproveModes[providerType] >
+ *        provider spec autoApproveModes.default.
+ *      A repo-requested mode ID is adopted ONLY when it exists in the provider's
+ *      own `autoApproveModes.modes`; an unknown/stale/typo'd ID is IGNORED and we
+ *      fall back to the provider default (fail-closed: never coerce into a
+ *      dangerous mode via a bad ID).
+ *
+ *   ③ DANGEROUS gate: whichever mode stage ② picked, if it is dangerous and the
+ *      machine-local delegatedWorkerDangerousModeAllow is not set, downgrade to a
+ *      non-dangerous PTY-parse mode (or `false` if none exists).
  */
 export function resolveDelegatedWorkerAutoApprove(
     meshPolicy?: Pick<RepoMeshPolicy, 'delegatedWorkerAutoApprove' | 'delegatedWorkerDangerousModeAllow'> | null,
     nodePolicy?: Pick<RepoMeshNodePolicy, 'delegatedWorkerAutoApprove' | 'delegatedWorkerDangerousModeAllow'> | null,
     provider?: Pick<ProviderModule, 'autoApproveModes'> | null,
+    repoConfig?: RepoMeshDeclarativeConfig | null,
+    // providerType is needed to look up the repo-declared requested mode; it is
+    // separate from `provider` because the caller resolves the spec independently.
+    providerType?: string | null,
 ): boolean | string {
+    // ── ① ENABLE gate — machine-local only. false short-circuits before mode. ──
     let enabled = true;
     if (typeof nodePolicy?.delegatedWorkerAutoApprove === 'boolean') {
         enabled = nodePolicy.delegatedWorkerAutoApprove;
@@ -822,16 +851,32 @@ export function resolveDelegatedWorkerAutoApprove(
 
     const modes = provider?.autoApproveModes;
     if (!modes) return true;
-    const defaultMode = modes.modes.find((mode) => mode.id === modes.default);
-    if (!defaultMode || defaultMode.strategy === 'post-boot-command') return false;
 
+    // ── ② MODE selection (enabled only). Repo providerDefaults MAY override the
+    //     provider spec default here — but only with a mode ID the spec knows. ──
+    // Future: a per-task override would slot in ahead of the repo default; the
+    // signature reserves that precedence but no task override is wired yet.
+    const requestedModeRaw = typeof providerType === 'string'
+        ? repoConfig?.providerDefaults?.autoApproveModes?.[providerType.trim()]
+        : undefined;
+    const requestedModeId = typeof requestedModeRaw === 'string' && requestedModeRaw.trim()
+        ? requestedModeRaw.trim()
+        : '';
+    const requestedMode = requestedModeId
+        ? modes.modes.find((mode) => mode.id === requestedModeId)
+        : undefined;
+    const selectedMode = requestedMode
+        ?? modes.modes.find((mode) => mode.id === modes.default);
+    if (!selectedMode || selectedMode.strategy === 'post-boot-command') return false;
+
+    // ── ③ DANGEROUS gate — downgrade a dangerous selection without machine opt-in. ──
     const dangerousAllowed = resolveDelegatedWorkerDangerousModeAllow(meshPolicy, nodePolicy);
-    if (deriveAutoApproveModeRisk(defaultMode) === 'dangerous' && !dangerousAllowed) {
-        const ptyFallback = modes!.modes.find((mode) =>
+    if (deriveAutoApproveModeRisk(selectedMode) === 'dangerous' && !dangerousAllowed) {
+        const ptyFallback = modes.modes.find((mode) =>
             mode.strategy === 'pty-parse-default' && deriveAutoApproveModeRisk(mode) !== 'dangerous');
         return ptyFallback?.id || false;
     }
-    return defaultMode.id;
+    return selectedMode.id;
 }
 
 export function resolveDelegatedWorkerDangerousModeAllow(
@@ -849,12 +894,14 @@ export function delegatedWorkerAutoApproveSettings(
     meshPolicy?: Pick<RepoMeshPolicy, 'delegatedWorkerAutoApprove' | 'delegatedWorkerDangerousModeAllow'> | null,
     nodePolicy?: Pick<RepoMeshNodePolicy, 'delegatedWorkerAutoApprove' | 'delegatedWorkerDangerousModeAllow'> | null,
     provider?: Pick<ProviderModule, 'autoApproveModes'> | null,
+    repoConfig?: RepoMeshDeclarativeConfig | null,
+    providerType?: string | null,
 ): {
     autoApprove: boolean | undefined;
     autoApproveMode: string | undefined;
     delegatedWorkerDangerousModeAllow: boolean;
 } {
-    const resolved = resolveDelegatedWorkerAutoApprove(meshPolicy, nodePolicy, provider);
+    const resolved = resolveDelegatedWorkerAutoApprove(meshPolicy, nodePolicy, provider, repoConfig, providerType);
     const delegatedWorkerDangerousModeAllow = resolveDelegatedWorkerDangerousModeAllow(meshPolicy, nodePolicy);
     return typeof resolved === 'string'
         ? { autoApprove: undefined, autoApproveMode: resolved, delegatedWorkerDangerousModeAllow }

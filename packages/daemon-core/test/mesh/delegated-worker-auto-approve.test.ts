@@ -73,6 +73,85 @@ describe('resolveDelegatedWorkerAutoApprove', () => {
     expect(DEFAULT_MESH_POLICY.delegatedWorkerDangerousModeAllow).toBe(false);
   });
 
+  // ── repo mesh.json providerDefaults (MODE selection only, never ENABLE) ──
+  const modeProvider = {
+    autoApproveModes: {
+      default: 'parsed',
+      modes: [
+        { id: 'parsed', label: 'Parsed', strategy: 'pty-parse-default', risk: 'safe' },
+        { id: 'accept-edits', label: 'Accept edits', strategy: 'launch-args', risk: 'safe', launchArgs: ['--accept-edits'] },
+        {
+          id: 'danger',
+          label: 'Danger',
+          strategy: 'launch-args',
+          risk: 'safe',
+          launchArgs: ['--dangerously-bypass-approvals-and-sandbox'],
+        },
+      ],
+    },
+  } as any;
+
+  const repoConfig = (modeId: string) => ({
+    version: 1 as const,
+    providerDefaults: { autoApproveModes: { 'claude-cli': modeId } },
+  });
+
+  it('adopts a repo mesh.json requested mode over the provider spec default when enabled', () => {
+    expect(
+      resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined, modeProvider, repoConfig('accept-edits'), 'claude-cli'),
+    ).toBe('accept-edits');
+    // No repoConfig / no providerType → provider spec default.
+    expect(resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined, modeProvider)).toBe('parsed');
+    expect(
+      resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined, modeProvider, repoConfig('accept-edits'), 'other-cli'),
+    ).toBe('parsed');
+  });
+
+  it('PRIORITY INVERSION GUARD: node/mesh ENABLE=false wins over any repo-requested mode', () => {
+    // node false, repo requests a mode → still false (repo never re-enables).
+    expect(
+      resolveDelegatedWorkerAutoApprove(
+        { delegatedWorkerAutoApprove: true },
+        { delegatedWorkerAutoApprove: false },
+        modeProvider,
+        repoConfig('accept-edits'),
+        'claude-cli',
+      ),
+    ).toBe(false);
+    // mesh false → still false.
+    expect(
+      resolveDelegatedWorkerAutoApprove(
+        { delegatedWorkerAutoApprove: false },
+        undefined,
+        modeProvider,
+        repoConfig('accept-edits'),
+        'claude-cli',
+      ),
+    ).toBe(false);
+  });
+
+  it('ignores an unknown/stale repo mode id and falls back to the provider default (fail-closed)', () => {
+    expect(
+      resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined, modeProvider, repoConfig('does-not-exist'), 'claude-cli'),
+    ).toBe('parsed');
+  });
+
+  it('downgrades a repo-requested DANGEROUS mode to PTY parsing without a machine opt-in', () => {
+    expect(
+      resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined, modeProvider, repoConfig('danger'), 'claude-cli'),
+    ).toBe('parsed');
+    // With machine-local opt-in, the repo-requested dangerous mode is honored.
+    expect(
+      resolveDelegatedWorkerAutoApprove(
+        { ...DEFAULT_MESH_POLICY, delegatedWorkerDangerousModeAllow: true },
+        undefined,
+        modeProvider,
+        repoConfig('danger'),
+        'claude-cli',
+      ),
+    ).toBe('danger');
+  });
+
   it('clears the opposite settings key so global mode precedence cannot bypass mesh policy', () => {
     expect(delegatedWorkerAutoApproveSettings(
       { ...DEFAULT_MESH_POLICY, delegatedWorkerAutoApprove: false },

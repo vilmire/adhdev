@@ -17,6 +17,7 @@ import { enqueueUnresolvedDelegateForward, nudgeUnresolvedForwardRetry } from '.
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { delegatedWorkerAutoApproveSettings } from '../repo-mesh-types.js';
+import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent, withStatusProbeMarker, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
@@ -1618,6 +1619,17 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                                         mesh?.policy,
                                         node?.policy,
                                         components.providerLoader?.getMeta(recoveryContext.failedProviderType),
+                                        // Recovery relaunch: same repo-declared requested mode as the
+                                        // primary path. node.workspace missing → null → provider default.
+                                        (() => {
+                                            const ws = typeof node?.workspace === 'string' && node.workspace.trim() ? node.workspace.trim() : '';
+                                            if (!ws) return null;
+                                            try {
+                                                const r = loadRepoMeshJsonConfig(ws);
+                                                return r.sourceType === 'repo_file' && r.config ? r.config : null;
+                                            } catch { return null; }
+                                        })(),
+                                        recoveryContext.failedProviderType,
                                     ),
                                     launchedByCoordinator: true,
                                 }

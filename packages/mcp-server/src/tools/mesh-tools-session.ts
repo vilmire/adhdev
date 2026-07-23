@@ -63,6 +63,8 @@ import {
     resolveCoordinatorNode,
     resolveAllowSendKeysDestructive,
     resolveDelegatedWorkerAutoApprove,
+    resolveDelegatedWorkerDangerousModeAllow,
+    loadRepoMeshJsonConfig,
     resolveMeshSessionProviderMetadata,
     resolveSessionProviderType,
     triggerMeshQueueAndReport,
@@ -1068,7 +1070,35 @@ export async function meshLaunchSession(
         // each one. Resolve the auto-approve policy (node override → mesh policy → default
         // true) and stamp it into the launch settings envelope so it wins over the global
         // per-provider-type autoApprove config via the settingsOverride merge.
+        //
+        // ENABLE decision stays 100% machine-local here (no repoConfig influence):
+        // resolveDelegatedWorkerAutoApprove with no provider spec returns the raw boolean.
         const delegatedWorkerAutoApprove = resolveDelegatedWorkerAutoApprove(ctx.mesh.policy, node.policy);
+        // MODE alignment with the auto-launch path: the MCP process has NO provider
+        // loader, so it cannot validate a repo-requested mode ID against the live
+        // provider spec. Instead we stamp the requested mode ID as `autoApproveMode`
+        // and forward `delegatedWorkerDangerousModeAllow`; the DAEMON-side adapter
+        // (cli-provider-instance.shouldAutoApprove → resolveProviderAutoApproveMode)
+        // validates it against the real spec and fails closed on an unknown ID
+        // (→ inactive, falls back to the provider default via the legacy path) and
+        // downgrades a dangerous mode when the machine has not opted in. This keeps
+        // manual mesh_launch_session consistent with the coordinator auto-launch
+        // without duplicating the provider registry into the MCP process.
+        // Only consult the repo config when the ENABLE gate resolved to on.
+        let requestedAutoApproveMode: string | undefined;
+        const delegatedWorkerDangerousModeAllow = resolveDelegatedWorkerDangerousModeAllow(ctx.mesh.policy, node.policy);
+        if (delegatedWorkerAutoApprove !== false) {
+            try {
+                const ws = typeof node.workspace === 'string' && node.workspace.trim() ? node.workspace.trim() : '';
+                if (ws) {
+                    const repo = loadRepoMeshJsonConfig(ws);
+                    const repoMode = repo.sourceType === 'repo_file'
+                        ? repo.config?.providerDefaults?.autoApproveModes?.[resolvedProviderType]
+                        : undefined;
+                    if (typeof repoMode === 'string' && repoMode.trim()) requestedAutoApproveMode = repoMode.trim();
+                }
+            } catch { /* graceful: no repo config → daemon uses provider default */ }
+        }
         const isLocalNode = isLocalControlPlaneNode(ctx, node);
         if (node.daemonId && !isLocalNode && !coordinatorDaemonId) {
             return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
@@ -1148,7 +1178,14 @@ export async function meshLaunchSession(
                     spawnedSessionVisibility,
                     // Delegated worker auto-approval (see resolveDelegatedWorkerAutoApprove).
                     // Lands in settingsOverride and beats the global per-provider autoApprove.
+                    // When a repo-requested mode ID is present AND auto-approve is enabled,
+                    // stamp the mode ID (validated daemon-side) alongside the boolean; the
+                    // adapter's resolveProviderAutoApproveMode prefers the mode and fails
+                    // closed on an unknown ID. delegatedWorkerDangerousModeAllow rides along
+                    // so the adapter can honor/deny a dangerous requested mode.
                     autoApprove: delegatedWorkerAutoApprove,
+                    ...(requestedAutoApproveMode ? { autoApproveMode: requestedAutoApproveMode } : {}),
+                    delegatedWorkerDangerousModeAllow,
                     ...(coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {}),
                     // (3) Stamp the originating coordinator SESSION at launch too, so a worker
                     // launched via mesh_launch_session routes its completions back to the exact

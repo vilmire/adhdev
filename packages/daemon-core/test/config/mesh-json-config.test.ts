@@ -53,6 +53,41 @@ describe('mesh-json-config — normalize', () => {
         expect((config as any).futureUnknown).toBeUndefined();
     });
 
+    it('normalizes providerDefaults.autoApproveModes (shape-only, trims keys/values)', () => {
+        const { valid, config } = normalizeRepoMeshDeclarativeConfig({
+            version: 1,
+            providerDefaults: {
+                autoApproveModes: {
+                    ' claude-cli ': ' accept-edits ',
+                    'codex-cli': 'auto',
+                    'empty-mode': '',      // dropped: no mode id
+                    '   ': 'x',            // dropped: no provider type
+                    'non-string': 42,      // dropped: not a string
+                },
+            },
+        });
+        expect(valid).toBe(true);
+        expect(config!.providerDefaults).toEqual({
+            autoApproveModes: { 'claude-cli': 'accept-edits', 'codex-cli': 'auto' },
+        });
+    });
+
+    it('drops an empty providerDefaults zone and flags a non-object one', () => {
+        const empty = normalizeRepoMeshDeclarativeConfig({
+            version: 1,
+            providerDefaults: { autoApproveModes: {} },
+        });
+        expect(empty.valid).toBe(true);
+        expect(empty.config!.providerDefaults).toBeUndefined();
+
+        const bad = normalizeRepoMeshDeclarativeConfig({
+            version: 1,
+            providerDefaults: { autoApproveModes: [] as any },
+        });
+        expect(bad.valid).toBe(true);
+        expect(bad.errors.some((e) => /autoApproveModes must be an object/.test(e))).toBe(true);
+    });
+
     it('policy is NOT a zone — a policy block is silently dropped (machine-local only)', () => {
         const { valid, config } = normalizeRepoMeshDeclarativeConfig({
             version: 1,

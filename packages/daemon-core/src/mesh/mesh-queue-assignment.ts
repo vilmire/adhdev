@@ -14,6 +14,8 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
 import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveCoordinatorIdlePushPolicy } from '../repo-mesh-types.js';
+import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
+import type { RepoMeshDeclarativeConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
@@ -88,6 +90,25 @@ export function __resetIdleAutoFastForwardForTests(): void {
     idleAutoFastForwardLastAttempt.clear();
     continuousAutoFastForwardLastScan.clear();
     autoFastForwardWorkspaceLease.clear();
+}
+
+/**
+ * Load the repo-shared `.adhdev/mesh.json` for a node's workspace, tolerating a
+ * missing/invalid file (returns null → resolver falls back to provider-spec
+ * defaults, i.e. exactly the pre-providerDefaults behavior). Only the
+ * `providerDefaults` zone influences the delegated-worker MODE selection; it never
+ * touches the ENABLE decision. When a node carries no workspace path (should not
+ * happen for a launchable node, but be defensive), we skip the read entirely.
+ */
+function loadRepoConfigForNode(node: any): RepoMeshDeclarativeConfig | null {
+    const workspace = typeof node?.workspace === 'string' && node.workspace.trim() ? node.workspace.trim() : '';
+    if (!workspace) return null;
+    try {
+        const result = loadRepoMeshJsonConfig(workspace);
+        return result.sourceType === 'repo_file' && result.config ? result.config : null;
+    } catch {
+        return null;
+    }
 }
 
 export function getMeshWithCache(components: DaemonComponents, meshId: string): any | undefined {
@@ -708,6 +729,8 @@ export function tryAssignQueueTask(
                     mesh?.policy,
                     node?.policy,
                     components.providerLoader?.getMeta(providerType),
+                    loadRepoConfigForNode(node),
+                    providerType,
                 ),
                 ...(localDaemonId ? { meshCoordinatorDaemonId: localDaemonId } : {}),
                 // COMPLETION-PROPAGATION F5: (re)stamp the coordinator SESSION anchor from THIS
@@ -2327,6 +2350,8 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                         mesh?.policy,
                         node?.policy,
                         components.providerLoader?.getMeta(resolved.providerType),
+                        loadRepoConfigForNode(node),
+                        resolved.providerType,
                     ),
                     launchedByCoordinator: true,
                     autoLaunchedForQueueTaskId: task.id,

@@ -19,6 +19,18 @@
  * machine-local policy directly. The repo file shapes the coordinator prompt and
  * operating notes, nothing else.
  *
+ * `providerDefaults` IS NOT POLICY EITHER. It is a repo-shared DECLARATIVE
+ * "requested auto-approve mode" per providerType — the answer to "WHEN a delegated
+ * worker of type X is auto-approved, WHICH mode should it use by default". It has
+ * NO say over WHETHER auto-approve is enabled: the ENABLE decision (and the
+ * dangerous-mode opt-in) remains 100% machine-local (meshes.json /
+ * RepoMeshPolicy). A repo can declare `providerDefaults` freely; a machine that
+ * has delegatedWorkerAutoApprove=false still gets no auto-approve, and a dangerous
+ * requested mode is still downgraded to PTY parsing unless the machine opts in.
+ * The requested mode ID is validated at runtime against the provider spec — an
+ * unknown mode ID is IGNORED (fall back to the provider's own default), never
+ * silently coerced into a dangerous mode.
+ *
  * The coordinator/operatingNotes merge is **in-memory only**: the on-disk
  * machine-local `meshes.json` is never mutated by this module.
  *
@@ -61,6 +73,19 @@ export interface RepoMeshDeclarativeLimits {
 }
 
 /**
+ * Repo-shared declarative per-provider defaults. NOT policy — see the file header.
+ * `autoApproveModes` maps a providerType (e.g. "claude-cli") to the auto-approve
+ * mode ID that a delegated worker of that type should REQUEST when it is
+ * auto-approved. The map only influences WHICH mode is used, never WHETHER
+ * auto-approve is enabled (that stays machine-local). Mode IDs are validated
+ * against the live provider spec at resolve time; an unknown ID is ignored.
+ */
+export interface RepoMeshDeclarativeProviderDefaults {
+    /** providerType → requested auto-approve mode ID. */
+    autoApproveModes?: Record<string, string>;
+}
+
+/**
  * Parsed + normalized `.adhdev/mesh.json` shape. Every field is optional except
  * version so a repo can declare only the zone(s) it cares about. Policy is NOT a
  * zone here — it is machine-local (meshes.json) only.
@@ -70,6 +95,8 @@ export interface RepoMeshDeclarativeConfig {
     coordinator?: RepoMeshDeclarativeCoordinatorConfig;
     operatingNotes?: CoordinatorOperatingNote[];
     limits?: RepoMeshDeclarativeLimits;
+    /** Repo-shared per-provider defaults (requested auto-approve mode). NOT policy. */
+    providerDefaults?: RepoMeshDeclarativeProviderDefaults;
 }
 
 export interface RepoMeshJsonConfigLoadResult {
@@ -130,6 +157,20 @@ export const MESH_JSON_CONFIG_SCHEMA = {
             properties: {
                 maxNoteChars: { type: 'number', minimum: 1 },
                 maxNotes: { type: 'number', minimum: 1 },
+            },
+        },
+        providerDefaults: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+                // providerType → requested auto-approve mode ID. Mode IDs are
+                // validated against the live provider spec at resolve time; an
+                // unknown ID is ignored (provider default is used), so the schema
+                // only constrains the shape (string→string), not the ID values.
+                autoApproveModes: {
+                    type: 'object',
+                    additionalProperties: { type: 'string' },
+                },
             },
         },
     },
@@ -223,6 +264,38 @@ export function normalizeRepoMeshDeclarativeConfig(parsed: unknown): {
             if (Object.keys(limits).length) config.limits = limits;
         } else {
             errors.push('limits must be an object when provided');
+        }
+    }
+
+    // providerDefaults: shape-only normalization. We keep every string→string
+    // (providerType → requested mode ID) entry after trimming; we deliberately do
+    // NOT validate the mode IDs against any provider spec here — the normalizer has
+    // no provider registry, and (crucially) validity depends on the LIVE provider
+    // at resolve time. The runtime resolver (resolveDelegatedWorkerAutoApprove)
+    // checks the requested ID against provider.autoApproveModes.modes and falls
+    // back to the provider's own default when the ID is unknown. This keeps the
+    // config fail-closed: a stale/typo'd mode ID never coerces into a dangerous
+    // mode, it just means "no repo override → provider default".
+    if (parsed.providerDefaults !== undefined) {
+        if (isRecord(parsed.providerDefaults)) {
+            const pd: RepoMeshDeclarativeProviderDefaults = {};
+            const rawModes = (parsed.providerDefaults as Record<string, unknown>).autoApproveModes;
+            if (rawModes !== undefined) {
+                if (isRecord(rawModes)) {
+                    const modes: Record<string, string> = {};
+                    for (const [providerType, modeId] of Object.entries(rawModes)) {
+                        const type = typeof providerType === 'string' ? providerType.trim() : '';
+                        const id = typeof modeId === 'string' ? modeId.trim() : '';
+                        if (type && id) modes[type] = id;
+                    }
+                    if (Object.keys(modes).length) pd.autoApproveModes = modes;
+                } else {
+                    errors.push('providerDefaults.autoApproveModes must be an object when provided');
+                }
+            }
+            if (Object.keys(pd).length) config.providerDefaults = pd;
+        } else {
+            errors.push('providerDefaults must be an object when provided');
         }
     }
 
@@ -364,6 +437,21 @@ export function applyRepoMeshConfig<T extends Pick<LocalMeshEntry, 'coordinator'
  * exported — it is machine-local only and has no place in mesh.json. Operating
  * notes are intentionally NOT exported either: those are runtime ledger lessons,
  * and a repo should declare baseline notes deliberately.
+ *
+ * `providerDefaults` is NOT auto-exported from the machine-local mesh (there is no
+ * machine-local source for it — it is a repo-authored declaration). To help an
+ * operator hand-author it, the scaffold carries a commented example shape:
+ *
+ *   "providerDefaults": {
+ *     "autoApproveModes": {
+ *       "claude-cli": "accept-edits",   // requested mode WHEN auto-approve is on
+ *       "codex-cli": "auto"             // (enable/dangerous opt-in stays machine-local)
+ *     }
+ *   }
+ *
+ * The example is surfaced via the scaffold's `_providerDefaultsExample` hint (JSON
+ * has no comments) rather than a live `providerDefaults` value, so serializing the
+ * scaffold never writes an unwanted requested-mode map into the repo file.
  */
 export function buildMeshJsonConfigScaffold(
     mesh: Pick<LocalMeshEntry, 'coordinator'>,
@@ -377,6 +465,21 @@ export function buildMeshJsonConfigScaffold(
     if (Object.keys(coord).length) scaffold.coordinator = coord;
     return scaffold;
 }
+
+/**
+ * A copy-paste example of the `providerDefaults` zone for operators hand-authoring
+ * a repo `.adhdev/mesh.json`. Returned by the export/write commands as a separate
+ * hint field (never merged into the serialized scaffold) so the repo file stays
+ * clean. The mode IDs shown are illustrative — a repo should use IDs that exist in
+ * its own providers' specs; an unknown ID is ignored at resolve time and the
+ * provider's own default is used.
+ */
+export const MESH_JSON_PROVIDER_DEFAULTS_EXAMPLE: RepoMeshDeclarativeProviderDefaults = {
+    autoApproveModes: {
+        'claude-cli': 'accept-edits',
+        'codex-cli': 'auto',
+    },
+};
 
 /** Serialize a scaffold to the canonical 2-space JSON draft text. */
 export function serializeMeshJsonConfigScaffold(config: RepoMeshDeclarativeConfig): string {
