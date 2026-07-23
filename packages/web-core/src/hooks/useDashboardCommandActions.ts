@@ -29,7 +29,7 @@ export interface LaunchResult {
   manualSetup?: MeshCoordinatorManualSetup | null
 }
 
-interface LaunchProviderOptions {
+export interface LaunchProviderOptions {
   workspaceId?: string | null
   workspacePath?: string | null
   // Explicit "run in the home directory" choice (the dashboard "Home directory"
@@ -42,6 +42,26 @@ interface LaunchProviderOptions {
   cliArgs?: string[]
   initialModel?: string | null
   initialThinkingLevel?: string | null
+  settings?: {
+    autoApprove?: boolean
+    autoApproveMode?: string
+  }
+}
+
+export function buildDashboardProviderLaunchPayload(
+  providerType: string,
+  opts?: LaunchProviderOptions,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = { cliType: providerType }
+  if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
+  else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
+  else if (opts?.useHome) payload.useHome = true
+  if (opts?.resumeSessionId?.trim()) payload.resumeSessionId = opts.resumeSessionId.trim()
+  if (Array.isArray(opts?.cliArgs) && opts.cliArgs.length > 0) payload.cliArgs = opts.cliArgs
+  if (opts?.initialModel?.trim()) payload.initialModel = opts.initialModel.trim()
+  if (opts?.initialThinkingLevel?.trim()) payload.initialThinkingLevel = opts.initialThinkingLevel.trim()
+  if (opts?.settings) payload.settings = opts.settings
+  return payload
 }
 
 export interface MeshLaunchOption {
@@ -120,17 +140,10 @@ export function useDashboardCommandActions({
   ): Promise<LaunchResult> => {
     const startedAt = Date.now()
     try {
-      const payload: Record<string, unknown> = { cliType: providerType }
-      if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
-      else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
-      // Home-directory launch: only when no dir/workspaceId is set (mirrors AgentTab /
-      // useMachineActions). Gated on the explicit opts.useHome flag so a directory /
-      // saved-workspace / default-workspace selection is never swallowed.
-      else if (opts?.useHome) payload.useHome = true
-      if (opts?.resumeSessionId?.trim()) payload.resumeSessionId = opts.resumeSessionId.trim()
-      if (Array.isArray(opts?.cliArgs) && opts.cliArgs.length > 0) payload.cliArgs = opts.cliArgs
-      if (opts?.initialModel?.trim()) payload.initialModel = opts.initialModel.trim()
-      if (opts?.initialThinkingLevel?.trim()) payload.initialThinkingLevel = opts.initialThinkingLevel.trim()
+      // Home-directory launch is gated on explicit useHome and never overrides
+      // a directory or saved workspace. The same builder also preserves the
+      // launch-time auto-approve settings stamp.
+      const payload = buildDashboardProviderLaunchPayload(providerType, opts)
       const res: any = await launchCli(machineId, payload)
       const result = res?.result || res
       const launchedSessionId = result?.sessionId || result?.id

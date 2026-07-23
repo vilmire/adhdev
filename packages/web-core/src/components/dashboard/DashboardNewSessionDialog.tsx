@@ -19,6 +19,17 @@ import type { LaunchResult, MeshLaunchOption } from '../../hooks/useDashboardCom
 import MeshCoordinatorManualSetupPanel from '../MeshCoordinatorManualSetupPanel'
 import { buildManualCoordinatorSetup, type MeshCoordinatorManualSetup } from '../../utils/mesh-coordinator-setup'
 import { LAUNCH_CATEGORY_LABELS } from './launch-category-labels'
+import {
+    AutoApproveModeSelector,
+    DangerousAutoApproveModeDialog,
+    LegacyAutoApproveToggle,
+} from './AutoApproveModeSelector'
+import {
+    buildAutoApproveLaunchSettings,
+    deriveAutoApproveModeRisk,
+    resolveInitialAutoApproveModeId,
+} from '../../utils/auto-approve-modes'
+import type { AutoApproveMode } from '@adhdev/daemon-core'
 
 type LaunchKind = 'ide' | 'cli' | 'acp'
 type WorkspaceLaunchMode = 'workspace' | 'mesh'
@@ -58,6 +69,10 @@ interface DashboardNewSessionDialogProps {
             cliArgs?: string[]
             initialModel?: string | null
             initialThinkingLevel?: string | null
+            settings?: {
+                autoApprove?: boolean
+                autoApproveMode?: string
+            }
         },
     ) => Promise<{ ok: boolean; error?: string; code?: string }>
     onListMeshes: (machineId: string) => Promise<MeshLaunchOption[]>
@@ -173,6 +188,9 @@ export default function DashboardNewSessionDialog({
     const [activeKind, setActiveKind] = useState<LaunchKind | null>(getDefaultLaunchKind(sortedMachines[0]))
     const [selectedTarget, setSelectedTarget] = useState('')
     const [launchArgs, setLaunchArgs] = useState('')
+    const [legacyAutoApprove, setLegacyAutoApprove] = useState(false)
+    const [selectedAutoApproveModeId, setSelectedAutoApproveModeId] = useState('')
+    const [pendingDangerousMode, setPendingDangerousMode] = useState<AutoApproveMode | null>(null)
     // Brain-routing overrides for this session: model + thinking level, best-effort.
     const [initialModel, setInitialModel] = useState('')
     const [initialThinkingLevel, setInitialThinkingLevel] = useState('')
@@ -276,6 +294,11 @@ export default function DashboardNewSessionDialog({
         () => [...cliProviders, ...acpProviders].find(p => p.type === selectedTarget) as any,
         [cliProviders, acpProviders, selectedTarget],
     )
+    const autoApproveModes = activeKind === 'cli'
+        ? activeLaunchProvider?.autoApproveModes
+        : undefined
+    const autoApproveModesFingerprint = JSON.stringify(autoApproveModes || null)
+    const initialAutoApproveModeId = resolveInitialAutoApproveModeId(autoApproveModes)
     // Shared provider-option lookup — same source the slot editor and MAGI editor
     // read, so a provider's model/thinking lists come from one place.
     const modelOptionsForTarget = useMemo(
@@ -330,6 +353,9 @@ export default function DashboardNewSessionDialog({
             setActiveKind(getDefaultLaunchKind(selectedMachine))
             setSelectedTarget('')
             setLaunchArgs('')
+            setLegacyAutoApprove(false)
+            setSelectedAutoApproveModeId('')
+            setPendingDangerousMode(null)
             setInitialModel('')
             setInitialThinkingLevel('')
             setModelIsCustom(false)
@@ -387,6 +413,28 @@ export default function DashboardNewSessionDialog({
         setInitialThinkingLevel('')
         setModelIsCustom(false)
     }, [selectedTarget])
+
+    // A dangerous registry default must never become active merely because its
+    // manifest was downloaded. Provider changes reset to a non-dangerous default;
+    // dangerous choices are committed only by the confirmation dialog below.
+    useEffect(() => {
+        setSelectedAutoApproveModeId(initialAutoApproveModeId)
+        setLegacyAutoApprove(false)
+        setPendingDangerousMode(null)
+    }, [autoApproveModesFingerprint, initialAutoApproveModeId, selectedMachine?.id, selectedTarget])
+
+    const requestAutoApproveMode = useCallback((mode: AutoApproveMode) => {
+        if (deriveAutoApproveModeRisk(mode) === 'dangerous') {
+            setPendingDangerousMode(mode)
+            return
+        }
+        setSelectedAutoApproveModeId(mode.id)
+    }, [])
+
+    const launchAutoApproveSettings = useMemo(
+        () => buildAutoApproveLaunchSettings(autoApproveModes, selectedAutoApproveModeId, legacyAutoApprove),
+        [autoApproveModes, legacyAutoApprove, selectedAutoApproveModeId],
+    )
 
     const loadSavedSessions = useCallback(async (machineId: string, providerType: string) => {
         const requestSeq = savedSessionsRequestSeqRef.current + 1
@@ -637,6 +685,7 @@ export default function DashboardNewSessionDialog({
                 cliArgs: parsedArgs,
                 initialModel: initialModel.trim() ? initialModel.trim() : null,
                 initialThinkingLevel: initialThinkingLevel.trim() ? initialThinkingLevel.trim() : null,
+                settings: launchAutoApproveSettings,
             })
         setBusy(false)
         if (!result.ok) {
@@ -656,6 +705,7 @@ export default function DashboardNewSessionDialog({
         launchArgs,
         initialModel,
         initialThinkingLevel,
+        launchAutoApproveSettings,
         loadRecentArgs,
         onClose,
         onLaunchIde,
@@ -971,6 +1021,25 @@ export default function DashboardNewSessionDialog({
                             </LaunchSectionCard>
                         )}
 
+                        {workspaceMode !== 'mesh' && activeKind === 'cli' && (
+                            <LaunchSectionCard title={t('newSession.autoApproveMode')}>
+                                {autoApproveModes ? (
+                                    <AutoApproveModeSelector
+                                        config={autoApproveModes}
+                                        selectedModeId={selectedAutoApproveModeId}
+                                        disabled={busy}
+                                        onSelectMode={requestAutoApproveMode}
+                                    />
+                                ) : (
+                                    <LegacyAutoApproveToggle
+                                        checked={legacyAutoApprove}
+                                        disabled={busy}
+                                        onChange={setLegacyAutoApprove}
+                                    />
+                                )}
+                            </LaunchSectionCard>
+                        )}
+
                         {((workspaceMode === 'mesh' && !!selectedTarget) || (workspaceMode !== 'mesh' && activeKind !== 'ide')) && (
                             <LaunchSectionCard title={t('newSession.modelAndThinking')}>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1144,6 +1213,7 @@ export default function DashboardNewSessionDialog({
                             workspacePath: launchTarget.workspacePath,
                             useHome: launchTarget.useHome,
                             resumeSessionId: session.providerSessionId,
+                            settings: launchAutoApproveSettings,
                         }).then((result) => {
                             if (!result.ok) {
                                 setMessageTone('error')
@@ -1160,6 +1230,16 @@ export default function DashboardNewSessionDialog({
                             ))
                         })
                     }}
+                />
+            )}
+            {pendingDangerousMode && (
+                <DangerousAutoApproveModeDialog
+                    mode={pendingDangerousMode}
+                    onConfirm={() => {
+                        setSelectedAutoApproveModeId(pendingDangerousMode.id)
+                        setPendingDangerousMode(null)
+                    }}
+                    onCancel={() => setPendingDangerousMode(null)}
                 />
             )}
         </>

@@ -2,6 +2,10 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import DashboardNewSessionDialog, { LaunchCategorySelector } from '../../../src/components/dashboard/DashboardNewSessionDialog'
+import {
+  AutoApproveModeSelector,
+  DangerousAutoApproveModeDialog,
+} from '../../../src/components/dashboard/AutoApproveModeSelector'
 import type { DaemonData } from '../../../src/types'
 
 function createMachine(index = 1): DaemonData {
@@ -19,6 +23,8 @@ function createMachine(index = 1): DaemonData {
         icon: 'claude',
         category: 'cli',
         installed: true,
+        enabled: true,
+        machineStatus: 'detected',
       },
     ],
     detectedIdes: [],
@@ -49,6 +55,64 @@ function renderDialog(machines: DaemonData[] = [createMachine()]) {
 }
 
 describe('DashboardNewSessionDialog', () => {
+  it('shows provider auto-approve modes with risk badges', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(AutoApproveModeSelector, {
+        config: {
+          default: 'pty-parse',
+          modes: [
+            { id: 'pty-parse', label: 'PTY parse (interactive)', strategy: 'pty-parse-default', risk: 'safe' },
+            {
+              id: 'yolo',
+              label: 'YOLO',
+              strategy: 'launch-args',
+              risk: 'dangerous',
+              warning: 'Bypasses all approvals',
+              launchArgs: ['--dangerously-bypass-approvals-and-sandbox'],
+            },
+          ],
+        },
+        selectedModeId: 'pty-parse',
+        onSelectMode: () => {},
+      }),
+    )
+
+    expect(html).toContain('PTY parse (interactive)')
+    expect(html).toContain('YOLO')
+    expect(html).toContain('Safe')
+    expect(html).toContain('Dangerous')
+    expect(html).not.toContain('role="switch"')
+  })
+
+  it('keeps the legacy on/off switch when the provider has no modes', () => {
+    const html = renderDialog()
+
+    expect(html).toContain('role="switch"')
+    expect(html).toContain('Auto approve')
+  })
+
+  it('renders the dangerous confirmation with its warning and exact injected launch args', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(DangerousAutoApproveModeDialog, {
+        mode: {
+          id: 'yolo',
+          label: 'YOLO',
+          strategy: 'launch-args',
+          risk: 'dangerous',
+          warning: 'Only use this in a trusted workspace',
+          launchArgs: ['--permission-mode', 'bypassPermissions'],
+        },
+        onConfirm: () => {},
+        onCancel: () => {},
+      }),
+    )
+
+    expect(html).toContain('Confirm dangerous auto-approve mode')
+    expect(html).toContain('Only use this in a trusted workspace')
+    expect(html).toContain('[&quot;--permission-mode&quot;,&quot;bypassPermissions&quot;]')
+    expect(html).toContain('Use dangerous mode')
+  })
+
   it('does not show hosted runtime recovery CTA in the new session flow', () => {
     const html = renderDialog()
 

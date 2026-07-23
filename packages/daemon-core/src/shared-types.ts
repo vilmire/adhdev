@@ -52,7 +52,7 @@ export type { ProviderErrorReason } from './providers/provider-instance.js';
 // Local import for use in Managed*Entry types below
 import type { ActiveChatData as _ActiveChatData, ProviderErrorReason as _ProviderErrorReason } from './providers/provider-instance.js';
 import type { WorkspaceEntry } from './config/workspaces.js';
-import type { ProviderMeshCoordinatorConfig, ProviderResumeCapability } from './providers/contracts.js';
+import type { AutoApproveModesConfig, ProviderMeshCoordinatorConfig, ProviderResumeCapability } from './providers/contracts.js';
 import type {
     GitCompactSummary,
     GitDiffSummary,
@@ -563,6 +563,8 @@ export interface AvailableProviderInfo {
     lastVerification?: MachineProviderCheckResult;
     /** Provider-declared Repo Mesh coordinator/MCP behavior. */
     meshCoordinator?: ProviderMeshCoordinatorConfig;
+    /** Provider-declared auto-approve choices shown by session launch UIs. */
+    autoApproveModes?: AutoApproveModesConfig;
     /** BRAIN-ROUTING: suggested model values for the new-session model dropdown. */
     modelOptions?: string[];
     /** BRAIN-ROUTING: reasoning-effort values for the new-session thinking dropdown. */

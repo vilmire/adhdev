@@ -18,6 +18,20 @@ describe('buildAvailableProviders — model/thinking option passthrough', () => 
         machineStatus: 'detected' as const,
         modelOptions: ['gpt-5.5', 'gpt-5.4', 'gpt-5-codex'],
         thinkingLevelOptions: ['minimal', 'low', 'medium', 'high', 'xhigh'],
+        autoApproveModes: {
+          default: 'pty-parse',
+          modes: [
+            { id: 'pty-parse', label: 'PTY parse', strategy: 'pty-parse-default', risk: 'safe' },
+            {
+              id: 'yolo',
+              label: 'YOLO',
+              strategy: 'launch-args',
+              risk: 'dangerous',
+              warning: 'Bypasses approvals',
+              launchArgs: ['--dangerously-bypass-approvals-and-sandbox'],
+            },
+          ],
+        },
       },
       {
         type: 'claude-cli',
@@ -42,6 +56,7 @@ describe('buildAvailableProviders — model/thinking option passthrough', () => 
     const claude = out.find(p => p.type === 'claude-cli')!
     expect(codex.modelOptions).toEqual(['gpt-5.5', 'gpt-5.4', 'gpt-5-codex'])
     expect(codex.thinkingLevelOptions).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh'])
+    expect(codex.autoApproveModes).toEqual(loader.getAvailableProviderInfos()[0].autoApproveModes)
     // codex has no haiku — the whole point of provider-specific lists.
     expect(claude.modelOptions).toEqual(['fable', 'opus', 'sonnet', 'haiku'])
     expect(claude.modelOptions).not.toContain('gpt-5.5')
@@ -52,5 +67,6 @@ describe('buildAvailableProviders — model/thinking option passthrough', () => 
     const gemini = out.find(p => p.type === 'gemini-cli')!
     expect(gemini.modelOptions).toBeUndefined()
     expect(gemini.thinkingLevelOptions).toBeUndefined()
+    expect(gemini.autoApproveModes).toBeUndefined()
   })
 })

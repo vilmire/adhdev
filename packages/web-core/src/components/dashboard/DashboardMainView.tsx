@@ -127,6 +127,11 @@ interface DashboardMainViewProps {
             resumeSessionId?: string | null
             cliArgs?: string[]
             initialModel?: string | null
+            initialThinkingLevel?: string | null
+            settings?: {
+                autoApprove?: boolean
+                autoApproveMode?: string
+            }
         },
     ) => Promise<{ ok: boolean; error?: string }>
     onListMachineMeshes: (machineId: string) => Promise<MeshLaunchOption[]>

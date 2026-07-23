@@ -145,6 +145,7 @@ export function buildAvailableProviders(
         lastDetection?: AvailableProviderInfo['lastDetection'];
         lastVerification?: AvailableProviderInfo['lastVerification'];
         meshCoordinator?: AvailableProviderInfo['meshCoordinator'];
+        autoApproveModes?: AvailableProviderInfo['autoApproveModes'];
         _sourceTrust?: AvailableProviderInfo['trust'];
         _sourceLayer?: AvailableProviderInfo['sourceLayer'];
         _sourceName?: string | null;
@@ -183,6 +184,7 @@ export function buildAvailableProviders(
             ...(provider.lastDetection !== undefined ? { lastDetection: provider.lastDetection } : {}),
             ...(provider.lastVerification !== undefined ? { lastVerification: provider.lastVerification } : {}),
             ...(provider.meshCoordinator !== undefined ? { meshCoordinator: provider.meshCoordinator } : {}),
+            ...(provider.autoApproveModes !== undefined ? { autoApproveModes: provider.autoApproveModes } : {}),
             ...(trust ? {
                 trust,
                 trustDescription: describeTrust(trust),
