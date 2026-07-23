@@ -64,7 +64,7 @@ import { getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-
 import { resolveSessionBusyVerdict, runContinuousAutoFastForwardScan, runPendingCoordinatorCatchupScan } from './mesh-queue-assignment.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerEntry } from './mesh-ledger.js';
-import { findTerminalLedgerEvidenceForTask } from './mesh-events-stale.js';
+import { findTerminalLedgerEvidenceForTask, reconcileDirectDispatchCompletionFromTranscript } from './mesh-events-stale.js';
 import {
     resolveCoordinatorDaemonIds,
     daemonHostsMesh,
@@ -84,6 +84,7 @@ import {
     reconcileUnterminatedDirectDispatches,
     autoPruneStaleDirectDispatches,
     pollAssignedTaskTerminalEvidence,
+    type AssignedTaskTerminalEvidence,
 } from './mesh-completion-synthesis.js';
 import { sessionStatusFromNodes } from './mesh-active-work.js';
 
@@ -941,6 +942,60 @@ async function evaluateEarlyIdleTranscriptArm(
     return verdict === 'UNKNOWN';             // remote, unknowable class — trust the (a) reprobe
 }
 
+// WATCHDOG-FINALSUMMARY-LOST. When the assigned-stranded watchdog / delivered-no-turn deadline
+// proves a task terminal from the worker transcript (pollAssignedTaskTerminalEvidence), it must
+// PROPAGATE that completion to the coordinator the SAME way a native agent:generating_completed
+// does — a finalSummary-bearing [System] notification — not merely flip the queue row and trace a
+// structural DROP. A provider that finishes early (e.g. codex ~25s) is watchdog-completed here; if
+// the summary is dropped the coordinator NEVER learns what the worker produced (kimi only got it by
+// the lucky timing of the 180s stall-reconcile's second emit).
+//
+// reconcileDirectDispatchCompletionFromTranscript is the shared native-completion synth: it writes
+// the terminal ledger WITH the finalSummary and queues the coordinator event with the same
+// buildMeshSystemMessage the native path uses. It is idempotent — hasTerminalLedgerAfterDispatch
+// makes a second call (or a later real emit) a no-op (alreadyTerminal), and its non-self-attributing
+// synth is marked WEAK so the worker's own later emit can still supersede it rather than being
+// dropped as a duplicate. That is the dedup guarantee: at most one [System] completion surfaces.
+//
+// Returns true if a terminal ledger for this task now exists (freshly written OR already present) —
+// the caller then skips its own bare-payload ledger write, which lacked the finalSummary entirely.
+function propagateWatchdogTranscriptCompletion(
+    meshId: string,
+    row: { id: string; assignedNodeId?: string; assignedSessionId?: string; assignedProviderType?: string; dispatchTimestamp?: string },
+    evidence: AssignedTaskTerminalEvidence,
+    source: string,
+): boolean {
+    const sessionId = readNonEmptyString(row.assignedSessionId) || evidence.sessionId;
+    if (!sessionId || !readNonEmptyString(evidence.finalSummary)) {
+        // No routable session or no summary to carry — fall back to the caller's bare ledger write.
+        return false;
+    }
+    try {
+        const result = reconcileDirectDispatchCompletionFromTranscript({
+            meshId,
+            nodeId: readNonEmptyString(row.assignedNodeId) || evidence.nodeId,
+            sessionId,
+            providerType: readNonEmptyString(row.assignedProviderType) || evidence.providerType,
+            providerSessionId: evidence.providerSessionId,
+            taskId: row.id,
+            finalSummary: evidence.finalSummary,
+            ...(evidence.transcriptMessageAt ? { transcriptMessageAt: evidence.transcriptMessageAt } : {}),
+            ...(readNonEmptyString(row.dispatchTimestamp) ? { dispatchTimestamp: readNonEmptyString(row.dispatchTimestamp) } : {}),
+            // The watchdog poll already enforced idle + post-dispatch + no-trailing-tool + streak;
+            // skip the reconcile's own grace/transcript_not_proven gates (dedup backstops remain).
+            preValidatedTranscriptEvidence: true,
+            source,
+        });
+        // reconciled → freshly queued the coordinator completion; alreadyTerminal → a terminal
+        // ledger (a real emit that raced in, or a prior watchdog synth) is already present. Either
+        // way a finalSummary-bearing completion has been (or will be) delivered; the caller must NOT
+        // add its summary-less ledger row on top.
+        return result.reconciled || result.alreadyTerminal === true;
+    } catch {
+        return false; // best-effort — fall back to the caller's bare ledger write
+    }
+}
+
 // PHASE 2.5 — assigned-stranded dispatch watchdog (Bug B). claimNextTask atomically
 // flips a row to 'assigned' BEFORE the fire-and-forget dispatch runs. If that dispatch
 // neither rejects (→ no .catch requeue) nor is confirmed delivered — a relay that hangs
@@ -1013,11 +1068,19 @@ async function recoverStrandedAssignedDispatches(
                 const terminalEvidence = await pollAssignedTaskTerminalEvidence(components, mesh, row);
                 if (terminalEvidence) {
                     assignedIdleFinalAssistantSince.delete(idleTranscriptStreakKey);
-                    updateTaskStatus(meshId, row.id, terminalEvidence);
-                    if (!findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id })) {
+                    updateTaskStatus(meshId, row.id, terminalEvidence.outcome);
+                    // WATCHDOG-FINALSUMMARY-LOST: propagate the completion to the coordinator WITH the
+                    // finalSummary the poll read — the SAME [System] notification the native
+                    // generating_completed produces — instead of only tracing a structural DROP. When
+                    // propagation delivered (or a terminal ledger already exists), skip the bare
+                    // summary-less ledger write below; only fall back to it if propagation could not run.
+                    const propagated = propagateWatchdogTranscriptCompletion(
+                        meshId, row, terminalEvidence, 'early_idle_transcript_evidence',
+                    );
+                    if (!propagated && !findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id })) {
                         try {
                             appendLedgerEntry(meshId, {
-                                kind: terminalEvidence === 'completed' ? 'task_completed' : 'task_failed',
+                                kind: terminalEvidence.outcome === 'completed' ? 'task_completed' : 'task_failed',
                                 nodeId: row.assignedNodeId,
                                 sessionId: row.assignedSessionId,
                                 providerType: row.assignedProviderType,
@@ -1032,14 +1095,15 @@ async function recoverStrandedAssignedDispatches(
                     LOG.warn('MeshReconcile', `Early-completed assigned task ${row.id} on mesh ${meshId} `
                         + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}): worker idle with a `
                         + `final assistant message after dispatch for ≥${Math.round(ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS / 1000)}s — `
-                        + `the completion event was lost/late (pure-PTY provider), task is ${terminalEvidence} without waiting the 15-min deadline`);
-                    traceMeshEventDrop('assigned_early_transcript_completed', {
+                        + `the completion event was lost/late (pure-PTY provider), task is ${terminalEvidence.outcome} without waiting the 15-min deadline`
+                        + `${propagated ? ' (finalSummary propagated to coordinator)' : ''}`);
+                    traceMeshEventStage('assigned_early_transcript_completed', {
                         taskId: row.id,
                         sessionId: row.assignedSessionId,
                         nodeId: row.assignedNodeId,
                         meshId,
                         event: 'agent:generating_completed',
-                    }, terminalEvidence);
+                    }, propagated ? 'propagated' : terminalEvidence.outcome);
                     continue;
                 }
                 // Poll was inconclusive (mid-turn re-check / stale tail / unreadable) — reset the
@@ -1290,11 +1354,17 @@ async function recoverStrandedAssignedDispatches(
                 deliveredNoTurnUnknownStreak.delete(streakKey);
                 // updateTaskStatus ends the single-flight dispatch window on any transition off
                 // 'assigned', so a later requeue/re-dispatch is never blocked by a stale mark.
-                updateTaskStatus(meshId, row.id, terminalEvidence);
-                if (!findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id })) {
+                updateTaskStatus(meshId, row.id, terminalEvidence.outcome);
+                // WATCHDOG-FINALSUMMARY-LOST: propagate the finalSummary-bearing completion to the
+                // coordinator (same [System] notification as the native path); only fall back to the
+                // bare summary-less ledger write when propagation could not run.
+                const propagated = propagateWatchdogTranscriptCompletion(
+                    meshId, row, terminalEvidence, 'redrive_deadline_transcript_evidence',
+                );
+                if (!propagated && !findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id })) {
                     try {
                         appendLedgerEntry(meshId, {
-                            kind: terminalEvidence === 'completed' ? 'task_completed' : 'task_failed',
+                            kind: terminalEvidence.outcome === 'completed' ? 'task_completed' : 'task_failed',
                             nodeId: row.assignedNodeId,
                             sessionId: row.assignedSessionId,
                             providerType: row.assignedProviderType,
@@ -1308,14 +1378,15 @@ async function recoverStrandedAssignedDispatches(
                 }
                 LOG.warn('MeshReconcile', `Skipped delivered-no-turn re-drive for task ${row.id} on mesh ${meshId} `
                     + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}): worker transcript is idle with a `
-                    + `final assistant message after dispatch — the completion event was lost/late, task is ${terminalEvidence}, NOT re-driving`);
-                traceMeshEventDrop('redrive_deadline_transcript_completed', {
+                    + `final assistant message after dispatch — the completion event was lost/late, task is ${terminalEvidence.outcome}, NOT re-driving`
+                    + `${propagated ? ' (finalSummary propagated to coordinator)' : ''}`);
+                traceMeshEventStage('redrive_deadline_transcript_completed', {
                     taskId: row.id,
                     sessionId: row.assignedSessionId,
                     nodeId: row.assignedNodeId,
                     meshId,
                     event: 'agent:generating_completed',
-                }, `${reclaimReason} → transcript ${terminalEvidence}`);
+                }, `${reclaimReason} → transcript ${terminalEvidence.outcome}${propagated ? ' propagated' : ''}`);
                 continue;
             }
             const reclaimedLost = reclaimStrandedAssignedTask(meshId, row.id, {

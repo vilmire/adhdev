@@ -31,6 +31,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 import { runMeshReconcileTick, __resetReconcileInFlightSynthDebounceForTests, getMeshV2BackstopCounters, __resetMeshV2BackstopCountersForTests, __resetReclaimUnknownStreakForTests } from '../../src/mesh/mesh-reconcile-loop.js'
 import { setLogLevel, getRecentLogs } from '../../src/logging/logger.js'
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
+import { reconcileDirectDispatchCompletionFromTranscript } from '../../src/mesh/mesh-events-stale.js'
 import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, claimNextTask, reclaimStrandedAssignedTask } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, appendLedgerEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
@@ -3310,6 +3311,95 @@ describe('runMeshReconcileTick', () => {
         expect((completed?.payload as any)?.source).toBe('early_idle_transcript_evidence')
         // No reclaim / re-drive happened — the worker was completed, not torn off its task.
         expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+      } finally {
+        vi.useRealTimers()
+        cleanup(meshId)
+      }
+    })
+
+    // WATCHDOG-FINALSUMMARY-LOST: an early-idle watchdog completion (a provider that finished early,
+    // e.g. codex ~25s, whose generating_completed was lost/late) must PROPAGATE the worker's final
+    // summary to the coordinator as a [System] notification — the SAME surface a native
+    // generating_completed produces — not merely flip the queue row + trace a structural DROP. Before
+    // the fix the finalSummary was dropped and the coordinator never learned what the worker produced.
+    it('WATCHDOG-FINALSUMMARY-LOST: early-idle completion queues a coordinatorMessage carrying the worker finalSummary (not a bare DROP)', async () => {
+      const meshId = `mesh_early_finalsummary_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-early-finalsummary'
+      const summary = 'Done — refactored the parser, 4 files changed, all tests pass.'
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const dispatchAt = Date.now()
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+
+        const idleInstance = {
+          category: 'cli',
+          provider: { type: 'kimi', category: 'cli', tui: { transcriptPty: { scope: 'buffer' } } },
+          getState: () => ({ instanceId: sessionId, status: 'idle', type: 'kimi', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
+        }
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status: 'idle',
+            providerSessionId: 'kimi-history-fs',
+            messages: [
+              { role: 'user', content: 'do work', timestamp: dispatchAt + 500 },
+              { role: 'assistant', content: summary, timestamp: dispatchAt + 4_000 },
+            ],
+          }
+        })
+        const components = {
+          instanceManager: {
+            getByCategory: (category: string) => (category === 'cli' ? [idleInstance] : []),
+            getInstance: (id: string) => (id === sessionId ? idleInstance : undefined),
+          },
+          commandHandler: { handle: readChat },
+        } as any
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        await runMeshReconcileTick(components)          // arm the streak
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components)          // grace elapsed → poll + complete
+
+        // Row completed.
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('completed')
+
+        // A coordinator completion was queued (NOT dropped) carrying the [System] message + summary.
+        const completionEvents = getPendingMeshCoordinatorEvents(meshId)
+          .filter(e => e.event === 'agent:generating_completed' && !!e.coordinatorMessage)
+        expect(completionEvents.length).toBe(1)
+        expect(completionEvents[0].coordinatorMessage).toContain('[System]')
+        expect(completionEvents[0].coordinatorMessage).toContain(summary)
+        expect((completionEvents[0].metadataEvent as any)?.finalSummary).toBe(summary)
+
+        // The terminal ledger carries the finalSummary too (previously the bare DROP payload lacked it).
+        const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed')
+        expect(completed).toBeTruthy()
+        expect((completed?.payload as any)?.finalSummary).toBe(summary)
+
+        // DEDUP: a SECOND reconcile for the same task (a later watchdog tick, or the worker's own
+        // native emit routing through the same synth) is idempotent — hasTerminalLedgerAfterDispatch
+        // makes it alreadyTerminal, so NO second [System] completion is queued.
+        const second = reconcileDirectDispatchCompletionFromTranscript({
+          meshId,
+          nodeId,
+          sessionId,
+          providerType: 'kimi',
+          providerSessionId: 'kimi-history-fs',
+          taskId: claimed.id,
+          finalSummary: summary,
+          transcriptMessageAt: new Date(dispatchAt + 4_000).toISOString(),
+          source: 'early_idle_transcript_evidence',
+        })
+        expect(second.alreadyTerminal).toBe(true)
+        const afterSecond = getPendingMeshCoordinatorEvents(meshId)
+          .filter(e => e.event === 'agent:generating_completed' && !!e.coordinatorMessage)
+        expect(afterSecond.length).toBe(1)
       } finally {
         vi.useRealTimers()
         cleanup(meshId)

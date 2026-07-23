@@ -432,11 +432,28 @@ export async function autoPruneStaleDirectDispatches(
 // Conservative: a non-idle read, a read failure, no final summary, or a summary provably BEFORE
 // dispatch all yield null (fall through to the caller's normal reclaim decision) — the poll can
 // only PREVENT a wrong re-drive, never invent a completion.
+//
+// WATCHDOG-FINALSUMMARY-LOST: the poll now returns the FINAL ASSISTANT SUMMARY it read (not just
+// the 'completed' verdict) so the watchdog caller can propagate a finalSummary-bearing completion
+// to the coordinator (the SAME [System] notification a native generating_completed produces),
+// instead of dropping the summary and only flipping the row + tracing a structural DROP. The
+// evidence carried here is exactly what reconcileDirectDispatchCompletionFromTranscript needs to
+// build and queue that completion.
+export interface AssignedTaskTerminalEvidence {
+    outcome: 'completed';
+    finalSummary: string;
+    transcriptMessageAt?: string;
+    providerSessionId?: string;
+    providerType?: string;
+    nodeId?: string;
+    sessionId: string;
+}
+
 export async function pollAssignedTaskTerminalEvidence(
     components: DaemonComponents,
     mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
     row: { id: string; assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string; dispatchTimestamp?: string },
-): Promise<'completed' | null> {
+): Promise<AssignedTaskTerminalEvidence | null> {
     const sessionId = readNonEmptyString(row.assignedSessionId);
     const nodeId = readNonEmptyString(row.assignedNodeId);
     if (!sessionId || !nodeId) return null; // no worker to read
@@ -508,5 +525,17 @@ export async function pollAssignedTaskTerminalEvidence(
     // cannot distinguish a self-reported failure from the plain transcript tail here (that lives
     // in buildTaskCompletionEvidence's structured-result path), and the alternative — re-driving a
     // finished worker — is strictly worse, so a proven turn-end short-circuits to 'completed'.
-    return 'completed';
+    //
+    // WATCHDOG-FINALSUMMARY-LOST: carry the read evidence back to the caller so it can propagate a
+    // finalSummary-bearing completion (not just flip the row). providerSessionId is best-effort from
+    // the read payload — absent → daemon-level routing (unchanged from the reconcile paths).
+    return {
+        outcome: 'completed',
+        finalSummary: evidence.finalSummary,
+        ...(evidence.transcriptMessageAt ? { transcriptMessageAt: evidence.transcriptMessageAt } : {}),
+        ...(readNonEmptyString(payload.providerSessionId) ? { providerSessionId: readNonEmptyString(payload.providerSessionId) } : {}),
+        ...(providerType ? { providerType } : {}),
+        ...(nodeId ? { nodeId } : {}),
+        sessionId,
+    };
 }

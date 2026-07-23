@@ -208,6 +208,27 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
      * ledger entry below; absent on legacy rows → daemon-level routing (unchanged).
      */
     targetCoordinatorSessionId?: string;
+    /**
+     * WATCHDOG-FINALSUMMARY-LOST: fallback dispatch anchor for a CLAIM-PATH row that has no
+     * `task_dispatched` direct-dispatch ledger entry (findDirectDispatchLedgerEntry → null). The
+     * assigned-stranded watchdog already PROVED the transcript is idle-with-final-assistant AND
+     * dated at/after this timestamp before calling; supplying it dates the completion for the
+     * ledger/diagnostics. Direct-dispatch callers omit it → the ledger entry's timestamp is used
+     * (unchanged).
+     */
+    dispatchTimestamp?: string;
+    /**
+     * WATCHDOG-FINALSUMMARY-LOST: the caller (the assigned-stranded watchdog poll,
+     * pollAssignedTaskTerminalEvidence) has ALREADY enforced the turn-end proof this function's
+     * grace + transcript_not_proven gates exist for — a settled-idle read, a final assistant dated
+     * at/after dispatch, no trailing tool activity, and a continuous-idle streak. Those gates guard
+     * the direct-dispatch first-idle-tick synth that fires ~1s after dispatch off a possibly-stale
+     * tail; the watchdog does not fire until that proof holds, so re-applying the (60s/120s) grace
+     * here would only DELAY a completion the watchdog already validated. When set, skip the grace +
+     * transcript_not_proven gates (the terminal-ledger dedup + weak-supersession backstops remain).
+     * Direct-dispatch callers omit it → the gates apply exactly as before (no regression).
+     */
+    preValidatedTranscriptEvidence?: boolean;
     source?: string;
 }): { reconciled: boolean; kind?: MeshLedgerKind; alreadyTerminal?: boolean; workerResult?: unknown; ledgerEntryId?: string; reason?: string } {
     const finalSummary = readNonEmptyString(args.finalSummary);
@@ -251,10 +272,14 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
     // `…::genuine` slot free for the worker's own later agent:generating_completed to surface (the
     // CANON-B weak→genuine supersession) instead of being dropped as a duplicate.
     const selfAttributing = workerResult.source === 'final_summary_json';
-    const dispatchTime = dispatch?.timestamp ? new Date(dispatch.timestamp).getTime() : Number.NaN;
+    // WATCHDOG-FINALSUMMARY-LOST: prefer the ledger dispatch timestamp; fall back to the caller's
+    // proven anchor (a claim-path row has no task_dispatched ledger entry to date).
+    const dispatchTime = dispatch?.timestamp
+        ? new Date(dispatch.timestamp).getTime()
+        : (args.dispatchTimestamp ? new Date(args.dispatchTimestamp).getTime() : Number.NaN);
     const transcriptTime = args.transcriptMessageAt ? new Date(args.transcriptMessageAt).getTime() : Number.NaN;
     const transcriptAfterDispatch = Number.isFinite(dispatchTime) && Number.isFinite(transcriptTime) && transcriptTime >= dispatchTime;
-    if (workerResult.source !== 'final_summary_json' && !transcriptAfterDispatch) {
+    if (!args.preValidatedTranscriptEvidence && workerResult.source !== 'final_summary_json' && !transcriptAfterDispatch) {
         return { reconciled: false, reason: 'transcript_not_proven_after_dispatch' };
     }
     // NOTIF-MISS grace gate (FIX 1): refuse to synthesize a completion for a direct dispatch
@@ -271,7 +296,7 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
     // so it is exempt; the grace only guards the ambiguous plain-text-tail case. When the dispatch
     // entry is missing we cannot date it and do NOT block (the stale-summary timestamp guard +
     // FIX 2 supersession remain the correctness backstops).
-    if (Number.isFinite(dispatchTime) && workerResult.source !== 'final_summary_json') {
+    if (!args.preValidatedTranscriptEvidence && Number.isFinite(dispatchTime) && workerResult.source !== 'final_summary_json') {
         const dispatchedToIdleSession = dispatch?.payload?.dispatchedToIdleSession === true;
         const graceMs = dispatchedToIdleSession
             ? DIRECT_DISPATCH_IDLE_SESSION_RECONCILE_GRACE_MS
