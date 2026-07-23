@@ -31,7 +31,13 @@ function makeFlushInstance(opts: {
 
   instance.type = 'claude-cli'
   instance.instanceId = 'sess-continuity'
-  instance.provider = { name: 'Claude', settings: {}, requiresFinalAssistantBeforeIdle: true }
+  // claude-cli is a write-lag native source: it does NOT declare requiresFinalAssistantBeforeIdle,
+  // so its external-native missing_final_assistant block is UN-floored (immediate CANON-C emit,
+  // upgraded later by the reconcile). This matches the real claude-cli manifest and the
+  // spec-driven floor partition (only providers that declare the flag are floored). The stale
+  // mid-turn assistant is still rejected by the turn-boundary gate below — that guard is
+  // independent of the floor.
+  instance.provider = { name: 'Claude', settings: {} }
   instance.workingDir = '/repo/worktree'
   // Mesh worker context so the finalization gate path (native-native / allowTimeout) is live.
   instance.settings = { meshNodeFor: 'mesh-1', meshActiveTaskId: 'task-1' }

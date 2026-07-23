@@ -2135,9 +2135,18 @@ export class CliProviderInstance implements ProviderInstance {
                     //     reaches the floor because the next tool call's idle→busy transition cancels
                     //     the pending.
                     //
-                    // No provider manifest flag distinguishes write-lag from mid-tool-call, so the
-                    // scope is the concrete write-lag provider (claude-cli) vs the rest.
-                    const isWriteLagNativeSource = this.type === 'claude-cli';
+                    // The distinction IS a manifest flag: `requiresFinalAssistantBeforeIdle`. A
+                    // provider that declares it (codex-cli / cursor-cli / kimi / opencode) is
+                    // asserting "an idle without a final assistant reply is NOT a genuine turn-end"
+                    // — exactly the CANON-C min-elapsed floor's precondition, so it gets the floor
+                    // (noExternalTranscriptSource). A provider that does NOT declare it (claude-cli)
+                    // treats its own idle as authoritative — its transcript write merely trails by a
+                    // fraction of a second (write-lag native source), so it emits IMMEDIATELY,
+                    // un-floored. This is the SAME flag the sibling branch below (source !==
+                    // 'external-native') already uses for the identical noExternalTranscriptSource
+                    // decision, so the two branches now agree; and it correctly covers third-party
+                    // providers instead of a hardcoded provider name.
+                    const isWriteLagNativeSource = (this.provider as any).requiresFinalAssistantBeforeIdle !== true;
                     return {
                         reason: 'missing_final_assistant',
                         terminal: true,

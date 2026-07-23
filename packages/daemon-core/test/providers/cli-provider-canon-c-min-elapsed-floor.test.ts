@@ -161,9 +161,9 @@ describe('CliProviderInstance — CANON-C min-elapsed floor', () => {
 
 const TURN_START = 1_700_000_000_000
 
-function codexExternalNativeInstance(opts: { probeLastRole: string; probeContentLen: number }): any {
+function codexExternalNativeInstance(opts: { probeLastRole: string; probeContentLen: number; type?: string; requiresFinalAssistantBeforeIdle?: boolean }): any {
   const instance = Object.create(CliProviderInstance.prototype) as any
-  instance.type = 'codex-cli'
+  instance.type = opts.type ?? 'codex-cli'
   instance.instanceId = 'sess-codex-en'
   instance.workingDir = '/repo/worktree'
   instance.generatingStartedAt = TURN_START
@@ -172,7 +172,12 @@ function codexExternalNativeInstance(opts: { probeLastRole: string; probeContent
   instance.autoApproveBusy = false
   // Mesh worker context so allowMissingAssistantTimeout is live (allowTimeout set on the block).
   instance.settings = { meshNodeFor: 'mesh-1', meshActiveTaskId: 'task-1' }
-  instance.provider = { name: 'Codex', settings: {}, nativeHistory: {} }
+  // SPEC-DRIVEN FLOOR: the floor decision reads the provider manifest's
+  // requiresFinalAssistantBeforeIdle flag (NOT a hardcoded provider name). codex-cli / kimi /
+  // cursor-cli / opencode declare it (=true → floored); claude-cli leaves it undeclared
+  // (write-lag native source → immediate emit). Default the fixture to a codex-shaped spec that
+  // declares the flag so it reflects the real manifest.
+  instance.provider = { name: 'Codex', settings: {}, nativeHistory: {}, requiresFinalAssistantBeforeIdle: opts.requiresFinalAssistantBeforeIdle ?? true }
   instance.providerSessionId = 'codex-conv-1'
   instance.startedAt = 0
   instance.meshTaskInjectedAt = 0
@@ -234,5 +239,58 @@ describe('CANON-C floor — codex/kimi external-native missing_final_assistant c
     expect(block.allowTimeout).toBe(true)
     // The RCA fix: this block must now be subject to the min-elapsed floor.
     expect(block.noExternalTranscriptSource).toBe(true)
+  })
+
+  // SPEC-DRIVEN FLOOR partition (name-driven → manifest-driven). The floor decision at the
+  // external-native missing_final_assistant block now reads the provider's
+  // requiresFinalAssistantBeforeIdle manifest flag instead of `this.type === 'claude-cli'`.
+  // The two sides of the partition:
+  //   • DECLARED (=true): codex-cli / kimi / cursor-cli / opencode → "idle without a final
+  //     assistant is not a genuine turn-end" → floored (noExternalTranscriptSource).
+  //   • UNDECLARED: claude-cli → its idle is authoritative, transcript merely trails (write-lag
+  //     native source) → immediate CANON-C emit, NOT floored.
+  function blockFor(opts: { type: string; requiresFinalAssistantBeforeIdle?: boolean }) {
+    const instance = codexExternalNativeInstance({
+      probeLastRole: 'user',
+      probeContentLen: 0,
+      type: opts.type,
+      requiresFinalAssistantBeforeIdle: opts.requiresFinalAssistantBeforeIdle,
+    })
+    const pending = {
+      chatTitle: 'worktree',
+      duration: 5,
+      timestamp: TURN_START + 5_000,
+      firstObservedAt: TURN_START + 5_000,
+      previousStatus: 'generating',
+      turnStartedAt: TURN_START,
+      busyEpochAtArm: 3,
+      lastOutputAtArm: TURN_START + 4_900,
+    }
+    return (CliProviderInstance.prototype as any).getCompletedFinalizationBlock.call(instance, 'idle', pending)
+  }
+
+  it('DECLARED requiresFinalAssistantBeforeIdle (codex/kimi) → floored (noExternalTranscriptSource)', () => {
+    for (const type of ['codex-cli', 'kimi', 'cursor-cli', 'opencode']) {
+      const block = blockFor({ type, requiresFinalAssistantBeforeIdle: true })
+      expect(block?.reason, type).toBe('missing_final_assistant')
+      expect(block?.noExternalTranscriptSource, type).toBe(true)
+    }
+  })
+
+  it('UNDECLARED requiresFinalAssistantBeforeIdle (claude-cli write-lag native source) → NOT floored (immediate emit)', () => {
+    // claude-cli does not declare the flag → its idle is authoritative → no floor. The block is
+    // still terminal, but WITHOUT noExternalTranscriptSource so the CANON-C decoupled path emits
+    // immediately (upgraded later by the reconcile once the trailing transcript write lands).
+    const block = blockFor({ type: 'claude-cli', requiresFinalAssistantBeforeIdle: false })
+    expect(block?.reason).toBe('missing_final_assistant')
+    expect(block?.terminal).toBe(true)
+    expect(block?.noExternalTranscriptSource).toBeUndefined()
+  })
+
+  it('a third-party provider that declares the flag is floored too (no hardcoded name gate)', () => {
+    // The refactor removes the provider-name hardcode, so a NON-builtin provider that declares
+    // requiresFinalAssistantBeforeIdle also gets the floor — the behaviour the name gate missed.
+    const block = blockFor({ type: 'some-thirdparty-cli', requiresFinalAssistantBeforeIdle: true })
+    expect(block?.noExternalTranscriptSource).toBe(true)
   })
 })
