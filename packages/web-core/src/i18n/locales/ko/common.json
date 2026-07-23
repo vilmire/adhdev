@@ -939,7 +939,7 @@
     },
     "chatInput": {
         "attachImage": "이미지 첨부",
-        "placeholder": "{{panel}}에 메시지 전송... (줄바꿈은 Shift+Enter)",
+        "placeholder": "{{panel}}에 메시지 전송...",
         "sendMessage": "메시지 전송",
         "dropImage": "여기에 이미지를 놓으세요"
     },

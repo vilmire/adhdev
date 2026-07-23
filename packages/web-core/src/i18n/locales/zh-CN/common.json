@@ -939,7 +939,7 @@
     },
     "chatInput": {
         "attachImage": "附加图片",
-        "placeholder": "向 {{panel}} 发送消息...（Shift+Enter 换行）",
+        "placeholder": "向 {{panel}} 发送消息...",
         "sendMessage": "发送消息",
         "dropImage": "将图片拖放到此处"
     },

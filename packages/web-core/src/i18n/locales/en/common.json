@@ -939,7 +939,7 @@
     },
     "chatInput": {
         "attachImage": "Attach image",
-        "placeholder": "Send message to {{panel}}... (Shift+Enter for newline)",
+        "placeholder": "Send message to {{panel}}...",
         "sendMessage": "Send message",
         "dropImage": "Drop image here"
     },

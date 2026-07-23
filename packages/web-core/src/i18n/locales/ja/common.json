@@ -939,7 +939,7 @@
     },
     "chatInput": {
         "attachImage": "画像を添付",
-        "placeholder": "{{panel}} にメッセージを送信...（改行は Shift+Enter）",
+        "placeholder": "{{panel}} にメッセージを送信...",
         "sendMessage": "メッセージを送信",
         "dropImage": "ここに画像をドロップ"
     },
