@@ -78,20 +78,30 @@ function compile(re: string, flags?: string): RegExp {
   }
 }
 
+// See detect-status.PICKER_OPTION_ROW — kept in lockstep so both layers gate on
+// the identical picker signature.
+const PICKER_OPTION_ROW = /^\s*(?:[❯›>]\s*)?(?:\[[ xX]\]|[☐☒◻◼]\s*)?\d+[.)]\s+\S/m;
+
 /**
- * APPROVAL-PICKER-MISROUTE (mission f1d25e11) defense-in-depth: mirror
+ * APPROVAL-PICKER-MISROUTE (mission f1d25e11 / fb2a7053) defense-in-depth: mirror
  * detect-status.isAskUserQuestionPickerSignature at the button-parse layer. A
  * multi-choice AskUserQuestion picker is not an approval modal; its numbered
  * option rows can otherwise be extracted as approval buttons and produce a
- * spurious approval modal. When the picker signature (claude TUI select footer +
- * "Type something"/"Chat about this" freeform escape hatch) is present, return
- * null early so the screen is surfaced as waiting_choice, never approval.
+ * spurious approval modal.
+ *
+ * The picker signature is the claude TUI select footer ("Enter to select" +
+ * "Esc to cancel") plus at least one numbered option row. A genuine approval
+ * modal never renders that footer pair, so it is safe even though approval modals
+ * also draw numbered rows. The freeform escape hatch ("Type something" / "Chat
+ * about this") used to be REQUIRED here too, which broke the guard whenever the
+ * hatch rows were absent or scrolled out of frame; it is now downgraded to an
+ * optional supporting signal (mirrors detect-status).
  */
 function isAskUserQuestionPickerSignature(text: string): boolean {
   if (!text) return false;
   const hasSelectFooter = /Enter to select/i.test(text) && /Esc to cancel/i.test(text);
   if (!hasSelectFooter) return false;
-  return /Type something\.?|Chat about this/i.test(text);
+  return PICKER_OPTION_ROW.test(text);
 }
 
 function findQuestionLineIndex(

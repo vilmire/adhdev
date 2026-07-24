@@ -81,6 +81,21 @@ const QUESTION_SCREEN = [
   '  Enter to select · Esc to cancel',
 ].join('\n');
 
+// The RCA case (mission fb2a7053): the SAME picker, but WITHOUT the freeform
+// escape-hatch rows ("Type something" / "Chat about this") — they can be absent
+// or scrolled out of the captured frame. Only the select footer + numbered
+// options remain. The guard must STILL recognise this as a picker even though
+// the escape hatch is gone.
+const QUESTION_SCREEN_NO_HATCH = [
+  '  Scope',
+  '  Which scope should I use?',
+  '',
+  '  ❯ 1. Yes, unicast',
+  '    2. No, broadcast',
+  '',
+  '  Enter to select · Esc to cancel',
+].join('\n');
+
 // A genuine tool-consent approval modal — no picker footer, no freeform hatch.
 const APPROVAL_SCREEN = [
   '  Do you want to proceed?',
@@ -101,19 +116,27 @@ const spec: ModalTuiSpec & DetectStatusTuiSpec['modal'] = {
 describe('AskUserQuestion picker is not an approval (mission f1d25e11)', () => {
   it('isAskUserQuestionPickerSignature recognises the picker signature and rejects a plain approval', () => {
     expect(isAskUserQuestionPickerSignature(QUESTION_SCREEN)).toBe(true);
+    // Case (1): the RCA regression — a picker with NO freeform escape hatch is
+    // still recognised (footer + numbered options are sufficient).
+    expect(isAskUserQuestionPickerSignature(QUESTION_SCREEN_NO_HATCH)).toBe(true);
+    // Case (2): a genuine approval modal (Yes/No, no picker footer) is NOT a picker.
     expect(isAskUserQuestionPickerSignature(APPROVAL_SCREEN)).toBe(false);
-    // Select footer alone (no freeform hatch) is not enough to call it a question.
+    // Select footer alone (no numbered option rows) is not enough to call it a
+    // picker — guards a stray "Enter to select" string in prose.
     expect(isAskUserQuestionPickerSignature('Enter to select · Esc to cancel')).toBe(false);
   });
 
-  it('detect-status does NOT report waiting_approval for a question picker', () => {
+  it('detect-status does NOT report waiting_approval for a question picker (with or without escape hatch)', () => {
     const detect = buildDetectStatusFromTui({
       modal: spec as DetectStatusTuiSpec['modal'],
       dispatchOrder: { $schema: 'adhdev:tui/dispatch-order@1', order: ['modal'] },
     });
     // The question screen must NOT be classified as an approval.
     expect(detect(statusInput(QUESTION_SCREEN))).toBeNull();
-    // A genuine approval modal on the same spec still fires waiting_approval.
+    // Case (1): the escape-hatch-less picker must ALSO not be an approval.
+    expect(detect(statusInput(QUESTION_SCREEN_NO_HATCH))).toBeNull();
+    // Case (2): a genuine approval modal on the same spec still fires
+    // waiting_approval — no false-negative introduced by the relaxed guard.
     expect(detect(statusInput(APPROVAL_SCREEN))).toBe('waiting_approval');
   });
 
@@ -122,7 +145,9 @@ describe('AskUserQuestion picker is not an approval (mission f1d25e11)', () => {
     // No approval modal is extracted from the question picker — its option rows
     // are never mistaken for approval buttons.
     expect(parse(approvalInput(QUESTION_SCREEN))).toBeNull();
-    // The genuine approval modal still parses.
+    // Case (1): same for the escape-hatch-less picker.
+    expect(parse(approvalInput(QUESTION_SCREEN_NO_HATCH))).toBeNull();
+    // Case (2): the genuine approval modal still parses (regression guard).
     const approval = parse(approvalInput(APPROVAL_SCREEN));
     expect(approval).not.toBeNull();
     expect(approval?.buttons).toEqual(['Yes', 'No']);

@@ -572,6 +572,45 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
     });
   });
 
+  it('captures a headerless single-question picker with NO freeform escape hatch (mission fb2a7053)', () => {
+    // RCA regression: the headerless parser used to REQUIRE the "Type something"
+    // / "Chat about this" escape-hatch rows. When they are absent (or scrolled
+    // out of frame) the parse returned null, activeInteractivePrompt stayed
+    // null, and detect-status then mis-classified the screen as
+    // waiting_approval — no promptId was emitted so the coordinator could not
+    // answer it. The select footer ("Enter to select" + "Esc to cancel") plus a
+    // real numbered option block must be sufficient on their own.
+    const screen = [
+      '무엇을 내시겠어요?',
+      '',
+      '❯ 1. ✊ 바위',
+      '  2. ✌️  가위',
+      '  3. ✋  보',
+      '────────────────────────────────────────────────',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n');
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([
+      { screenText: screen },
+    ], { promptId: 'no-hatch-tui-prompt', createdAt: 1234 });
+
+    // A promptId-bearing prompt is produced → surfaced as waiting_choice.
+    expect(prompt?.promptId).toBe('no-hatch-tui-prompt');
+    expect(prompt?.questions).toHaveLength(1);
+    expect(prompt?.questions[0]).toMatchObject({
+      questionId: 'q1',
+      question: '무엇을 내시겠어요?',
+      multiSelect: false,
+      options: [
+        { label: '✊ 바위' },
+        { label: '✌️  가위' },
+        { label: '✋  보' },
+      ],
+    });
+    // No escape hatch on screen → allowFreeform is not set.
+    expect(prompt?.questions[0].allowFreeform).toBeUndefined();
+  });
+
   it('detects multi-select from checkbox option markers even when the footer hint drifts (regression)', () => {
     // Regression: the dashboard rendered single-select (radio) for a
     // multi-select AskUserQuestion because multiSelect was derived solely from

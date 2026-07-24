@@ -303,8 +303,15 @@ function readClaudeOptionDescription(lines: string[], optionLineIndex: number): 
 }
 
 function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index: number): InteractiveQuestion | null {
+  // The claude TUI select footer ("Enter to select" + "Esc to cancel") is the
+  // picker's defining signature. The freeform escape hatch ("Type something" /
+  // "Chat about this") used to be REQUIRED here, but those option rows can be
+  // absent or scrolled out of the captured frame — in which case the picker
+  // failed to parse, activeInteractivePrompt stayed null, and detect-status
+  // then mis-classified the screen as waiting_approval (mission fb2a7053).
+  // Requiring only the footer plus (below) a real option block is sufficient;
+  // the escape hatch, when present, is still picked up as allowFreeform.
   if (!isClaudeTuiSelectFooter(page.screenText)) return null;
-  if (!/Type something\.?|Chat about this/i.test(page.screenText)) return null;
 
   const lines = page.screenText.split(/\r?\n/);
   let footerIndex = -1;

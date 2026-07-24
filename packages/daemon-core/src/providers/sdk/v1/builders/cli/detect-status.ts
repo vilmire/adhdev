@@ -204,30 +204,50 @@ function extractButtonLabels(spec: ModalSpec, text: string): string[] {
  * an assistant enumeration lacks that pair and does not fire the cue.
  */
 function buttonBlockApprovalCue(spec: ModalSpec, text: string): boolean {
+  // Defense-in-depth (mission fb2a7053): even if some caller reaches here on a
+  // question picker, its "Enter to select"/"Esc to cancel" footer marks it as a
+  // choice, not an approval — never derive an approval cue from picker rows.
+  if (/Enter to select/i.test(text) && /Esc to cancel/i.test(text)) return false;
   const labels = extractButtonLabels(spec, text);
   if (labels.length < 2) return false;
   if (pickApprovalButton(labels).index < 0) return false;
   return hasNegativeApprovalOption(labels);
 }
 
+// A claude-cli AskUserQuestion picker option row: an optional cursor / checkbox
+// followed by a "N." number marker. The picker draws AT LEAST one such row.
+const PICKER_OPTION_ROW = /^\s*(?:[❯›>]\s*)?(?:\[[ xX]\]|[☐☒◻◼]\s*)?\d+[.)]\s+\S/m;
+
 /**
- * APPROVAL-PICKER-MISROUTE (mission f1d25e11) defense-in-depth: an
+ * APPROVAL-PICKER-MISROUTE (mission f1d25e11 / fb2a7053) defense-in-depth: an
  * AskUserQuestion multi-choice picker is NOT an approval modal. Its option rows
  * ("❯ 1. label") can otherwise satisfy the approval button cue and get
  * mis-classified as `waiting_approval`, so the worker's question is surfaced to
  * the coordinator as a task_approval_needed (→ mesh_approve, which cannot answer
- * it). The picker carries a distinctive signature the approval FSM never does:
- * the claude TUI select footer ("Enter to select … Esc to cancel") together with
- * the freeform escape hatch ("Type something" / "Chat about this"). When both are
- * present the screen is a question picker — surfaced separately as
- * waiting_choice — so the approval matchers must yield. Mirrors the legacy
- * looksLikeSelectionPicker guard (cli-provider-instance.ts) ported to SDK-v1.
+ * it), with no promptId for mesh_answer_question.
+ *
+ * The picker's distinguishing signature is its footer: the claude TUI select
+ * hints "Enter to select" AND "Esc to cancel". A genuine tool-consent approval
+ * modal (Yes/No/Allow/Deny) NEVER renders that footer pair — it uses the ordinary
+ * "? for shortcuts" prompt line instead — so the footer alone reliably separates
+ * the two even though BOTH draw numbered option rows.
+ *
+ * The original guard additionally required the freeform escape hatch ("Type
+ * something" / "Chat about this"). That made the guard collapse whenever the
+ * escape-hatch rows were absent or scrolled out of the captured frame: the
+ * picker then fell through to the approval matchers → waiting_approval. The
+ * escape hatch is therefore DOWNGRADED from a required signal to an optional
+ * supporting one: the guard now fires on the select footer plus at least one
+ * numbered option row (which every picker draws), and the escape hatch merely
+ * reinforces an already-matching footer. The numbered-row requirement keeps a
+ * bare "Enter to select" string (e.g. inside prose) from being mistaken for a
+ * picker.
  */
 export function isAskUserQuestionPickerSignature(text: string): boolean {
   if (!text) return false;
   const hasSelectFooter = /Enter to select/i.test(text) && /Esc to cancel/i.test(text);
   if (!hasSelectFooter) return false;
-  return /Type something\.?|Chat about this/i.test(text);
+  return PICKER_OPTION_ROW.test(text);
 }
 
 function modalMatches(spec: ModalSpec, input: CliStatusInput): boolean {
