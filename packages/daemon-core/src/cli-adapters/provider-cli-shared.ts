@@ -789,6 +789,59 @@ export function computeTerminalQueryTail(buffer: string): string {
     return '';
 }
 
+/**
+ * Windows executable extensions to probe, derived from `%PATHEXT%` so we honor
+ * whatever the shell would actually resolve (`.exe;.bat;.cmd;.ps1;…`). We add
+ * `.ps1` explicitly (npm now ships PowerShell shims and it is not always in the
+ * default PATHEXT) and always include `''` so an already-extensioned name
+ * (`codex.cmd`) still matches. Falls back to a sane default list when PATHEXT
+ * is unset. Non-win32 callers never reach this.
+ */
+function windowsExecutableExtensions(): string[] {
+    const raw = process.env.PATHEXT;
+    const fromEnv = raw
+        ? raw.split(';').map((e) => e.trim().toLowerCase()).filter(Boolean)
+        : ['.exe', '.cmd', '.bat'];
+    const merged = [...fromEnv];
+    if (!merged.includes('.ps1')) merged.push('.ps1');
+    // Bare name last so extensioned matches win first.
+    if (!merged.includes('')) merged.push('');
+    // De-dupe while preserving order.
+    return Array.from(new Set(merged));
+}
+
+/**
+ * Common Windows npm-global / package-manager bin dirs that a daemon's inherited
+ * PATH frequently misses. Additive and existence-guarded — we only return dirs
+ * that exist, so the common path stats nothing extra beyond a handful of paths.
+ * `npm config get prefix` is consulted best-effort (short timeout) because it is
+ * the authoritative non-default prefix (nvm-windows, custom `--prefix`).
+ */
+function windowsExtraBinDirs(): string[] {
+    const dirs: string[] = [];
+    const fs = require('fs');
+    const push = (dir: string | undefined | null) => {
+        if (!dir) return;
+        try { if (fs.existsSync(dir)) dirs.push(dir); } catch { /* best-effort */ }
+    };
+    if (process.env.APPDATA) push(path.join(process.env.APPDATA, 'npm'));
+    if (process.env.LOCALAPPDATA) push(path.join(process.env.LOCALAPPDATA, 'npm'));
+    if (process.env.USERPROFILE) push(path.join(process.env.USERPROFILE, 'scoop', 'shims'));
+    // nvm-windows / custom prefix: `npm config get prefix` points at the active
+    // global bin dir, which on Windows is the prefix dir itself (shims live there).
+    try {
+        const prefix = execSync('npm config get prefix', {
+            encoding: 'utf-8',
+            timeout: 2000,
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        if (prefix && prefix !== 'undefined') push(prefix);
+    } catch { /* npm not on PATH or slow — skip */ }
+    try { push(path.dirname(process.execPath)); } catch { /* best-effort */ }
+    return dirs;
+}
+
 export function findBinary(name: string): string {
     const trimmed = String(name || '').trim();
     if (!trimmed) return trimmed;
@@ -809,15 +862,14 @@ export function findBinary(name: string): string {
     // handling then launches it correctly regardless of PATH.
     const extraDirs: string[] = [];
     if (isWin) {
-        if (process.env.APPDATA) extraDirs.push(path.join(process.env.APPDATA, 'npm'));
-        try { extraDirs.push(path.dirname(process.execPath)); } catch { /* best-effort */ }
+        extraDirs.push(...windowsExtraBinDirs());
     } else {
         extraDirs.push(path.join(os.homedir(), '.npm-global', 'bin'));
         extraDirs.push('/usr/local/bin', '/opt/homebrew/bin');
         try { extraDirs.push(path.dirname(process.execPath)); } catch { /* best-effort */ }
     }
     const searchDirs = [...paths, ...extraDirs];
-    const exes = isWin ? ['.exe', '.cmd', '.bat', ''] : [''];
+    const exes = isWin ? windowsExecutableExtensions() : [''];
 
     for (const p of searchDirs) {
         if (!p) continue;
