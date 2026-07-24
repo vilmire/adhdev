@@ -99,6 +99,43 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Provider spec fixtures live in the sibling adhdev-providers repo (a
+      # submodule of the private cloud monorepo, unknown to this OSS repo). The
+      # spec-driven tests resolve them at repoRoot/adhdev-providers, where
+      # repoRoot = $GITHUB_WORKSPACE/.. — a path outside the workspace that
+      # actions/checkout cannot target directly. Check it out inside the
+      # workspace and symlink it to the expected sibling location.
+      - name: Checkout provider specs
+        # Non-fatal: fork PRs get a read-only token scoped to the head repo and
+        # may lack access to adhdev-providers. On push/tag (the release path)
+        # the token has access and this succeeds.
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: vilmire/adhdev-providers
+          path: .adhdev-providers-src
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Link provider specs into expected sibling path
+        run: |
+          set -euo pipefail
+          if [ -d "$GITHUB_WORKSPACE/.adhdev-providers-src" ]; then
+            ln -sfn "$GITHUB_WORKSPACE/.adhdev-providers-src" "$GITHUB_WORKSPACE/../adhdev-providers"
+            echo "Linked adhdev-providers → $GITHUB_WORKSPACE/../adhdev-providers"
+            ls "$GITHUB_WORKSPACE/../adhdev-providers/cli/claude-cli/specs/4.0.json"
+          else
+            echo "⚠ adhdev-providers checkout absent (external fork without access); spec tests will resolve via fallback or fail."
+          fi
+
+      # Real-git fixture tests (mesh-fast-forward-node, git-status, refine-*)
+      # shell out to git init/commit/rev-parse. Without an identity and default
+      # branch, those spawns emit hints and misbehave on the runner.
+      - name: Configure git identity for test fixtures
+        run: |
+          git config --global user.email "ci@adhf.dev"
+          git config --global user.name "ADHDev CI"
+          git config --global init.defaultBranch main
+
       - name: Use Node.js 22
         uses: actions/setup-node@v6
         with:
