@@ -3027,6 +3027,8 @@
             "point3": "Continúa con una instrucción de chat y guarda el móvil",
             "notificationLabel": "Notificación push móvil para la aprobación de un agente",
             "resumeLabel": "Aprobando y continuando desde el panel móvil",
+            "deviceShotLabel": "Notificaciones reales en la pantalla de bloqueo de iOS mostrando alertas push de ADHDev agrupadas para finalizaciones y aprobaciones de agentes",
+            "deviceShotCaption": "Dispositivo real — notificaciones push reales en un teléfono",
             "point4": "Sin port forwarding, VPN ni DMZ — P2P con relé TURN conecta desde cafeterías, hotspots, escritorio o portátil, cualquier red con internet"
         },
         "brain": {

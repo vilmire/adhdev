@@ -3027,6 +3027,8 @@
             "point3": "在聊天里追加指示，然后收起手机",
             "notificationLabel": "用于智能体批准的移动推送通知",
             "resumeLabel": "在移动端仪表盘上批准并追加指示",
+            "deviceShotLabel": "真机 iOS 锁屏通知中心，展示分组的 ADHDev 智能体完成与审批推送提醒",
+            "deviceShotCaption": "真机 — 手机上收到的真实推送通知",
             "point4": "无需端口转发、VPN 或 DMZ —— P2P 加 TURN 中继,咖啡馆、手机热点、台式机或笔记本,只要能上网就能连接"
         },
         "brain": {
