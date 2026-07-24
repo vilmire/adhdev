@@ -17,7 +17,8 @@ describe('CliProviderInstance.flushMeshCompletionBeforeCleanup', () => {
     turnStartedAt: number
     meshTaskInjectedAt: number
     finalSummary: string | undefined
-    lastEmittedCompletion?: { taskId: string; at: number } | null
+    lastEmittedCompletion?: { taskId: string; at: number; weak?: boolean; emittedAtEpoch?: number } | null
+    busyEpoch?: number
   }) {
     const emitted: any[] = []
     const instance = Object.create(CliProviderInstance.prototype) as any
@@ -28,6 +29,7 @@ describe('CliProviderInstance.flushMeshCompletionBeforeCleanup', () => {
     instance.settings = opts.settings
     instance.events = []
     instance.startedAt = 1_000
+    instance.busyEpoch = opts.busyEpoch ?? 0
     instance.meshTaskInjectedAt = opts.meshTaskInjectedAt
     instance.lastCompletionSummary = null
     instance.lastEmittedCompletion = opts.lastEmittedCompletion ?? null
@@ -60,17 +62,25 @@ describe('CliProviderInstance.flushMeshCompletionBeforeCleanup', () => {
     expect(emitted[0].taskId).toBe('task-1')
     expect(emitted[0].finalSummary).toBe('done: committed and pushed')
     expect(emitted[0].evidenceLevel).toBe('transcript')
-    // Double-emit guard is now armed for this task.
-    expect(instance.lastEmittedCompletion).toEqual({ taskId: 'task-1', at: expect.any(Number) })
+    // Double-emit guard is now armed for this task. A transcript-evidence emit is
+    // GENUINE (weak=false) → single-shot, and it carries the busyEpoch snapshot.
+    expect(instance.lastEmittedCompletion).toEqual({
+      taskId: 'task-1',
+      at: expect.any(Number),
+      evidenceLevel: 'transcript',
+      weak: false,
+      emittedAtEpoch: expect.any(Number),
+    })
   })
 
-  it('does NOT re-emit when this turn completion already fired (double-emit guard)', () => {
+  it('does NOT re-emit when this turn completion already fired GENUINELY (double-emit guard)', () => {
     const { instance, emitted } = makeInstance({
       settings: meshSettings,
       meshTaskInjectedAt: 2_000,
       turnStartedAt: 3_000,
       finalSummary: 'done',
-      lastEmittedCompletion: { taskId: 'task-1', at: 5_000 },
+      // A prior GENUINE emit (weak=false) → single-shot, never re-emit.
+      lastEmittedCompletion: { taskId: 'task-1', at: 5_000, weak: false, emittedAtEpoch: 0 },
     })
     const result = instance.flushMeshCompletionBeforeCleanup()
     expect(result).toBe(false)

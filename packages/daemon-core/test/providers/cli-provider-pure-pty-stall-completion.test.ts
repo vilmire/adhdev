@@ -21,7 +21,7 @@ describe('CliProviderInstance.tryReconcilePurePtyCompletionForStall', () => {
     meshTaskInjectedAt: number
     finalSummary: string | undefined
     hasPending?: boolean
-    lastEmittedCompletion?: { taskId: string; at: number } | null
+    lastEmittedCompletion?: { taskId: string; at: number; weak?: boolean; emittedAtEpoch?: number } | null
   }) {
     const emitted: any[] = []
     const instance = Object.create(CliProviderInstance.prototype) as any
@@ -173,7 +173,7 @@ describe('CliProviderInstance.tryReconcileNativeSourceCompletionForStall', () =>
     meshTaskInjectedAt: number
     finalSummary: string | undefined
     hasPending?: boolean
-    lastEmittedCompletion?: { taskId: string; at: number } | null
+    lastEmittedCompletion?: { taskId: string; at: number; weak?: boolean; emittedAtEpoch?: number } | null
   }) {
     const emitted: any[] = []
     const instance = Object.create(CliProviderInstance.prototype) as any

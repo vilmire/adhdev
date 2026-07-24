@@ -27,6 +27,7 @@ import { LOG } from '../logging/logger.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
 import { shouldCollectTraceCategory } from '../logging/debug-config.js';
 import { traceMeshEventStage, traceMeshEventDrop } from '../mesh/mesh-event-trace.js';
+import { isWeakCompletionEvidence } from '../mesh/mesh-events-utils.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
 import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, hasReliableApprovalAffirmative, looksLikeActiveApprovalPromptText, normalizeApprovalLabel } from './approval-utils.js';
@@ -1439,7 +1440,20 @@ export class CliProviderInstance implements ProviderInstance {
     // this to refuse a SECOND completion for a turn whose completion already fired —
     // so a worker that finished cleanly and is simply being auto-cleaned never emits a
     // duplicate. taskId '' covers an ad-hoc (no-task) turn. null = none emitted yet.
-    private lastEmittedCompletion: { taskId: string; at: number } | null = null;
+    //
+    // COMPLETION-WEAK-REARM (fix1): the latch now carries the EVIDENCE STRENGTH of the
+    // recorded emit. `weak` mirrors isWeakCompletionEvidence() over the exact event that
+    // was pushed (evidenceLevel ∈ {weak,insufficient}, reviewRecommended, or a
+    // missing_final_assistant diagnostic — the CANON-C decoupled-immediate emit and the
+    // startup-grace fast-collapse synth are the two weak producers). `emittedAtEpoch`
+    // snapshots busyEpoch at emit time so the transcript re-emit paths can require a real
+    // generating→idle transition (busyEpoch advanced past this) before re-arming — a
+    // static idle screen can never re-fire the same weak frame. A weak latch is a
+    // ONE-SHOT re-arm: the genuine re-emit overwrites this with weak=false, so a
+    // subsequent idle tick hits the non-weak latch and stops (never a third emit).
+    private lastEmittedCompletion:
+        | { taskId: string; at: number; evidenceLevel?: string; weak: boolean; emittedAtEpoch: number }
+        | null = null;
 
     private async enforceFreshSessionLaunchIfNeeded(): Promise<void> {
         const scriptName = getForcedNewSessionScriptName(this.provider, this.launchMode);
@@ -2658,8 +2672,10 @@ export class CliProviderInstance implements ProviderInstance {
         if (!this.isMeshWorkerSession()) return false;
         const taskId = this.completingTurnTaskId();
 
-        // DOUBLE-EMIT guard: this turn's completion already fired — never re-emit.
-        if (this.lastEmittedCompletion && this.lastEmittedCompletion.taskId === (taskId ?? '')) {
+        // DOUBLE-EMIT guard (COMPLETION-WEAK-REARM fix1): suppress a re-emit only when this
+        // turn's completion already fired with GENUINE evidence. A prior WEAK emit is
+        // re-armable once a real generating→idle transition intervened (one-shot).
+        if (this.shouldSuppressCompletionReEmit(taskId)) {
             return false;
         }
 
@@ -2737,8 +2753,10 @@ export class CliProviderInstance implements ProviderInstance {
         if (this.hasAdapterPendingResponse()) return false;
 
         const taskId = this.completingTurnTaskId();
-        // DOUBLE-EMIT guard: this turn's completion already fired — never re-emit.
-        if (this.lastEmittedCompletion && this.lastEmittedCompletion.taskId === (taskId ?? '')) {
+        // DOUBLE-EMIT guard (COMPLETION-WEAK-REARM fix1): suppress a re-emit only when this
+        // turn's completion already fired with GENUINE evidence. A prior WEAK emit is
+        // re-armable once a real generating→idle transition intervened (one-shot).
+        if (this.shouldSuppressCompletionReEmit(taskId)) {
             return false;
         }
         // The injected task's own turn must have genuinely started (guards against a
@@ -2814,8 +2832,10 @@ export class CliProviderInstance implements ProviderInstance {
         if (this.hasAdapterPendingResponse()) return false;
 
         const taskId = this.completingTurnTaskId();
-        // DOUBLE-EMIT guard: this turn's completion already fired — never re-emit.
-        if (this.lastEmittedCompletion && this.lastEmittedCompletion.taskId === (taskId ?? '')) {
+        // DOUBLE-EMIT guard (COMPLETION-WEAK-REARM fix1): suppress a re-emit only when this
+        // turn's completion already fired with GENUINE evidence. A prior WEAK emit is
+        // re-armable once a real generating→idle transition intervened (one-shot).
+        if (this.shouldSuppressCompletionReEmit(taskId)) {
             return false;
         }
         // The injected task's own turn must have genuinely started (guards against a
@@ -3401,12 +3421,8 @@ export class CliProviderInstance implements ProviderInstance {
         if (summary) {
             this.lastCompletionSummary = { content: summary, receivedAt: opts.timestamp };
         }
-        // KIMI-MESH-COMPLETION-EMIT (axis 2, double-emit guard): record that THIS turn's
-        // completion has now been emitted, keyed by its taskId, so the pre-cleanup
-        // completion flush never fires a duplicate for the same turn.
-        this.lastEmittedCompletion = { taskId: typeof opts.taskId === 'string' ? opts.taskId : '', at: Date.now() };
-        this.pushEvent({
-            event: 'agent:generating_completed',
+        const completionEvent = {
+            event: 'agent:generating_completed' as const,
             chatTitle: opts.chatTitle,
             duration: opts.duration,
             timestamp: opts.timestamp,
@@ -3417,7 +3433,27 @@ export class CliProviderInstance implements ProviderInstance {
             finalSummary: opts.finalSummary,
             ...(opts.evidenceLevel !== undefined ? { evidenceLevel: opts.evidenceLevel } : {}),
             ...(opts.completionDiagnostic !== undefined ? { completionDiagnostic: opts.completionDiagnostic } : {}),
-        });
+        };
+        // KIMI-MESH-COMPLETION-EMIT (axis 2, double-emit guard): record that THIS turn's
+        // completion has now been emitted, keyed by its taskId, so the pre-cleanup
+        // completion flush never fires a duplicate for the same turn.
+        //
+        // COMPLETION-WEAK-REARM (fix1): stamp the emit's evidence STRENGTH so the three
+        // transcript re-emit guards can distinguish a weak first emit (which must be
+        // re-armable once a genuine idle lands) from a genuine one (single-shot). The
+        // weakness is read from the exact event being pushed — evidenceLevel plus the
+        // completionDiagnostic (missing_final_assistant blockReason) — via the same
+        // isWeakCompletionEvidence() the coordinator/ledger paths share, so the worker's
+        // notion of "weak" cannot drift from theirs. emittedAtEpoch snapshots busyEpoch so
+        // a re-arm requires a real generating→idle transition after this emit.
+        this.lastEmittedCompletion = {
+            taskId: typeof opts.taskId === 'string' ? opts.taskId : '',
+            at: Date.now(),
+            evidenceLevel: opts.evidenceLevel,
+            weak: isWeakCompletionEvidence(completionEvent as Record<string, unknown>),
+            emittedAtEpoch: this.busyEpoch,
+        };
+        this.pushEvent(completionEvent);
         // COORDINATOR-SILENT-IDLE one-shot consume: this completion's snapshot rides the
         // armed mute (resolveMuted honors settings.silentNextIdlePush for the idle status
         // above), so the routine idle push is suppressed for THIS completion only. Clear
@@ -3427,6 +3463,42 @@ export class CliProviderInstance implements ProviderInstance {
         if (this.settings?.silentNextIdlePush === true) {
             this.updateSettings({ silentNextIdlePush: undefined, silentNextIdlePushArmedAt: undefined });
         }
+    }
+
+    /**
+     * COMPLETION-WEAK-REARM (fix1): the double-emit guard shared by the three transcript
+     * re-emit paths (flushMeshCompletionBeforeCleanup, tryReconcilePurePtyCompletionForStall,
+     * tryReconcileNativeSourceCompletionForStall). Returns true when a re-emit for `taskId`
+     * must be SUPPRESSED because this turn's completion already fired with strong evidence.
+     *
+     * The defect this replaces: the old guard short-circuited on ANY prior emit for the
+     * taskId, regardless of its evidence. After a WEAK completion (CANON-C decoupled-immediate
+     * missing_final_assistant, or a startup-grace fast-collapse synth), the same session
+     * reaching a GENUINE idle later (final assistant present) was silently swallowed — the
+     * worker never emitted the genuine completion and the coordinator held on the acked-death
+     * deadline (8 min).
+     *
+     * New behavior:
+     *   • no latch / taskId mismatch → NOT suppressed (the caller's own evidence gate runs).
+     *   • prior emit was GENUINE (not weak) → SUPPRESSED (single-shot; a clean completion is
+     *     never re-emitted).
+     *   • prior emit was WEAK → re-arm ONE-SHOT, but only across a real generating→idle
+     *     transition: require busyEpoch to have advanced past the weak emit's epoch, so a
+     *     static idle screen cannot re-fire the same weak frame. The genuine re-emit passes
+     *     evidenceLevel:'transcript' (non-weak), overwriting the latch → any subsequent idle
+     *     tick hits the now-genuine latch and is suppressed. Never a third emit.
+     */
+    private shouldSuppressCompletionReEmit(taskId: string | undefined): boolean {
+        const latch = this.lastEmittedCompletion;
+        if (!latch || latch.taskId !== (taskId ?? '')) return false;
+        // Prior emit was genuine → single-shot, never re-emit.
+        if (!latch.weak) return true;
+        // Prior emit was weak → allow the genuine re-emit ONLY once a real generating phase
+        // opened after the weak emit (busyEpoch advanced). Otherwise a static idle frame would
+        // re-fire the same weak completion. Bounded to a single re-arm by the latch overwrite
+        // the genuine re-emit performs (weak=false), so the next tick is suppressed above.
+        if (this.busyEpoch <= latch.emittedAtEpoch) return true;
+        return false;
     }
 
     /**
