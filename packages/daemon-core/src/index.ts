@@ -392,6 +392,7 @@ export {
   maybeRunDaemonUpgradeHelperFromEnv,
   spawnDetachedDaemonUpgradeHelper,
   resolveCurrentGlobalInstallSurface,
+  resolveInstanceDir,
   buildPinnedGlobalInstallCommand,
   execNpmCommandSync,
   getNpmExecOptions,

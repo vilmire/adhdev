@@ -16,8 +16,21 @@ import {
   stopOwnedProcessesForPrefixes,
   waitForPidExit,
 } from './process-lifecycle.js';
+import { getConfigDir } from '../config/config.js';
 
 const UPGRADE_HELPER_ENV = 'ADHDEV_DAEMON_UPGRADE_HELPER';
+
+// Canonical per-instance base dir name (e.g. `.adhdev` for stable,
+// `.adhdev-preview` for the coexisting preview install). Derived from the
+// running daemon's config dir basename so it stays consistent with Phase 0/1:
+// the installer pins ADHDEV_CONFIG_DIR=~/.adhdev-preview for the preview
+// instance, getConfigDir() honors it, and its basename is the instance dir. A
+// stable / no-override daemon yields `.adhdev`, so every Windows-layout path is
+// byte-for-byte identical to before the instance axis existed.
+export function resolveInstanceDir(configDir: string = getConfigDir()): string {
+  const base = path.basename(configDir).trim();
+  return base || '.adhdev';
+}
 
 export interface DaemonUpgradeHelperPayload {
   packageName: string;
@@ -152,9 +165,9 @@ function resolveInstallPrefixFromPackageRoot(packageRoot: string, packageName: s
 // dispatcher shims in ~/.adhdev/npm-global. Because self-upgrade reuses the
 // running prefix, that install then re-installs into the same node22 dir forever
 // and never converts to the dispatcher. Detecting it lets us force convergence.
-function isPortableNode22Prefix(prefix: string | null, homeDir: string): boolean {
+function isPortableNode22Prefix(prefix: string | null, homeDir: string, instanceDir: string = '.adhdev'): boolean {
   if (!prefix) return false;
-  const portableRoot = path.join(homeDir, '.adhdev', 'tools', 'node22');
+  const portableRoot = path.join(homeDir, instanceDir, 'tools', 'node22');
   const normalizedPrefix = path.resolve(prefix).replace(/[\\/]+$/, '').toLowerCase();
   const normalizedRoot = path.resolve(portableRoot).replace(/[\\/]+$/, '').toLowerCase();
   return normalizedPrefix === normalizedRoot || normalizedPrefix.startsWith(`${normalizedRoot}${path.sep.toLowerCase()}`);
@@ -168,9 +181,9 @@ function isPortableNode22Prefix(prefix: string | null, homeDir: string): boolean
 // resolveWindowsInstallerLayout only requires a `npm-installs/version-*` path —
 // performWindowsAtomicUpgrade stages a fresh version- prefix of its own and uses
 // this only as the "old prefix" to stop/clean, so a non-existent path is a no-op.
-function canonicalDispatcherInstallPrefix(homeDir: string): string {
-  const installRoot = path.join(homeDir, '.adhdev', 'npm-installs');
-  const pointerPath = path.join(homeDir, '.adhdev', 'npm-global', '.adhdev-current');
+function canonicalDispatcherInstallPrefix(homeDir: string, instanceDir: string = '.adhdev'): string {
+  const installRoot = path.join(homeDir, instanceDir, 'npm-installs');
+  const pointerPath = path.join(homeDir, instanceDir, 'npm-global', '.adhdev-current');
   try {
     const activeVersion = fs.readFileSync(pointerPath, 'utf8').trim();
     if (activeVersion.startsWith('version-')) return path.join(installRoot, activeVersion);
@@ -186,11 +199,19 @@ export function resolveCurrentGlobalInstallSurface(options: {
   nodeExecutable?: string;
   platform?: NodeJS.Platform;
   homeDir?: string;
+  /**
+   * Per-instance base dir name under homeDir (`.adhdev` stable /
+   * `.adhdev-preview` preview). Defaults to the running daemon's config-dir
+   * basename via resolveInstanceDir(), so the legacy-prefix convergence checks
+   * scope to the correct instance's tools/node22 + npm-installs tree.
+   */
+  instanceDir?: string;
 }): CurrentGlobalInstallSurface {
   const packageRoot = findCurrentPackageRoot(options.currentCliPath || process.argv[1], options.packageName);
   const npmInvocation = resolveSiblingNpmInvocation(options.nodeExecutable || process.execPath, options.platform);
   const platform = options.platform || process.platform;
   const homeDir = options.homeDir || os.homedir();
+  const instanceDir = options.instanceDir || resolveInstanceDir();
   let installPrefix = packageRoot ? resolveInstallPrefixFromPackageRoot(packageRoot, options.packageName) : null;
   // FIX C: on Windows, never let a self-upgrade perpetuate the legacy
   // node22-prefix install. If the running adhdev lives under ~/.adhdev/tools/
@@ -198,8 +219,8 @@ export function resolveCurrentGlobalInstallSurface(options: {
   // converges to the ~/.adhdev/npm-global pointer + shims. Scoped to win32 AND a
   // tools/node22 prefix so npm-linked dev / standalone / real dispatcher installs
   // are untouched.
-  if (platform === 'win32' && isPortableNode22Prefix(installPrefix, homeDir)) {
-    installPrefix = canonicalDispatcherInstallPrefix(homeDir);
+  if (platform === 'win32' && isPortableNode22Prefix(installPrefix, homeDir, instanceDir)) {
+    installPrefix = canonicalDispatcherInstallPrefix(homeDir, instanceDir);
   }
   return {
     npmExecutable: npmInvocation.executable,
@@ -576,12 +597,18 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
 
   await stopSessionHostProcesses(sessionHostAppName);
   removeDaemonPidFile();
+  // Scope the Windows atomic-upgrade layout to THIS daemon's instance so
+  // `adhdev-preview update` rotates only the preview prefix/pointer/tools tree
+  // and never touches the stable install (and vice-versa). Stable / no-override
+  // daemons resolve `.adhdev`, keeping the historical layout byte-identical.
+  const instanceDir = resolveInstanceDir();
   const windowsInstallerLayout = resolveWindowsInstallerLayout({
     homeDir: os.homedir(),
     installPrefix: installCommand.surface.installPrefix,
+    instanceDir,
   });
   if (windowsInstallerLayout) {
-    const portableNode = findPortableNode22(os.homedir());
+    const portableNode = findPortableNode22(os.homedir(), process.execPath, instanceDir);
     if (!portableNode) {
       throw new Error('installer-managed Windows update requires the portable Node.js 22 runtime');
     }

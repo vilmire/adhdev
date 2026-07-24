@@ -531,6 +531,104 @@ describe('Windows installer-managed atomic upgrade', () => {
     expect(fs.existsSync(stale2)).toBe(false)
   })
 
+  // Phase 2: the Windows atomic-upgrade layout is per-instance. `instanceDir`
+  // defaults to `.adhdev`, so the stable path is byte-for-byte identical to
+  // before the option existed; the preview instance rotates ONLY its own tree.
+  describe('Phase 2 per-instance pointer layout', () => {
+    it('INVARIANT: an unset instanceDir resolves byte-identical ~/.adhdev paths (stable unchanged)', () => {
+      const homeDir = path.join('/fake-home')
+      const installPrefix = path.join(homeDir, '.adhdev', 'npm-installs', 'version-old')
+      // The exact paths the pre-Phase-2 code hardcoded.
+      const expectedInstallRoot = path.join(homeDir, '.adhdev', 'npm-installs')
+      const expectedStablePrefix = path.join(homeDir, '.adhdev', 'npm-global')
+      const expectedPointer = path.join(expectedStablePrefix, '.adhdev-current')
+
+      const unset = resolveWindowsInstallerLayout({ homeDir, installPrefix, platform: 'win32' })
+      const explicitStable = resolveWindowsInstallerLayout({ homeDir, installPrefix, platform: 'win32', instanceDir: '.adhdev' })
+      const emptyString = resolveWindowsInstallerLayout({ homeDir, installPrefix, platform: 'win32', instanceDir: '' })
+
+      for (const layout of [unset, explicitStable, emptyString]) {
+        expect(layout).not.toBeNull()
+        expect(layout!.installRoot).toBe(expectedInstallRoot)
+        expect(layout!.stablePrefix).toBe(expectedStablePrefix)
+        expect(layout!.pointerPath).toBe(expectedPointer)
+        expect(layout!.activePrefix).toBe(installPrefix)
+        expect(layout!.activeVersionName).toBe('version-old')
+      }
+      // Unset === explicit-stable, field for field (the invariant proof).
+      expect(unset).toEqual(explicitStable)
+      expect(emptyString).toEqual(explicitStable)
+    })
+
+    it('preview instanceDir resolves the whole layout under ~/.adhdev-preview, never touching ~/.adhdev', () => {
+      const homeDir = path.join('/fake-home')
+      const installPrefix = path.join(homeDir, '.adhdev-preview', 'npm-installs', 'version-pv')
+      const layout = resolveWindowsInstallerLayout({
+        homeDir, installPrefix, platform: 'win32', instanceDir: '.adhdev-preview',
+      })
+      expect(layout).not.toBeNull()
+      expect(layout!.installRoot).toBe(path.join(homeDir, '.adhdev-preview', 'npm-installs'))
+      expect(layout!.stablePrefix).toBe(path.join(homeDir, '.adhdev-preview', 'npm-global'))
+      expect(layout!.pointerPath).toBe(path.join(homeDir, '.adhdev-preview', 'npm-global', '.adhdev-current'))
+      expect(layout!.activeVersionName).toBe('version-pv')
+      // Nothing in the resolved layout references the stable `.adhdev` tree.
+      for (const p of [layout!.installRoot, layout!.stablePrefix, layout!.pointerPath, layout!.activePrefix]) {
+        expect(p).not.toMatch(/[\\/]\.adhdev[\\/]/)
+      }
+    })
+
+    it('rejects a preview prefix whose parent install root belongs to a different instance', () => {
+      const homeDir = path.join('/fake-home')
+      // A stable-tree prefix must not validate as a preview layout.
+      const stablePrefixVersion = path.join(homeDir, '.adhdev', 'npm-installs', 'version-old')
+      expect(resolveWindowsInstallerLayout({
+        homeDir, installPrefix: stablePrefixVersion, platform: 'win32', instanceDir: '.adhdev-preview',
+      })).toBeNull()
+      // ...and vice-versa: a preview-tree prefix is not a stable layout.
+      const previewPrefixVersion = path.join(homeDir, '.adhdev-preview', 'npm-installs', 'version-pv')
+      expect(resolveWindowsInstallerLayout({
+        homeDir, installPrefix: previewPrefixVersion, platform: 'win32', instanceDir: '.adhdev',
+      })).toBeNull()
+    })
+
+    it('end-to-end preview upgrade rotates only the preview pointer while a stable tree sits untouched', async () => {
+      const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-atomic-pv-'))
+      roots.push(homeDir)
+      // Seed BOTH a stable and a preview installer tree side by side.
+      const stableGlobal = path.join(homeDir, '.adhdev', 'npm-global')
+      const stablePointer = path.join(stableGlobal, '.adhdev-current')
+      fs.mkdirSync(stableGlobal, { recursive: true })
+      fs.writeFileSync(stablePointer, 'version-stable-untouched')
+      fs.writeFileSync(path.join(stableGlobal, 'adhdev.cmd'), '@echo stable\r\n')
+
+      const previewInstallRoot = path.join(homeDir, '.adhdev-preview', 'npm-installs')
+      const previewGlobal = path.join(homeDir, '.adhdev-preview', 'npm-global')
+      const previewActive = path.join(previewInstallRoot, 'version-pv-old')
+      fs.mkdirSync(previewActive, { recursive: true })
+      fs.mkdirSync(previewGlobal, { recursive: true })
+      const previewPointer = path.join(previewGlobal, '.adhdev-current')
+      fs.writeFileSync(previewPointer, 'version-pv-old')
+      fs.writeFileSync(path.join(previewGlobal, 'adhdev.cmd'), '@echo pv old\r\n')
+      fs.writeFileSync(path.join(previewGlobal, 'adhdev.ps1'), '# pv old\r\n')
+      fs.writeFileSync(path.join(previewGlobal, 'adhdev'), '#!/bin/sh\n# pv old\n')
+
+      const layout = resolveWindowsInstallerLayout({
+        homeDir, installPrefix: previewActive, platform: 'win32', instanceDir: '.adhdev-preview',
+      })!
+      const result = await performWindowsAtomicUpgrade({
+        layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.9', portableNode: process.execPath,
+        hooks: hooks({ install: (prefix) => installPackage(prefix, '1.0.18-rc.9') }),
+      })
+
+      // Preview pointer advanced to the freshly staged prefix, under ~/.adhdev-preview.
+      expect(fs.readFileSync(previewPointer, 'utf8')).toBe(path.basename(result.stagedPrefix))
+      expect(result.stagedPrefix.startsWith(previewInstallRoot)).toBe(true)
+      // The stable tree is byte-for-byte untouched.
+      expect(fs.readFileSync(stablePointer, 'utf8')).toBe('version-stable-untouched')
+      expect(fs.readFileSync(path.join(stableGlobal, 'adhdev.cmd'), 'utf8')).toBe('@echo stable\r\n')
+    })
+  })
+
   it('FIX B: boundedCleanupInactivePrefixes removes inactive version-* prefixes via fs.rm', () => {
     const { layout } = fixture()
     const active = seedVersionPrefix(layout.installRoot, 'version-active')

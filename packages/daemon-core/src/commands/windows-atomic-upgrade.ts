@@ -103,14 +103,32 @@ function normalizeForCompare(value: string): string {
   return path.resolve(value).replace(/[\\/]+$/, '').toLowerCase();
 }
 
+// The per-instance base directory name under homeDir. Stable installs live under
+// `.adhdev` (the historical literal); the coexisting preview install lives under
+// `.adhdev-preview`. When unset it falls back to `.adhdev`, so every stable
+// call site resolves to byte-identical paths to before this option existed.
+export const DEFAULT_INSTANCE_DIR = '.adhdev';
+
+function normalizeInstanceDir(instanceDir?: string | null): string {
+  const trimmed = instanceDir?.trim();
+  return trimmed ? trimmed : DEFAULT_INSTANCE_DIR;
+}
+
 export function resolveWindowsInstallerLayout(options: {
   homeDir: string;
   installPrefix: string | null;
   platform?: NodeJS.Platform;
+  /**
+   * Per-instance base dir name under homeDir (e.g. `.adhdev` for stable,
+   * `.adhdev-preview` for the coexisting preview install). Defaults to
+   * `.adhdev`, keeping the stable layout byte-for-byte identical to before.
+   */
+  instanceDir?: string;
 }): WindowsInstallerLayout | null {
   if ((options.platform || process.platform) !== 'win32' || !options.installPrefix) return null;
-  const installRoot = path.join(options.homeDir, '.adhdev', 'npm-installs');
-  const stablePrefix = path.join(options.homeDir, '.adhdev', 'npm-global');
+  const instanceDir = normalizeInstanceDir(options.instanceDir);
+  const installRoot = path.join(options.homeDir, instanceDir, 'npm-installs');
+  const stablePrefix = path.join(options.homeDir, instanceDir, 'npm-global');
   const pointerPath = path.join(stablePrefix, POINTER_NAME);
   const activeVersionName = path.basename(options.installPrefix);
   if (!activeVersionName.startsWith('version-')) return null;
@@ -140,9 +158,13 @@ function nodeMajor(nodeExecutable: string): number | null {
   }
 }
 
-export function findPortableNode22(homeDir: string, currentNode: string = process.execPath): string | null {
+export function findPortableNode22(
+  homeDir: string,
+  currentNode: string = process.execPath,
+  instanceDir: string = DEFAULT_INSTANCE_DIR,
+): string | null {
   const candidates: string[] = [currentNode];
-  const portableRoot = path.join(homeDir, '.adhdev', 'tools', 'node22');
+  const portableRoot = path.join(homeDir, normalizeInstanceDir(instanceDir), 'tools', 'node22');
   try {
     const dirs = fs.readdirSync(portableRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())

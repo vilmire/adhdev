@@ -125,6 +125,7 @@ describe('upgrade helper install surface', () => {
       nodeExecutable: nodePath,
       platform: 'win32',
       homeDir: home,
+      instanceDir: '.adhdev',
     })
 
     // No dispatcher pointer yet → migration sentinel under npm-installs.
@@ -155,6 +156,7 @@ describe('upgrade helper install surface', () => {
       nodeExecutable: nodePath,
       platform: 'win32',
       homeDir: home,
+      instanceDir: '.adhdev',
     })
 
     expect(surface.installPrefix).toBe(path.join(home, '.adhdev', 'npm-installs', 'version-1700000000000-42-abcdef'))
@@ -179,6 +181,7 @@ describe('upgrade helper install surface', () => {
       nodeExecutable: nodePath,
       platform: 'win32',
       homeDir: home,
+      instanceDir: '.adhdev',
     })
 
     // Already a dispatcher version- prefix → used as-is, never rewritten.

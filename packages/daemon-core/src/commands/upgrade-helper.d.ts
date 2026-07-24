@@ -19,11 +19,14 @@ export interface PinnedGlobalInstallCommand {
     surface: CurrentGlobalInstallSurface;
     execOptions: { shell: boolean };
 }
+export declare function resolveInstanceDir(configDir?: string): string;
 export declare function resolveCurrentGlobalInstallSurface(options: {
     packageName: string;
     currentCliPath?: string;
     nodeExecutable?: string;
     platform?: NodeJS.Platform;
+    homeDir?: string;
+    instanceDir?: string;
 }): CurrentGlobalInstallSurface;
 export declare function buildPinnedGlobalInstallCommand(options: {
     packageName: string;
