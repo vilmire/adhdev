@@ -11,8 +11,8 @@
  * include `✻` (U+273B). Claude Code uses `✻` BOTH as the active "generating"
  * glyph (`✻ Verb… ↓ N tokens`) AND as the settled "done" glyph
  * (`✻ Verb for Ns`, no tokens). So `approval→busy`'s "is it generating?"
- * clause never matched the active form → the only two approval exits
- * (`→busy` needs a spinner, `→idle` needs `cursor_above:5` stability) both
+ * clause never matched the active form → the approval resume path
+ * (spinner-authenticated resolving state) and `→idle` exit both
  * failed → wedge. Same defect class as APPROVAL-BUSY-WEDGE (commit 1fa6ec3),
  * recurring because that fix's glyph set omitted `✻`.
  *
@@ -81,11 +81,13 @@ maybe('claude-cli 4.0 approval ✻-spinner wedge', () => {
     '  1 shell',
   ].join('\n')
 
-  it('unsticks approval → busy when ✻ spinner carries active tokens', () => {
-    // Held well past approval→busy's 1500ms min_hold; cursor on the footer ❯
-    // (row 7) so cursor_above:12 is satisfied.
-    const r = evaluateFsm(spec, 'approval', wedgeScreen, { row: 7, col: 0 }, undefined, clock(5_000))
-    expect(r.fired?.to).toBe('busy')
+  it('unsticks approval through the resolving gate when ✻ spinner carries active tokens', () => {
+    const candidate = evaluateFsm(
+      spec, 'approval', wedgeScreen, { row: 7, col: 0 }, undefined, clock(5_000))
+    expect(candidate.fired?.to).toBe('approval_resolving')
+    const settled = evaluateFsm(
+      spec, 'approval_resolving', wedgeScreen, { row: 7, col: 0 }, undefined, clock(1_300))
+    expect(settled.fired?.to).toBe('busy')
   })
 
   it('does NOT mis-read the ✻ "… for Ns" completion line as a spinner (busy→idle preserved)', () => {
@@ -106,7 +108,7 @@ maybe('claude-cli 4.0 approval ✻-spinner wedge', () => {
     expect(r.fired?.to).toBe('idle')
   })
 
-  it('still recognizes the legacy ✢-class spinner as generating (no regression)', () => {
+  it('still recognizes the legacy ✢-class spinner through the resolving gate', () => {
     const legacyScreen = [
       '⏺ Working.',
       '',
@@ -117,8 +119,12 @@ maybe('claude-cli 4.0 approval ✻-spinner wedge', () => {
       '────────────────────────────────────────────────────────────────────────────────',
       '  ➜ spec-notif-magi-manual git:(spec/notif-magi-manual)',
     ].join('\n')
-    const r = evaluateFsm(spec, 'approval', legacyScreen, { row: 5, col: 0 }, undefined, clock(5_000))
-    expect(r.fired?.to).toBe('busy')
+    const candidate = evaluateFsm(
+      spec, 'approval', legacyScreen, { row: 5, col: 0 }, undefined, clock(5_000))
+    expect(candidate.fired?.to).toBe('approval_resolving')
+    const settled = evaluateFsm(
+      spec, 'approval_resolving', legacyScreen, { row: 5, col: 0 }, undefined, clock(1_300))
+    expect(settled.fired?.to).toBe('busy')
   })
 
   /**
@@ -244,7 +250,7 @@ maybe('claude-cli 4.0 approval ✻-spinner wedge', () => {
     expect(r.fired?.to).not.toBe('approval')
   })
 
-  it('leaves approval → busy once the choice block is gone even if a body numbered list remains', () => {
+  it('resumes through the settling gate once the choice block is gone even if a body numbered list remains', () => {
     // Answered/resumed: the modal choice block is gone (footer is a bare ❯) and
     // generation resumed with a live spinner. A lone `1.`-style numbered list in
     // the transcript body without a following `2.` must NOT re-wedge approval —
@@ -259,7 +265,11 @@ maybe('claude-cli 4.0 approval ✻-spinner wedge', () => {
       '────────────────────────────────────────────────────────────────────────────────',
       '  ➜ spec-notif-magi-manual git:(spec/notif-magi-manual)',
     ].join('\n')
-    const r = evaluateFsm(spec, 'approval', answeredWithBodyList, { row: 5, col: 0 }, undefined, clock(6_000))
-    expect(r.fired?.to).toBe('busy')
+    const candidate = evaluateFsm(
+      spec, 'approval', answeredWithBodyList, { row: 5, col: 0 }, undefined, clock(6_000))
+    expect(candidate.fired?.to).toBe('approval_resolving')
+    const settled = evaluateFsm(
+      spec, 'approval_resolving', answeredWithBodyList, { row: 5, col: 0 }, undefined, clock(1_300))
+    expect(settled.fired?.to).toBe('busy')
   })
 })

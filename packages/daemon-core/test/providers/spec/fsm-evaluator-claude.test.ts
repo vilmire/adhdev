@@ -578,7 +578,7 @@ describe('claude-cli v4 FSM — footer-anchored spinner false-idle guard', () =>
 // Fix (spec-only): (1) relax the spinner regex to match glyph+word with EITHER
 // ellipsis OR an elapsed-time (`\d+[smh]`) / token-counter (`↑/↓ N tokens`)
 // trailer OR the esc-to-interrupt cue — ellipsis no longer required. The same
-// regex is shared by idle→busy / busy→idle / approval→busy / approval→idle
+// regex is shared by idle→busy / busy→idle / approval resume / approval→idle
 // (unify maintained). (2) drop `cursor_above` from the busy→idle stable clause so
 // it measures WHOLE-SCREEN quiet — the below-cursor spinner tick now resets the
 // 8s timer every second, making a false idle during generation structurally
@@ -704,20 +704,18 @@ describe('claude-cli v4 FSM — FALSEIDLE2 ellipsis-less spinner + whole-screen 
         expect(typeof footer?.matchedText).toBe('string');
     });
 
-    it('(unify) all four spinner-detecting clauses use the identical regex', () => {
+    it('(unify) all spinner-detecting clauses use the identical regex', () => {
         const m = (l: string) => spec.transitions.find(t => t.label === l)!.when as any;
         const i2b = m('idle→busy').matches;
         const b2i = m('busy→idle').all[0].not.matches;
-        // approval→busy (R4 AUTOAPPROVE/sticky-approval guard) is now all:[ {not: footer ❯ 1.},
-        // {not: footer Esc to cancel}, {not: Do you want to proceed?}, {stable_ms,cursor_above},
-        // {matches: <spinner>} ]. The spinner regex is the trailing flat positive clause (no
-        // section, no not) — read it from there so the "all four spinner clauses use the
-        // identical regex" invariant still holds post-merge.
-        const a2b = m('approval→busy').all.find((c: any) => c.matches && !c.section && !c.not).matches;
-        // approval→idle keeps the spinner as a negated body clause: {not:{section:'body',matches:<spinner>}}.
-        const a2i = m('approval→idle').all.find((c: any) => c.not && c.not.section === 'body' && c.not.matches).not.matches;
+        const a2r = m('approval→resolving').all.find(
+            (c: any) => c.matches && c.section === 'status_tail' && !c.not).matches;
+        const r2b = m('approval-resolving→busy').matches;
+        const a2i = m('approval→idle').all.find(
+            (c: any) => c.not && c.not.section === 'status_tail' && c.not.matches).not.matches;
         expect(b2i).toBe(i2b);
-        expect(a2b).toBe(i2b);
+        expect(a2r).toBe(i2b);
+        expect(r2b).toBe(i2b);
         expect(a2i).toBe(i2b);
     });
 });
@@ -818,20 +816,20 @@ describe('claude-cli v4 FSM — modal buttons survive a divider below the choice
     });
 });
 
-// ── (c) approval→busy footer guard (approval sticky) ─────────────────────────
-// approval→idle guards on `not footer ❯ 1.` (the modal is gone) but approval→busy
+// ── (c) approval-resume footer guard (approval sticky) ───────────────────────
+// approval→idle guards on `not footer ❯ 1.` (the modal is gone) but approval resume
 // did NOT — so a residual spinner / "esc to interrupt" cue left over from the
-// pre-approval turn flipped the FSM approval→busy while the modal's "❯ 1." choice
+// pre-approval turn flipped the FSM toward busy while the modal's "❯ 1." choice
 // was STILL on screen. That collapsed the live modal to a generating state, the
 // modal stopped being surfaced, and auto-approve never fired (the 2nd-order flap).
-// Fix (4.0.json): approval→busy now also requires the footer ❯ 1. anchor to be
+// Fix (4.0.json): approval resume now also requires the footer ❯ 1. anchor to be
 // ABSENT, mirroring approval→idle. While the modal is up, approval is sticky.
 
-describe('claude-cli v4 FSM — approval→busy footer guard (sticky approval)', () => {
+describe('claude-cli v4 FSM — approval resume settling (sticky approval)', () => {
     const spec = loadSpec();
 
-    it('approval→busy when-clause carries the not-footer ❯ 1. guard', () => {
-        const t = spec.transitions.find(tr => tr.label === 'approval→busy')!;
+    it('approval→resolving when-clause carries the not-footer ❯ 1. guard', () => {
+        const t = spec.transitions.find(tr => tr.label === 'approval→resolving')!;
         const clauses = (t.when as any).all as any[];
         expect(Array.isArray(clauses)).toBe(true);
         const guard = clauses.find(c => c.not && c.not.section === 'footer'
@@ -874,9 +872,24 @@ describe('claude-cli v4 FSM — approval→busy footer guard (sticky approval)',
         expect(ev.fired?.to).not.toBe('busy');
     });
 
-    it('approval→busy still fires once the modal dismisses and the spinner is active', () => {
+    it('enters approval_resolving once the modal dismisses and the spinner is active', () => {
         const ev = evaluateFsm(spec, 'approval', genuineResume, { row: 6, col: 2 }, undefined, clk(10000, 0));
-        expect(ev.fired?.to).toBe('busy');
+        expect(ev.fired?.to).toBe('approval_resolving');
+    });
+
+    it('requires a continuous resolving window before returning to busy', () => {
+        const early = evaluateFsm(
+            spec, 'approval_resolving', genuineResume, { row: 6, col: 2 }, undefined, clk(1100, 0));
+        expect(early.fired?.to).not.toBe('busy');
+        const settled = evaluateFsm(
+            spec, 'approval_resolving', genuineResume, { row: 6, col: 2 }, undefined, clk(1300, 0));
+        expect(settled.fired?.to).toBe('busy');
+    });
+
+    it('returns to approval if the modal reappears during the resolving window', () => {
+        const ev = evaluateFsm(
+            spec, 'approval_resolving', stickyApproval, { row: 9, col: 2 }, undefined, clk(500, 0));
+        expect(ev.fired?.to).toBe('approval');
     });
 
     // ── APPROVAL-BUSY-FLICKER (live snapshot b4232227) ─────────────────────
@@ -886,10 +899,9 @@ describe('claude-cli v4 FSM — approval→busy footer guard (sticky approval)',
     // its "Do you want to proceed?" question are still on screen and a body
     // spinner animates. Pre-fix that single torn frame satisfied approval→busy;
     // the next full frame re-fired →approval (priority 100, no hold), producing
-    // the ~1.5s approval↔busy oscillation (the period == approval→busy min_hold).
-    // Fix: approval→busy additionally requires (a) NOT "Do you want to proceed?"
-    // anywhere, and (b) the modal region (cursor_above 12) stable for 700ms — a
-    // one-frame tear can satisfy neither.
+    // the ~1.5s approval↔busy oscillation. The current fix first enters an
+    // approval-status resolving state. A restored modal returns to approval;
+    // only a continuously authenticated status tail can later enter busy.
     const tornApproval = [
         '❯ Run the build please',
         '',
@@ -904,17 +916,17 @@ describe('claude-cli v4 FSM — approval→busy footer guard (sticky approval)',
         D,                                    //   not yet repainted this frame
     ].join('\n');
 
-    it('(flicker) the proceed-question guard is present on approval→busy', () => {
-        const clauses = (spec.transitions.find(t => t.label === 'approval→busy')!.when as any).all as any[];
+    it('(flicker) the proceed-question guard is present on approval→resolving', () => {
+        const clauses = (spec.transitions.find(t => t.label === 'approval→resolving')!.when as any).all as any[];
         // The spec may use a regex alternation group (e.g. "Do you want to (?:proceed|...)")
         // so match against any not-clause whose matches string covers the proceed/consent question,
         // either whole-screen (no section) or modal-scoped.
         const proceedGuard = clauses.find(c => c.not
             && typeof c.not.matches === 'string'
             && /Do you want to/.test(c.not.matches));
-        expect(proceedGuard, 'approval→busy missing not(Do you want to proceed?) guard').toBeTruthy();
-        const stableGuard = clauses.find(c => typeof c.stable_ms === 'number');
-        expect(stableGuard, 'approval→busy missing stable_ms tear guard').toBeTruthy();
+        expect(proceedGuard, 'approval→resolving missing not(Do you want to proceed?) guard').toBeTruthy();
+        const spinner = clauses.find(c => c.section === 'status_tail' && typeof c.matches === 'string');
+        expect(spinner, 'approval→resolving must authenticate the live status tail').toBeTruthy();
     });
 
     it('(flicker) STAYS in approval on a torn frame: footer markers gone but question still up', () => {
@@ -923,10 +935,10 @@ describe('claude-cli v4 FSM — approval→busy footer guard (sticky approval)',
         expect(ev.fired?.to).not.toBe('busy');
     });
 
-    it('(flicker) a single torn paint cannot demote: modal region not stable long enough', () => {
-        // Even hypothesising the question string were absent, the modal region
-        // (cursor_above 12) changed 100ms ago → stable_ms(700) unsatisfied → no busy.
-        const ev = evaluateFsm(spec, 'approval', tornApproval, { row: 11, col: 2 }, undefined, clk(10000, 0, [[-1, 9900], [12, 9900]]));
+    it('(flicker) a torn modal disappearance cannot jump directly to busy', () => {
+        const tornGone = genuineResume;
+        const ev = evaluateFsm(spec, 'approval', tornGone, { row: 6, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).toBe('approval_resolving');
         expect(ev.fired?.to).not.toBe('busy');
     });
 });
@@ -945,7 +957,7 @@ describe('claude-cli v4 FSM — approval→busy footer guard (sticky approval)',
 // false-fire on the bullet, falsely ENTERING busy from a quiet prompt.
 //
 // Fix (spec-only, minimal): drop `·` from the shared spinner glyph class in all
-// four spinner-detecting clauses (idle→busy / busy→idle / approval→busy /
+// spinner-detecting clauses (idle→busy / busy→idle / approval resume /
 // approval→idle) AND from the busy→idle completion-footer spinner-below lookahead.
 // Whole-screen scope is UNCHANGED (FALSEIDLE2 invariant preserved) — only the one
 // prose-colliding glyph is removed, so real asterisk / Braille spinners still hold
@@ -1048,20 +1060,68 @@ describe('claude-cli v4 FSM — FALSEBUSY middle-dot body false-match', () => {
         expect(re.test('✢ Slithering… (esc to interrupt)')).toBe(true);
         expect(re.test('⣾ Running the test suite… (esc to interrupt)')).toBe(true);
         expect(re.test('✽ Ebbing (3m · ↑10k tokens)')).toBe(true);
-        // `·` is gone from the glyph class itself
-        expect((idleToBusy.when as any).matches).not.toContain('[·');
+        // `·` is absent from the spinner-glyph class. It remains valid only as
+        // authenticated status chrome before the ctrl+t footer suffix.
+        expect((idleToBusy.when as any).matches).not.toMatch(/\[·[^\]]*✢/);
     });
 
-    it('(unify) all four spinner clauses still share the identical (de-dotted) regex', () => {
+    it('(unify) all spinner clauses still share the identical authenticated regex', () => {
         const m = (l: string) => spec.transitions.find(t => t.label === l)!.when as any;
         const i2b = m('idle→busy').matches;
         const b2i = m('busy→idle').all[0].not.matches;
-        const a2b = m('approval→busy').all.find((c: any) => c.matches && !c.section && !c.not).matches;
-        const a2i = m('approval→idle').all.find((c: any) => c.not && c.not.section === 'body' && c.not.matches).not.matches;
+        const a2r = m('approval→resolving').all.find(
+            (c: any) => c.matches && c.section === 'status_tail' && !c.not).matches;
+        const r2b = m('approval-resolving→busy').matches;
+        const a2i = m('approval→idle').all.find(
+            (c: any) => c.not && c.not.section === 'status_tail' && c.not.matches).not.matches;
         expect(b2i).toBe(i2b);
-        expect(a2b).toBe(i2b);
+        expect(a2r).toBe(i2b);
+        expect(r2b).toBe(i2b);
         expect(a2i).toBe(i2b);
-        expect(i2b).not.toContain('[·');
+        expect(i2b).not.toMatch(/\[·[^\]]*✢/);
+    });
+});
+
+// ── FALSEBUSY-C: assistant output self-matches the textual spinner cue ────────
+// Live session 7b9cb7d5 rendered its own RCA response into `body`. The response
+// quoted the old bare `esc to interrupt` alternative, so the whole-screen
+// busy→idle not-spinner guard read that assistant prose as a live spinner after
+// the real spinner had disappeared. The session stayed generating indefinitely.
+describe('claude-cli v4 FSM — assistant text cannot self-match spinner chrome', () => {
+    const spec = loadSpec();
+    const Dline = '─'.repeat(64);
+    const assistantRcaAtPrompt = [
+        '⏺ RCA 요약',
+        '',
+        'claude-cli busy 스피너 검출 정규식의 마지막 대안을 설명합니다.',
+        '• esc to interrupt',
+        '이 문구가 assistant body에 남아도 실제 spinner는 아닙니다.',
+        '',
+        '✻ Cooked for 1m 48s',
+        '',
+        Dline, '❯ ', Dline,
+        '  ➜ adhdev git:(main)',
+    ].join('\n');
+
+    it('does not re-enter busy from idle on the quoted interrupt cue', () => {
+        const ev = evaluateFsm(spec, 'idle', assistantRcaAtPrompt, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).not.toBe('busy');
+    });
+
+    it('allows busy→idle after completion when only the quoted cue remains', () => {
+        const ev = evaluateFsm(spec, 'busy', assistantRcaAtPrompt, undefined, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('rejects prose/bullets but preserves authenticated text-only status cues', () => {
+        const spinner = (spec.transitions.find(t => t.label === 'idle→busy')!.when as any);
+        expect(spinner.section).toBe('status_tail');
+        const re = new RegExp(spinner.matches, 'i');
+        expect(re.test('설명: esc to interrupt 대안')).toBe(false);
+        expect(re.test('• esc to interrupt')).toBe(false);
+        expect(re.test('esc to interrupt')).toBe(true);
+        expect(re.test('  esc to interrupt · ctrl+t to hide todos')).toBe(true);
+        expect(re.test('Bloviating about edge cases (esc to interrupt · ctrl+t to hide todos)')).toBe(true);
     });
 });
 
@@ -1364,7 +1424,7 @@ describe('claude-cli v4 FSM — FALSEBUSY B: footer pushed out of viewport (Cody
 // claude approval modal ALWAYS renders its decisive chrome — the `Esc to cancel ·
 // Tab to amend · ctrl+e to explain` footer and/or the `Do you want to proceed?`
 // question (both visible in every real-screen fixture above) — so →approval now
-// also requires one of those markers. Stickiness on approval→busy / approval→idle is
+// also requires one of those markers. Stickiness on approval resume / approval→idle is
 // reinforced with the same `Esc to cancel` footer guard (modal up ⇒ never idle).
 
 describe('claude-cli v4 FSM — APPROVESTUCK footer-marker approval gate (fixA)', () => {
@@ -1438,8 +1498,8 @@ describe('claude-cli v4 FSM — APPROVESTUCK footer-marker approval gate (fixA)'
         }
     });
 
-    it('(sticky) approval→busy AND approval→idle carry the not-footer "Esc to cancel" guard', () => {
-        for (const label of ['approval→busy', 'approval→idle']) {
+    it('(sticky) approval→resolving AND approval→idle carry the not-footer "Esc to cancel" guard', () => {
+        for (const label of ['approval→resolving', 'approval→idle']) {
             const clauses = (spec.transitions.find(t => t.label === label)!.when as any).all as any[];
             const guard = clauses.find(c => c.not && c.not.section === 'footer'
                 && typeof c.not.matches === 'string' && /Esc to cancel/.test(c.not.matches));
@@ -1450,7 +1510,7 @@ describe('claude-cli v4 FSM — APPROVESTUCK footer-marker approval gate (fixA)'
     it('(sticky) STAYS in approval while the "Esc to cancel" footer is up, even without ❯ 1.', () => {
         // Modal chrome where the choice line momentarily lacks the ❯ marker but the
         // decisive "Esc to cancel" footer is still rendered + a residual spinner.
-        // Pre-fix the not(footer ❯ 1.) guard alone would let approval→busy fire.
+        // Pre-fix the not(footer ❯ 1.) guard alone would let approval resume fire.
         const markerStillUp = [
             '❯ Run the build please',
             '',
