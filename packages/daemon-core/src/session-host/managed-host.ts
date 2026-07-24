@@ -9,6 +9,8 @@ import {
     type SessionHostRequestType,
 } from '@adhdev/session-host-core';
 import { getProcessCommandLine, parseNodeScriptPath } from '../commands/process-lifecycle.js';
+import { findPortableNode22 } from '../commands/windows-atomic-upgrade.js';
+import { resolveInstanceDir } from '../commands/upgrade-helper.js';
 import { LOG } from '../logging/logger.js';
 import { ensureSessionHostReady as ensureSharedSessionHostReady } from './runtime-support.js';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../runtime-defaults.js';
@@ -139,8 +141,52 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         }
     }
 
+    /**
+     * Resolve the node binary used to launch the session-host-daemon child.
+     *
+     * The session-host process `require()`s node-pty, whose Windows conpty.node
+     * prebuild only ships for the bundled portable Node 22 (matching node-pty's
+     * shipped win32-x64 prebuild). If the parent daemon happens to run under a
+     * different node (e.g. the box's SYSTEM node 24 on a fresh install), spawning
+     * the session-host with raw `process.execPath` would load node-pty under that
+     * node — and if the prebuild is missing there, every session start crashes
+     * with `Cannot find module ./prebuilds/win32-x64/conpty.node`.
+     *
+     * On win32 we therefore resolve the portable Node 22 the atomic-upgrade path
+     * already uses (`findPortableNode22`) and spawn the child with it. If no
+     * portable Node 22 is staged we fall back to `process.execPath` (never crash
+     * a working setup) but warn loudly so the misconfiguration is diagnosable.
+     *
+     * On every other platform this returns `process.execPath` unchanged — the
+     * session-host runtime selection is win32-only.
+     */
+    function resolveSessionHostNode(): string {
+        if (process.platform !== 'win32') {
+            return process.execPath;
+        }
+        let portableNode: string | null = null;
+        try {
+            portableNode = findPortableNode22(os.homedir(), process.execPath, resolveInstanceDir());
+        } catch (error) {
+            LOG.warn(
+                'SessionHost',
+                `Failed to resolve portable Node 22 for the session-host spawn: ${error instanceof Error ? error.message : String(error)}`,
+            );
+        }
+        if (portableNode) {
+            return portableNode;
+        }
+        LOG.warn(
+            'SessionHost',
+            `Portable Node 22 not found; spawning the session-host with ${process.execPath}. ` +
+                'node-pty may fail to load its conpty.node prebuild under a non-22 Node on win32.',
+        );
+        return process.execPath;
+    }
+
     function spawnHost(): void {
         const entry = resolveEntry();
+        const nodeExecutable = resolveSessionHostNode();
         let stdio: StdioOptions = 'ignore';
         let logFd: number | null = null;
         if (options.spawnStdio === 'logfile') {
@@ -149,7 +195,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             logFd = fs.openSync(path.join(logDir, 'session-host.log'), 'a');
             stdio = ['ignore', logFd, logFd];
         }
-        const child = spawn(process.execPath, [entry], {
+        const child = spawn(nodeExecutable, [entry], {
             detached: true,
             stdio,
             windowsHide: true,
