@@ -811,6 +811,37 @@ function windowsExecutableExtensions(): string[] {
 }
 
 /**
+ * Best-effort resolution of the active npm global prefix via
+ * `npm config get prefix`. This is the authoritative non-default prefix that a
+ * daemon's inherited PATH cannot infer — nvm / nvm-windows, `npm config set
+ * prefix`, `~/.npm-global`, custom `--prefix`. Consulted with a SHORT timeout so
+ * a slow/absent npm never hangs detection, and memoized per-process so repeated
+ * detections don't re-spawn the (relatively slow) npm process.
+ * Returns the raw prefix dir, or undefined when npm is unavailable.
+ */
+let cachedNpmPrefix: string | undefined | null = undefined; // null = resolved-to-nothing
+function npmGlobalPrefix(): string | undefined {
+    if (cachedNpmPrefix !== undefined) return cachedNpmPrefix ?? undefined;
+    try {
+        const prefix = execSync('npm config get prefix', {
+            encoding: 'utf-8',
+            timeout: 2000,
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        cachedNpmPrefix = prefix && prefix !== 'undefined' ? prefix : null;
+    } catch {
+        cachedNpmPrefix = null; // npm not on PATH or slow — remember and skip
+    }
+    return cachedNpmPrefix ?? undefined;
+}
+
+/** Test-only: reset the memoized npm-prefix so a test can re-stub `execSync`. */
+export function __resetNpmPrefixCacheForTests(): void {
+    cachedNpmPrefix = undefined;
+}
+
+/**
  * Common Windows npm-global / package-manager bin dirs that a daemon's inherited
  * PATH frequently misses. Additive and existence-guarded — we only return dirs
  * that exist, so the common path stats nothing extra beyond a handful of paths.
@@ -829,15 +860,37 @@ function windowsExtraBinDirs(): string[] {
     if (process.env.USERPROFILE) push(path.join(process.env.USERPROFILE, 'scoop', 'shims'));
     // nvm-windows / custom prefix: `npm config get prefix` points at the active
     // global bin dir, which on Windows is the prefix dir itself (shims live there).
-    try {
-        const prefix = execSync('npm config get prefix', {
-            encoding: 'utf-8',
-            timeout: 2000,
-            windowsHide: true,
-            stdio: ['ignore', 'pipe', 'ignore'],
-        }).trim();
-        if (prefix && prefix !== 'undefined') push(prefix);
-    } catch { /* npm not on PATH or slow — skip */ }
+    push(npmGlobalPrefix());
+    try { push(path.dirname(process.execPath)); } catch { /* best-effort */ }
+    return dirs;
+}
+
+/**
+ * Common Unix (Linux/macOS) global-bin dirs that a daemon's minimal non-login
+ * PATH frequently misses. The systemd unit ships no PATH pin, so a daemon started
+ * outside the user's interactive shell never sees these. Additive and
+ * existence-guarded. Notably includes `~/.local/bin`, the Claude Code native
+ * installer default (`curl … install.sh | bash`), plus the npm global prefix bin
+ * (nvm / `npm config set prefix` / `~/.npm-global`).
+ */
+function unixExtraBinDirs(): string[] {
+    const dirs: string[] = [];
+    const fs = require('fs');
+    const home = os.homedir();
+    const push = (dir: string | undefined | null) => {
+        if (!dir) return;
+        try { if (fs.existsSync(dir)) dirs.push(dir); } catch { /* best-effort */ }
+    };
+    // Claude Code native-installer default + alternate native location.
+    push(path.join(home, '.local', 'bin'));
+    push(path.join(home, '.claude', 'local', 'bin'));
+    // Historical / explicit npm-global default.
+    push(path.join(home, '.npm-global', 'bin'));
+    push('/usr/local/bin');
+    push('/opt/homebrew/bin');
+    // Active npm prefix bin — covers nvm / custom `npm config set prefix`.
+    const prefix = npmGlobalPrefix();
+    if (prefix) push(path.join(prefix, 'bin'));
     try { push(path.dirname(process.execPath)); } catch { /* best-effort */ }
     return dirs;
 }
@@ -864,9 +917,7 @@ export function findBinary(name: string): string {
     if (isWin) {
         extraDirs.push(...windowsExtraBinDirs());
     } else {
-        extraDirs.push(path.join(os.homedir(), '.npm-global', 'bin'));
-        extraDirs.push('/usr/local/bin', '/opt/homebrew/bin');
-        try { extraDirs.push(path.dirname(process.execPath)); } catch { /* best-effort */ }
+        extraDirs.push(...unixExtraBinDirs());
     }
     const searchDirs = [...paths, ...extraDirs];
     const exes = isWin ? windowsExecutableExtensions() : [''];

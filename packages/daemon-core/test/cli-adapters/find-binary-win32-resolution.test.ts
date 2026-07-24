@@ -28,7 +28,7 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 // Import AFTER mocks are registered.
-const { findBinary } = await import('../../src/cli-adapters/provider-cli-shared.js');
+const { findBinary, __resetNpmPrefixCacheForTests } = await import('../../src/cli-adapters/provider-cli-shared.js');
 
 describe('findBinary win32 resolution', () => {
     let tmpDir: string;
@@ -40,6 +40,7 @@ describe('findBinary win32 resolution', () => {
         for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
         mocks.platform.mockReturnValue('win32');
         mocks.execSync.mockReturnValue('undefined');
+        __resetNpmPrefixCacheForTests();
     });
 
     afterEach(() => {
