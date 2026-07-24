@@ -172,6 +172,7 @@ jobs:
       - name: Build packages required for tests
         run: |
           npm run build -w packages/session-host-core
+          npm run build -w packages/session-host-daemon
           npm run build -w packages/mesh-shared
           npm run build -w packages/daemon-core
 
