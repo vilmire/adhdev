@@ -17,6 +17,7 @@ import { registerMeshCoordinator } from '../../mesh/coordinator-registry.js';
 import { partitionSessionHostRecords } from '../../session-host/runtime-surface.js';
 import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } from '../mesh-coordinator.js';
 import { normalizeMeshNodeId } from '@adhdev/mesh-shared';
+import { delegatedWorkerAutoApproveSettings } from '../../repo-mesh-types.js';
 import {
     readProviderPriorityFromPolicy,
     resolveProviderTypeFromPriority,
@@ -429,7 +430,25 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             dir: workspace,
                             cliArgs: cliCmdArgs.length > 0 ? cliCmdArgs : undefined,
                             env: Object.keys(cliCmdEnv).length > 0 ? cliCmdEnv : undefined,
-                            settings: { meshCoordinatorFor: meshId },
+                            settings: {
+                                meshCoordinatorFor: meshId,
+                                // AUTOAPPROVE-COORD: the coordinator is a mesh session too, so it
+                                // must inherit the workspace's declarative auto-approve MODE
+                                // (.adhdev/mesh.json providerDefaults.autoApproveModes) exactly like
+                                // a delegated worker does at dispatch. Reuse the already-loaded repo
+                                // config so the launch args carry --permission-mode. NB: we deliberately
+                                // do NOT stamp launchedByCoordinator here — that flag is a WORKER-only
+                                // dangerous-mode downgrade signal (auto-approve-modes.ts); the coordinator
+                                // is the owner, not a worker. The dangerous gate is already applied inside
+                                // delegatedWorkerAutoApproveSettings via mesh/node policy.
+                                ...delegatedWorkerAutoApproveSettings(
+                                    effectiveMesh?.policy,
+                                    coordinatorNode?.policy,
+                                    providerMeta,
+                                    repoMeshConfigLoad.config,
+                                    cliType,
+                                ),
+                            },
                             ...(initialModel ? { initialModel } : {}),
                             ...(initialThinkingLevel ? { initialThinkingLevel } : {}),
                         });
@@ -650,7 +669,17 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         cliArgs: cliArgs.length > 0 ? cliArgs : undefined,
                         env: Object.keys(launchEnv).length > 0 ? launchEnv : undefined,
                         settings: {
-                            meshCoordinatorFor: meshId
+                            meshCoordinatorFor: meshId,
+                            // AUTOAPPROVE-COORD: inherit the workspace declarative auto-approve MODE
+                            // for the coordinator session (see the cli_command branch for the full
+                            // rationale). No launchedByCoordinator stamp — the coordinator is the owner.
+                            ...delegatedWorkerAutoApproveSettings(
+                                effectiveMesh?.policy,
+                                coordinatorNode?.policy,
+                                providerMeta,
+                                repoMeshConfigLoad.config,
+                                cliType,
+                            ),
                         },
                         ...(initialModel ? { initialModel } : {}),
                         ...(initialThinkingLevel ? { initialThinkingLevel } : {}),

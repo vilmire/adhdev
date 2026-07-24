@@ -559,11 +559,18 @@ describe('resolveMeshCoordinatorSetup', () => {
         workspace: liveRepo,
         sessionId: 'coordinator-live-session',
       })
+      // AUTOAPPROVE-COORD: the coordinator launch now carries the workspace's
+      // declarative auto-approve settings (same resolver the delegated worker uses).
+      // No repo mesh.json providerDefaults here → enable gate defaults on (autoApprove:true),
+      // and crucially NO launchedByCoordinator stamp (coordinator is the owner, not a worker).
       expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.objectContaining({
         cliType: 'claude-cli',
         dir: liveRepo,
-        settings: { meshCoordinatorFor: 'mesh-live-workspace' },
+        settings: expect.objectContaining({ meshCoordinatorFor: 'mesh-live-workspace' }),
       }))
+      const liveLaunchSettings = (cliManager.handleCliCommand as any).mock.calls
+        .find((c: any[]) => c[0] === 'launch_cli')?.[1]?.settings
+      expect(liveLaunchSettings).not.toHaveProperty('launchedByCoordinator')
     } finally {
       if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
       else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
@@ -1709,7 +1716,11 @@ describe('claude-cli coordinator provider capability', () => {
       expect(result).toMatchObject({ success: true, cliType: 'claude-cli' })
       const launchCall = (cliManager.handleCliCommand as any).mock.calls[0]?.[1] as any
       expect(launchCall.cliType).toBe('claude-cli')
-      expect(launchCall.settings).toEqual({ meshCoordinatorFor: 'mesh_claude_args' })
+      // AUTOAPPROVE-COORD: coordinator launch inherits the workspace auto-approve settings
+      // (delegatedWorkerAutoApproveSettings). No providerDefaults declared here → enable gate on.
+      // launchedByCoordinator MUST NOT be stamped — that is a worker-only downgrade flag.
+      expect(launchCall.settings).toMatchObject({ meshCoordinatorFor: 'mesh_claude_args' })
+      expect(launchCall.settings).not.toHaveProperty('launchedByCoordinator')
       const cliArgs: string[] = launchCall.cliArgs || []
       expect(cliArgs).toContain('--mcp-config')
       const mcpConfigIndex = cliArgs.indexOf('--mcp-config')
@@ -1717,6 +1728,90 @@ describe('claude-cli coordinator provider capability', () => {
       expect(cliArgs).toContain('--append-system-prompt')
       const promptIndex = cliArgs.indexOf('--append-system-prompt')
       expect(cliArgs[promptIndex + 1]).toContain('Repo Mesh Coordinator')
+    } finally {
+      if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
+      else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('launch_mesh_coordinator inherits the workspace .adhdev/mesh.json auto-approve MODE (no launchedByCoordinator)', async () => {
+    // AUTOAPPROVE-COORD regression: a coordinator launched into a workspace whose
+    // .adhdev/mesh.json declares providerDefaults.autoApproveModes[<provider>] must
+    // carry that MODE into its launch settings — exactly as a delegated worker does —
+    // while NEVER receiving the worker-only launchedByCoordinator downgrade flag.
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-coord-autoapprove-'))
+    const mcpEntry = join(workspace, 'mcp-server.js')
+    writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
+    const previousMcpEntry = process.env.ADHDEV_MCP_SERVER_PATH
+    process.env.ADHDEV_MCP_SERVER_PATH = mcpEntry
+
+    mkdirSync(join(workspace, '.adhdev'), { recursive: true })
+    writeFileSync(join(workspace, '.adhdev', 'mesh.json'), JSON.stringify({
+      version: 1,
+      providerDefaults: {
+        autoApproveModes: { 'claude-cli': 'accept-edits' },
+      },
+    }), 'utf-8')
+
+    const provider: ProviderModule = {
+      type: 'claude-cli',
+      name: 'Claude Code',
+      category: 'cli',
+      spawn: { command: 'claude' },
+      autoApproveModes: {
+        default: 'off',
+        modes: [
+          { id: 'off', label: 'Off', strategy: 'pty-parse-default', risk: 'safe' },
+          { id: 'accept-edits', label: 'Accept edits', strategy: 'launch-args', risk: 'caution', launchArgs: ['--permission-mode', 'acceptEdits'] },
+        ],
+      },
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'auto_import',
+          format: 'claude_mcp_json',
+          path: '.mcp.json',
+          serverName: 'adhdev-mesh',
+        },
+        systemPromptInjection: {
+          mode: 'cli_arg',
+          flag: '--append-system-prompt',
+        },
+      },
+    }
+    const cliManager = {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'claude-coord-session' })),
+    }
+    const router = createAutoImportRouter(provider, cliManager)
+
+    const inlineMesh = {
+      id: 'mesh_coord_autoapprove',
+      name: 'Coord AutoApprove Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [{ id: 'node-1', workspace, policy: {} }],
+      policy: {},
+      coordinator: {},
+    }
+
+    try {
+      const result = await router.execute('launch_mesh_coordinator', {
+        meshId: 'mesh_coord_autoapprove',
+        cliType: 'claude-cli',
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({ success: true, cliType: 'claude-cli' })
+      const launchCall = (cliManager.handleCliCommand as any).mock.calls
+        .find((c: any[]) => c[0] === 'launch_cli')?.[1] as any
+      expect(launchCall).toBeDefined()
+      // The declared mode rode into the coordinator launch settings…
+      expect(launchCall.settings).toMatchObject({
+        meshCoordinatorFor: 'mesh_coord_autoapprove',
+        autoApproveMode: 'accept-edits',
+      })
+      // …and the worker-only downgrade flag was NOT stamped on the coordinator.
+      expect(launchCall.settings).not.toHaveProperty('launchedByCoordinator')
     } finally {
       if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
       else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
