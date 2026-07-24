@@ -142,6 +142,84 @@ describe('codex-cli v1 manifest — declarative builders', () => {
     expect(detect(statusInput(screen))).toBe('idle');
   });
 
+  // ─── mid-tool-call idle valley (mission f2f6da1b root fix) ───────────────
+  // codex's live spinner ("Working (Ns • esc to interrupt)") scrolls UP out of
+  // the bottom visible rows while a tool call's output renders, so the OLD
+  // live-frame-tail spinner scope (bottom 12 lines) momentarily missed it and the
+  // settled-prompt regex (^[❯›>]$) fired a FALSE idle — the codex early-completion
+  // valley. The spinner scope is now whole-screen, so the pushed-up spinner header
+  // is still detected and the turn correctly stays `generating`. The patterns were
+  // simultaneously tightened (glyph/digit after "Working (", bulleted "…esc to
+  // interrupt)" footer) so a whole-screen scan does NOT match assistant prose that
+  // merely says "Working" or "esc to interrupt".
+  //
+  // A 40-row grid: spinner header on line 2, then tool output, and a bare prompt
+  // char in the LAST 12 lines (what tricked the old tail scope into reading idle).
+  function valleyScreen(spinnerHeader: string): string {
+    const toolOutput = Array.from({ length: 20 }, (_, i) => `  read package.json → line ${i + 1}`);
+    return [
+      '⏺ Reading the repo-root package.json',
+      spinnerHeader,
+      ...toolOutput,
+      '❯ gpt-5-codex high',
+      '  gpt-5-codex low · ~/repo · 019f9177-abcd',
+    ].join('\n');
+  }
+
+  it('mid-tool-call VALLEY: stays generating when the spinner scrolled above the bottom rows (Working timer)', () => {
+    expect(detect(statusInput(valleyScreen('Working (18s • esc to interrupt)')))).toBe('generating');
+  });
+
+  it('regression guard: the SAME valley frame WOULD misdetect under a bottom-rows-only scope (proves the scope fix is load-bearing)', () => {
+    // Rebuild the detector with the OLD live-frame-tail scope; the pushed-up spinner
+    // is outside the bottom rows so it is NOT seen and the frame reads NOT generating
+    // (the exact codex early-completion valley). This asserts the fixture is a genuine
+    // valley and that scope: whole-screen is what closes it — so a future edit that
+    // narrows the scope back re-breaks this test.
+    const oldScopeDetect = buildDetectStatusFromTui({
+      spinner: { ...(tui.spinner as any), scope: 'live-frame-tail', scopeWindowLines: 12 },
+      settledPrompt: tui.settledPrompt,
+      modal: tui.modal,
+      dispatchOrder: tui.dispatchOrder,
+    });
+    expect(oldScopeDetect(statusInput(valleyScreen('Working (18s • esc to interrupt)')))).not.toBe('generating');
+  });
+
+  it('mid-tool-call VALLEY: stays generating for the braille-glyph spinner header (Thinking)', () => {
+    expect(detect(statusInput(valleyScreen('  Thinking (⣿ 4s • esc to interrupt)')))).toBe('generating');
+  });
+
+  it('mid-tool-call VALLEY: stays generating for "Starting MCP servers (" pushed up', () => {
+    expect(detect(statusInput(valleyScreen('Starting MCP servers (3s • esc to interrupt)')))).toBe('generating');
+  });
+
+  it('genuine turn-end: settles to idle once the spinner is gone from the whole grid', () => {
+    const screen = [
+      '⏺ The "name" field is "adhdev-cloud-monorepo".',
+      ...Array.from({ length: 16 }, (_, i) => `  (prior tool output ${i + 1})`),
+      '❯ gpt-5-codex high',
+      '? for shortcuts',
+      'tab to queue message',
+      '❯',
+    ].join('\n');
+    expect(detect(statusInput(screen))).toBe('idle');
+  });
+
+  it('no false-generating: an assistant answer that mentions the spinner words stays idle', () => {
+    // The tightened patterns must not fire on prose. Both cues appear as plain text
+    // in the final answer, but neither is the live spinner (no glyph/digit after
+    // "Working (", no bulleted "…esc to interrupt)" footer).
+    const screen = [
+      '⏺ Working on it is done. To stop codex mid-turn, press esc to interrupt the run.',
+      ...Array.from({ length: 12 }, (_, i) => `  detail ${i + 1}`),
+      '❯ gpt-5-codex high',
+      '? for shortcuts',
+      'tab to queue message',
+      '❯',
+    ].join('\n');
+    expect(detect(statusInput(screen))).toBe('idle');
+  });
+
   // ─── parse_approval (regular modal) ─────────────────────────────────────
 
   it('extracts a numbered approval modal (normal rendering)', () => {
