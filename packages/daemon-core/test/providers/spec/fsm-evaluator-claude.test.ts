@@ -1529,3 +1529,161 @@ describe('claude-cli v4 FSM — APPROVESTUCK footer-marker approval gate (fixA)'
         expect(ev.fired?.to).not.toBe('idle');
     });
 });
+
+// ── ASKUSERQUESTION-PICKER-MISROUTE (spec@4 path) ─────────────────────────────
+// Root cause (READ-ONLY RCA, mission on branch fix/claude-cli-askuserquestion-
+// approval-classify): claude-cli runs through the spec@4 FSM, NOT the legacy
+// ProviderCliAdapter, so the 1.0.23 escape-hatch fix (isAskUserQuestionPicker-
+// Signature, in the SDK-v1 builders) never applied to the 4.0.json spec. An
+// AskUserQuestion multi-choice PICKER — numbered options + a "Enter to select ·
+// Esc to cancel" nav footer + a "Type something"/"Chat about this" escape hatch —
+// satisfied →approval (footer ❯ 1. + footer "Esc to cancel" + not-spinner), so
+// it was surfaced to the coordinator as task_approval_needed (→ mesh_approve,
+// which cannot answer a question) and waiting_choice/waiting_approval co-fired.
+//
+// Fix (spec-only): →picker (priority 110 > approval 100) now ALSO recognises the
+// "Enter to select" AskUserQuestion signature + numbered options, and →approval
+// carries a not(picker-signature) guard — so a picker resolves to waiting_choice,
+// NEVER approval, and the two are mutually exclusive. The whole-body self-match
+// of the numbered-pair member is closed by footer-anchoring it (was whole-screen).
+describe('claude-cli v4 FSM — AskUserQuestion picker is a choice, not an approval', () => {
+    const spec = loadSpec();
+    const Dline = '─'.repeat(64);
+
+    // A live AskUserQuestion picker: 3-5 numbered options, the freeform escape
+    // hatch ("Type something" / "Chat about this"), and the picker nav footer.
+    const askQuestionPicker = [
+        '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+        '  ▘▘ ▝▝    ~/Work/adhdev',
+        '',
+        '⏺ Which scope should I use for the dispatch?',
+        '',
+        '  Scope',
+        '  ❯ 1. Yes, unicast',
+        '    2. No, broadcast',
+        '    3. Type something',
+        '    4. Chat about this',
+        '',
+        '  Enter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n');
+
+    // The same picker but WITHOUT the freeform escape-hatch rows (they can be
+    // absent / scrolled out). The "Enter to select" nav footer + numbered options
+    // must STILL classify it as a picker (the RCA regression fb2a7053).
+    const askQuestionPickerNoHatch = [
+        '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+        '  ▘▘ ▝▝    ~/Work/adhdev',
+        '',
+        '⏺ Which scope should I use?',
+        '',
+        '  Scope',
+        '  ❯ 1. Yes, unicast',
+        '    2. No, broadcast',
+        '',
+        '  Enter to select · Esc to cancel',
+    ].join('\n');
+
+    // A genuine tool-consent approval modal: an approval question + a Yes/No set +
+    // the approval footer ("Esc to cancel") — and crucially NO "Enter to select".
+    const genuineApproval = [
+        '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+        '  ▘▘ ▝▝    ~/Work/adhdev',
+        '',
+        '⏺ I will edit the file now.',
+        '',
+        'Do you want to proceed?',
+        ' ❯ 1. Yes',
+        " 2. Yes, and don't ask again this session",
+        ' 3. No',
+        '',
+        ' Esc to cancel · Tab to amend · ctrl+e to explain',
+    ].join('\n');
+
+    it('(a) an AskUserQuestion picker resolves to waiting_choice (picker), NOT approval', () => {
+        const lines = strip(askQuestionPicker);
+        const ev = evaluateFsm(spec, 'busy', askQuestionPicker, { row: lines.length - 1, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).toBe('picker');
+        expect(ev.fired?.to).not.toBe('approval');
+    });
+
+    it('(a) the escape-hatch-less picker is ALSO a picker (fb2a7053 regression)', () => {
+        const lines = strip(askQuestionPickerNoHatch);
+        const ev = evaluateFsm(spec, 'busy', askQuestionPickerNoHatch, { row: lines.length - 1, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).toBe('picker');
+        expect(ev.fired?.to).not.toBe('approval');
+    });
+
+    it('(a) picker also wins from idle (question raised while the composer is quiet)', () => {
+        const lines = strip(askQuestionPicker);
+        const ev = evaluateFsm(spec, 'idle', askQuestionPicker, { row: lines.length - 1, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).toBe('picker');
+    });
+
+    it('(b) a genuine approval modal (Yes / No, no picker footer) resolves to approval', () => {
+        const lines = strip(genuineApproval);
+        const ev = evaluateFsm(spec, 'busy', genuineApproval, { row: lines.length - 1, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).toBe('approval');
+    });
+
+    it('(c) SELF-MATCH guard: task-prompt prose with a "1./2." pair + "Esc to cancel" but NO real modal footer stays idle/generating', () => {
+        // A quiet composer whose BODY (above the ❯ composer) is task-prompt prose
+        // containing a numbered "1./2." pair AND the literal string "Esc to cancel".
+        // Pre-fix the whole-screen numbered-pair member let this satisfy →approval;
+        // footer-anchoring the pair (+ the footer "Esc to cancel" requirement) means
+        // body prose can never reach the approval predicate.
+        const proseBodyNoModal = [
+            '▗ ▗   ▖ ▖  Claude Code v2.1.153',
+            '  ▘▘ ▝▝    ~/Work/adhdev',
+            '',
+            '⏺ Here is the plan:',
+            '  1. converge providers',
+            '  2. relocate the oss test',
+            '  (tip: press Esc to cancel a running step)',
+            '',
+            Dline, '❯ ', Dline,
+            '  ⏵⏵ accept edits on (shift+tab to cycle)',
+        ].join('\n');
+        const ev = evaluateFsm(spec, 'idle', proseBodyNoModal, { row: 8, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).not.toBe('approval');
+        expect(ev.fired?.to).not.toBe('picker');
+    });
+
+    it('(d) no screen resolves to BOTH approval and choice simultaneously', () => {
+        // For every fixture, at most one of {approval, picker} may fire (they are the
+        // two modal-classifying transitions). The evaluator returns the single fired
+        // transition, but assert both cannot be individually satisfiable on the same
+        // frame by checking the picker/approval exclusion holds on the picker frame.
+        for (const screen of [askQuestionPicker, askQuestionPickerNoHatch, genuineApproval]) {
+            const lines = strip(screen);
+            const ev = evaluateFsm(spec, 'busy', screen, { row: lines.length - 1, col: 2 }, undefined, clk(10000, 0));
+            const approvalT = ev.transitions.find(t => t.to === 'approval');
+            const pickerT = ev.transitions.find(t => t.to === 'picker');
+            const both = (approvalT?.fires ?? false) && (pickerT?.fires ?? false);
+            expect(both, `both approval and picker fired on: ${screen.slice(0, 40)}`).toBe(false);
+        }
+    });
+
+    it('(unit) →approval carries a not(picker-signature) guard; →picker recognises "Enter to select"', () => {
+        const approval = spec.transitions.find(t => t.label === '→approval')!;
+        const all = (approval.when as any).all as any[];
+        const pickerGuard = all.find(c => c.not && typeof c.not.matches === 'string' && /Enter to select/.test(c.not.matches));
+        expect(pickerGuard, '→approval missing not(Enter to select) picker guard').toBeTruthy();
+
+        const picker = spec.transitions.find(t => t.label === '→picker')!;
+        expect(picker.priority).toBeGreaterThan(approval.priority ?? 0);
+        const anyMembers = (picker.when as any).any as any[];
+        const askQ = anyMembers.find(m => Array.isArray(m.all)
+            && m.all.some((c: any) => typeof c.matches === 'string' && /Enter to select/.test(c.matches)));
+        expect(askQ, '→picker missing AskUserQuestion "Enter to select" branch').toBeTruthy();
+    });
+
+    it('(unit) the →approval numbered-pair member is footer-anchored (no whole-body self-match)', () => {
+        const approval = spec.transitions.find(t => t.label === '→approval')!;
+        const all = (approval.when as any).all as any[];
+        const anyLeg = all.find(c => Array.isArray(c.any));
+        const pairMember = anyLeg.any.find((m: any) => typeof m.matches === 'string'
+            && m.matches.includes('2\\.') && m.matches.includes('1\\.'));
+        expect(pairMember, 'numbered-pair member not found').toBeTruthy();
+        expect(pairMember.section, 'numbered-pair member must be footer-scoped').toBe('footer');
+    });
+});
