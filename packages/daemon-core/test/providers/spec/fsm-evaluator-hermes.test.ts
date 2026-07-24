@@ -259,3 +259,59 @@ describe('hermes-cli v4 FSM', () => {
         expect(buttons[0].key).toBe('1\r');
     });
 });
+
+// ── SPINNER-BODY-SELFMATCH: assistant body quotes the busy cue ────────────────
+// Sibling of the claude-cli rc.6 "assistant text cannot self-match spinner
+// chrome" regression. Live hermes-cli sessions render their own RCA/explanation
+// into the transcript body. Hermes' busy cues (`msg=interrupt`, `Enter to
+// interrupt`, `/steer`, `Ctrl+C cancel`, `musing...`) render on the bottom
+// footer/status prompt line, but the OLD spec checked those literals against the
+// whole-screen `body` section — so an assistant answer that quoted or explained
+// them self-matched: idle→busy false-fired and busy→idle's not-clause read TRUE
+// forever → the session wedged in `generating`. The fix scopes every busy-cue
+// check to the bounded bottom window `status_tail` (from_bottom:4), which — unlike
+// the anchored `status` section — never falls back to whole-screen when the ⚕
+// status line is absent, so quoted prose in the scrollback can no longer self-match.
+
+// An idle hermes screen whose assistant answer QUOTES the busy chrome in the body
+// scrollback, while the live footer carries only the settled ❯ composer prompt.
+const assistantQuotesBusyCue = [
+    '  user: explain the busy detection',
+    '',
+    '  assistant: The old spec matched the literal footer cues',
+    '  "msg=interrupt", "Enter to interrupt", "/steer" and "musing..."',
+    '  against the whole screen. Quoting any of them in this answer —',
+    '  msg=interrupt / Enter to interrupt / /steer / musing... — must not',
+    '  read as generation now that the check is tail-scoped.',
+    '',
+    '────────────────────────────────────────────────────────────',
+    '❯',
+].join('\n');
+
+describe('hermes-cli v4 FSM — assistant text cannot self-match spinner chrome', () => {
+    const spec = loadSpec();
+
+    it('does NOT re-enter busy from idle on quoted footer cues in body', () => {
+        const row = assistantQuotesBusyCue.split('\n').length - 1;
+        const ev = evaluateFsm(spec, 'idle', assistantQuotesBusyCue, { row, col: 1 }, undefined, clk(30000, 0));
+        expect(ev.fired?.to).not.toBe('busy');
+    });
+
+    it('busy→idle when only the quoted cues remain in body (clean ❯ footer)', () => {
+        const row = assistantQuotesBusyCue.split('\n').length - 1;
+        const ev = evaluateFsm(spec, 'busy', assistantQuotesBusyCue, { row, col: 1 }, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('idle→busy is scoped to status_tail (not the whole-screen body)', () => {
+        const idleToBusy = spec.transitions.find(t => t.label === 'idle→busy')!;
+        expect((idleToBusy.when as any).section).toBe('status_tail');
+    });
+
+    it('a live footer busy cue still drives idle→busy (fix is a guard, not an over-fix)', () => {
+        // busyScreen carries `❯ msg=interrupt · Ctrl+C cancel` on the footer line,
+        // inside the status_tail window → genuine generation is still detected.
+        const ev = evaluateFsm(spec, 'idle', busyScreen, { row: 5, col: 1 }, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('busy');
+    });
+});

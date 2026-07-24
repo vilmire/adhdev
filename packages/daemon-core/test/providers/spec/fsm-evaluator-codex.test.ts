@@ -47,6 +47,21 @@ function makeScreen(bodyContent: string[], footerLine = '  tab to queue message 
     return lines.join('\n');
 }
 
+// A live-layout busy screen: codex draws the `Working (` / `esc to interrupt`
+// spinner near the BOTTOM (just above the composer prompt), so it lands in the
+// `status_tail` (from_bottom:12) window — the section every busy-cue check is
+// now scoped to (SPINNER-BODY-SELFMATCH fix). Placing the spinner high in the
+// body — as an assistant answer quoting the cue would — must NOT read as busy.
+function makeBusyScreen(bodyContent: string[], spinnerLine: string): string {
+    const lines: string[] = [...bodyContent];
+    while (lines.length < 46) lines.push('');
+    lines.push(spinnerLine);            // spinner in the tail window
+    lines.push('');
+    lines.push('› ');                   // composer prompt below the spinner
+    lines.push('  tab to queue message  ·  ⏎ send');
+    return lines.join('\n');
+}
+
 function makeScreenWithModal(bodyContent: string[], modalContent: string[]): string {
     const lines: string[] = [...bodyContent];
     // body occupies first lines, pad to leave room
@@ -77,13 +92,11 @@ const composerReadyScreen = makeScreen([
     '',
 ]);
 
-// Active busy: shows "Working (" spinner in body
-const busyScreen = makeScreen([
+// Active busy: shows "Working (" spinner in the live status tail
+const busyScreen = makeBusyScreen([
     '  Writing the implementation...',
     '',
-    '  Working (⣿ 3s)',
-    '',
-]);
+], '  Working (⣿ 3s)');
 
 // MCP init screen
 const mcpInitScreen = makeScreen([
@@ -122,12 +135,10 @@ const doneScreen = makeScreen([
 ]);
 
 // Short task
-const shortBusyScreen = makeScreen([
+const shortBusyScreen = makeBusyScreen([
     '  OK',
     '',
-    '  Working (⣾ 1s)',
-    '',
-]);
+], '  Working (⣾ 1s)');
 
 describe('codex-cli v4 FSM', () => {
     const spec = loadSpec();
@@ -310,5 +321,71 @@ describe('codex-cli v4 FSM', () => {
         const buttons = extractButtonsFromRule(rule, hay);
         expect(buttons.map(b => b.index)).toEqual([1, 2]);
         expect(buttons[0].key).toBe('1\r');
+    });
+});
+
+// ── SPINNER-BODY-SELFMATCH: assistant body quotes the busy cue ────────────────
+// Sibling of the claude-cli rc.6 "assistant text cannot self-match spinner
+// chrome" regression. Live codex-cli sessions render their own RCA/explanation
+// into the transcript body. When that answer quotes codex's busy chrome — the
+// literal `Working (` header or the `esc to interrupt` interrupt hint — the OLD
+// spec checked those literals against the whole-screen `body` section, so the
+// assistant prose self-matched: idle→busy false-fired, and busy→idle's
+// not-clause read TRUE forever → the session wedged in `generating` even though
+// no live spinner was on the status tail. The fix scopes every busy-cue check to
+// `status_tail` (from_bottom:12) and anchors the cue on codex's animated-spinner
+// shape, so quoted prose in the scrollback can no longer look like generation.
+
+// An idle codex screen whose assistant answer QUOTES the busy chrome (`Working (`
+// and a bare `esc to interrupt`) in the body scrollback, while the live status
+// tail carries NO spinner — just the settled composer prompt. Must read idle.
+const assistantQuotesBusyCue = makeScreen([
+    '  Codex explained the spinner detection:',
+    '',
+    '  The old spec matched the literal "Working (" header and the bare',
+    '  "esc to interrupt" hint against the whole screen. Quoting either',
+    '  string here — Working (like this) or esc to interrupt — must not',
+    '  be read as a live spinner now that the check is tail-scoped.',
+    '',
+], '  › ');
+
+describe('codex-cli v4 FSM — assistant text cannot self-match spinner chrome', () => {
+    const spec = loadSpec();
+
+    it('does NOT re-enter busy from idle on a quoted "Working ("/"esc to interrupt" in body', () => {
+        const row = assistantQuotesBusyCue.split('\n').length - 1;
+        const ev = evaluateFsm(spec, 'idle', assistantQuotesBusyCue, { row, col: 2 }, undefined, clk(30000, 0));
+        expect(ev.fired?.to).not.toBe('busy');
+    });
+
+    it('busy→idle when only the quoted cue remains in body (no live tail spinner)', () => {
+        const row = assistantQuotesBusyCue.split('\n').length - 1;
+        const ev = evaluateFsm(spec, 'busy', assistantQuotesBusyCue, { row, col: 2 }, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('idle→busy is scoped to status_tail (not the whole-screen body)', () => {
+        const idleToBusy = spec.transitions.find(t => t.label === 'idle→busy')!;
+        expect((idleToBusy.when as any).section).toBe('status_tail');
+    });
+
+    it('the tail-anchored spinner regex rejects quoted prose but keeps the live spinner/hint', () => {
+        const re = new RegExp((spec.transitions.find(t => t.label === 'idle→busy')!.when as any).matches, 'i');
+        // Prose that merely mentions the cue must NOT match.
+        expect(re.test('  string here — Working (like this) or esc to interrupt —')).toBe(false);
+        expect(re.test('  quoting the bare esc to interrupt hint')).toBe(false);
+        expect(re.test('  explaining the Working (header) cue')).toBe(false);
+        // The genuine animated spinner header (glyph or elapsed digit) still matches.
+        expect(re.test('  Working (⣿ 3s)')).toBe(true);
+        expect(re.test('  Thinking (⣾ 12s)')).toBe(true);
+        // The genuine footer interrupt hint inside the live status parens matches.
+        expect(re.test('  Working (⣿ 3s · esc to interrupt)')).toBe(true);
+        expect(re.test('  … • esc to interrupt)')).toBe(true);
+    });
+
+    it('a live tail spinner still drives idle→busy (fix is a guard, not an over-fix)', () => {
+        const row = busyScreen.split('\n').length - 1;
+        const ev = evaluateFsm(spec, 'idle', busyScreen, { row, col: 2 }, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('busy');
     });
 });
