@@ -2086,7 +2086,13 @@ export class CliProviderInstance implements ProviderInstance {
                     // eventually emits" fix while filtering the mid-turn false-idle. Scoped to
                     // autonomous mesh sessions (allowMissingAssistantTimeout) so an interactive
                     // antigravity session, which has no coordinator to misfire at, is untouched.
-                    if (this.type === 'antigravity-cli') {
+                    //
+                    // SPEC-DRIVEN completion timing (mission f2f6da1b root 2): the HOLD class is the
+                    // manifest flag `holdCompletionForTranscript` (antigravity-cli declares it), NOT a
+                    // hardcoded provider name — a native-history provider whose PTY-derived idle can
+                    // precede the authoritative transcript write. write-lag (claude) and floor
+                    // (codex/kimi/…) providers leave it false and fall through to the decision below.
+                    if ((this.provider as any)?.holdCompletionForTranscript === true) {
                         if (allowMissingAssistantTimeout) {
                             return { reason: 'missing_final_assistant', terminal: false, holdForTranscript: true };
                         }
@@ -2135,17 +2141,19 @@ export class CliProviderInstance implements ProviderInstance {
                     //     reaches the floor because the next tool call's idle→busy transition cancels
                     //     the pending.
                     //
-                    // The distinction IS a manifest flag: `requiresFinalAssistantBeforeIdle`. A
-                    // provider that declares it (codex-cli / cursor-cli / kimi / opencode) is
-                    // asserting "an idle without a final assistant reply is NOT a genuine turn-end"
-                    // — exactly the CANON-C min-elapsed floor's precondition, so it gets the floor
-                    // (noExternalTranscriptSource). A provider that does NOT declare it (claude-cli)
-                    // treats its own idle as authoritative — its transcript write merely trails by a
-                    // fraction of a second (write-lag native source), so it emits IMMEDIATELY,
-                    // un-floored. This is the SAME flag the sibling branch below (source !==
-                    // 'external-native') already uses for the identical noExternalTranscriptSource
-                    // decision, so the two branches now agree; and it correctly covers third-party
-                    // providers instead of a hardcoded provider name.
+                    // SPEC-DRIVEN completion timing (mission f2f6da1b root 2): the HOLD class already
+                    // returned above (holdCompletionForTranscript). The remaining two classes are the
+                    // manifest flag `requiresFinalAssistantBeforeIdle`:
+                    //   • FLOOR — declared (codex-cli / cursor-cli / kimi / opencode): "an idle without
+                    //     a final assistant reply is NOT a genuine turn-end", exactly the CANON-C
+                    //     min-elapsed floor's precondition, so it gets the floor
+                    //     (noExternalTranscriptSource).
+                    //   • IMMEDIATE (write-lag) — not declared (claude-cli): idle is authoritative, the
+                    //     transcript write merely trails by a fraction of a second, so it emits
+                    //     IMMEDIATELY, un-floored.
+                    // This is the SAME flag the sibling branch below (source !== 'external-native')
+                    // uses for the identical noExternalTranscriptSource decision, so the two branches
+                    // agree; and it covers third-party providers instead of a hardcoded provider name.
                     const isWriteLagNativeSource = (this.provider as any).requiresFinalAssistantBeforeIdle !== true;
                     return {
                         reason: 'missing_final_assistant',
@@ -3250,9 +3258,11 @@ export class CliProviderInstance implements ProviderInstance {
             // transcript branch above clears the block for a genuine emit once the answer lands).
             // A genuinely quiescent tool-only turn (no assistant bubble, PTY stable) falls through
             // to the existing weak force-emit; a runaway PTY that never quiets releases at the hard
-            // cap so it cannot wedge forever. Scoped to antigravity holdForTranscript so
-            // claude-cli/codex-cli completion timing is unchanged.
-            if (this.type === 'antigravity-cli'
+            // cap so it cannot wedge forever. SPEC-DRIVEN (mission f2f6da1b root 2): scoped to the
+            // HOLD completion-timing class (`holdCompletionForTranscript`, e.g. antigravity-cli) via
+            // its holdForTranscript block — NOT a hardcoded provider name — so claude-cli/codex-cli
+            // (immediate/floor classes, which never produce a holdForTranscript block) are unchanged.
+            if ((this.provider as any)?.holdCompletionForTranscript === true
                 && block.holdForTranscript === true
                 && waitedMs < ANTIGRAVITY_HOLD_HARD_CAP_MS
                 && this.antigravityHoldPtyStillActive()) {

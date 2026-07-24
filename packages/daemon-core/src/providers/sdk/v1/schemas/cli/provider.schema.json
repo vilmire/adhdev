@@ -201,7 +201,12 @@
     "requiresFinalAssistantBeforeIdle": {
       "type": "boolean",
       "default": false,
-      "description": "When true, daemon defers generating→idle until parseSession includes a final standard assistant message."
+      "description": "When true, daemon defers generating→idle until parseSession includes a final standard assistant message. Also selects the completion-timing floor for a native-source provider: an idle without a final assistant reply is treated as a possible mid-tool-call quiet valley, so the decoupled CANON-C completion is held under the min-elapsed floor (noExternalTranscriptSource) rather than emitted immediately. A provider that leaves this false is a write-lag native source (e.g. claude-cli) whose transcript merely trails the finished idle by a write, so it emits immediately."
+    },
+    "holdCompletionForTranscript": {
+      "type": "boolean",
+      "default": false,
+      "description": "Completion-timing authority for a native-history provider whose live idle verdict is PTY-derived but whose authoritative answer lands in native history (e.g. antigravity-cli). When true, an idle-without-final-assistant HOLDS for the native transcript to land (holdForTranscript) instead of emitting or applying the min-elapsed floor, and the hold persists past the 30s finalization cap while the PTY is still active (bounded by the hard cap). This is the third completion-timing class alongside immediate (requiresFinalAssistantBeforeIdle=false) and floor (requiresFinalAssistantBeforeIdle=true)."
     },
     "augmentStaleSnapshot": {
       "type": "boolean",

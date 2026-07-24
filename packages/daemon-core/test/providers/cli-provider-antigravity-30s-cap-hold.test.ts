@@ -28,6 +28,17 @@ const HOLD_BLOCK = { reason: 'missing_final_assistant', terminal: false, holdFor
 // A non-terminal block WITHOUT holdForTranscript: releases at the 30s cap in the original path.
 const PLAIN_NONTERMINAL_BLOCK = { reason: 'missing_final_assistant', terminal: false }
 
+// The completion-timing spec each real manifest declares (mission f2f6da1b root 2): the 30s-cap
+// hold reads `holdCompletionForTranscript`, so the fixture's provider spec must match its manifest.
+//   antigravity-cli → holdCompletionForTranscript: true (HOLD class)
+//   codex-cli/kimi/cursor-cli/opencode → requiresFinalAssistantBeforeIdle: true (FLOOR class)
+//   claude-cli → neither (IMMEDIATE write-lag class)
+function completionTimingProvider(type: string): Record<string, unknown> {
+  if (type === 'antigravity-cli') return { holdCompletionForTranscript: true }
+  if (['codex-cli', 'kimi', 'cursor-cli', 'opencode'].includes(type)) return { requiresFinalAssistantBeforeIdle: true }
+  return {} // claude-cli and any other: write-lag immediate
+}
+
 type FlushOutcome = { emitted: boolean; heldReason: string | null; scheduledRetry: boolean }
 
 /**
@@ -48,6 +59,11 @@ function makeInstance(opts: {
   const outcome: FlushOutcome = { emitted: false, heldReason: null, scheduledRetry: false }
   const instance = Object.create(CliProviderInstance.prototype) as any
   instance.type = opts.type
+  // SPEC-DRIVEN completion timing (mission f2f6da1b root 2): the 30s-cap PTY-active hold is now
+  // gated on the manifest flag holdCompletionForTranscript, NOT the provider name. Give each
+  // fixture the provider spec its real manifest declares: antigravity holds (flag true), codex
+  // floors (requiresFinalAssistantBeforeIdle), claude emits immediately (neither).
+  instance.provider = completionTimingProvider(opts.type)
   instance.instanceId = 'sess-x'
   instance.busyEpoch = 0
   instance.generatingStartedAt = NOW - opts.waitedMs
@@ -226,6 +242,25 @@ describe('CliProviderInstance — ANTIGRAVITY 30s-cap premature-completion hold'
     const out = runFlush(h)
     expect(out.emitted).toBe(true)
     expect(out.scheduledRetry).toBe(false)
+  })
+
+  // SPEC-DRIVEN completion-timing partition (mission f2f6da1b root 2). The 30s-cap PTY-active hold
+  // is gated on the manifest flag holdCompletionForTranscript, NOT the provider name. This asserts
+  // the full built-in partition through the flag-driven fixtures — the HOLD class (antigravity)
+  // keeps holding while the PTY is active past the cap; the FLOOR (codex/kimi/cursor/opencode) and
+  // IMMEDIATE (claude) classes both release at the cap because they never declare the hold flag.
+  it('completion-timing partition: HOLD class holds past cap; FLOOR + IMMEDIATE classes release', () => {
+    const holdClass = ['antigravity-cli']
+    const releaseClass = ['codex-cli', 'kimi', 'cursor-cli', 'opencode', 'claude-cli']
+    for (const type of holdClass) {
+      const out = runFlush(makeInstance({ type, block: HOLD_BLOCK, waitedMs: COMPLETED_FINALIZATION_MAX_WAIT_MS + 5_000, lastOutputQuietMs: 200 }))
+      expect(out.emitted, `${type} (HOLD class) must NOT emit past the cap while PTY active`).toBe(false)
+      expect(out.heldReason, `${type} hold reason`).toBe('antigravity_hold_pty_active')
+    }
+    for (const type of releaseClass) {
+      const out = runFlush(makeInstance({ type, block: HOLD_BLOCK, waitedMs: COMPLETED_FINALIZATION_MAX_WAIT_MS + 5_000, lastOutputQuietMs: 200 }))
+      expect(out.emitted, `${type} (FLOOR/IMMEDIATE class) must release at the cap`).toBe(true)
+    }
   })
 })
 

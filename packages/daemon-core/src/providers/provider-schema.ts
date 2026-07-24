@@ -79,6 +79,7 @@ const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'submitStrategy',
   'requirePromptEchoBeforeSubmit',
   'requiresFinalAssistantBeforeIdle',
+  'holdCompletionForTranscript',
   'augmentStaleSnapshot',
   'timeouts',
   'disableUpstream',

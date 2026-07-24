@@ -215,8 +215,18 @@ export interface CliProviderModule {
     requirePromptEchoBeforeSubmit?: boolean;
     /** Allow sending another prompt while the CLI is still generating so users can intervene mid-turn. */
     allowInputDuringGeneration?: boolean;
-    /** When true, only transition to idle after the parsed transcript includes a final standard assistant message. */
+    /** When true, only transition to idle after the parsed transcript includes a final standard assistant message.
+     *  Also selects the completion-timing FLOOR (mid-tool-valley-prone native source, e.g. codex/kimi/cursor/opencode):
+     *  an idle-without-final-assistant holds the decoupled CANON-C completion under the min-elapsed floor. False = a
+     *  write-lag native source (e.g. claude-cli) that emits immediately. See holdCompletionForTranscript for the
+     *  third (hold) class. */
     requiresFinalAssistantBeforeIdle?: boolean;
+    /** Completion-timing HOLD class (e.g. antigravity-cli): a native-history provider whose live idle verdict is
+     *  PTY-derived but whose authoritative answer lands in native history. When true, an idle-without-final-assistant
+     *  HOLDS for the transcript to land (holdForTranscript) instead of emitting/flooring, and keeps holding past the
+     *  30s finalization cap while the PTY is still active (bounded by the hard cap). The third completion-timing class
+     *  alongside immediate (requiresFinalAssistantBeforeIdle=false) and floor (requiresFinalAssistantBeforeIdle=true). */
+    holdCompletionForTranscript?: boolean;
     /** When true, allow providers to augment stale snapshot data before parse. Reserved for future use. */
     augmentStaleSnapshot?: boolean;
     /** When provider-owned, daemon treats provider parser output as canonical transcript authority. */

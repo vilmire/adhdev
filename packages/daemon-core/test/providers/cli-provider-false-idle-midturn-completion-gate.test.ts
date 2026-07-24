@@ -70,7 +70,10 @@ function makeAntigravityFlush(opts: {
   const emitted: any[] = []
   const reScheduled: number[] = []
   const instance = baseInstance('antigravity-cli')
-  instance.provider = { name: 'Antigravity', settings: {}, nativeHistory: {} }
+  // SPEC-DRIVEN completion timing (mission f2f6da1b root 2): antigravity's HOLD class is now the
+  // manifest flag holdCompletionForTranscript (not the provider name), so the fixture must declare
+  // it to model the real manifest and exercise the holdForTranscript branch.
+  instance.provider = { name: 'Antigravity', settings: {}, nativeHistory: {}, holdCompletionForTranscript: true }
   instance.providerSessionId = ''
   instance.startedAt = 0
   instance.meshTaskInjectedAt = 0 // injectedTaskHasStartedGenerating fails-open (turn started)

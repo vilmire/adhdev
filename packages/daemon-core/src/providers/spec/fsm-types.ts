@@ -246,6 +246,9 @@ export interface CliSpecV4 {
     delegate?: DelegateTrigger[];
     native_history?: NativeHistoryConfig;
     requiresFinalAssistantBeforeIdle?: boolean;
+    /** Completion-timing HOLD class (native-history provider whose answer lands in native history, e.g.
+     *  antigravity-cli): idle-without-final-assistant holds for the transcript instead of emitting/flooring. */
+    holdCompletionForTranscript?: boolean;
 }
 
 export function isV4Spec(raw: unknown): raw is CliSpecV4 {
