@@ -4,6 +4,7 @@ import { homedir, tmpdir } from 'os';
 import * as path from 'path';
 import { join } from 'path';
 import { ProviderLoader } from '../../src/providers/provider-loader.js';
+import { getConfigDir } from '../../src/config/config.js';
 
 function writeProvider(root: string, category: string, type: string, data: Record<string, unknown>) {
   const dir = join(root, category, type);
@@ -94,7 +95,7 @@ describe('ProviderLoader source root selection', () => {
 
     const loader = new ProviderLoader({ probeStarts: [projectDir] });
 
-    expect(loader.getUserDir()).toBe(path.join(homedir(), '.adhdev', 'providers'));
+    expect(loader.getUserDir()).toBe(path.join(getConfigDir(), 'providers'));
     expect(loader.getSourceConfig().userDirSource).toBe('home-default');
   });
 
@@ -128,10 +129,10 @@ describe('ProviderLoader source root selection', () => {
     expect(loader.getSourceConfig().userDirSource).toBe('sibling-marker');
   });
 
-  it('falls back to ~/.adhdev/providers when no sibling adhdev-providers checkout exists', () => {
+  it('falls back to {configDir}/providers when no sibling adhdev-providers checkout exists', () => {
     const loader = new ProviderLoader({ probeStarts: [projectDir] });
 
-    expect(loader.getUserDir()).toBe(path.join(homedir(), '.adhdev', 'providers'));
+    expect(loader.getUserDir()).toBe(path.join(getConfigDir(), 'providers'));
     expect(loader.getSourceConfig().userDirSource).toBe('home-default');
   });
 
@@ -167,14 +168,74 @@ describe('ProviderLoader source root selection', () => {
       sourceMode: 'normal',
       disableUpstream: false,
       explicitProviderDir: null,
-      userDir: path.join(homedir(), '.adhdev', 'providers'),
-      upstreamDir: path.join(homedir(), '.adhdev', 'providers', '.upstream'),
+      userDir: path.join(getConfigDir(), 'providers'),
+      upstreamDir: path.join(getConfigDir(), 'providers', '.upstream'),
       providerRoots: [
-        path.join(homedir(), '.adhdev', 'providers'),
-        path.join(homedir(), '.adhdev', 'external'),
-        path.join(homedir(), '.adhdev', 'providers', '.upstream'),
+        path.join(getConfigDir(), 'providers'),
+        path.join(getConfigDir(), 'external'),
+        path.join(getConfigDir(), 'providers', '.upstream'),
       ],
     });
+  });
+});
+
+describe('ProviderLoader source dir instance isolation (ADHDEV_CONFIG_DIR)', () => {
+  let tmpRoot = '';
+  let projectDir = '';
+  let configDir = '';
+  let envBefore: string | undefined;
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'adhdev-loader-configdir-'));
+    projectDir = join(tmpRoot, 'project');
+    configDir = join(tmpRoot, 'preview-config');
+    mkdirSync(projectDir, { recursive: true });
+    envBefore = process.env.ADHDEV_CONFIG_DIR;
+  });
+
+  afterEach(() => {
+    if (envBefore === undefined) {
+      delete process.env.ADHDEV_CONFIG_DIR;
+    } else {
+      process.env.ADHDEV_CONFIG_DIR = envBefore;
+    }
+    if (tmpRoot && existsSync(tmpRoot)) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+    tmpRoot = '';
+    projectDir = '';
+    configDir = '';
+  });
+
+  it('scopes providers/upstream/external roots to ADHDEV_CONFIG_DIR when set', () => {
+    process.env.ADHDEV_CONFIG_DIR = configDir;
+
+    const loader = new ProviderLoader({ probeStarts: [projectDir] });
+    const snapshot = loader.getSourceConfig();
+
+    expect(loader.getUserDir()).toBe(path.join(configDir, 'providers'));
+    expect(loader.getUpstreamDir()).toBe(path.join(configDir, 'providers', '.upstream'));
+    expect(snapshot.userDir).toBe(path.join(configDir, 'providers'));
+    expect(snapshot.upstreamDir).toBe(path.join(configDir, 'providers', '.upstream'));
+    expect(snapshot.providerRoots).toEqual([
+      path.join(configDir, 'providers'),
+      path.join(configDir, 'external'),
+      path.join(configDir, 'providers', '.upstream'),
+    ]);
+  });
+
+  it('falls back to ~/.adhdev roots when ADHDEV_CONFIG_DIR is unset', () => {
+    delete process.env.ADHDEV_CONFIG_DIR;
+
+    const loader = new ProviderLoader({ probeStarts: [projectDir] });
+    const snapshot = loader.getSourceConfig();
+
+    expect(loader.getUserDir()).toBe(path.join(homedir(), '.adhdev', 'providers'));
+    expect(snapshot.providerRoots).toEqual([
+      path.join(homedir(), '.adhdev', 'providers'),
+      path.join(homedir(), '.adhdev', 'external'),
+      path.join(homedir(), '.adhdev', 'providers', '.upstream'),
+    ]);
   });
 });
 
@@ -947,9 +1008,8 @@ describe('ProviderLoader upstream fetch cooldown vs empty upstream', () => {
   // out immediately and we only assert which gate branch the code took.
   const UNREACHABLE = 'https://adhdev-provider-loader-test.invalid/providers.tar.gz';
   let tmpRoot = '';
-  let upstreamDir = ''; // always {home}/.adhdev/providers/.upstream — the loader fixes this
-  let homeBefore: string | undefined;
-  let userProfileBefore: string | undefined;
+  let upstreamDir = ''; // {configDir}/providers/.upstream — the loader derives this from getConfigDir()
+  let configDirBefore: string | undefined;
 
   function seedRecentMeta(dir: string) {
     mkdirSync(dir, { recursive: true });
@@ -961,8 +1021,8 @@ describe('ProviderLoader upstream fetch cooldown vs empty upstream', () => {
   }
 
   function newLoader(logs: string[]) {
-    // upstreamDir is derived from os.homedir(), not from a userDir option, so we
-    // redirect HOME/USERPROFILE to the temp root (done in beforeEach) rather than
+    // upstreamDir is derived from getConfigDir(), not from a userDir option, so we
+    // redirect ADHDEV_CONFIG_DIR to the temp root (done in beforeEach) rather than
     // passing a userDir here.
     return new ProviderLoader({
       providerTarballUrl: UNREACHABLE,
@@ -972,19 +1032,15 @@ describe('ProviderLoader upstream fetch cooldown vs empty upstream', () => {
 
   beforeEach(() => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'adhdev-loader-cooldown-'));
-    homeBefore = process.env.HOME;
-    userProfileBefore = process.env.USERPROFILE;
-    process.env.HOME = tmpRoot;
-    process.env.USERPROFILE = tmpRoot; // win32 os.homedir() reads USERPROFILE
-    upstreamDir = join(tmpRoot, '.adhdev', 'providers', '.upstream');
-    mkdirSync(join(tmpRoot, '.adhdev', 'providers'), { recursive: true });
+    configDirBefore = process.env.ADHDEV_CONFIG_DIR;
+    process.env.ADHDEV_CONFIG_DIR = tmpRoot;
+    upstreamDir = join(tmpRoot, 'providers', '.upstream');
+    mkdirSync(join(tmpRoot, 'providers'), { recursive: true });
   });
 
   afterEach(() => {
-    if (homeBefore === undefined) delete process.env.HOME;
-    else process.env.HOME = homeBefore;
-    if (userProfileBefore === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = userProfileBefore;
+    if (configDirBefore === undefined) delete process.env.ADHDEV_CONFIG_DIR;
+    else process.env.ADHDEV_CONFIG_DIR = configDirBefore;
     if (tmpRoot && existsSync(tmpRoot)) rmSync(tmpRoot, { recursive: true, force: true });
     tmpRoot = upstreamDir = '';
   });

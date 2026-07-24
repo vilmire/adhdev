@@ -37,6 +37,7 @@ import {
   resolveActiveSource,
 } from './external-sources.js';
 import type { ProviderSourceMode } from '../config/config.js';
+import { getConfigDir } from '../config/config.js';
 import {
   resolveRegistryBaseUrl,
   resolveProviderTarballUrl,
@@ -237,7 +238,7 @@ export class ProviderLoader {
   }
 
   private detectDefaultUserDir(): { path: string; source: 'sibling-env' | 'sibling-marker' | 'home-default' } {
-    const fallback = path.join(os.homedir(), '.adhdev', 'providers');
+    const fallback = path.join(getConfigDir(), 'providers');
     const envOptIn = process.env[ProviderLoader.SIBLING_ENV_VAR] === '1';
     const visited = new Set<string>();
 
@@ -305,8 +306,10 @@ export class ProviderLoader {
     this.registryBaseUrl = resolveRegistryBaseUrl(options?.registryUrl);
     this.providerTarballUrl = resolveProviderTarballUrl(options?.providerTarballUrl);
 
-    // Default directory for auto-downloads
-    this.defaultProvidersDir = path.join(os.homedir(), '.adhdev', 'providers');
+    // Default directory for auto-downloads. Resolved via getConfigDir() so
+    // ADHDEV_CONFIG_DIR (preview/stable instance isolation) is honored instead
+    // of a hardcoded ~/.adhdev.
+    this.defaultProvidersDir = path.join(getConfigDir(), 'providers');
     const detected = this.detectDefaultUserDir();
     this.userDir = detected.path;
     this.userDirSource = detected.source;
@@ -329,9 +332,9 @@ export class ProviderLoader {
 
   private migrateMarketplaceDirToExternal(): void {
     try {
-      const home = os.homedir();
-      const oldDir = path.join(home, '.adhdev', 'marketplace');
-      const newDir = path.join(home, '.adhdev', 'external');
+      const configDir = getConfigDir();
+      const oldDir = path.join(configDir, 'marketplace');
+      const newDir = path.join(configDir, 'external');
       if (!fs.existsSync(oldDir)) return;
       if (fs.existsSync(newDir)) {
         // Both exist — don't merge. Leave old in place; surface in logs so
@@ -380,7 +383,7 @@ export class ProviderLoader {
     // (official auto-sync). findProviderDirInternal walks this list in order
     // to locate the provider dir containing the scripts/, so external must
     // be included here even though loadAll() also reads it directly.
-    const externalDir = path.join(os.homedir(), '.adhdev', 'external');
+    const externalDir = path.join(getConfigDir(), 'external');
     return [this.userDir, externalDir, this.upstreamDir];
   }
 
@@ -511,7 +514,7 @@ export class ProviderLoader {
  //    an external source runs JavaScript the daemon hasn't audited, so
  //    dashboards must surface an "untrusted source" badge before letting
  //    the user enable them.
-    const externalDir = path.join(os.homedir(), '.adhdev', 'external');
+    const externalDir = path.join(getConfigDir(), 'external');
     if (fs.existsSync(externalDir)) {
       // Legacy layout (pre-source-namespace): manifests sit directly at
       // external/<category>/<type>/. Detect by presence of category dirs at
@@ -2414,7 +2417,7 @@ export class ProviderLoader {
             // came from + whether it ships JavaScript hooks. The dashboard
             // uses this to render trust badges; non-spec external manifests
             // need an explicit user confirm before activation.
-            const externalDirAbs = path.join(os.homedir(), '.adhdev', 'external');
+            const externalDirAbs = path.join(getConfigDir(), 'external');
             const layer: 'user' | 'upstream' | 'external' = d.startsWith(externalDirAbs)
               ? 'external'
               : (d.startsWith(this.userDir) && !d.includes('.upstream') ? 'user' : 'upstream');
