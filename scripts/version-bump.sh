@@ -71,9 +71,24 @@ else
 fi
 
 # ── CI verification (mirrors GitHub Actions) ──
+#
+# This block runs the SAME gates the OSS CI enforces (.github/workflows/ci.yml)
+# BEFORE the release tag is created, so a green local run guarantees a green
+# tagged CI run — publish never gets skipped on a red tag.
+#
+# Why local-run and not "push branch → wait for CI → tag" (the CI-wait design):
+# the CI `build` job is deliberately skipped on a branch push whose commit
+# message starts with 'chore: bump version to v' (ci.yml build `if:`), and the
+# `test` job `needs: build`. So on the bump commit's branch push, the test job
+# never runs — the test/publish gates only execute on the *tag* push. Waiting
+# for a branch-push test run would wait for a job that is skipped by design, and
+# the tests do not actually run until the tag already exists (too late to gate).
+# Running the CI `test` job's exact commands locally before the tag is therefore
+# the only gate that fires before publish. This mirrors the root
+# scripts/version-bump.sh, which already runs `npm run ci` before committing.
 
 echo ""
-echo "⏳ [1/3] Build verification..."
+echo "⏳ [1/4] Build verification..."
 export ADHDEV_SKIP_GHOSTTY_VT_BUILD="${ADHDEV_SKIP_GHOSTTY_VT_BUILD:-1}"
 if ! npm run build; then
     echo "❌ Build failed! Fix errors before bumping."
@@ -81,7 +96,7 @@ if ! npm run build; then
 fi
 echo "✅ Build passed!"
 
-echo "⏳ [2/3] Shebang verification..."
+echo "⏳ [2/4] Shebang verification..."
 SHEBANG=$(head -1 packages/daemon-standalone/dist/index.js)
 if ! echo "$SHEBANG" | grep -q '#!/usr/bin/env node'; then
     echo "❌ Shebang missing in daemon-standalone! Got: $SHEBANG"
@@ -89,10 +104,75 @@ if ! echo "$SHEBANG" | grep -q '#!/usr/bin/env node'; then
 fi
 echo "✅ Shebang OK!"
 
-echo "⏳ [3/3] Bundle verification..."
+echo "⏳ [3/4] Bundle verification..."
 if ! npm run bundle:web -w packages/daemon-standalone 2>/dev/null; then
     echo "⚠ Web bundle step skipped (non-critical)"
 fi
+echo "✅ Bundle check passed!"
+
+# [4/4] Test gate — mirrors the CI `test` job (.github/workflows/ci.yml).
+# v1.0.21 was tagged on a commit whose CI test job was red, so npm publish was
+# skipped and the release had to be discarded. This gate reproduces that job
+# locally so a red test blocks the tag instead of a discarded release.
+echo "⏳ [4/4] Test gate (mirrors CI test job)..."
+
+# CI test-job prerequisites reproduced locally (ci.yml `test` job steps):
+#
+#  1. git identity + default branch — the daemon-core suite has real-git
+#     fixture tests that shell out to `git init/commit/rev-parse`; without an
+#     identity/default branch those spawns emit hints and misbehave. Set only
+#     when unset so a developer's existing config is never overwritten.
+if [ -z "$(git config user.email 2>/dev/null || true)" ]; then
+    git config user.email "ci@adhf.dev"
+fi
+if [ -z "$(git config user.name 2>/dev/null || true)" ]; then
+    git config user.name "ADHDev CI"
+fi
+if [ -z "$(git config init.defaultBranch 2>/dev/null || true)" ]; then
+    git config init.defaultBranch main
+fi
+
+#  2. provider spec fixtures — spec-driven daemon-core/mcp-server tests resolve
+#     the sibling adhdev-providers repo at repoRoot/../adhdev-providers. In the
+#     cloud monorepo checkout it is already present as a sibling; only warn if
+#     it is genuinely missing (tests fall back or skip), never hard-fail here.
+if [ ! -e "../adhdev-providers" ]; then
+    echo "⚠ ../adhdev-providers sibling not found — spec-driven tests may fall back or fail."
+    echo "  (In the cloud monorepo this is the adhdev-providers submodule sibling.)"
+fi
+
+run_ci_step() {
+    # Run one CI-mirrored step; abort the whole script on the first red so the
+    # tag is never created for a commit CI would reject. `set -e` is suspended
+    # inside `if`, so this explicit check is what enforces fail-on-first-red.
+    local label="$1"
+    shift
+    if ! "$@"; then
+        echo "❌ Test gate failed at: ${label}"
+        echo "   CI would be red on this commit — publish would be skipped."
+        echo "   Fix the failure above before tagging a release."
+        exit 1
+    fi
+}
+
+#  3. build the packages the test job builds before running tests (ci.yml
+#     'Build packages required for tests'). daemon-core is already built by
+#     [1/4] above via `npm run build`, but re-run the CI's explicit list so the
+#     gate stays faithful even if the top-level build graph changes.
+run_ci_step "build session-host-core"   npm run build -w packages/session-host-core
+run_ci_step "build session-host-daemon" npm run build -w packages/session-host-daemon
+run_ci_step "build mesh-shared"          npm run build -w packages/mesh-shared
+run_ci_step "build daemon-core"          npm run build -w packages/daemon-core
+
+# Run the exact CI test-job commands, in CI order. Any red blocks the tag.
+# NOTE: the daemon-core suite includes slow real-git/provider-spec fixtures;
+# this step is intentionally the CI-identical gate, so it may take a while.
+run_ci_step "test mesh-shared"       npm run test -w packages/mesh-shared
+run_ci_step "test daemon-core"       npm run test -w packages/daemon-core
+run_ci_step "test mcp-server"        npm run test -w packages/mcp-server
+run_ci_step "test web-core"          npm run test -w packages/web-core
+run_ci_step "typecheck daemon-core"  npm run typecheck -w packages/daemon-core
+echo "✅ Test gate passed!"
 echo "✅ All checks passed!"
 
 # ── Bump versions ──
