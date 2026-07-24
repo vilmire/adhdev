@@ -93,6 +93,185 @@
             "colFrom": "출발",
             "colTo": "도착",
             "colCause": "원인"
+        },
+        "guide": {
+            "title": "대시보드 가이드",
+            "subtitle": "대시보드 흐름, 플로팅·팝아웃 탭, 그리고 조정 가능한 그룹별 단축키에 대한 간단한 안내입니다.",
+            "close": "대시보드 가이드 닫기",
+            "tabs": {
+                "overview": "개요",
+                "quickstart": "빠른 시작",
+                "shortcuts": "단축키"
+            },
+            "overview": {
+                "whatLivesWhere": {
+                    "title": "무엇이 어디에 있나요",
+                    "tabsLabel": "탭:",
+                    "tabsText": "IDE, CLI, ACP 에이전트에 걸친 활성 세션입니다.",
+                    "hiddenLabel": "숨긴 탭:",
+                    "hiddenText": "메인 스트립에는 두고 싶지 않지만 계속 유지하고 싶은 세션을 보관합니다.",
+                    "inboxLabel": "활동 수신함:",
+                    "inboxText": "승인을 기다리는 세션이나 아직 확인하지 않은 완료된 작업입니다.",
+                    "cliToggleLabel": "CLI 보기 전환:",
+                    "cliToggleText": "PTY 세션을 다시 시작하지 않고 터미널과 채팅 렌더링 사이에서 전환합니다."
+                },
+                "usefulFlows": {
+                    "title": "유용한 흐름",
+                    "reviewLabel": "알림 검토:",
+                    "reviewText": "수신함을 열어 세션으로 이동한 다음, 활성 창에서 바로 대화 또는 승인 컨트롤을 사용하세요.",
+                    "clutterLabel": "복잡함 줄이기:",
+                    "clutterText": "덜 중요한 세션은 닫지 말고 숨긴 다음, 필요할 때 숨긴 탭에서 복원하세요.",
+                    "splitLabel": "작업 분할:",
+                    "splitText": "입력용으로 한 창을 활성 상태로 두고, 보조 창은 포커스하기 전까지 읽기 전용으로 유지하세요.",
+                    "detachedLabel": "분리된 보기:",
+                    "detachedText": "빠른 나란히 보기를 위해 탭을 플로팅하거나, 별도 모니터를 원할 때 새 창으로 팝아웃하세요.",
+                    "dockingLabel": "도킹:",
+                    "dockingText": "Dock을 사용해 플로팅 탭을 그리드로 되돌리거나, 팝아웃된 탭을 메인 대시보드로 옮기세요.",
+                    "perTabLabel": "탭별 단축키:",
+                    "perTabText": "Dockview 탭을 우클릭하여 해당 세션 전용 직접 단축키를 지정하세요.",
+                    "approvalLabel": "승인 버튼:",
+                    "approvalText": "활성 세션의 처음 세 개의 표시된 승인 동작에는 {{keys}} 를 사용하세요."
+                }
+            },
+            "quickstart": {
+                "desktop": {
+                    "title": "데스크톱 빠른 시작",
+                    "step1": "먼저 머신 또는 워크스페이스 흐름에서 시작하세요. CLI나 ACP 세션을 실행하기 전에 워크스페이스를 선택하거나 저장하세요.",
+                    "step2": "메인 스트립은 활성 작업에 집중하고, 넘치는 것은 숨긴 탭으로 보내세요.",
+                    "step3": "모든 탭을 훑어보는 대신, 승인이 필요하거나 완료된 세션은 수신함을 사용하세요.",
+                    "step4": "병렬 읽기가 필요할 때만 분할하세요. 메인 레이아웃을 잃지 않고 탭을 분리하려면 플로팅하거나 팝아웃하세요."
+                },
+                "mobile": {
+                    "title": "모바일 빠른 시작",
+                    "step1": "검토와 답장은 채팅 모드를 유지하세요. 워크스페이스 모드는 주로 세션을 실행하거나 다시 열 때 사용하세요.",
+                    "step2": "머신 화면에서 시작해 워크스페이스를 선택한 다음, 거기서 IDE, CLI, ACP를 실행하세요.",
+                    "step3": "모바일은 더 단순한 제어 화면으로 취급하세요. 분할 워크플로 없음, 적은 탭 조작, 빠른 세션 전환."
+                }
+            },
+            "shortcuts": {
+                "sections": {
+                    "all": "전체",
+                    "workspace": "워크스페이스",
+                    "panes": "창",
+                    "approvals": "승인"
+                },
+                "disableAll": "모두 비활성화",
+                "resetToDefaults": "기본값으로 재설정",
+                "default": "기본값:",
+                "listening": "입력 대기 중...",
+                "set": "설정",
+                "disable": "비활성화",
+                "off": "꺼짐",
+                "footer": "{{keys}} 같은 조합 단축키를 사용하거나 직접 조합을 설정하세요. 텍스트 입력 중에는 대시보드 동작 단축키가 무시됩니다.",
+                "resetConfirm": "모든 대시보드 단축키를 기본값으로 재설정할까요?",
+                "setListening": "입력 대기"
+            }
+        },
+        "shortcutDefs": {
+            "openShortcutHelp": {
+                "label": "단축키 열기",
+                "description": "키보드 단축키 패널을 표시합니다."
+            },
+            "openNewSession": {
+                "label": "새 세션",
+                "description": "새 세션 실행기를 엽니다."
+            },
+            "hideCurrentTab": {
+                "label": "현재 탭 숨기기",
+                "description": "현재 활성 탭을 숨긴 탭으로 숨깁니다."
+            },
+            "toggleHiddenTabs": {
+                "label": "숨긴 탭 토글",
+                "description": "숨긴 탭 팝오버를 열거나 닫습니다."
+            },
+            "openHistoryForActiveTab": {
+                "label": "기록 열기",
+                "description": "활성 세션의 기록을 엽니다."
+            },
+            "openRemoteForActiveTab": {
+                "label": "원격 열기",
+                "description": "가능한 경우 활성 세션의 원격 제어를 엽니다."
+            },
+            "floatActiveTab": {
+                "label": "활성 탭 플로팅",
+                "description": "활성 탭을 플로팅 패널로 옮깁니다."
+            },
+            "popoutActiveTab": {
+                "label": "활성 탭을 새 창에서 열기",
+                "description": "활성 탭을 분리된 팝아웃 창으로 옮깁니다."
+            },
+            "dockActiveTab": {
+                "label": "활성 탭 도킹",
+                "description": "플로팅 탭을 그리드로 되돌리거나 팝아웃 탭을 메인 창으로 옮깁니다."
+            },
+            "splitActiveTabRight": {
+                "label": "활성 탭을 새 오른쪽 창으로",
+                "description": "오른쪽에 창을 만들고 활성 탭을 그곳으로 옮깁니다."
+            },
+            "splitActiveTabDown": {
+                "label": "활성 탭을 새 아래쪽 창으로",
+                "description": "아래에 창을 만들고 활성 탭을 그곳으로 옮깁니다."
+            },
+            "focusLeftPane": {
+                "label": "왼쪽 창 포커스",
+                "description": "왼쪽 창으로 포커스를 이동합니다."
+            },
+            "focusRightPane": {
+                "label": "오른쪽 창 포커스",
+                "description": "오른쪽 창으로 포커스를 이동합니다."
+            },
+            "focusUpPane": {
+                "label": "위쪽 창 포커스",
+                "description": "위쪽 창으로 포커스를 이동합니다."
+            },
+            "focusDownPane": {
+                "label": "아래쪽 창 포커스",
+                "description": "아래쪽 창으로 포커스를 이동합니다."
+            },
+            "moveActiveTabToLeftPane": {
+                "label": "활성 탭 왼쪽으로 이동",
+                "description": "활성 탭을 왼쪽 창으로 옮깁니다."
+            },
+            "moveActiveTabToRightPane": {
+                "label": "활성 탭 오른쪽으로 이동",
+                "description": "활성 탭을 오른쪽 창으로 옮깁니다."
+            },
+            "moveActiveTabToUpPane": {
+                "label": "활성 탭 위로 이동",
+                "description": "활성 탭을 위쪽 창으로 옮깁니다."
+            },
+            "moveActiveTabToDownPane": {
+                "label": "활성 탭 아래로 이동",
+                "description": "활성 탭을 아래쪽 창으로 옮깁니다."
+            },
+            "triggerPrimaryApprovalAction": {
+                "label": "승인 동작 1",
+                "description": "활성 세션의 첫 번째 승인/동작 버튼을 누릅니다."
+            },
+            "triggerSecondaryApprovalAction": {
+                "label": "승인 동작 2",
+                "description": "활성 세션의 두 번째 승인/동작 버튼을 누릅니다."
+            },
+            "triggerTertiaryApprovalAction": {
+                "label": "승인 동작 3",
+                "description": "활성 세션의 세 번째 승인/동작 버튼을 누릅니다."
+            },
+            "setActiveTabShortcut": {
+                "label": "활성 탭 단축키 설정",
+                "description": "활성 탭에 대한 직접 단축키 기록을 시작합니다."
+            },
+            "selectPreviousGroupTab": {
+                "label": "그룹 내 이전 탭",
+                "description": "활성 Dockview 그룹 안에서 이전 탭으로 이동합니다."
+            },
+            "selectNextGroupTab": {
+                "label": "그룹 내 다음 탭",
+                "description": "활성 Dockview 그룹 안에서 다음 탭으로 이동합니다."
+            },
+            "toggleCliView": {
+                "label": "CLI 보기 토글",
+                "description": "활성 CLI 세션을 채팅과 터미널 보기 사이에서 전환합니다."
+            }
         }
     },
     "cliStop": {

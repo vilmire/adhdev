@@ -93,6 +93,185 @@
             "colFrom": "変更前",
             "colTo": "変更後",
             "colCause": "原因"
+        },
+        "guide": {
+            "title": "ダッシュボードガイド",
+            "subtitle": "ダッシュボードの流れ、フローティングタブとポップアウトタブ、そして調整可能なグループ化されたショートカットの簡単なガイドです。",
+            "close": "ダッシュボードガイドを閉じる",
+            "tabs": {
+                "overview": "概要",
+                "quickstart": "クイックスタート",
+                "shortcuts": "ショートカット"
+            },
+            "overview": {
+                "whatLivesWhere": {
+                    "title": "どこに何があるか",
+                    "tabsLabel": "タブ:",
+                    "tabsText": "IDE、CLI、ACP エージェントにまたがるアクティブなセッション。",
+                    "hiddenLabel": "非表示タブ:",
+                    "hiddenText": "メインストリップには置きたくないが、残しておきたいセッションを退避します。",
+                    "inboxLabel": "アクティビティ受信箱:",
+                    "inboxText": "承認待ちのセッションや、まだ確認していない完了タスク。",
+                    "cliToggleLabel": "CLI ビュー切り替え:",
+                    "cliToggleText": "PTY セッションを再起動せずにターミナルとチャット表示を切り替えます。"
+                },
+                "usefulFlows": {
+                    "title": "便利なフロー",
+                    "reviewLabel": "通知の確認:",
+                    "reviewText": "受信箱を開いてセッションに移動し、アクティブなペインから直接、会話または承認コントロールを使用します。",
+                    "clutterLabel": "散らかりを減らす:",
+                    "clutterText": "重要度の低いセッションは閉じずに非表示にし、必要なときに非表示タブから復元します。",
+                    "splitLabel": "作業の分割:",
+                    "splitText": "入力用に 1 つのペインをアクティブにし、フォーカスするまで補助ペインは読み取り専用のままにします。",
+                    "detachedLabel": "分離ビュー:",
+                    "detachedText": "並べて素早く作業するにはタブをフローティングし、別モニターが必要なときは新しいウィンドウにポップアウトします。",
+                    "dockingLabel": "ドッキング:",
+                    "dockingText": "Dock を使ってフローティングタブをグリッドに戻すか、ポップアウトしたタブをメインダッシュボードに戻します。",
+                    "perTabLabel": "タブ別ショートカット:",
+                    "perTabText": "Dockview タブを右クリックして、その特定のセッション専用の直接ショートカットを割り当てます。",
+                    "approvalLabel": "承認ボタン:",
+                    "approvalText": "アクティブなセッションで最初に表示される 3 つの承認アクションには {{keys}} を使用します。"
+                }
+            },
+            "quickstart": {
+                "desktop": {
+                    "title": "デスクトップのクイックスタート",
+                    "step1": "まずマシンまたはワークスペースのフローから始めます。CLI や ACP セッションを起動する前にワークスペースを選択または保存します。",
+                    "step2": "メインストリップはアクティブな作業に集中させ、あふれた分は非表示タブに送ります。",
+                    "step3": "すべてのタブを走査する代わりに、承認が必要なセッションや完了したセッションには受信箱を使います。",
+                    "step4": "並行して読む必要があるときだけ分割します。メインレイアウトを崩さずにタブを分離したいときはフローティングまたはポップアウトします。"
+                },
+                "mobile": {
+                    "title": "モバイルのクイックスタート",
+                    "step1": "確認や返信はチャットモードのままにします。ワークスペースモードは主にセッションの起動や再開に使います。",
+                    "step2": "マシン画面から始めてワークスペースを選び、そこから IDE、CLI、ACP を起動します。",
+                    "step3": "モバイルはよりシンプルな操作面として扱います。分割ワークフローなし、タブ操作は少なく、セッション切り替えは高速。"
+                }
+            },
+            "shortcuts": {
+                "sections": {
+                    "all": "すべて",
+                    "workspace": "ワークスペース",
+                    "panes": "ペイン",
+                    "approvals": "承認"
+                },
+                "disableAll": "すべて無効化",
+                "resetToDefaults": "既定値にリセット",
+                "default": "既定値:",
+                "listening": "入力待ち...",
+                "set": "設定",
+                "disable": "無効化",
+                "off": "オフ",
+                "footer": "{{keys}} のような修飾キーショートカットを使うか、独自の組み合わせを設定します。テキスト入力中はダッシュボードのアクションショートカットは無視されます。",
+                "resetConfirm": "すべてのダッシュボードショートカットを既定値にリセットしますか?",
+                "setListening": "入力待ち"
+            }
+        },
+        "shortcutDefs": {
+            "openShortcutHelp": {
+                "label": "ショートカットを開く",
+                "description": "キーボードショートカットパネルを表示します。"
+            },
+            "openNewSession": {
+                "label": "新規セッション",
+                "description": "新規セッションランチャーを開きます。"
+            },
+            "hideCurrentTab": {
+                "label": "現在のタブを非表示",
+                "description": "現在アクティブなタブを非表示タブに隠します。"
+            },
+            "toggleHiddenTabs": {
+                "label": "非表示タブの切り替え",
+                "description": "非表示タブのポップオーバーを開閉します。"
+            },
+            "openHistoryForActiveTab": {
+                "label": "履歴を開く",
+                "description": "アクティブなセッションの履歴を開きます。"
+            },
+            "openRemoteForActiveTab": {
+                "label": "リモートを開く",
+                "description": "利用可能な場合、アクティブなセッションのリモートコントロールを開きます。"
+            },
+            "floatActiveTab": {
+                "label": "アクティブタブをフローティング",
+                "description": "アクティブなタブをフローティングパネルに移動します。"
+            },
+            "popoutActiveTab": {
+                "label": "アクティブタブを新しいウィンドウで開く",
+                "description": "アクティブなタブを分離したポップアウトウィンドウに移動します。"
+            },
+            "dockActiveTab": {
+                "label": "アクティブタブをドック",
+                "description": "フローティングタブをグリッドに戻すか、ポップアウトタブをメインウィンドウに戻します。"
+            },
+            "splitActiveTabRight": {
+                "label": "アクティブタブを新しい右ペインへ",
+                "description": "右側にペインを作成し、アクティブなタブをそこへ移動します。"
+            },
+            "splitActiveTabDown": {
+                "label": "アクティブタブを新しい下ペインへ",
+                "description": "下側にペインを作成し、アクティブなタブをそこへ移動します。"
+            },
+            "focusLeftPane": {
+                "label": "左ペインにフォーカス",
+                "description": "左側のペインにフォーカスを移動します。"
+            },
+            "focusRightPane": {
+                "label": "右ペインにフォーカス",
+                "description": "右側のペインにフォーカスを移動します。"
+            },
+            "focusUpPane": {
+                "label": "上ペインにフォーカス",
+                "description": "上のペインにフォーカスを移動します。"
+            },
+            "focusDownPane": {
+                "label": "下ペインにフォーカス",
+                "description": "下のペインにフォーカスを移動します。"
+            },
+            "moveActiveTabToLeftPane": {
+                "label": "アクティブタブを左へ移動",
+                "description": "アクティブなタブを左側のペインへ移動します。"
+            },
+            "moveActiveTabToRightPane": {
+                "label": "アクティブタブを右へ移動",
+                "description": "アクティブなタブを右側のペインへ移動します。"
+            },
+            "moveActiveTabToUpPane": {
+                "label": "アクティブタブを上へ移動",
+                "description": "アクティブなタブを上のペインへ移動します。"
+            },
+            "moveActiveTabToDownPane": {
+                "label": "アクティブタブを下へ移動",
+                "description": "アクティブなタブを下のペインへ移動します。"
+            },
+            "triggerPrimaryApprovalAction": {
+                "label": "承認アクション 1",
+                "description": "アクティブなセッションの最初の承認/アクションボタンを押します。"
+            },
+            "triggerSecondaryApprovalAction": {
+                "label": "承認アクション 2",
+                "description": "アクティブなセッションの 2 番目の承認/アクションボタンを押します。"
+            },
+            "triggerTertiaryApprovalAction": {
+                "label": "承認アクション 3",
+                "description": "アクティブなセッションの 3 番目の承認/アクションボタンを押します。"
+            },
+            "setActiveTabShortcut": {
+                "label": "アクティブタブのショートカットを設定",
+                "description": "アクティブなタブの直接ショートカットの記録を開始します。"
+            },
+            "selectPreviousGroupTab": {
+                "label": "グループ内の前のタブ",
+                "description": "アクティブな Dockview グループ内で前のタブに移動します。"
+            },
+            "selectNextGroupTab": {
+                "label": "グループ内の次のタブ",
+                "description": "アクティブな Dockview グループ内で次のタブに移動します。"
+            },
+            "toggleCliView": {
+                "label": "CLI ビューの切り替え",
+                "description": "アクティブな CLI セッションをチャットとターミナル表示の間で切り替えます。"
+            }
         }
     },
     "cliStop": {

@@ -93,6 +93,185 @@
             "colFrom": "Desde",
             "colTo": "Hasta",
             "colCause": "Causa"
+        },
+        "guide": {
+            "title": "Guía del panel",
+            "subtitle": "Una guía rápida del flujo del panel, las pestañas flotantes y emergentes, además de los atajos agrupados que puedes ajustar.",
+            "close": "Cerrar la guía del panel",
+            "tabs": {
+                "overview": "Resumen",
+                "quickstart": "Inicio rápido",
+                "shortcuts": "Atajos"
+            },
+            "overview": {
+                "whatLivesWhere": {
+                    "title": "Qué hay en cada lugar",
+                    "tabsLabel": "Pestañas:",
+                    "tabsText": "sesiones activas de agentes de IDE, CLI y ACP.",
+                    "hiddenLabel": "Pestañas ocultas:",
+                    "hiddenText": "guarda sesiones que no quieres en la tira principal pero que aún deseas conservar.",
+                    "inboxLabel": "Bandeja de actividad:",
+                    "inboxText": "sesiones a la espera de aprobación o tareas finalizadas que aún no has revisado.",
+                    "cliToggleLabel": "Alternar vista CLI:",
+                    "cliToggleText": "cambia una sesión PTY entre representación de terminal y de chat sin reiniciarla."
+                },
+                "usefulFlows": {
+                    "title": "Flujos útiles",
+                    "reviewLabel": "Revisar notificaciones:",
+                    "reviewText": "abre la bandeja, salta a la sesión y luego usa los controles de conversación o aprobación directamente desde el panel activo.",
+                    "clutterLabel": "Reducir el desorden:",
+                    "clutterText": "oculta las sesiones menos importantes en lugar de cerrarlas y restáuralas desde las pestañas ocultas cuando las necesites.",
+                    "splitLabel": "Dividir el trabajo:",
+                    "splitText": "mantén un panel activo para la entrada y deja que los paneles secundarios permanezcan de solo lectura hasta que los enfoques.",
+                    "detachedLabel": "Vistas separadas:",
+                    "detachedText": "haz flotar una pestaña para trabajar rápido en paralelo, o ábrela en una ventana nueva cuando quieras un monitor separado.",
+                    "dockingLabel": "Acoplamiento:",
+                    "dockingText": "usa Acoplar para devolver una pestaña flotante a la cuadrícula, o mueve una pestaña emergente de vuelta al panel principal.",
+                    "perTabLabel": "Atajos por pestaña:",
+                    "perTabText": "haz clic derecho en una pestaña de Dockview para asignar un atajo directo a esa sesión específica.",
+                    "approvalLabel": "Botones de aprobación:",
+                    "approvalText": "usa {{keys}} para las primeras tres acciones de aprobación visibles de la sesión activa."
+                }
+            },
+            "quickstart": {
+                "desktop": {
+                    "title": "Inicio rápido de escritorio",
+                    "step1": "Empieza primero por el flujo de máquina o espacio de trabajo. Elige o guarda un espacio de trabajo antes de lanzar sesiones CLI o ACP.",
+                    "step2": "Mantén la tira principal centrada en el trabajo activo y envía el excedente a las pestañas ocultas.",
+                    "step3": "Usa la bandeja para las sesiones que requieren aprobación o completadas en lugar de revisar cada pestaña.",
+                    "step4": "Divide solo cuando necesites lectura en paralelo; haz flotar o abre una pestaña en ventana aparte cuando quieras separarla sin perder el diseño principal."
+                },
+                "mobile": {
+                    "title": "Inicio rápido en móvil",
+                    "step1": "Mantente en modo chat para revisar y responder; usa el modo espacio de trabajo principalmente para lanzar o reabrir sesiones.",
+                    "step2": "Empieza desde la pantalla de máquina, elige un espacio de trabajo y luego lanza IDE, CLI o ACP desde allí.",
+                    "step3": "Trata el móvil como la superficie de control más simple: sin flujo de división, menos mecánicas de pestañas, cambio de sesión más rápido."
+                }
+            },
+            "shortcuts": {
+                "sections": {
+                    "all": "Todos",
+                    "workspace": "Espacio de trabajo",
+                    "panes": "Paneles",
+                    "approvals": "Aprobaciones"
+                },
+                "disableAll": "Desactivar todo",
+                "resetToDefaults": "Restablecer valores predeterminados",
+                "default": "Predeterminado:",
+                "listening": "Escuchando...",
+                "set": "Definir",
+                "disable": "Desactivar",
+                "off": "Desactivado",
+                "footer": "Usa atajos con modificadores como {{keys}}, o define tu propia combinación. Los atajos de acción del panel se ignoran mientras escribes en campos de texto.",
+                "resetConfirm": "¿Restablecer todos los atajos del panel a sus valores predeterminados?",
+                "setListening": "Escuchando"
+            }
+        },
+        "shortcutDefs": {
+            "openShortcutHelp": {
+                "label": "Abrir atajos",
+                "description": "Muestra el panel de atajos de teclado."
+            },
+            "openNewSession": {
+                "label": "Nueva sesión",
+                "description": "Abre el lanzador de nueva sesión."
+            },
+            "hideCurrentTab": {
+                "label": "Ocultar pestaña actual",
+                "description": "Oculta la pestaña activa actual en las pestañas ocultas."
+            },
+            "toggleHiddenTabs": {
+                "label": "Alternar pestañas ocultas",
+                "description": "Abre o cierra el menú emergente de pestañas ocultas."
+            },
+            "openHistoryForActiveTab": {
+                "label": "Abrir historial",
+                "description": "Abre el historial de la sesión activa."
+            },
+            "openRemoteForActiveTab": {
+                "label": "Abrir remoto",
+                "description": "Abre el control remoto de la sesión activa cuando esté disponible."
+            },
+            "floatActiveTab": {
+                "label": "Hacer flotar la pestaña activa",
+                "description": "Mueve la pestaña activa a un panel flotante."
+            },
+            "popoutActiveTab": {
+                "label": "Abrir la pestaña activa en una ventana nueva",
+                "description": "Mueve la pestaña activa a una ventana emergente separada."
+            },
+            "dockActiveTab": {
+                "label": "Acoplar la pestaña activa",
+                "description": "Acopla una pestaña flotante de vuelta a la cuadrícula, o mueve una pestaña emergente de vuelta a la ventana principal."
+            },
+            "splitActiveTabRight": {
+                "label": "Mover la pestaña activa a un nuevo panel derecho",
+                "description": "Crea un panel a la derecha y mueve la pestaña activa a él."
+            },
+            "splitActiveTabDown": {
+                "label": "Mover la pestaña activa a un nuevo panel inferior",
+                "description": "Crea un panel debajo y mueve la pestaña activa a él."
+            },
+            "focusLeftPane": {
+                "label": "Enfocar el panel izquierdo",
+                "description": "Mueve el foco al panel de la izquierda."
+            },
+            "focusRightPane": {
+                "label": "Enfocar el panel derecho",
+                "description": "Mueve el foco al panel de la derecha."
+            },
+            "focusUpPane": {
+                "label": "Enfocar el panel superior",
+                "description": "Mueve el foco al panel de arriba."
+            },
+            "focusDownPane": {
+                "label": "Enfocar el panel inferior",
+                "description": "Mueve el foco al panel de abajo."
+            },
+            "moveActiveTabToLeftPane": {
+                "label": "Mover la pestaña activa a la izquierda",
+                "description": "Mueve la pestaña activa al panel de la izquierda."
+            },
+            "moveActiveTabToRightPane": {
+                "label": "Mover la pestaña activa a la derecha",
+                "description": "Mueve la pestaña activa al panel de la derecha."
+            },
+            "moveActiveTabToUpPane": {
+                "label": "Mover la pestaña activa hacia arriba",
+                "description": "Mueve la pestaña activa al panel de arriba."
+            },
+            "moveActiveTabToDownPane": {
+                "label": "Mover la pestaña activa hacia abajo",
+                "description": "Mueve la pestaña activa al panel de abajo."
+            },
+            "triggerPrimaryApprovalAction": {
+                "label": "Acción de aprobación 1",
+                "description": "Pulsa el primer botón de aprobación/acción de la sesión activa."
+            },
+            "triggerSecondaryApprovalAction": {
+                "label": "Acción de aprobación 2",
+                "description": "Pulsa el segundo botón de aprobación/acción de la sesión activa."
+            },
+            "triggerTertiaryApprovalAction": {
+                "label": "Acción de aprobación 3",
+                "description": "Pulsa el tercer botón de aprobación/acción de la sesión activa."
+            },
+            "setActiveTabShortcut": {
+                "label": "Definir atajo de pestaña activa",
+                "description": "Empieza a grabar un atajo directo para la pestaña activa."
+            },
+            "selectPreviousGroupTab": {
+                "label": "Pestaña anterior del grupo",
+                "description": "Ve a la pestaña anterior dentro del grupo Dockview activo."
+            },
+            "selectNextGroupTab": {
+                "label": "Siguiente pestaña del grupo",
+                "description": "Ve a la siguiente pestaña dentro del grupo Dockview activo."
+            },
+            "toggleCliView": {
+                "label": "Alternar vista CLI",
+                "description": "Alterna la sesión CLI activa entre la vista de chat y de terminal."
+            }
         }
     },
     "cliStop": {

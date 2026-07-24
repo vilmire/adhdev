@@ -93,6 +93,185 @@
             "colFrom": "From",
             "colTo": "To",
             "colCause": "Cause"
+        },
+        "guide": {
+            "title": "Dashboard guide",
+            "subtitle": "A quick guide to the dashboard flow, floating and popout tabs, plus grouped shortcuts you can tune.",
+            "close": "Close dashboard guide",
+            "tabs": {
+                "overview": "Overview",
+                "quickstart": "Quick start",
+                "shortcuts": "Shortcuts"
+            },
+            "overview": {
+                "whatLivesWhere": {
+                    "title": "What lives where",
+                    "tabsLabel": "Tabs:",
+                    "tabsText": "active sessions across IDE, CLI, and ACP agents.",
+                    "hiddenLabel": "Hidden tabs:",
+                    "hiddenText": "stash sessions you do not want in the main strip but still want to keep around.",
+                    "inboxLabel": "Activity inbox:",
+                    "inboxText": "sessions waiting for approval or finished tasks you have not reviewed yet.",
+                    "cliToggleLabel": "CLI view toggle:",
+                    "cliToggleText": "switch a PTY session between terminal and chat rendering without relaunching it."
+                },
+                "usefulFlows": {
+                    "title": "Useful flows",
+                    "reviewLabel": "Review notifications:",
+                    "reviewText": "open the inbox, jump to the session, then use the conversation or approval controls directly from the active pane.",
+                    "clutterLabel": "Reduce clutter:",
+                    "clutterText": "hide less important sessions instead of closing them, then restore from hidden tabs when needed.",
+                    "splitLabel": "Split work:",
+                    "splitText": "keep one pane active for input and let secondary panes stay read-only until you focus them.",
+                    "detachedLabel": "Detached views:",
+                    "detachedText": "float a tab for quick side-by-side work, or pop it into a new window when you want a separate monitor.",
+                    "dockingLabel": "Docking:",
+                    "dockingText": "use Dock to bring a floating tab back into the grid, or move a popped out tab back to the main dashboard.",
+                    "perTabLabel": "Per-tab shortcuts:",
+                    "perTabText": "right-click a Dockview tab to assign a direct shortcut for that specific session.",
+                    "approvalLabel": "Approval buttons:",
+                    "approvalText": "use {{keys}} for the first three visible approval actions on the active session."
+                }
+            },
+            "quickstart": {
+                "desktop": {
+                    "title": "Desktop quick start",
+                    "step1": "Start from the machine or workspace flow first. Pick or save a workspace before launching CLI or ACP sessions.",
+                    "step2": "Keep the main strip focused on active work and push overflow into Hidden tabs.",
+                    "step3": "Use the inbox for approval-required or completed sessions instead of scanning every tab.",
+                    "step4": "Split only when you need parallel reading; float or pop out a tab when you want to detach it without losing the main layout."
+                },
+                "mobile": {
+                    "title": "Mobile quick start",
+                    "step1": "Stay in chat mode for review and replies; use workspace mode mainly to launch or reopen sessions.",
+                    "step2": "Start from the machine screen, choose a workspace, then launch IDE, CLI, or ACP from there.",
+                    "step3": "Treat mobile as the simpler control surface: no split workflow, fewer tab mechanics, faster session switching."
+                }
+            },
+            "shortcuts": {
+                "sections": {
+                    "all": "All",
+                    "workspace": "Workspace",
+                    "panes": "Panes",
+                    "approvals": "Approvals"
+                },
+                "disableAll": "Disable all",
+                "resetToDefaults": "Reset to defaults",
+                "default": "Default:",
+                "listening": "Listening...",
+                "set": "Set",
+                "disable": "Disable",
+                "off": "Off",
+                "footer": "Use modifier shortcuts like {{keys}}, or set your own combo. Dashboard action shortcuts are ignored while typing in text inputs.",
+                "resetConfirm": "Reset all dashboard shortcuts back to their default values?",
+                "setListening": "Listening"
+            }
+        },
+        "shortcutDefs": {
+            "openShortcutHelp": {
+                "label": "Open shortcuts",
+                "description": "Show the keyboard shortcuts panel."
+            },
+            "openNewSession": {
+                "label": "New session",
+                "description": "Open the new session launcher."
+            },
+            "hideCurrentTab": {
+                "label": "Hide current tab",
+                "description": "Hide the currently active tab into Hidden tabs."
+            },
+            "toggleHiddenTabs": {
+                "label": "Toggle hidden tabs",
+                "description": "Open or close the hidden tabs popover."
+            },
+            "openHistoryForActiveTab": {
+                "label": "Open history",
+                "description": "Open history for the active session."
+            },
+            "openRemoteForActiveTab": {
+                "label": "Open remote",
+                "description": "Open remote control for the active session when available."
+            },
+            "floatActiveTab": {
+                "label": "Float active tab",
+                "description": "Move the active tab into a floating panel."
+            },
+            "popoutActiveTab": {
+                "label": "Open active tab in new window",
+                "description": "Move the active tab into a detached popout window."
+            },
+            "dockActiveTab": {
+                "label": "Dock active tab",
+                "description": "Dock a floating tab back into the grid, or move a popout tab back to the main window."
+            },
+            "splitActiveTabRight": {
+                "label": "Move active tab to new right pane",
+                "description": "Create a pane to the right and move the active tab into it."
+            },
+            "splitActiveTabDown": {
+                "label": "Move active tab to new lower pane",
+                "description": "Create a pane below and move the active tab into it."
+            },
+            "focusLeftPane": {
+                "label": "Focus left pane",
+                "description": "Move focus to the pane on the left."
+            },
+            "focusRightPane": {
+                "label": "Focus right pane",
+                "description": "Move focus to the pane on the right."
+            },
+            "focusUpPane": {
+                "label": "Focus upper pane",
+                "description": "Move focus to the pane above."
+            },
+            "focusDownPane": {
+                "label": "Focus lower pane",
+                "description": "Move focus to the pane below."
+            },
+            "moveActiveTabToLeftPane": {
+                "label": "Move active tab left",
+                "description": "Move the active tab into the pane on the left."
+            },
+            "moveActiveTabToRightPane": {
+                "label": "Move active tab right",
+                "description": "Move the active tab into the pane on the right."
+            },
+            "moveActiveTabToUpPane": {
+                "label": "Move active tab up",
+                "description": "Move the active tab into the pane above."
+            },
+            "moveActiveTabToDownPane": {
+                "label": "Move active tab down",
+                "description": "Move the active tab into the pane below."
+            },
+            "triggerPrimaryApprovalAction": {
+                "label": "Approval action 1",
+                "description": "Press the first approval/action button for the active session."
+            },
+            "triggerSecondaryApprovalAction": {
+                "label": "Approval action 2",
+                "description": "Press the second approval/action button for the active session."
+            },
+            "triggerTertiaryApprovalAction": {
+                "label": "Approval action 3",
+                "description": "Press the third approval/action button for the active session."
+            },
+            "setActiveTabShortcut": {
+                "label": "Set active tab shortcut",
+                "description": "Start recording a direct shortcut for the active tab."
+            },
+            "selectPreviousGroupTab": {
+                "label": "Previous tab in group",
+                "description": "Move to the previous tab inside the active Dockview group."
+            },
+            "selectNextGroupTab": {
+                "label": "Next tab in group",
+                "description": "Move to the next tab inside the active Dockview group."
+            },
+            "toggleCliView": {
+                "label": "Toggle CLI view",
+                "description": "Toggle the active CLI session between chat and terminal view."
+            }
         }
     },
     "cliStop": {

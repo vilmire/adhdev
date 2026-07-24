@@ -1,5 +1,6 @@
 import React from 'react'
 import { flushSync } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation, CliConversationViewMode } from './types'
 import { isAcpConv, isCliConv } from './types'
@@ -11,7 +12,7 @@ import DashboardNewSessionDialog from './DashboardNewSessionDialog'
 import DashboardMeshGraphDialog from './DashboardMeshGraphDialog'
 import GitStatusDialog from '../git/GitStatusDialog'
 import type { DashboardMobileSection } from './DashboardMobileBottomNav'
-import { useActionShortcuts, type DashboardActionShortcutDefinition } from '../../hooks/useActionShortcuts'
+import { useActionShortcuts, getDefaultShortcut, type DashboardActionShortcutDefinition } from '../../hooks/useActionShortcuts'
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { IconX } from '../Icons'
@@ -233,6 +234,7 @@ export default function DashboardMainView({
     onMarkNotificationUnread,
     onDeleteNotification,
 }: DashboardMainViewProps) {
+    const { t } = useTranslation()
     const dockviewActionHandlersRef = React.useRef<{
         setShortcutForActiveTab: () => void
         restoreHiddenTabToSavedLocation: (tabKey: string) => void
@@ -477,6 +479,21 @@ export default function DashboardMainView({
         [actionDefinitions, shortcutSection],
     )
 
+    // Derive the approval-button hint from the live default shortcuts so the
+    // guide stays correct if the defaults change (previously hardcoded to
+    // ⌥J/⌥K/⌥L, which did not match the real ⌥A/⌥D/⌥L defaults).
+    const approvalShortcutHint = React.useMemo(
+        () => [
+            getDefaultShortcut('triggerPrimaryApprovalAction', isMac),
+            getDefaultShortcut('triggerSecondaryApprovalAction', isMac),
+            getDefaultShortcut('triggerTertiaryApprovalAction', isMac),
+        ].filter(Boolean).join(' / '),
+        [isMac],
+    )
+    const modifierShortcutHint = isMac
+        ? '⌘⇧Enter, ⌘⇧→, ⌘Ctrl⇧↓'
+        : 'Ctrl+Shift+Enter, Ctrl+Shift+→, Ctrl+Alt+Shift+↓'
+
     const handleDisableAllShortcuts = React.useCallback(() => {
         const next = Object.fromEntries(
             actionDefinitions.map(action => [action.id, '']),
@@ -486,14 +503,14 @@ export default function DashboardMainView({
 
     const handleResetShortcutsToDefaults = React.useCallback(() => {
         if (typeof window !== 'undefined') {
-            const confirmed = window.confirm('Reset all dashboard shortcuts back to their default values?')
+            const confirmed = window.confirm(t('dashboard.guide.shortcuts.resetConfirm'))
             if (!confirmed) return
         }
         const next = Object.fromEntries(
             actionDefinitions.map(action => [action.id, action.defaultShortcut]),
         ) as Record<(typeof actionDefinitions)[number]['id'], string>
         saveShortcuts(next)
-    }, [actionDefinitions, saveShortcuts])
+    }, [actionDefinitions, saveShortcuts, t])
 
     React.useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -688,16 +705,16 @@ export default function DashboardMainView({
                     >
                         <div className="flex items-start justify-between gap-4 mb-5">
                             <div>
-                                <div className="text-sm font-bold text-text-primary">Dashboard guide</div>
+                                <div className="text-sm font-bold text-text-primary">{t('dashboard.guide.title')}</div>
                                 <div className="text-xs text-text-secondary mt-1">
-                                    A quick guide to the dashboard flow, floating and popout tabs, plus grouped shortcuts you can tune.
+                                    {t('dashboard.guide.subtitle')}
                                 </div>
                             </div>
                             <button
                                 type="button"
                                 className="btn btn-secondary btn-sm inline-flex items-center justify-center w-8 px-0"
                                 onClick={handleCloseShortcutHelp}
-                                aria-label="Close dashboard guide"
+                                aria-label={t('dashboard.guide.close')}
                             >
                                 <IconX size={14} />
                             </button>
@@ -705,9 +722,9 @@ export default function DashboardMainView({
 
                         <div className="flex gap-2 mb-4 overflow-x-auto">
                             {([
-                                { id: 'overview', label: 'Overview' },
-                                { id: 'quickstart', label: 'Quick start' },
-                                { id: 'shortcuts', label: 'Shortcuts' },
+                                { id: 'overview', label: t('dashboard.guide.tabs.overview') },
+                                { id: 'quickstart', label: t('dashboard.guide.tabs.quickstart') },
+                                { id: 'shortcuts', label: t('dashboard.guide.tabs.shortcuts') },
                             ] as const).map(tab => (
                                 <button
                                     key={tab.id}
@@ -723,25 +740,25 @@ export default function DashboardMainView({
                         {guideTab === 'overview' && (
                             <>
                                 <div className="rounded-xl border border-border-subtle bg-bg-secondary/30 px-4 py-3 mb-4">
-                                    <div className="text-sm font-semibold text-text-primary">What lives where</div>
+                                    <div className="text-sm font-semibold text-text-primary">{t('dashboard.guide.overview.whatLivesWhere.title')}</div>
                                     <div className="text-xs text-text-secondary mt-2 space-y-2">
-                                        <div><span className="font-semibold text-text-primary">Tabs:</span> active sessions across IDE, CLI, and ACP agents.</div>
-                                        <div><span className="font-semibold text-text-primary">Hidden tabs:</span> stash sessions you do not want in the main strip but still want to keep around.</div>
-                                        <div><span className="font-semibold text-text-primary">Activity inbox:</span> sessions waiting for approval or finished tasks you have not reviewed yet.</div>
-                                        <div><span className="font-semibold text-text-primary">CLI view toggle:</span> switch a PTY session between terminal and chat rendering without relaunching it.</div>
+                                        <div><span className="font-semibold text-text-primary">{t('dashboard.guide.overview.whatLivesWhere.tabsLabel')}</span> {t('dashboard.guide.overview.whatLivesWhere.tabsText')}</div>
+                                        <div><span className="font-semibold text-text-primary">{t('dashboard.guide.overview.whatLivesWhere.hiddenLabel')}</span> {t('dashboard.guide.overview.whatLivesWhere.hiddenText')}</div>
+                                        <div><span className="font-semibold text-text-primary">{t('dashboard.guide.overview.whatLivesWhere.inboxLabel')}</span> {t('dashboard.guide.overview.whatLivesWhere.inboxText')}</div>
+                                        <div><span className="font-semibold text-text-primary">{t('dashboard.guide.overview.whatLivesWhere.cliToggleLabel')}</span> {t('dashboard.guide.overview.whatLivesWhere.cliToggleText')}</div>
                                     </div>
                                 </div>
 
                                 <div className="rounded-xl border border-border-subtle bg-bg-secondary/30 px-4 py-3">
-                                    <div className="text-sm font-semibold text-text-primary">Useful flows</div>
+                                    <div className="text-sm font-semibold text-text-primary">{t('dashboard.guide.overview.usefulFlows.title')}</div>
                                     <div className="text-xs text-text-secondary mt-2 space-y-2">
-                                        <div><span className="font-semibold text-text-primary">Review notifications:</span> open the inbox, jump to the session, then use the conversation or approval controls directly from the active pane.</div>
-                                        <div><span className="font-semibold text-text-primary">Reduce clutter:</span> hide less important sessions instead of closing them, then restore from hidden tabs when needed.</div>
-                                        <div><span className="font-semibold text-text-primary">Split work:</span> keep one pane active for input and let secondary panes stay read-only until you focus them.</div>
-                                        <div><span className="font-semibold text-text-primary">Detached views:</span> float a tab for quick side-by-side work, or pop it into a new window when you want a separate monitor.</div>
-                                        <div><span className="font-semibold text-text-primary">Docking:</span> use Dock to bring a floating tab back into the grid, or move a popped out tab back to the main dashboard.</div>
-                                        <div><span className="font-semibold text-text-primary">Per-tab shortcuts:</span> right-click a Dockview tab to assign a direct shortcut for that specific session.</div>
-                                        <div><span className="font-semibold text-text-primary">Approval buttons:</span> use {isMac ? '⌥J / ⌥K / ⌥L' : 'Ctrl+Alt+J / K / L'} for the first three visible approval actions on the active session.</div>
+                                        <div><span className="font-semibold text-text-primary">{t('dashboard.guide.overview.usefulFlows.reviewLabel')}</span> {t('dashboard.guide.overview.usefulFlows.reviewText')}</div>
+                                        <div><span className="font-semibold text-text-primary">{t('dashboard.guide.overview.usefulFlows.clutterLabel')}</span> {t('dashboard.guide.overview.usefulFlows.clutterText')}</div>
+                                        <div><span className="font-semibold text-text-primary">{t('dashboard.guide.overview.usefulFlows.splitLabel')}</span> {t('dashboard.guide.overview.usefulFlows.splitText')}</div>
+                                        <div><span className="font-semibold text-text-primary">{t('dashboard.guide.overview.usefulFlows.detachedLabel')}</span> {t('dashboard.guide.overview.usefulFlows.detachedText')}</div>
+                                        <div><span className="font-semibold text-text-primary">{t('dashboard.guide.overview.usefulFlows.dockingLabel')}</span> {t('dashboard.guide.overview.usefulFlows.dockingText')}</div>
+                                        <div><span className="font-semibold text-text-primary">{t('dashboard.guide.overview.usefulFlows.perTabLabel')}</span> {t('dashboard.guide.overview.usefulFlows.perTabText')}</div>
+                                        <div><span className="font-semibold text-text-primary">{t('dashboard.guide.overview.usefulFlows.approvalLabel')}</span> {t('dashboard.guide.overview.usefulFlows.approvalText', { keys: approvalShortcutHint })}</div>
                                     </div>
                                 </div>
                             </>
@@ -750,21 +767,21 @@ export default function DashboardMainView({
                         {guideTab === 'quickstart' && (
                             <div className="space-y-4">
                                 <div className="rounded-xl border border-border-subtle bg-bg-secondary/30 px-4 py-3">
-                                    <div className="text-sm font-semibold text-text-primary">Desktop quick start</div>
+                                    <div className="text-sm font-semibold text-text-primary">{t('dashboard.guide.quickstart.desktop.title')}</div>
                                     <div className="text-xs text-text-secondary mt-2 space-y-2">
-                                        <div><span className="font-semibold text-text-primary">1.</span> Start from the machine or workspace flow first. Pick or save a workspace before launching CLI or ACP sessions.</div>
-                                        <div><span className="font-semibold text-text-primary">2.</span> Keep the main strip focused on active work and push overflow into Hidden tabs.</div>
-                                        <div><span className="font-semibold text-text-primary">3.</span> Use the inbox for approval-required or completed sessions instead of scanning every tab.</div>
-                                        <div><span className="font-semibold text-text-primary">4.</span> Split only when you need parallel reading; float or pop out a tab when you want to detach it without losing the main layout.</div>
+                                        <div><span className="font-semibold text-text-primary">1.</span> {t('dashboard.guide.quickstart.desktop.step1')}</div>
+                                        <div><span className="font-semibold text-text-primary">2.</span> {t('dashboard.guide.quickstart.desktop.step2')}</div>
+                                        <div><span className="font-semibold text-text-primary">3.</span> {t('dashboard.guide.quickstart.desktop.step3')}</div>
+                                        <div><span className="font-semibold text-text-primary">4.</span> {t('dashboard.guide.quickstart.desktop.step4')}</div>
                                     </div>
                                 </div>
 
                                 <div className="rounded-xl border border-border-subtle bg-bg-secondary/30 px-4 py-3">
-                                    <div className="text-sm font-semibold text-text-primary">Mobile quick start</div>
+                                    <div className="text-sm font-semibold text-text-primary">{t('dashboard.guide.quickstart.mobile.title')}</div>
                                     <div className="text-xs text-text-secondary mt-2 space-y-2">
-                                        <div><span className="font-semibold text-text-primary">1.</span> Stay in chat mode for review and replies; use workspace mode mainly to launch or reopen sessions.</div>
-                                        <div><span className="font-semibold text-text-primary">2.</span> Start from the machine screen, choose a workspace, then launch IDE, CLI, or ACP from there.</div>
-                                        <div><span className="font-semibold text-text-primary">3.</span> Treat mobile as the simpler control surface: no split workflow, fewer tab mechanics, faster session switching.</div>
+                                        <div><span className="font-semibold text-text-primary">1.</span> {t('dashboard.guide.quickstart.mobile.step1')}</div>
+                                        <div><span className="font-semibold text-text-primary">2.</span> {t('dashboard.guide.quickstart.mobile.step2')}</div>
+                                        <div><span className="font-semibold text-text-primary">3.</span> {t('dashboard.guide.quickstart.mobile.step3')}</div>
                                     </div>
                                 </div>
                             </div>
@@ -775,10 +792,10 @@ export default function DashboardMainView({
                                 <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
                                     <div className="flex flex-wrap gap-2">
                                         {([
-                                            { id: 'all', label: 'All' },
-                                            { id: 'workspace', label: 'Workspace' },
-                                            { id: 'panes', label: 'Panes' },
-                                            { id: 'approvals', label: 'Approvals' },
+                                            { id: 'all', label: t('dashboard.guide.shortcuts.sections.all') },
+                                            { id: 'workspace', label: t('dashboard.guide.shortcuts.sections.workspace') },
+                                            { id: 'panes', label: t('dashboard.guide.shortcuts.sections.panes') },
+                                            { id: 'approvals', label: t('dashboard.guide.shortcuts.sections.approvals') },
                                         ] as const).map(section => (
                                             <button
                                                 key={section.id}
@@ -796,7 +813,7 @@ export default function DashboardMainView({
                                             className="btn btn-secondary btn-sm"
                                             onClick={handleDisableAllShortcuts}
                                         >
-                                            Disable all
+                                            {t('dashboard.guide.shortcuts.disableAll')}
                                         </button>
                                         <button
                                             type="button"
@@ -808,7 +825,7 @@ export default function DashboardMainView({
                                             }}
                                             onClick={handleResetShortcutsToDefaults}
                                         >
-                                            Reset to defaults
+                                            {t('dashboard.guide.shortcuts.resetToDefaults')}
                                         </button>
                                     </div>
                                 </div>
@@ -821,17 +838,17 @@ export default function DashboardMainView({
                                         >
                                             <div className="flex items-start justify-between gap-4">
                                                 <div className="min-w-0">
-                                                    <div className="text-sm font-semibold text-text-primary">{action.label}</div>
-                                                    <div className="text-xs text-text-secondary mt-1">{action.description}</div>
+                                                    <div className="text-sm font-semibold text-text-primary">{t(`dashboard.shortcutDefs.${action.id}.label`, action.label)}</div>
+                                                    <div className="text-xs text-text-secondary mt-1">{t(`dashboard.shortcutDefs.${action.id}.description`, action.description)}</div>
                                                     <div className="text-[11px] text-text-muted mt-2">
-                                                        Default: <span className="font-mono">{action.defaultShortcut}</span>
+                                                        {t('dashboard.guide.shortcuts.default')} <span className="font-mono">{action.defaultShortcut}</span>
                                                     </div>
                                                 </div>
                                                 <div className="flex items-center gap-2 shrink-0">
                                                     <span className="text-[11px] font-mono px-2 py-1 rounded bg-surface-secondary border border-border-subtle min-w-[72px] text-center">
                                                         {shortcutListening === action.id
-                                                            ? (shortcutListeningDraft.length > 0 ? `${shortcutListeningDraft.join(' ')} ...` : 'Listening...')
-                                                            : (actionShortcuts[action.id] || 'Off')}
+                                                            ? (shortcutListeningDraft.length > 0 ? `${shortcutListeningDraft.join(' ')} ...` : t('dashboard.guide.shortcuts.listening'))
+                                                            : (actionShortcuts[action.id] || t('dashboard.guide.shortcuts.off'))}
                                                     </span>
                                                     <button
                                                         type="button"
@@ -841,7 +858,7 @@ export default function DashboardMainView({
                                                             setShortcutListeningDraft([])
                                                         }}
                                                     >
-                                                        {shortcutListening === action.id ? 'Listening' : 'Set'}
+                                                        {shortcutListening === action.id ? t('dashboard.guide.shortcuts.setListening') : t('dashboard.guide.shortcuts.set')}
                                                     </button>
                                                     <button
                                                         type="button"
@@ -852,7 +869,7 @@ export default function DashboardMainView({
                                                             saveShortcuts(next)
                                                         }}
                                                     >
-                                                        Disable
+                                                        {t('dashboard.guide.shortcuts.disable')}
                                                     </button>
                                                 </div>
                                             </div>
@@ -861,7 +878,7 @@ export default function DashboardMainView({
                                 </div>
 
                                 <div className="text-[11px] text-text-muted mt-4">
-                                    Use modifier shortcuts like {isMac ? '⌘⇧Enter, ⌘⇧→, ⌘Ctrl⇧↓' : 'Ctrl+Shift+Enter, Ctrl+Shift+→, Ctrl+Alt+Shift+↓'}, or set your own combo. Dashboard action shortcuts are ignored while typing in text inputs.
+                                    {t('dashboard.guide.shortcuts.footer', { keys: modifierShortcutHint })}
                                 </div>
                             </>
                         )}

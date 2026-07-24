@@ -93,6 +93,185 @@
             "colFrom": "从",
             "colTo": "到",
             "colCause": "原因"
+        },
+        "guide": {
+            "title": "仪表板指南",
+            "subtitle": "关于仪表板流程、浮动和弹出标签页，以及可调整的分组快捷键的快速指南。",
+            "close": "关闭仪表板指南",
+            "tabs": {
+                "overview": "概览",
+                "quickstart": "快速开始",
+                "shortcuts": "快捷键"
+            },
+            "overview": {
+                "whatLivesWhere": {
+                    "title": "各部分位置",
+                    "tabsLabel": "标签页:",
+                    "tabsText": "跨 IDE、CLI 和 ACP 代理的活动会话。",
+                    "hiddenLabel": "隐藏标签页:",
+                    "hiddenText": "存放你不想放在主栏但仍想保留的会话。",
+                    "inboxLabel": "活动收件箱:",
+                    "inboxText": "等待审批的会话或你尚未查看的已完成任务。",
+                    "cliToggleLabel": "CLI 视图切换:",
+                    "cliToggleText": "无需重新启动即可在终端和聊天渲染之间切换 PTY 会话。"
+                },
+                "usefulFlows": {
+                    "title": "实用流程",
+                    "reviewLabel": "查看通知:",
+                    "reviewText": "打开收件箱，跳转到会话，然后直接从活动窗格使用对话或审批控件。",
+                    "clutterLabel": "减少杂乱:",
+                    "clutterText": "隐藏不太重要的会话而不是关闭它们，需要时再从隐藏标签页恢复。",
+                    "splitLabel": "拆分工作:",
+                    "splitText": "保持一个窗格用于输入，让辅助窗格在你聚焦之前保持只读。",
+                    "detachedLabel": "分离视图:",
+                    "detachedText": "浮动标签页以便快速并排工作，或在需要单独显示器时将其弹出到新窗口。",
+                    "dockingLabel": "停靠:",
+                    "dockingText": "使用停靠将浮动标签页放回网格，或将弹出的标签页移回主仪表板。",
+                    "perTabLabel": "按标签页快捷键:",
+                    "perTabText": "右键单击 Dockview 标签页，为该特定会话分配直接快捷键。",
+                    "approvalLabel": "审批按钮:",
+                    "approvalText": "对活动会话中前三个可见的审批操作使用 {{keys}}。"
+                }
+            },
+            "quickstart": {
+                "desktop": {
+                    "title": "桌面快速开始",
+                    "step1": "先从机器或工作区流程开始。在启动 CLI 或 ACP 会话之前选择或保存工作区。",
+                    "step2": "让主栏专注于活动工作，将多余的内容推入隐藏标签页。",
+                    "step3": "对需要审批或已完成的会话使用收件箱，而不是逐个扫描每个标签页。",
+                    "step4": "仅在需要并行阅读时才拆分；想要分离标签页而不打乱主布局时可将其浮动或弹出。"
+                },
+                "mobile": {
+                    "title": "移动端快速开始",
+                    "step1": "查看和回复时保持在聊天模式；工作区模式主要用于启动或重新打开会话。",
+                    "step2": "从机器屏幕开始，选择一个工作区，然后从那里启动 IDE、CLI 或 ACP。",
+                    "step3": "将移动端视为更简单的控制界面:没有拆分工作流，标签页操作更少，会话切换更快。"
+                }
+            },
+            "shortcuts": {
+                "sections": {
+                    "all": "全部",
+                    "workspace": "工作区",
+                    "panes": "窗格",
+                    "approvals": "审批"
+                },
+                "disableAll": "全部禁用",
+                "resetToDefaults": "重置为默认值",
+                "default": "默认:",
+                "listening": "正在监听...",
+                "set": "设置",
+                "disable": "禁用",
+                "off": "关闭",
+                "footer": "使用像 {{keys}} 这样的修饰键快捷键，或设置你自己的组合。在文本输入框中输入时，仪表板操作快捷键会被忽略。",
+                "resetConfirm": "将所有仪表板快捷键重置为默认值吗?",
+                "setListening": "监听中"
+            }
+        },
+        "shortcutDefs": {
+            "openShortcutHelp": {
+                "label": "打开快捷键",
+                "description": "显示键盘快捷键面板。"
+            },
+            "openNewSession": {
+                "label": "新建会话",
+                "description": "打开新建会话启动器。"
+            },
+            "hideCurrentTab": {
+                "label": "隐藏当前标签页",
+                "description": "将当前活动标签页隐藏到隐藏标签页中。"
+            },
+            "toggleHiddenTabs": {
+                "label": "切换隐藏标签页",
+                "description": "打开或关闭隐藏标签页弹出框。"
+            },
+            "openHistoryForActiveTab": {
+                "label": "打开历史记录",
+                "description": "打开活动会话的历史记录。"
+            },
+            "openRemoteForActiveTab": {
+                "label": "打开远程",
+                "description": "在可用时打开活动会话的远程控制。"
+            },
+            "floatActiveTab": {
+                "label": "浮动活动标签页",
+                "description": "将活动标签页移动到浮动面板中。"
+            },
+            "popoutActiveTab": {
+                "label": "在新窗口中打开活动标签页",
+                "description": "将活动标签页移动到分离的弹出窗口中。"
+            },
+            "dockActiveTab": {
+                "label": "停靠活动标签页",
+                "description": "将浮动标签页停靠回网格，或将弹出标签页移回主窗口。"
+            },
+            "splitActiveTabRight": {
+                "label": "将活动标签页移至新的右窗格",
+                "description": "在右侧创建一个窗格并将活动标签页移入其中。"
+            },
+            "splitActiveTabDown": {
+                "label": "将活动标签页移至新的下窗格",
+                "description": "在下方创建一个窗格并将活动标签页移入其中。"
+            },
+            "focusLeftPane": {
+                "label": "聚焦左窗格",
+                "description": "将焦点移动到左侧窗格。"
+            },
+            "focusRightPane": {
+                "label": "聚焦右窗格",
+                "description": "将焦点移动到右侧窗格。"
+            },
+            "focusUpPane": {
+                "label": "聚焦上窗格",
+                "description": "将焦点移动到上方窗格。"
+            },
+            "focusDownPane": {
+                "label": "聚焦下窗格",
+                "description": "将焦点移动到下方窗格。"
+            },
+            "moveActiveTabToLeftPane": {
+                "label": "将活动标签页左移",
+                "description": "将活动标签页移动到左侧窗格。"
+            },
+            "moveActiveTabToRightPane": {
+                "label": "将活动标签页右移",
+                "description": "将活动标签页移动到右侧窗格。"
+            },
+            "moveActiveTabToUpPane": {
+                "label": "将活动标签页上移",
+                "description": "将活动标签页移动到上方窗格。"
+            },
+            "moveActiveTabToDownPane": {
+                "label": "将活动标签页下移",
+                "description": "将活动标签页移动到下方窗格。"
+            },
+            "triggerPrimaryApprovalAction": {
+                "label": "审批操作 1",
+                "description": "按下活动会话的第一个审批/操作按钮。"
+            },
+            "triggerSecondaryApprovalAction": {
+                "label": "审批操作 2",
+                "description": "按下活动会话的第二个审批/操作按钮。"
+            },
+            "triggerTertiaryApprovalAction": {
+                "label": "审批操作 3",
+                "description": "按下活动会话的第三个审批/操作按钮。"
+            },
+            "setActiveTabShortcut": {
+                "label": "设置活动标签页快捷键",
+                "description": "开始记录活动标签页的直接快捷键。"
+            },
+            "selectPreviousGroupTab": {
+                "label": "组内上一个标签页",
+                "description": "在活动 Dockview 组内移动到上一个标签页。"
+            },
+            "selectNextGroupTab": {
+                "label": "组内下一个标签页",
+                "description": "在活动 Dockview 组内移动到下一个标签页。"
+            },
+            "toggleCliView": {
+                "label": "切换 CLI 视图",
+                "description": "在聊天和终端视图之间切换活动 CLI 会话。"
+            }
         }
     },
     "cliStop": {
