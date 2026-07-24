@@ -15,8 +15,6 @@ AI coding agents have become long-running background workers. ADHDev is the cont
 
 Website: **[adhf.dev](https://adhf.dev)** · Docs: **[docs.adhf.dev](https://docs.adhf.dev)**
 
-<!-- HERO: Refinery convergence demo GIF (assets pending, see LAUNCH-ASSETS-PREP) -->
-
 <p align="center">
   <img src="docs/assets/readme/landing-command-center-demo-poster.jpg" alt="ADHDev desktop dashboard switching between chat and terminal views, floating a panel, and splitting the workspace" width="100%" />
 </p>
@@ -41,14 +39,16 @@ Your agents run locally; you drive them from anywhere. The dashboard is a real c
 
 ### 🕸️ Repo Mesh — true multi-machine parallelism
 Enqueue tasks with dependencies and let a coordinator dispatch them to whichever node has spare capacity — your laptop, a desktop, a build box. This is genuine multi-machine orchestration over a P2P mesh, **not** SSH into one host. Each task runs in its own worktree so agents never step on each other. The mesh and Refinery engine ships in this repo; cross-machine dispatch runs on the cloud edition.
-<!-- SCREENSHOT: Repo Mesh node/task board (assets pending, see LAUNCH-ASSETS-PREP) -->
+
+<p align="center">
+  <img src="docs/assets/readme/landing-mesh-observability.jpg" alt="ADHDev mesh observability board showing the ledger, task queue, active sessions, nodes, and refine jobs for a repo" width="100%" />
+</p>
 
 ### ⚡ Async by design — you talk to one place
 You talk to one place. The coordinator orchestrates every worker and machine asynchronously — it waits on events, you don't. No session babysitting. Instead of sitting in front of each agent window watching for it to finish, you hand work to a single coordinator that drives all the workers in parallel and reacts only when a completion, approval, or status event actually arrives — no polling, no blocking waits. One conversation for you; a non-blocking event loop underneath.
 
 ### 🚢 Refinery — unattended landing on `main`
-Parallelism only pays off if the work actually merges. The Refinery converges finished tasks with per-repo validation gates, patch-equivalence checks, submodule-aware fast-forward merges, and automatic worktree cleanup — unattended. Agents finish; the Refinery lands them.
-<!-- SCREENSHOT: Refinery convergence view (assets pending, see LAUNCH-ASSETS-PREP) -->
+Parallelism only pays off if the work actually merges. The Refinery converges finished tasks with per-repo validation gates, patch-equivalence checks, submodule-aware fast-forward merges, and automatic worktree cleanup — unattended. Agents finish; the Refinery lands them. The mesh board above surfaces the whole pipeline live: the ledger's `DIRECT FAST FORWARD` entries are landed tasks, and `REFINE JOBS` tracks convergence in flight.
 
 ### 🧩 Submodule-aware convergence — works on real monorepos
 Parallel worktrees and unattended merges get fragile the moment git submodules enter the picture. ADHDev handles that case head-on — this very project is a submodule monorepo (a root repo plus the AGPL engine and provider catalog as submodules), and we dogfood the mesh and Refinery on it every day. The Refinery treats submodules as first-class during convergence:
@@ -59,6 +59,10 @@ Parallel worktrees and unattended merges get fragile the moment git submodules e
 
 ### 🔺 MAGI — cross-verified results
 Run a task through independent agent perspectives and cross-check their output before it counts as done, so a single confident-but-wrong answer doesn't slip through. Higher-stakes changes get more than one set of eyes.
+
+<p align="center">
+  <img src="docs/assets/readme/landing-magi-synthesis.jpg" alt="ADHDev MAGI synthesis view — a coordinator reconciles three independent agent replicas, showing what they agreed on, what was contested, and which claims still need verification" width="100%" />
+</p>
 
 ### 🔐 P2P transport (trust, not a paywall)
 Chat, commands, screenshots, and remote input travel over an encrypted WebRTC data channel directly between your dashboard and your daemon. The server only handles signaling and lightweight metadata — your working data doesn't sit on someone else's box. It's a trust property of the design, not an upsell.
