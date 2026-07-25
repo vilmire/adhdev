@@ -1201,6 +1201,64 @@ export function collectFastForwardGitlinkPaths(repoRoot: string, baseHead: strin
 }
 
 /**
+ * Collect gitlink resolutions for the *trivial fast-forward* case, so the
+ * gitlink-aware root rebase ({@link rootRebaseResolvingGitlinks}) can drive a
+ * behind>0 rebase whose changed submodule pointer would otherwise make a plain
+ * `git rebase baseHead` abort on the gitlink.
+ *
+ * When base has advanced the SAME submodule as the branch, git's recursive merge
+ * refuses to auto-merge the gitlink even when the two commits are in a strict
+ * ancestor/descendant relationship (a real fast-forward). That is fine for the
+ * patch-equivalence gate (it synthesizes the merged tree), but the sync_base
+ * *rebase* still runs `git rebase baseHead`, which stops on the same gitlink
+ * conflict and aborts → the branch is wrongly blocked. This helper produces the
+ * per-path resolution the root rebase needs so those paths take the gitlink-aware
+ * path instead of the plain rebase.
+ *
+ * Direction rule (kept consistent with the diverged path, which always resolves to
+ * the linear descendant): pick whichever of base/branch commit is the DESCENDANT
+ * of the other and resolve the gitlink to it — the more-advanced commit wins.
+ *   - base ancestor-of branch  → branch is more advanced → resolve to branch-side.
+ *   - branch ancestor-of base  → base is more advanced   → resolve to base-side.
+ *   - neither ancestor (diverged) or ambiguous → excluded (left to the diverged
+ *     converge path / patch-equivalence gate).
+ *
+ * The base-side submodule commit is committed in the base workspace and may be
+ * missing from the worktree's submodule object store; a best-effort local fetch
+ * (identical to {@link convergeDivergedSubmoduleGitlinks}) brings it in so the
+ * ancestry checks and the root rebase's `checkout --detach` can see it.
+ */
+export function collectTrivialFastForwardGitlinkResolutions(
+    worktreeRoot: string,
+    baseRepoRoot: string,
+    baseHead: string,
+    branchHead: string,
+): Array<{ path: string; rebasedCommit: string }> {
+    const resolutions: Array<{ path: string; rebasedCommit: string }> = [];
+    for (const path of readChangedGitlinkPaths(worktreeRoot, baseHead, branchHead)) {
+        const baseCommit = readTreeObject(baseRepoRoot, baseHead, path);
+        const branchCommit = readTreeObject(worktreeRoot, branchHead, path);
+        if (!baseCommit || !branchCommit) continue;
+        const submoduleRepoPath = pathResolve(worktreeRoot, path);
+        // Make the base-side commit available locally (it may only live in base/<path>).
+        ensureSubmoduleCommitLocal(submoduleRepoPath, pathResolve(baseRepoRoot, path), baseCommit);
+        if (baseCommit === branchCommit) {
+            // Identical pointer — no gitlink conflict to resolve; skip.
+            continue;
+        }
+        if (isSubmoduleFastForward(submoduleRepoPath, baseCommit, branchCommit)) {
+            // base ancestor-of branch → branch-side is the descendant (more advanced).
+            resolutions.push({ path, rebasedCommit: branchCommit });
+        } else if (isSubmoduleFastForward(submoduleRepoPath, branchCommit, baseCommit)) {
+            // branch ancestor-of base → base-side is the descendant (more advanced).
+            resolutions.push({ path, rebasedCommit: baseCommit });
+        }
+        // else: diverged / ambiguous → leave to convergeDivergedSubmoduleGitlinks.
+    }
+    return resolutions;
+}
+
+/**
  * Whether both commits exist locally in the submodule repo AND neither is an
  * ancestor of the other — i.e. a genuine sibling divergence off a shared merge
  * base. `baseCommit` ancestor-of `branchCommit` (strict fast-forward) returns
