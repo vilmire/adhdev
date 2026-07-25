@@ -876,9 +876,33 @@ export class FsmDriver implements ISpecDriver {
                 curLines = currentLines;
                 prevLines = this.prevScreenLines;
             } else {
-                const start = Math.max(0, cursor.row - d.cursor_above);
-                curLines = currentLines.slice(start, cursor.row);
-                prevLines = this.prevScreenLines.slice(start, cursor.row);
+                // CODEX-FSM-DEGENERATE-STABLE fix: cursor.row is the backend's RAW
+                // row coordinate (ghostty getCursorPosition(), un-normalized), while
+                // currentLines is the VIEWPORT snapshot with blank ends trimmed
+                // (ghostty-vt-backend getText → trimBlankEnds). The two coordinate
+                // spaces diverge whenever trailing blank rows are trimmed away (or
+                // the backend counts scrollback rows): cursor.row then overshoots
+                // the array and slice(start, cursor.row) returns an EMPTY window.
+                // Two empty windows compare equal on every frame, so
+                // regionLastChangedAt never advances and stable_ms accumulates
+                // forever — the FSM read a generating screen as
+                // "stable cursor_above=4 353833ms / 1500ms" and committed a false
+                // busy→idle (live RCA: generating_completed at duration=402s while
+                // the native transcript kept growing).
+                //
+                // Invariant: an unmeasurable window must NEVER read as "stable".
+                // Clamp the window end to the content length (when the cursor sits
+                // in the trimmed blank region, the lines directly above it in
+                // content terms are the content tail), and when the window is still
+                // empty (no measurable content at all) mark the region CHANGED so
+                // the stable clock restarts instead of accumulating.
+                const window = stableCursorWindow(currentLines.length, cursor.row, d.cursor_above);
+                if (!window) {
+                    this.regionLastChangedAt.set(d.key, now);
+                    continue;
+                }
+                curLines = currentLines.slice(window.start, window.end);
+                prevLines = this.prevScreenLines.slice(window.start, window.end);
             }
             const cur = filterIgnoredLines(curLines, d.ignoreRe).join('\n');
             const prev = filterIgnoredLines(prevLines, d.ignoreRe).join('\n');
@@ -1569,4 +1593,20 @@ function sliceSectionLines(lines: string[], sections: ResolvedSection[], id: str
 export function filterIgnoredLines(lines: string[], ignoreRe: RegExp | undefined): string[] {
     if (!ignoreRe) return lines;
     return lines.filter(l => !ignoreRe.test(l));
+}
+
+/** Compute the [start, end) line window a cursor_above stable region measures,
+ *  reconciling the backend's raw cursor row with the blank-trimmed viewport
+ *  line array (see the CODEX-FSM-DEGENERATE-STABLE note in trackRegionChanges).
+ *  The window end is clamped to the content length so an overshooting cursor
+ *  row measures the content tail instead of slicing past the array into a
+ *  permanently-empty — and therefore permanently "unchanged" — window.
+ *  Returns null when no measurable window exists (cursor at/above row 0, or no
+ *  content): the caller must treat the region as CHANGED, never stable.
+ *  Exported for unit tests. */
+export function stableCursorWindow(lineCount: number, cursorRow: number, cursorAbove: number): { start: number; end: number } | null {
+    const end = Math.min(Math.max(0, cursorRow), Math.max(0, lineCount));
+    const start = Math.max(0, end - cursorAbove);
+    if (end <= start) return null;
+    return { start, end };
 }

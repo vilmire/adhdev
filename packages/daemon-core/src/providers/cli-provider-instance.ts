@@ -59,6 +59,7 @@ import {
     COMPLETED_FINALIZATION_RETRY_MS,
     COMPLETED_FINALIZATION_MAX_WAIT_MS,
     CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS,
+    MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS,
     NATIVE_HISTORY_MESH_IDLE_SETTLE_MS,
     PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS,
     ANTIGRAVITY_HOLD_QUIET_DWELL_MS,
@@ -3140,6 +3141,56 @@ export class CliProviderInstance implements ProviderInstance {
             // from ever being emitted during the valley, without depending on the valley's length.
             const isTranscriptEvidenceGate = block.allowTimeout === true;
             LOG.debug('CLI', `[${this.type}] finalization block: reason=${blockReason} terminal=${block.terminal} allowTimeout=${isTranscriptEvidenceGate} waitedMs=${waitedMs} maxWait=${COMPLETED_FINALIZATION_MAX_WAIT_MS}`);
+            // (TRANSCRIPT-GROWTH-HOLD — CODEX-FSM-DEGENERATE-STABLE RCA, upper safety net)
+            // The FLOOR class (missing_final_assistant + noExternalTranscriptSource:
+            // codex-cli / kimi / cursor-cli / opencode) releases its weak emit once
+            // the idle has been CONTINUOUSLY quiet past the floor/cap — "quiet" as
+            // judged by the SAME screen parsing whose lie armed this completion
+            // (spinner escaped the status window, or a degenerate stable region
+            // accumulated a false 353s "quiet"). The daemon already observes the
+            // independent liveness signal that proves otherwise — the native
+            // transcript advancing (the stall watchdog logs exactly this: "PTY
+            // quiet 365s but transcript advancing") — but it was never wired into
+            // the idle/completion judgment. Wire it here: if the provider's native
+            // transcript file was appended within the growth-quiet window, the
+            // turn is demonstrably alive; HOLD (re-probe each retry — the hold
+            // releases at most MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS after
+            // the transcript's last append) instead of emitting a completion the
+            // coordinator can never correct.
+            //
+            // Conservative by construction: this only ever DELAYS an emit on
+            // positive growth evidence. A pure-PTY provider (no native source →
+            // sample null), an unresolvable transcript, or a transcript whose
+            // mtime is unknown/quiet falls through to the unchanged floor/cap
+            // logic — missing information NEVER blocks an idle verdict (no
+            // false-busy wedge). Clean completions (in-turn final assistant
+            // present) never reach this branch, so genuine completion latency is
+            // untouched; claude-cli's write-lag CANON-C immediate emit is likewise
+            // untouched (its block deliberately omits noExternalTranscriptSource).
+            if (blockReason === 'missing_final_assistant' && block.noExternalTranscriptSource === true) {
+                let nativeSample: { msgCount: number; sourceMtimeMs: number } | null = null;
+                try { nativeSample = this.sampleNativeTranscriptProgress(); } catch { nativeSample = null; }
+                const sourceMtimeMs = nativeSample?.sourceMtimeMs ?? 0;
+                if (nativeSample && sourceMtimeMs > 0 && Date.now() - sourceMtimeMs < MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS) {
+                    if (pending.loggedBlockReason !== 'native_transcript_advancing') {
+                        LOG.info('CLI', `[${this.type}] holding pending completed (native_transcript_advancing: msgCount=${nativeSample.msgCount} mtimeAge=${Date.now() - sourceMtimeMs}ms < ${MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS}ms) — transcript still growing, screen-idle verdict not trusted`);
+                        if (this.isMeshWorkerSession()) {
+                            traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `native_transcript_advancing msgCount=${nativeSample.msgCount} mtimeAge=${Date.now() - sourceMtimeMs}ms`);
+                        }
+                        if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
+                            blockReason: 'native_transcript_advancing',
+                            latestVisibleStatus,
+                            msgCount: nativeSample.msgCount,
+                            sourceMtimeAgeMs: Date.now() - sourceMtimeMs,
+                            growthQuietMs: MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS,
+                            waitedMs,
+                        });
+                        pending.loggedBlockReason = 'native_transcript_advancing';
+                    }
+                    this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
+                    return;
+                }
+            }
             if (!isTranscriptEvidenceGate && (block.terminal || waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS)) {
                 if (pending.loggedBlockReason !== blockReason) {
                     LOG.info('CLI', `[${this.type}] waiting to emit completed until transcript finalizes (${blockReason})`);

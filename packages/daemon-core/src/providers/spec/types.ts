@@ -293,6 +293,31 @@ export interface SectionDef {
      * for that anchor. A scalar `anchor` ignores array form beyond index 0.
      */
     anchor_context?: AnchorContext | (AnchorContext | null)[];
+    /**
+     * Extends an anchored section N lines ABOVE its anchor line. The default
+     * anchored geometry starts the section AT the anchor line, which cannot
+     * express a status block that sits directly ABOVE its landmark (e.g.
+     * codex's live `Working (…)` spinner above the `› ` composer). With
+     * `above: K` the section starts at max(0, anchorLine - K), so the window
+     * stays pinned to the landmark regardless of output volume — unlike
+     * `from_bottom`, which counts from the LAST NON-BLANK line of a
+     * blank-trimmed viewport and lets the live status block escape the window
+     * once long output fills the tail (CODEX-FSM-DEGENERATE-STABLE RCA,
+     * defect 1: the spinner left the from_bottom:12 window while the worker
+     * was still generating).
+     */
+    above?: number;
+    /**
+     * Anchor-miss policy. Default (absent): an anchored section whose anchor
+     * matches NOTHING falls back to the whole screen (from=0, to=total) — the
+     * historical behavior modal sections rely on ("whole-screen fallback in
+     * non-modal frames is harmless"). 'empty' resolves the section to EMPTY
+     * instead, for sections whose guard regexes must never see unrelated body
+     * text: status_tail's spinner cues, whose whole-screen fallback would
+     * re-open the SPINNER-BODY-SELFMATCH defect on any frame where the
+     * composer landmark is momentarily absent (mid-redraw).
+     */
+    anchor_miss?: 'empty';
     lines?: number;
     until_regex?: string;
     until_regex_flags?: string;

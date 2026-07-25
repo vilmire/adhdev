@@ -115,6 +115,31 @@ export const COMPLETED_FINALIZATION_MAX_WAIT_MS = 30_000;
 // Sized so a short transcript-write lag resolves under it while staying well below the 30s
 // COMPLETED_FINALIZATION_MAX_WAIT_MS cap that force-releases the weak completion regardless.
 export const CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS = 20_000;
+// (TRANSCRIPT-GROWTH-HOLD — CODEX-FSM-DEGENERATE-STABLE RCA, upper safety net)
+// Minimum QUIET time required on the provider's native transcript file before a
+// missing_final_assistant + noExternalTranscriptSource completion (the FLOOR
+// class: codex-cli / kimi / cursor-cli / opencode) may release its weak emit.
+// While the transcript file has been appended within this window, the turn is
+// demonstrably alive regardless of what the screen parser says — the FSM's
+// busy→idle that armed the completion was a lie (spinner escaped the status
+// window / degenerate stable region), so the flush HOLDS instead of firing.
+//
+// Conservative by construction: the hold engages ONLY on positive growth
+// evidence (a fresh source mtime). A provider with no native source, an
+// unresolvable transcript, or a transcript that has gone quiet for this window
+// falls through to the unchanged floor/cap logic — missing information never
+// blocks an idle verdict (no false-busy wedge), and each hold cycle is
+// re-verified against a FRESH sample, so the hold releases at most this long
+// after the transcript's last append.
+//
+// Sized from the live RCA: during the defect the rollout transcript advanced
+// ~once per 45s (msgCount 82→87 over ~4min) while the PTY was quiet for 365s,
+// so the window must exceed that append cadence or the hold leaks between
+// appends; 60s covers it with margin while staying well under the 180s
+// mesh-worker stall watchdog threshold, which keeps ownership of genuine long
+// stalls. It only ever delays the already-degraded missing_final_assistant
+// path — completions WITH an in-turn final assistant never see this hold.
+export const MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS = 60_000;
 // (FALSEIDLE-BGCHILD-a) Minimum generating→idle settle window for native-history mesh worker
 // sessions. Native-history providers (e.g. claude-cli) normally flush the completion with
 // flushDelay=0 — the transcript is authoritative, so there is no reason to wait. But a worker

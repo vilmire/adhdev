@@ -107,7 +107,9 @@ export function resolveSections(
                     if (candIdx !== -1 && (idx === -1 || candIdx < idx)) idx = candIdx;
                 }
                 if (idx !== -1) {
-                    from = idx;
+                    from = typeof sec.above === 'number' && sec.above > 0
+                        ? Math.max(0, idx - Math.floor(sec.above))
+                        : idx;
                     to = total;
                     if (sec.until_regex !== undefined) {
                         try {
@@ -118,6 +120,12 @@ export function resolveSections(
                     } else if (sec.lines !== undefined) {
                         to = Math.min(total, from + sec.lines);
                     }
+                } else if (sec.anchor_miss === 'empty') {
+                    // Explicit empty-on-miss (see SectionDef.anchor_miss): the
+                    // section resolves to EMPTY rather than the whole-screen
+                    // fallback, so narrow-cue guards never see unrelated body.
+                    from = 0;
+                    to = 0;
                 }
             } catch { /* bad anchor regex */ }
         } else if (sec.from_top !== undefined) {
