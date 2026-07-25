@@ -36,6 +36,7 @@ import {
     RefineExecFileAsync,
     RefineStageOutcome,
     classifyPatchEquivalenceFailure,
+    collectTrivialFastForwardGitlinkResolutions,
     convergeDivergedSubmoduleGitlinks,
     recordMeshRefineStage,
     resolveRefineryAutoPublishSubmoduleMainCommits,
@@ -625,6 +626,35 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
                     }
                 }
             } catch { /* fail-open: on gate error, fall through to the rebase */ }
+
+            // TRIVIAL-FF GITLINK: the diverged path above only fills gitlinkResolutions
+            // when base and branch advanced the SAME submodule to NON-ff (sibling) commits.
+            // When the changed gitlink is instead a strict fast-forward (base advanced the
+            // submodule to an ancestor/descendant of the branch-side commit — the common
+            // case when a sibling branch already merged its oss bump), the pre-rebase gate
+            // reports NO submodule_conflict, so gitlinkResolutions stays empty and the plain
+            // `git rebase baseHead` below runs. That plain rebase still hits the same gitlink
+            // and aborts ("Recursive merging with submodules currently only supports trivial
+            // cases"), wrongly blocking the branch. So when behind>0 and any changed gitlink
+            // remains (and the diverged path did not already resolve them), collect the
+            // trivial-ff resolutions and take the gitlink-aware root rebase too. Direction is
+            // the same as the diverged rule: resolve to the more-advanced (descendant) commit.
+            if (gitlinkResolutions.length === 0) {
+                try {
+                    const ffResolutions = collectTrivialFastForwardGitlinkResolutions(
+                        node.workspace, repoRoot, baseHead, branchHead,
+                    );
+                    if (ffResolutions.length > 0) {
+                        gitlinkResolutions = ffResolutions;
+                        recordMeshRefineStage(refineStages, 'submodule_gitlink_converge', 'passed', syncStarted, {
+                            reason: 'submodule_trivial_ff_gitlink_aware_rebase',
+                            gitlinks: ffResolutions.map(r => ({ path: r.path, rebasedCommit: r.rebasedCommit })),
+                        });
+                        LOG.info('Mesh', `[Refinery] Trivial fast-forward submodule gitlink(s) for node ${node.id} — using gitlink-aware rebase: `
+                            + ffResolutions.map(r => `${r.path}→${r.rebasedCommit.slice(0, 12)}`).join(', '));
+                    }
+                } catch { /* fail-open: on collection error, fall through to the plain rebase */ }
+            }
 
             // behind>0: strictly-behind OR diverged. Rebase the branch onto the pinned
             // baseHead. A conflict aborts and terminates blocked_review (retryable=false —
