@@ -2455,7 +2455,19 @@
             "detailLabelBranch": "Rama",
             "detailLabelRole": "Rol",
             "detailLabelStarted": "Iniciada",
-            "detailLabelWorkspace": "Espacio de trabajo"
+            "detailLabelWorkspace": "Espacio de trabajo",
+            "routingHeading": "Enrutamiento",
+            "routingDevice": "Dispositivo",
+            "routingDaemon": "Daemon",
+            "routingExecution": "Ejecución",
+            "routingVia": "Vía",
+            "routingDifficulty": "Dificultad",
+            "routingFitness": "Idoneidad",
+            "routingReason": "Motivo",
+            "routingRequiredTags": "Etiquetas requeridas",
+            "routingTagsUnsatisfied": "no satisfechas",
+            "routingSkipped": "Candidatos omitidos",
+            "routingSkippedMore": "+{{count}} más"
         }
     },
     "machine": {

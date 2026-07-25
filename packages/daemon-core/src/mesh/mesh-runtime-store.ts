@@ -323,6 +323,10 @@ export class MeshRuntimeStore {
                 node_id TEXT,
                 session_id TEXT,
                 provider_type TEXT,
+                -- LEDGER-TASK-TRACEABILITY (B): the task a lifecycle entry pertains to,
+                -- promoted from payload.taskId so kind+task_id joins are index-backed
+                -- (legacy DBs get this column via migrateMeshIsolationColumns' ALTER).
+                task_id TEXT,
                 payload TEXT NOT NULL DEFAULT '{}'
             );
 
@@ -546,6 +550,23 @@ export class MeshRuntimeStore {
             //    store never creates it; an old install drops the dormant table once.
             //    Idempotent — DROP TABLE IF EXISTS is a no-op on every subsequent boot.
             this.db.exec(`DROP TABLE IF EXISTS mesh_completion_conflicts`);
+
+            // 7. LEDGER-TASK-TRACEABILITY (B): mesh_event_ledger.task_id. A pre-existing
+            //    DB has the ledger table (CREATE IF NOT EXISTS is a no-op) without this
+            //    column, so add it. Nullable — legacy rows read back with task_id NULL and
+            //    fall back to payload.taskId at the read layer (ledgerEntryTaskId), so no
+            //    backfill is needed. Idempotent: the column check short-circuits once present.
+            const ledgerCols = this.tableColumns('mesh_event_ledger');
+            if (!ledgerCols.has('task_id')) {
+                this.db.exec(`ALTER TABLE mesh_event_ledger ADD COLUMN task_id TEXT`);
+            }
+            // kind+task_id join index (task lifecycle timeline). Created unconditionally —
+            // IF NOT EXISTS is a no-op once present; the column is guaranteed above.
+            this.db.exec(`
+                CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_task
+                    ON mesh_event_ledger(mesh_id, task_id, timestamp)
+                    WHERE task_id IS NOT NULL
+            `);
         } catch (err: any) {
             // Best-effort: a failed isolation migration must not brick the store. The
             // CREATE-TABLE definitions above already carry the new schema for fresh DBs;
@@ -1821,6 +1842,7 @@ export class MeshRuntimeStore {
         nodeId?: string | null;
         sessionId?: string | null;
         providerType?: string | null;
+        taskId?: string | null;
         payload?: unknown;
     }): void {
         // Ledger `kind` is a mandatory schema invariant (mesh_event_ledger.kind is
@@ -1837,8 +1859,8 @@ export class MeshRuntimeStore {
         }
         this.db.prepare(
             `INSERT OR IGNORE INTO mesh_event_ledger
-             (id, mesh_id, timestamp, kind, node_id, session_id, provider_type, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+             (id, mesh_id, timestamp, kind, node_id, session_id, provider_type, task_id, payload)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
             entry.id,
             entry.meshId,
@@ -1847,6 +1869,7 @@ export class MeshRuntimeStore {
             entry.nodeId ?? null,
             entry.sessionId ?? null,
             entry.providerType ?? null,
+            entry.taskId ?? null,
             JSON.stringify(entry.payload ?? {}),
         );
         this.maybeCheckpointWal();
@@ -1857,7 +1880,7 @@ export class MeshRuntimeStore {
         since?: string;
         kind?: string;
         limit?: number;
-    }): Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; payload: unknown }> {
+    }): Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; taskId: string | null; payload: unknown }> {
         const limit = opts?.tail ?? opts?.limit ?? 200;
         let query: string;
         const params: unknown[] = [meshId];
@@ -1883,6 +1906,7 @@ export class MeshRuntimeStore {
             nodeId: r.node_id as string | null,
             sessionId: r.session_id as string | null,
             providerType: r.provider_type as string | null,
+            taskId: (r.task_id as string | null) ?? null,
             payload: (() => { try { return JSON.parse(r.payload as string); } catch { return {}; } })(),
         }));
     }
@@ -1897,7 +1921,7 @@ export class MeshRuntimeStore {
         since?: string;
         kinds?: string[];
         tail?: number;
-    }): Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; payload: unknown }> {
+    }): Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; taskId: string | null; payload: unknown }> {
         const params: unknown[] = [meshId];
         let whereClause = 'mesh_id = ?';
         if (opts?.since) {
@@ -1929,6 +1953,7 @@ export class MeshRuntimeStore {
             nodeId: r.node_id as string | null,
             sessionId: r.session_id as string | null,
             providerType: r.provider_type as string | null,
+            taskId: (r.task_id as string | null) ?? null,
             payload: (() => { try { return JSON.parse(r.payload as string); } catch { return {}; } })(),
         }));
     }
@@ -1967,13 +1992,13 @@ export class MeshRuntimeStore {
 
     importLedgerEntries(entries: Array<{
         id: string; meshId: string; timestamp: string; kind: string;
-        nodeId?: string | null; sessionId?: string | null; providerType?: string | null; payload?: unknown;
+        nodeId?: string | null; sessionId?: string | null; providerType?: string | null; taskId?: string | null; payload?: unknown;
     }>): number {
         let imported = 0;
         const stmt = this.db.prepare(
             `INSERT OR IGNORE INTO mesh_event_ledger
-             (id, mesh_id, timestamp, kind, node_id, session_id, provider_type, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+             (id, mesh_id, timestamp, kind, node_id, session_id, provider_type, task_id, payload)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         );
         this.db.transaction(() => {
             for (const e of entries) {
@@ -1984,7 +2009,7 @@ export class MeshRuntimeStore {
                 if (!e.kind || !String(e.kind).trim()) continue;
                 const result = stmt.run(
                     e.id, e.meshId, e.timestamp, e.kind,
-                    e.nodeId ?? null, e.sessionId ?? null, e.providerType ?? null,
+                    e.nodeId ?? null, e.sessionId ?? null, e.providerType ?? null, e.taskId ?? null,
                     JSON.stringify(e.payload ?? {}),
                 );
                 if (result.changes > 0) imported++;

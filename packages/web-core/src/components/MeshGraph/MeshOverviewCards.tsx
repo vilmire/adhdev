@@ -659,9 +659,83 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
     )
 }
 
+// LEDGER-TASK-TRACEABILITY (E2): the routing rationale a task_dispatched / task_claimed
+// entry carries in payload.routingDecision — who ran it (device/daemon/provider/model/
+// thinking), by what path (via), and why (fitness score, skipped candidates, tag gating).
+interface RoutingDecisionView {
+    source?: string
+    selectedNodeId?: string
+    daemonId?: string
+    transport?: string
+    resolvedProviderType?: string
+    resolvedModel?: string
+    resolvedThinkingLevel?: string
+    resolvedDifficulty?: string
+    fitnessScore?: number
+    reason?: string
+    skippedCandidates?: Array<{ nodeId?: string; reason?: string }>
+    skippedCandidatesDropped?: number
+    requiredTagsResult?: { required?: string[]; satisfied?: boolean; missing?: string[] }
+}
+
+function readRoutingDecision(payload: Record<string, unknown> | undefined): RoutingDecisionView | null {
+    const rd = payload && typeof payload === 'object' ? (payload as Record<string, unknown>).routingDecision : undefined
+    if (!rd || typeof rd !== 'object' || Array.isArray(rd)) return null
+    return rd as RoutingDecisionView
+}
+
+function RoutingDecisionDetail({ meshTheme, routing, resolveNodeLabel }: { meshTheme: MeshGraphTheme; routing: RoutingDecisionView; resolveNodeLabel: (nodeId: string | undefined | null) => string }) {
+    const { t } = useTranslation('common')
+    // "who ran it" — provider · model · thinking, joined compactly.
+    const execProfile = [routing.resolvedProviderType, routing.resolvedModel, routing.resolvedThinkingLevel]
+        .filter((v): v is string => typeof v === 'string' && !!v)
+        .join(' · ')
+    const tags = routing.requiredTagsResult
+    return (
+        <div className="flex flex-col gap-1.5">
+            <div className={`text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.routingHeading')}</div>
+            <div className="grid gap-1.5 text-xs">
+                {routing.selectedNodeId && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.routingDevice')} value={resolveNodeLabel(routing.selectedNodeId)} />}
+                {routing.daemonId && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.routingDaemon')} value={routing.daemonId} />}
+                {execProfile && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.routingExecution')} value={execProfile} />}
+                {(routing.source || routing.transport) && (
+                    <ModalRow meshTheme={meshTheme} label={t('mesh.overview.routingVia')} value={[routing.source, routing.transport].filter(Boolean).join(' · ')} />
+                )}
+                {routing.resolvedDifficulty && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.routingDifficulty')} value={routing.resolvedDifficulty} />}
+                {typeof routing.fitnessScore === 'number' && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.routingFitness')} value={String(routing.fitnessScore)} />}
+                {routing.reason && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.routingReason')} value={routing.reason} />}
+                {tags && Array.isArray(tags.required) && tags.required.length > 0 && (
+                    <ModalRow
+                        meshTheme={meshTheme}
+                        label={t('mesh.overview.routingRequiredTags')}
+                        value={`${tags.required.join(', ')}${tags.satisfied === false ? ` · ${t('mesh.overview.routingTagsUnsatisfied')}${tags.missing?.length ? `: ${tags.missing.join(', ')}` : ''}` : ''}`}
+                    />
+                )}
+            </div>
+            {Array.isArray(routing.skippedCandidates) && routing.skippedCandidates.length > 0 && (
+                <div className="flex flex-col gap-1">
+                    <div className={`text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.routingSkipped')}</div>
+                    <div className={`flex flex-col gap-0.5 text-[11px] leading-4 ${meshTheme.textSecondary}`}>
+                        {routing.skippedCandidates.map((c, i) => (
+                            <div key={`${c.nodeId ?? 'node'}-${i}`}>
+                                <span>{resolveNodeLabel(c.nodeId)}</span>
+                                {c.reason && <span className={meshTheme.textMuted}> — {c.reason}</span>}
+                            </div>
+                        ))}
+                        {typeof routing.skippedCandidatesDropped === 'number' && routing.skippedCandidatesDropped > 0 && (
+                            <div className={meshTheme.textMuted}>{t('mesh.overview.routingSkippedMore', { count: routing.skippedCandidatesDropped })}</div>
+                        )}
+                    </div>
+                </div>
+            )}
+        </div>
+    )
+}
+
 function LedgerDetail({ meshTheme, entry, resolveNodeLabel }: { meshTheme: MeshGraphTheme; entry: RepoMeshLedgerEntryStatus; resolveNodeLabel: (nodeId: string | undefined | null) => string }) {
     const { t } = useTranslation('common')
     const summary = payloadSummary(entry.payload)
+    const routing = readRoutingDecision(entry.payload as Record<string, unknown> | undefined)
     let payloadJson = ''
     try {
         payloadJson = JSON.stringify(entry.payload ?? {}, null, 2)
@@ -681,6 +755,8 @@ function LedgerDetail({ meshTheme, entry, resolveNodeLabel }: { meshTheme: MeshG
                 {entry.sessionId && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelSession')} value={shortSessionId(entry.sessionId)} />}
                 {entry.providerType && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelProvider')} value={entry.providerType} />}
             </div>
+            {/* LEDGER-TASK-TRACEABILITY (E2): human-readable routing rationale (who/via/why). */}
+            {routing && <RoutingDecisionDetail meshTheme={meshTheme} routing={routing} resolveNodeLabel={resolveNodeLabel} />}
             {payloadJson && payloadJson !== '{}' && (
                 <div>
                     <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelPayload')}</div>

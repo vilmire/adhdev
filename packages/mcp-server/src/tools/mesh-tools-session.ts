@@ -379,6 +379,7 @@ export async function meshSendTask(
                             taskMode,
                             providerType,
                             targetSessionId: dispatchedSessionId,
+                            ...(args.node_id ? { selectedNodeId: args.node_id } : {}),
                             ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
                             // COORD-EVENT-MISROUTE: persist the dispatching coordinator daemon anchor
                             // (same value stamped into meshContext above) so a transcript-reconcile
@@ -571,6 +572,7 @@ export async function meshSendTask(
                         providerType: resolvedProviderType,
                         targetSessionId: args.session_id,
                         dispatchedToIdleSession: sessionWasIdle,
+                        ...(args.node_id ? { selectedNodeId: args.node_id } : {}),
                         ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
                         // COORD-EVENT-MISROUTE: persist the dispatching coordinator daemon anchor so a
                         // transcript-reconcile synth recovers it from the ledger rather than stamping

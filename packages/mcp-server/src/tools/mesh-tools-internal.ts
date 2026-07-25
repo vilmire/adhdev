@@ -489,6 +489,13 @@ export function buildDirectTaskPayload(
          *  deliverable to any coordinator. Mirrors the `coordinatorDaemonId` already stamped into
          *  the worker's meshContext. Absent on legacy rows → daemon-level fallback (unchanged). */
         coordinatorDaemonId?: string;
+        /** LEDGER-TASK-TRACEABILITY (A/D): the node this direct dispatch targeted, plus the
+         *  resolved model/thinking axes (when known), surfaced in the routingDecision sub-object
+         *  so the dashboard renders direct dispatches with the same "who/via/why" shape as
+         *  queue-claim dispatches. Optional — pre-existing callers omit them. */
+        selectedNodeId?: string;
+        resolvedModel?: string;
+        resolvedThinkingLevel?: string;
     },
 ): Record<string, unknown> {
     const descriptor = summarizeTaskMessage(message);
@@ -505,6 +512,18 @@ export function buildDirectTaskPayload(
         ...(opts.dispatchedToIdleSession !== undefined ? { dispatchedToIdleSession: opts.dispatchedToIdleSession } : {}),
         ...(opts.coordinatorSessionId ? { coordinatorSessionId: opts.coordinatorSessionId } : {}),
         ...(opts.coordinatorDaemonId ? { coordinatorDaemonId: opts.coordinatorDaemonId } : {}),
+        // Uniform routing rationale (mirrors the queue-claim task_dispatched shape) so both
+        // paths render identically in mesh_task_history / the dashboard. The legacy top-level
+        // `source`/`via`/`providerType` fields above are preserved verbatim for existing
+        // consumers (mesh-active-work / mesh-events-stale key on payload.source === 'direct').
+        routingDecision: {
+            source: 'direct',
+            via,
+            ...(opts.selectedNodeId ? { selectedNodeId: opts.selectedNodeId } : {}),
+            ...(opts.providerType ? { resolvedProviderType: opts.providerType } : {}),
+            ...(opts.resolvedModel ? { resolvedModel: opts.resolvedModel } : {}),
+            ...(opts.resolvedThinkingLevel ? { resolvedThinkingLevel: opts.resolvedThinkingLevel } : {}),
+        },
     };
 }
 
@@ -1615,11 +1634,38 @@ export function isGitStatusDirty(status: any): boolean {
 // mesh_reconcile_ledger.
 // (large-value compaction utils moved to ./mesh-tool-shared.ts)
 
+// LEDGER-TASK-TRACEABILITY (E1): compact a task_dispatched routingDecision for the
+// slim ledger view — keep every scalar field (source, selectedNodeId, daemonId,
+// resolvedProviderType/Model/ThinkingLevel/Difficulty, fitnessScore, reason, transport,
+// requiredTagsResult) verbatim, and bound skippedCandidates to a handful with a dropped
+// count so a large fleet's candidate list can't bloat the compact payload.
+const ROUTING_SKIPPED_COMPACT_MAX = 5;
+export function compactRoutingDecision(routing: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(routing)) {
+        if (k === 'skippedCandidates' && Array.isArray(v)) {
+            const kept = v.slice(0, ROUTING_SKIPPED_COMPACT_MAX);
+            out[k] = kept;
+            if (v.length > kept.length) out.skippedCandidatesDropped = v.length - kept.length;
+        } else {
+            out[k] = v;
+        }
+    }
+    return out;
+}
+
 export function slimLedgerPayload(payload: Record<string, unknown>): Record<string, unknown> {
     const slim: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(payload)) {
         if (k === 'message' || k === 'taskSummary') {
             slim[k] = typeof v === 'string' && v.length > 200 ? v.slice(0, 200) + '…' : v;
+        } else if (k === 'routingDecision' && v && typeof v === 'object' && !Array.isArray(v)) {
+            // LEDGER-TASK-TRACEABILITY (E1): the routing rationale (source, device/daemon,
+            // resolved provider/model/thinking, why) is the whole point of task_dispatched —
+            // preserve it even in compact mode. It is small by construction; only bound the
+            // skippedCandidates list so a large fleet can't blow the compact budget. The
+            // message/finalSummary truncation policy above is untouched.
+            slim[k] = compactRoutingDecision(v as Record<string, unknown>);
         } else if (k === 'evidence' || k === 'workerResult' || k === 'gitStatus' || k === 'validationResults') {
             // Skip large nested evidence objects — accessible via mesh_reconcile_ledger if needed.
         } else if (k === 'finalSummary') {

@@ -293,6 +293,30 @@ function warnDispatchWarmupGetterMissingOnce(daemonId: string): void {
     LOG.warn('MeshQueue', `Mesh peer connection getter unavailable for ${String(daemonId).slice(0, 12)}; remote task-dispatch warmup deadline degraded to the combined connect+response window. Avoids a cold-open false-timeout but loses warm/cold precision — wire getMeshPeerConnectionStatus on this daemon.`);
 }
 
+// LEDGER-TASK-TRACEABILITY (A/D): the routing rationale captured at claim/dispatch
+// time so mesh_task_history / the dashboard can answer "why THIS node/provider/model".
+// All fields optional — the event-driven / idle drains don't compute a fitness score,
+// so they omit the extras and only `source` is always present.
+export interface MeshTaskRoutingDecision {
+    // How the task reached this dispatch: a normal queue claim, the auto-launch drain
+    // that spawned a fresh worker, or a coordinator direct dispatch (mesh_send_task).
+    source: 'queue' | 'autoLaunch' | 'direct';
+    // The task→slot fitness score of the selected node (scoreSlotForTask), when the
+    // 'fitness' scheduling strategy ranked candidates. Absent for first_eligible etc.
+    fitnessScore?: number;
+    // Candidate nodes considered but skipped before this one won, with the reason.
+    skippedCandidates?: Array<{ nodeId: string; reason: string }>;
+    // Required-tag gating result for the selected node.
+    requiredTagsResult?: { required: string[]; satisfied: boolean; missing: string[] };
+    // The resolved execution profile (D): provider actually launched, and the
+    // model/thinking/difficulty axes that shaped it, plus the human-readable reason.
+    resolvedProviderType?: string;
+    resolvedModel?: string;
+    resolvedThinkingLevel?: string;
+    resolvedDifficulty?: string;
+    reason?: string;
+}
+
 interface DeliverTaskContext {
     meshId: string;
     nodeId: string;
@@ -302,6 +326,8 @@ interface DeliverTaskContext {
     transport: 'remote' | 'local';
     sourceCoordinatorSessionId?: string;
     sourceCoordinatorDaemonId?: string;
+    // LEDGER-TASK-TRACEABILITY (A): routing rationale to record on task_dispatched.
+    routingDecision?: MeshTaskRoutingDecision;
 }
 
 // Readiness barrier for the LOCAL auto-launch path. A just-spawned CLI session is
@@ -346,6 +372,51 @@ async function waitForLocalSessionReady(components: DaemonComponents, sessionId:
 // (response budget governs from t0), so a normal dispatch sees no added latency. The
 // LOCAL transport (in-process cliManager) has no channel to warm up and keeps the
 // flat Bug B hang guard.
+/**
+ * LEDGER-TASK-TRACEABILITY (A/D): append a task_dispatched entry from an already-built
+ * dispatch context. Reads the execution profile off the claimed task (model/thinking/
+ * difficulty/coordinator session were stamped at enqueue/claim) and folds in the caller's
+ * routing rationale. Hot-path-safe: no detection, no scoring — everything is precomputed.
+ * taskId is promoted to the base field (B) so the row joins the lifecycle by kind+taskId.
+ */
+function recordTaskDispatchedLedger(ctx: DeliverTaskContext, deliveryId: string): void {
+    const task = ctx.task;
+    const routing = ctx.routingDecision;
+    const routingDecision: Record<string, unknown> = {
+        source: routing?.source ?? 'queue',
+        selectedNodeId: ctx.nodeId,
+        ...(localCoordinatorDaemonId() ? { daemonId: localCoordinatorDaemonId() } : {}),
+        transport: ctx.transport,
+        // D: resolved execution profile — prefer the caller's resolved values, fall back
+        // to what the claimed task row carries (queue/idle drains carry it on the task).
+        resolvedProviderType: routing?.resolvedProviderType ?? ctx.providerType,
+        ...(routing?.resolvedModel ?? task.model ? { resolvedModel: routing?.resolvedModel ?? task.model } : {}),
+        ...(routing?.resolvedThinkingLevel ?? task.thinkingLevel ? { resolvedThinkingLevel: routing?.resolvedThinkingLevel ?? task.thinkingLevel } : {}),
+        ...(routing?.resolvedDifficulty ?? task.difficulty ? { resolvedDifficulty: routing?.resolvedDifficulty ?? task.difficulty } : {}),
+        ...(typeof routing?.fitnessScore === 'number' ? { fitnessScore: routing.fitnessScore } : {}),
+        ...(routing?.skippedCandidates?.length ? { skippedCandidates: routing.skippedCandidates } : {}),
+        ...(routing?.requiredTagsResult ? { requiredTagsResult: routing.requiredTagsResult } : {}),
+        ...(routing?.reason ? { reason: routing.reason } : {}),
+    };
+    appendLedgerEntry(ctx.meshId, {
+        kind: 'task_dispatched',
+        nodeId: ctx.nodeId,
+        sessionId: ctx.sessionId,
+        providerType: ctx.providerType,
+        taskId: task.id,
+        payload: {
+            taskId: task.id,
+            ...(task.missionId ? { missionId: task.missionId } : {}),
+            deliveryId,
+            transport: ctx.transport,
+            ...(ctx.sourceCoordinatorSessionId ? { coordinatorSessionId: ctx.sourceCoordinatorSessionId } : {}),
+            ...(ctx.sourceCoordinatorDaemonId ? { coordinatorDaemonId: ctx.sourceCoordinatorDaemonId } : {}),
+            ...(Array.isArray(task.requiredTags) && task.requiredTags.length ? { requiredTags: task.requiredTags } : {}),
+            routingDecision,
+        },
+    });
+}
+
 function deliverTaskToSession(
     dispatchThunk: () => Promise<unknown>,
     ctx: DeliverTaskContext,
@@ -363,6 +434,15 @@ function deliverTaskToSession(
         ...(ctx.sourceCoordinatorSessionId ? { sourceCoordinatorSessionId: ctx.sourceCoordinatorSessionId } : {}),
         ...(ctx.sourceCoordinatorDaemonId ? { sourceCoordinatorDaemonId: ctx.sourceCoordinatorDaemonId } : {}),
     });
+
+    // LEDGER-TASK-TRACEABILITY (A): record the dispatch — the single funnel every
+    // queue-claim dispatch (local + remote) flows through — so mesh_task_history and the
+    // dashboard can show "which device/daemon/provider/model, via what path, and why".
+    // All routing values are ALREADY computed by the caller (no re-serialization on the
+    // hot path); the delivery id links this to the delivered/failed transitions below.
+    try {
+        recordTaskDispatchedLedger(ctx, delivery.id);
+    } catch { /* ledger write is best-effort — dispatch proceeds regardless */ }
 
     // Invoke the transport synchronously (preserves the prior fire-and-forget timing,
     // and lets a synchronous throw fall into the same failure path as a rejection).
@@ -466,7 +546,12 @@ export function tryAssignQueueTask(
     meshId: string,
     nodeId: string,
     sessionId: string,
-    providerType: string
+    providerType: string,
+    // LEDGER-TASK-TRACEABILITY (A): routing rationale computed by the auto-launch drain
+    // (fitness score, skipped candidates, resolved model/thinking). Threaded to the
+    // task_dispatched ledger entry. Other claim paths (event/idle drain) omit it and the
+    // entry records source:'queue' with just the resolved provider from the claimed row.
+    routingDecision?: MeshTaskRoutingDecision,
 ): boolean {
     const mesh = getMeshWithCache(components, meshId);
     // Match with the shared 3-form normalizer (id / nodeId / node_id), not raw
@@ -652,6 +737,29 @@ export function tryAssignQueueTask(
 
     LOG.info('MeshQueue', `Node ${nodeId} (${sessionId}) pulled task ${task.id}`);
 
+    // LEDGER-TASK-TRACEABILITY (C): the task just transitioned pending→assigned. Record
+    // the claim (distinct from the later task_dispatched, which fires when the message is
+    // handed to the transport in deliverTaskToSession). This is the single funnel every
+    // claim path (event/idle drain, auto-launch, remote reclaim) flows through, so one
+    // append here covers them all. Best-effort — a ledger write must never fail a claim.
+    try {
+        appendLedgerEntry(meshId, {
+            kind: 'task_claimed',
+            nodeId,
+            sessionId,
+            providerType,
+            taskId: task.id,
+            payload: {
+                taskId: task.id,
+                ...(task.missionId ? { missionId: task.missionId } : {}),
+                nodeId,
+                sessionId,
+                providerType,
+                claimedAt: new Date().toISOString(),
+            },
+        });
+    } catch { /* best-effort — claim proceeds regardless */ }
+
     // FALSE-BLOCKER-CLONE-QUEUE (stale-event clear): the task just claimed and will dispatch,
     // so any actionable blocker previously paged for it (e.g. a 'target_node_id_unmatched'
     // emitted during the clone/bootstrap propagation window before the node became
@@ -726,6 +834,7 @@ export function tryAssignQueueTask(
                     transport: 'remote',
                     ...(sourceCoordinatorSessionId ? { sourceCoordinatorSessionId } : {}),
                     ...(localDaemonIdForDispatch ? { sourceCoordinatorDaemonId: localDaemonIdForDispatch } : {}),
+                    ...(routingDecision ? { routingDecision } : {}),
                 },
                 // Warmup-aware deadline: this dispatch can be the FIRST command to a
                 // peer whose mesh DataChannel is still opening — charge the cold-open
@@ -815,6 +924,7 @@ export function tryAssignQueueTask(
             transport: 'local',
             ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { sourceCoordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
             ...(localCoordinatorDaemonId() ? { sourceCoordinatorDaemonId: localCoordinatorDaemonId() } : {}),
+            ...(routingDecision ? { routingDecision } : {}),
         },
     );
 
@@ -1832,6 +1942,11 @@ function recordAutoLaunchEvent(meshId: string, args: {
     sessionId?: string;
     reason?: string;
     error?: string;
+    // LEDGER-TASK-TRACEABILITY (D): the resolved execution profile the auto-launch
+    // resolved for this worker, so session_auto_launch records what model/thinking the
+    // spawned worker actually launched with (not just the provider).
+    model?: string;
+    thinkingLevel?: string;
 }) {
     // Suppress consecutive identical `skipped` entries for the same task (4s reconcile
     // re-trigger noise). Non-skip phases and changed reasons always record and reset
@@ -1853,11 +1968,16 @@ function recordAutoLaunchEvent(meshId: string, args: {
             nodeId: args.nodeId,
             sessionId: args.sessionId,
             providerType: args.providerType,
+            // (B) promote taskId so this entry joins the task lifecycle timeline.
+            ...(args.taskId ? { taskId: args.taskId } : {}),
             payload: {
                 phase: args.phase,
                 taskId: args.taskId,
                 reason: args.reason,
                 error: args.error,
+                // (D) resolved execution profile for the spawned worker.
+                ...(args.model ? { resolvedModel: args.model } : {}),
+                ...(args.thinkingLevel ? { resolvedThinkingLevel: args.thinkingLevel } : {}),
             },
         });
     } catch (e: any) {
@@ -1872,6 +1992,9 @@ function markAutoLaunch(meshId: string, taskId: string, args: {
     providerType?: string;
     sessionId?: string;
     error?: string;
+    // LEDGER-TASK-TRACEABILITY (D): resolved execution profile for started/completed.
+    model?: string;
+    thinkingLevel?: string;
 }) {
     recordTaskAutoLaunch(meshId, taskId, {
         status: args.status,
@@ -1888,6 +2011,8 @@ function markAutoLaunch(meshId: string, taskId: string, args: {
         sessionId: args.sessionId,
         reason: args.reason,
         error: args.error,
+        ...(args.model ? { model: args.model } : {}),
+        ...(args.thinkingLevel ? { thinkingLevel: args.thinkingLevel } : {}),
     });
     // Fix (1): actively notify the coordinator of a non-self-resolving skip; re-arm the
     // notification on any non-skip transition (started/completed) so a later genuine skip
@@ -2278,6 +2403,20 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 { bumpCursor: true, task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags } },
             ).map((c: RankableNode) => c.node);
 
+        // LEDGER-TASK-TRACEABILITY (A): accumulate the candidate nodes that were
+        // considered but skipped before the winning node, so task_dispatched can record
+        // WHY the other nodes lost (cooldown, dirty, cap, provider mismatch, …). Bounded
+        // so a large fleet can't bloat the entry. markSkip mirrors markAutoLaunch's skip
+        // side effect AND appends to this list in one call.
+        const skippedCandidates: Array<{ nodeId: string; reason: string }> = [];
+        const SKIPPED_CANDIDATES_MAX = 12;
+        const markSkip = (nodeIdForSkip: string, reason: string, extra?: { providerType?: string }) => {
+            markAutoLaunch(meshId, task.id, { status: 'skipped', reason, nodeId: nodeIdForSkip, ...(extra || {}) });
+            if (nodeIdForSkip && skippedCandidates.length < SKIPPED_CANDIDATES_MAX) {
+                skippedCandidates.push({ nodeId: nodeIdForSkip, reason });
+            }
+        };
+
         for (const node of orderedCandidateNodes) {
             const nodeId = readMeshNodeId(node);
             if (!nodeId) continue;
@@ -2286,19 +2425,19 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
             const cooldownUntil = autoLaunchCooldownUntil.get(launchKey) || 0;
             if (cooldownUntil > 0 && now >= cooldownUntil) autoLaunchCooldownUntil.delete(launchKey);
             if (autoLaunchInProgress.has(launchKey)) {
-                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'auto_launch_in_progress', nodeId });
+                markSkip(nodeId, 'auto_launch_in_progress');
                 continue;
             }
             if (now < cooldownUntil) {
-                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'auto_launch_cooldown', nodeId });
+                markSkip(nodeId, 'auto_launch_cooldown');
                 continue;
             }
             if (isDirtyNode(node)) {
-                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'dirty_workspace', nodeId });
+                markSkip(nodeId, 'dirty_workspace');
                 continue;
             }
             if (!isLaunchableNode(node)) {
-                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'node_not_launch_ready', nodeId });
+                markSkip(nodeId, 'node_not_launch_ready');
                 continue;
             }
             // FRESHNESS gate (distinct from the health gate above): a clean-tree node that
@@ -2310,7 +2449,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
             // place. Telemetry-absent nodes pass (never block on missing data). The 4s
             // reconcile retries once the node's auto-ff repair path catches it up.
             if (!isMeshNodeFreshEnoughToLaunch(node, freshnessGate)) {
-                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'node_stale_behind_upstream', nodeId });
+                markSkip(nodeId, 'node_stale_behind_upstream');
                 continue;
             }
             const launchTarget = resolveAutoLaunchTarget(components, node);
@@ -2318,7 +2457,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 // Remote node we can't reach (no transport / no coordinator daemonId).
                 // Set a cooldown so the 4s reconcile loop doesn't re-attempt this node
                 // every tick; the de-dup'd skip ledger keeps it diagnosable without flood.
-                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: launchTarget.reason || 'auto_launch_unavailable', nodeId });
+                markSkip(nodeId, launchTarget.reason || 'auto_launch_unavailable');
                 autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                 continue;
             }
@@ -2333,19 +2472,19 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
             // reason so the coordinator is not paged; the 4s reconcile retries, and once the
             // existing session goes terminal this gate clears and a legitimate launch proceeds.
             if (nodeHasLiveSessionPendingClaim(components, meshId, nodeId, task, node)) {
-                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'node_has_live_session_pending_claim', nodeId });
+                markSkip(nodeId, 'node_has_live_session_pending_claim');
                 continue;
             }
             // Write tasks keep the one-active-per-node invariant (worktree isolation);
             // read-only diagnoses may auto-launch onto a node that already has an active
             // assignment. Classified by the shared isTaskReadonly predicate.
             if (!isTaskReadonly(task) && nodeHasActiveAssignment(meshId, nodeId)) {
-                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'node_has_active_assignment', nodeId });
+                markSkip(nodeId, 'node_has_active_assignment');
                 continue;
             }
             const maxConcurrentSessions = Number(node?.policy?.maxConcurrentSessions);
             if (Number.isFinite(maxConcurrentSessions) && maxConcurrentSessions >= 0 && liveSessionCountForNode(components, meshId, nodeId) >= maxConcurrentSessions) {
-                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'max_concurrent_sessions_reached', nodeId });
+                markSkip(nodeId, 'max_concurrent_sessions_reached');
                 continue;
             }
 
@@ -2353,7 +2492,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
             try {
                 const resolved = await resolveUsableProvider(components, nodeId, node, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags });
                 if (!resolved.providerType) {
-                    markAutoLaunch(meshId, task.id, { status: 'skipped', reason: resolved.reason || 'provider_unusable', nodeId });
+                    markSkip(nodeId, resolved.reason || 'provider_unusable');
                     continue;
                 }
                 // Slot-derived model/thinking: an explicit task.model/thinkingLevel
@@ -2388,7 +2527,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     providerCap !== undefined
                     && activeProviderAssignedCount(meshId, nodeId, resolved.providerType) >= providerCap
                 ) {
-                    markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'max_provider_parallel_reached', nodeId, providerType: resolved.providerType });
+                    markSkip(nodeId, 'max_provider_parallel_reached', { providerType: resolved.providerType });
                     continue;
                 }
 
@@ -2424,7 +2563,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                         meshCoordinatorDaemonId: launchTarget.coordinatorDaemonId,
                         meshCoordinatorNodeId: nodeId,
                     };
-                    markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: resolved.providerType });
+                    markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: resolved.providerType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
                     let launchResult: any;
                     try {
                         // OFFLINE-NODE-BLOCKING: no peer-connected pre-check before this remote
@@ -2464,12 +2603,12 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     // which (forwarded back here) drives the claim via the normal event path / PHASE 1
                     // reconcile. Set a cooldown so the 4s loop doesn't re-launch before that lands.
                     const remoteSessionId = readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.id) || readNonEmptyString(payload.runtimeSessionId);
-                    markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: resolved.providerType, sessionId: remoteSessionId || undefined });
+                    markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: resolved.providerType, sessionId: remoteSessionId || undefined, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
                     autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                     return true;
                 }
 
-                markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: resolved.providerType });
+                markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: resolved.providerType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
                 const launchResult: any = await components.cliManager.handleCliCommand('launch_cli', {
                     cliType: resolved.providerType,
                     dir: node.workspace,
@@ -2492,7 +2631,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                     return false;
                 }
-                markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: resolved.providerType, sessionId });
+                markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: resolved.providerType, sessionId, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
                 // Readiness barrier: a freshly-spawned local CLI session is NOT yet
                 // interactive — its PTY prints the input prompt (and the adapter flips
                 // isReady()) only ~2-6s after launch. Dispatching the task immediately
@@ -2503,7 +2642,27 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 // first message lands cleanly. The adapter's queue-until-ready path is the
                 // backstop if readiness is reported late; this just avoids the churn.
                 await waitForLocalSessionReady(components, sessionId);
-                tryAssignQueueTask(components, meshId, nodeId, sessionId, resolved.providerType);
+                // LEDGER-TASK-TRACEABILITY (A/D): the auto-launch drain has all the routing
+                // rationale in scope (resolved provider/model/thinking, skipped candidates,
+                // fitness score). Fold it into the task_dispatched entry the claim writes.
+                // All values are already computed above — no extra work on the dispatch path.
+                const requiredTags = Array.isArray(task.requiredTags) ? task.requiredTags.filter((t): t is string => !!t) : [];
+                const routingDecision: MeshTaskRoutingDecision = {
+                    source: 'autoLaunch',
+                    fitnessScore: nodeFitnessForTask(node, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }),
+                    ...(skippedCandidates.length ? { skippedCandidates } : {}),
+                    requiredTagsResult: {
+                        required: requiredTags,
+                        satisfied: !requiredTags.length || nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node, resolved.providerType)),
+                        missing: requiredTags.filter(t => !buildMeshNodeCapabilityTags(node, resolved.providerType).includes(t)),
+                    },
+                    resolvedProviderType: resolved.providerType,
+                    ...(effectiveModel ? { resolvedModel: effectiveModel } : {}),
+                    ...(effectiveThinkingLevel ? { resolvedThinkingLevel: effectiveThinkingLevel } : {}),
+                    ...((task as any).difficulty ? { resolvedDifficulty: String((task as any).difficulty) } : {}),
+                    ...(resolved.reason ? { reason: resolved.reason } : {}),
+                };
+                tryAssignQueueTask(components, meshId, nodeId, sessionId, resolved.providerType, routingDecision);
                 return true;
             } catch (e: any) {
                 markAutoLaunch(meshId, task.id, { status: 'failed', error: e?.message || String(e), nodeId });

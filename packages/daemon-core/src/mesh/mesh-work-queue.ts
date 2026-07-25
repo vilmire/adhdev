@@ -1150,6 +1150,10 @@ export function recordDirectDispatchTask(
                 status: 'delivered',
             });
         } catch { /* best-effort — the assigned row is already recorded */ }
+        // NOTE (LEDGER-TASK-TRACEABILITY A): the direct-dispatch (mesh_send_task) path
+        // appends its own task_dispatched ledger entry at the MCP layer (mesh-tools-session.ts
+        // via buildDirectTaskPayload → routingDecision source:'direct') BEFORE calling this.
+        // Do NOT append task_dispatched here — it would double-record the same dispatch.
         return entry;
     });
 }

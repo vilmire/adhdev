@@ -2455,7 +2455,19 @@
             "detailLabelBranch": "分支",
             "detailLabelRole": "角色",
             "detailLabelStarted": "已启动",
-            "detailLabelWorkspace": "工作区"
+            "detailLabelWorkspace": "工作区",
+            "routingHeading": "路由",
+            "routingDevice": "设备",
+            "routingDaemon": "守护进程",
+            "routingExecution": "执行配置",
+            "routingVia": "经由",
+            "routingDifficulty": "难度",
+            "routingFitness": "匹配度",
+            "routingReason": "原因",
+            "routingRequiredTags": "必需标签",
+            "routingTagsUnsatisfied": "未满足",
+            "routingSkipped": "跳过的候选",
+            "routingSkippedMore": "另有 {{count}} 个"
         }
     },
     "machine": {

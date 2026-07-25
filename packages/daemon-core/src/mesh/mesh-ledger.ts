@@ -29,6 +29,11 @@ import {
 
 export type MeshLedgerKind =
     | 'task_dispatched'
+    // LEDGER-TASK-TRACEABILITY (C): a queue task transitioned pending→assigned (a
+    // node/session claimed it). Distinct from task_dispatched (the message was handed
+    // to the transport): claim precedes dispatch and marks the lifecycle handoff.
+    // payload: { taskId, nodeId, sessionId, providerType?, claimedAt }
+    | 'task_claimed'
     | 'task_completed'
     | 'task_failed'
     | 'task_stalled'
@@ -111,7 +116,38 @@ export interface MeshLedgerEntry {
     nodeId?: string;
     sessionId?: string;
     providerType?: string;
+    // LEDGER-TASK-TRACEABILITY (B): the task this entry pertains to, promoted from
+    // payload.taskId to a top-level base field so a task's lifecycle
+    // (task_dispatched → task_claimed → task_completed/failed/stalled/reclaimed) can
+    // be joined by kind+taskId without an O(n) per-entry payload scan. Optional and
+    // back-compat: legacy rows never carried it — readers fall back to payload.taskId,
+    // and appendLedgerEntry auto-derives it from payload.taskId for task-lifecycle
+    // kinds so every such entry is uniformly queryable.
+    taskId?: string;
     payload: Record<string, unknown>;
+}
+
+// LEDGER-TASK-TRACEABILITY (B): the kinds whose taskId base field is auto-derived
+// from payload.taskId at append time (so a join by kind+taskId is uniform). Other
+// kinds may still set taskId explicitly; this only backfills the common lifecycle.
+const TASK_LIFECYCLE_LEDGER_KINDS: ReadonlySet<MeshLedgerKind> = new Set<MeshLedgerKind>([
+    'task_dispatched',
+    'task_claimed',
+    'task_completed',
+    'task_failed',
+    'task_stalled',
+    'task_reclaimed',
+    'task_approval_needed',
+    'task_question_pending',
+    'p2p_dispatch_failed',
+]);
+
+/** Resolve the taskId for a ledger entry, preferring the base field and falling
+ *  back to payload.taskId (legacy rows / entries that only carry it in payload). */
+export function ledgerEntryTaskId(entry: Pick<MeshLedgerEntry, 'taskId' | 'payload'>): string | undefined {
+    if (typeof entry.taskId === 'string' && entry.taskId.trim()) return entry.taskId.trim();
+    const fromPayload = entry.payload && typeof entry.payload === 'object' ? (entry.payload as Record<string, unknown>).taskId : undefined;
+    return typeof fromPayload === 'string' && fromPayload.trim() ? fromPayload.trim() : undefined;
 }
 
 export function isIntentionalCleanupStopEntry(entry: Pick<MeshLedgerEntry, 'kind' | 'payload'>): boolean {
@@ -796,6 +832,14 @@ export function appendLedgerEntry(
         ...partial,
     };
 
+    // LEDGER-TASK-TRACEABILITY (B): backfill the taskId base field from payload.taskId
+    // for task-lifecycle kinds so every dispatch/claim/complete/fail/stall/reclaim
+    // entry is uniformly join-able by kind+taskId. An explicit partial.taskId wins.
+    if (!entry.taskId && TASK_LIFECYCLE_LEDGER_KINDS.has(entry.kind)) {
+        const derived = ledgerEntryTaskId(entry);
+        if (derived) entry.taskId = derived;
+    }
+
     const filePath = getLedgerPath(meshId);
 
     // Compact or rotate based on file size
@@ -822,6 +866,7 @@ export function appendLedgerEntry(
             nodeId: entry.nodeId ?? null,
             sessionId: entry.sessionId ?? null,
             providerType: entry.providerType ?? null,
+            taskId: entry.taskId ?? null,
             payload: entry.payload,
         });
     } catch {
@@ -1074,7 +1119,15 @@ function readLedgerFile(meshId: string): MeshLedgerEntry[] {
         if (!line.trim()) continue;
         try {
             const entry = JSON.parse(line) as MeshLedgerEntry;
-            if (entry.id && entry.kind) entries.push(entry);
+            if (entry.id && entry.kind) {
+                // LEDGER-TASK-TRACEABILITY (B): backfill the base taskId from
+                // payload.taskId for legacy JSONL lines that predate the field.
+                if (!entry.taskId) {
+                    const derived = ledgerEntryTaskId(entry);
+                    if (derived) entry.taskId = derived;
+                }
+                entries.push(entry);
+            }
         } catch { /* skip malformed lines */ }
     }
     return entries;
@@ -1108,6 +1161,7 @@ function ensureLedgerImported(store: MeshRuntimeStore, meshId: string): void {
             nodeId: e.nodeId ?? null,
             sessionId: e.sessionId ?? null,
             providerType: e.providerType ?? null,
+            taskId: ledgerEntryTaskId(e) ?? null,
             payload: e.payload ?? {},
         })));
     } catch { /* import is best-effort; reads fall back to JSONL on store failure */ }
@@ -1116,16 +1170,23 @@ function ensureLedgerImported(store: MeshRuntimeStore, meshId: string): void {
 function readLedgerFromStore(meshId: string): MeshLedgerEntry[] {
     const store = MeshRuntimeStore.getInstance();
     ensureLedgerImported(store, meshId);
-    return store.readLedgerEntriesOrdered(meshId).map(r => ({
-        id: r.id,
-        meshId: r.meshId,
-        timestamp: r.timestamp,
-        kind: r.kind as MeshLedgerKind,
-        ...(r.nodeId ? { nodeId: r.nodeId } : {}),
-        ...(r.sessionId ? { sessionId: r.sessionId } : {}),
-        ...(r.providerType ? { providerType: r.providerType } : {}),
-        payload: (r.payload && typeof r.payload === 'object' ? r.payload : {}) as Record<string, unknown>,
-    }));
+    return store.readLedgerEntriesOrdered(meshId).map(r => {
+        const payload = (r.payload && typeof r.payload === 'object' ? r.payload : {}) as Record<string, unknown>;
+        // LEDGER-TASK-TRACEABILITY (B): prefer the column, fall back to payload.taskId
+        // for legacy rows written before the column existed (back-compat join).
+        const taskId = ledgerEntryTaskId({ taskId: r.taskId ?? undefined, payload });
+        return {
+            id: r.id,
+            meshId: r.meshId,
+            timestamp: r.timestamp,
+            kind: r.kind as MeshLedgerKind,
+            ...(r.nodeId ? { nodeId: r.nodeId } : {}),
+            ...(r.sessionId ? { sessionId: r.sessionId } : {}),
+            ...(r.providerType ? { providerType: r.providerType } : {}),
+            ...(taskId ? { taskId } : {}),
+            payload,
+        };
+    });
 }
 
 function getCachedRawEntries(meshId: string): MeshLedgerEntry[] {

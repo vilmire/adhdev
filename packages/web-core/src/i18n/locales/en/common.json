@@ -2455,7 +2455,19 @@
             "detailLabelBranch": "Branch",
             "detailLabelRole": "Role",
             "detailLabelStarted": "Started",
-            "detailLabelWorkspace": "Workspace"
+            "detailLabelWorkspace": "Workspace",
+            "routingHeading": "Routing",
+            "routingDevice": "Device",
+            "routingDaemon": "Daemon",
+            "routingExecution": "Execution",
+            "routingVia": "Via",
+            "routingDifficulty": "Difficulty",
+            "routingFitness": "Fitness",
+            "routingReason": "Reason",
+            "routingRequiredTags": "Required tags",
+            "routingTagsUnsatisfied": "unsatisfied",
+            "routingSkipped": "Skipped candidates",
+            "routingSkippedMore": "+{{count}} more"
         }
     },
     "machine": {

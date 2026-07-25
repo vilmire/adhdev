@@ -2455,7 +2455,19 @@
             "detailLabelBranch": "브랜치",
             "detailLabelRole": "역할",
             "detailLabelStarted": "시작 시각",
-            "detailLabelWorkspace": "워크스페이스"
+            "detailLabelWorkspace": "워크스페이스",
+            "routingHeading": "라우팅",
+            "routingDevice": "디바이스",
+            "routingDaemon": "데몬",
+            "routingExecution": "실행 프로필",
+            "routingVia": "경유",
+            "routingDifficulty": "난이도",
+            "routingFitness": "적합도",
+            "routingReason": "근거",
+            "routingRequiredTags": "필수 태그",
+            "routingTagsUnsatisfied": "미충족",
+            "routingSkipped": "건너뛴 후보",
+            "routingSkippedMore": "외 {{count}}개"
         }
     },
     "machine": {

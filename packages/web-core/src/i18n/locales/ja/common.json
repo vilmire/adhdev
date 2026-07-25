@@ -2455,7 +2455,19 @@
             "detailLabelBranch": "ブランチ",
             "detailLabelRole": "ロール",
             "detailLabelStarted": "開始",
-            "detailLabelWorkspace": "ワークスペース"
+            "detailLabelWorkspace": "ワークスペース",
+            "routingHeading": "ルーティング",
+            "routingDevice": "デバイス",
+            "routingDaemon": "デーモン",
+            "routingExecution": "実行プロファイル",
+            "routingVia": "経由",
+            "routingDifficulty": "難易度",
+            "routingFitness": "適合度",
+            "routingReason": "理由",
+            "routingRequiredTags": "必須タグ",
+            "routingTagsUnsatisfied": "未充足",
+            "routingSkipped": "スキップした候補",
+            "routingSkippedMore": "他 {{count}} 件"
         }
     },
     "machine": {

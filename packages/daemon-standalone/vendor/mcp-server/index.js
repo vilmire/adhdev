@@ -2082,7 +2082,19 @@ function buildDirectTaskPayload(message, via, opts) {
     ...opts.targetSessionId ? { targetSessionId: opts.targetSessionId } : {},
     ...opts.dispatchedToIdleSession !== void 0 ? { dispatchedToIdleSession: opts.dispatchedToIdleSession } : {},
     ...opts.coordinatorSessionId ? { coordinatorSessionId: opts.coordinatorSessionId } : {},
-    ...opts.coordinatorDaemonId ? { coordinatorDaemonId: opts.coordinatorDaemonId } : {}
+    ...opts.coordinatorDaemonId ? { coordinatorDaemonId: opts.coordinatorDaemonId } : {},
+    // Uniform routing rationale (mirrors the queue-claim task_dispatched shape) so both
+    // paths render identically in mesh_task_history / the dashboard. The legacy top-level
+    // `source`/`via`/`providerType` fields above are preserved verbatim for existing
+    // consumers (mesh-active-work / mesh-events-stale key on payload.source === 'direct').
+    routingDecision: {
+      source: "direct",
+      via,
+      ...opts.selectedNodeId ? { selectedNodeId: opts.selectedNodeId } : {},
+      ...opts.providerType ? { resolvedProviderType: opts.providerType } : {},
+      ...opts.resolvedModel ? { resolvedModel: opts.resolvedModel } : {},
+      ...opts.resolvedThinkingLevel ? { resolvedThinkingLevel: opts.resolvedThinkingLevel } : {}
+    }
   };
 }
 function findNode(mesh, nodeId) {
@@ -2847,11 +2859,27 @@ function isGitStatusDirty(status) {
   if (Array.isArray(status?.submodules) && status.submodules.some((submodule) => submodule?.dirty || submodule?.outOfSync || submodule?.error)) return true;
   return countUncommittedChanges(status) > 0;
 }
+var ROUTING_SKIPPED_COMPACT_MAX = 5;
+function compactRoutingDecision(routing) {
+  const out = {};
+  for (const [k, v] of Object.entries(routing)) {
+    if (k === "skippedCandidates" && Array.isArray(v)) {
+      const kept = v.slice(0, ROUTING_SKIPPED_COMPACT_MAX);
+      out[k] = kept;
+      if (v.length > kept.length) out.skippedCandidatesDropped = v.length - kept.length;
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
 function slimLedgerPayload(payload) {
   const slim = {};
   for (const [k, v] of Object.entries(payload)) {
     if (k === "message" || k === "taskSummary") {
       slim[k] = typeof v === "string" && v.length > 200 ? v.slice(0, 200) + "\u2026" : v;
+    } else if (k === "routingDecision" && v && typeof v === "object" && !Array.isArray(v)) {
+      slim[k] = compactRoutingDecision(v);
     } else if (k === "evidence" || k === "workerResult" || k === "gitStatus" || k === "validationResults") {
     } else if (k === "finalSummary") {
       slim[k] = typeof v === "string" && v.length > 300 ? v.slice(0, 300) + "\u2026" : v;
@@ -6523,6 +6551,7 @@ async function meshSendTask(ctx, args) {
               taskMode,
               providerType,
               targetSessionId: dispatchedSessionId,
+              ...args.node_id ? { selectedNodeId: args.node_id } : {},
               ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {},
               // COORD-EVENT-MISROUTE: persist the dispatching coordinator daemon anchor
               // (same value stamped into meshContext above) so a transcript-reconcile
@@ -6685,6 +6714,7 @@ async function meshSendTask(ctx, args) {
             providerType: resolvedProviderType,
             targetSessionId: args.session_id,
             dispatchedToIdleSession: sessionWasIdle,
+            ...args.node_id ? { selectedNodeId: args.node_id } : {},
             ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {},
             // COORD-EVENT-MISROUTE: persist the dispatching coordinator daemon anchor so a
             // transcript-reconcile synth recovers it from the ledger rather than stamping
