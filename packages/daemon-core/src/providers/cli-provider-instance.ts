@@ -785,16 +785,21 @@ export class CliProviderInstance implements ProviderInstance {
             }))
             : mergedMessages;
 
-        // Dashboard-tail repair (native-source providers, e.g. antigravity): the
-        // assistant answer lives only in native-history, so the PTY-parsed
-        // statusMessages end on the user prompt / auto-approve system lines and the
-        // snapshot's preview / lastMessageRole / completionMarker never see the
-        // answer — the session looks stuck on the user turn. We already cached the
-        // real final assistant summary at completion time (lastCompletionSummary),
-        // so append it as the trailing assistant bubble when the current tail has no
-        // assistant message at/after it. Purely additive to the status view; no
-        // per-tick native read, no effect on providers whose PTY carries the
-        // assistant (they surface it themselves and the guard below is a no-op).
+        // purpose: 'display-tail' (zero-read) — Dashboard-tail repair (native-source
+        // providers, e.g. antigravity): the assistant answer lives only in native-history,
+        // so the PTY-parsed statusMessages end on the user prompt / auto-approve system
+        // lines and the snapshot's preview / lastMessageRole / completionMarker never see
+        // the answer — the session looks stuck on the user turn. We already cached the
+        // real final assistant summary at completion time (lastCompletionSummary), so
+        // append it as the trailing assistant bubble when the current tail has no
+        // assistant message at/after it. Purely additive to the status view; no per-tick
+        // native read, no effect on providers whose PTY carries the assistant (they
+        // surface it themselves and the guard below is a no-op).
+        //
+        // authority-ok: this is a DISPLAY-ONLY tail repair, never a completion/stall/
+        // redrive verdict — it reads the pre-cached summary (zero native read) and only
+        // paints the status view. It keys off the adapter's runtime chatMessagesOwnedExternally
+        // capability (not a class predicate); a completion decision is never taken here.
         const adapterOwnsMessagesElsewhereForTail = (this.adapter as any)?.chatMessagesOwnedExternally === true;
         if (adapterOwnsMessagesElsewhereForTail && this.lastCompletionSummary) {
             const summary = this.lastCompletionSummary;
@@ -1580,6 +1585,11 @@ export class CliProviderInstance implements ProviderInstance {
     private readExternalCompletionMessages(): unknown[] | null {
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
         if (!adapterOwnsMessagesElsewhere) return null;
+        // authority-ok: native READ resolution, not a completion/stall/redrive verdict.
+        // This gate only decides whether an on-disk native transcript EXISTS to read for
+        // this session; the completion decision is made by callers over the returned
+        // messages (completionFinalAssistantEvidence / completionFinalSummary), which
+        // route class through resolveTranscriptAuthorityProfile.
         if (!isNativeSourceCanonicalHistory(this.provider.nativeHistory)) return null;
 
         // Resolve a CONCRETE native-history handle for this session's OWN
@@ -2613,6 +2623,11 @@ export class CliProviderInstance implements ProviderInstance {
      * (≥180s of PTY stasis), never on the routine 5s tick.
      */
     private sampleNativeTranscriptProgress(): { msgCount: number; sourceMtimeMs: number } | null {
+        // authority-ok: native fingerprint SAMPLING, not a stall verdict. This only
+        // decides whether a native source exists to sample a progress fingerprint from;
+        // the caller (checkMeshWorkerStall) makes the stall/no-progress decision over the
+        // returned fingerprint. Non-native-source classes have nothing to sample here and
+        // fall back to the unchanged lastOutputAt-only judgment.
         if (!isNativeSourceCanonicalHistory(this.provider?.nativeHistory)) return null;
         // readExternalCompletionMessages resolves this session's OWN native-source
         // conversation (providerSessionId / persisted pin / floor claim) and, as a
@@ -5119,6 +5134,9 @@ export class CliProviderInstance implements ProviderInstance {
         const limit = options.full ? Number.MAX_SAFE_INTEGER : STATUS_HYDRATION_TAIL_LIMIT;
         const windowTag = options.full ? 'full' : `tail:${STATUS_HYDRATION_TAIL_LIMIT}`;
 
+        // authority-ok: history-hydration READ routing, not a completion verdict. Selects
+        // the on-disk native transcript vs the materialized-mirror read path; no
+        // completion/stall/redrive decision is taken here.
         if (isNativeSourceCanonicalHistory(canonicalHistory)) {
             const cacheKey = [this.type, this.providerSessionId, this.workingDir, windowTag].join('\0');
             const now = Date.now();
@@ -5188,6 +5206,8 @@ export class CliProviderInstance implements ProviderInstance {
         // transcript so seedSessionHistory can prime dedup state. Pass full so the
         // hydration read is unbounded here (and only here).
         this.syncCanonicalSavedHistoryIfNeeded({ full: true });
+        // authority-ok: history-restore READ routing, not a completion verdict — picks the
+        // native transcript read vs the legacy chat-history read for seeding dedup state.
         const restoredHistory = isNativeSourceCanonicalHistory(this.provider.nativeHistory)
             ? readProviderChatHistory(this.type, {
                 canonicalHistory: this.provider.nativeHistory,
