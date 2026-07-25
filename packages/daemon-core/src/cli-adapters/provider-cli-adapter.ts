@@ -232,6 +232,9 @@ export class ProviderCliAdapter implements CliAdapter {
     private pendingOutboundQueue: PendingOutboundMessage[] = [];
     private pendingOutboundFlushTimer: NodeJS.Timeout | null = null;
     private pendingOutboundFlushInFlight = false;
+    // Stale-queue watchdog: fires STALE_QUEUE_WARN_MS after the oldest queued
+    // message was enqueued if nothing has been flushed yet.
+    private pendingOutboundStaleTimer: NodeJS.Timeout | null = null;
     // Submit retry timer — PTY-level, not state machine
     private submitRetryTimer: NodeJS.Timeout | null = null;
 
@@ -1715,6 +1718,10 @@ export class ProviderCliAdapter implements CliAdapter {
         await new Promise<void>(resolve => setTimeout(resolve, FORCE_SUBMIT_SETTLE_MS));
     }
 
+    // Stale-queue threshold: warn if a queued message has not been flushed
+    // within this many milliseconds (instrumentation only, no behavior change).
+    private static readonly STALE_QUEUE_WARN_MS = 15000;
+
     private enqueuePendingOutboundMessage(text: string, reason: string, meshTaskId?: string): void {
         const content = String(text || '');
         const duplicate = this.pendingOutboundQueue.some((message) => message.content === content);
@@ -1722,6 +1729,18 @@ export class ProviderCliAdapter implements CliAdapter {
             return;
         }
         const queuedAt = Date.now();
+        const stableMs = this.lastScreenChangeAt ? (queuedAt - this.lastScreenChangeAt) : -1;
+        // Diagnostic context: which gate caused the silent-queue and the full
+        // session readiness snapshot at the moment of enqueue.
+        const gateContext = {
+            reason,
+            startupParseGate: this.startupParseGate,
+            ready: this.ready,
+            engineStatus: this.engine.currentStatus,
+            isWaitingForResponse: this.engine.isWaitingForResponse,
+            stableMs,
+            sessionId: this.engine.getTraceSessionId(),
+        };
         const message: PendingOutboundMessage = {
             id: `${queuedAt}:${this.pendingOutboundQueue.length}:${Math.random().toString(36).slice(2, 10)}`,
             role: 'user',
@@ -1731,8 +1750,23 @@ export class ProviderCliAdapter implements CliAdapter {
             ...(typeof meshTaskId === 'string' && meshTaskId.trim() ? { meshTaskId } : {}),
         };
         this.pendingOutboundQueue.push(message);
-        LOG.info('CLI', `[${this.cliType}] queued outbound message while busy (${reason}); queue=${this.pendingOutboundQueue.length}`);
+        LOG.info('CLI', `[${this.cliType}] queued outbound message; gate=${JSON.stringify(gateContext)}; queue=${this.pendingOutboundQueue.length}`);
         this.onStatusChange?.();
+        // Stale-queue watchdog: emit a warn-level log if the enqueued message
+        // has not been flushed after STALE_QUEUE_WARN_MS. This fires once per
+        // enqueue event (not once per message still in queue) so it does not
+        // spam on a persistently stuck queue; it simply surfaces that the queue
+        // is stuck and records the current gate state at warn time.
+        if (!this.pendingOutboundStaleTimer) {
+            this.pendingOutboundStaleTimer = setTimeout(() => {
+                this.pendingOutboundStaleTimer = null;
+                if (this.pendingOutboundQueue.length === 0) return;
+                const oldest = this.pendingOutboundQueue[0];
+                const staleSec = ((Date.now() - oldest.queuedAt) / 1000).toFixed(1);
+                const nowStableMs = this.lastScreenChangeAt ? (Date.now() - this.lastScreenChangeAt) : -1;
+                LOG.warn('CLI', `[${this.cliType}] STALE QUEUE: ${this.pendingOutboundQueue.length} message(s) undelivered for ${staleSec}s; gate=startupParseGate:${this.startupParseGate} ready:${this.ready} engineStatus:${this.engine.currentStatus} isWaitingForResponse:${this.engine.isWaitingForResponse} stableMs:${nowStableMs} sessionId:${this.engine.getTraceSessionId()} enqueueReason:${oldest.id}`);
+            }, ProviderCliAdapter.STALE_QUEUE_WARN_MS);
+        }
     }
 
     private shouldQueuePendingOutboundMessage(parsedStatusBeforeSend: any | null = null): string | null {
@@ -1785,6 +1819,11 @@ export class ProviderCliAdapter implements CliAdapter {
                 try {
                     await this.sendMessageNow(next.content, false, next.meshTaskId);
                     this.pendingOutboundQueue.shift();
+                    // Clear stale watchdog once the queue drains.
+                    if (this.pendingOutboundQueue.length === 0 && this.pendingOutboundStaleTimer) {
+                        clearTimeout(this.pendingOutboundStaleTimer);
+                        this.pendingOutboundStaleTimer = null;
+                    }
                     this.onStatusChange?.();
                 } catch (error: any) {
                     LOG.warn('CLI', `[${this.cliType}] queued outbound flush failed: ${error?.message || error}`);
@@ -2174,6 +2213,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.pendingTerminalQueryTail = '';
         this.ptyOutputChunks = [];
         if (this.pendingOutboundFlushTimer) { clearTimeout(this.pendingOutboundFlushTimer); this.pendingOutboundFlushTimer = null; }
+        if (this.pendingOutboundStaleTimer) { clearTimeout(this.pendingOutboundStaleTimer); this.pendingOutboundStaleTimer = null; }
         this.pendingOutboundQueue = [];
         this.pendingOutboundFlushInFlight = false;
         if (this.ptyProcess) {
@@ -2197,6 +2237,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.pendingTerminalQueryTail = '';
         this.ptyOutputChunks = [];
         if (this.pendingOutboundFlushTimer) { clearTimeout(this.pendingOutboundFlushTimer); this.pendingOutboundFlushTimer = null; }
+        if (this.pendingOutboundStaleTimer) { clearTimeout(this.pendingOutboundStaleTimer); this.pendingOutboundStaleTimer = null; }
         this.pendingOutboundQueue = [];
         this.pendingOutboundFlushInFlight = false;
         if (this.ptyProcess) {
