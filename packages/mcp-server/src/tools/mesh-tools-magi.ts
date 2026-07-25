@@ -1453,8 +1453,6 @@ export async function meshMagiReview(
         waitTimeoutMs?: number;
         task_kind?: string;
         taskKind?: string;
-        use_judge?: boolean;
-        useJudge?: boolean;
         auto_cleanup?: boolean;
         autoCleanup?: boolean;
     },
@@ -1479,12 +1477,6 @@ export async function meshMagiReview(
     // B: warn (do NOT block) if the coordinator embedded an output schema in the question —
     // it collides with the single kind contract MAGI injects and causes fusion/unparseable.
     const questionSchemaWarning = detectQuestionOutputSchemaConflict(question);
-    // G: use_judge is an interface stub only — judge synthesis is not implemented; true
-    // falls back to clustering with a warning. Default false.
-    const useJudge = (args.use_judge ?? args.useJudge) === true;
-    const judgeWarning = useJudge
-        ? 'use_judge=true requested, but judge synthesis is not yet implemented — falling back to clustering synthesis.'
-        : null;
 
     await refreshMeshFromDaemon(ctx);
 
@@ -1648,7 +1640,6 @@ export async function meshMagiReview(
         panel: panelName,
         taskKind,
         ...(questionSchemaWarning ? { questionSchemaWarning } : {}),
-        ...(judgeWarning ? { judgeWarning } : {}),
         question,
         replicaCount: replicaRecords.length,
         replicas: replicaRecords.map(r => ({ taskId: r.taskId, provider: r.provider, targetNodeId: r.targetNodeId })),
