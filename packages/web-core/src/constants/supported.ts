@@ -145,7 +145,7 @@ export const BUILTIN_EXTENSIONS: readonly SupportedEntry[] = [
   }
 ]
 
-export const BUILTIN_ACP_COUNT = 34
+export const BUILTIN_ACP_COUNT = 35
 
 export const DEFAULT_PROVIDER_VERIFICATION: ProviderVerification = {
   "status": "unverified",
