@@ -145,7 +145,7 @@ export const BUILTIN_EXTENSIONS: readonly SupportedEntry[] = [
   }
 ]
 
-export const BUILTIN_ACP_COUNT = 35
+export const BUILTIN_ACP_COUNT = 32
 
 export const DEFAULT_PROVIDER_VERIFICATION: ProviderVerification = {
   "status": "unverified",
@@ -478,17 +478,6 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "owner": "community",
     "source": "docs/site/data/provider-catalog.mjs"
   },
-  "autohand-acp": {
-    "status": "unverified",
-    "testedOn": [],
-    "testedVersions": [],
-    "validatedFlows": [],
-    "lastValidated": null,
-    "notes": "",
-    "evidence": "",
-    "owner": "community",
-    "source": "docs/site/data/provider-catalog.mjs"
-  },
   "blackbox-ai-acp": {
     "status": "unverified",
     "testedOn": [],
@@ -534,17 +523,6 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "codex-acp": {
-    "status": "unverified",
-    "testedOn": [],
-    "testedVersions": [],
-    "validatedFlows": [],
-    "lastValidated": null,
-    "notes": "",
-    "evidence": "",
-    "owner": "community",
-    "source": "docs/site/data/provider-catalog.mjs"
-  },
-  "corust-agent-acp": {
     "status": "unverified",
     "testedOn": [],
     "testedVersions": [],
@@ -712,17 +690,6 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "owner": "community",
     "source": "docs/site/data/provider-catalog.mjs"
   },
-  "minion-code-acp": {
-    "status": "unverified",
-    "testedOn": [],
-    "testedVersions": [],
-    "validatedFlows": [],
-    "lastValidated": null,
-    "notes": "",
-    "evidence": "",
-    "owner": "community",
-    "source": "docs/site/data/provider-catalog.mjs"
-  },
   "mistral-vibe-acp": {
     "status": "unverified",
     "testedOn": [],
@@ -848,13 +815,11 @@ export const PROVIDER_VERIFICATION_STATUS: Record<string, ProviderVerificationSt
   "amp-acp": "unverified",
   "auggie-acp": "unverified",
   "autodev-acp": "unverified",
-  "autohand-acp": "unverified",
   "blackbox-ai-acp": "unverified",
   "claude-agent-acp": "unverified",
   "cline-acp": "unverified",
   "codebuddy-acp": "unverified",
   "codex-acp": "unverified",
-  "corust-agent-acp": "unverified",
   "crow-cli-acp": "unverified",
   "cursor-acp": "partial",
   "deepagents-acp": "unverified",
@@ -868,7 +833,6 @@ export const PROVIDER_VERIFICATION_STATUS: Record<string, ProviderVerificationSt
   "junie-acp": "unverified",
   "kilo-acp": "unverified",
   "kimi-acp": "unverified",
-  "minion-code-acp": "unverified",
   "mistral-vibe-acp": "unverified",
   "nova-acp": "unverified",
   "openclaw-acp": "unverified",
