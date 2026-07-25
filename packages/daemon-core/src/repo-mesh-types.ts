@@ -1184,6 +1184,14 @@ export interface LocalMeshNodeEntry {
      */
     reportedMemberState?: MeshReportedMemberState;
     /**
+     * Versioned per-machine runtime facts bundle (MeshNodeFacts — deploy-lag
+     * visibility design §a). Remote nodes: ingested wholesale from the
+     * git_status envelope's reporterNodeFacts. Self/worktree nodes: built by
+     * the SAME producer (buildLocalNodeFacts). Relayed opaquely — surfaces
+     * must pass the object through, never rebuild it field-by-field.
+     */
+    nodeFacts?: import('@adhdev/mesh-shared').MeshNodeFacts;
+    /**
      * The operator-set machine nickname (config.machineNickname) of the daemon
      * that owns this node's workspace. The local coordinator stamps its own
      * config value onto its self/base node; a remote member self-reports its
@@ -1476,6 +1484,13 @@ export interface RepoMeshNodeStatus {
      * (scope/isDaemonAffecting flags). Omitted when the build is current.
      */
     staleDaemonBuild?: Record<string, unknown>;
+    /**
+     * Versioned per-machine runtime facts bundle (MeshNodeFacts). Opaque
+     * pass-through from the node record — see the node-level field doc.
+     * Carries the daemon build COMMIT (not just the version string), which is
+     * the deploy-lag anchor the dashboard renders.
+     */
+    nodeFacts?: import('@adhdev/mesh-shared').MeshNodeFacts;
     error?: string;
 }
 

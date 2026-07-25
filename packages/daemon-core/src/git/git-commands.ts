@@ -4,6 +4,7 @@ import { getGitDiffSummary, getGitFileDiff } from './git-diff.js';
 import { GitCommandError, isPathInside, resolveGitRepository, runGit } from './git-executor.js';
 import { createGitSnapshotStore } from './git-snapshot-store.js';
 import { getGitRepoStatus } from './git-status.js';
+import { buildLocalNodeFacts } from '../mesh/node-facts.js';
 import { loadConfig } from '../config/config.js';
 import type {
   GitCommandName,
@@ -133,7 +134,7 @@ type GitCommandSuccess =
   // (REMOTE-NODE-SLOTS-COORDINATOR-LOCAL fix). The legacy flat
   // reporterProviderVersions/reporterDaemonBuildVersion fields are ALSO emitted for
   // back-compat during a mixed-version-mesh rollout.
-  | { success: true; status: GitRepoStatus; reporterPlatform?: string; reporterArch?: string; reporterMachineNickname?: string; reporterProviderVersions?: Record<string, string>; reporterDaemonBuildVersion?: string; reporterMemberState?: { providerVersions?: Record<string, string>; daemonBuildVersion?: string; lastReportedAt?: number } }
+  | { success: true; status: GitRepoStatus; reporterPlatform?: string; reporterArch?: string; reporterMachineNickname?: string; reporterProviderVersions?: Record<string, string>; reporterDaemonBuildVersion?: string; reporterMemberState?: { providerVersions?: Record<string, string>; daemonBuildVersion?: string; lastReportedAt?: number }; reporterNodeFacts?: import('@adhdev/mesh-shared').MeshNodeFacts }
   | { success: true; diffSummary: GitDiffSummary }
   | { success: true; diff: GitFileDiff }
   | { success: true; snapshot: GitSnapshot }
@@ -382,6 +383,14 @@ export async function handleGitCommand(
               lastReportedAt: Date.now(),
             }
           : undefined;
+      // Versioned facts bundle (deploy-lag visibility design §a): built by the
+      // SAME buildLocalNodeFacts the self-node stamp uses, relayed opaquely —
+      // never rebuild it field-by-field downstream. Legacy flat fields and
+      // reporterMemberState ride alongside for mixed-version meshes.
+      const reporterNodeFacts = buildLocalNodeFacts({
+        providerVersions: reporterProviderVersions ?? null,
+        machineNickname: reporterMachineNickname ?? null,
+      });
       return {
         success: true,
         status,
@@ -391,6 +400,7 @@ export async function handleGitCommand(
         ...(reporterProviderVersions ? { reporterProviderVersions } : {}),
         ...(reporterDaemonBuildVersion ? { reporterDaemonBuildVersion } : {}),
         ...(reporterMemberState ? { reporterMemberState } : {}),
+        reporterNodeFacts,
       };
     }
 

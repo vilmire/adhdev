@@ -286,6 +286,11 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
             ? { providerVersions: record.providerVersions as RepoMeshNodeStatus['providerVersions'] } : {}),
         ...(readString(record.daemonBuildVersion, record.daemon_build_version)
             ? { daemonBuildVersion: readString(record.daemonBuildVersion, record.daemon_build_version) } : {}),
+        // Versioned facts bundle — OPAQUE pass-through by design (deploy-lag
+        // design §a): future bundle fields must ride through without touching
+        // this reassembler.
+        ...(record.nodeFacts && typeof record.nodeFacts === 'object' && !Array.isArray(record.nodeFacts)
+            ? { nodeFacts: record.nodeFacts as RepoMeshNodeStatus['nodeFacts'] } : {}),
         ...(error ? { error } : {}),
     }
 }

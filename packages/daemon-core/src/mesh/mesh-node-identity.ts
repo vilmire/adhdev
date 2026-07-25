@@ -15,7 +15,8 @@ import type { ProviderLoader } from '../providers/provider-loader.js';
 import { detectCLI, getCachedProviderVersions } from '../detection/cli-detector.js';
 import { getDaemonBuildInfo } from '../build-info.js';
 import { getGitRepoStatus } from '../git/git-status.js';
-import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, daemonIdsEquivalent, meshWorkspacesEquivalent, sessionIdsEquivalent, withStatusProbeMarker } from '@adhdev/mesh-shared';
+import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, normalizeMeshNodeFacts, daemonIdsEquivalent, meshWorkspacesEquivalent, sessionIdsEquivalent, withStatusProbeMarker } from '@adhdev/mesh-shared';
+import { buildLocalNodeFacts } from './node-facts.js';
 import type { MeshReportedMemberState } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
@@ -432,6 +433,20 @@ export function recordInlineMeshDirectGitTruth(
         if (mirrored.providerVersions || mirrored.daemonBuildVersion) {
             node.reportedMemberState = mirrored;
         }
+    }
+    // Versioned facts bundle (deploy-lag visibility design §a). Remote: ingest the
+    // envelope's reporterNodeFacts WHOLESALE (opaque — unknown future fields ride
+    // through). Self/worktree: the local probe bypasses handleGitCommand, so build
+    // the bundle with the SAME producer the envelope uses — the two paths cannot
+    // drift on a per-field basis anymore. Skipped (no stamp churn) when a remote
+    // envelope predates the bundle.
+    if (!isLocalSource) {
+        const remoteFacts = normalizeMeshNodeFacts((git as { reporterNodeFacts?: unknown }).reporterNodeFacts);
+        if (remoteFacts) node.nodeFacts = remoteFacts;
+    } else {
+        try {
+            node.nodeFacts = buildLocalNodeFacts({ providerVersions: reporterProviderVersions ?? null });
+        } catch { /* facts stamp is best-effort observability */ }
     }
     return {
         reporterPlatform,

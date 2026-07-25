@@ -98,6 +98,12 @@ function MeshNodeRuntimeRow({ node }: { node: RepoMeshNodeStatus }) {
     const daemonBuildVersion = typeof node.daemonBuildVersion === 'string' && node.daemonBuildVersion
         ? node.daemonBuildVersion
         : undefined
+    // Versioned facts bundle: prefer its build identity (version + COMMIT) over
+    // the legacy flat version string — the commit is the deploy-lag anchor.
+    const factsBuild = node.nodeFacts?.daemonBuild
+    const buildChipLabel = factsBuild?.commitShort
+        ? `build ${factsBuild.version || daemonBuildVersion || '?'}@${factsBuild.commitShort}`
+        : daemonBuildVersion ? `build ${daemonBuildVersion}` : undefined
     return (
         <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
             <div className="flex flex-wrap items-center gap-2">
@@ -113,7 +119,7 @@ function MeshNodeRuntimeRow({ node }: { node: RepoMeshNodeStatus }) {
                 {sessionCount > 0 && <Badge label={`${sessionCount} session${sessionCount === 1 ? '' : 's'}`} tone="default" />}
                 {node.autoFastForwardEligible && <Badge label="fast-forward ready" tone="info" title="Clean, behind upstream — safe for fast-forward" />}
                 {!!staleBuild && <Badge label="stale build" tone="warn" title="Live daemon was built behind workspace HEAD — merged fixes may not be live" />}
-                {daemonBuildVersion && <Badge label={`build ${daemonBuildVersion}`} tone="default" title="Daemon build version reported by this node" />}
+                {buildChipLabel && <Badge label={buildChipLabel} tone={staleBuild ? 'warn' : 'default'} title="Daemon build (version@commit) reported by this node — the running daemon's actual code identity" />}
                 <MeshNodeSchedulingBadges scheduling={node.scheduling} />
             </div>
             {providerVersionEntries.length > 0 && (

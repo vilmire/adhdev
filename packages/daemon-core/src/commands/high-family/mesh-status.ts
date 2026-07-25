@@ -357,6 +357,11 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                             ...(typeof node.reportedDaemonBuildVersion === 'string' && node.reportedDaemonBuildVersion
                                 ? { daemonBuildVersion: node.reportedDaemonBuildVersion }
                                 : {}),
+                            // Opaque pass-through of the versioned facts bundle —
+                            // never rebuild it field-by-field (deploy-lag design §a).
+                            ...(node.nodeFacts && typeof node.nodeFacts === 'object'
+                                ? { nodeFacts: node.nodeFacts }
+                                : {}),
                             providerPriority,
                             // ORCHESTRATION_NODE_SLOTS.md: surface the node's capability
                             // slots so the dashboard slot editor can read them. Only
