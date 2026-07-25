@@ -616,6 +616,20 @@ export interface MeshWorkQueueEntry {
      * by counting active assignments grouped by node + provider.
      */
     assignedProviderType?: string;
+    /**
+     * Transcript-authority class of the claiming session's provider, stamped at
+     * claim time (P1 of the transcript-authority unification — root repo
+     * docs/design/2026-07-25-transcript-authority-unification.md). Lets the
+     * COORDINATOR side classify a remote worker (early-arm / redrive gates)
+     * without resolving the provider module locally — the structural fix for
+     * the "remote class unknowable → reprobe-only" blind spot. Absent on rows
+     * claimed by older daemons; consumers must fall back to local resolution.
+     */
+    assignedTranscriptProfile?: {
+        class: 'native-source' | 'pure-pty' | 'daemon-owned';
+        timing: 'hold' | 'floor' | 'immediate';
+        emitsPtyTurnEvents: boolean;
+    };
     /** Human/operator reason for terminal cancellation. */
     cancelReason?: string;
     cancelledAt?: string;
@@ -1165,7 +1179,12 @@ export function claimNextTask(
     nodeId: string,
     sessionId: string,
     capabilityTags?: string[],
-    opts?: { providerType?: string; providerMaxParallel?: number; nodeIsWorktree?: boolean },
+    opts?: {
+        providerType?: string;
+        providerMaxParallel?: number;
+        nodeIsWorktree?: boolean;
+        assignedTranscriptProfile?: MeshWorkQueueEntry['assignedTranscriptProfile'];
+    },
 ): MeshWorkQueueEntry | null {
     return MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, nodeId, sessionId, capabilityTags, opts);
 }

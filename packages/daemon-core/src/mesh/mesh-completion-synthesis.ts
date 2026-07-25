@@ -471,6 +471,93 @@ export interface AssignedTaskTerminalEvidence {
 // dispatch timestamp, or a tail containing nothing dated at/after dispatch all yield false, so the
 // caller falls through to its normal re-drive decision. The poll can only PREVENT a re-drive of a
 // working session, never create or suppress a completion.
+// ---------------------------------------------------------------------------
+// Shared assigned-task read_chat skeleton (P1 of the transcript-authority
+// unification — root repo docs/design/2026-07-25-transcript-authority-unification.md).
+// pollAssignedTaskInTurnProgress ('turn-progress') and
+// pollAssignedTaskTerminalEvidence ('terminal-evidence') previously duplicated
+// this fetch verbatim; both are delegation shells over this one skeleton so a
+// future purpose (or the reconcile-loop consumers in P3) cannot fork the
+// transport semantics again. Inconclusive — no worker, no transport, transport
+// error, or an explicit success:false — is null; callers keep their
+// conservative fallbacks ("couldn't tell ≠ idle").
+// ---------------------------------------------------------------------------
+async function fetchAssignedTaskChatTail(
+    components: DaemonComponents,
+    mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
+    row: { assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string },
+    tailLimit = 10,
+): Promise<Record<string, unknown> | null> {
+    const sessionId = readNonEmptyString(row.assignedSessionId);
+    const nodeId = readNonEmptyString(row.assignedNodeId);
+    if (!sessionId || !nodeId) return null; // no worker to read
+
+    const node = (mesh.nodes ?? []).find(n => n.id === nodeId);
+    const nodeDaemonId = readNonEmptyString(node?.daemonId);
+    const localDaemonId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
+    const isLocalNode = !nodeDaemonId
+        || daemonIdsEquivalent(nodeDaemonId, localDaemonId)
+        || !!components.instanceManager.getInstance(sessionId);
+
+    const providerType = readNonEmptyString(row.assignedProviderType);
+    const readArgs: Record<string, unknown> = {
+        sessionId,
+        targetSessionId: sessionId,
+        tailLimit,
+        ...(node?.workspace ? { workspace: node.workspace } : {}),
+        ...(providerType ? { agentType: providerType, providerType } : {}),
+    };
+
+    try {
+        if (isLocalNode) {
+            const result = await components.commandHandler?.handle('read_chat', readArgs);
+            if (result && (result as { success?: boolean }).success === false) return null;
+            return unwrapReadChatPayload(result);
+        }
+        if (components.dispatchMeshCommand) {
+            const result = await components.dispatchMeshCommand(nodeDaemonId, 'read_chat', readArgs);
+            const payload = unwrapReadChatPayload(result);
+            if (payload && (payload as { success?: boolean }).success === false) return null;
+            return payload;
+        }
+        return null; // remote node, no P2P transport — can't read this tick
+    } catch {
+        return null; // transport error / session gone → inconclusive, let the caller decide
+    }
+}
+
+/**
+ * Purpose-tagged coordinator-side evidence query — the remote half of the
+ * transcript-authority choke point (P1). Existing callers keep the original
+ * poll* shells below; new consumers (the reconcile loop's early-arm / redrive
+ * sites in P3) should enter here so the purpose vocabulary — not another
+ * ad-hoc gate — expresses what is being asked of the worker transcript.
+ */
+export type AssignedTaskEvidencePurpose = 'turn-progress' | 'terminal-evidence';
+
+export interface AssignedTaskCompletionEvidence {
+    purpose: AssignedTaskEvidencePurpose;
+    /** "Did the worker START this task's turn" — post-dispatch agent bubble. */
+    inTurnProgress: boolean;
+    /** "Did the worker FINISH this task's turn" — populated for 'terminal-evidence'. */
+    terminal: AssignedTaskTerminalEvidence | null;
+}
+
+export async function resolveAssignedTaskCompletionEvidence(
+    components: DaemonComponents,
+    mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
+    row: { id: string; assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string; dispatchTimestamp?: string },
+    purpose: AssignedTaskEvidencePurpose,
+): Promise<AssignedTaskCompletionEvidence> {
+    if (purpose === 'turn-progress') {
+        const inTurnProgress = await pollAssignedTaskInTurnProgress(components, mesh, row);
+        return { purpose, inTurnProgress, terminal: null };
+    }
+    const terminal = await pollAssignedTaskTerminalEvidence(components, mesh, row);
+    // A proven turn-end implies the turn also started.
+    return { purpose, inTurnProgress: terminal != null, terminal };
+}
+
 export async function pollAssignedTaskInTurnProgress(
     components: DaemonComponents,
     mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
@@ -485,38 +572,7 @@ export async function pollAssignedTaskInTurnProgress(
     const dispatchedAtMs = Date.parse(readNonEmptyString(row.dispatchTimestamp));
     if (!Number.isFinite(dispatchedAtMs)) return false;
 
-    const node = (mesh.nodes ?? []).find(n => n.id === nodeId);
-    const nodeDaemonId = readNonEmptyString(node?.daemonId);
-    const localDaemonId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
-    const isLocalNode = !nodeDaemonId
-        || daemonIdsEquivalent(nodeDaemonId, localDaemonId)
-        || !!components.instanceManager.getInstance(sessionId);
-
-    const providerType = readNonEmptyString(row.assignedProviderType);
-    const readArgs: Record<string, unknown> = {
-        sessionId,
-        targetSessionId: sessionId,
-        tailLimit: 10,
-        ...(node?.workspace ? { workspace: node.workspace } : {}),
-        ...(providerType ? { agentType: providerType, providerType } : {}),
-    };
-
-    let payload: Record<string, unknown> | null = null;
-    try {
-        if (isLocalNode) {
-            const result = await components.commandHandler?.handle('read_chat', readArgs);
-            if (result && (result as { success?: boolean }).success === false) return false;
-            payload = unwrapReadChatPayload(result);
-        } else if (components.dispatchMeshCommand) {
-            const result = await components.dispatchMeshCommand(nodeDaemonId, 'read_chat', readArgs);
-            payload = unwrapReadChatPayload(result);
-            if (payload && (payload as { success?: boolean }).success === false) return false;
-        } else {
-            return false; // remote node, no P2P transport — can't read this tick
-        }
-    } catch {
-        return false; // transport error / session gone → inconclusive, let the caller decide
-    }
+    const payload = await fetchAssignedTaskChatTail(components, mesh, row);
     if (!payload) return false;
 
     const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
@@ -542,38 +598,8 @@ export async function pollAssignedTaskTerminalEvidence(
     const nodeId = readNonEmptyString(row.assignedNodeId);
     if (!sessionId || !nodeId) return null; // no worker to read
 
-    const node = (mesh.nodes ?? []).find(n => n.id === nodeId);
-    const nodeDaemonId = readNonEmptyString(node?.daemonId);
-    const localDaemonId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
-    const isLocalNode = !nodeDaemonId
-        || daemonIdsEquivalent(nodeDaemonId, localDaemonId)
-        || !!components.instanceManager.getInstance(sessionId);
-
     const providerType = readNonEmptyString(row.assignedProviderType);
-    const readArgs: Record<string, unknown> = {
-        sessionId,
-        targetSessionId: sessionId,
-        tailLimit: 10,
-        ...(node?.workspace ? { workspace: node.workspace } : {}),
-        ...(providerType ? { agentType: providerType, providerType } : {}),
-    };
-
-    let payload: Record<string, unknown> | null = null;
-    try {
-        if (isLocalNode) {
-            const result = await components.commandHandler?.handle('read_chat', readArgs);
-            if (result && (result as { success?: boolean }).success === false) return null;
-            payload = unwrapReadChatPayload(result);
-        } else if (components.dispatchMeshCommand) {
-            const result = await components.dispatchMeshCommand(nodeDaemonId, 'read_chat', readArgs);
-            payload = unwrapReadChatPayload(result);
-            if (payload && (payload as { success?: boolean }).success === false) return null;
-        } else {
-            return null; // remote node, no P2P transport — can't read this tick
-        }
-    } catch {
-        return null; // transport error / session gone → inconclusive, let the caller decide
-    }
+    const payload = await fetchAssignedTaskChatTail(components, mesh, row);
     if (!payload) return null;
 
     // Only a settled-idle session is a turn-end; a generating/waiting session is mid-turn and

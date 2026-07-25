@@ -915,7 +915,12 @@ export class MeshRuntimeStore {
         nodeId: string,
         sessionId: string,
         capabilityTags: string[] = [],
-        opts?: { providerType?: string; providerMaxParallel?: number; nodeIsWorktree?: boolean },
+        opts?: {
+            providerType?: string;
+            providerMaxParallel?: number;
+            nodeIsWorktree?: boolean;
+            assignedTranscriptProfile?: MeshWorkQueueEntry['assignedTranscriptProfile'];
+        },
     ): MeshWorkQueueEntry | null {
         return this.transaction(() => {
             this.ensureLegacyQueueMigrated(meshId);
@@ -1070,6 +1075,9 @@ export class MeshRuntimeStore {
             entry.assignedNodeId = nodeId;
             entry.assignedSessionId = sessionId;
             if (providerType) entry.assignedProviderType = providerType;
+            // P1 transcript-authority stamp (write-only for now): lets the
+            // coordinator classify this worker without local provider access.
+            if (opts?.assignedTranscriptProfile) entry.assignedTranscriptProfile = opts.assignedTranscriptProfile;
             entry.dispatchTimestamp = now;
             // REDRIVE-DUP: bump the per-task dispatch nonce on every claim so this dispatch
             // carries a nonce strictly greater than any prior (reclaimed) dispatch of the same

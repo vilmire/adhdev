@@ -8,6 +8,7 @@ import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
+import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -433,6 +434,33 @@ function deliverTaskToSession(
 // the mesh_status per-node session filter, and the read_chat node scope guard all
 // share one comparison rule instead of drifting module-private copies.
 
+/**
+ * Resolve the transcript-authority profile of the LIVE claiming session's
+ * provider module (runtime capability, not manifest — a manifest may declare
+ * nativeHistory the live-loaded session doesn't have). Row-lean subset: the
+ * nativeHistory config itself stays local. Undefined when the session isn't
+ * locally observable — the row simply carries no stamp and consumers fall
+ * back to local resolution (older-daemon rows look the same).
+ */
+function resolveClaimingSessionTranscriptProfile(
+    components: DaemonComponents,
+    sessionId: string,
+): MeshWorkQueueEntry['assignedTranscriptProfile'] {
+    try {
+        const instances = components.instanceManager?.getByCategory?.('cli') || [];
+        const inst = instances.find((i: any) => {
+            const sid = i?.getState?.().instanceId;
+            return typeof sid === 'string' && sid && sessionIdsEquivalent(sid, sessionId);
+        }) as { provider?: unknown } | undefined;
+        const provider = inst?.provider;
+        if (!provider || typeof provider !== 'object') return undefined;
+        const profile = resolveTranscriptAuthorityProfile(provider as Parameters<typeof resolveTranscriptAuthorityProfile>[0]);
+        return { class: profile.class, timing: profile.timing, emitsPtyTurnEvents: profile.emitsPtyTurnEvents };
+    } catch {
+        return undefined;
+    }
+}
+
 export function tryAssignQueueTask(
     components: DaemonComponents,
     meshId: string,
@@ -589,10 +617,16 @@ export function tryAssignQueueTask(
     // worktree sessions. Without it, every sibling worktree session on this daemon could
     // claim the same convergence intent and race push/production-deploy (the 4-way fan-out).
     const nodeIsWorktree = node?.isLocalWorktree === true;
+    // P1 transcript-authority stamp: the claim runs on the daemon that owns the
+    // session, so the LIVE provider module (runtime capability, not manifest) is
+    // resolvable here — classify once and persist it on the row so coordinator-side
+    // gates (early-arm / redrive) can classify this worker without local access.
+    const assignedTranscriptProfile = resolveClaimingSessionTranscriptProfile(components, sessionId);
     const task = claimNextTask(meshId, nodeId, sessionId, capabilityTags, {
         providerType,
         ...(providerMaxParallel !== undefined ? { providerMaxParallel } : {}),
         nodeIsWorktree,
+        ...(assignedTranscriptProfile ? { assignedTranscriptProfile } : {}),
     });
     if (!task) {
         return false;

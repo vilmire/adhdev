@@ -419,6 +419,28 @@ describe('mesh-runtime-store', () => {
             __clearMeshQueueForTests(meshId);
         });
 
+        it('persists the assignedTranscriptProfile stamp on claim and omits it when absent', () => {
+            const meshId = `mesh-claim-profile-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            db.insertQueueEntry({ id: 'task-p1', meshId, message: 'stamped', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
+            db.insertQueueEntry({ id: 'task-p2', meshId, message: 'unstamped', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+
+            const profile = { class: 'native-source', timing: 'floor', emitsPtyTurnEvents: false } as const;
+            const stamped = db.claimNextQueueTask(meshId, 'node1', 'sess1', [], { assignedTranscriptProfile: profile });
+            expect(stamped?.id).toBe('task-p1');
+            expect(stamped?.assignedTranscriptProfile).toEqual(profile);
+            // Round-trips through the persisted payload, not just the in-memory entry.
+            const persisted = db.getQueueEntries(meshId, ['assigned']).find(e => e.id === 'task-p1');
+            expect(persisted?.assignedTranscriptProfile).toEqual(profile);
+
+            // Older-daemon shape: no stamp option → no field on the row.
+            const unstamped = db.claimNextQueueTask(meshId, 'node2', 'sess2');
+            expect(unstamped?.id).toBe('task-p2');
+            expect(unstamped?.assignedTranscriptProfile).toBeUndefined();
+
+            __clearMeshQueueForTests(meshId);
+        });
+
         it('returns null when node/session already has an active assignment', () => {
             const meshId = `mesh-claim-active-${randomUUID().slice(0, 8)}`;
             const db = MeshRuntimeStore.getInstance();
