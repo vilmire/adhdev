@@ -3180,6 +3180,150 @@ describe('runMeshReconcileTick', () => {
       }
     })
 
+    // ── STARTED-REDRIVE-NATIVE-SOURCE-BLINDSPOT ─────────────────────────────────
+    // The short re-drive reads "no agent:generating_started" as proof the worker never consumed
+    // the task. For a NATIVE-SOURCE provider (transcriptAuthority=provider + nativeHistory —
+    // kimi) that inference is false: its turn start lives in the native transcript, never in the
+    // PTY event stream, so a busy worker reads delivered-but-never-acked AND (between tool calls)
+    // IDLE_CONFIRMED — which re-drove IMMEDIATELY, with no grace. Live 2026-07-25: the same prompt
+    // was re-injected at 35s/28s/27s/43s and the task then marked failed. The fix consults the
+    // provider's own evidence (post-dispatch agent bubbles) before trusting the missing event.
+
+    // Build a delivered-but-unconsumed row on a LOCAL native-source (kimi) session that reads
+    // IDLE_CONFIRMED — the exact live shape. `messages` decides whether the transcript shows
+    // post-dispatch progress.
+    const makeNativeSourceRedriveCase = (
+      meshId: string,
+      nodeId: string,
+      sessionId: string,
+      buildMessages: (dispatchAt: number) => any[],
+      provider: any = {
+        type: 'kimi',
+        category: 'cli',
+        transcriptAuthority: 'provider',
+        nativeHistory: { source: { kind: 'jsonl' } },
+        tui: { transcriptPty: { scope: 'buffer' } },
+      },
+    ) => {
+      const dispatchAt = Date.now()
+      enqueueTask(meshId, 'investigate the failure', { targetNodeId: nodeId })
+      const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+      backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
+      createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'investigate the failure', status: 'delivered' })
+
+      // Locally present + idle → resolveSessionBusyVerdict IDLE_CONFIRMED (the immediate-redrive
+      // branch). A native-source worker reads idle in the gaps between its tool calls.
+      const idleInstance = {
+        category: 'cli',
+        provider,
+        getState: () => ({ instanceId: sessionId, status: 'idle', type: provider.type, settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
+      }
+      const readChat = vi.fn(async (cmd: string) => {
+        if (cmd !== 'read_chat') return { success: true }
+        // status 'idle' throughout: the in-turn-progress poll must NOT depend on a
+        // generating status — the whole point is that this class reads idle mid-task.
+        return { success: true, status: 'idle', messages: buildMessages(dispatchAt - UNCONSUMED_MS) }
+      })
+      const components = {
+        instanceManager: {
+          getByCategory: (category: string) => (category === 'cli' ? [idleInstance] : []),
+          getInstance: (id: string) => (id === sessionId ? idleInstance : undefined),
+        },
+        commandHandler: { handle: readChat },
+      } as any
+      const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
+      meshConfigMocks.listMeshes.mockReturnValue([mesh])
+      meshConfigMocks.getMesh.mockReturnValue(mesh)
+      return { claimed, components, readChat }
+    }
+
+    it('does NOT re-drive a delivered-but-unconsumed NATIVE-SOURCE (kimi) row whose transcript shows post-dispatch progress', async () => {
+      const meshId = `mesh_phase25_native_progress_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-kimi-working'
+      try {
+        // Mid-task shape: the assistant narrated and fired a tool AFTER dispatch, but the turn has
+        // NOT ended. pollAssignedTaskTerminalEvidence would reject this (trailing tool activity) —
+        // which is why the re-drive path needs its own in-turn-progress bar.
+        const { claimed, components } = makeNativeSourceRedriveCase(meshId, nodeId, sessionId, dispatchedAt => [
+          { role: 'user', content: 'investigate the failure', timestamp: dispatchedAt + 300 },
+          { role: 'assistant', content: 'Let me check the reconcile loop…', timestamp: dispatchedAt + 4_000 },
+          { role: 'assistant', content: '', kind: 'tool', timestamp: dispatchedAt + 6_000 },
+        ])
+
+        // Several ticks: neither the immediate IDLE_CONFIRMED re-drive nor any accrued streak may
+        // fire while the transcript keeps proving the worker is working.
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe(sessionId)
+        expect(readLedgerEntries(meshId).some(
+          e => e.kind === 'task_reclaimed' && (e.payload as any)?.reason === 'delivered_not_consumed_redrive',
+        )).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('STILL re-drives a delivered-but-unconsumed NATIVE-SOURCE row whose transcript shows NO post-dispatch progress (genuinely lost delivery)', async () => {
+      const meshId = `mesh_phase25_native_no_progress_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-kimi-never-started'
+      try {
+        // The rescue must stay narrow: a native-source session whose transcript holds only a PRIOR
+        // task's tail (everything dated BEFORE this dispatch) is a genuinely lost delivery and must
+        // still be re-driven. The post-dispatch user echo alone is not progress — only agent bubbles
+        // count, else every delivered row would suppress its own re-drive.
+        const { claimed, components } = makeNativeSourceRedriveCase(meshId, nodeId, sessionId, dispatchedAt => [
+          { role: 'assistant', content: 'Previous task done.', timestamp: dispatchedAt - 120_000 },
+          { role: 'user', content: 'investigate the failure', timestamp: dispatchedAt + 300 },
+        ])
+
+        await runMeshReconcileTick(components)
+
+        // The re-drive fired. (The row does not stay 'pending': the session is locally present and
+        // idle, so PHASE 3 re-dispatches it the same tick — pre-existing behaviour. The reclaim
+        // ledger is therefore the assertion that the re-drive happened.)
+        const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
+        expect(reclaimed).toHaveLength(1)
+        expect((reclaimed[0].payload as any).reason).toBe('delivered_not_consumed_redrive')
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('PTY-event provider (claude-cli) is UNAFFECTED: an idle delivered-but-unconsumed row is re-driven immediately even with post-dispatch transcript activity', async () => {
+      const meshId = `mesh_phase25_pty_unaffected_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-claude-idle'
+      try {
+        // Same transcript that HOLDS a native-source row, but on a PTY-event provider (no
+        // nativeHistory → resolveLocalSessionNativeSource false). For this class the absent
+        // generating_started IS valid consumption evidence, so the pre-existing immediate
+        // IDLE_CONFIRMED re-drive must be preserved exactly.
+        const { claimed, components } = makeNativeSourceRedriveCase(
+          meshId, nodeId, sessionId,
+          dispatchedAt => [
+            { role: 'user', content: 'investigate the failure', timestamp: dispatchedAt + 300 },
+            { role: 'assistant', content: 'Let me check the reconcile loop…', timestamp: dispatchedAt + 4_000 },
+          ],
+          { type: 'claude-cli', category: 'cli' },
+        )
+
+        await runMeshReconcileTick(components)
+
+        const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
+        expect(reclaimed).toHaveLength(1)
+        expect((reclaimed[0].payload as any).reason).toBe('delivered_not_consumed_redrive')
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
     // ── TASK-PROMPT-REDRIVE-AFTER-COMPLETE (Fix A-i) ────────────────────────────
     // The long DELIVERED_NO_TURN_DEADLINE (15min) reclaim must NOT re-drive a task the worker
     // actually finished when its completion event never reached the coordinator ledger. Past

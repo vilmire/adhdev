@@ -84,6 +84,7 @@ import {
     reconcileUnterminatedDirectDispatches,
     autoPruneStaleDirectDispatches,
     pollAssignedTaskTerminalEvidence,
+    pollAssignedTaskInTurnProgress,
     type AssignedTaskTerminalEvidence,
 } from './mesh-completion-synthesis.js';
 import { sessionStatusFromNodes } from './mesh-active-work.js';
@@ -1199,6 +1200,37 @@ async function recoverStrandedAssignedDispatches(
             if (verdict === 'GENERATING') {
                 deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
             } else {
+                // STARTED-REDRIVE-NATIVE-SOURCE-BLINDSPOT. Everything below infers "the worker never
+                // consumed the task" from the ABSENCE of agent:generating_started. That inference is
+                // only valid for a provider whose turn start IS a PTY event. A NATIVE-SOURCE provider
+                // (transcriptAuthority=provider + on-disk nativeHistory — kimi and kin) signals start
+                // and finish through its native transcript, never emitting generating_started, so the
+                // delivery legitimately stays 'delivered' while the worker is hard at work; and
+                // between tool calls it reads IDLE_CONFIRMED, which re-drives IMMEDIATELY with no
+                // grace at all. Live 2026-07-25: a kimi worker was re-injected the same prompt at
+                // 35s/28s/27s/43s (answering it each time) and the task then marked failed.
+                //
+                // So for that class ONLY, replace the missing event with the evidence the provider
+                // actually produces: any post-dispatch agent bubble in its transcript. Found → the
+                // prompt WAS consumed and the turn is under way; hold the row (and clear the streak,
+                // since progress is positive evidence, not a deferral). Not found / unreadable → fall
+                // through unchanged. PTY-event providers never enter this branch
+                // (resolveLocalSessionNativeSource false/undefined), so their behaviour is untouched.
+                const nativeSourceRedriveCandidate = row.assignedSessionId
+                    ? resolveLocalSessionNativeSource(components, row.assignedSessionId) === true
+                    : false;
+                if (nativeSourceRedriveCandidate
+                    && await pollAssignedTaskInTurnProgress(components, { id: meshId, nodes: mesh.nodes }, row)) {
+                    deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
+                    traceMeshEventDrop('short_redrive_deferred_native_source_progress', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_started',
+                    }, `native_source_in_turn_progress (verdict ${verdict})`);
+                    continue;
+                }
                 if (verdict === 'IDLE_CONFIRMED') {
                     deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
                 } else if (assignedRowLiveStatusIsAwaitingApproval(mesh, row.assignedNodeId, row.assignedSessionId)) {

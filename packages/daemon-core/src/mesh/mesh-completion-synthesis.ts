@@ -26,7 +26,7 @@ import { getActiveDirectDispatches, getQueue } from './mesh-work-queue.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
 import { reconcileDirectDispatchCompletionFromTranscript } from './mesh-events-stale.js';
-import { extractFinalAssistantSummaryEvidence, hasTrailingToolActivityAfterFinalAssistant } from '../providers/chat-message-normalization.js';
+import { extractFinalAssistantSummaryEvidence, hasTrailingToolActivityAfterFinalAssistant, readChatMessageTimestampMs } from '../providers/chat-message-normalization.js';
 import type { ChatMessage } from '../types.js';
 import {
     getMeshV2BackstopCounters,
@@ -447,6 +447,90 @@ export interface AssignedTaskTerminalEvidence {
     providerType?: string;
     nodeId?: string;
     sessionId: string;
+}
+
+// STARTED-REDRIVE-NATIVE-SOURCE-BLINDSPOT. Single-shot transcript poll that asks the NARROWER
+// question the delivered-not-consumed short re-drive needs: did the worker START this turn
+// (in-turn progress), regardless of whether it ever FINISHED it?
+//
+// The short re-drive treats "no agent:generating_started arrived" as positive evidence the worker
+// never consumed the task. That inference holds for a PTY-event provider, whose turn start IS an
+// emitted event. It is FALSE for a NATIVE-SOURCE provider (transcriptAuthority=provider +
+// on-disk nativeHistory — kimi and kin): its start/finish signals live in the native transcript,
+// not in the PTY event stream, so a worker that is demonstrably mid-task still reads
+// delivered-but-never-acked. The observed symptom (2026-07-25): a kimi worker answering the same
+// question four times as the watchdog re-injected the prompt at 35s/28s/27s/43s, then marked the
+// task failed — verdict IDLE_CONFIRMED, because between tool calls the session reads idle.
+//
+// pollAssignedTaskTerminalEvidence answers "did it FINISH" (idle + final-assistant + no trailing
+// tool activity). That is the wrong bar here: a worker mid-task has NOT finished, yet must not be
+// re-driven. This poll therefore accepts ANY post-dispatch transcript bubble — assistant text,
+// thought, or tool/terminal activity — as proof the prompt was consumed and work is under way.
+//
+// Conservative in the same direction as its sibling: an unreadable transcript, a missing/unusable
+// dispatch timestamp, or a tail containing nothing dated at/after dispatch all yield false, so the
+// caller falls through to its normal re-drive decision. The poll can only PREVENT a re-drive of a
+// working session, never create or suppress a completion.
+export async function pollAssignedTaskInTurnProgress(
+    components: DaemonComponents,
+    mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
+    row: { id: string; assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string; dispatchTimestamp?: string },
+): Promise<boolean> {
+    const sessionId = readNonEmptyString(row.assignedSessionId);
+    const nodeId = readNonEmptyString(row.assignedNodeId);
+    if (!sessionId || !nodeId) return false; // no worker to read
+
+    // A dispatch boundary is REQUIRED: without it a reused session's prior-task tail would read as
+    // progress on THIS task and suppress the re-drive forever.
+    const dispatchedAtMs = Date.parse(readNonEmptyString(row.dispatchTimestamp));
+    if (!Number.isFinite(dispatchedAtMs)) return false;
+
+    const node = (mesh.nodes ?? []).find(n => n.id === nodeId);
+    const nodeDaemonId = readNonEmptyString(node?.daemonId);
+    const localDaemonId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
+    const isLocalNode = !nodeDaemonId
+        || daemonIdsEquivalent(nodeDaemonId, localDaemonId)
+        || !!components.instanceManager.getInstance(sessionId);
+
+    const providerType = readNonEmptyString(row.assignedProviderType);
+    const readArgs: Record<string, unknown> = {
+        sessionId,
+        targetSessionId: sessionId,
+        tailLimit: 10,
+        ...(node?.workspace ? { workspace: node.workspace } : {}),
+        ...(providerType ? { agentType: providerType, providerType } : {}),
+    };
+
+    let payload: Record<string, unknown> | null = null;
+    try {
+        if (isLocalNode) {
+            const result = await components.commandHandler?.handle('read_chat', readArgs);
+            if (result && (result as { success?: boolean }).success === false) return false;
+            payload = unwrapReadChatPayload(result);
+        } else if (components.dispatchMeshCommand) {
+            const result = await components.dispatchMeshCommand(nodeDaemonId, 'read_chat', readArgs);
+            payload = unwrapReadChatPayload(result);
+            if (payload && (payload as { success?: boolean }).success === false) return false;
+        } else {
+            return false; // remote node, no P2P transport — can't read this tick
+        }
+    } catch {
+        return false; // transport error / session gone → inconclusive, let the caller decide
+    }
+    if (!payload) return false;
+
+    const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
+    // Any AGENT-side bubble dated at/after dispatch proves the prompt landed and the turn is under
+    // way. User bubbles are excluded: the injected task prompt itself is a post-dispatch user
+    // message, and counting it would suppress the re-drive for the very row this watchdog exists
+    // to rescue (delivered, echoed into the transcript, but never actually worked).
+    return messages.some(msg => {
+        if (!msg) return false;
+        if (msg.role === 'user' || msg.role === 'system') return false;
+        const ts = readChatMessageTimestampMs(msg);
+        if (typeof ts !== 'number' || !Number.isFinite(ts)) return false;
+        return ts >= dispatchedAtMs;
+    });
 }
 
 export async function pollAssignedTaskTerminalEvidence(
