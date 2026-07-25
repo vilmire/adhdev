@@ -17,7 +17,7 @@ import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import { shortHash } from '../system/hash.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
 import type { MeshSendKeyItem, MeshSendKeyName } from '../cli-adapters/provider-cli-shared.js';
-import { isPurePtyTranscriptProvider } from '../cli-adapters/provider-cli-shared.js';
+import { resolveTranscriptAuthorityProfile } from './transcript-evidence.js';
 import { createCliAdapter } from './spec/route.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
@@ -2525,30 +2525,18 @@ export class CliProviderInstance implements ProviderInstance {
             }
         }
 
-        // KIMI-PURE-PTY-COMPLETION-EMIT (Fix 3): before firing a false stall, check the
-        // pure-PTY class (no native transcript → nativeSample was null above). A finished
-        // pure-PTY worker sits at a static idle prompt with an in-turn final assistant
-        // message but never emitted generating_completed — the status-agnostic watchdog
-        // would misread that quiet as a wedge. If the PTY transcript proves a finished
-        // turn, emit the missing completion and SUPPRESS the stall (mark the anchor
-        // emitted so this static idle is not re-checked every tick). No-op for
-        // native-source providers and for a genuinely mid-turn / wedged worker with no
-        // final assistant → the real stall fires below unchanged.
-        if (this.tryReconcilePurePtyCompletionForStall(observedStatus)) {
-            this.meshStallEmittedForAnchor = true;
-            return;
-        }
-
-        // KIMI-NATIVE-SOURCE-COMPLETION-EMIT (Fix 3): the pure-PTY check above is a no-op
-        // for a native-source provider (kimi and kin — transcriptAuthority=provider +
-        // nativeHistory). For that class, a finished-but-quiet idle whose transcript has
-        // gone static (sampleNativeTranscriptProgress stopped re-arming) is otherwise
-        // misread as a wedge. Resolve the completion from the authoritative native
-        // transcript; if it proves a finished turn, emit the missing completion and
-        // SUPPRESS the stall. No-op for pure-PTY providers and for a genuinely mid-turn /
-        // wedged native-source worker with no in-turn final assistant → the real stall
-        // fires below unchanged. Mutually exclusive with the pure-PTY path.
-        if (this.tryReconcileNativeSourceCompletionForStall(observedStatus)) {
+        // TRANSCRIPT-COMPLETION-STALL-RESCUE (P2 of the transcript-authority
+        // unification — historically KIMI-PURE-PTY-COMPLETION-EMIT + KIMI-NATIVE-
+        // SOURCE-COMPLETION-EMIT, two class-enumerated copies of the same rescue).
+        // A finished worker whose generating_completed never emitted (idle→idle
+        // collapse) sits at a STATIC idle prompt; the status-agnostic watchdog
+        // would misread that finished-but-quiet state as a wedge and false-fire
+        // monitor:no_progress. If the class-appropriate transcript (PTY parse or
+        // authoritative native history — completionFinalSummary picks) proves a
+        // finished turn, emit the missing completion and SUPPRESS the stall. A
+        // genuinely mid-turn / wedged worker with no in-turn final assistant falls
+        // through and the real stall fires below unchanged.
+        if (this.tryReconcileTranscriptCompletionForStall(observedStatus)) {
             this.meshStallEmittedForAnchor = true;
             return;
         }
@@ -2718,35 +2706,38 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /**
-     * KIMI-PURE-PTY-COMPLETION-EMIT (Fix 3): stall-path completion reconcile for the
-     * PURE-PTY transcript class (kimi and kin — no native transcript, no provider
-     * authority; see isPurePtyTranscriptProvider). Such a worker whose
-     * generating_completed never emitted (the onTurnStarted idle→idle collapse Fix 1
-     * fixes at the source) sits at a STATIC idle prompt: its PTY output stops the
-     * instant the answer is rendered, so the status-agnostic no-progress watchdog
-     * (checkMeshWorkerStall) reads the finished-but-quiet session as a stall and would
-     * false-fire monitor:no_progress. The native-transcript reconcile
-     * (sampleNativeTranscriptProgress) does NOT cover this class (no native source →
-     * null sample), so the stall path needs its own guard.
+     * TRANSCRIPT-COMPLETION-STALL-RESCUE (P2 of the transcript-authority
+     * unification — root repo docs/design/2026-07-25-transcript-authority-
+     * unification.md): stall-path completion reconcile for every class whose
+     * turns can finish without a generating_completed emit (idle→idle collapse)
+     * and then sit PTY-quiet at a static idle prompt.
      *
-     * Called from checkMeshWorkerStall just before the fire. Returns true when the
-     * session is a finished pure-PTY turn — idle, no pending response, and a PTY-parsed
-     * in-turn final assistant summary — in which case it emits the missing
-     * generating_completed (idempotent: a real/late emit writes the terminal ledger and
-     * the coordinator's reconcile makes any duplicate a no-op) and the caller SUPPRESSES
-     * the stall. Returns false for every other class/state (native-source provider, a
-     * genuinely mid-turn or wedged worker with no final assistant), so a real stall still
-     * fires unchanged.
+     * Historically this was TWO class-enumerated copies — KIMI-PURE-PTY-
+     * COMPLETION-EMIT (Fix 3) gated on isPurePtyTranscriptProvider, and
+     * KIMI-NATIVE-SOURCE-COMPLETION-EMIT gated on isNativeSourceCanonicalHistory
+     * — whose bodies were identical because completionFinalSummary already picks
+     * the class-appropriate evidence source (authoritative native transcript for
+     * a native-source provider, the PTY parse otherwise). The enumeration itself
+     * was the recurring defect: each new class had to be remembered at this site.
+     * The profile collapses it: any class except daemon-owned is eligible, and
+     * the evidence bar — not the class — decides.
      *
-     * Evidence bar is identical to flushMeshCompletionBeforeCleanup: injected task's turn
-     * genuinely started + an in-turn final assistant summary. Conservative by
-     * construction — no summary ⇒ no proof of completion ⇒ return false and let the real
-     * stall fire.
+     * Called from checkMeshWorkerStall just before the fire. Returns true when
+     * the session is a finished turn — idle, nothing pending, the injected
+     * task's turn genuinely started, and an in-turn final assistant summary —
+     * in which case it emits the missing generating_completed (idempotent: a
+     * real/late emit writes the terminal ledger and the coordinator's reconcile
+     * makes any duplicate a no-op) and the caller SUPPRESSES the stall. Returns
+     * false for a daemon-owned provider and for a genuinely mid-turn / wedged
+     * worker with no in-turn final assistant, so a real stall still fires
+     * unchanged. Evidence bar is identical to flushMeshCompletionBeforeCleanup.
      */
-    private tryReconcilePurePtyCompletionForStall(observedStatus: string): boolean {
-        // Only the pure-PTY class — native-source providers are handled by
-        // sampleNativeTranscriptProgress above.
-        if (!isPurePtyTranscriptProvider(this.provider)) return false;
+    private tryReconcileTranscriptCompletionForStall(observedStatus: string): boolean {
+        // daemon-owned transcripts get real PTY turn events — an idle-quiet
+        // daemon-owned worker with no completion emit is a genuine anomaly the
+        // stall should surface, exactly as before this unification.
+        const profile = resolveTranscriptAuthorityProfile(this.provider);
+        if (profile.class === 'daemon-owned') return false;
         // A finished turn is idle with nothing pending. A generating/waiting session is
         // mid-turn (the real stall path should evaluate it), so never complete it here.
         if (observedStatus !== 'idle') return false;
@@ -2770,6 +2761,10 @@ export class CliProviderInstance implements ProviderInstance {
         try {
             parsedMessages = this.adapter?.getScriptParsedStatus?.()?.messages;
         } catch { parsedMessages = undefined; }
+        // completionFinalSummary turn-scopes the class-appropriate transcript (native
+        // history for a native-source provider, the PTY parse otherwise) — a stale
+        // prior-turn tail or a mid-turn worker with no in-turn final assistant yields
+        // '' → return false below.
         let finalSummary: string | undefined;
         try {
             finalSummary = this.completionFinalSummary(parsedMessages, turnStartedAt);
@@ -2778,11 +2773,16 @@ export class CliProviderInstance implements ProviderInstance {
         // stall fire so a genuinely-wedged worker is still surfaced.
         if (!finalSummary) return false;
 
-        LOG.warn('CLI', `[${this.type}] reconciling pure-PTY mesh completion from the stall path for session ${this.instanceId} `
+        // Telemetry keeps the historical per-class source strings so traces and
+        // dashboards stay comparable across the unification.
+        const diagnosticSource = profile.class === 'pure-pty'
+            ? 'stall_pure_pty_transcript_completion'
+            : 'stall_native_source_transcript_completion';
+        LOG.warn('CLI', `[${this.type}] reconciling ${profile.class} mesh completion from the stall path for session ${this.instanceId} `
             + `task=${taskId ?? '(none)'} — PTY is idle-quiet with an in-turn final assistant message but the completion `
-            + `event never fired (pure-PTY provider); emitting it instead of a false monitor:no_progress.`);
+            + `event never fired; emitting it instead of a false monitor:no_progress.`);
         if (this.isMeshWorkerSession()) {
-            traceMeshEventStage('fired', this.meshTraceCtx(), 'stall_pure_pty_transcript_completion');
+            traceMeshEventStage('fired', this.meshTraceCtx(), diagnosticSource);
         }
         this.emitGeneratingCompleted({
             chatTitle: '',
@@ -2791,89 +2791,7 @@ export class CliProviderInstance implements ProviderInstance {
             taskId,
             finalSummary,
             evidenceLevel: 'transcript',
-            completionDiagnostic: { source: 'stall_pure_pty_transcript_completion' },
-        });
-        return true;
-    }
-
-    /**
-     * KIMI-NATIVE-SOURCE-COMPLETION-EMIT (Fix 3): stall-path completion reconcile for a
-     * NATIVE-SOURCE provider (transcriptAuthority=provider + nativeHistory — e.g. kimi,
-     * whose authoritative transcript is ~/.kimi-code/.../wire.jsonl). Like the pure-PTY
-     * class, a native-source worker that submits a prompt while already idle can collapse
-     * idle→idle so agent:generating_completed never emits; its PTY then goes screen-quiet
-     * the instant the answer renders, and the status-agnostic no-progress watchdog
-     * (checkMeshWorkerStall) misreads that finished-but-static idle as a wedge and would
-     * false-fire monitor:no_progress. sampleNativeTranscriptProgress only re-arms while the
-     * transcript is STILL ADVANCING; once the turn is done the transcript is static and the
-     * sample stops rescuing — so the stall path needs this decisive completion check for the
-     * finished-and-quiet case. tryReconcilePurePtyCompletionForStall does NOT cover this
-     * class (isPurePtyTranscriptProvider is false for a native-source provider), so it runs
-     * as a fallback here.
-     *
-     * Mutually exclusive with the pure-PTY path by construction: a provider is either
-     * native-source (this method) or pure-PTY (that method), never both. Called from
-     * checkMeshWorkerStall only after tryReconcilePurePtyCompletionForStall returned false.
-     *
-     * Evidence bar is identical to the pure-PTY / pre-cleanup paths: idle with nothing
-     * pending, the injected task's turn genuinely started, and an in-turn final assistant
-     * summary — here resolved from the native transcript by completionFinalSummary (its
-     * native-source branch reads readExternalCompletionMessages). No summary ⇒ no proof of
-     * completion ⇒ return false and let the real stall fire so a genuinely-wedged worker is
-     * still surfaced. Idempotent: a real/late emit writes the terminal ledger and the
-     * coordinator's reconcile makes any duplicate a no-op.
-     */
-    private tryReconcileNativeSourceCompletionForStall(observedStatus: string): boolean {
-        // Only the native-source class — the pure-PTY class is handled above.
-        if (!isNativeSourceCanonicalHistory(this.provider?.nativeHistory)) return false;
-        // A finished turn is idle with nothing pending. A generating/waiting session is
-        // mid-turn (the real stall path should evaluate it), so never complete it here.
-        if (observedStatus !== 'idle') return false;
-        if (this.hasAdapterPendingResponse()) return false;
-
-        const taskId = this.completingTurnTaskId();
-        // DOUBLE-EMIT guard (COMPLETION-WEAK-REARM fix1): suppress a re-emit only when this
-        // turn's completion already fired with GENUINE evidence. A prior WEAK emit is
-        // re-armable once a real generating→idle transition intervened (one-shot).
-        if (this.shouldSuppressCompletionReEmit(taskId)) {
-            return false;
-        }
-        // The injected task's own turn must have genuinely started (guards against a
-        // reused session's stale tail before this task ran).
-        if (!this.injectedTaskHasStartedGenerating()) return false;
-
-        const turnStartedAt = typeof (this.adapter as any)?.currentTurnStartedAt === 'number'
-            ? (this.adapter as any).currentTurnStartedAt as number
-            : this.meshTaskInjectedAt || undefined;
-        let parsedMessages: unknown;
-        try {
-            parsedMessages = this.adapter?.getScriptParsedStatus?.()?.messages;
-        } catch { parsedMessages = undefined; }
-        // completionFinalSummary reads the AUTHORITATIVE native transcript (wire.jsonl) for
-        // this native-source provider and turn-scopes it — so a stale prior-turn tail or a
-        // mid-turn worker with no in-turn final assistant yields '' → return false below.
-        let finalSummary: string | undefined;
-        try {
-            finalSummary = this.completionFinalSummary(parsedMessages, turnStartedAt);
-        } catch { finalSummary = undefined; }
-        // No in-turn final assistant evidence → not a proven turn-end. Let the real stall
-        // fire so a genuinely-wedged worker is still surfaced.
-        if (!finalSummary) return false;
-
-        LOG.warn('CLI', `[${this.type}] reconciling native-source mesh completion from the stall path for session ${this.instanceId} `
-            + `task=${taskId ?? '(none)'} — PTY is idle-quiet with an in-turn final assistant message in the native `
-            + `transcript but the completion event never fired; emitting it instead of a false monitor:no_progress.`);
-        if (this.isMeshWorkerSession()) {
-            traceMeshEventStage('fired', this.meshTraceCtx(), 'stall_native_source_transcript_completion');
-        }
-        this.emitGeneratingCompleted({
-            chatTitle: '',
-            duration: undefined,
-            timestamp: Date.now(),
-            taskId,
-            finalSummary,
-            evidenceLevel: 'transcript',
-            completionDiagnostic: { source: 'stall_native_source_transcript_completion' },
+            completionDiagnostic: { source: diagnosticSource },
         });
         return true;
     }
@@ -3466,9 +3384,9 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /**
-     * COMPLETION-WEAK-REARM (fix1): the double-emit guard shared by the three transcript
-     * re-emit paths (flushMeshCompletionBeforeCleanup, tryReconcilePurePtyCompletionForStall,
-     * tryReconcileNativeSourceCompletionForStall). Returns true when a re-emit for `taskId`
+     * COMPLETION-WEAK-REARM (fix1): the double-emit guard shared by the transcript
+     * re-emit paths (flushMeshCompletionBeforeCleanup,
+     * tryReconcileTranscriptCompletionForStall). Returns true when a re-emit for `taskId`
      * must be SUPPRESSED because this turn's completion already fired with strong evidence.
      *
      * The defect this replaces: the old guard short-circuited on ANY prior emit for the
