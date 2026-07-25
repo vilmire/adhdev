@@ -2101,12 +2101,13 @@ export class CliProviderInstance implements ProviderInstance {
                     // autonomous mesh sessions (allowMissingAssistantTimeout) so an interactive
                     // antigravity session, which has no coordinator to misfire at, is untouched.
                     //
-                    // SPEC-DRIVEN completion timing (mission f2f6da1b root 2): the HOLD class is the
-                    // manifest flag `holdCompletionForTranscript` (antigravity-cli declares it), NOT a
+                    // SPEC-DRIVEN completion timing (mission f2f6da1b root 2, P4 profile
+                    // substitution): the HOLD class is the authority profile's timing==='hold'
+                    // (manifest holdCompletionForTranscript — antigravity-cli declares it), NOT a
                     // hardcoded provider name — a native-history provider whose PTY-derived idle can
-                    // precede the authoritative transcript write. write-lag (claude) and floor
-                    // (codex/kimi/…) providers leave it false and fall through to the decision below.
-                    if ((this.provider as any)?.holdCompletionForTranscript === true) {
+                    // precede the authoritative transcript write. write-lag (claude, 'immediate') and
+                    // floor (codex/kimi/…, 'floor') classes fall through to the decision below.
+                    if (resolveTranscriptAuthorityProfile(this.provider).timing === 'hold') {
                         if (allowMissingAssistantTimeout) {
                             return { reason: 'missing_final_assistant', terminal: false, holdForTranscript: true };
                         }
@@ -2168,7 +2169,7 @@ export class CliProviderInstance implements ProviderInstance {
                     // This is the SAME flag the sibling branch below (source !== 'external-native')
                     // uses for the identical noExternalTranscriptSource decision, so the two branches
                     // agree; and it covers third-party providers instead of a hardcoded provider name.
-                    const isWriteLagNativeSource = (this.provider as any).requiresFinalAssistantBeforeIdle !== true;
+                    const isWriteLagNativeSource = resolveTranscriptAuthorityProfile(this.provider).timing !== 'floor';
                     return {
                         reason: 'missing_final_assistant',
                         terminal: true,
@@ -2176,14 +2177,15 @@ export class CliProviderInstance implements ProviderInstance {
                         ...(isWriteLagNativeSource ? {} : { noExternalTranscriptSource: true }),
                     };
                 }
-                if ((this.provider as any).requiresFinalAssistantBeforeIdle === true) {
+                if (resolveTranscriptAuthorityProfile(this.provider).timing === 'floor') {
                     return { reason: 'missing_final_assistant', terminal: true, allowTimeout: allowMissingAssistantTimeout, noExternalTranscriptSource: true };
                 }
             } else {
-                LOG.debug('CLI', `[${this.type}] missing_final_assistant (not ownsExternal) requiresFinalAssistant=${!!(this.provider as any).requiresFinalAssistantBeforeIdle}`);
+                const notOwnsExternalTiming = resolveTranscriptAuthorityProfile(this.provider).timing;
+                LOG.debug('CLI', `[${this.type}] missing_final_assistant (not ownsExternal) requiresFinalAssistant=${notOwnsExternalTiming === 'floor'}`);
                 return {
                     reason: 'missing_final_assistant',
-                    terminal: (this.provider as any).requiresFinalAssistantBeforeIdle === true,
+                    terminal: notOwnsExternalTiming === 'floor',
                     allowTimeout: allowMissingAssistantTimeout,
                     // PTY-parsed provider (codex-cli): no external transcript trails the idle
                     // transition, so the CANON-C decoupled emit must observe the min-elapsed floor
@@ -3200,7 +3202,7 @@ export class CliProviderInstance implements ProviderInstance {
             // HOLD completion-timing class (`holdCompletionForTranscript`, e.g. antigravity-cli) via
             // its holdForTranscript block — NOT a hardcoded provider name — so claude-cli/codex-cli
             // (immediate/floor classes, which never produce a holdForTranscript block) are unchanged.
-            if ((this.provider as any)?.holdCompletionForTranscript === true
+            if (resolveTranscriptAuthorityProfile(this.provider).timing === 'hold'
                 && block.holdForTranscript === true
                 && waitedMs < ANTIGRAVITY_HOLD_HARD_CAP_MS
                 && this.antigravityHoldPtyStillActive()) {
@@ -3898,7 +3900,7 @@ export class CliProviderInstance implements ProviderInstance {
             fcEvidenceSource = evidence.source;
             fcFinalSummary = extractFinalSummaryFromMessages(evidence.messages as any);
         } catch { /* best-effort */ }
-        const missingEvidence = ((this.provider as any).requiresFinalAssistantBeforeIdle === true || fcEvidenceSource === 'external-native') && !fcFinalSummary;
+        const missingEvidence = (resolveTranscriptAuthorityProfile(this.provider).timing === 'floor' || fcEvidenceSource === 'external-native') && !fcFinalSummary;
         // Mirror the short-generating idle path's suppression: a provider that
         // requires a final assistant (or external-native history) with NO confirmed
         // summary and NO mesh context emits nothing — the session is idle with no
@@ -4203,7 +4205,7 @@ export class CliProviderInstance implements ProviderInstance {
                     // (the mid-turn point-sample that triggered this whole false-idle bug) is treated
                     // as weak/held, not fired as a genuine completion. A real shortFinalSummary being
                     // present still clears the gate (the !shortFinalSummary guard is unchanged).
-                    const missingEvidence = ((this.provider as any).requiresFinalAssistantBeforeIdle === true
+                    const missingEvidence = (resolveTranscriptAuthorityProfile(this.provider).timing === 'floor'
                         || shortEvidenceSource === 'external-native'
                         || shortEvidenceSource === 'unavailable') && !shortFinalSummary;
                     if (missingEvidence) {

@@ -15,7 +15,6 @@ import {
 import {
     buildCliScreenSnapshot,
     compactPromptText,
-    isPurePtyTranscriptProvider,
     normalizePromptText,
     promptLikelyVisible,
     type CliChatMessage,
@@ -24,6 +23,7 @@ import {
     type CliTraceEntry,
     type ParsedSession,
 } from './provider-cli-shared.js';
+import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import type { CliScriptRunner } from './cli-script-runner.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -375,8 +375,9 @@ export class CliStateEngine {
         // existing PTY-parsed final-assistant idle gate produce a real
         // generating→idle completion edge. Same idle safety as above: applyIdle
         // / finishResponse still own the actual idle transition.
-        const promoteOnTurnStart = this.provider.transcriptAuthority === 'provider'
-            || isPurePtyTranscriptProvider(this.provider);
+        const promoteProfile = resolveTranscriptAuthorityProfile(this.provider);
+        const promoteOnTurnStart = promoteProfile.providerOwnsTranscript
+            || promoteProfile.class === 'pure-pty';
         if (promoteOnTurnStart && this.currentStatus !== 'waiting_approval') {
             this.setStatus('generating', 'turn_started');
             this.callbacks.onStatusChange();
