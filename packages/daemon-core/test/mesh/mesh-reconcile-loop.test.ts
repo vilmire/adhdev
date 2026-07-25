@@ -3202,6 +3202,11 @@ describe('runMeshReconcileTick', () => {
         category: 'cli',
         transcriptAuthority: 'provider',
         nativeHistory: { source: { kind: 'jsonl' } },
+        // Matches the real kimi manifest (adhdev-providers/cli/kimi): the FLOOR
+        // completion-timing class. The P3 profile gate keys on floor/hold
+        // (emitsPtyTurnEvents=false) — a write-lag native source (no flag,
+        // e.g. claude) DOES emit generating_started and is intentionally held.
+        requiresFinalAssistantBeforeIdle: true,
         tui: { transcriptPty: { scope: 'buffer' } },
       },
     ) => {
@@ -3619,14 +3624,16 @@ describe('runMeshReconcileTick', () => {
 
         const idleInstance = {
           category: 'cli',
-          // NATIVE-SOURCE provider: transcriptAuthority='provider' + nativeHistory present.
-          // resolveLocalSessionPurePty → false (not pure-PTY); resolveLocalSessionNativeSource
-          // → true, so the extended gate arms it despite delivery never being 'acked'.
+          // NATIVE-SOURCE floor provider (matches the real kimi manifest):
+          // transcriptAuthority='provider' + nativeHistory + requiresFinalAssistantBeforeIdle.
+          // The P3 profile gate (emitsPtyTurnEvents=false for floor/hold native + pure-PTY)
+          // arms it despite delivery never being 'acked'.
           provider: {
             type: 'kimi',
             category: 'cli',
             transcriptAuthority: 'provider',
             nativeHistory: { source: { kind: 'jsonl' } },
+            requiresFinalAssistantBeforeIdle: true,
             tui: { transcriptPty: { scope: 'buffer' } },
           },
           getState: () => ({ instanceId: sessionId, status: 'idle', type: 'kimi', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),

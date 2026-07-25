@@ -77,8 +77,7 @@ import {
     resolveReconcileIntervalMs,
 } from './mesh-reconcile-config.js';
 import { pullRemoteNodeQueues, pullPendingEventsFromNode, reprobeWorkerStatus } from './mesh-remote-event-pull.js';
-import { isPurePtyTranscriptProvider } from '../cli-adapters/provider-cli-shared.js';
-import { isNativeSourceCanonicalHistory } from '../config/chat-history.js';
+import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import { runDiskRetentionSweep, detectAndSignalOrphanWorktrees } from './mesh-disk-retention.js';
 import {
     reconcileUnterminatedDirectDispatches,
@@ -792,53 +791,40 @@ function assignedRowLiveStatusIsAwaitingApproval(
     }
 }
 
-// EARLY-IDLE-COMPLETION-FALSE-POSITIVE — resolve whether the assigned session's provider is
-// the pure-PTY transcript class (kimi and kin — no native history, no provider authority), from
-// the LOCAL instance when it is present. Returns:
-//   true      → local instance is a pure-PTY provider (the class the early rescue exists for)
-//   false     → local instance is NOT pure-PTY (native / provider-authoritative)
-//   undefined → no local instance (remote worker / gone / id-form skew) — pure-PTY unknowable here
-// A remote pure-PTY worker is handled by the reprobe path (a fresh-idle read positively confirms
-// the session is settled before the streak accrues), not by this local-only capability check.
-function resolveLocalSessionPurePty(components: DaemonComponents, sessionId: string): boolean | undefined {
+/**
+ * P3 of the transcript-authority unification (root repo docs/design/
+ * 2026-07-25-transcript-authority-unification.md): resolve the assigned
+ * worker's transcript-authority profile. The claim-time row stamp comes FIRST
+ * — it was written by the daemon that OWNS the session from its LIVE provider
+ * module, so it classifies a REMOTE worker this coordinator cannot resolve
+ * locally (the structural fix for the "remote class unknowable → reprobe-only"
+ * blind spot). Falls back to the local instance for pre-stamp rows / direct
+ * dispatches; undefined for an older-daemon remote row — callers keep their
+ * conservative reprobe fallbacks.
+ */
+function resolveAssignedTranscriptProfile(
+    components: DaemonComponents,
+    row: {
+        assignedSessionId?: string;
+        assignedTranscriptProfile?: { class: string; timing: string; emitsPtyTurnEvents: boolean };
+    },
+): { class: string; timing: string; emitsPtyTurnEvents: boolean } | undefined {
+    const stamped = row.assignedTranscriptProfile;
+    if (stamped && typeof stamped === 'object' && typeof stamped.emitsPtyTurnEvents === 'boolean') {
+        return stamped;
+    }
+    const sessionId = readNonEmptyString(row.assignedSessionId);
+    if (!sessionId) return undefined;
     try {
         const instances = components.instanceManager?.getByCategory?.('cli') || [];
         const inst = instances.find((i: any) => {
             const sid = readNonEmptyString(i?.getState?.().instanceId);
             return sid && sessionIdsEquivalent(sid, sessionId);
         }) as { provider?: unknown } | undefined;
-        if (!inst) return undefined; // remote / gone / id-form skew — not locally observable
-        const provider = inst.provider;
+        const provider = inst?.provider;
         if (!provider || typeof provider !== 'object') return undefined;
-        return isPurePtyTranscriptProvider(provider as Parameters<typeof isPurePtyTranscriptProvider>[0]);
-    } catch {
-        return undefined;
-    }
-}
-
-// KIMI-NATIVE-SOURCE early-idle arm — resolve whether the assigned session's provider is a
-// NATIVE-SOURCE provider (transcriptAuthority=provider + on-disk nativeHistory — e.g. kimi's
-// wire.jsonl), from the LOCAL instance when it is present. Returns:
-//   true      → local instance is a native-source provider (kimi and kin)
-//   false     → local instance is NOT native-source (pure-PTY / daemon-owned transcript)
-//   undefined → no local instance (remote worker / gone / id-form skew) — unknowable here
-// This is the mirror of resolveLocalSessionPurePty for the class that DOES have an
-// authoritative on-disk transcript: a native-source worker that collapses idle→idle (never
-// emitting generating_started so taskDeliveryConsumed stays false) would otherwise be blocked
-// by the turn-not-started hold, leaving a finished turn 'assigned' until the 15-min reclaim.
-// Allowing it to arm lets the transcript-evidence poll complete it promptly; the poll's
-// idle + final-assistant-after-dispatch guards remain the finality net.
-function resolveLocalSessionNativeSource(components: DaemonComponents, sessionId: string): boolean | undefined {
-    try {
-        const instances = components.instanceManager?.getByCategory?.('cli') || [];
-        const inst = instances.find((i: any) => {
-            const sid = readNonEmptyString(i?.getState?.().instanceId);
-            return sid && sessionIdsEquivalent(sid, sessionId);
-        }) as { provider?: { nativeHistory?: unknown } } | undefined;
-        if (!inst) return undefined; // remote / gone / id-form skew — not locally observable
-        const provider = inst.provider;
-        if (!provider || typeof provider !== 'object') return undefined;
-        return isNativeSourceCanonicalHistory((provider as { nativeHistory?: any }).nativeHistory);
+        const profile = resolveTranscriptAuthorityProfile(provider as Parameters<typeof resolveTranscriptAuthorityProfile>[0]);
+        return { class: profile.class, timing: profile.timing, emitsPtyTurnEvents: profile.emitsPtyTurnEvents };
     } catch {
         return undefined;
     }
@@ -870,7 +856,13 @@ async function evaluateEarlyIdleTranscriptArm(
     components: DaemonComponents,
     mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
     store: MeshRuntimeStore,
-    row: { id: string; assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string },
+    row: {
+        id: string;
+        assignedSessionId?: string;
+        assignedNodeId?: string;
+        assignedProviderType?: string;
+        assignedTranscriptProfile?: { class: string; timing: string; emitsPtyTurnEvents: boolean };
+    },
     localDaemonId?: string,
     selfIds: string[] = [],
 ): Promise<boolean> {
@@ -921,26 +913,21 @@ async function evaluateEarlyIdleTranscriptArm(
 
     // (b) TURN-START evidence (guards the boot-window / preamble false positive).
     if (store.taskDeliveryConsumed(mesh.id, row.id)) return true; // worker emitted generating_started
-    // Delivery never consumed. Preserve the kimi rescue ONLY for the LOCAL pure-PTY class (which
-    // never emits generating_started); a native/provider-authoritative local worker that hasn't
-    // started its turn must NOT be armed off a boot-window idle. For a remote worker (pure-PTY
-    // unknowable here) the positive-idle reprobe in (a) is the gate — allow accrual and let the poll
-    // enforce post-dispatch + trailing-tool-activity finality.
-    const localPurePty = resolveLocalSessionPurePty(components, sessionId);
-    if (localPurePty === true) return true;   // local pure-PTY — the class this rescue targets
-    if (localPurePty === false) {
-        // Not the pure-PTY class. A NATIVE-SOURCE provider (transcriptAuthority=provider +
-        // nativeHistory — e.g. kimi) can ALSO collapse idle→idle and never emit
-        // generating_started (so taskDeliveryConsumed stays false), yet its finished turn is
-        // provable from its authoritative on-disk transcript. Arm it too so it completes via
-        // the transcript-evidence poll instead of sitting 'assigned' until the 15-min
-        // DELIVERED_NO_TURN_DEADLINE_MS reclaim. A genuinely daemon-owned / non-native worker
-        // that hasn't started its turn is still held (returns false).
-        const localNativeSource = resolveLocalSessionNativeSource(components, sessionId);
-        if (localNativeSource === true) return true; // native-source — provable via its transcript
-        return false;                                // daemon-owned, turn not started — hold
-    }
-    return verdict === 'UNKNOWN';             // remote, unknowable class — trust the (a) reprobe
+    // Delivery never consumed. Classify via the transcript-authority profile (P3):
+    // a class that runs turns WITHOUT reliable PTY turn events (pure-PTY, or a
+    // native-source floor/hold provider — emitsPtyTurnEvents=false) legitimately
+    // never emits generating_started, and its finished turn is provable from its
+    // transcript — arm it and let the transcript-evidence poll enforce the
+    // post-dispatch + trailing-tool finality net. A class with RELIABLE PTY turn
+    // events (daemon-owned, or a write-lag native source like claude-cli) that
+    // hasn't started its turn is HELD — arming it off a boot-window idle is
+    // exactly the preamble false positive this gate exists to prevent. The
+    // claim-time row stamp classifies REMOTE workers too; an unstamped remote
+    // row (older claiming daemon) keeps the historical fallback of trusting the
+    // (a) positive-idle reprobe.
+    const profile = resolveAssignedTranscriptProfile(components, row);
+    if (profile) return profile.emitsPtyTurnEvents === false;
+    return verdict === 'UNKNOWN';             // no stamp, no local instance — trust the (a) reprobe
 }
 
 // WATCHDOG-FINALSUMMARY-LOST. When the assigned-stranded watchdog / delivered-no-turn deadline
@@ -1210,16 +1197,20 @@ async function recoverStrandedAssignedDispatches(
                 // grace at all. Live 2026-07-25: a kimi worker was re-injected the same prompt at
                 // 35s/28s/27s/43s (answering it each time) and the task then marked failed.
                 //
-                // So for that class ONLY, replace the missing event with the evidence the provider
+                // So for that class, replace the missing event with the evidence the provider
                 // actually produces: any post-dispatch agent bubble in its transcript. Found → the
                 // prompt WAS consumed and the turn is under way; hold the row (and clear the streak,
                 // since progress is positive evidence, not a deferral). Not found / unreadable → fall
-                // through unchanged. PTY-event providers never enter this branch
-                // (resolveLocalSessionNativeSource false/undefined), so their behaviour is untouched.
-                const nativeSourceRedriveCandidate = row.assignedSessionId
-                    ? resolveLocalSessionNativeSource(components, row.assignedSessionId) === true
-                    : false;
-                if (nativeSourceRedriveCandidate
+                // through unchanged. P3 generalization: the gate is the transcript-authority
+                // profile's emitsPtyTurnEvents=false (pure-PTY AND native-source floor/hold —
+                // every class whose turn start is not a PTY event), resolved from the claim-time
+                // row stamp FIRST so a REMOTE worker of this class is finally covered too (the
+                // original fix was local-only). Reliable-PTY-event providers never enter this
+                // branch, so their behaviour is untouched.
+                const redriveProfile = row.assignedSessionId
+                    ? resolveAssignedTranscriptProfile(components, row)
+                    : undefined;
+                if (redriveProfile?.emitsPtyTurnEvents === false
                     && await pollAssignedTaskInTurnProgress(components, { id: meshId, nodes: mesh.nodes }, row)) {
                     deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
                     traceMeshEventDrop('short_redrive_deferred_native_source_progress', {
@@ -1228,7 +1219,7 @@ async function recoverStrandedAssignedDispatches(
                         nodeId: row.assignedNodeId,
                         meshId,
                         event: 'agent:generating_started',
-                    }, `native_source_in_turn_progress (verdict ${verdict})`);
+                    }, `${redriveProfile.class}_in_turn_progress (verdict ${verdict})`);
                     continue;
                 }
                 if (verdict === 'IDLE_CONFIRMED') {
