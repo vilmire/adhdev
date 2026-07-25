@@ -6,7 +6,7 @@
  */
 
 import { joinRepoPath, readBoolean, readNumber, readRecord, readString, type JsonRecord } from './json'
-import type { GitRepoStatus, GitSubmoduleStatus, GitUpstreamFreshness } from './types'
+import type { DaemonBuildBehind, GitRepoStatus, GitSubmoduleStatus, GitUpstreamFreshness } from './types'
 
 export function scoreGitUpstreamFreshness(status: GitUpstreamFreshness | undefined): number {
     switch (status) {
@@ -129,6 +129,14 @@ export function normalizeGitStatus(
         stashCount: readNumber(status.stashCount, status.stash_count) ?? 0,
         lastCheckedAt: options?.lastCheckedAt ?? readNumber(status.lastCheckedAt, status.last_checked_at) ?? Date.now(),
         ...(submodules ? { submodules } : {}),
+        // Deploy-lag visibility: daemonBuildBehind is computed by the reporting
+        // daemon's git probe (build commit vs workspace/submodule HEAD). It must
+        // survive relay reassembly or downstream staleDaemonBuild surfaces
+        // (dashboard Status tab badge, MCP staleDaemonBuilds warning) never fire
+        // for remote nodes.
+        ...(status.daemonBuildBehind && typeof status.daemonBuildBehind === 'object'
+            ? { daemonBuildBehind: status.daemonBuildBehind as unknown as DaemonBuildBehind }
+            : {}),
         ...(error ? { error } : {}),
     }
 }

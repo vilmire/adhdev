@@ -1516,6 +1516,16 @@ export function finalizeMeshNodeStatus(args: {
         liveTruthProbed,
         directTruthUnavailable,
     });
+    // Deploy-lag visibility: surface the git probe's daemonBuildBehind as the
+    // top-level staleDaemonBuild node field — same contract as the MCP
+    // mesh_status surface (mesh-tools-status.ts). The dashboard Status tab's
+    // stale-build badge reads this field; before this stamp the dashboard
+    // surface never received it (and normalizeGitStatus additionally dropped
+    // it from relayed remote statuses), so the badge was a dead path.
+    const gitForBuildLag = readObjectRecord(status.git);
+    if (gitForBuildLag.daemonBuildBehind && typeof gitForBuildLag.daemonBuildBehind === 'object') {
+        status.staleDaemonBuild = gitForBuildLag.daemonBuildBehind;
+    }
     const bootstrap = readObjectRecord(node?.worktreeBootstrap);
     if (node?.isLocalWorktree && readStringValue(bootstrap.status)) {
         status.worktreeBootstrap = bootstrap;

@@ -82,6 +82,23 @@ describe('normalizeGitStatus', () => {
     it('returns undefined for an empty status', () => {
         expect(normalizeGitStatus({}, {})).toBeUndefined()
     })
+
+    it('preserves daemonBuildBehind through reassembly (deploy-lag visibility)', () => {
+        const daemonBuildBehind = {
+            buildCommit: 'a'.repeat(40),
+            buildCommitShort: 'aaaaaaa',
+            head: 'b'.repeat(40),
+            scope: 'oss',
+            isDaemonAffecting: true,
+        }
+        const git = normalizeGitStatus({ isGitRepo: true, branch: 'main', daemonBuildBehind }, {})
+        expect(git?.daemonBuildBehind).toEqual(daemonBuildBehind)
+    })
+
+    it('drops a non-object daemonBuildBehind instead of relaying garbage', () => {
+        const git = normalizeGitStatus({ isGitRepo: true, branch: 'main', daemonBuildBehind: 'stale' }, {})
+        expect(git?.daemonBuildBehind).toBeUndefined()
+    })
 })
 
 describe('scoreGitStatusCandidate ordering', () => {
