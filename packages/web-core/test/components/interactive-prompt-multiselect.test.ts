@@ -20,19 +20,20 @@ describe('InteractivePromptModal multi-select rendering', () => {
     // The indicator shape must be conditional on multiSelect — square (rounded-sm) when multi,
     // round (rounded-full) when single. A hardcoded rounded-full would be the original bug.
     expect(source).toContain("multiSelect ? 'rounded-sm' : 'rounded-full'")
-    // The indicator span must not unconditionally hardcode the radio shape any more.
-    expect(source).not.toMatch(/rounded-full border\b/)
+    // The option indicator span must not unconditionally hardcode the radio shape any more.
+    // (Guard the marker specifically; a `rounded-full border` pill badge elsewhere is fine.)
+    expect(source).not.toMatch(/h-4 w-4 shrink-0 items-center justify-center rounded-full border\b/)
   })
 
   it('passes the question multiSelect flag down to OptionButton', () => {
     const source = readSource(MODAL)
-    expect(source).toContain('multiSelect={currentQuestion.multiSelect}')
+    expect(source).toContain('multiSelect={question.multiSelect}')
   })
 
   it('exposes accessible role/state for the choice group and options', () => {
     const source = readSource(MODAL)
     // Group semantics differ by selection mode.
-    expect(source).toContain("currentQuestion.multiSelect ? 'group' : 'radiogroup'")
+    expect(source).toContain("question.multiSelect ? 'group' : 'radiogroup'")
     // Each option exposes radio/checkbox semantics.
     expect(source).toContain("multiSelect ? 'checkbox' : 'radio'")
     expect(source).toContain('aria-checked={selected}')

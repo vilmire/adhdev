@@ -3064,6 +3064,8 @@
     },
     "interactivePrompt": {
         "selectAllThatApply": "Select all that apply",
+        "multipleChoice": "Multiple choice",
+        "singleChoice": "Single choice",
         "other": "Other"
     },
     "git": {

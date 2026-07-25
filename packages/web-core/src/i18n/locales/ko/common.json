@@ -3064,6 +3064,8 @@
     },
     "interactivePrompt": {
         "selectAllThatApply": "해당하는 항목을 모두 선택하세요",
+        "multipleChoice": "다중 선택",
+        "singleChoice": "단일 선택",
         "other": "기타"
     },
     "git": {

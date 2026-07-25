@@ -3067,6 +3067,8 @@
     },
     "interactivePrompt": {
         "selectAllThatApply": "該当するものをすべて選択",
+        "multipleChoice": "複数選択",
+        "singleChoice": "単一選択",
         "other": "その他"
     },
     "git": {

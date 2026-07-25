@@ -64,13 +64,17 @@ function OptionButton({
       } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
     >
       <span className="flex items-start gap-2">
-        {/* Multi-select renders a square checkbox indicator; single-select a round radio. */}
+        {/* Multi-select renders a square checkbox indicator; single-select a round radio dot. */}
         <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border ${
           multiSelect ? 'rounded-sm' : 'rounded-full'
         } ${
           selected ? 'border-accent-primary bg-accent-primary text-accent-on-primary' : 'border-border-subtle'
         }`}>
-          {selected ? <IconCheckCircle size={12} /> : null}
+          {selected
+            ? multiSelect
+              ? <IconCheckCircle size={12} />
+              : <span className="h-1.5 w-1.5 rounded-full bg-accent-on-primary" />
+            : null}
         </span>
         <span className="min-w-0">
           <span className="block text-sm font-semibold leading-5">{label}</span>
@@ -90,14 +94,12 @@ export default function InteractivePromptModal({
 }: InteractivePromptModalProps) {
   const { t } = useTranslation('common')
   const [selection, setSelection] = useState<InteractivePromptSelection>(() => defaultSelection(promptSession))
-  const [currentStep, setCurrentStep] = useState(0)
   // Gate that blocks Submit for a short window right after a new prompt renders.
   const [submitReady, setSubmitReady] = useState(false)
   const submitReadyRef = useRef(false)
 
   useEffect(() => {
     setSelection(defaultSelection(promptSession))
-    setCurrentStep(0)
     setSubmitReady(false)
     submitReadyRef.current = false
     const promptId = promptSession?.prompt.promptId
@@ -110,13 +112,9 @@ export default function InteractivePromptModal({
   }, [promptSession?.prompt.promptId])
 
   const questions = promptSession?.prompt.questions || []
-  const totalSteps = questions.length
-  const isLastStep = currentStep === totalSteps - 1
-  const isSingleQuestion = totalSteps === 1
-
-  const currentQuestion = questions[currentStep]
-  const currentAnswer = currentQuestion ? selection[currentQuestion.questionId] : undefined
-  const currentAnswered = currentQuestion ? hasAnswer(currentQuestion, currentAnswer) : false
+  // A single question needs no section header/numbering; multiple questions are listed
+  // top-to-bottom, each as its own titled section on one screen (no step wizard).
+  const isSingleQuestion = questions.length === 1
 
   const canSubmit = useMemo(() => {
     if (!promptSession) return false
@@ -154,14 +152,6 @@ export default function InteractivePromptModal({
     }))
   }
 
-  const handleNext = () => {
-    if (currentStep < totalSteps - 1) setCurrentStep(s => s + 1)
-  }
-
-  const handleBack = () => {
-    if (currentStep > 0) setCurrentStep(s => s - 1)
-  }
-
   const handleSubmit = () => {
     // submitReadyRef guards the just-rendered window; isSubmitting guards in-flight.
     if (!canSubmit || isSubmitting || !submitReadyRef.current) return
@@ -184,11 +174,6 @@ export default function InteractivePromptModal({
             </h2>
           </div>
           <div className="flex items-center gap-2">
-            {!isSingleQuestion && (
-              <span className="text-xs text-text-muted">
-                {currentStep + 1} / {totalSteps}
-              </span>
-            )}
             <button
               type="button"
               onClick={onCancel}
@@ -200,73 +185,71 @@ export default function InteractivePromptModal({
           </div>
         </div>
 
-        {/* Step indicator dots for multi-question */}
-        {!isSingleQuestion && (
-          <div className="flex shrink-0 gap-1.5 px-5 pt-3">
-            {questions.map((q, i) => (
-              <div
-                key={q.questionId}
-                className={`h-1.5 flex-1 rounded-full transition-colors ${
-                  i < currentStep
-                    ? 'bg-accent-primary'
-                    : i === currentStep
-                    ? 'bg-accent-primary/60'
-                    : 'bg-border-default'
-                }`}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* Question body — scrolls independently so the header and footer stay pinned. */}
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-          {currentQuestion && (
-            <section className="space-y-3">
-              <div>
-                {currentQuestion.header && (
-                  <div className="mb-1 text-xs font-semibold uppercase tracking-normal text-text-muted">
-                    {currentQuestion.header}
-                  </div>
-                )}
-                <div className="text-sm font-semibold text-text-primary">
-                  {!isSingleQuestion ? `${currentStep + 1}. ` : ''}{currentQuestion.question}
-                </div>
-                {currentQuestion.multiSelect && currentQuestion.options.length > 0 && (
-                  <div className="mt-0.5 text-xs text-text-muted">{t('interactivePrompt.selectAllThatApply')}</div>
-                )}
-              </div>
-
-              <div
-                className="grid gap-2"
-                role={currentQuestion.multiSelect ? 'group' : 'radiogroup'}
-                aria-label={currentQuestion.question}
+        {/* Body — every question is listed here on one screen and scrolls independently
+            so the header and footer stay pinned. */}
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
+          {questions.map((question, index) => {
+            const selectedLabels = answerPreview.answers[question.questionId]?.selectedLabels || []
+            const typeLabel = question.multiSelect
+              ? t('interactivePrompt.multipleChoice')
+              : t('interactivePrompt.singleChoice')
+            return (
+              <section
+                key={question.questionId}
+                className={index > 0 ? 'space-y-3 border-t border-border-default pt-5' : 'space-y-3'}
               >
-                {currentQuestion.options.map(option => (
-                  <OptionButton
-                    key={option.label}
-                    label={option.label}
-                    description={option.description || option.preview}
-                    selected={(answerPreview.answers[currentQuestion.questionId]?.selectedLabels || []).includes(option.label)}
-                    multiSelect={currentQuestion.multiSelect}
-                    disabled={isSubmitting}
-                    onClick={() => toggleOption(currentQuestion, option.label)}
-                  />
-                ))}
-              </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    {question.header && (
+                      <span className="text-xs font-semibold uppercase tracking-normal text-text-muted">
+                        {question.header}
+                      </span>
+                    )}
+                    {/* Type label makes the checkbox-vs-radio distinction explicit per question. */}
+                    <span className="rounded-full border border-border-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-normal text-text-muted">
+                      {typeLabel}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-text-primary">
+                    {!isSingleQuestion ? `${index + 1}. ` : ''}{question.question}
+                  </div>
+                  {question.multiSelect && question.options.length > 0 && (
+                    <div className="mt-0.5 text-xs text-text-muted">{t('interactivePrompt.selectAllThatApply')}</div>
+                  )}
+                </div>
 
-              {currentQuestion.allowFreeform && (
-                <label className="block">
-                  <span className="mb-1 block text-xs font-semibold text-text-muted">{t('interactivePrompt.other')}</span>
-                  <textarea
-                    value={selection[currentQuestion.questionId]?.freeformText || ''}
-                    disabled={isSubmitting}
-                    onChange={(event) => setFreeformText(currentQuestion.questionId, event.currentTarget.value)}
-                    className="w-full min-h-20 rounded-md border border-border-default bg-surface-secondary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent-primary"
-                  />
-                </label>
-              )}
-            </section>
-          )}
+                <div
+                  className="grid gap-2"
+                  role={question.multiSelect ? 'group' : 'radiogroup'}
+                  aria-label={question.question}
+                >
+                  {question.options.map(option => (
+                    <OptionButton
+                      key={option.label}
+                      label={option.label}
+                      description={option.description || option.preview}
+                      selected={selectedLabels.includes(option.label)}
+                      multiSelect={question.multiSelect}
+                      disabled={isSubmitting}
+                      onClick={() => toggleOption(question, option.label)}
+                    />
+                  ))}
+                </div>
+
+                {question.allowFreeform && (
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-text-muted">{t('interactivePrompt.other')}</span>
+                    <textarea
+                      value={selection[question.questionId]?.freeformText || ''}
+                      disabled={isSubmitting}
+                      onChange={(event) => setFreeformText(question.questionId, event.currentTarget.value)}
+                      className="w-full min-h-20 rounded-md border border-border-default bg-surface-secondary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent-primary"
+                    />
+                  </label>
+                )}
+              </section>
+            )
+          })}
 
           {error && (
             <div className="rounded-md border border-status-error/30 bg-status-error/10 px-3 py-2 text-sm text-status-error">
@@ -276,38 +259,18 @@ export default function InteractivePromptModal({
         </div>
 
         {/* Footer */}
-        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border-default px-5 pt-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))]">
-          <div>
-            {!isSingleQuestion && currentStep > 0 && (
-              <button type="button" className="btn btn-ghost btn-sm" onClick={handleBack} disabled={isSubmitting}>
-                Back
-              </button>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel} disabled={isSubmitting}>
-              Cancel
-            </button>
-            {isSingleQuestion || isLastStep ? (
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                onClick={handleSubmit}
-                disabled={!canSubmit || isSubmitting || !submitReady}
-              >
-                {isSubmitting ? 'Submitting...' : 'Submit'}
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                onClick={handleNext}
-                disabled={!currentAnswered || isSubmitting}
-              >
-                Next
-              </button>
-            )}
-          </div>
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border-default px-5 pt-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))]">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel} disabled={isSubmitting}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={handleSubmit}
+            disabled={!canSubmit || isSubmitting || !submitReady}
+          >
+            {isSubmitting ? 'Submitting...' : 'Submit'}
+          </button>
         </div>
       </div>
     </div>
