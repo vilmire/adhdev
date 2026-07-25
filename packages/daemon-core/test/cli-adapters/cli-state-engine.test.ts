@@ -256,6 +256,45 @@ describe('CliStateEngine', () => {
             expect(callbacks.onTurnCompleted).toHaveBeenCalled()
         })
 
+        // E2 (transcript-authority timing-class enumeration): shouldDeferFinishForTranscript now
+        // routes through resolveTranscriptAuthorityProfile().timing === 'floor' instead of reading
+        // the raw requiresFinalAssistantBeforeIdle flag. The profile treats a provider that ALSO
+        // declares holdCompletionForTranscript as the 'hold' class (not 'floor'), so it must NOT
+        // defer here — the hold-and-emit timing lives in the finalization gate, not this engine's
+        // idle-finish defer. For every REAL provider the two are identical (none sets both flags);
+        // this test pins the one input where they would diverge so the mapping stays a pure floor
+        // classification and never accidentally gains hold providers.
+        it('finishResponse does NOT defer for a hold-class provider (holdCompletionForTranscript) even with only tool messages', () => {
+            const { engine, transport, callbacks } = buildEngine({
+                requiresFinalAssistantBeforeIdle: true,
+                holdCompletionForTranscript: true,
+            })
+            transport.runParseSession = vi.fn(() => ({
+                status: 'idle',
+                messages: [
+                    { role: 'user', content: 'do it' },
+                    { role: 'assistant', kind: 'tool', content: 'tool call' },
+                ],
+                activeModal: null,
+            }))
+            engine.currentStatus = 'idle' as any
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = {
+                prompt: 'do it',
+                startedAt: Date.now() - 1000,
+                bufferStart: 0,
+                rawBufferStart: 0,
+            }
+
+            engine.finishResponse()
+
+            // hold class ⇒ timing !== 'floor' ⇒ shouldDeferFinishForTranscript returns false ⇒ the
+            // idle-finish proceeds (turn completes) rather than deferring in 'generating'.
+            expect(engine.isWaitingForResponse).toBe(false)
+            expect(engine.currentStatus).toBe('idle')
+            expect(callbacks.onTurnCompleted).toHaveBeenCalled()
+        })
+
         it('finishResponse returns early when submitPending guard is active', () => {
             const { engine, callbacks } = buildEngine()
             // submitPendingUntil set to far future blocks finishResponse

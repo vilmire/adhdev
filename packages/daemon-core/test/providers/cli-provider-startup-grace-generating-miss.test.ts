@@ -473,3 +473,141 @@ describe('CliProviderInstance — fresh-session startup-grace generating miss', 
     expect(completionEvents(events).length).toBe(0)
   })
 })
+
+// ── AGY-BOOT-PHANTOM: hold-class startup-grace collapse must HOLD, not emit a weak phantom ──
+//
+// antigravity declares holdCompletionForTranscript (transcript-authority timing='hold'): its
+// idle verdict must wait for the native transcript to land before a completion is emitted. At
+// boot, that native history is often not yet written, so completionFinalAssistantEvidence returns
+// source='unavailable' with no summary. The OLD startup-grace synth only enumerated the 'floor'
+// and 'external-native' classes for its missingEvidence check, so a hold provider fell through
+// (missingEvidence=false) and — because it has mesh context — fired a WEAK phantom
+// agent:generating_completed the instant the FSM collapsed to idle, before the turn's authoritative
+// transcript existed. The genuine finalization gate (getCompletedFinalizationBlock, external-native
+// branch) HOLDs the hold class (holdForTranscript / null), so the synth must too: suppress and
+// leave the task unmarked so a later poll re-runs once the transcript's final assistant lands.
+function makeHoldInstance(opts: { finalSummary?: string } = {}): Harness {
+  const events: any[] = []
+  const instance = Object.create(CliProviderInstance.prototype) as any
+
+  let adapterStatus = 'starting'
+  let adapterWaiting = false
+
+  instance.type = 'antigravity-cli'
+  instance.instanceId = 'sess-agy-boot-1'
+  // holdCompletionForTranscript:true + a nativeHistory config ⇒ transcript-authority timing='hold'.
+  instance.provider = {
+    name: 'Antigravity',
+    type: 'antigravity-cli',
+    settings: {},
+    holdCompletionForTranscript: true,
+    transcriptAuthority: 'provider',
+    nativeHistory: { enabled: true, format: 'jsonl' },
+  }
+  instance.workingDir = '/repo/worktree-agy'
+  instance.providerSessionId = 'psess-agy-boot-1'
+  // Mesh worker context — the exact scenario where the OLD code emitted the phantom (it passed the
+  // !hasMeshContext suppression precisely because mesh context was present).
+  instance.settings = { meshNodeFor: 'mesh-1', meshActiveTaskId: 'task-agy-1', meshNodeId: 'node-1' }
+
+  instance.lastStatus = 'starting'
+  instance.generatingStartedAt = 0
+  instance.generatingDebouncePending = null
+  instance.generatingDebounceTimer = null
+  instance.completedDebouncePending = null
+  instance.completedDebounceTimer = null
+  instance.lastApprovalEventFingerprint = ''
+  instance.autoApproveBusy = false
+  instance.agentReadyEmitted = false
+  instance.suppressIdleHistoryReplay = false
+  instance.startedAt = Date.now()
+  instance.startupGraceCollapseAt = null
+  instance.fastCollapseSynthesizedTaskId = null
+
+  // When finalSummary is provided the native transcript has landed (assistant reply present);
+  // otherwise the transcript is not yet written (source='unavailable', no messages).
+  const parsedMessages = opts.finalSummary
+    ? [{ role: 'assistant', content: opts.finalSummary }]
+    : []
+
+  instance.adapter = {
+    getStatus: () => ({ status: adapterStatus }),
+    getPartialResponse: () => '',
+    getScriptParsedStatus: () => ({ status: 'idle', messages: parsedMessages }),
+    getScreenText: () => '',
+    get isWaitingForResponse() { return adapterWaiting },
+    chatMessagesOwnedExternally: true,
+  }
+
+  instance.maybeAutoApproveStatus = () => false
+  instance.promoteProviderSessionId = () => {}
+  instance.applyProviderResponse = () => {}
+  instance.isMeshWorkerSession = () => true
+  instance.completionFinalAssistantEvidence = (msgs: any) => opts.finalSummary
+    ? { present: true, messages: Array.isArray(msgs) ? msgs : [], source: 'external-native' }
+    : { present: false, messages: [], source: 'unavailable' }
+  instance.completionHasFinalAssistantMessage = () => !!opts.finalSummary
+  instance.hasAdapterPendingResponse = () => adapterWaiting
+  instance.scheduleCompletedDebounceFlush = () => { ;(instance as any).flushCompletedDebounceIfFinalized?.() }
+  instance.flushCompletedDebounceIfFinalized = function () {
+    const pending = (this as any).completedDebouncePending
+    if (!pending) return
+    ;(this as any).completedDebouncePending = null
+    ;(this as any).pushEvent({
+      event: 'agent:generating_completed',
+      chatTitle: pending.chatTitle,
+      duration: pending.duration,
+      timestamp: pending.timestamp,
+      finalSummary: opts.finalSummary,
+    })
+  }
+  instance.monitor = { check: () => [] }
+  instance.context = { emitProviderEvent: (e: any) => events.push(e) }
+  instance.events = []
+
+  return {
+    instance,
+    events,
+    setAdapterStatus: (status: string) => { adapterStatus = status },
+    setAdapterWaiting: (waiting: boolean) => { adapterWaiting = waiting },
+  }
+}
+
+describe('CliProviderInstance — AGY-BOOT-PHANTOM (hold-class startup-grace collapse)', () => {
+  it('HOLD: hold-class boot collapse with the native transcript not yet landed emits NO completion', () => {
+    const { instance, events, setAdapterStatus, setAdapterWaiting } = makeHoldInstance()
+    // A turn started and the FSM collapsed to idle, but the authoritative native transcript has
+    // not been written yet (source='unavailable', no summary). This is the phantom scenario.
+    instance.adapter.currentTurnTaskId = 'task-agy-1'
+    setAdapterWaiting(false)
+    setAdapterStatus('idle')
+    instance.detectStatusTransition() // starting → idle — hold-class must HOLD, not synthesize
+
+    expect(completionEvents(events).length).toBe(0)
+    // Left UNMARKED so a later poll can retry once the transcript lands.
+    expect(instance.fastCollapseSynthesizedTaskId).toBe(null)
+  })
+
+  it('HOLD-THEN-EMIT: once the native transcript lands, the re-polled hold session emits a real completion', () => {
+    // First poll: transcript absent → held (no completion, unmarked).
+    const held = makeHoldInstance()
+    held.instance.adapter.currentTurnTaskId = 'task-agy-1'
+    held.setAdapterWaiting(false)
+    held.setAdapterStatus('idle')
+    held.instance.detectStatusTransition()
+    expect(completionEvents(held.events).length).toBe(0)
+
+    // Second scenario: the same collapse but the transcript's final assistant is now present.
+    const landed = makeHoldInstance({ finalSummary: 'Done — reviewed the module, no changes needed.' })
+    landed.instance.adapter.currentTurnTaskId = 'task-agy-1'
+    landed.setAdapterWaiting(false)
+    landed.setAdapterStatus('idle')
+    landed.instance.detectStatusTransition()
+
+    const completions = completionEvents(landed.events)
+    expect(completions.length).toBe(1)
+    expect(completions[0].completionDiagnostic?.reason).toBe('startup_grace_fast_collapse')
+    expect(completions[0].finalSummary).toBe('Done — reviewed the module, no changes needed.')
+    expect(landed.instance.fastCollapseSynthesizedTaskId).toBe('task-agy-1')
+  })
+})

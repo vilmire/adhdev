@@ -1604,7 +1604,15 @@ export class CliStateEngine {
         // background-tool race this was meant to guard against. If a provider
         // really needs the gate, the manifest can set
         // `requiresFinalAssistantBeforeIdle: true`.
-        const requiresFinalAssistant = !!this.provider.requiresFinalAssistantBeforeIdle;
+        //
+        // This is a completion-timing JUDGMENT, so it goes through the shared
+        // transcript-authority profile rather than reading the raw flag: the
+        // 'floor' class is exactly `requiresFinalAssistantBeforeIdle && !hold`
+        // (see resolveTranscriptAuthorityProfile), which is equivalent to the
+        // old `!!requiresFinalAssistantBeforeIdle` for every real provider
+        // because none declares both flags — a hold provider (antigravity)
+        // sets holdCompletionForTranscript only, so it was already false here.
+        const requiresFinalAssistant = resolveTranscriptAuthorityProfile(this.provider).timing === 'floor';
         if (!requiresFinalAssistant) return false;
         if (!this.isWaitingForResponse || !this.currentTurnScope || this.hasActionableApproval()) return false;
         const parsedStatus = typeof parsed?.status === 'string' ? parsed.status.trim() : '';

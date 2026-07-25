@@ -3915,7 +3915,31 @@ export class CliProviderInstance implements ProviderInstance {
             fcEvidenceSource = evidence.source;
             fcFinalSummary = extractFinalSummaryFromMessages(evidence.messages as any);
         } catch { /* best-effort */ }
-        const missingEvidence = (resolveTranscriptAuthorityProfile(this.provider).timing === 'floor' || fcEvidenceSource === 'external-native') && !fcFinalSummary;
+        // SPEC-DRIVEN completion timing (mission f2f6da1b / AGY-BOOT-PHANTOM): the
+        // startup-grace synth must enumerate the SAME transcript-authority timing
+        // classes the genuine finalization gate does (getCompletedFinalizationBlock,
+        // the external-native branch ~line 2120), not just 'floor' + external-native.
+        // The 'hold' class (antigravity — holdCompletionForTranscript) was missing:
+        // at boot its native history is often not yet written, so fcEvidenceSource is
+        // 'unavailable' (neither 'floor' nor 'external-native'), which left
+        // missingEvidence=false and fired a WEAK phantom completion the moment the FSM
+        // collapsed to idle — a completion for a turn whose authoritative transcript
+        // had not landed.
+        const synthTiming = resolveTranscriptAuthorityProfile(this.provider).timing;
+        const missingEvidence = (synthTiming === 'floor' || synthTiming === 'hold' || fcEvidenceSource === 'external-native') && !fcFinalSummary;
+        // HOLD class (antigravity): idle holds for the native transcript to land. The
+        // finalization gate never emits a completion for a hold provider without the
+        // transcript (it returns holdForTranscript / null at ~line 2120), so the synth
+        // must not either — even WITH mesh context. Suppress the synth and leave the
+        // task UNMARKED so a later idle poll re-runs this path once the transcript's
+        // final assistant lands (then fcFinalSummary is present → missingEvidence=false
+        // → a genuine, summary-bearing emit). This is the HOLD-and-retry equivalent of
+        // the finalization gate's non-terminal missing_final_assistant hold; it is what
+        // stops the boot-time phantom weak completion for a mesh worker.
+        if (missingEvidence && synthTiming === 'hold') {
+            LOG.info('CLI', `[${this.type}] ${reason} held: hold-class transcript not yet landed (source=${fcEvidenceSource})`);
+            return false;
+        }
         // Mirror the short-generating idle path's suppression: a provider that
         // requires a final assistant (or external-native history) with NO confirmed
         // summary and NO mesh context emits nothing — the session is idle with no
