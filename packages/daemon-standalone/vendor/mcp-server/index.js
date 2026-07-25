@@ -393,6 +393,8 @@ var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_approve",
   "mesh_answer_question",
   "mesh_list_pending_approvals",
+  "mesh_create",
+  "mesh_add_node",
   "mesh_clone_node",
   "mesh_remove_node",
   "mesh_refine_node",
@@ -1116,6 +1118,41 @@ var MESH_LIST_PENDING_APPROVALS_TOOL = {
     properties: {}
   }
 };
+var MESH_CREATE_TOOL = {
+  name: "mesh_create",
+  description: "Bootstrap a brand-new mesh for a Git repository \u2014 the first step for an MCP-only agent that has no mesh yet. Mirrors `adhdev mesh create <name>`. A mesh groups one repo's workspaces/nodes so the coordinator can delegate work across them. You MUST supply the repo identity: pass repo_remote_url (the git remote URL, e.g. git@github.com:user/repo.git or https://github.com/user/repo.git \u2014 the identity is derived from it) OR repo_identity (an explicit normalized identity like github.com/user/repo). At least one is required; there is no auto-detection here (the CLI auto-detects from the current dir, but the MCP server may run elsewhere). Set add_current:true to also register a node in the same call (uses workspace if given, else the daemon's current working directory) \u2014 handy when the daemon runs in the repo you want as the base node. BOOT-GATE / WHEN CALLABLE: this tool is reachable in STANDARD mode (adhdev mcp, no --repo-mesh) \u2014 the bootstrap context where no mesh exists \u2014 and also in mesh mode (where it creates a SEPARATE additional mesh). It is NOT reachable before any mesh exists via mesh mode, because `adhdev mcp --repo-mesh <id>` refuses to start without an existing meshId. So the intended flow is: run standard-mode MCP \u2192 mesh_create \u2192 mesh_add_node \u2192 then relaunch as `adhdev mcp --repo-mesh <returned mesh_id>`. Returns mesh_id (and node_id when add_current is used); use mesh_id for the follow-up mesh_add_node call and to launch mesh mode.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: 'Human-readable mesh name (e.g. "adhdev-main"). Trimmed, max 100 chars.' },
+      repo_remote_url: { type: "string", description: "Git remote URL of the repo (e.g. git@github.com:user/repo.git). The repo identity is normalized from this. Provide this OR repo_identity." },
+      repo_identity: { type: "string", description: "Explicit normalized repo identity (e.g. github.com/user/repo). Provide this OR repo_remote_url. Wins over repo_remote_url when both are given." },
+      default_branch: { type: "string", description: 'Default branch for the repo (e.g. "main"). Optional; used as the merge/convergence target.' },
+      add_current: { type: "boolean", description: "Also register a node in this same call (parity with CLI --add-current). Uses `workspace` if provided, otherwise the daemon's current working directory." },
+      workspace: { type: "string", description: "Absolute workspace path to register when add_current:true. Ignored unless add_current is true. Defaults to the daemon's cwd." }
+    },
+    required: ["name"]
+  }
+};
+var MESH_ADD_NODE_TOOL = {
+  name: "mesh_add_node",
+  description: "Register a workspace as a node in an EXISTING mesh \u2014 the second bootstrap step after mesh_create (or to add more nodes later). Mirrors `adhdev mesh add-node <mesh_id>` with --workspace / --read-only / --provider-priority. A node is a repo checkout on a daemon that the coordinator can launch agents on and delegate tasks to. mesh_id is REQUIRED in standard mode (pass the id returned by mesh_create); in mesh mode it defaults to the active mesh. workspace is the absolute path to the repo checkout ON THE DAEMON that owns it \u2014 the local base node is added by the daemon that created the mesh. NOTE: this registers an EXISTING directory as a node (including marking one as a worktree via is_worktree). To CREATE a fresh git worktree + branch for isolated parallel work, use mesh_clone_node instead \u2014 that runs the actual `git worktree add`. Returns node_id + workspace so you can immediately target the node with mesh_launch_session / mesh_send_task / mesh_enqueue_task.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      mesh_id: { type: "string", description: "Target mesh id (from mesh_create / mesh_status). Required in standard mode; defaults to the active mesh in mesh mode." },
+      workspace: { type: "string", description: "Absolute path to the repo checkout on the owning daemon (e.g. /Users/me/work/repo). Must be unique within the mesh." },
+      read_only: { type: "boolean", description: "Mark the node read-only (no launches/mutations targeted here). Parity with CLI --read-only." },
+      provider_priority: {
+        type: "array",
+        items: { type: "string" },
+        description: 'Ordered provider types this node prefers when mesh_launch_session omits an explicit type (e.g. ["claude-cli","codex"]). Parity with CLI --provider-priority. A comma-separated string is also accepted.'
+      },
+      is_worktree: { type: "boolean", description: "Mark this workspace as an existing local git worktree (parity with CLI --worktree). This only tags an already-present worktree dir; it does NOT create one \u2014 use mesh_clone_node to create a worktree+branch." }
+    },
+    required: ["workspace"]
+  }
+};
 var MESH_CLONE_NODE_TOOL = {
   name: "mesh_clone_node",
   description: "Create a new worktree-based node from an existing node for isolated parallel work. Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously.",
@@ -1543,6 +1580,8 @@ var ALL_MESH_TOOLS = [
   MESH_APPROVE_TOOL,
   MESH_ANSWER_QUESTION_TOOL,
   MESH_LIST_PENDING_APPROVALS_TOOL,
+  MESH_CREATE_TOOL,
+  MESH_ADD_NODE_TOOL,
   MESH_CLONE_NODE_TOOL,
   MESH_REMOVE_NODE_TOOL,
   MESH_REFINE_NODE_TOOL,
@@ -7391,6 +7430,100 @@ async function meshRemoveNode(ctx, args) {
   return JSON.stringify({ ...result || {}, ...transportFallback ? { transportFallback } : {} }, null, 2);
 }
 
+// src/tools/mesh-tools-crud.ts
+async function meshCreate(transport, args) {
+  const name = typeof args?.name === "string" ? args.name.trim() : "";
+  if (!name) {
+    return JSON.stringify({ success: false, error: "name required" }, null, 2);
+  }
+  const repoRemoteUrl = typeof args?.repo_remote_url === "string" ? args.repo_remote_url.trim() : "";
+  const repoIdentity = typeof args?.repo_identity === "string" ? args.repo_identity.trim() : "";
+  const defaultBranch = typeof args?.default_branch === "string" ? args.default_branch.trim() : "";
+  if (!repoRemoteUrl && !repoIdentity) {
+    return JSON.stringify({
+      success: false,
+      error: "Either repo_remote_url or repo_identity is required. Pass the repo's git remote URL (e.g. git@github.com:user/repo.git) or an explicit identity (e.g. github.com/user/repo)."
+    }, null, 2);
+  }
+  const createResult = await transport.command("create_mesh", {
+    name,
+    ...repoRemoteUrl ? { repoRemoteUrl } : {},
+    ...repoIdentity ? { repoIdentity } : {},
+    ...defaultBranch ? { defaultBranch } : {}
+  });
+  const createPayload = unwrapCommandPayload(createResult);
+  const mesh = createPayload?.mesh;
+  if (!createPayload?.success || !mesh?.id) {
+    return JSON.stringify({
+      success: false,
+      error: createPayload?.error || "create_mesh failed",
+      raw: createPayload ?? createResult
+    }, null, 2);
+  }
+  const out = {
+    success: true,
+    mesh_id: mesh.id,
+    name: mesh.name,
+    repo_identity: mesh.repoIdentity,
+    default_branch: mesh.defaultBranch,
+    node_count: Array.isArray(mesh.nodes) ? mesh.nodes.length : 0,
+    next_step: `Add the base node with mesh_add_node (mesh_id: "${mesh.id}", workspace: <repo path>), then start mesh mode with: adhdev mcp --repo-mesh ${mesh.id}`
+  };
+  if (args?.add_current === true) {
+    const workspace = typeof args?.workspace === "string" && args.workspace.trim() ? args.workspace.trim() : "";
+    const addResult = await transport.command("add_mesh_node", {
+      meshId: mesh.id,
+      ...workspace ? { workspace } : {},
+      inlineMesh: mesh
+    });
+    const addPayload = unwrapCommandPayload(addResult);
+    if (addPayload?.success && addPayload?.node?.id) {
+      out.node_id = addPayload.node.id;
+      out.node_workspace = addPayload.node.workspace;
+    } else {
+      out.add_current_error = addPayload?.error || "add_mesh_node failed (mesh was still created)";
+    }
+  }
+  return JSON.stringify(out, null, 2);
+}
+async function meshAddNode(transport, args, defaultMeshId) {
+  const meshId = typeof args?.mesh_id === "string" && args.mesh_id.trim() ? args.mesh_id.trim() : typeof defaultMeshId === "string" ? defaultMeshId.trim() : "";
+  const workspace = typeof args?.workspace === "string" ? args.workspace.trim() : "";
+  if (!meshId) {
+    return JSON.stringify({ success: false, error: "mesh_id required (create one first with mesh_create)." }, null, 2);
+  }
+  if (!workspace) {
+    return JSON.stringify({ success: false, error: "workspace required (absolute path to the repo checkout on the target daemon)." }, null, 2);
+  }
+  const providerPriority = Array.isArray(args?.provider_priority) ? args.provider_priority.map((v) => typeof v === "string" ? v.trim() : "").filter(Boolean) : typeof args?.provider_priority === "string" ? args.provider_priority.split(",").map((v) => v.trim()).filter(Boolean) : [];
+  const addResult = await transport.command("add_mesh_node", {
+    meshId,
+    workspace,
+    ...args?.read_only === true ? { readOnly: true } : {},
+    ...providerPriority.length ? { providerPriority } : {},
+    ...args?.is_worktree === true ? { isLocalWorktree: true } : {},
+    ...args?.inline_mesh ? { inlineMesh: args.inline_mesh } : {}
+  });
+  const addPayload = unwrapCommandPayload(addResult);
+  if (!addPayload?.success || !addPayload?.node?.id) {
+    return JSON.stringify({
+      success: false,
+      error: addPayload?.error || "add_mesh_node failed",
+      code: addPayload?.code,
+      raw: addPayload ?? addResult
+    }, null, 2);
+  }
+  return JSON.stringify({
+    success: true,
+    mesh_id: meshId,
+    node_id: addPayload.node.id,
+    workspace: addPayload.node.workspace,
+    read_only: addPayload.node.policy?.readOnly === true,
+    provider_priority: addPayload.node.policy?.providerPriority,
+    next_step: `Node registered. Launch an agent on it with mesh_launch_session (node_id: "${addPayload.node.id}") or delegate work with mesh_send_task / mesh_enqueue_task.`
+  }, null, 2);
+}
+
 // src/tools/mesh-tools-refine.ts
 async function meshRefineConfigSchema(ctx) {
   const node = resolveRefineConfigNode(ctx);
@@ -8770,6 +8903,12 @@ async function startMcpServer(opts) {
           case "mesh_list_pending_approvals":
             text = await meshListPendingApprovals(meshCtx, a);
             break;
+          case "mesh_create":
+            text = await meshCreate(meshCtx.transport, a);
+            break;
+          case "mesh_add_node":
+            text = await meshAddNode(meshCtx.transport, a, meshCtx.mesh.id);
+            break;
           case "mesh_clone_node":
             text = await meshCloneNode(meshCtx, a);
             break;
@@ -8907,6 +9046,11 @@ async function startMcpServer(opts) {
     GIT_DIFF_TOOL,
     GIT_CHECKPOINT_TOOL,
     GIT_PUSH_TOOL,
+    // Mesh bootstrap: create a mesh + register its first node from an MCP-only agent.
+    // Exposed in standard mode precisely because this is the no-mesh-yet context —
+    // mesh mode refuses to boot without an existing meshId (see the mesh-mode block above).
+    MESH_CREATE_TOOL,
+    MESH_ADD_NODE_TOOL,
     ...isLocal ? [SCREENSHOT_TOOL] : []
   ];
   const server = new import_server.Server(
@@ -8994,6 +9138,14 @@ async function startMcpServer(opts) {
         }
         case "check_pending": {
           const text = await checkPending(transport, { format: a.format });
+          return { content: [{ type: "text", text }] };
+        }
+        case "mesh_create": {
+          const text = await meshCreate(transport, a);
+          return { content: [{ type: "text", text }] };
+        }
+        case "mesh_add_node": {
+          const text = await meshAddNode(transport, a);
           return { content: [{ type: "text", text }] };
         }
         default:
