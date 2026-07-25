@@ -240,7 +240,7 @@ export function buildMeshNodeMachineIdentity(node: Record<string, unknown>, opts
     const hostname = readMeshNodeHostname(node);
     const machineName = readMeshNodeDisplayMachineName(node);
     const coordinatorHostname = readStringValue(opts.coordinatorHostname);
-    const machineIdMatches = Boolean(opts.localMachineId && machineId && opts.localMachineId === machineId);
+    const machineIdMatches = Boolean(opts.localMachineId && machineId && daemonIdsEquivalent(opts.localMachineId, machineId));
     const daemonIdMatches = Boolean(opts.localDaemonId && daemonId && daemonIdsEquivalent(opts.localDaemonId, daemonId));
     const hostnameMatches = Boolean(
         normalizeMeshHostname(hostname)
