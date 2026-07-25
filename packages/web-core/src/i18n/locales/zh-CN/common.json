@@ -2808,7 +2808,29 @@
         "hero": {
             "badge": "多厂商、多机器的智能体控制平面",
             "title": "在浏览器中驱动每一个本地编码智能体 —— 并行运行。",
-            "subtitle": "从浏览器和手机运行并批准 <roll></roll> 等 CLI 智能体。跨多台机器的工作在隔离分支上并行执行，并自动落地到 <code>main</code>。",
+            "subtitleInstall": "在<os></os>上安装 ADHDev。",
+            "subtitlePlace": "然后，在<place></place>，用你的<device></device>",
+            "subtitleAsk": "让<coordinator></coordinator>把<worker></worker>派去<verb></verb>你的仓库。",
+            "subtitleLand": "完成的工作会自动落地到 main。",
+            "axes": {
+                "os": ["Mac", "Windows 电脑", "Linux 机器"],
+                "place": [
+                    "地铁",
+                    "咖啡馆",
+                    "父母家",
+                    "床上",
+                    "沙发",
+                    "花园",
+                    "副驾驶座",
+                    "渡轮",
+                    "厕所",
+                    "集装箱里",
+                    "月球",
+                    "服务器机架"
+                ],
+                "device": ["台式机", "笔记本电脑", "平板电脑", "手机"],
+                "verb": ["调试", "构建", "测试", "审查"]
+            },
             "selectOs": "选择操作系统",
             "osUnix": "macOS / Linux",
             "osWindows": "Windows",

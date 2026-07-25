@@ -2808,7 +2808,29 @@
         "hero": {
             "badge": "Multi-vendor, multi-machine agent control plane",
             "title": "Manage the coding agents running on your computer — from anywhere.",
-            "subtitle": "Run and approve <roll></roll> from your browser and phone. Work across several machines runs in parallel on isolated branches and lands on <code>main</code> automatically.",
+            "subtitleInstall": "Install ADHDev on <os></os>.",
+            "subtitlePlace": "Then, from <place></place>, use your <device></device>",
+            "subtitleAsk": "to ask <coordinator></coordinator> to send <worker></worker> to <verb></verb> your repo.",
+            "subtitleLand": "Finished work lands on main automatically.",
+            "axes": {
+                "os": ["your Mac", "your Windows PC", "your Linux machine"],
+                "place": [
+                    "the subway",
+                    "a cafe",
+                    "your parents' place",
+                    "bed",
+                    "the couch",
+                    "the garden",
+                    "the passenger seat",
+                    "the ferry",
+                    "the toilet",
+                    "inside a container",
+                    "the moon",
+                    "a server rack"
+                ],
+                "device": ["desktop", "laptop", "tablet", "mobile phone"],
+                "verb": ["debug", "build", "test", "review"]
+            },
             "selectOs": "Select OS",
             "osUnix": "macOS / Linux",
             "osWindows": "Windows",

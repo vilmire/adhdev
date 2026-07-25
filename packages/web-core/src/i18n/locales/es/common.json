@@ -2808,7 +2808,29 @@
         "hero": {
             "badge": "El plano de control de agentes multiproveedor y multimáquina",
             "title": "Ejecuta cada agente de codificación local desde la web — en paralelo.",
-            "subtitle": "Ejecuta y aprueba <roll></roll> desde tu navegador y tu teléfono. El trabajo repartido entre varias máquinas corre en paralelo en ramas aisladas y aterriza en <code>main</code> automáticamente.",
+            "subtitleInstall": "Instala ADHDev en <os></os>.",
+            "subtitlePlace": "Luego, desde <place></place>, usa tu <device></device>",
+            "subtitleAsk": "para pedirle a <coordinator></coordinator> que envíe a <worker></worker> a <verb></verb> tu repositorio.",
+            "subtitleLand": "El trabajo terminado aterriza en main automáticamente.",
+            "axes": {
+                "os": ["tu Mac", "tu PC con Windows", "tu máquina Linux"],
+                "place": [
+                    "el metro",
+                    "una cafetería",
+                    "la casa de tus padres",
+                    "la cama",
+                    "el sofá",
+                    "el jardín",
+                    "el asiento del copiloto",
+                    "el ferry",
+                    "el baño",
+                    "dentro de un contenedor",
+                    "la luna",
+                    "un rack de servidores"
+                ],
+                "device": ["ordenador de escritorio", "portátil", "tablet", "móvil"],
+                "verb": ["depurar", "compilar", "probar", "revisar"]
+            },
             "selectOs": "Seleccionar SO",
             "osUnix": "macOS / Linux",
             "osWindows": "Windows",

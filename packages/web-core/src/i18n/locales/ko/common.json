@@ -2808,7 +2808,29 @@
         "hero": {
             "badge": "멀티 벤더, 멀티 머신 에이전트 컨트롤 플레인",
             "title": "내 컴퓨터에서 실행 중인 코딩 에이전트를 어디서든 관리하세요.",
-            "subtitle": "<roll></roll>를 브라우저와 휴대폰에서 실행하고 승인하세요. 여러 머신의 작업은 격리된 브랜치에서 병렬로 처리되고 자동으로 <code>main</code>에 합쳐집니다.",
+            "subtitleInstall": "<os></os>에 ADHDev를 설치하세요.",
+            "subtitlePlace": "그리고 <place></place>에서, <device></device>으로",
+            "subtitleAsk": "<coordinator></coordinator>에게 <worker></worker>를 보내 리포지토리를 <verb></verb>하게 해보세요.",
+            "subtitleLand": "완료된 작업은 자동으로 main에 착지합니다.",
+            "axes": {
+                "os": ["Mac", "Windows PC", "Linux 머신"],
+                "place": [
+                    "지하철",
+                    "카페",
+                    "부모님 댁",
+                    "침대",
+                    "소파",
+                    "정원",
+                    "조수석",
+                    "페리",
+                    "화장실",
+                    "컨테이너 안",
+                    "달",
+                    "서버 랙"
+                ],
+                "device": ["데스크톱", "노트북", "태블릿", "휴대폰"],
+                "verb": ["디버그", "빌드", "테스트", "리뷰"]
+            },
             "selectOs": "OS 선택",
             "osUnix": "macOS / Linux",
             "osWindows": "Windows",
