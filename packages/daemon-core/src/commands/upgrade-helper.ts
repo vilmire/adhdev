@@ -595,7 +595,21 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
     await waitForPidExit(payload.parentPid, 15000);
   }
 
-  await stopSessionHostProcesses(sessionHostAppName);
+  // The only reason to kill the session-host during an upgrade is the Windows
+  // EBUSY hazard: node-pty's `conpty.node` (and the ghostty VT dll) stay
+  // EXCLUSIVELY locked while the host has them memory-mapped, so npm's
+  // copy-to-staging fails until the host exits (see stopSessionHostProcesses).
+  // POSIX can replace an open file freely — the running host keeps its handles
+  // to the old inode and keeps serving — so killing it there only tears down
+  // every hosted CLI session (coordinator + workers) for no benefit. Leave the
+  // host running on POSIX; on the next boot `ensureSessionHostReady()` reuses
+  // the still-listening socket and `cliManager.restoreHostedSessions()` rebinds
+  // the live runtimes. Windows keeps the kill unchanged.
+  if (process.platform === 'win32') {
+    await stopSessionHostProcesses(sessionHostAppName);
+  } else {
+    appendUpgradeLog('POSIX — session-host left running (survives upgrade; sessions rebind on next boot)');
+  }
   removeDaemonPidFile();
   // Scope the Windows atomic-upgrade layout to THIS daemon's instance so
   // `adhdev-preview update` rotates only the preview prefix/pointer/tools tree
