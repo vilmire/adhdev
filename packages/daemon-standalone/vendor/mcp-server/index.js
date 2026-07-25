@@ -1406,7 +1406,6 @@ var MESH_MAGI_REVIEW_TOOL = {
       n: { type: "number", description: "Global replica override per slot (clamped by the total-replica guard cap, default 12)." },
       task_kind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "REQUIRED. Selects (1) the SINGLE output schema injected into each replica prompt and the strict parser used at collection (no schema-on-schema conflict), AND (2) the user-configured kind-panel binding that supplies the fan-out slots (mesh settings \u2192 magiKindPanels; errors magi_kind_not_configured if that kind has no configured slots \u2014 no named-panel/inline/preset fallback). claim_audit: {claims[],top_findings[],open_questions[]}. rca: {rootCause,failsAt,mechanism,evidence[],fixDirection,confidence}. design: {recommendation,rationale,alternatives[],tradeoffs[],risks[],evidence[],confidence}. freeform: no schema \u2014 natural-language answer, parsing/evidence checks waived, cross-verification is weak. Every kind except freeform requires non-empty evidence[]; an empty-evidence or schema-invalid answer triggers ONE delta re-request before being dropped as unparseable. Do NOT also embed an output-format schema in the question \u2014 it collides with this contract (a warning is surfaced if detected)." },
       mode: { type: "string", enum: ["rca", "investigation", "claim_audit", "design_review", "code_audit"], description: "Synthesis emphasis hint \u2014 affects labels only, never the agent count or schema. Distinct from task_kind (which selects the output schema)." },
-      use_judge: { type: "boolean", description: "Default false (clustering synthesis). STUB: judge synthesis is not yet implemented \u2014 passing true currently falls back to clustering with a warning. Reserved interface only." },
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
       include_stale: { type: "boolean", description: "Default false. By default, panel slots whose node HEAD commit differs from the coordinator reference commit are EXCLUDED (they would investigate different code). Set true to fan out to them anyway \u2014 results will be git-skewed and a warning is surfaced. If exclusion drops the panel below 2 independent targets the call errors rather than degrading to N=1; include_stale=true is one way to recover." },
       wait: { type: "boolean", description: "Default true \u2014 collect replica outputs and return the synthesis. Set false to dispatch async and return a consensusGroupId handle; collect later with mesh_magi_collect." },
@@ -5532,8 +5531,6 @@ async function meshMagiReview(ctx, args) {
     }, null, 2);
   }
   const questionSchemaWarning = detectQuestionOutputSchemaConflict(question);
-  const useJudge = (args.use_judge ?? args.useJudge) === true;
-  const judgeWarning = useJudge ? "use_judge=true requested, but judge synthesis is not yet implemented \u2014 falling back to clustering synthesis." : null;
   await refreshMeshFromDaemon(ctx);
   const referenceCommit = resolveMagiReferenceCommit(ctx);
   const referenceSubmoduleKey = resolveMagiReferenceSubmoduleKey(ctx);
@@ -5639,7 +5636,6 @@ Target: ${args.target}` : ""}`,
     panel: panelName,
     taskKind,
     ...questionSchemaWarning ? { questionSchemaWarning } : {},
-    ...judgeWarning ? { judgeWarning } : {},
     question,
     replicaCount: replicaRecords.length,
     replicas: replicaRecords.map((r) => ({ taskId: r.taskId, provider: r.provider, targetNodeId: r.targetNodeId })),
