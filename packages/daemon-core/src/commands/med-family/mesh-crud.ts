@@ -665,6 +665,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             const capabilities = Array.isArray(args?.capabilities)
                 ? args.capabilities.map((t: any) => typeof t === 'string' ? t.trim() : '').filter(Boolean)
                 : undefined;
+            const isLocalWorktree = args?.isLocalWorktree === true;
             const node = addNode(meshId, {
                 workspace,
                 ...(repoRoot ? { repoRoot } : {}),
@@ -672,6 +673,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 ...(machineId ? { machineId } : {}),
                 ...(policy ? { policy } : {}),
                 ...(role ? { role } : {}),
+                ...(isLocalWorktree ? { isLocalWorktree: true } : {}),
                 ...(capabilities && capabilities.length ? { capabilities } : {}),
             });
             if (!node) return { success: false, error: 'Mesh not found' };

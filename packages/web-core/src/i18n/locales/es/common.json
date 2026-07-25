@@ -3067,6 +3067,8 @@
     },
     "interactivePrompt": {
         "selectAllThatApply": "Selecciona todas las que correspondan",
+        "multipleChoice": "Selección múltiple",
+        "singleChoice": "Selección única",
         "other": "Otro"
     },
     "git": {

@@ -363,7 +363,7 @@ export type { DaemonState } from './config/state-store.js';
 // ── Detection ──
 export { detectIDEs } from './detection/ide-detector.js';
 export type { IDEInfo } from './detection/ide-detector.js';
-export { detectCLIs } from './detection/cli-detector.js';
+export { detectCLIs, detectCLI } from './detection/cli-detector.js';
 export { getHostMemorySnapshot } from './system/host-memory.js';
 export type { HostMemorySnapshot } from './system/host-memory.js';
 export {

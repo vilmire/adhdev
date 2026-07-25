@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT } from '@adhdev/daemon-core';
-import { ALL_MESH_TOOLS, MESH_CLEANUP_SESSIONS_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL, MESH_REQUEUE_HELD_EVENTS_TOOL, MESH_STATUS_TOOL, MESH_VIEW_QUEUE_TOOL } from '../src/tools/mesh-tools.js';
+import { ALL_MESH_TOOLS, MESH_ADD_NODE_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_CREATE_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL, MESH_REQUEUE_HELD_EVENTS_TOOL, MESH_STATUS_TOOL, MESH_VIEW_QUEUE_TOOL } from '../src/tools/mesh-tools.js';
 
 test('ALL_MESH_TOOLS is exactly the canonical mesh tool registry (6-6 consistency)', () => {
   const published = ALL_MESH_TOOLS.map(tool => tool.name).sort();
@@ -71,6 +71,28 @@ test('mesh_status and mesh_view_queue schemas expose compact/verbose payload con
   assert.equal((MESH_VIEW_QUEUE_TOOL.inputSchema.properties as any).compact.type, 'boolean');
   assert.equal((MESH_VIEW_QUEUE_TOOL.inputSchema.properties as any).verbose.type, 'boolean');
   assert.match((MESH_VIEW_QUEUE_TOOL.inputSchema.properties as any).compact.description, /Default true/);
+});
+
+test('mesh_create / mesh_add_node bootstrap tools are published for MCP-only mesh creation', () => {
+  // Exposed in ALL_MESH_TOOLS (so mesh-mode list-tools advertises them) and canonical.
+  assert.equal(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_create'), true);
+  assert.equal(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_add_node'), true);
+  assert.equal(CANONICAL_MESH_TOOL_NAMES.includes('mesh_create' as any), true);
+  assert.equal(CANONICAL_MESH_TOOL_NAMES.includes('mesh_add_node' as any), true);
+
+  // mesh_create: requires name, accepts either repo identity source.
+  assert.equal(MESH_CREATE_TOOL.name, 'mesh_create');
+  assert.deepEqual(MESH_CREATE_TOOL.inputSchema.required, ['name']);
+  assert.equal((MESH_CREATE_TOOL.inputSchema.properties as any).repo_remote_url.type, 'string');
+  assert.equal((MESH_CREATE_TOOL.inputSchema.properties as any).repo_identity.type, 'string');
+  assert.equal((MESH_CREATE_TOOL.inputSchema.properties as any).add_current.type, 'boolean');
+
+  // mesh_add_node: requires workspace, mesh_id optional (defaults to active mesh in mesh mode).
+  assert.equal(MESH_ADD_NODE_TOOL.name, 'mesh_add_node');
+  assert.deepEqual(MESH_ADD_NODE_TOOL.inputSchema.required, ['workspace']);
+  assert.equal((MESH_ADD_NODE_TOOL.inputSchema.properties as any).mesh_id.type, 'string');
+  assert.equal((MESH_ADD_NODE_TOOL.inputSchema.properties as any).read_only.type, 'boolean');
+  assert.equal((MESH_ADD_NODE_TOOL.inputSchema.properties as any).provider_priority.type, 'array');
 });
 
 test('mesh session cleanup tools expose explicit manual cleanup and remove-node policy override', () => {

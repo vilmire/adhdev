@@ -1010,6 +1010,8 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_approve\` | Approve/reject a pending agent action (a yes/no tool-consent modal) |
 | \`mesh_answer_question\` | Answer a delegated session's multi-choice QUESTION (AskUserQuestion / status awaiting_choice). NOT an approval — it offers labelled options (possibly multi-select or freeform). Pass the promptId from the agent:waiting_choice event + one answer per question (select by option label or 1-based index). Use this, never mesh_approve, for a question |
 | \`mesh_list_pending_approvals\` | List every session across the mesh awaiting an approval decision (the approval inbox) — read-only; enumerate all blocked sessions at once, then drive a mesh_approve for each |
+| \`mesh_create\` | Bootstrap a NEW mesh for a repo (name + repo_remote_url/repo_identity); optionally register the current workspace as the first node. The from-scratch entry point when no mesh exists yet |
+| \`mesh_add_node\` | Register a workspace as a node in an existing mesh (workspace + optional read_only/provider_priority). The second bootstrap step after mesh_create; use mesh_clone_node instead to create a fresh git worktree |
 | \`mesh_clone_node\` | Create a worktree node for isolated parallel branch work |
 | \`mesh_refine_node\` | Validate and merge a completed worktree node back into its base branch |
 | \`mesh_refine_batch\` | Batch Refinery: converge multiple sibling worktree nodes onto the base branch in one conflict-aware sequential pipeline |

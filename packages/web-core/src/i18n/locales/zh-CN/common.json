@@ -3067,6 +3067,8 @@
     },
     "interactivePrompt": {
         "selectAllThatApply": "选择所有适用项",
+        "multipleChoice": "多选",
+        "singleChoice": "单选",
         "other": "其他"
     },
     "git": {
