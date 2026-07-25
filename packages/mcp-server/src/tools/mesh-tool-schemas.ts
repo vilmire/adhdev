@@ -445,6 +445,52 @@ export const MESH_LIST_PENDING_APPROVALS_TOOL = {
     },
 };
 
+export const MESH_CREATE_TOOL = {
+    name: 'mesh_create',
+    description: 'Bootstrap a brand-new mesh for a Git repository — the first step for an MCP-only agent that has no mesh yet. '
+        + 'Mirrors `adhdev mesh create <name>`. A mesh groups one repo\'s workspaces/nodes so the coordinator can delegate work across them. '
+        + 'You MUST supply the repo identity: pass repo_remote_url (the git remote URL, e.g. git@github.com:user/repo.git or https://github.com/user/repo.git — the identity is derived from it) OR repo_identity (an explicit normalized identity like github.com/user/repo). At least one is required; there is no auto-detection here (the CLI auto-detects from the current dir, but the MCP server may run elsewhere). '
+        + 'Set add_current:true to also register a node in the same call (uses workspace if given, else the daemon\'s current working directory) — handy when the daemon runs in the repo you want as the base node. '
+        + 'BOOT-GATE / WHEN CALLABLE: this tool is reachable in STANDARD mode (adhdev mcp, no --repo-mesh) — the bootstrap context where no mesh exists — and also in mesh mode (where it creates a SEPARATE additional mesh). It is NOT reachable before any mesh exists via mesh mode, because `adhdev mcp --repo-mesh <id>` refuses to start without an existing meshId. So the intended flow is: run standard-mode MCP → mesh_create → mesh_add_node → then relaunch as `adhdev mcp --repo-mesh <returned mesh_id>`. '
+        + 'Returns mesh_id (and node_id when add_current is used); use mesh_id for the follow-up mesh_add_node call and to launch mesh mode.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            name: { type: 'string', description: 'Human-readable mesh name (e.g. "adhdev-main"). Trimmed, max 100 chars.' },
+            repo_remote_url: { type: 'string', description: 'Git remote URL of the repo (e.g. git@github.com:user/repo.git). The repo identity is normalized from this. Provide this OR repo_identity.' },
+            repo_identity: { type: 'string', description: 'Explicit normalized repo identity (e.g. github.com/user/repo). Provide this OR repo_remote_url. Wins over repo_remote_url when both are given.' },
+            default_branch: { type: 'string', description: 'Default branch for the repo (e.g. "main"). Optional; used as the merge/convergence target.' },
+            add_current: { type: 'boolean', description: 'Also register a node in this same call (parity with CLI --add-current). Uses `workspace` if provided, otherwise the daemon\'s current working directory.' },
+            workspace: { type: 'string', description: 'Absolute workspace path to register when add_current:true. Ignored unless add_current is true. Defaults to the daemon\'s cwd.' },
+        },
+        required: ['name'],
+    },
+};
+
+export const MESH_ADD_NODE_TOOL = {
+    name: 'mesh_add_node',
+    description: 'Register a workspace as a node in an EXISTING mesh — the second bootstrap step after mesh_create (or to add more nodes later). '
+        + 'Mirrors `adhdev mesh add-node <mesh_id>` with --workspace / --read-only / --provider-priority. A node is a repo checkout on a daemon that the coordinator can launch agents on and delegate tasks to. '
+        + 'mesh_id is REQUIRED in standard mode (pass the id returned by mesh_create); in mesh mode it defaults to the active mesh. workspace is the absolute path to the repo checkout ON THE DAEMON that owns it — the local base node is added by the daemon that created the mesh. '
+        + 'NOTE: this registers an EXISTING directory as a node (including marking one as a worktree via is_worktree). To CREATE a fresh git worktree + branch for isolated parallel work, use mesh_clone_node instead — that runs the actual `git worktree add`. '
+        + 'Returns node_id + workspace so you can immediately target the node with mesh_launch_session / mesh_send_task / mesh_enqueue_task.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            mesh_id: { type: 'string', description: 'Target mesh id (from mesh_create / mesh_status). Required in standard mode; defaults to the active mesh in mesh mode.' },
+            workspace: { type: 'string', description: 'Absolute path to the repo checkout on the owning daemon (e.g. /Users/me/work/repo). Must be unique within the mesh.' },
+            read_only: { type: 'boolean', description: 'Mark the node read-only (no launches/mutations targeted here). Parity with CLI --read-only.' },
+            provider_priority: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Ordered provider types this node prefers when mesh_launch_session omits an explicit type (e.g. ["claude-cli","codex"]). Parity with CLI --provider-priority. A comma-separated string is also accepted.',
+            },
+            is_worktree: { type: 'boolean', description: 'Mark this workspace as an existing local git worktree (parity with CLI --worktree). This only tags an already-present worktree dir; it does NOT create one — use mesh_clone_node to create a worktree+branch.' },
+        },
+        required: ['workspace'],
+    },
+};
+
 export const MESH_CLONE_NODE_TOOL = {
     name: 'mesh_clone_node',
     description: 'Create a new worktree-based node from an existing node for isolated parallel work. '
@@ -934,6 +980,8 @@ export const ALL_MESH_TOOLS = [
     MESH_APPROVE_TOOL,
     MESH_ANSWER_QUESTION_TOOL,
     MESH_LIST_PENDING_APPROVALS_TOOL,
+    MESH_CREATE_TOOL,
+    MESH_ADD_NODE_TOOL,
     MESH_CLONE_NODE_TOOL,
     MESH_REMOVE_NODE_TOOL,
     MESH_REFINE_NODE_TOOL,

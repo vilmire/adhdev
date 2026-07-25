@@ -39,6 +39,8 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_approve',
     'mesh_answer_question',
     'mesh_list_pending_approvals',
+    'mesh_create',
+    'mesh_add_node',
     'mesh_clone_node',
     'mesh_remove_node',
     'mesh_refine_node',

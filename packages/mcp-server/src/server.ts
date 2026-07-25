@@ -36,10 +36,12 @@ import { LAUNCH_SESSION_TOOL, launchSession } from './tools/launch-session.js';
 import { STOP_SESSION_TOOL, stopSession } from './tools/stop-session.js';
 import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
 import {
-  ALL_MESH_TOOLS, meshStatus, meshListNodes, meshSendTask, meshReadChat,
+  ALL_MESH_TOOLS, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL,
+  meshStatus, meshListNodes, meshSendTask, meshReadChat,
   meshEnqueueTask, meshViewQueue, meshQueueCancel, meshQueueRequeue,
   meshReadDebug, meshReadTerminal, meshSendKeys,
   meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon, meshCheckpoint, meshApprove, meshAnswerQuestion, meshListPendingApprovals,
+  meshCreate, meshAddNode,
   meshCloneNode, meshRemoveNode, meshRefineNode,
   meshRefineConfig, meshInit, meshReinit, meshRefinePlan, meshRefineBatch,
   meshChangeImpactConfig,
@@ -220,6 +222,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_approve': text = await meshApprove(meshCtx, a as any); break;
           case 'mesh_answer_question': text = await meshAnswerQuestion(meshCtx, a as any); break;
           case 'mesh_list_pending_approvals': text = await meshListPendingApprovals(meshCtx, a as any); break;
+          case 'mesh_create': text = await meshCreate(meshCtx.transport, a as any); break;
+          case 'mesh_add_node': text = await meshAddNode(meshCtx.transport, a as any, meshCtx.mesh.id); break;
           case 'mesh_clone_node': text = await meshCloneNode(meshCtx, a as any); break;
           case 'mesh_remove_node': text = await meshRemoveNode(meshCtx, a as any); break;
           case 'mesh_refine_node': text = await meshRefineNode(meshCtx, a as any); break;
@@ -296,6 +300,11 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     GIT_DIFF_TOOL,
     GIT_CHECKPOINT_TOOL,
     GIT_PUSH_TOOL,
+    // Mesh bootstrap: create a mesh + register its first node from an MCP-only agent.
+    // Exposed in standard mode precisely because this is the no-mesh-yet context —
+    // mesh mode refuses to boot without an existing meshId (see the mesh-mode block above).
+    MESH_CREATE_TOOL,
+    MESH_ADD_NODE_TOOL,
     ...(isLocal ? [SCREENSHOT_TOOL] : []),
   ];
 
@@ -387,6 +396,14 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
         }
         case 'check_pending': {
           const text = await checkPending(transport, { format: a.format });
+          return { content: [{ type: 'text', text }] };
+        }
+        case 'mesh_create': {
+          const text = await meshCreate(transport, a as any);
+          return { content: [{ type: 'text', text }] };
+        }
+        case 'mesh_add_node': {
+          const text = await meshAddNode(transport, a as any);
           return { content: [{ type: 'text', text }] };
         }
         default:
