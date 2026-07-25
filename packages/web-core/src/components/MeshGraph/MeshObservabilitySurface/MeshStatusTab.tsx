@@ -80,7 +80,7 @@ function MeshNodeSchedulingBadges({ scheduling }: { scheduling?: RepoMeshNodeSch
     )
 }
 
-function MeshNodeRuntimeRow({ node }: { node: RepoMeshNodeStatus }) {
+function MeshNodeRuntimeRow({ node, mainAnchorCommit }: { node: RepoMeshNodeStatus; mainAnchorCommit?: string }) {
     const meshTheme = useContext(MeshGraphThemeContext)
     const sessionCount = (node.activeSessionDetails?.length ?? node.activeSessions?.length ?? 0)
     const head = shortCommit(node.git?.headCommit)
@@ -104,6 +104,11 @@ function MeshNodeRuntimeRow({ node }: { node: RepoMeshNodeStatus }) {
     const buildChipLabel = factsBuild?.commitShort
         ? `build ${factsBuild.version || daemonBuildVersion || '?'}@${factsBuild.commitShort}`
         : daemonBuildVersion ? `build ${daemonBuildVersion}` : undefined
+    // Global deploy-lag anchor: the running daemon's build commit vs origin/main
+    // (previewFreshness.currentMainCommit). Complements the node-LOCAL
+    // staleDaemonBuild marker (build vs this workspace HEAD) — a daemon can be
+    // current for its workspace yet behind the deployed main line.
+    const deployLag = !!(factsBuild?.commit && mainAnchorCommit && factsBuild.commit !== mainAnchorCommit)
     return (
         <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
             <div className="flex flex-wrap items-center gap-2">
@@ -119,7 +124,8 @@ function MeshNodeRuntimeRow({ node }: { node: RepoMeshNodeStatus }) {
                 {sessionCount > 0 && <Badge label={`${sessionCount} session${sessionCount === 1 ? '' : 's'}`} tone="default" />}
                 {node.autoFastForwardEligible && <Badge label="fast-forward ready" tone="info" title="Clean, behind upstream — safe for fast-forward" />}
                 {!!staleBuild && <Badge label="stale build" tone="warn" title="Live daemon was built behind workspace HEAD — merged fixes may not be live" />}
-                {buildChipLabel && <Badge label={buildChipLabel} tone={staleBuild ? 'warn' : 'default'} title="Daemon build (version@commit) reported by this node — the running daemon's actual code identity" />}
+                {buildChipLabel && <Badge label={buildChipLabel} tone={staleBuild || deployLag ? 'warn' : 'default'} title="Daemon build (version@commit) reported by this node — the running daemon's actual code identity" />}
+                {deployLag && <Badge label={`deploy-lag vs main@${shortCommit(mainAnchorCommit)}`} tone="warn" title="Running daemon build commit differs from origin/main — deploy + restart pending for this node" />}
                 <MeshNodeSchedulingBadges scheduling={node.scheduling} />
             </div>
             {providerVersionEntries.length > 0 && (
@@ -211,7 +217,7 @@ export function MeshStatusTab({ canonicalStatus }: { canonicalStatus: RepoMeshSt
                         {t('mesh.status.noNodesReporting')}
                     </div>
                 ) : (
-                    canonicalStatus.nodes.map(node => <MeshNodeRuntimeRow key={node.nodeId} node={node} />)
+                    canonicalStatus.nodes.map(node => <MeshNodeRuntimeRow key={node.nodeId} node={node} mainAnchorCommit={typeof canonicalStatus.previewFreshness?.currentMainCommit === 'string' ? canonicalStatus.previewFreshness.currentMainCommit : undefined} />)
                 )}
             </div>
         </div>

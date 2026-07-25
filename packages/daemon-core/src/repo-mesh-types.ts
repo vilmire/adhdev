@@ -1311,6 +1311,14 @@ export interface RepoMeshStatus {
      */
     missions?: (MeshMissionSummary | MeshMissionSlimSummary)[];
     /**
+     * Preview-deploy freshness rollup (deploy-lag visibility): stamped by the
+     * dashboard mesh_status when the repo has a preview pipeline. Shape is
+     * daemon-defined (mesh/preview-freshness.ts) — `currentMainCommit` is the
+     * global deploy-lag anchor the dashboard compares nodeFacts.daemonBuild
+     * against. Omitted for repos without the pipeline and by older daemons.
+     */
+    previewFreshness?: Record<string, unknown>;
+    /**
      * MAGI cross-verification activity, reconstructed from the mesh ledger
      * (magi_dispatched / magi_synthesis entries) and folded in so the dashboard's
      * MAGI surface can read synthesis output — needs_verification counts, the

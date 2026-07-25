@@ -329,6 +329,7 @@ export function recordInlineMeshDirectGitTruth(
     reporterProviderVersions: Record<string, string> | null;
     reporterDaemonBuildVersion: string | null;
     reportedMemberState: MeshReportedMemberState | null;
+    nodeFacts: import('@adhdev/mesh-shared').MeshNodeFacts | null;
 } {
     if (!node || typeof node !== 'object' || Array.isArray(node)) {
         return {
@@ -338,6 +339,7 @@ export function recordInlineMeshDirectGitTruth(
             reporterProviderVersions: null,
             reporterDaemonBuildVersion: null,
             reportedMemberState: null,
+            nodeFacts: null,
         };
     }
     const checkedAt = readNumberValue(git.lastCheckedAt) ?? Date.now();
@@ -455,6 +457,9 @@ export function recordInlineMeshDirectGitTruth(
         reporterProviderVersions,
         reporterDaemonBuildVersion,
         reportedMemberState: (!isLocalSource ? (node.reportedMemberState ?? null) : null) as MeshReportedMemberState | null,
+        // Bundle rides to persistence so the facts (incl. build COMMIT — the
+        // deploy-lag anchor) survive a config reload / coordinator restart.
+        nodeFacts: (node.nodeFacts ?? null) as import('@adhdev/mesh-shared').MeshNodeFacts | null,
     };
 }
 
@@ -570,6 +575,7 @@ export function persistNodeReporterPlatform(
         reporterProviderVersions?: Record<string, string> | null;
         reporterDaemonBuildVersion?: string | null;
         reportedMemberState?: MeshReportedMemberState | null;
+        nodeFacts?: import('@adhdev/mesh-shared').MeshNodeFacts | null;
     },
 ): void {
     if (meshSource !== 'local_config') return;
@@ -585,13 +591,15 @@ export function persistNodeReporterPlatform(
     // per-machine runtime facts only (versions + build) — slots are coordinator-owned
     // config, not reported (REMOTE-NODE-SLOTS-COORDINATOR-LOCAL fix).
     const reportedMemberState = reporter.reportedMemberState ?? undefined;
+    const nodeFacts = reporter.nodeFacts ?? undefined;
     if (
         !reportedPlatform &&
         !reportedArch &&
         !reportedMachineNickname &&
         !reportedProviderVersions &&
         !reportedDaemonBuildVersion &&
-        !reportedMemberState
+        !reportedMemberState &&
+        !nodeFacts
     ) {
         return;
     }
@@ -603,6 +611,7 @@ export function persistNodeReporterPlatform(
             reportedProviderVersions,
             reportedDaemonBuildVersion,
             reportedMemberState,
+            nodeFacts,
         }))
         .catch(() => { /* best-effort self-heal; never block status assembly */ });
 }

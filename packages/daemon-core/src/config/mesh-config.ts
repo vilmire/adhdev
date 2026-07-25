@@ -651,6 +651,8 @@ export function updateNode(
          *  Slots are NOT carried — they are coordinator-owned config
          *  (REMOTE-NODE-SLOTS-COORDINATOR-LOCAL fix). */
         reportedMemberState?: MeshReportedMemberState;
+        /** Versioned runtime-facts bundle — whole-object replace, opaque. */
+        nodeFacts?: import('@adhdev/mesh-shared').MeshNodeFacts;
     },
 ): LocalMeshNodeEntry | undefined {
     const config = loadMeshConfig();
@@ -675,6 +677,11 @@ export function updateNode(
         // report so a stale mirror never sticks — same policy as the flat reported*
         // fields). normalizeReportedMemberState upstream guarantees a clean shape.
         node.reportedMemberState = opts.reportedMemberState;
+    }
+    if (opts.nodeFacts) {
+        // Versioned runtime-facts bundle — whole-object replace, OPAQUE (unknown
+        // future fields persist untouched; deploy-lag design §a).
+        node.nodeFacts = opts.nodeFacts;
     }
     if (opts.policy) node.policy = { ...node.policy, ...opts.policy };
     if (Object.prototype.hasOwnProperty.call(opts, 'capabilities')) {
