@@ -677,6 +677,20 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 ...(capabilities && capabilities.length ? { capabilities } : {}),
             });
             if (!node) return { success: false, error: 'Mesh not found' };
+            // MESH-MEMBERSHIP-INLINE-CACHE-SYNC: addNode() above only wrote the new
+            // node to the file-backed meshes.json. getMeshForCommand's inline-cache-
+            // preferred read (the default for mesh_status/mesh_list_nodes/get_mesh)
+            // resolves this SAME meshId from `inlineMeshCache` whenever a prior
+            // command warmed it (e.g. a cloud coordinator launch with inlineMesh —
+            // see mesh-coordinator-launch.ts). Without pushing the new node into
+            // that cache too, the live view keeps serving the pre-add snapshot until
+            // the daemon restarts and the cache is re-emptied. Only touch the cache
+            // when it already holds this mesh (nothing to fix for a pure local-config
+            // mesh that no caller has ever warmed).
+            const cachedMesh = ctx.getCachedInlineMesh(meshId);
+            if (cachedMesh) {
+                ctx.updateInlineMeshNode(meshId, cachedMesh, node);
+            }
             // mesh_status hands back a coordinator-memory aggregate
             // snapshot keyed on (meshId, queueRevision). Adding a
             // node touches neither, so without an explicit cache
@@ -1036,6 +1050,19 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 // the response is accurate.
                 if (!removed && !node) removed = true;
                 if (removed) ctx.invalidateAggregateMeshStatus(meshId);
+                // MESH-MEMBERSHIP-INLINE-CACHE-SYNC: mirror-image of the inline
+                // branch above. This mesh resolved from local_config (nothing had
+                // warmed inlineMeshCache for it YET at getMeshForCommand time), but
+                // another command (e.g. a cloud coordinator launch with inlineMesh)
+                // may have already warmed the cache for this same meshId from an
+                // earlier read. Splice the node out of the cached copy too, and
+                // tombstone it, so a dashboard's stale inlineMesh echo cannot merge
+                // the removed node back in (see removeInlineMeshNode's tombstone
+                // comment).
+                if (removed) {
+                    const cachedMesh = ctx.getCachedInlineMesh(meshId);
+                    if (cachedMesh) ctx.removeInlineMeshNode(meshId, cachedMesh, nodeId);
+                }
             }
 
             // Record in task ledger

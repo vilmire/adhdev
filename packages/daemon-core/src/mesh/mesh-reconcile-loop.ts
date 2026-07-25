@@ -1583,6 +1583,40 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         }
     }
 
+    // ── PHASE 0.5: merge file-config membership into the router's inline cache ─
+    // MESH-MEMBERSHIP-INLINE-CACHE-SYNC: getMeshForCommand's inline-cache-preferred
+    // read (mesh_status / mesh_list_nodes / get_mesh) resolves a meshId from
+    // router.inlineMeshCache whenever ANYTHING has warmed it (e.g. a cloud
+    // coordinator launch with inlineMesh — see mesh-coordinator-launch.ts). Once
+    // warmed, that cache — not meshes.json — is what every live read serves.
+    // add_mesh_node/remove_mesh_node now push their own writes into the cache
+    // too, but a change made by ANOTHER daemon (or a direct meshes.json edit)
+    // reaches only this daemon's file config, never its in-memory cache. This
+    // loop already re-reads listMeshes() every tick for its own queue work, so
+    // reuse that read to fold the current file-config membership into the cache
+    // via the same reconcileInlineMeshCache path getMeshForCommand itself uses
+    // (getCachedInlineMesh(meshId, incoming) merges — it does not overwrite —
+    // preferring cache-only nodes when the cache is newer, e.g. a just-cloned
+    // worktree not yet flushed to disk).
+    //
+    // Deliberately gated on `router.getCachedInlineMesh(mesh.id)` (no second arg)
+    // returning a hit FIRST: calling the merging overload unconditionally would
+    // warm the cache for every local-config mesh on every tick, flipping meshes
+    // that have NEVER been inline-cached from always-fresh 'local_config' reads
+    // to a resolution sourced from a snapshot that's only as fresh as the last
+    // 4s tick. Only merge into a cache entry that already exists.
+    if (components.router) {
+        for (const mesh of listMeshes()) {
+            try {
+                if (components.router.getCachedInlineMesh(mesh.id)) {
+                    components.router.getCachedInlineMesh(mesh.id, mesh);
+                }
+            } catch (e: any) {
+                LOG.warn('MeshReconcile', `Inline-cache membership merge failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
+        }
+    }
+
     // ── PHASE 1: pull remote node queues for every mesh this daemon hosts ──────
     // Cloud-only (dispatchMeshCommand present). Runs whether or not a live CLI
     // coordinator exists — this is what lets an MCP/LLM coordinator ever see a
