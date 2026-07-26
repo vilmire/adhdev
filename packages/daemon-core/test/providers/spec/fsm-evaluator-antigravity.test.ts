@@ -199,3 +199,119 @@ describe('antigravity-cli v4 FSM', () => {
         expect(buttons[0].key).toBe('1\r');
     });
 });
+
+// ── BUSY-IDLE-BOUNDED-FALLBACK: repaint-wedged stable clock (AGY) ────────────
+// AGY-SPEC-BUSY-WEDGE RCA (2026-07-26), same family as the codex-cli fix: after
+// a completed turn a benign repaint inside the cursor_above:4 window keeps
+// resetting the stable clock faster than 1500ms, so the strict all(4) never
+// passes and the session wedges in busy. The exact ticker string is not yet
+// captured, so NO ignore_lines is added; instead busy→idle gained a bounded
+// fallback arm: same modal/esc-to-cancel vetoes + `? for shortcuts` required +
+// live braille activity-marker veto (idle→busy regex reused) + elapsed 60000.
+// These tests pin it with a VIRTUAL clock: region key 4 (the strict arm's
+// stable window) is marked changed 500ms ago, so the strict arm can never
+// pass — exactly the live wedge condition.
+
+// Completed turn with shortcuts footer but `esc to cancel` STILL visible and
+// no braille marker — isolates the esc-to-cancel veto.
+const escCancelDoneScreen = makeScreen(
+    ['  Refactoring complete!', '  Modified: Button.tsx'],
+    '  esc to cancel  ·  ? for shortcuts'
+);
+
+// Completed turn with NO shortcuts footer — isolates the shortcuts requirement.
+const noShortcutsDoneScreen = makeScreen(
+    ['  Refactoring complete!', '  Modified: Button.tsx'],
+    '  › '
+);
+
+// Live activity marker (braille + Generating/Running/Thinking) in body with a
+// shortcuts-only footer — isolates the braille veto from the esc-to-cancel one.
+function brailleActiveScreen(glyph: string, verb: string): string {
+    return makeScreen(
+        ['  Working on your request...', '', `  ${glyph} ${verb}...`],
+        '  ? for shortcuts'
+    );
+}
+
+describe('antigravity-cli v4 FSM — busy→idle bounded fallback (repaint wedge)', () => {
+    const spec = loadSpec();
+
+    // Region key 4 = the strict arm's {stable_ms:1500, cursor_above:4} window;
+    // "changed 500ms ago" keeps the strict arm permanently blocked, so only the
+    // bounded fallback arm can ever fire in these tests.
+    const UNSTABLE: [number, number][] = [[4, 60500]];
+
+    it('strict arm still fires first on a genuinely quiet completed screen (~1.5s fast path)', () => {
+        const ev = evaluateFsm(spec, 'busy', doneScreen, { row: 39, col: 4 }, undefined, clk(2000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('does NOT fire at 59s when the repaint keeps the stable window unsettled (wedge repro)', () => {
+        const ev = evaluateFsm(
+            spec, 'busy', doneScreen, { row: 39, col: 4 }, undefined,
+            clk(59000, 0, [[4, 58500]]),
+        );
+        expect(ev.fired).toBeNull();
+    });
+
+    it('fires busy→idle at 61s on the completed screen despite the repaint wedge', () => {
+        const ev = evaluateFsm(spec, 'busy', doneScreen, { row: 39, col: 4 }, undefined, clk(61000, 0, UNSTABLE));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('veto: footer `esc to cancel` blocks the fallback at 61s', () => {
+        const ev = evaluateFsm(spec, 'busy', escCancelDoneScreen, { row: 39, col: 4 }, undefined, clk(61000, 0, UNSTABLE));
+        expect(ev.fired).toBeNull();
+    });
+
+    it('veto: a live braille Generating/Running/Thinking marker blocks the fallback at 61s', () => {
+        for (const [glyph, verb] of [['⠹', 'Generating'], ['⠿', 'Running'], ['⠋', 'Thinking']] as const) {
+            const screen = brailleActiveScreen(glyph, verb);
+            const ev = evaluateFsm(spec, 'busy', screen, { row: 39, col: 4 }, undefined, clk(61000, 0, UNSTABLE));
+            expect(ev.fired).toBeNull();
+        }
+    });
+
+    it('veto: an approval modal with shortcuts footer routes to approval at 61s, never idle', () => {
+        const ev = evaluateFsm(spec, 'busy', approvalScreen, { row: 39, col: 4 }, undefined, clk(61000, 0, UNSTABLE));
+        expect(ev.fired?.to).toBe('approval');
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('veto: a trust modal routes to trust at 61s, never idle', () => {
+        const ev = evaluateFsm(spec, 'busy', trustScreen, { row: 39, col: 4 }, undefined, clk(61000, 0, UNSTABLE));
+        expect(ev.fired?.to).toBe('trust');
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('does NOT fire at 61s without the `? for shortcuts` footer', () => {
+        const ev = evaluateFsm(spec, 'busy', noShortcutsDoneScreen, { row: 39, col: 4 }, undefined, clk(61000, 0, UNSTABLE));
+        expect(ev.fired).toBeNull();
+    });
+
+    it('the fallback vetoes reuse the shipping regexes (no drift) and no transcript signals', () => {
+        const busyToIdle = spec.transitions.find(t => t.label === 'busy→idle')!;
+        const arms = (busyToIdle.when as any).any as any[];
+        expect(arms).toHaveLength(2);
+        const strict = arms[0].all as any[];
+        const fallback = arms[1].all as any[];
+        // Modal veto identical to the strict arm / →approval pattern.
+        const modalOf = (all: any[]) => all.find(c => c.not?.section === 'modal')?.not?.matches;
+        expect(modalOf(fallback)).toBe(modalOf(strict));
+        expect(modalOf(fallback)).toBe((spec.transitions.find(t => t.label === '→approval')!.when as any).matches);
+        // Braille activity veto identical to the idle→busy body braille regex.
+        const idleToBusyArms = (spec.transitions.find(t => t.label === 'idle→busy')!.when as any).any as any[];
+        const idleBusyBraille = idleToBusyArms.find(c => c.section === 'body')?.matches;
+        const fallbackBraille = fallback.find(c => c.not?.section === 'body')?.not?.matches;
+        expect(fallbackBraille).toBe(idleBusyBraille);
+        // esc-to-cancel veto + shortcuts requirement present in both arms.
+        for (const all of [strict, fallback]) {
+            expect(all.some(c => c.not?.section === 'footer' && c.not.matches === 'esc to cancel')).toBe(true);
+            expect(all.some(c => c.section === 'footer' && c.matches === '\\? for shortcuts')).toBe(true);
+        }
+        // The fallback must not consult transcript signals.
+        expect(JSON.stringify(busyToIdle.when)).not.toContain('final_assistant_present');
+        expect(JSON.stringify(busyToIdle.when)).not.toContain('signal');
+    });
+});
