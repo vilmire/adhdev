@@ -1873,6 +1873,24 @@ export function getNodeLaunchReadiness(node: LocalMeshNodeEntry): Record<string,
     };
 }
 
+// MESH_LAUNCH_SESSION SEMANTICS (pinned, rc.15 orchestration RCA Fix B): mesh_launch_session is
+// an EXPLICIT, caller-directed spawn — the caller is asking for a NEW session on this node right
+// now, force or not. By default this block does NOT refuse a 'running' worktreeBootstrap status;
+// it only fail-closes on a 'failed' bootstrap, or (opt-in via mesh policy
+// requireBootstrapBeforeLaunch) any non-'ready' status. This is DELIBERATELY more permissive than
+// the two automatic paths that share the same worktreeBootstrap signal:
+//   - auto-launch candidacy (mesh-queue-assignment.isLaunchableNode → shouldDeferDispatchForBootstrap)
+//     now excludes a 'running' node outright, so the background queue drain never spawns an
+//     ORPHAN session competing with the bootstrap's own session-under-construction.
+//   - explicit mesh_send_task dispatch to a node with 'running' bootstrap (med-family/cli-agent.ts
+//     agent_command) defers UNLESS the caller pinned a specific target session that is
+//     independently re-confirmed idle/ready right now (narrow, session-scoped override — never
+//     applies to a brand-new spawn, since there is no existing session to confirm).
+// mesh_launch_session has no such override to reason about because it never targets an existing
+// session in the first place — every call is a fresh spawn, so the caller/coordinator remains
+// responsible for not launching redundantly onto a node mid-bootstrap. Do not add an implicit
+// 'running' refusal here without also updating MESH_LAUNCH_SESSION_TOOL's description — a change
+// here is a documented contract change, not just an internal tweak.
 export function getWorktreeBootstrapLaunchBlock(node: LocalMeshNodeEntry, meshPolicy?: unknown): Record<string, unknown> | undefined {
     if (!(node as any).isLocalWorktree) return undefined;
     const bootstrap = (node as any).worktreeBootstrap;

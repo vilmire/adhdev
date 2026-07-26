@@ -505,6 +505,50 @@ function resolveActiveDirectDispatchTaskId(meshId: string, sessionId: string): s
     }
 }
 
+// ---------------------------------------------------------------------------
+// CAUSAL-COMPLETION-GATE (Fix A, rc.15 orchestration RCA): auto-launch sessions can emit a
+// spurious agent:generating_completed before the task was ever delivered to / consumed by the
+// session — a freshly spawned worker's boot/idle-prompt output can be misread by the provider's
+// own completion detector as a finished turn (totalMessages=0: the worker never actually
+// processed the task). The provider's weak/false-idle self-report is not guaranteed to catch a
+// pure boot artifact, so this is an INDEPENDENT, coordinator-side check scoped to the exact race:
+// a task still 'pending' whose in-window autoLaunch record names THIS session. For that narrow
+// case we require causal evidence — the delivery was consumed (taskDeliveryConsumed) or a
+// task_dispatched ledger entry proves the turn actually started — before letting the completion
+// through. An already-claimed/dispatched task (the overwhelming majority of completions) never
+// matches (its status is no longer 'pending'), so this never broadens into general suppression.
+// ---------------------------------------------------------------------------
+
+// The in-window, not-yet-claimed queue task (if any) whose autoLaunch record names this exact
+// session. Bounded to AUTO_LAUNCH_AWAIT_CLAIM_MS — the same window the claim-churn/respawn guards
+// use — so a task whose autoLaunch attempt is long expired (and has since moved on to backoff /
+// direct-dispatch fallback, or a fresh auto-launch attempt) is never matched here.
+function findInWindowUnclaimedAutoLaunchTask(meshId: string, sessionId: string, nowMs: number): MeshWorkQueueEntry | undefined {
+    return getQueue(meshId, { status: ['pending'] }).find(task => {
+        const al = task.autoLaunch;
+        if (!al || al.status !== 'completed' || !al.sessionId) return false;
+        if (!sessionIdsEquivalent(al.sessionId, sessionId)) return false;
+        const launchedAtMs = Date.parse(al.updatedAt);
+        return Number.isFinite(launchedAtMs) && nowMs - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
+    });
+}
+
+// Turn-start evidence distinct from taskDeliveryConsumed: a task_dispatched ledger entry naming
+// BOTH this taskId and this sessionId proves the coordinator itself recorded a genuine dispatch
+// of this task onto this session. A task still 'pending' (the only case this gate applies to)
+// normally has no such entry — task_dispatched is written when the claim transitions the row to
+// 'assigned' — so this is a defensive alternate signal, not the expected path.
+function hasMatchingTaskDispatchedLedgerEntry(meshId: string, taskId: string, sessionId: string): boolean {
+    const entries = readLedgerEntries(meshId, { tail: 200 });
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        if (entry.kind !== 'task_dispatched') continue;
+        if (!sessionIdsEquivalent(entry.sessionId, sessionId)) continue;
+        if (readNonEmptyString(entry.payload?.taskId) === taskId) return true;
+    }
+    return false;
+}
+
 // Coordinator-side suppression/reconcile gate for an incoming mesh event. Each clause is a
 // closed dedup/suppression concern that only inspects the event + already-resolved context and
 // either (a) returns a `suppress` result the caller forwards verbatim, (b) returns a `reconcile`
@@ -603,6 +647,24 @@ function evaluateMeshEventSuppression(
         }
     }
     if (args.event === 'agent:generating_completed' && eventSessionId) {
+        // CAUSAL-COMPLETION-GATE (Fix A): fail closed ONLY for the scoped auto-launch race —
+        // an in-window, still-'pending' task whose autoLaunch record names this exact session,
+        // with neither a consumed delivery nor a matching task_dispatched ledger entry. Every
+        // other completion (already-claimed tasks, direct dispatches, expired auto-launch
+        // windows) falls through unchanged to the existing dedup/terminal-ledger logic below.
+        const inWindowTask = findInWindowUnclaimedAutoLaunchTask(args.meshId, eventSessionId, Date.now());
+        if (inWindowTask) {
+            const causalEvidence = MeshRuntimeStore.getInstance().taskDeliveryConsumed(args.meshId, inWindowTask.id)
+                || hasMatchingTaskDispatchedLedgerEntry(args.meshId, inWindowTask.id, eventSessionId);
+            if (!causalEvidence) {
+                LOG.warn('MeshEvents', `Suppressed premature agent:generating_completed for auto-launch session ${eventSessionId} (mesh ${args.meshId}): task ${inWindowTask.id} delivery not yet consumed and no turn-start evidence — likely a boot artifact before the task was ever dispatched`);
+                traceMeshEventDrop('autolaunch_completion_before_causal_evidence', traceCtx, `taskId=${inWindowTask.id}`);
+                return {
+                    kind: 'suppress',
+                    result: { success: true, forwarded: 0, suppressed: true, autoLaunchCausalGateFailed: true, taskId: inWindowTask.id },
+                };
+            }
+        }
         const terminal = findRecentTerminalLedgerEvidence({
             meshId: args.meshId,
             sessionId: eventSessionId,
