@@ -1331,7 +1331,12 @@ function isTerminalSessionStatus(status: string): boolean {
     return ['stopped', 'failed', 'terminated', 'exited', 'closed'].includes(status);
 }
 
-function isIdleSessionState(state: any): boolean {
+// Exported (Fix B, rc.15 orchestration RCA) so the explicit mesh_send_task dispatch path
+// (med-family/cli-agent.ts) can reuse the SAME status/liveness probe to independently confirm a
+// pinned target session is genuinely ready before overriding the coarse worktreeBootstrap
+// 'running' defer for that one session. Never returns true for 'starting' / 'waiting_approval' /
+// 'generating' / any other non-idle status — those still refuse the override.
+export function isIdleSessionState(state: any): boolean {
     const status = readNonEmptyString(state?.status).toLowerCase();
     if (isTerminalSessionStatus(status)) return false;
     return status === 'idle' || state?.activeChat?.status === 'waiting_input';
@@ -1387,6 +1392,19 @@ function nodeHasActiveMeshWork(components: DaemonComponents, meshId: string, nod
 
 function isLaunchableNode(node: any): boolean {
     if (!node || node.status === 'disabled' || node.status === 'removed') return false;
+    // BOOTSTRAP-POLICY-CONSISTENCY (Fix B, rc.15 orchestration RCA): a worktree node whose
+    // bootstrap is still 'running' must be excluded from auto-launch candidacy, not merely
+    // deferred at claim time. Before this, isLaunchableNode passed a bootstrapping node through,
+    // so maybeAutoLaunchOneQueueSession could spawn a session (launch_cli) on it — an ORPHAN,
+    // since tryAssignQueueTask's own bootstrap gate (mirrors this same predicate) then defers the
+    // claim onto that freshly-spawned session anyway, leaving it stranded with nothing assigned
+    // while the node's real bootstrap-driven session comes up separately. Reusing
+    // shouldDeferDispatchForBootstrap (rather than a raw status check) keeps this in agreement
+    // with the claim gate's stale-running backstop: a 'running' stamp old enough and verified
+    // git-clean is treated as silently complete and does not block launch.
+    if (shouldDeferDispatchForBootstrap(node as { worktreeBootstrap?: { status?: string; startedAt?: string; updatedAt?: string; completedAt?: string }; workspace?: string })) {
+        return false;
+    }
     // Delegate the health gate to the shared resolver so the auto-launch gate and the
     // MAGI fan-out planner agree on exactly what "launchable health" means (online /
     // unknown / absent pass; degraded / offline / dirty / wrong_branch are blocked).

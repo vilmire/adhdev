@@ -15,6 +15,7 @@ import { getRecentActivity } from '../../config/recent-activity.js';
 import { getSavedProviderSessions } from '../../config/saved-sessions.js';
 import { listProviderHistorySessions } from '../../config/chat-history.js';
 import { buildMeshWorkerRelayStamp, readNonEmptyString } from '../../mesh/mesh-events-utils.js';
+import { isIdleSessionState } from '../../mesh/mesh-queue-assignment.js';
 import { LOG } from '../../logging/logger.js';
 import { readStringValue } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
@@ -231,8 +232,8 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
         // completion event sits in the pending queue until a read_chat reconcile drains
         // it. Stamping here makes a reused/relaunched remote session relay-safe at
         // dispatch time even when it was not launched via mesh_launch_session.
+        const dispatchSessionId = readStringValue(args?.targetSessionId, (args as any)?.sessionId, (args as any)?.instanceId);
         {
-            const dispatchSessionId = readStringValue(args?.targetSessionId, (args as any)?.sessionId, (args as any)?.instanceId);
             const dispatchMeshContext = args?.meshContext as Record<string, unknown> | undefined;
             if (dispatchSessionId && dispatchMeshContext) {
                 try {
@@ -289,18 +290,36 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
                 // by the local queue-claim gate too so remote and local dispatch agree on when to defer.
                 const { shouldDeferDispatchForBootstrap } = await import('../../mesh/worktree-bootstrap-config.js');
                 if (shouldDeferDispatchForBootstrap(nodeObj as any)) {
-                    return {
-                        success: false,
-                        recoverable: true,
-                        dispatched: false,
-                        code: 'mesh_node_bootstrap_pending',
-                        reason: 'bootstrap_still_running',
-                        nodeId: dispatchNodeId,
-                        meshId: dispatchMeshId,
-                        ...(readStringValue(meshCtx?.taskId) ? { taskId: readStringValue(meshCtx?.taskId) } : {}),
-                        error: `Node '${dispatchNodeId}' worktree bootstrap is still running; a task injected now would land in the session input buffer before the provider is ready to consume it and be silently lost. Dispatch deferred.`,
-                        nextAction: 'Wait for the worktree_bootstrap_complete event (or poll mesh_status until the node session is ready), then re-send the task with mesh_send_task. Alternatively use mesh_enqueue_task so the queue auto-assigns it once a ready session is available.',
-                    };
+                    // BOOTSTRAP-POLICY-CONSISTENCY (Fix B, rc.15 orchestration RCA): the node-level
+                    // worktreeBootstrap.status flag is COARSE — it can read stale 'running' (the
+                    // detached async persist chain lags the inline stamp) even though the explicit
+                    // mesh_send_task caller already independently confirmed, via its own live
+                    // get_status_metadata probe, that the PINNED target session is genuinely ready.
+                    // Refusing that dispatch anyway is a false block. Narrowest safe override: only
+                    // when the caller named a specific target session AND that session's live status
+                    // — re-probed here via the same isIdleSessionState liveness check the queue
+                    // assignment gate uses — is independently confirmed idle right now. A session
+                    // that is starting / generating / waiting_approval / any other non-idle status
+                    // never qualifies, so this can never mask a genuinely half-built worktree.
+                    const dispatchSessionState = dispatchSessionId
+                        ? ctx.deps.instanceManager?.getInstance?.(dispatchSessionId)?.getState?.()
+                        : undefined;
+                    const sessionConfirmedReady = !!dispatchSessionState && isIdleSessionState(dispatchSessionState);
+                    if (!sessionConfirmedReady) {
+                        return {
+                            success: false,
+                            recoverable: true,
+                            dispatched: false,
+                            code: 'mesh_node_bootstrap_pending',
+                            reason: 'bootstrap_still_running',
+                            nodeId: dispatchNodeId,
+                            meshId: dispatchMeshId,
+                            ...(readStringValue(meshCtx?.taskId) ? { taskId: readStringValue(meshCtx?.taskId) } : {}),
+                            error: `Node '${dispatchNodeId}' worktree bootstrap is still running; a task injected now would land in the session input buffer before the provider is ready to consume it and be silently lost. Dispatch deferred.`,
+                            nextAction: 'Wait for the worktree_bootstrap_complete event (or poll mesh_status until the node session is ready), then re-send the task with mesh_send_task. Alternatively use mesh_enqueue_task so the queue auto-assigns it once a ready session is available.',
+                        };
+                    }
+                    LOG.info('MeshQueue', `Overriding stale worktreeBootstrap 'running' flag for node ${dispatchNodeId}: explicit target session ${dispatchSessionId} is independently confirmed idle/ready — dispatching mesh_send_task directly.`);
                 }
             } catch { /* best-effort — if the bootstrap probe fails, fall through and dispatch */ }
         }
