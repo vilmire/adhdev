@@ -95,11 +95,31 @@ export interface FsmNotCondition {
     not: FsmCondition;
 }
 
+/**
+ * TX-FSM Stage 0 (shadow) — a daemon-signal leaf. References a NORMALIZED
+ * signal name from the SignalSnapshot envelope (never a provider name), so a
+ * spec can combine transcript evidence with PTY conditions via all/any/not:
+ *
+ *   { all: [ { matches: "…" }, { signal: "final_assistant_present" } ] }
+ *
+ * STAGE-0 SEMANTICS: evaluated for the shadow log only. The leaf NEVER gates
+ * a transition — the evaluator treats it as pass-through for the real verdict
+ * and records what it WOULD have decided (TransitionEval.shadow). A missing
+ * or unavailable signal fails open. Promotion to a real gate is Stage 1+.
+ */
+export interface FsmSignalCondition {
+    /** Normalized signal name (see SIGNAL_NAMES in signal-envelope.ts). */
+    signal: string;
+    /** Expected value; default true. */
+    equals?: boolean;
+}
+
 export type FsmCondition =
     | RegexCondition
     | ChangedCondition
     | ElapsedCondition
     | StableCondition
+    | FsmSignalCondition
     | FsmAllCondition
     | FsmAnyCondition
     | FsmNotCondition;

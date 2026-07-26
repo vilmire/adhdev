@@ -30,6 +30,7 @@ import {
     type ResolvedSection, type TraceEntry,
 } from './evaluator.js';
 import { evaluateFsm, stableRegionKey, type FsmClock, type TransitionEval, type FsmEvaluation } from './fsm-evaluator.js';
+import type { SignalSnapshot } from './signal-envelope.js';
 import {
     type CliSpecV4, type FsmState, type FsmTransition,
     initialState, stateById, statusForState, modalKindForState, outgoingTransitions,
@@ -144,6 +145,14 @@ export interface ISpecDriver {
     getFsmDebug?(): unknown;
     getFsmSnapshotHistory?(): ReadonlyArray<FsmSnapshotEntry>;
     getEventTimeline?(limit?: number): ReadonlyArray<SpecPtyEvent>;
+    /**
+     * TX-FSM Stage 0 (shadow): inject the daemon-normalized signal observation.
+     * Observation ONLY — the driver receives the envelope, never a reader; all
+     * file discovery / session pinning / parsing stays daemon-side so the FSM
+     * engine remains a generic PTY engine. The snapshot feeds the shadow
+     * verdict of `signal` conditions exclusively; it cannot gate a transition.
+     */
+    setSignalObservation?(snapshot: SignalSnapshot | null): void;
 }
 
 export interface SpecDriverOpts {
@@ -367,6 +376,15 @@ export class FsmDriver implements ISpecDriver {
      *  transition — the rich pre-transition table that lastFsmEval only keeps
      *  for the single most recent evaluation. Separate from stateHistory. */
     private fsmSnapshotHistory: FsmSnapshotEntry[] = [];
+    /** TX-FSM Stage 0 (shadow): the latest daemon-injected signal observation.
+     *  Read by evalFsmNow for the shadow verdict of `signal` conditions ONLY —
+     *  the Stage-0 pass-through in the evaluator means it can never alter
+     *  which transition fires. */
+    private signalObservation: SignalSnapshot | null = null;
+    /** Per-transition last-logged shadow divergence (`${from}→${to}` → whether
+     *  the shadow verdict currently disagrees with the real one), so the
+     *  shadow log emits on FLIP only, not every frame. */
+    private shadowDivergenceLast = new Map<string, boolean>();
 
     constructor(private readonly opts: SpecDriverOpts) {
         this.loadSpecOrThrow();
@@ -449,6 +467,17 @@ export class FsmDriver implements ISpecDriver {
      *  update, not user input. */
     updateMeta(meta: Record<string, unknown>, replace = false): void {
         this.adapter.updateMeta(meta, replace);
+    }
+
+    /**
+     * TX-FSM Stage 0 (shadow): receive the daemon-normalized signal
+     * observation. The driver stores it verbatim — it does NOT poll, parse,
+     * or read anything itself (generic-PTY-engine boundary). The observation
+     * only feeds the shadow verdict of `signal` conditions; the evaluator's
+     * Stage-0 pass-through guarantees it cannot change a transition.
+     */
+    setSignalObservation(snapshot: SignalSnapshot | null): void {
+        this.signalObservation = snapshot ?? null;
     }
 
     snapshot(): string { return this.adapter.snapshot(); }
@@ -643,7 +672,38 @@ export class FsmDriver implements ISpecDriver {
 
     private evalFsmNow(screen: string, cursor: { row: number; col: number }, now: number) {
         const prev = this.prevScreenLines.length > 0 ? this.prevScreenLines : undefined;
-        return evaluateFsm(this.spec, this.currentStateId, screen, cursor, prev, this.buildClock(now));
+        return evaluateFsm(this.spec, this.currentStateId, screen, cursor, prev, this.buildClock(now), this.signalObservation);
+    }
+
+    /**
+     * TX-FSM Stage 0 (shadow): compare each signal-guarded transition's
+     * counterfactual verdict against the real (PTY-only) one and log on FLIP.
+     * This is the "만약 적용했다면" half of the shadow log — the Stage 1-3
+     * evidence for whether signal gating would have changed any verdict, and
+     * in which direction. Read-only: runs after the evaluation is complete
+     * and never feeds back into it.
+     */
+    private logShadowDivergence(ev: FsmEvaluation): void {
+        for (const t of ev.transitions) {
+            if (!t.shadow) continue;
+            const key = `${this.currentStateId}→${t.to}`;
+            const diverges = t.shadow.fires !== t.fires;
+            if ((this.shadowDivergenceLast.get(key) ?? false) === diverges) continue;
+            this.shadowDivergenceLast.set(key, diverges);
+            if (diverges) {
+                LOG.info(
+                    'FsmDriver',
+                    `[${this.specTag()}] [shadow] ${key} (${t.label}): real fires=${t.fires}`
+                    + ` but signal-gated verdict would be fires=${t.shadow.fires}`
+                    + ` (shadowCond=${t.shadow.condResult}${t.shadow.unknown ? ', signal unknown/fail-open' : ''})`,
+                );
+            } else {
+                LOG.info(
+                    'FsmDriver',
+                    `[${this.specTag()}] [shadow] ${key} (${t.label}): shadow verdict realigned with real fires=${t.fires}`,
+                );
+            }
+        }
     }
 
     private reevaluate(forceEmit = false): void {
@@ -659,6 +719,7 @@ export class FsmDriver implements ISpecDriver {
         const ev = this.evalFsmNow(screen, cursor, now);
         this.lastFsmEval = ev;
         this.prevScreenLines = currentLines;
+        this.logShadowDivergence(ev);
 
         if (ev.fired) {
             this.commitTransition(ev.fired, now, ev);
