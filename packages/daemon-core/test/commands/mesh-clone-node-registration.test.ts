@@ -160,6 +160,136 @@ describe('clone_mesh_node registration <-> membership consistency', () => {
 })
 
 /**
+ * Regression: NODE-MEMBERSHIP-SHRINK-ON-MERGE at the router level.
+ *
+ * Reproduces the exact live-observed trigger the mesh-clone-node-registration
+ * test above does NOT cover: that test always resends the SAME (never
+ * re-stamped) inlineMesh closure variable, so its `updatedAt` never advances
+ * past the cache's and the pre-fix "preserve when cache is authoritative"
+ * branch happened to mask the bug. Live RCA (2026-07-25) showed the actual
+ * trigger is a DIFFERENT MCP client/session sending a snapshot stamped with a
+ * NEWER local clock that has never learned the clone exists — e.g. any
+ * unrelated mesh_git_status/mesh_refine_node/mesh_slots-family call from a
+ * second coordinator session. 37 node_cloned events over two days, only the 3
+ * permanent base nodes survived.
+ */
+describe('clone_mesh_node membership survives a fresher-stamped snapshot from another client', () => {
+  it('keeps a cloned worktree node registered when a later snapshot with a NEWER updatedAt omits it, but explicit removal still works', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'mesh-clone-shrink-config-'))
+    const { dir, repoRoot } = await createTempGitRepo('mesh-clone-shrink-repo-')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+
+    try {
+      process.env.ADHDEV_CONFIG_DIR = configDir
+      const { createMesh, addNode, getMesh } = await import('../../src/config/mesh-config.js')
+
+      const mesh = createMesh({ name: 'Shrink Mesh', repoIdentity: 'github.com/acme/shrink-mesh', defaultBranch: 'main' })
+      const sourceNode = addNode(mesh.id, { workspace: repoRoot, repoRoot, daemonId: 'daemon-local' })
+      expect(sourceNode?.id).toBeTruthy()
+
+      const { router } = createRouter()
+
+      const inlineMesh = {
+        id: mesh.id,
+        name: mesh.name,
+        repoIdentity: mesh.repoIdentity,
+        defaultBranch: 'main',
+        policy: { worktreeBaseDir: join(dir, 'worktrees') },
+        updatedAt: '2026-07-25T17:40:00.000Z',
+        nodes: [
+          { id: sourceNode!.id, daemonId: 'daemon-local', workspace: repoRoot, repoRoot, policy: {}, cachedStatus: { health: 'online' } },
+        ],
+      }
+      await router.execute('get_mesh', { meshId: mesh.id, inlineMesh }) as any
+
+      const clone = await router.execute('clone_mesh_node', {
+        meshId: mesh.id,
+        sourceNodeId: sourceNode!.id,
+        branch: 'feature/clone-shrink',
+        inlineMesh,
+        setupWaitMs: 14000,
+      }) as any
+      expect(clone.success).toBe(true)
+      const clonedNodeId = clone.node?.id as string
+      expect(clonedNodeId).toBeTruthy()
+
+      // (a) Fix 1: the clone must ALSO be durably persisted to meshes.json, not
+      // only the in-memory inline cache — a config-file twin with the SAME id.
+      const configMesh = getMesh(mesh.id)
+      expect(configMesh?.nodes?.some((n: any) => n.id === clonedNodeId)).toBe(true)
+
+      // (b) Fix 2: a snapshot from a DIFFERENT client, stamped with a NEWER
+      // updatedAt, that has never learned the clone exists (only knows the
+      // base node) must NOT cause the clone to vanish from membership.
+      const staleClientSnapshot = {
+        ...inlineMesh,
+        updatedAt: '2026-07-25T18:20:00.000Z',
+        nodes: [
+          { id: sourceNode!.id, daemonId: 'daemon-local', workspace: repoRoot, repoRoot, policy: {}, cachedStatus: { health: 'online' } },
+        ],
+      }
+      const afterStaleMerge = await router.execute('get_mesh', { meshId: mesh.id, inlineMesh: staleClientSnapshot }) as any
+      expect(afterStaleMerge.success).toBe(true)
+      const memberIdsAfterStaleMerge = afterStaleMerge.mesh.nodes.map((n: any) => n.id)
+      expect(memberIdsAfterStaleMerge).toContain(clonedNodeId)
+      expect(memberIdsAfterStaleMerge).toContain(sourceNode!.id)
+
+      // (c) A node the OTHER client knows about but this cache does not (union
+      // in the other direction) must still merge in normally.
+      const withNewlyDiscoveredNode = {
+        ...staleClientSnapshot,
+        updatedAt: '2026-07-25T18:25:00.000Z',
+        nodes: [
+          ...staleClientSnapshot.nodes,
+          { id: 'node_discovered_elsewhere', daemonId: 'daemon-remote', workspace: '/remote/repo', repoRoot: '/remote/repo', policy: {} },
+        ],
+      }
+      const afterUnionMerge = await router.execute('get_mesh', { meshId: mesh.id, inlineMesh: withNewlyDiscoveredNode }) as any
+      const memberIdsAfterUnionMerge = afterUnionMerge.mesh.nodes.map((n: any) => n.id)
+      expect(memberIdsAfterUnionMerge).toContain(clonedNodeId)
+      expect(memberIdsAfterUnionMerge).toContain('node_discovered_elsewhere')
+
+      // (d) Explicit remove_mesh_node must still actually remove the node —
+      // Fix 2's union-by-default merge must not block genuine, intentional
+      // removal. This is the critical must-not-regress check.
+      const removed = await router.execute('remove_mesh_node', {
+        meshId: mesh.id,
+        nodeId: clonedNodeId,
+        inlineMesh: withNewlyDiscoveredNode,
+        force: true,
+      }) as any
+      expect(removed.success).toBe(true)
+      expect(removed.removed).not.toBe(false)
+
+      // (e) After explicit removal, the node must stay gone even when a STALE
+      // snapshot that still lists it (e.g. a dashboard's cached echo) is
+      // resent — this is exactly what the tombstone mechanism guards.
+      const staleEchoAfterRemoval = {
+        ...inlineMesh,
+        updatedAt: '2026-07-25T18:30:00.000Z',
+        nodes: [
+          ...inlineMesh.nodes,
+          { id: clonedNodeId, daemonId: 'daemon-local', workspace: clone.worktreePath, repoRoot: clone.worktreePath, policy: {}, isLocalWorktree: true },
+        ],
+      }
+      const afterRemovalRead = await router.execute('get_mesh', { meshId: mesh.id, inlineMesh: staleEchoAfterRemoval }) as any
+      const memberIdsAfterRemoval = afterRemovalRead.mesh.nodes.map((n: any) => n.id)
+      expect(memberIdsAfterRemoval).not.toContain(clonedNodeId)
+
+      // (f) The durable config-file twin must also be gone (Fix 1 + explicit
+      // removal together must not leave an orphaned config-file record).
+      const configMeshAfterRemoval = getMesh(mesh.id)
+      expect(configMeshAfterRemoval?.nodes?.some((n: any) => n.id === clonedNodeId)).toBe(false)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      await cleanupTempDir(configDir)
+      await cleanupTempDir(dir)
+    }
+  })
+})
+
+/**
  * Regression: mesh_refine_node "Node '<id>' not found in mesh" for clone nodes.
  *
  * Same membership-divergence class as the clone-registration fix above, but on
@@ -216,10 +346,15 @@ describe('mesh_refine_node membership <-> inline-cache-only clone node', () => {
       const clonedNodeId = clone.node?.id as string
       expect(clonedNodeId).toBeTruthy()
 
-      // Sanity: the cloned node is NOT in config (meshes.json) — it exists only in
-      // the inline cache. This is the precondition that broke the config-first read.
+      // NODE-MEMBERSHIP-SHRINK-ON-MERGE fix: clone_mesh_node now ALSO persists a
+      // durable twin to meshes.json (best-effort, same id) so the node survives
+      // a daemon restart. This is no longer "cache-only" as it was pre-fix; the
+      // membership-resolution regression this test actually guards (refine/plan
+      // resolving via the SAME preferInline authority as clone/get_mesh, not the
+      // config-first branch) is independent of durable persistence and is
+      // covered by the plan/refine assertions below.
       const configMesh = getMesh(mesh.id)
-      expect(configMesh?.nodes?.some((n: any) => n.id === clonedNodeId)).toBe(false)
+      expect(configMesh?.nodes?.some((n: any) => n.id === clonedNodeId)).toBe(true)
 
       // It IS visible through the inline-cache read path (mesh_list_nodes parity).
       const cacheRead = await router.execute('get_mesh', { meshId: mesh.id }) as any

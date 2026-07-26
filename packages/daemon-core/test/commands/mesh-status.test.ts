@@ -1774,7 +1774,21 @@ describe('mesh_status', () => {
     }
   })
 
-  it('drops cached inline nodes that are absent from a newer live inline snapshot before direct truth gating', async () => {
+  // NODE-MEMBERSHIP-SHRINK-ON-MERGE: this test previously asserted that a
+  // cache-only node vanishes from membership the moment ANY later inline
+  // snapshot omits it (title: "drops cached inline nodes..."). That was the
+  // exact anti-pattern root-caused by mesh RCA 2026-07-25 — a client snapshot
+  // omitting a node is NOT evidence the node was intentionally removed (the
+  // client may simply not have learned about it yet), and treating it as such
+  // silently destroyed live worktree-clone membership (37 node_cloned events
+  // over two days, only 3 base nodes survived). reconcileInlineMeshCache now
+  // merges as a union: a cache-only node survives unless it carries positive
+  // removal evidence (an explicit remove_mesh_node tombstone). A node whose
+  // workspace has genuinely gone missing on disk is still correctly flagged as
+  // direct-peer-truth-UNAVAILABLE (visible via unavailableNodeIds) rather than
+  // silently dropped from the membership list — this is the actionable signal
+  // callers should key off, not quiet deletion.
+  it('keeps a cached inline node in membership (flagged unavailable, not dropped) when absent from a newer live inline snapshot', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-prune-inline-cache-')
     try {
       const { router } = createRouter()
@@ -1796,6 +1810,12 @@ describe('mesh_status', () => {
         },
       })
 
+      // requireDirectPeerTruth is a separate, pre-existing, intentional gate:
+      // a non-worktree node whose direct truth cannot be confirmed correctly
+      // fails THIS specific call (unrelated to the membership-merge fix under
+      // test here). What this test asserts is that the node's MEMBERSHIP
+      // itself is preserved (visible via unavailableNodeIds) rather than
+      // silently vanishing from the mesh's node list.
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_prune_inline_cache',
         requireDirectPeerTruth: true,
@@ -1813,15 +1833,75 @@ describe('mesh_status', () => {
         },
       }) as any
 
-      expect(result.success).toBe(true)
-      expect(result.nodes.map((node: any) => node.nodeId)).toEqual(['node_7'])
+      expect(result.success).toBe(false)
+      expect(result.code).toBe('mesh_direct_peer_truth_unavailable')
       expect(result.sourceOfTruth.directPeerTruth).toMatchObject({
         required: true,
-        satisfied: true,
+        satisfied: false,
         localConfirmedCount: 1,
         peerAttemptedCount: 0,
-        unavailableNodeIds: [],
+        unavailableNodeIds: ['node_removed'],
       })
+
+      // The membership-merge fix under test: a plain (non-gated) read must
+      // still show the cache-only node as a live member — preserved, not
+      // silently dropped — with mesh_status's own per-node evidence marking
+      // it unresolved rather than membership pretending it never existed.
+      const plainRead = await router.execute('mesh_status', {
+        meshId: 'mesh_prune_inline_cache',
+        refresh: true,
+        inlineMesh: {
+          id: 'mesh_prune_inline_cache',
+          name: 'ADHDev',
+          repoIdentity: 'github.com/vilmire/adhdev',
+          defaultBranch: 'main',
+          coordinator: { preferredNodeId: 'node_7' },
+          policy: {},
+          nodes: [
+            { id: 'node_7', daemonId: 'daemon_7', machineLabel: 'Local', workspace: repoRoot, repoRoot, policy: { providerPriority: ['hermes-cli'] }, lastSeenAt: new Date().toISOString() },
+          ],
+        },
+      }) as any
+      expect(plainRead.success).toBe(true)
+      expect(plainRead.nodes.map((node: any) => node.nodeId).sort()).toEqual(['node_7', 'node_removed'])
+
+      // Explicit removal (positive evidence) must still actually drop the node
+      // from membership — union-by-default does not block genuine removal.
+      const removed = await router.execute('remove_mesh_node', {
+        meshId: 'mesh_prune_inline_cache',
+        nodeId: 'node_removed',
+        force: true,
+        inlineMesh: {
+          id: 'mesh_prune_inline_cache',
+          name: 'ADHDev',
+          repoIdentity: 'github.com/vilmire/adhdev',
+          defaultBranch: 'main',
+          coordinator: { preferredNodeId: 'node_7' },
+          policy: {},
+          nodes: [
+            { id: 'node_7', daemonId: 'daemon_7', machineLabel: 'Local', workspace: repoRoot, repoRoot, policy: { providerPriority: ['hermes-cli'] } },
+            { id: 'node_removed', daemonId: 'daemon_removed', machineLabel: 'Removed', workspace: '/missing/removed/worktree', repoRoot: '/missing/removed/worktree', policy: { providerPriority: ['hermes-cli'] } },
+          ],
+        },
+      }) as any
+      expect(removed.success).toBe(true)
+
+      const afterRemoval = await router.execute('mesh_status', {
+        meshId: 'mesh_prune_inline_cache',
+        refresh: true,
+        inlineMesh: {
+          id: 'mesh_prune_inline_cache',
+          name: 'ADHDev',
+          repoIdentity: 'github.com/vilmire/adhdev',
+          defaultBranch: 'main',
+          coordinator: { preferredNodeId: 'node_7' },
+          policy: {},
+          nodes: [
+            { id: 'node_7', daemonId: 'daemon_7', machineLabel: 'Local', workspace: repoRoot, repoRoot, policy: { providerPriority: ['hermes-cli'] } },
+          ],
+        },
+      }) as any
+      expect(afterRemoval.nodes.map((node: any) => node.nodeId)).toEqual(['node_7'])
     } finally {
       await cleanupTempDir(dir)
     }

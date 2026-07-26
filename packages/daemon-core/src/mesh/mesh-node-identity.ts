@@ -782,7 +782,28 @@ export function sanitizeInlineMesh(inlineMesh: any): any {
     };
 }
 
-export function reconcileInlineMeshCache(cached: any, incoming: any): any {
+// NODE-MEMBERSHIP-SHRINK-ON-MERGE: reconcileInlineMeshCache used to derive
+// membership shrinkage from a client-local `updatedAt` timestamp comparison
+// (`preserveCachedMembership`). That timestamp is bumped by ANY MCP client on
+// ITS OWN possibly-stale mesh snapshot whenever it makes an unrelated
+// git-status/refine/slots-type call — it carries no information about whether
+// that client has ever learned a given node exists. When an incoming snapshot
+// happened to carry an `updatedAt` that was not older than the cache's, a node
+// that existed ONLY in the cache (e.g. a worktree just registered by
+// clone_mesh_node, not yet echoed back by every other client) was silently
+// dropped from the merged result — no removeNode() call, no ledger entry, no
+// log line. Root-caused via mesh RCA 2026-07-25: 37 node_cloned events over two
+// days, only the 3 permanent base nodes surviving in the durable registry.
+//
+// Fix: membership merge is UNION by default. A node present only in the cache
+// survives reconciliation unconditionally UNLESS its id appears in
+// `removedNodeIds` — positive evidence of an intentional removal, populated
+// only by the explicit remove_mesh_node path's tombstone set
+// (DaemonCommandRouter#tombstoneRemovedInlineMeshNode). `updatedAt` is still
+// used to decide which SIDE's fields win on a genuine field-level conflict for
+// nodes both sides agree exist, but it is never again used to decide whether a
+// node exists at all.
+export function reconcileInlineMeshCache(cached: any, incoming: any, removedNodeIds?: ReadonlySet<string>): any {
     if (!cached || typeof cached !== 'object' || Array.isArray(cached)) return incoming;
     if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return cached;
     const cachedNodes = Array.isArray(cached.nodes) ? cached.nodes : [];
@@ -791,7 +812,9 @@ export function reconcileInlineMeshCache(cached: any, incoming: any): any {
 
     const cachedUpdatedAt = Date.parse(readStringValue(cached.updatedAt, cached.updated_at) || '');
     const incomingUpdatedAt = Date.parse(readStringValue(incoming.updatedAt, incoming.updated_at) || '');
-    const preserveCachedMembership = Number.isFinite(cachedUpdatedAt)
+    // Field-precedence only (which side's fields win for a node both sides
+    // agree exists) — no longer gates whether a cache-only node survives.
+    const cacheFieldsWinOnConflict = Number.isFinite(cachedUpdatedAt)
         && (!Number.isFinite(incomingUpdatedAt) || cachedUpdatedAt > incomingUpdatedAt);
 
     const cachedById = new Map<string, any>();
@@ -804,28 +827,33 @@ export function reconcileInlineMeshCache(cached: any, incoming: any): any {
     const nodes = incomingNodes.map((incomingNode: any) => {
         const nodeId = readInlineMeshNodeId(incomingNode);
         const cachedNode = nodeId ? cachedById.get(nodeId) : undefined;
-        if (!cachedNode && preserveCachedMembership) return null;
         if (nodeId) mergedIncomingIds.add(nodeId);
         if (!cachedNode) return incomingNode;
         if (hasInlineMeshTransientNodeState(incomingNode)) {
-            return { ...cachedNode, ...incomingNode };
+            return cacheFieldsWinOnConflict ? { ...incomingNode, ...cachedNode } : { ...cachedNode, ...incomingNode };
         }
         return { ...stripInlineMeshTransientNodeState(cachedNode), ...incomingNode };
-    }).filter(Boolean);
+    });
 
-    // When the cached membership is authoritative (newer than the incoming
-    // snapshot), nodes that exist only in the cache must survive reconciliation.
-    // A freshly cloned worktree node lives only in the coordinator's cache until
-    // the next snapshot catches up; iterating incomingNodes alone would silently
-    // drop it, making the node invisible to get_mesh / membership reads even
-    // though worktree_bootstrap_complete already fired.
-    if (preserveCachedMembership) {
-        for (const cachedNode of cachedNodes) {
-            const nodeId = readInlineMeshNodeId(cachedNode);
-            if (nodeId && !mergedIncomingIds.has(nodeId)) {
-                nodes.push(cachedNode);
-            }
+    // Union: every node that exists only in the cache survives reconciliation
+    // unless it carries positive removal evidence (tombstoned by an explicit
+    // remove_mesh_node). A freshly cloned worktree node lives only in the
+    // coordinator's cache until the next snapshot catches up; dropping it here
+    // would make it invisible to get_mesh / membership reads even though
+    // worktree_bootstrap_complete already fired.
+    const droppedNodeIds: string[] = [];
+    for (const cachedNode of cachedNodes) {
+        const nodeId = readInlineMeshNodeId(cachedNode);
+        if (!nodeId || mergedIncomingIds.has(nodeId)) continue;
+        if (removedNodeIds?.has(nodeId)) {
+            droppedNodeIds.push(nodeId);
+            continue;
         }
+        nodes.push(cachedNode);
+    }
+
+    if (droppedNodeIds.length > 0) {
+        LOG.info('Mesh', `[NodeMembershipMerge] mesh=${String(cached.id || incoming.id || 'unknown')} droppedNodeIds=${JSON.stringify(droppedNodeIds)} reason=tombstoned_removal cachedCount=${cachedNodes.length} incomingCount=${incomingNodes.length}`);
     }
 
     return {

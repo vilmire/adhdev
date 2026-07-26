@@ -546,6 +546,13 @@ export interface AddNodeOptions {
      *  the daemon that owns its workspace (self/base node or a local worktree
      *  clone), so the local config is the correct source. */
     machineNickname?: string;
+    /** Caller-supplied node id (e.g. an id already minted for an inline-cache
+     *  node) so a durable config-file twin shares the SAME id as its inline
+     *  counterpart. Without this, addNode mints its own id and the two
+     *  representations of "the same node" would carry different ids, breaking
+     *  id-keyed reconciliation between the inline cache and meshes.json.
+     *  Omitted → a fresh id is minted as before (default, unchanged behavior). */
+    id?: string;
 }
 
 export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntry | undefined {
@@ -577,7 +584,7 @@ export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntr
     })();
 
     const node: LocalMeshNodeEntry = {
-        id: `node_${randomUUID().replace(/-/g, '')}`,
+        id: (typeof opts.id === 'string' && opts.id.trim()) ? opts.id.trim() : `node_${randomUUID().replace(/-/g, '')}`,
         workspace: opts.workspace.trim(),
         repoRoot: opts.repoRoot,
         daemonId: opts.daemonId,

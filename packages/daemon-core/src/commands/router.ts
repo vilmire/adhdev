@@ -456,7 +456,7 @@ export class DaemonCommandRouter {
         );
         const cached = this.inlineMeshCache.get(meshId);
         if (cached) {
-            const merged = reconcileInlineMeshCache(cached, sanitizedInlineMesh);
+            const merged = reconcileInlineMeshCache(cached, sanitizedInlineMesh, this.removedInlineMeshNodeIds.get(meshId));
             this.inlineMeshCache.set(meshId, merged);
             return merged;
         }
@@ -482,6 +482,7 @@ export class DaemonCommandRouter {
                     const merged = reconcileInlineMeshCache(
                         cached,
                         this.applyInlineMeshNodeTombstones(meshId, inlineMesh as any),
+                        this.removedInlineMeshNodeIds.get(meshId),
                     );
                     this.inlineMeshCache.set(meshId, sanitizeInlineMesh(normalizeInlineMeshNodeIdentity(merged)));
                     return { mesh: merged, inline: true, source: 'inline_cache' };

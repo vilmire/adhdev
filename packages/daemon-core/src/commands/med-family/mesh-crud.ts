@@ -1226,6 +1226,31 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                     clonedFromNodeId: sourceNodeId,
                 };
                 ctx.updateInlineMeshNode(meshId, mesh, node);
+                // NODE-MEMBERSHIP-SHRINK-ON-MERGE (durability half): the inline
+                // branch used to register the clone ONLY in the in-memory inline
+                // cache. That cache-only node had no durable twin, so a daemon
+                // restart (or, before the reconcile fix above, a stale-timestamped
+                // merge) lost it with no recovery path. Best-effort also persist to
+                // meshes.json when this meshId has a config-file twin — a pure
+                // inline mesh (cloud-originating, no local config mesh) has no such
+                // twin, so addNode returns undefined and this is a silent no-op;
+                // the node still lives on in the inline cache as before, now
+                // additionally protected by the union-merge fix.
+                try {
+                    const { addNode: addDurableNode } = await import('../../config/mesh-config.js');
+                    addDurableNode(meshId, {
+                        id: node.id,
+                        workspace: result.worktreePath,
+                        repoRoot: result.worktreePath,
+                        daemonId: sourceNode.daemonId,
+                        machineId: sourceNode.machineId ?? (sourceNode as any).machine_id,
+                        userOverrides: { ...(sourceNode.userOverrides || {}) },
+                        isLocalWorktree: true,
+                        worktreeBranch: result.branch,
+                        clonedFromNodeId: sourceNodeId,
+                        policy: clonedPolicy as any,
+                    });
+                } catch { /* no config-file twin for this mesh (pure inline/cloud mesh) — inline cache remains source of truth */ }
             } else {
                 const { addNode } = await import('../../config/mesh-config.js');
                 const clonedPolicy: Record<string, unknown> = { ...(sourceNode.policy || {}) };
