@@ -39,6 +39,20 @@ export interface DaemonUpgradeHelperPayload {
   restartArgv: string[];
   cwd?: string;
   sessionHostAppName?: string;
+  /**
+   * Restart-only mode: wait for the parent daemon to exit, then re-spawn it
+   * without running any npm install. Used by daemon_restart (mesh
+   * restart_daemon_node mode="restart") to reset daemon state (memory leaks,
+   * zombie sessions, wedged internals) with minimal downtime.
+   */
+  skipInstall?: boolean;
+  /**
+   * Opt-in hard refresh: also stop the session-host process, which destroys
+   * EVERY hosted CLI session (no idle-gate — see SessionHostServer.stop).
+   * Mirrors what Windows already does unconditionally on upgrade (conpty.node
+   * lock). Default off: POSIX leaves the host running so sessions rebind.
+   */
+  killSessionHost?: boolean;
 }
 
 export interface CurrentGlobalInstallSurface {
@@ -605,12 +619,25 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
   // host running on POSIX; on the next boot `ensureSessionHostReady()` reuses
   // the still-listening socket and `cliManager.restoreHostedSessions()` rebinds
   // the live runtimes. Windows keeps the kill unchanged.
-  if (process.platform === 'win32') {
+  // killSessionHost is an explicit opt-in hard refresh (mesh restart_daemon_node
+  // kill_session_host) that forces the same teardown on any platform.
+  if (process.platform === 'win32' || payload.killSessionHost === true) {
     await stopSessionHostProcesses(sessionHostAppName);
   } else {
     appendUpgradeLog('POSIX — session-host left running (survives upgrade; sessions rebind on next boot)');
   }
   removeDaemonPidFile();
+
+  // Restart-only mode (daemon_restart): the parent has exited and the pid file
+  // is gone — re-spawn the daemon as-is. No npm install, no prefix rotation, so
+  // there is no Windows lock hazard and downtime is just the re-spawn.
+  if (payload.skipInstall) {
+    appendUpgradeLog('Restart-only mode — package install skipped, re-spawning daemon');
+    spawnDetachedDaemonRestart(restartArgv, payload.cwd);
+    try { fs.unlinkSync(getUpgradeFailureNoticePath()); } catch { /* no previous failure notice */ }
+    return;
+  }
+
   // Scope the Windows atomic-upgrade layout to THIS daemon's instance so
   // `adhdev-preview update` rotates only the preview prefix/pointer/tools tree
   // and never touches the stable install (and vice-versa). Stable / no-override
@@ -758,6 +785,11 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
     appendUpgradeLog('Post-install staging cleanup complete');
   }
 
+  spawnDetachedDaemonRestart(restartArgv, payload.cwd);
+  try { fs.unlinkSync(getUpgradeFailureNoticePath()); } catch { /* no previous failure notice */ }
+}
+
+function spawnDetachedDaemonRestart(restartArgv: string[], cwd?: string): void {
   if (restartArgv.length > 0) {
     const env = { ...process.env };
     delete env[UPGRADE_HELPER_ENV];
@@ -766,14 +798,13 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
-      cwd: payload.cwd || process.cwd(),
+      cwd: cwd || process.cwd(),
       env,
     });
     child.unref();
   } else {
     appendUpgradeLog('No restart argv provided; upgrade completed without restart');
   }
-  try { fs.unlinkSync(getUpgradeFailureNoticePath()); } catch { /* no previous failure notice */ }
 }
 
 export async function maybeRunDaemonUpgradeHelperFromEnv(): Promise<boolean> {
