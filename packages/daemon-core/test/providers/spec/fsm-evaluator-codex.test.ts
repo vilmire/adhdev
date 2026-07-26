@@ -389,3 +389,128 @@ describe('codex-cli v4 FSM — assistant text cannot self-match spinner chrome',
         expect(ev.fired?.to).toBe('busy');
     });
 });
+
+// ── BUSY-IDLE-BOUNDED-FALLBACK: repaint-wedged stable clock ──────────────────
+// CODEX-FSM-BUSY-WEDGE RCA (2026-07-26): a completed session (final response +
+// composer `› …` returned) sat in busy for 22+ min, busy→idle firing 0 times.
+// Debug showed condResult=false with remainingMs≈1342 on the all(3) — only the
+// stable_ms leaf reports nonzero remainingMs, so a benign post-generation
+// repaint inside the cursor_above:4 window kept resetting the stable clock
+// faster than 1500ms. busy→idle is now any[ strict arm (byte-equivalent),
+// bounded fallback arm: same spinner/MCP vetoes + modal veto + elapsed 30000 ].
+// These tests pin the fallback with a VIRTUAL clock: the region map marks the
+// cursor_above:4 window (key 4) as changed 500ms ago, so the strict arm's
+// stable leaf can never pass — exactly the live wedge condition.
+
+// The real completed codex layout: final response text, the composer hint line
+// `› Summarize recent commits`, and the model footer — NO live spinner.
+const completedComposerScreen = makeScreen([
+    '',
+    '  Here is the summary of the recent commits:',
+    '',
+    '  • d23ea3f fix(codex-cli): re-anchor status_tail on the composer landmark',
+    '  • 2cc9b6e Retire 3 dead ACP providers; update gemini/qwen spawn flags',
+    '',
+    '› Summarize recent commits',
+], '  gpt-5.4 low · ~/Work/myproject');
+
+// Picker modal (e.g. /model) — must veto the fallback exactly like approval.
+const pickerScreen = makeScreenWithModal(
+    ['  Model picker opened', ''],
+    [
+        '  Select a model',
+        '  › 1. gpt-5.4',
+        '    2. gpt-5.4-mini',
+        '',
+    ]
+);
+
+describe('codex-cli v4 FSM — busy→idle bounded fallback (repaint wedge)', () => {
+    const spec = loadSpec();
+
+    // Region key 4 = the strict arm's {stable_ms:1500, cursor_above:4} window;
+    // "changed 500ms ago" keeps the strict arm permanently blocked, so only the
+    // bounded fallback arm can ever fire in these tests.
+    const UNSTABLE: [number, number][] = [[4, 30500]];
+
+    it('strict arm still fires first on a genuinely quiet completed composer screen', () => {
+        const row = completedComposerScreen.split('\n').length - 1;
+        // Stable since state entry (no region entries) — idle at ~1.5s, long
+        // before the 30s fallback: the fallback did not weaken the fast path.
+        const ev = evaluateFsm(spec, 'busy', completedComposerScreen, { row, col: 2 }, undefined, clk(2000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('does NOT fire at 29s when the repaint keeps the stable window unsettled (wedge repro)', () => {
+        const row = completedComposerScreen.split('\n').length - 1;
+        const ev = evaluateFsm(
+            spec, 'busy', completedComposerScreen, { row, col: 2 }, undefined,
+            clk(29000, 0, [[4, 28500]]),
+        );
+        expect(ev.fired).toBeNull();
+    });
+
+    it('fires busy→idle at 31s on the completed composer screen despite the repaint wedge', () => {
+        const row = completedComposerScreen.split('\n').length - 1;
+        const ev = evaluateFsm(spec, 'busy', completedComposerScreen, { row, col: 2 }, undefined, clk(31000, 0, UNSTABLE));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('veto: a live Working spinner blocks the fallback at 31s (no false idle mid-generation)', () => {
+        const liveSpinner = makeBusyScreen([
+            '  Still generating the implementation...',
+            '',
+        ], '  Working (⣿ 31s · esc to interrupt)');
+        const row = liveSpinner.split('\n').length - 1;
+        const ev = evaluateFsm(spec, 'busy', liveSpinner, { row, col: 2 }, undefined, clk(31000, 0, UNSTABLE));
+        expect(ev.fired).toBeNull();
+    });
+
+    it('veto: MCP init in body blocks the fallback at 31s', () => {
+        const row = mcpInitScreen.split('\n').length - 1;
+        const ev = evaluateFsm(spec, 'busy', mcpInitScreen, { row, col: 2 }, undefined, clk(31000, 0, UNSTABLE));
+        expect(ev.fired).toBeNull();
+    });
+
+    it('veto: an approval modal at 31s routes to approval, never idle', () => {
+        const row = approvalScreen.split('\n').length - 1;
+        const ev = evaluateFsm(spec, 'busy', approvalScreen, { row, col: 2 }, undefined, clk(31000, 0, UNSTABLE));
+        expect(ev.fired?.to).toBe('approval');
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('veto: a trust modal at 31s routes to trust, never idle', () => {
+        const row = trustScreen.split('\n').length - 1;
+        const ev = evaluateFsm(spec, 'busy', trustScreen, { row, col: 2 }, undefined, clk(31000, 0, UNSTABLE));
+        expect(ev.fired?.to).toBe('trust');
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('veto: a picker modal at 31s routes to picker, never idle', () => {
+        const row = pickerScreen.split('\n').length - 1;
+        const ev = evaluateFsm(spec, 'busy', pickerScreen, { row, col: 2 }, undefined, clk(31000, 0, UNSTABLE));
+        expect(ev.fired?.to).toBe('picker');
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('the fallback modal veto regex is synthesized from the modal transition patterns (no drift)', () => {
+        const busyToIdle = spec.transitions.find(t => t.label === 'busy→idle')!;
+        const arms = (busyToIdle.when as any).any as any[];
+        expect(arms).toHaveLength(2);
+        const fallbackModalNot = arms[1].all.find(
+            (c: any) => c.not?.section === 'modal',
+        );
+        expect(fallbackModalNot).toBeDefined();
+        for (const label of ['→approval', '→trust', '→picker']) {
+            const t = spec.transitions.find(x => x.label === label)!;
+            const pattern = (t.when as any).matches as string;
+            // Every alternative of each modal transition pattern must appear in
+            // the fallback veto, so a future modal pattern can't drift past it.
+            for (const alt of pattern.split('|')) {
+                expect(fallbackModalNot.not.matches).toContain(alt);
+            }
+        }
+        // The fallback must not consult transcript signals.
+        expect(JSON.stringify(busyToIdle.when)).not.toContain('final_assistant_present');
+    });
+});
