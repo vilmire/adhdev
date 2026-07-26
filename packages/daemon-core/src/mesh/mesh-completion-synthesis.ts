@@ -593,6 +593,32 @@ export async function pollAssignedTaskTerminalEvidence(
     components: DaemonComponents,
     mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
     row: { id: string; assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string; dispatchTimestamp?: string },
+    opts?: {
+        /**
+         * TX-FSM Stage 2 (EARLY-IDLE preamble guard): when set, the selected
+         * final assistant bubble must ALSO be at least this old at poll time.
+         *
+         * Why: the early-idle caller's continuous-idle streak proves the
+         * worker's status VERDICT stayed idle — not that the transcript did.
+         * A floor-class worker reads idle in the sliver BETWEEN an assistant
+         * preamble ("코드와 로그를 병행으로 확인하겠습니다.") and the tool call
+         * it is about to fire; at that instant the preamble IS the latest
+         * user-facing assistant bubble, is dated after dispatch, and has no
+         * trailing tool activity yet, so every structural guard above passes
+         * and a turn still in flight gets promoted to a completion (ledger
+         * 84594b15, 2026-07-26: task_completed with
+         * transcriptFinalAssistantPresent:false while the worker went on to an
+         * approval modal and did the real work minutes later). No single-read
+         * structural test can separate that preamble from a genuine final
+         * answer — only TIME can: a bubble younger than the settle window is
+         * narration, not a turn end. A genuinely finished worker's bubble
+         * simply completes one streak later (the caller resets and re-arms),
+         * so this guard DELAYS the early path by at most one window, never
+         * loses it. Fail-safe direction: veto → the caller falls through to
+         * the reclaim/grace paths.
+         */
+        minFinalAssistantAgeMs?: number;
+    },
 ): Promise<AssignedTaskTerminalEvidence | null> {
     const sessionId = readNonEmptyString(row.assignedSessionId);
     const nodeId = readNonEmptyString(row.assignedNodeId);
@@ -628,6 +654,16 @@ export async function pollAssignedTaskTerminalEvidence(
     const dispatchedAtMs = Date.parse(readNonEmptyString(row.dispatchTimestamp));
     const transcriptAtMs = Date.parse(evidence.transcriptMessageAt ?? '');
     if (!(Number.isFinite(dispatchedAtMs) && Number.isFinite(transcriptAtMs) && transcriptAtMs >= dispatchedAtMs)) {
+        return null;
+    }
+
+    // TX-FSM Stage 2 (EARLY-IDLE preamble guard): the final assistant bubble
+    // must have SETTLED — see the opts doc above. A bubble younger than the
+    // caller's settle window is treated as in-flight narration: veto (null),
+    // exactly like the trailing-tool guard, so the streak re-accumulates and a
+    // genuine turn end completes one window later.
+    if (typeof opts?.minFinalAssistantAgeMs === 'number' && opts.minFinalAssistantAgeMs > 0
+        && Date.now() - transcriptAtMs < opts.minFinalAssistantAgeMs) {
         return null;
     }
 

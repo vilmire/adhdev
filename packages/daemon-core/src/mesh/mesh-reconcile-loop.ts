@@ -1053,7 +1053,14 @@ async function recoverStrandedAssignedDispatches(
             if (since === undefined) {
                 assignedIdleFinalAssistantSince.set(idleTranscriptStreakKey, nowMs);
             } else if (nowMs - since >= ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS) {
-                const terminalEvidence = await pollAssignedTaskTerminalEvidence(components, mesh, row);
+                // TX-FSM Stage 2: the poll must additionally prove the final
+                // assistant bubble has SETTLED for the full window (preamble
+                // guard — see pollAssignedTaskTerminalEvidence). A too-fresh
+                // bubble vetoes to null → the streak resets below and a genuine
+                // turn end completes one window later.
+                const terminalEvidence = await pollAssignedTaskTerminalEvidence(components, mesh, row, {
+                    minFinalAssistantAgeMs: ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS,
+                });
                 if (terminalEvidence) {
                     assignedIdleFinalAssistantSince.delete(idleTranscriptStreakKey);
                     updateTaskStatus(meshId, row.id, terminalEvidence.outcome);

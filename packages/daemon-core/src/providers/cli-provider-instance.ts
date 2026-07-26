@@ -19,6 +19,7 @@ import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js'
 import type { MeshSendKeyItem, MeshSendKeyName } from '../cli-adapters/provider-cli-shared.js';
 import { resolveTranscriptAuthorityProfile } from './transcript-evidence.js';
 import { TranscriptSignalSource } from './transcript-signal-source.js';
+import { resolveBusyLeaseGate } from './busy-lease-gate.js';
 import type { SignalSnapshot } from './spec/signal-envelope.js';
 import { createCliAdapter } from './spec/route.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
@@ -1714,6 +1715,10 @@ export class CliProviderInstance implements ProviderInstance {
                     // the message scan.
                     finalAssistantPresent: (msgs, ts) => this.completionHasFinalAssistantMessage(msgs, ts),
                     growthQuietMs: MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS,
+                    // TX-FSM Stage 2: the lease bound follows the rollout gate's
+                    // (possibly env-overridden) value; the gate's enabled flag is
+                    // consulted per judgment, not here.
+                    leaseBoundMs: resolveBusyLeaseGate(this.type).boundMs,
                 });
             }
             const snapshot = this.transcriptSignalSource.update(
@@ -2728,6 +2733,18 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /**
+     * TX-FSM Stage 2: is the bounded busy lease enabled for THIS provider?
+     * This is the canary rollout gate (busy-lease-gate.ts) — a per-provider
+     * feature switch, NOT a classification (transcript class/timing still come
+     * from resolveTranscriptAuthorityProfile only). Resolved per call so an
+     * env-driven rollout change takes effect without rebuilding the instance;
+     * any resolver error fails closed (lease disabled → pre-Stage-2 behavior).
+     */
+    private busyLeaseGateEnabled(): boolean {
+        try { return resolveBusyLeaseGate(this.type).enabled; } catch { return false; }
+    }
+
+    /**
      * KIMI-MESH-COMPLETION-EMIT (axis 2). Last-chance completion emit for a mesh
      * DELEGATED worker whose PTY has already exited (e.g. killed by a false stall)
      * and is about to be auto-cleaned (cli-manager.startCliExitMonitor →
@@ -3306,6 +3323,40 @@ export class CliProviderInstance implements ProviderInstance {
                     }
                     this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
                     return;
+                }
+                // TX-FSM Stage 2 (bounded busy lease): the transcript is NOT
+                // growing right now (the branch above would have held), but a
+                // sample within the lease bound proved it live — the turn is in
+                // a PTY-quiet valley, not finished. For lease-gated providers
+                // (canary rollout, resolveBusyLeaseGate), keep HOLDING the
+                // missing_final_assistant emit until the lease EXPIRES; on
+                // expiry this branch stops engaging and the unchanged floor/cap
+                // logic below resumes — the lease extends busy, it can never
+                // create an unbounded one (the agy busy-wedge failure mode).
+                // Fail-open identically to the growth-hold: no usable snapshot,
+                // no signal source, a never-issued lease, or a non-gated
+                // provider all fall through untouched.
+                if (growthSnapshot?.available === true && this.busyLeaseGateEnabled()) {
+                    const lease = this.transcriptSignalSource?.busyLease() ?? null;
+                    if (lease?.active === true) {
+                        if (pending.loggedBlockReason !== 'busy_lease_active') {
+                            LOG.info('CLI', `[${this.type}] holding pending completed (busy_lease_active: lastLiveAt=${lease.lastLiveAt} expiresIn=${lease.remainingMs}ms) — transcript live within the lease bound, screen-idle verdict not trusted`);
+                            if (this.isMeshWorkerSession()) {
+                                traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `busy_lease_active lastLiveAt=${lease.lastLiveAt} expiresIn=${lease.remainingMs}ms`);
+                            }
+                            if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
+                                blockReason: 'busy_lease_active',
+                                latestVisibleStatus,
+                                leaseLastLiveAt: lease.lastLiveAt,
+                                leaseExpiresAt: lease.expiresAt,
+                                leaseRemainingMs: lease.remainingMs,
+                                waitedMs,
+                            });
+                            pending.loggedBlockReason = 'busy_lease_active';
+                        }
+                        this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
+                        return;
+                    }
                 }
             }
             if (!isTranscriptEvidenceGate && (block.terminal || waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS)) {

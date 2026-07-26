@@ -34,6 +34,7 @@
 
 import { LOG } from '../logging/logger.js';
 import type { TranscriptAuthorityProfile } from './transcript-evidence.js';
+import { BUSY_LEASE_BOUND_MS } from './busy-lease-gate.js';
 import {
     SIGNAL_SNAPSHOT_KIND,
     unavailableSignalSnapshot,
@@ -69,11 +70,38 @@ export interface TranscriptSignalSourceOpts {
      *  completion pipeline's MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS so
      *  the shadow signal is comparable to the existing growth-hold judgment. */
     growthQuietMs: number;
+    /** TX-FSM Stage 2: bound (ms) for the busy lease this source tracks.
+     *  Defaults to BUSY_LEASE_BOUND_MS. */
+    leaseBoundMs?: number;
+}
+
+/** TX-FSM Stage 2 — the bounded busy lease state derived from the sample
+ *  stream. The lease is ACTIVE while the most recent liveness-proving sample
+ *  (in_turn_progress) is younger than the bound. It is deliberately kept OFF
+ *  the SignalSnapshot envelope (the Stage-0 signal vocabulary is frozen and
+ *  pinned): consumers read it via busyLease() on the source, which is pure
+ *  memory — zero added I/O, and absent (never-issued) for any class the
+ *  envelope already fails open for. */
+export interface BusyLeaseState {
+    /** True while now < lastLiveAt + bound. False after expiry — the caller
+     *  MUST then fall back to its normal (pre-lease) judgment. */
+    active: boolean;
+    /** Wall-clock of the last liveness-proving sample; null when no live
+     *  sample has ever been observed (lease never issued). */
+    lastLiveAt: number | null;
+    /** lastLiveAt + bound; null when never issued. */
+    expiresAt: number | null;
+    /** max(0, expiresAt - now); 0 when expired or never issued. */
+    remainingMs: number;
 }
 
 export class TranscriptSignalSource {
     /** msgCount seen at the previous update — drives in_turn_progress. */
     private prevMsgCount = -1;
+    /** TX-FSM Stage 2: wall-clock of the most recent sample that proved the
+     *  transcript live (in_turn_progress === true — a count advance OR mtime
+     *  inside the growth-quiet window). -1 = the lease was never issued. */
+    private lastLiveSampleAt = -1;
     /** Fingerprint of the last LOGGED snapshot, so the shadow log fires on
      *  change only (a quiet session must not spam one line per read). */
     private lastLoggedFingerprint = '';
@@ -138,6 +166,10 @@ export class TranscriptSignalSource {
         const inTurnProgress = countAdvanced || fresh;
         const transcriptGrowing = ageMs === null ? null : fresh;
         this.prevMsgCount = msgCount;
+        // TX-FSM Stage 2: a liveness-proving sample (re)issues the busy lease.
+        // transcript_growing === true implies fresh implies in_turn_progress,
+        // so in_turn_progress alone is the issuance condition.
+        if (inTurnProgress) this.lastLiveSampleAt = now;
 
         return {
             kind: SIGNAL_SNAPSHOT_KIND,
@@ -151,6 +183,34 @@ export class TranscriptSignalSource {
             },
             detail: { msgCount, sourceMtimeMs, ageMs },
         };
+    }
+
+    /**
+     * TX-FSM Stage 2 — the bounded busy lease, derived from the SAME sample
+     * stream that produces the envelope (zero added I/O, pure memory read).
+     *
+     * Semantics: every sample whose in_turn_progress is true (re)issues the
+     * lease at that sample's wall-clock; the lease stays ACTIVE for
+     * leaseBoundMs after the LAST such sample and then EXPIRES. The bound is
+     * the whole point: the lease extends busy across PTY-quiet stretches while
+     * the transcript is demonstrably alive, but it can never hold busy
+     * indefinitely — after expiry the consumer must resume its normal
+     * (pre-lease) judgment, so a finished-but-wedged session escapes on the
+     * bound, not on a transcript event that may never come.
+     *
+     * Fail-open by construction: a non-native-source class, an unresolved
+     * transcript, or a read error never reaches the issuance line, so the
+     * lease is simply never issued (active:false, lastLiveAt:null) — a
+     * missing lease must never wedge a session or fabricate one.
+     */
+    busyLease(now: number = Date.now()): BusyLeaseState {
+        if (this.lastLiveSampleAt < 0) {
+            return { active: false, lastLiveAt: null, expiresAt: null, remainingMs: 0 };
+        }
+        const bound = this.opts.leaseBoundMs ?? BUSY_LEASE_BOUND_MS;
+        const expiresAt = this.lastLiveSampleAt + bound;
+        const remainingMs = Math.max(0, expiresAt - now);
+        return { active: remainingMs > 0, lastLiveAt: this.lastLiveSampleAt, expiresAt, remainingMs };
     }
 
     /** Stage-0 shadow log: emit one line when the normalized observation

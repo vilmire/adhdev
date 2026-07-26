@@ -32,7 +32,11 @@ function makeInstance(opts: {
   type: string
   waitedMs: number
   nativeSample: { msgCount: number; sourceMtimeMs: number } | null
-}): { instance: any; outcome: FlushOutcome } {
+  /** TX-FSM Stage 2: when set, the source is attached to the instance AND a
+   *  live (in_turn_progress) sample is fed at this wall-clock BEFORE the flush
+   *  — issuing the busy lease as of that moment. */
+  liveSampleAt?: number
+}): { instance: any; outcome: FlushOutcome; signalSource: TranscriptSignalSource } {
   const outcome: FlushOutcome = { emitted: false, heldReason: null, scheduledRetry: false }
   const instance = Object.create(CliProviderInstance.prototype) as any
   instance.type = opts.type
@@ -82,6 +86,18 @@ function makeInstance(opts: {
     finalAssistantPresent: () => false,
     growthQuietMs: MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS,
   })
+  // TX-FSM Stage 2: attach the source and pre-feed a live sample (fresh mtime
+  // at liveSampleAt → in_turn_progress=true → lease issued at liveSampleAt).
+  // The pre-feed carries the SAME msgCount as the flush probe sample so the
+  // probe itself does not count-advance and re-issue the lease — the lease
+  // state under test is exactly the one the pre-feed issued.
+  if (typeof opts.liveSampleAt === 'number') {
+    instance.transcriptSignalSource = signalSource
+    signalSource.buildSnapshot(
+      { messages: [], probe: { msgCount: opts.nativeSample?.msgCount ?? 1, sourceMtimeMs: opts.liveSampleAt } },
+      opts.liveSampleAt,
+    )
+  }
   instance.probeNativeTranscriptSignals = () => {
     if (!opts.nativeSample) return null
     return {
@@ -211,5 +227,71 @@ describe('CliProviderInstance — transcript-growth hold (floor-class completion
     const out = runFlush(h)
     expect(out.emitted).toBe(false)
     expect(out.heldReason).toBe('native_transcript_advancing')
+  })
+})
+
+// TX-FSM Stage 2 — bounded busy lease. The growth hold above releases as soon
+// as the transcript's mtime ages past the growth-quiet window — but a
+// PTY-quiet turn whose transcript proved live moments ago is in a valley, not
+// finished. For lease-gated providers (the kimi/codex-cli canary) the emit
+// stays HELD until the lease bound lapses after the LAST live sample; on
+// expiry the judgment returns to the unchanged floor/cap logic, so the lease
+// can never wedge a session busy forever (the agy failure mode).
+describe('CliProviderInstance — bounded busy lease (TX-FSM Stage 2)', () => {
+  it('HOLDS a floored emit while the lease is active (growth stopped, last live sample inside the bound)', () => {
+    // Transcript last advanced 120s ago: past the 60s growth-quiet window (so
+    // the Stage-1 growth hold would RELEASE) but inside the 180s lease bound.
+    const h = makeInstance({
+      type: 'kimi',
+      waitedMs: PAST_ALL_FLOORS,
+      nativeSample: { msgCount: 12, sourceMtimeMs: NOW - 120_000 },
+      liveSampleAt: NOW - 120_000,
+    })
+    const out = runFlush(h)
+    expect(out.emitted).toBe(false)
+    expect(out.scheduledRetry).toBe(true)
+    expect(out.heldReason).toBe('busy_lease_active')
+  })
+
+  it('RELEASES to the normal floor/cap judgment once the lease EXPIRES (bounded — never an infinite busy)', () => {
+    // Last live sample 200s ago → beyond the 180s bound. The lease must NOT
+    // hold; the pre-Stage-2 release path runs unchanged and the emit fires.
+    const h = makeInstance({
+      type: 'kimi',
+      waitedMs: PAST_ALL_FLOORS,
+      nativeSample: { msgCount: 12, sourceMtimeMs: NOW - 200_000 },
+      liveSampleAt: NOW - 200_000,
+    })
+    const out = runFlush(h)
+    expect(out.emitted).toBe(true)
+    expect(out.scheduledRetry).toBe(false)
+  })
+
+  it('does NOT engage for a provider outside the canary gate (identical samples → unchanged release)', () => {
+    // cursor-cli is in the growth-hold floor class but NOT in the Stage-2
+    // canary — the lease branch is skipped before any lease state is read.
+    const h = makeInstance({
+      type: 'cursor-cli',
+      waitedMs: PAST_ALL_FLOORS,
+      nativeSample: { msgCount: 12, sourceMtimeMs: NOW - 120_000 },
+      liveSampleAt: NOW - 120_000,
+    })
+    const out = runFlush(h)
+    expect(out.emitted).toBe(true)
+    expect(out.scheduledRetry).toBe(false)
+  })
+
+  it('fails open when the signal source was never attached (lease unobtainable → unchanged release)', () => {
+    // A gated provider whose probe yields no attached source (e.g. the read
+    // path never produced one) must fall through exactly as before Stage 2.
+    const h = makeInstance({
+      type: 'kimi',
+      waitedMs: PAST_ALL_FLOORS,
+      nativeSample: { msgCount: 12, sourceMtimeMs: NOW - 120_000 },
+      // no liveSampleAt → instance.transcriptSignalSource stays unset
+    })
+    const out = runFlush(h)
+    expect(out.emitted).toBe(true)
+    expect(out.scheduledRetry).toBe(false)
   })
 })

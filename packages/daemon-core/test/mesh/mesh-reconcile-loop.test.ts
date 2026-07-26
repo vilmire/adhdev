@@ -3429,7 +3429,7 @@ describe('runMeshReconcileTick', () => {
             providerSessionId: 'kimi-history-1',
             messages: [
               { role: 'user', content: 'do work', timestamp: dispatchAt + 500 },
-              { role: 'assistant', content: 'Done — implemented and committed.', timestamp: dispatchAt + 4_000 },
+              { role: 'assistant', content: 'Done — implemented and committed.', timestamp: dispatchAt + 500 },
             ],
           }
         })
@@ -3496,7 +3496,7 @@ describe('runMeshReconcileTick', () => {
             providerSessionId: 'kimi-history-fs',
             messages: [
               { role: 'user', content: 'do work', timestamp: dispatchAt + 500 },
-              { role: 'assistant', content: summary, timestamp: dispatchAt + 4_000 },
+              { role: 'assistant', content: summary, timestamp: dispatchAt + 500 },
             ],
           }
         })
@@ -3542,7 +3542,7 @@ describe('runMeshReconcileTick', () => {
           providerSessionId: 'kimi-history-fs',
           taskId: claimed.id,
           finalSummary: summary,
-          transcriptMessageAt: new Date(dispatchAt + 4_000).toISOString(),
+          transcriptMessageAt: new Date(dispatchAt + 500).toISOString(),
           source: 'early_idle_transcript_evidence',
         })
         expect(second.alreadyTerminal).toBe(true)
@@ -3646,7 +3646,7 @@ describe('runMeshReconcileTick', () => {
             providerSessionId: 'kimi-history-1',
             messages: [
               { role: 'user', content: 'do work', timestamp: dispatchAt + 500 },
-              { role: 'assistant', content: 'Done — implemented and committed.', timestamp: dispatchAt + 4_000 },
+              { role: 'assistant', content: 'Done — implemented and committed.', timestamp: dispatchAt + 500 },
             ],
           }
         })
@@ -3896,7 +3896,7 @@ describe('runMeshReconcileTick', () => {
             providerSessionId: 'kimi-history-1',
             messages: [
               { role: 'user', content: 'do work', timestamp: dispatchAt + 500 },
-              { role: 'assistant', content: 'Done — implemented and committed.', timestamp: dispatchAt + 4_000 },
+              { role: 'assistant', content: 'Done — implemented and committed.', timestamp: dispatchAt + 500 },
             ],
           }
         })
@@ -3965,6 +3965,88 @@ describe('runMeshReconcileTick', () => {
         expect(readLedgerEntries(meshId).some(
           e => (e.payload as any)?.source === 'early_idle_transcript_evidence',
         )).toBe(false)
+      } finally {
+        vi.useRealTimers()
+        cleanup(meshId)
+      }
+    })
+
+    // TX-FSM Stage 2 — defect 1 reproduction (ledger 84594b15, 2026-07-26): the worker printed a
+    // PREAMBLE ("코드와 로그를 병행으로 확인하겠습니다."), read idle in the sliver before firing its
+    // next tool, and got early-completed with transcriptFinalAssistantPresent:false. A single read
+    // cannot separate that preamble from a final answer structurally — only TIME can: a bubble that
+    // landed mid-window (younger than the 8s settle at poll time) is in-flight narration, so the
+    // poll vetoes it (streak resets). A genuinely finished worker is NOT lost: its bubble settles,
+    // the streak re-arms, and the completion lands one window later.
+    it('TX-FSM Stage 2 (preamble settle guard): a mid-window fresh assistant bubble does NOT early-complete at the first poll; it completes once settled', async () => {
+      const meshId = `mesh_stage2_preamble_settle_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-preamble-settle'
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const dispatchAt = Date.now()
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+
+        const idleInstance = {
+          category: 'cli',
+          provider: { type: 'kimi', category: 'cli', tui: { transcriptPty: { scope: 'buffer' } } },
+          getState: () => ({ instanceId: sessionId, status: 'idle', type: 'kimi', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
+        }
+        const readChat = vi.fn(async (cmd: string) => {
+          if (cmd !== 'read_chat') return { success: true }
+          return {
+            success: true,
+            status: 'idle',
+            providerSessionId: 'kimi-history-1',
+            messages: [
+              { role: 'user', content: 'do work', timestamp: dispatchAt + 500 },
+              // The 84594b15 shape: the assistant bubble lands MID-WINDOW
+              // (dispatch+4s — after the streak starts, only ~5s old at the
+              // first poll). Post-dispatch and trailing-tool-free, so every
+              // pre-Stage-2 structural guard passes; only the settle guard
+              // vetoes it.
+              { role: 'assistant', content: '코드와 로그를 병행으로 확인하겠습니다.', timestamp: dispatchAt + 4_000 },
+            ],
+          }
+        })
+        const components = {
+          instanceManager: {
+            getByCategory: (category: string) => (category === 'cli' ? [idleInstance] : []),
+            getInstance: (id: string) => (id === sessionId ? idleInstance : undefined),
+          },
+          commandHandler: { handle: readChat },
+        } as any
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        // Tick 1 arms the streak.
+        await runMeshReconcileTick(components)
+        // Tick 2 (+9s): poll runs but the bubble is only ~5s old → settle-guard veto,
+        // NO completion (the defect-1 false positive), streak resets.
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components)
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+        expect(readLedgerEntries(meshId).some(
+          e => (e.payload as any)?.source === 'early_idle_transcript_evidence',
+        )).toBe(false)
+
+        // Tick 3 (+9s): the streak only re-arms (reset by the veto) — still no poll.
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components)
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+
+        // Tick 4 (+9s): the bubble is now ~22s old (settled) and the re-armed streak
+        // has elapsed → the SAME evidence completes, one window late, never lost.
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components)
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('completed')
+        const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed')
+        expect((completed?.payload as any)?.source).toBe('early_idle_transcript_evidence')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
       } finally {
         vi.useRealTimers()
         cleanup(meshId)

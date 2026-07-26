@@ -11,6 +11,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TranscriptSignalSource } from '../../src/providers/transcript-signal-source.js';
+import { BUSY_LEASE_BOUND_MS } from '../../src/providers/busy-lease-gate.js';
 import { LOG } from '../../src/logging/logger.js';
 import type { TranscriptAuthorityProfile } from '../../src/providers/transcript-evidence.js';
 
@@ -185,5 +186,66 @@ describe('TranscriptSignalSource — shadow log (change-gated)', () => {
         src.update({ messages: null, probe: null }, NOW + 1_000);
         expect(infoSpy).toHaveBeenCalledTimes(2);
         expect(infoSpy.mock.calls[1][1]).toContain('reason=unresolved');
+    });
+});
+
+describe('TranscriptSignalSource — bounded busy lease (TX-FSM Stage 2)', () => {
+    it('is never issued before any live sample (fail-open: no lease, never a wedge)', () => {
+        const src = makeSource();
+        expect(src.busyLease(NOW)).toEqual({ active: false, lastLiveAt: null, expiresAt: null, remainingMs: 0 });
+        // A quiet sample (old mtime, no count advance) does NOT issue it either.
+        src.buildSnapshot({ messages: [], probe: { msgCount: 5, sourceMtimeMs: NOW - 120_000 } }, NOW);
+        expect(src.busyLease(NOW).active).toBe(false);
+    });
+
+    it('is issued by a live sample and stays active for exactly the bound', () => {
+        const src = makeSource();
+        src.buildSnapshot({ messages: [], probe: { msgCount: 5, sourceMtimeMs: NOW - 1_000 } }, NOW);
+        const lease = src.busyLease(NOW);
+        expect(lease.active).toBe(true);
+        expect(lease.lastLiveAt).toBe(NOW);
+        expect(lease.expiresAt).toBe(NOW + BUSY_LEASE_BOUND_MS);
+        expect(lease.remainingMs).toBe(BUSY_LEASE_BOUND_MS);
+        // Boundary: active one ms before expiry, expired AT the bound.
+        expect(src.busyLease(NOW + BUSY_LEASE_BOUND_MS - 1).active).toBe(true);
+        const expired = src.busyLease(NOW + BUSY_LEASE_BOUND_MS);
+        expect(expired.active).toBe(false);
+        expect(expired.remainingMs).toBe(0);
+        // …and it stays expired (no implicit renewal) — the consumer returns to
+        // its normal judgment after the bound, forever.
+        expect(src.busyLease(NOW + BUSY_LEASE_BOUND_MS * 2).active).toBe(false);
+    });
+
+    it('renews on every subsequent live sample (a working transcript never hits the bound)', () => {
+        const src = makeSource();
+        src.buildSnapshot({ messages: [], probe: { msgCount: 5, sourceMtimeMs: NOW - 1_000 } }, NOW);
+        // Quiet samples in between do not renew (stale mtime, no count advance)…
+        src.buildSnapshot({ messages: [], probe: { msgCount: 5, sourceMtimeMs: NOW - 120_000 } }, NOW + 100_000);
+        expect(src.busyLease(NOW + 100_000).lastLiveAt).toBe(NOW);
+        // …but a count advance does (even with an mtime outside the freshness window).
+        src.buildSnapshot({ messages: [], probe: { msgCount: 6, sourceMtimeMs: NOW - 120_000 } }, NOW + 150_000);
+        expect(src.busyLease(NOW + 150_000).lastLiveAt).toBe(NOW + 150_000);
+        expect(src.busyLease(NOW + 150_000).expiresAt).toBe(NOW + 150_000 + BUSY_LEASE_BOUND_MS);
+    });
+
+    it('is never issued by an unavailable sample (non-native class / unresolved / error)', () => {
+        const daemonOwned = makeSource({ profile: daemonOwnedProfile });
+        daemonOwned.buildSnapshot({ messages: [], probe: { msgCount: 5, sourceMtimeMs: NOW } }, NOW);
+        expect(daemonOwned.busyLease(NOW).active).toBe(false);
+
+        const unresolved = makeSource();
+        unresolved.buildSnapshot({ messages: null, probe: null }, NOW);
+        expect(unresolved.busyLease(NOW).active).toBe(false);
+
+        const errored = makeSource();
+        errored.buildSnapshot({ messages: null, probe: null, error: true }, NOW);
+        expect(errored.busyLease(NOW).active).toBe(false);
+    });
+
+    it('honors a custom leaseBoundMs (rollout tuning) over the default', () => {
+        const src = makeSource({ leaseBoundMs: 5_000 });
+        src.buildSnapshot({ messages: [], probe: { msgCount: 5, sourceMtimeMs: NOW - 1_000 } }, NOW);
+        expect(src.busyLease(NOW + 4_999).active).toBe(true);
+        expect(src.busyLease(NOW + 5_000).active).toBe(false);
     });
 });
