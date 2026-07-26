@@ -2376,13 +2376,20 @@ export class CliProviderInstance implements ProviderInstance {
             } catch { /* defensive: dwell read is best-effort — fall through to emit */ }
         }
 
-        // TX-FSM Stage 2.1 (KIMI-PARSED-RACE — quiet-dwell mirror): the equivalent PTY
-        // quiet-dwell protection for a lease-gated NATIVE-SOURCE provider's OWN evidence
+        // TX-FSM Stage 2.2 (KIMI-POST-FINAL-WEDGE): quiet-dwell protection for a
+        // lease-gated NATIVE-SOURCE provider's OWN evidence
         // (source==='external-native', reached because preferNativeOverParsed skipped the
-        // parsed short-circuit above). Kimi's spinner keeps repainting throughout generation —
-        // including the narration-to-tool-call gap that raced the completion gate live — so raw
-        // PTY output recency is still a correct, FSM-status-independent proof the turn actually
-        // settled, exactly like the codex/PTY dwell above. Deliberately NOT scoped to
+        // parsed short-circuit above). Use the authoritative transcript file's mtime snapshot,
+        // produced by the SAME native-history read that supplied finalAssistantEvidence above,
+        // rather than raw PTY output recency. Kimi repaints its idle prompt/status after the
+        // genuine final answer, so lastOutputAt may advance forever even though wire.jsonl is
+        // quiet; using that cosmetic clock wedged the pending completion. Conversely, before a
+        // tool.call lands the interim narration itself has just advanced wire.jsonl, so the
+        // transcript clock preserves the narrow pre-tool quiet-dwell protection.
+        //
+        // The snapshot is bounded and fail-open: ageMs below the existing dwell holds and
+        // retries; a quiet transcript releases, while an unavailable/unresolved/clockless
+        // snapshot cannot block completion. Deliberately NOT scoped to
         // allowMissingAssistantTimeout: this defect surfaces on a plain interactive session's
         // own idle/completion notification just as much as a mesh worker's, so restricting it to
         // autonomous mesh sessions would leave every non-mesh kimi session unprotected. A
@@ -2392,17 +2399,18 @@ export class CliProviderInstance implements ProviderInstance {
             && finalAssistantEvidence.source === 'external-native'
             && this.busyLeaseGateEnabled()) {
             try {
-                const outStatus = this.adapter.getStatus({ allowParse: false }) as any;
-                const lastOutputAt = typeof outStatus?.lastOutputAt === 'number' && Number.isFinite(outStatus.lastOutputAt)
-                    ? outStatus.lastOutputAt as number
+                const snapshot = this.lastTranscriptSignalSnapshot;
+                const transcriptAgeMs = snapshot?.available === true
+                    && typeof snapshot.detail?.ageMs === 'number'
+                    && Number.isFinite(snapshot.detail.ageMs)
+                    ? snapshot.detail.ageMs
                     : undefined;
-                if (typeof lastOutputAt === 'number') {
-                    const quietMs = Date.now() - lastOutputAt;
-                    if (quietMs < PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS) {
+                if (typeof transcriptAgeMs === 'number') {
+                    if (transcriptAgeMs < PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS) {
                         return { reason: 'native_source_final_assistant_quiet_dwell', terminal: false };
                     }
                 }
-            } catch { /* defensive: dwell read is best-effort — fall through to emit */ }
+            } catch { /* defensive: transcript dwell is best-effort — fail open */ }
         }
 
         return null;
@@ -3219,10 +3227,16 @@ export class CliProviderInstance implements ProviderInstance {
         // the settle window — so the single sample reads 'idle' even though the turn is still in
         // flight (it re-enters generating ~0.5s later). Require instead that the session stayed
         // CONTINUOUSLY idle since the debounce was armed: (1) no entry into a busy phase
-        // (busyEpoch unchanged), and (2) no new raw PTY output (lastOutputAt did not advance).
-        // Either signal ⇒ the idle was not continuous ⇒ cancel; the still-live turn re-arms its
-        // own completion when it genuinely finishes. This only ever cancels (never emits more),
-        // so shared behaviour for claude/codex/antigravity is strictly stricter, never looser.
+        // (busyEpoch unchanged), and (2) on the FIRST settle check, no new raw PTY output
+        // (lastOutputAt did not advance).
+        //
+        // Once a finalization block has claimed the pending completion (loggedBlockReason is
+        // set), its own bounded retry/evidence policy owns release. Re-applying the raw-output
+        // cancellation on every retry lets cosmetic idle redraws (notably Kimi's prompt/status
+        // repaint) delete the pending after a genuine final assistant has landed. The adapter
+        // emits no second idle edge for that already-idle turn, so deletion becomes a permanent
+        // internal-generating wedge. Busy re-entry remains an unconditional cancel above:
+        // busyEpoch is the structural continuity signal and must win even after a hold.
         if (typeof pending.busyEpochAtArm === 'number' && this.busyEpoch !== pending.busyEpochAtArm) {
             LOG.info('CLI', `[${this.type}] cancelled pending completed (busy re-entry during settle: epoch ${pending.busyEpochAtArm}→${this.busyEpoch})`);
             if (this.completionTraceOn()) this.recordCompletionGateTrace('cancel', {
@@ -3238,7 +3252,8 @@ export class CliProviderInstance implements ProviderInstance {
             return;
         }
         const latestOutputAt = typeof (latestStatus as any)?.lastOutputAt === 'number' ? (latestStatus as any).lastOutputAt as number : undefined;
-        if (typeof pending.lastOutputAtArm === 'number'
+        if (!pending.loggedBlockReason
+            && typeof pending.lastOutputAtArm === 'number'
             && typeof latestOutputAt === 'number'
             && latestOutputAt > pending.lastOutputAtArm) {
             LOG.info('CLI', `[${this.type}] cancelled pending completed (new PTY output during settle: ${pending.lastOutputAtArm}→${latestOutputAt})`);

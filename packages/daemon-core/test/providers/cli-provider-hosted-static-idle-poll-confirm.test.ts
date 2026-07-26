@@ -140,11 +140,16 @@ describe('ProviderCliAdapter — hosted static-idle poll confirm (D4)', () => {
         // Same wedge shape, reached via completion rather than boot: the turn scope
         // has been nulled and the screen is the static ready prompt again.
         const adapter = buildHostedWedgeAdapter(STATIC_IDLE_SCREEN, { lastNonEmptyOutputAgoMs: 8000 });
+        let statusChanges = 0;
+        adapter.setOnStatusChange(() => { statusChanges += 1 });
 
         const status = adapter.getStatus({ allowParse: true });
 
         expect(status.status).toBe('idle');
         expect(adapter.engine.currentStatus).toBe('idle');
+        // Poll-driven transitions must reach CliProviderInstance just like
+        // output-driven ones; otherwise its internal FSM remains generating.
+        expect(statusChanges).toBe(1);
     });
 
     it('NEGATIVE: a screen showing "esc to cancel" STAYS generating (real turn)', () => {

@@ -1161,7 +1161,13 @@ export class ProviderCliAdapter implements CliAdapter {
                     : 1;
                 this.staticIdlePollStreak += 1;
                 if (this.staticIdlePollStreak >= requiredStreak) {
-                    this.engine.confirmPollStaticIdle('poll_static_idle');
+                    if (this.engine.confirmPollStaticIdle('poll_static_idle')) {
+                        // This transition originates from the read-only status poll rather
+                        // than PTY output. Propagate it through the same instance callback as
+                        // output-driven FSM transitions so completion bookkeeping observes
+                        // generating→idle and can arm/finalize the pending completion.
+                        this.onStatusChange?.();
+                    }
                     this.staticIdlePollStreak = 0;
                 }
             } else {

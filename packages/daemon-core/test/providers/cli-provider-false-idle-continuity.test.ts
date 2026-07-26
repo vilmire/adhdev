@@ -90,7 +90,11 @@ describe('CliProviderInstance — FALSE-IDLE continuity + turn-boundary guard (D
     // Session read idle at flush time, but busyEpoch advanced 7→8 since arming: a generating
     // blip opened+closed inside the settle window. Must cancel, not emit a stale completion.
     const { instance, emitted } = makeFlushInstance({
-      pending: armedPending({ busyEpochAtArm: 7 }),
+      pending: armedPending({
+        busyEpochAtArm: 7,
+        // A prior bounded hold never weakens the structural busy-reentry cancellation.
+        loggedBlockReason: 'native_source_final_assistant_quiet_dwell',
+      }),
       parsedMessages: [assistantMsg('fresh reply', TURN_START + 6_000)],
       currentBusyEpoch: 8,
     })

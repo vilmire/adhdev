@@ -27,7 +27,7 @@ import { PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS } from '../../src/providers/c
 //     has actually landed.
 //  3. A quiet-dwell mirror (same PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS bound as the
 //     existing codex/PTY dwell) covers the narrow window BEFORE the tool call lands, using
-//     raw PTY output recency — independent of the FSM's own (momentarily wrong) status.
+//     authoritative transcript mtime rather than Kimi's cosmetic PTY redraw clock.
 //
 // Every hold below is non-terminal and bounded by the existing COMPLETED_FINALIZATION_MAX_
 // WAIT_MS (30s) retry/cap machinery — this can only ever DELAY a completion, never wedge one
@@ -88,11 +88,20 @@ function makeKimiFlush(opts: {
   parsedMessages: unknown[]
   externalMessages: unknown[] | null
   lastOutputAt: number
-}): { instance: any; emitted: any[]; reScheduled: number[] } {
+  transcriptAgeMs?: number | null
+}): {
+  instance: any
+  emitted: any[]
+  reScheduled: number[]
+  setLastOutputAt: (value: number) => void
+  setTranscriptAgeMs: (value: number | null) => void
+} {
   const emitted: any[] = []
   const reScheduled: number[] = []
   const instance = kimiInstance()
   instance.completedDebouncePending = armedPending({ lastOutputAtArm: opts.lastOutputAt })
+  let lastOutputAt = opts.lastOutputAt
+  let transcriptAgeMs = opts.transcriptAgeMs ?? null
 
   instance.adapter = {
     chatMessagesOwnedExternally: true,
@@ -101,17 +110,36 @@ function makeKimiFlush(opts: {
     isWaitingForResponse: false,
     isProcessing: () => false,
     getPartialResponse: () => '',
-    getStatus: () => ({ status: 'idle', lastOutputAt: opts.lastOutputAt }),
+    getStatus: () => ({ status: 'idle', lastOutputAt }),
     getScriptParsedStatus: () => ({ status: 'idle', messages: opts.parsedMessages }),
     getScreenText: () => '',
   }
 
-  instance.readExternalCompletionMessages = () => opts.externalMessages
+  instance.readExternalCompletionMessages = () => {
+    instance.lastTranscriptSignalSnapshot = opts.externalMessages && transcriptAgeMs !== null
+      ? {
+          available: true,
+          signals: {
+            final_assistant_present: true,
+            in_turn_progress: false,
+            transcript_growing: false,
+          },
+          detail: { ageMs: transcriptAgeMs },
+        }
+      : null
+    return opts.externalMessages
+  }
   instance.lastVisibleAssistantSummaryDetail = () => ({ content: '', timestampMs: undefined })
 
   instance.pushEvent = (e: any) => { emitted.push(e) }
   instance.scheduleCompletedDebounceFlush = (delayMs: number) => { reScheduled.push(delayMs) }
-  return { instance, emitted, reScheduled }
+  return {
+    instance,
+    emitted,
+    reScheduled,
+    setLastOutputAt: (value: number) => { lastOutputAt = value },
+    setTranscriptAgeMs: (value: number | null) => { transcriptAgeMs = value },
+  }
 }
 
 function completedEvents(emitted: any[]) {
@@ -119,7 +147,7 @@ function completedEvents(emitted: any[]) {
 }
 
 describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-FSM Stage 2.1)', () => {
-  it('(1) interim narration + PTY still active (recent output): HOLDS, does not early-fire', () => {
+  it('(1) interim narration + fresh native transcript: HOLDS, does not early-fire', () => {
     // The exact live defect: an interim assistant bubble with no trailing tool activity YET
     // (the tool.call has not landed in the transcript) and the PTY printed something moments
     // ago (spinner repaint) — no structural veto is possible yet, so the quiet-dwell mirror
@@ -127,7 +155,8 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
     const { instance, emitted, reScheduled } = makeKimiFlush({
       parsedMessages: [assistantMsg("Actually, I can't confirm that yet", TURN_START + 6_000)],
       externalMessages: [assistantMsg("Actually, I can't confirm that yet", TURN_START + 6_000)],
-      lastOutputAt: Date.now() - Math.floor(PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS / 2),
+      lastOutputAt: Date.now() - (PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS + 5_000),
+      transcriptAgeMs: Math.floor(PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS / 2),
     })
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
@@ -148,6 +177,7 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
         toolMsg(TURN_START + 6_500),
       ],
       lastOutputAt: Date.now() - (PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS + 5_000),
+      transcriptAgeMs: PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS + 5_000,
     })
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
@@ -157,17 +187,43 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
     expect(reScheduled.length).toBeGreaterThan(0)
   })
 
-  it('(3) true final answer, PTY quiet past the dwell, no trailing tool activity: EMITS', () => {
+  it('(3) true final answer + transcript quiet emits despite a recent cosmetic PTY redraw', () => {
     const { instance, emitted } = makeKimiFlush({
       parsedMessages: [assistantMsg('Both commands have now run successfully.', TURN_START + 12_000)],
       externalMessages: [assistantMsg('Both commands have now run successfully.', TURN_START + 12_000)],
-      lastOutputAt: Date.now() - (PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS + 5_000),
+      lastOutputAt: Date.now(),
+      transcriptAgeMs: PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS + 1,
     })
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
     expect(completedEvents(emitted)).toHaveLength(1)
     expect(instance.completedDebouncePending).toBeNull()
+  })
+
+  it('(3b) a finalization hold survives cosmetic PTY redraws and releases when the transcript becomes quiet', () => {
+    const h = makeKimiFlush({
+      parsedMessages: [assistantMsg('Both commands have now run successfully.', TURN_START + 12_000)],
+      externalMessages: [assistantMsg('Both commands have now run successfully.', TURN_START + 12_000)],
+      lastOutputAt: TURN_START + 4_900,
+      transcriptAgeMs: 0,
+    })
+
+    ;(h.instance as any).flushCompletedDebounceIfFinalized()
+
+    expect(completedEvents(h.emitted)).toHaveLength(0)
+    expect(h.instance.completedDebouncePending?.loggedBlockReason)
+      .toBe('native_source_final_assistant_quiet_dwell')
+    expect(h.reScheduled.length).toBeGreaterThan(0)
+
+    // Kimi repaints its settled prompt after the final answer. The redraw must not delete
+    // a pending completion already owned by the bounded transcript-dwell hold.
+    h.setLastOutputAt(TURN_START + 8_000)
+    h.setTranscriptAgeMs(PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS + 1)
+    ;(h.instance as any).flushCompletedDebounceIfFinalized()
+
+    expect(completedEvents(h.emitted)).toHaveLength(1)
+    expect(h.instance.completedDebouncePending).toBeNull()
   })
 
   it('(4) native transcript unresolved but the legacy parsed scrape has the final answer: fails OPEN and EMITS', () => {
