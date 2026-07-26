@@ -2809,8 +2809,9 @@
             "badge": "マルチベンダー・マルチマシン対応のエージェント制御プレーン",
             "title": "ローカルのコーディングエージェントを、ウェブから — 並列で動かす。",
             "subtitleInstall": "<os></os> に ADHDev をインストール。",
-            "subtitlePlace": "そして<place></place>から、<device></device>を使って",
+            "subtitlePlace": "<device></device>を使って",
             "subtitleAsk": "<coordinator></coordinator>に<worker></worker>を送ってリポジトリを<verb></verb>してもらいましょう。",
+            "subtitleFrom": "<place></place>から",
             "subtitleLand": "完了した作業は自動で main に着地します。",
             "axes": {
                 "os": ["Mac", "Windows PC", "Linux マシン"],

@@ -2809,8 +2809,9 @@
             "badge": "멀티 벤더, 멀티 머신 에이전트 컨트롤 플레인",
             "title": "내 컴퓨터에서 실행 중인 코딩 에이전트를 어디서든 관리하세요.",
             "subtitleInstall": "<os></os>에 ADHDev를 설치하세요.",
-            "subtitlePlace": "그리고 <place></place>에서, <device></device>으로",
+            "subtitlePlace": "<device></device>으로",
             "subtitleAsk": "<coordinator></coordinator>에게 <worker></worker>를 보내 리포지토리를 <verb></verb>하게 해보세요.",
+            "subtitleFrom": "<place></place>에서",
             "subtitleLand": "완료된 작업은 자동으로 main에 착지합니다.",
             "axes": {
                 "os": ["Mac", "Windows PC", "Linux 머신"],

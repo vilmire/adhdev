@@ -2809,8 +2809,9 @@
             "badge": "多厂商、多机器的智能体控制平面",
             "title": "在浏览器中驱动每一个本地编码智能体 —— 并行运行。",
             "subtitleInstall": "在<os></os>上安装 ADHDev。",
-            "subtitlePlace": "然后，在<place></place>，用你的<device></device>",
+            "subtitlePlace": "用你的<device></device>",
             "subtitleAsk": "让<coordinator></coordinator>把<worker></worker>派去<verb></verb>你的仓库。",
+            "subtitleFrom": "在<place></place>",
             "subtitleLand": "完成的工作会自动落地到 main。",
             "axes": {
                 "os": ["Mac", "Windows 电脑", "Linux 机器"],

@@ -2809,8 +2809,9 @@
             "badge": "Multi-vendor, multi-machine agent control plane",
             "title": "Manage the coding agents running on your computer — from anywhere.",
             "subtitleInstall": "Install ADHDev on <os></os>.",
-            "subtitlePlace": "Then, from <place></place>, use your <device></device>",
+            "subtitlePlace": "use your <device></device>",
             "subtitleAsk": "to ask <coordinator></coordinator> to send <worker></worker> to <verb></verb> your repo.",
+            "subtitleFrom": "from <place></place>",
             "subtitleLand": "Finished work lands on main automatically.",
             "axes": {
                 "os": ["your Mac", "your Windows PC", "your Linux machine"],
