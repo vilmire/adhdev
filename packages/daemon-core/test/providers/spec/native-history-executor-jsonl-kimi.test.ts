@@ -39,6 +39,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { executeNativeHistory } from '../../../src/providers/spec/native-history-executor.js';
+import { hasTrailingToolActivityAfterFinalAssistant, selectFinalAssistantTurnEndMessage } from '../../../src/providers/chat-message-normalization.js';
 
 // The shipped kimi nativeHistory.source (kept in sync with
 // adhdev-providers/cli/kimi/provider.v1.json).
@@ -59,6 +60,42 @@ const KIMI_SOURCE = {
         {
             where: '$.type == "context.append_loop_event" && $.event.type == "content.part" && $.event.part.type == "text"',
             message_map: { role: 'assistant', content: '$.event.part.text', timestamp_ms: '$.time' },
+        },
+        // TX-FSM Stage 2.1 (KIMI-PARSED-RACE): kimi's wire.jsonl also records tool
+        // invocation as `context.append_loop_event` / `event.type` "tool.call" and
+        // "tool.result" (validated live: real sessions show these interleaved with
+        // content.part text within the SAME turnId — an interim narration bullet can
+        // land, then a tool.call ~seconds-to-minutes later, then the true final text).
+        // Mapping them to kind:'tool' bubbles lets hasTrailingToolActivityAfterFinal­
+        // Assistant veto an interim bubble once the tool call has actually landed.
+        {
+            where: '$.type == "context.append_loop_event" && $.event.type == "tool.call"',
+            message_map: {
+                role: 'assistant',
+                content: '$.event.name',
+                timestamp_ms: '$.time',
+                tools: {
+                    block_type: '$.event.type',
+                    call_types: ['tool.call'],
+                    result_types: ['tool.result'],
+                    call_name: '$.event.name',
+                    call_args: '$.event.args',
+                },
+            },
+        },
+        {
+            where: '$.type == "context.append_loop_event" && $.event.type == "tool.result"',
+            message_map: {
+                role: 'assistant',
+                content: '$.event.type',
+                timestamp_ms: '$.time',
+                tools: {
+                    block_type: '$.event.type',
+                    call_types: ['tool.call'],
+                    result_types: ['tool.result'],
+                    result_content: '$.event.result.output',
+                },
+            },
         },
     ],
 };
@@ -169,6 +206,71 @@ describe('kimi nativeHistory jsonl', () => {
         expect(r!.messages).toHaveLength(4);
         // ordering: chronological (turn.prompt time < its answer time).
         expect(r!.messages.map((m: any) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    });
+
+    describe('(TX-FSM Stage 2.1) tool.call/tool.result mapping + trailing-tool-activity veto', () => {
+        // Mirrors a REAL captured kimi wire.jsonl shape (session kimi-p3-s1, turn 2): an
+        // interim narration bubble ("Actually, I can't confirm that yet...") lands, THEN
+        // (tens of seconds later live) a tool.call/tool.result, THEN the true final answer —
+        // all within the same turnId. Each test truncates the on-disk transcript to the
+        // exact record count a completion-gate poll would have seen at that moment.
+        const ALL_LINES = [
+            { type: 'turn.prompt', input: [{ type: 'text', text: 'confirm and retry' }], time: 0 },
+            {
+                type: 'context.append_loop_event',
+                event: { type: 'content.part', turnId: '2', part: { type: 'text', text: "Actually, I can't confirm that yet." } },
+                time: 100,
+            },
+            {
+                type: 'context.append_loop_event',
+                event: { type: 'tool.call', turnId: '2', name: 'Bash', args: { command: 'echo hi' } },
+                time: 50_100,
+            },
+            {
+                type: 'context.append_loop_event',
+                event: { type: 'tool.result', result: { output: 'hi' } },
+                time: 50_200,
+            },
+            {
+                type: 'context.append_loop_event',
+                event: { type: 'content.part', turnId: '2', part: { type: 'text', text: 'Both commands have now run successfully.' } },
+                time: 59_000,
+            },
+        ];
+
+        function runTruncated(nLines: number) {
+            const base = Date.now() - 60_000;
+            const lines = ALL_LINES.slice(0, nLines).map((l) => ({ ...l, time: base + l.time }));
+            writeSession({ sessionId: SESSION_ID, workspace: WORKSPACE, hex12: '78117b8afba9', lines, mtimeMs: base + (lines[lines.length - 1]?.time ?? 0) });
+            const r = run({ providerSessionId: SESSION_ID, workspace: WORKSPACE, sessionStartedAtMs: 0 });
+            expect(r).not.toBeNull();
+            return r!.messages;
+        }
+
+        it('at the interim-narration-only point (before tool.call lands): no tool bubble exists yet — the veto cannot fire (the residual gap the cli-provider-instance quiet-dwell guard covers)', () => {
+            const messages = runTruncated(2); // turn.prompt + interim text only
+            expect(messages.some((m: any) => m.kind === 'tool')).toBe(false);
+            expect(hasTrailingToolActivityAfterFinalAssistant(messages as any)).toBe(false);
+            expect(selectFinalAssistantTurnEndMessage(messages as any)?.content).toBe("Actually, I can't confirm that yet.");
+        });
+
+        it('once tool.call/tool.result land: kind:tool bubbles are produced and the trailing-tool-activity veto fires', () => {
+            const messages = runTruncated(4); // + tool.call + tool.result, final text NOT yet written
+            const toolMsgs = messages.filter((m: any) => m.kind === 'tool');
+            expect(toolMsgs).toHaveLength(2);
+            expect(toolMsgs.some((m: any) => String(m.content).includes('Bash'))).toBe(true);
+            expect(toolMsgs.some((m: any) => String(m.content).includes('hi'))).toBe(true);
+            // The interim bubble is STILL the last visible assistant message (tool bubbles are
+            // not user-facing), but it is now proven non-final by the trailing tool activity.
+            expect(selectFinalAssistantTurnEndMessage(messages as any)?.content).toBe("Actually, I can't confirm that yet.");
+            expect(hasTrailingToolActivityAfterFinalAssistant(messages as any)).toBe(true);
+        });
+
+        it('once the true final answer lands: no trailing tool activity after it — the veto correctly clears', () => {
+            const messages = runTruncated(ALL_LINES.length);
+            expect(hasTrailingToolActivityAfterFinalAssistant(messages as any)).toBe(false);
+            expect(selectFinalAssistantTurnEndMessage(messages as any)?.content).toBe('Both commands have now run successfully.');
+        });
     });
 
     it('extracts the session id from the session_<uuid> directory segment', () => {

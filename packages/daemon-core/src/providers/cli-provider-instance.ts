@@ -42,7 +42,7 @@ import {
     claimAntigravityConversation,
     releaseAntigravityOwner,
 } from './native-history/antigravity-claim-registry.js';
-import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages, extractFinalSummaryFromMessagesAfter, readChatMessageTimestampMs } from './chat-message-normalization.js';
+import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages, extractFinalSummaryFromMessagesAfter, readChatMessageTimestampMs, hasTrailingToolActivityAfterFinalAssistant } from './chat-message-normalization.js';
 import { workingDirBasename } from './working-dir.js';
 import { ManualAttendanceTracker } from './manual-attendance.js';
 import { buildCliStructuredInputPrompt } from './cli-provider-input-prompt.js';
@@ -1824,7 +1824,24 @@ export class CliProviderInstance implements ProviderInstance {
         // `completionHasFinalAssistantMessage(...) && !hasAdapterPendingResponse()` pairing already
         // used by the no-progress monitor reconcile path.
         const turnClosed = !this.hasAdapterPendingResponse();
-        if (this.completionHasFinalAssistantMessage(parsedMessages, turnStartedAt)) {
+        // TX-FSM Stage 2.1 (KIMI-PARSED-RACE): a native-source provider that ALSO ships a
+        // tui.transcriptPty scrape (kimi, like opencode/cursor-cli) keeps that scrape purely
+        // for LIVE status convenience — the manifest itself says "Chat is authoritative from
+        // nativeHistory; this PTY extraction only keeps live status available". But the parsed
+        // scrape carries no tool-activity concept at all (transcriptPty only extracts
+        // assistant/user text bullets), so an interim narration bullet Kimi renders just before
+        // firing a tool call ("코드와 로그를 병행으로 확인하겠습니다.") satisfies
+        // completionHasFinalAssistantMessage identically to a genuine final answer — and this
+        // early-return fires BEFORE the richer external-native evidence below is ever consulted,
+        // defeating the trailing-tool-activity veto and quiet-dwell guard added below it for
+        // this exact defect (live Kimi declaring completion on an interim transcript while the
+        // PTY kept generating). Skip the parsed short-circuit for the lease-gated canary
+        // (busyLeaseGateEnabled: kimi/codex-cli today) so the authoritative native transcript is
+        // judged first; codex-cli ships no transcriptPty so this is a no-op for it. Falls back to
+        // the parsed evidence below when the native transcript is unresolved (fail-open, same as
+        // before Stage 2.1).
+        const preferNativeOverParsed = (this.adapter as any)?.chatMessagesOwnedExternally === true && this.busyLeaseGateEnabled();
+        if (!preferNativeOverParsed && this.completionHasFinalAssistantMessage(parsedMessages, turnStartedAt)) {
             return {
                 present: turnClosed,
                 messages: Array.isArray(parsedMessages) ? parsedMessages : [],
@@ -1850,8 +1867,19 @@ export class CliProviderInstance implements ProviderInstance {
             // the injected task's onTurnStarted fires, currentTurnStartedAt/currentTurnTaskId
             // bind to it and a real final bubble still fires completion normally.
             const injectedTaskGenerating = this.injectedTaskHasStartedGenerating();
+            // TX-FSM Stage 2.1 (KIMI-PARSED-RACE, trailing-tool-activity veto): mirrors the
+            // mesh coordinator's pollAssignedTaskTerminalEvidence guard (ledger 84594b15) on
+            // the WORKER's own local evidence. A native-source transcript that captures
+            // tool.call/tool.result as kind:'tool' bubbles (kimi's nativeHistory.records, after
+            // the provider-manifest fix) proves the last VISIBLE assistant bubble was narration
+            // ("Let me check the logs...") that fired a tool call, not the turn's genuine final
+            // answer. A provider whose native transcript never records tool activity (nothing to
+            // veto on) is unaffected — this can only ever turn a false present:true into false,
+            // never the reverse.
+            const trailingToolActivity = hasTrailingToolActivityAfterFinalAssistant(externalMessages as any);
             const present = injectedTaskGenerating
                 && turnClosed
+                && !trailingToolActivity
                 && this.completionHasFinalAssistantMessage(externalMessages, turnStartedAt);
             // Dashboard tail-repair cache: this runs on EVERY completion check
             // (mesh AND non-mesh — the non-mesh path suppresses the
@@ -1870,6 +1898,18 @@ export class CliProviderInstance implements ProviderInstance {
                 present,
                 messages: externalMessages,
                 source: 'external-native',
+            };
+        }
+
+        // TX-FSM Stage 2.1: the native transcript is unresolved (no session pinned yet, file
+        // not yet written) for a provider whose parsed short-circuit was skipped above — fall
+        // back to the parsed evidence now rather than reporting present:false forever. Fail-open,
+        // identical to the pre-Stage-2.1 behaviour for this narrow (transcript-unavailable) case.
+        if (preferNativeOverParsed && this.completionHasFinalAssistantMessage(parsedMessages, turnStartedAt)) {
+            return {
+                present: turnClosed,
+                messages: Array.isArray(parsedMessages) ? parsedMessages : [],
+                source: 'parsed',
             };
         }
 
@@ -2331,6 +2371,35 @@ export class CliProviderInstance implements ProviderInstance {
                     const quietMs = Date.now() - lastOutputAt;
                     if (quietMs < PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS) {
                         return { reason: 'parsed_final_assistant_quiet_dwell', terminal: false };
+                    }
+                }
+            } catch { /* defensive: dwell read is best-effort — fall through to emit */ }
+        }
+
+        // TX-FSM Stage 2.1 (KIMI-PARSED-RACE — quiet-dwell mirror): the equivalent PTY
+        // quiet-dwell protection for a lease-gated NATIVE-SOURCE provider's OWN evidence
+        // (source==='external-native', reached because preferNativeOverParsed skipped the
+        // parsed short-circuit above). Kimi's spinner keeps repainting throughout generation —
+        // including the narration-to-tool-call gap that raced the completion gate live — so raw
+        // PTY output recency is still a correct, FSM-status-independent proof the turn actually
+        // settled, exactly like the codex/PTY dwell above. Deliberately NOT scoped to
+        // allowMissingAssistantTimeout: this defect surfaces on a plain interactive session's
+        // own idle/completion notification just as much as a mesh worker's, so restricting it to
+        // autonomous mesh sessions would leave every non-mesh kimi session unprotected. A
+        // provider outside the lease canary (or without adapterOwnsMessagesElsewhere) never
+        // reaches this branch — untouched.
+        if (adapterOwnsMessagesElsewhere
+            && finalAssistantEvidence.source === 'external-native'
+            && this.busyLeaseGateEnabled()) {
+            try {
+                const outStatus = this.adapter.getStatus({ allowParse: false }) as any;
+                const lastOutputAt = typeof outStatus?.lastOutputAt === 'number' && Number.isFinite(outStatus.lastOutputAt)
+                    ? outStatus.lastOutputAt as number
+                    : undefined;
+                if (typeof lastOutputAt === 'number') {
+                    const quietMs = Date.now() - lastOutputAt;
+                    if (quietMs < PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS) {
+                        return { reason: 'native_source_final_assistant_quiet_dwell', terminal: false };
                     }
                 }
             } catch { /* defensive: dwell read is best-effort — fall through to emit */ }
