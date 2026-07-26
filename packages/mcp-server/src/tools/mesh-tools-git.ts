@@ -145,7 +145,17 @@ export async function meshFastForwardNode(
 
 export async function meshRestartDaemon(
     ctx: MeshContext,
-    args: { node_id: string; channel?: 'stable' | 'preview' },
+    args: {
+        node_id: string;
+        channel?: 'stable' | 'preview';
+        mode?: 'upgrade' | 'restart';
+        force?: boolean;
+        self_only?: boolean;
+        when_idle?: boolean;
+        cancel_when_idle?: boolean;
+        timeout_ms?: number;
+        kill_session_host?: boolean;
+    },
 ): Promise<string> {
     await refreshMeshFromDaemon(ctx);
     const node = await findNodeWithRefresh(ctx, args.node_id);
@@ -153,12 +163,21 @@ export async function meshRestartDaemon(
     try {
         // inlineMesh lets the owning daemon resolve this node for the
         // remote-forward guard; channel is forwarded only when explicitly set so
-        // an unset call keeps the daemon on its configured channel.
+        // an unset call keeps the daemon on its configured channel. The opt-in
+        // gate overrides are forwarded only when set so a bare call is
+        // byte-identical to the pre-extension behavior.
         const result = await commandForNode(ctx, node, 'restart_daemon_node', {
             meshId: ctx.mesh.id,
             nodeId: node.id,
             inlineMesh: ctx.mesh,
             ...(args.channel ? { channel: args.channel } : {}),
+            ...(args.mode ? { mode: args.mode } : {}),
+            ...(args.force === true ? { force: true } : {}),
+            ...(args.self_only === true ? { selfOnly: true } : {}),
+            ...(args.when_idle === true ? { whenIdle: true } : {}),
+            ...(args.cancel_when_idle === true ? { cancelWhenIdle: true } : {}),
+            ...(typeof args.timeout_ms === 'number' ? { timeoutMs: args.timeout_ms } : {}),
+            ...(args.kill_session_host === true ? { killSessionHost: true } : {}),
         });
         return JSON.stringify(unwrapCommandPayload(result), null, 2);
     } catch (e: any) {

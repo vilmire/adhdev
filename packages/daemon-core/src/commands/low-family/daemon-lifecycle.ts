@@ -112,6 +112,47 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
         }
     },
 
+    // Restart-only path (mesh restart_daemon_node mode="restart"): re-spawn the
+    // daemon WITHOUT the npm reinstall daemon_upgrade performs. Used to reset
+    // daemon state (memory leaks, zombie sessions, wedged internals) when the
+    // version is already correct — downtime drops to the detached re-spawn.
+    // killSessionHost is an explicit opt-in hard refresh (see upgrade-helper).
+    daemon_restart: async (ctx: LowFamilyContext, args: any) => {
+        LOG.info('Restart', 'Restart-only requested (no package reinstall)');
+        try {
+            const isStandalone = ctx.deps.packageName === '@adhdev/daemon-standalone'
+                || process.argv[1]?.includes('daemon-standalone');
+            const pkgName = isStandalone ? '@adhdev/daemon-standalone' : 'adhdev';
+            const killSessionHost = args?.killSessionHost === true;
+            if (killSessionHost) {
+                LOG.warn('Restart', 'killSessionHost requested — session-host will be stopped and ALL hosted sessions destroyed');
+            }
+
+            spawnDetachedDaemonUpgradeHelper({
+                packageName: pkgName,
+                targetVersion: '',
+                parentPid: process.pid,
+                restartArgv: process.argv.slice(1),
+                cwd: process.cwd(),
+                sessionHostAppName: process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev',
+                skipInstall: true,
+                killSessionHost,
+            });
+            LOG.info('Restart', 'Scheduled detached restart-only helper');
+
+            // Exit after the command response has been sent so the helper can re-spawn cleanly.
+            setTimeout(() => {
+                LOG.info('Restart', 'Exiting daemon so detached helper can re-spawn it...');
+                process.exit(0);
+            }, 3000);
+
+            return { success: true, restarted: true, restarting: true, mode: 'restart', killSessionHost };
+        } catch (e: any) {
+            LOG.error('Restart', `Failed: ${e.message}`);
+            return { success: false, error: e.message };
+        }
+    },
+
     set_machine_nickname: async (_ctx: LowFamilyContext, args: any) => {
         const nickname = args?.nickname;
         updateConfig({ machineNickname: nickname || null });
