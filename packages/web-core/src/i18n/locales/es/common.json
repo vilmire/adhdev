@@ -2808,13 +2808,14 @@
         "hero": {
             "badge": "El plano de control de agentes multiproveedor y multimáquina",
             "title": "Ejecuta cada agente de codificación local desde la web — en paralelo.",
-            "subtitleInstall": "Instala ADHDev en <os></os>.",
+            "subtitleInstall": "Instala ADHDev en tu <os></os>.",
             "subtitlePlace": "usa tu <device></device>",
             "subtitleAsk": "para pedirle a <coordinator></coordinator> que envíe a <worker></worker> a <verb></verb> tu repositorio.",
             "subtitleFrom": "desde <place></place>",
+            "anywhere": "donde sea",
             "subtitleLand": "El trabajo terminado aterriza en main automáticamente.",
             "axes": {
-                "os": ["tu Mac", "tu PC con Windows", "tu máquina Linux"],
+                "os": ["Mac", "PC con Windows", "máquina Linux"],
                 "place": [
                     "el metro",
                     "una cafetería",

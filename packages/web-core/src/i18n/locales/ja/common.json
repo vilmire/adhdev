@@ -2812,6 +2812,7 @@
             "subtitlePlace": "<device></device>を使って",
             "subtitleAsk": "<coordinator></coordinator>に<worker></worker>を送ってリポジトリを<verb></verb>してもらいましょう。",
             "subtitleFrom": "<place></place>から",
+            "anywhere": "どこでも",
             "subtitleLand": "完了した作業は自動で main に着地します。",
             "axes": {
                 "os": ["Mac", "Windows PC", "Linux マシン"],

@@ -2812,6 +2812,7 @@
             "subtitlePlace": "用你的<device></device>",
             "subtitleAsk": "让<coordinator></coordinator>把<worker></worker>派去<verb></verb>你的仓库。",
             "subtitleFrom": "在<place></place>",
+            "anywhere": "随处",
             "subtitleLand": "完成的工作会自动落地到 main。",
             "axes": {
                 "os": ["Mac", "Windows 电脑", "Linux 机器"],

@@ -2812,6 +2812,7 @@
             "subtitlePlace": "<device></device>으로",
             "subtitleAsk": "<coordinator></coordinator>에게 <worker></worker>를 보내 리포지토리를 <verb></verb>하게 해보세요.",
             "subtitleFrom": "<place></place>에서",
+            "anywhere": "어디서든",
             "subtitleLand": "완료된 작업은 자동으로 main에 착지합니다.",
             "axes": {
                 "os": ["Mac", "Windows PC", "Linux 머신"],
