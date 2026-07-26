@@ -483,7 +483,7 @@ function deliverTaskToSession(
 
     guarded.then((res: any) => {
         if (timer) clearTimeout(timer);
-        const isQueued = res && typeof res === 'object' && res.queued === true;
+        const isQueued = res && typeof res === 'object' && res.status === 'queued';
         updateSessionDeliveryStatus(delivery.id, isQueued ? 'queued' : 'delivered');
     }).catch((e: any) => {
         if (timer) clearTimeout(timer);
