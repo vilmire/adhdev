@@ -25,7 +25,7 @@ import { daemonIdListIncludes } from './mesh-reconcile-identity.js';
 import { getActiveDirectDispatches, getQueue } from './mesh-work-queue.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
-import { reconcileDirectDispatchCompletionFromTranscript } from './mesh-events-stale.js';
+import { reconcileDirectDispatchCompletionFromTranscript, resolveLiveTurnPendingEvidence } from './mesh-events-stale.js';
 import { extractFinalAssistantSummaryEvidence, hasTrailingToolActivityAfterFinalAssistant, readChatMessageTimestampMs } from '../providers/chat-message-normalization.js';
 import type { ChatMessage } from '../types.js';
 import {
@@ -230,6 +230,29 @@ export async function reconcileUnterminatedDirectDispatches(
         const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
         const evidence = extractFinalAssistantSummaryEvidence(messages);
 
+        // MID-TURN-CAUSAL-ADMISSION (rc.16, trailing-tool veto): the latest final-LOOKING
+        // assistant bubble is followed by tool/terminal activity — the worker emitted interim
+        // narration ("Let me find…") and is still running tools; the bubble is a preamble,
+        // not a turn end. This is the exact false-completion shape of the verified incidents
+        // (weak synth after an interim progress sentence while tools continued), and PHASE 4
+        // previously never ran the veto pollAssignedTaskTerminalEvidence has. The veto applies
+        // to EVERY synth path below — never-acked first-idle, acked fast-track, AND the death
+        // deadline: a stale weak interim summary must not become final merely because a
+        // timeout fired while newer transcript/tool activity exists. The fast-track streak is
+        // reset so the continuous idle-with-final-assistant run must restart from the genuine
+        // final bubble. This cannot wedge: the next tick re-reads and re-evaluates (a genuine
+        // final assistant lands AFTER the last tool call, completing one tick later), and the
+        // hold is still released by the session-death read-failure backstop / stranded-reclaim
+        // / orphan-prune nets if the worker truly goes away.
+        if (hasTrailingToolActivityAfterFinalAssistant(messages)) {
+            setHoldState(synthKey, mesh.id, { liveConfirmedSinceAck: true, consecutiveReadFailures: 0 });
+            LOG.info('MeshReconcile', `Mid-turn causal admission: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) — the latest final-looking assistant bubble is followed by trailing tool/terminal activity (interim narration; the turn is still executing); holding the transcript synth`);
+            traceMeshEventDrop('reconcile_synth_veto_trailing_tool_activity', {
+                taskId, sessionId, nodeId, meshId: mesh.id, event: 'agent:generating_completed',
+            });
+            continue;
+        }
+
         if (isAcked) {
             const ackedAtMs = Date.parse(readNonEmptyString(dispatch.updatedAt));
             const sinceAckMs = Number.isFinite(ackedAtMs) ? nowMs - ackedAtMs : Number.POSITIVE_INFINITY;
@@ -357,6 +380,17 @@ export async function reconcileUnterminatedDirectDispatches(
                 // The ledger-recovered dispatching-coordinator daemon (inside the reconcile fn)
                 // takes PRIORITY over this arg; this remains the best-available fallback.
                 ...(coordinatorDaemonId ? { targetCoordinatorDaemonId: coordinatorDaemonId } : {}),
+                // MID-TURN-CAUSAL-ADMISSION (rc.16): pass the LOCAL live adapter's synchronous
+                // turn-state probe into the unified choke point — a pending verdict vetoes this
+                // eager synth (never-acked first-idle / acked fast-track). The death-deadline
+                // backstop is the bounded max-wait net and overrides the veto (genuine-final
+                // fail-open preserved); a remote/missing live source resolves to undefined and
+                // fails open onto the bounded transcript evidence above. The trailing-tool veto
+                // already ran at the top of this tick.
+                causalAdmission: {
+                    liveTurnPendingEvidence: resolveLiveTurnPendingEvidence(components, sessionId),
+                    boundedBackstop: backstopKind === 'ackedHoldDeathDeadlineFired',
+                },
                 source: 'daemon_reconcile_transcript_completion',
             });
             if (result.reconciled) {

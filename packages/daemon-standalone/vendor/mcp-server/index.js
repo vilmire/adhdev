@@ -2366,6 +2366,7 @@ async function reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, d
       });
       const payload = unwrapCommandPayload(readResult);
       if (payload?.success === false) continue;
+      if ((0, import_daemon_core3.hasTrailingToolActivityAfterFinalAssistant)(Array.isArray(payload?.messages) ? payload.messages : [])) continue;
       const evidence = readFinalAssistantTranscriptEvidence(payload);
       if (!evidence.finalSummary) continue;
       const result = (0, import_daemon_core3.reconcileDirectDispatchCompletionFromTranscript)({

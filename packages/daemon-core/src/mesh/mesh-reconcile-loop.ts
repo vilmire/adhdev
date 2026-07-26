@@ -64,7 +64,7 @@ import { getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-
 import { resolveSessionBusyVerdict, runContinuousAutoFastForwardScan, runPendingCoordinatorCatchupScan } from './mesh-queue-assignment.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerEntry } from './mesh-ledger.js';
-import { findTerminalLedgerEvidenceForTask, reconcileDirectDispatchCompletionFromTranscript } from './mesh-events-stale.js';
+import { findTerminalLedgerEvidenceForTask, reconcileDirectDispatchCompletionFromTranscript, resolveLiveTurnPendingEvidence } from './mesh-events-stale.js';
 import {
     resolveCoordinatorDaemonIds,
     daemonHostsMesh,
@@ -945,18 +945,24 @@ async function evaluateEarlyIdleTranscriptArm(
 // synth is marked WEAK so the worker's own later emit can still supersede it rather than being
 // dropped as a duplicate. That is the dedup guarantee: at most one [System] completion surfaces.
 //
-// Returns true if a terminal ledger for this task now exists (freshly written OR already present) —
-// the caller then skips its own bare-payload ledger write, which lacked the finalSummary entirely.
+// Returns 'propagated' if a terminal ledger for this task now exists (freshly written OR
+// already present) — the caller then skips its own bare-payload ledger write, which lacked
+// the finalSummary entirely. Returns 'deferred' when the MID-TURN-CAUSAL-ADMISSION guard
+// vetoed the synth on live mid-turn evidence — the caller must HOLD (no row flip, no bare
+// ledger write) and re-evaluate next tick. Returns 'unavailable' when propagation could not
+// run — the caller falls back to its bare ledger write (unchanged legacy behavior).
 function propagateWatchdogTranscriptCompletion(
+    components: DaemonComponents,
     meshId: string,
     row: { id: string; assignedNodeId?: string; assignedSessionId?: string; assignedProviderType?: string; dispatchTimestamp?: string },
     evidence: AssignedTaskTerminalEvidence,
     source: string,
-): boolean {
+    opts?: { boundedBackstop?: boolean },
+): 'propagated' | 'deferred' | 'unavailable' {
     const sessionId = readNonEmptyString(row.assignedSessionId) || evidence.sessionId;
     if (!sessionId || !readNonEmptyString(evidence.finalSummary)) {
         // No routable session or no summary to carry — fall back to the caller's bare ledger write.
-        return false;
+        return 'unavailable';
     }
     try {
         const result = reconcileDirectDispatchCompletionFromTranscript({
@@ -972,15 +978,30 @@ function propagateWatchdogTranscriptCompletion(
             // The watchdog poll already enforced idle + post-dispatch + no-trailing-tool + streak;
             // skip the reconcile's own grace/transcript_not_proven gates (dedup backstops remain).
             preValidatedTranscriptEvidence: true,
+            // MID-TURN-CAUSAL-ADMISSION (rc.16): the transcript poll's structural evidence can
+            // still straddle a genuinely mid-turn LOCAL worker (the incident shape: transcript
+            // reads idle-with-final-assistant while the raw PTY is mid-tool). Route the live
+            // adapter's synchronous probe through the unified choke point. The EARLY-IDLE
+            // caller is an eager path (no opts) → a pending verdict defers; the redrive-deadline
+            // caller passes boundedBackstop (the max-wait net) → the veto yields, preserving the
+            // genuine-final fail-open semantics.
+            causalAdmission: {
+                liveTurnPendingEvidence: resolveLiveTurnPendingEvidence(components, sessionId),
+                boundedBackstop: opts?.boundedBackstop === true,
+            },
             source,
         });
         // reconciled → freshly queued the coordinator completion; alreadyTerminal → a terminal
         // ledger (a real emit that raced in, or a prior watchdog synth) is already present. Either
         // way a finalSummary-bearing completion has been (or will be) delivered; the caller must NOT
         // add its summary-less ledger row on top.
-        return result.reconciled || result.alreadyTerminal === true;
+        if (result.reconciled || result.alreadyTerminal === true) return 'propagated';
+        if (result.reason === 'live_turn_pending_evidence' || result.reason === 'trailing_tool_activity_after_final_assistant') {
+            return 'deferred'; // mid-turn causal evidence — HOLD; do not complete this tick
+        }
+        return 'unavailable';
     } catch {
-        return false; // best-effort — fall back to the caller's bare ledger write
+        return 'unavailable'; // best-effort — fall back to the caller's bare ledger write
     }
 }
 
@@ -1062,6 +1083,29 @@ async function recoverStrandedAssignedDispatches(
                     minFinalAssistantAgeMs: ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS,
                 });
                 if (terminalEvidence) {
+                    // MID-TURN-CAUSAL-ADMISSION (rc.16): propagate FIRST. When the unified guard
+                    // defers (the LOCAL live adapter still reports the turn pending — transcript
+                    // idle-with-final-assistant can straddle a genuinely mid-turn worker), HOLD
+                    // the entire completion: no row flip, no bare ledger write, no queued event.
+                    // The streak resets so it re-accumulates; the next qualifying tick re-polls
+                    // and re-evaluates, releasing exactly once after the live state clears.
+                    const propagation = propagateWatchdogTranscriptCompletion(
+                        components, meshId, row, terminalEvidence, 'early_idle_transcript_evidence',
+                    );
+                    if (propagation === 'deferred') {
+                        assignedIdleFinalAssistantSince.delete(idleTranscriptStreakKey);
+                        LOG.info('MeshReconcile', `Deferred early transcript completion for task ${row.id} on mesh ${meshId} `
+                            + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}): the live adapter still reports `
+                            + `the turn pending (mid-tool / streaming / modal) — holding; the completion re-evaluates next tick`);
+                        traceMeshEventDrop('early_idle_completion_deferred_live_pending', {
+                            taskId: row.id,
+                            sessionId: row.assignedSessionId,
+                            nodeId: row.assignedNodeId,
+                            meshId,
+                            event: 'agent:generating_completed',
+                        });
+                        continue;
+                    }
                     assignedIdleFinalAssistantSince.delete(idleTranscriptStreakKey);
                     updateTaskStatus(meshId, row.id, terminalEvidence.outcome);
                     // WATCHDOG-FINALSUMMARY-LOST: propagate the completion to the coordinator WITH the
@@ -1069,9 +1113,7 @@ async function recoverStrandedAssignedDispatches(
                     // generating_completed produces — instead of only tracing a structural DROP. When
                     // propagation delivered (or a terminal ledger already exists), skip the bare
                     // summary-less ledger write below; only fall back to it if propagation could not run.
-                    const propagated = propagateWatchdogTranscriptCompletion(
-                        meshId, row, terminalEvidence, 'early_idle_transcript_evidence',
-                    );
+                    const propagated = propagation === 'propagated';
                     if (!propagated && !findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id })) {
                         try {
                             appendLedgerEntry(meshId, {
@@ -1388,9 +1430,14 @@ async function recoverStrandedAssignedDispatches(
                 // WATCHDOG-FINALSUMMARY-LOST: propagate the finalSummary-bearing completion to the
                 // coordinator (same [System] notification as the native path); only fall back to the
                 // bare summary-less ledger write when propagation could not run.
-                const propagated = propagateWatchdogTranscriptCompletion(
-                    meshId, row, terminalEvidence, 'redrive_deadline_transcript_evidence',
+                // MID-TURN-CAUSAL-ADMISSION: this is the BOUNDED max-wait net (the 15-min
+                // delivered-no-turn deadline) — boundedBackstop preserves the genuine-final
+                // fail-open semantics against the live-pending veto.
+                const propagation = propagateWatchdogTranscriptCompletion(
+                    components, meshId, row, terminalEvidence, 'redrive_deadline_transcript_evidence',
+                    { boundedBackstop: true },
                 );
+                const propagated = propagation === 'propagated';
                 if (!propagated && !findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id })) {
                     try {
                         appendLedgerEntry(meshId, {

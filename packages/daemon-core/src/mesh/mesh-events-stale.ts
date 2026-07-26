@@ -5,6 +5,7 @@ import { markSessionDeliveriesTerminal } from './mesh-delivery-policy.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { readNonEmptyString, readRecord, resolveEventSessionId, readWorkerResultMetadata, isWeakCompletionEvidence, buildMeshSystemMessage } from './mesh-events-utils.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
+import { LOG } from '../logging/logger.js';
 import { meshNodeIdMatches, sessionIdsEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 
 // EARLYNOTIFY-GATEBYPASS (d): every completed-emit producer that bypasses the CLI-provider
@@ -39,6 +40,88 @@ function recordSynthCompletionGateTrace(stage: string, payload: Record<string, u
 // already generating (where a transcript reconcile is far less likely to be premature).
 const DIRECT_DISPATCH_RECONCILE_GRACE_MS = 60_000;
 const DIRECT_DISPATCH_IDLE_SESSION_RECONCILE_GRACE_MS = 120_000;
+
+// ---------------------------------------------------------------------------
+// MID-TURN-CAUSAL-ADMISSION (rc.16 unified completion ingress)
+// ---------------------------------------------------------------------------
+// Verified incidents: the coordinator received a WEAK synthesized completion mid-turn —
+// after an interim narration bubble ("Let me find…") — while the worker's raw PTY still
+// showed `Working (43s)` and further tool calls continued. Every transcript-synth ingress
+// (reconcile-loop PHASE 4, the assigned-stranded watchdog's transcript propagation, the MCP
+// mesh_status poll) funnels through reconcileDirectDispatchCompletionFromTranscript, which
+// queues the coordinator completion DIRECTLY — bypassing the injectMeshSystemMessage →
+// evaluateMeshEventSuppression → hasLiveTurnPendingEvidence gate (3a48f660) that protects
+// the native provider-event path. evaluateTranscriptSynthAdmission is the ONE reusable
+// causal admission point closing that bypass: every synth caller passes its causal evidence
+// through the `causalAdmission` arg and the choke point enforces it uniformly.
+export interface TranscriptSynthCausalAdmission {
+    /**
+     * Synchronous re-check of a resolvable LOCAL live instance's CURRENT turn state — the
+     * same hasLiveTurnPendingEvidence() discriminator the 3a48f660 mid-turn gate uses on the
+     * native-event path. A pending verdict VETOES an eager transcript synth. Fail-open by
+     * construction: absent (remote/unknown session, separate-process caller), not a function,
+     * or throwing → no veto; the caller's bounded transcript evidence/settle behavior remains
+     * the operative net, so a missing transcript source never wedges.
+     */
+    liveTurnPendingEvidence?: () => boolean;
+    /**
+     * The caller is a BOUNDED last-resort backstop firing at its max-wait (the acked-hold
+     * death deadline, the delivered-no-turn redrive deadline). A bounded backstop overrides
+     * the live-pending veto — preserving the genuine-final fail-open / max-wait semantics —
+     * but NEVER overrides the trailing-tool veto (a stale weak interim summary must not
+     * become final merely because a timeout fired while newer transcript/tool activity
+     * exists).
+     */
+    boundedBackstop?: boolean;
+    /**
+     * The caller's transcript read shows tool/terminal activity AFTER the latest final-looking
+     * assistant bubble (hasTrailingToolActivityAfterFinalAssistant) — the bubble is interim
+     * narration ("Let me explore…"), the turn is still executing. Absolute veto: the worker is
+     * demonstrably alive and mid-turn, so even a bounded backstop keeps holding (the hold is
+     * still released by the session-death read-failure backstop and the stranded-reclaim /
+     * orphan-prune nets, so this cannot wedge forever).
+     */
+    trailingToolActivityAfterFinalAssistant?: boolean;
+}
+
+export type TranscriptSynthAdmissionVerdict =
+    | { admitted: true }
+    | { admitted: false; reason: 'live_turn_pending_evidence' | 'trailing_tool_activity_after_final_assistant' };
+
+export function evaluateTranscriptSynthAdmission(admission?: TranscriptSynthCausalAdmission): TranscriptSynthAdmissionVerdict {
+    if (!admission) return { admitted: true };
+    if (admission.trailingToolActivityAfterFinalAssistant === true) {
+        return { admitted: false, reason: 'trailing_tool_activity_after_final_assistant' };
+    }
+    if (!admission.boundedBackstop && typeof admission.liveTurnPendingEvidence === 'function') {
+        let pending = false;
+        try { pending = admission.liveTurnPendingEvidence() === true; } catch { /* fail open — never block on a diagnostic throw */ }
+        if (pending) return { admitted: false, reason: 'live_turn_pending_evidence' };
+    }
+    return { admitted: true };
+}
+
+/**
+ * Resolve the liveTurnPendingEvidence probe for `sessionId` from a components-shaped object
+ * (anything exposing instanceManager.getInstance). Returns undefined when no live instance
+ * resolves or the instance does not expose hasLiveTurnPendingEvidence — the fail-open
+ * remote/unknown case. Shared by every transcript-synth caller so the probe is resolved ONE
+ * way (UNIFY: same discriminator as the 3a48f660 native-event gate).
+ */
+export function resolveLiveTurnPendingEvidence(
+    components: { instanceManager?: { getInstance?: (sessionId: string) => unknown } } | undefined,
+    sessionId: string,
+): (() => boolean) | undefined {
+    try {
+        const instance = components?.instanceManager?.getInstance?.(sessionId) as
+            { hasLiveTurnPendingEvidence?: () => boolean } | undefined;
+        if (typeof instance?.hasLiveTurnPendingEvidence !== 'function') return undefined;
+        const probe = instance.hasLiveTurnPendingEvidence.bind(instance);
+        return () => probe();
+    } catch {
+        return undefined; // resolution itself failed → fail open
+    }
+}
 
 export function findRecentTerminalLedgerEvidence(args: {
     meshId: string;
@@ -229,6 +312,17 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
      * Direct-dispatch callers omit it → the gates apply exactly as before (no regression).
      */
     preValidatedTranscriptEvidence?: boolean;
+    /**
+     * MID-TURN-CAUSAL-ADMISSION (rc.16): causal admission evidence for the unified guard —
+     * see TranscriptSynthCausalAdmission. Every transcript-synth caller (PHASE 4 reconcile,
+     * watchdog transcript propagation, MCP mesh_status poll) passes what it knows; the choke
+     * point evaluates it BEFORE writing the terminal ledger or queuing the coordinator
+     * completion. A veto returns { reconciled: false, reason } — callers treat that exactly
+     * like their other not-yet-proven outcomes (hold and re-evaluate next tick), so the held
+     * completion re-evaluates the causal evidence every pass and releases exactly once after
+     * the state clears (the terminal-ledger dedup above makes the release idempotent).
+     */
+    causalAdmission?: TranscriptSynthCausalAdmission;
     source?: string;
 }): { reconciled: boolean; kind?: MeshLedgerKind; alreadyTerminal?: boolean; workerResult?: unknown; ledgerEntryId?: string; reason?: string } {
     const finalSummary = readNonEmptyString(args.finalSummary);
@@ -249,6 +343,21 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
         dispatchTimestamp: dispatch?.timestamp,
     })) {
         return { reconciled: false, alreadyTerminal: true, reason: 'terminal_ledger_entry_exists' };
+    }
+
+    // MID-TURN-CAUSAL-ADMISSION (rc.16): the unified guard every gate-bypassing synth must
+    // pass. Ordered BEFORE any ledger write / queue so a vetoed synth leaves no trace other
+    // than the completion-gate trace (observability parity with the synth-fire trace below).
+    const admission = evaluateTranscriptSynthAdmission(args.causalAdmission);
+    if (!admission.admitted) {
+        LOG.info('MeshEvents', `Transcript synth vetoed for task ${args.taskId} session ${args.sessionId} (source ${args.source || 'direct_task_transcript_reconciliation'}): ${admission.reason} — holding the completion; it re-evaluates on the next reconcile pass`);
+        recordSynthCompletionGateTrace('synth-veto', {
+            producer: 'transcript_reconcile',
+            source: args.source || 'direct_task_transcript_reconciliation',
+            taskId: args.taskId,
+            reason: admission.reason,
+        });
+        return { reconciled: false, reason: admission.reason };
     }
 
     const nodeId = readNonEmptyString(args.nodeId) || dispatch?.nodeId;

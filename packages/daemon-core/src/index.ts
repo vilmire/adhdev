@@ -536,6 +536,7 @@ export {
   CHAT_MESSAGE_ACTIVITY_SOURCES,
   CHAT_MESSAGE_INTERNAL_SOURCES,
   classifyChatMessageVisibility,
+  hasTrailingToolActivityAfterFinalAssistant,
   isUserFacingChatMessage,
   isActivityChatMessage,
   isInternalChatMessage,

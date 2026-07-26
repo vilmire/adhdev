@@ -77,6 +77,7 @@ import {
     getQueue,
     getLedgerSummary,
     getSessionRecoveryContext,
+    hasTrailingToolActivityAfterFinalAssistant,
     insertDirectDispatch,
     recordDirectDispatchTask,
     isP2pRelayTransportFailure,
@@ -859,6 +860,13 @@ export async function reconcileDirectDispatchesFromTranscriptEvidence(
             });
             const payload = unwrapCommandPayload(readResult);
             if (payload?.success === false) continue;
+            // MID-TURN-CAUSAL-ADMISSION (rc.16): the latest final-LOOKING assistant bubble
+            // followed by trailing tool/terminal activity is interim narration, not a turn
+            // end — a single coordinator poll must never promote it to a completion. This is
+            // the same veto the reconcile loop's PHASE 4 and the watchdog poll enforce; the
+            // MCP process has no live adapter to probe (remote semantics), so the bounded
+            // transcript evidence below remains the operative net (fail-open preserved).
+            if (hasTrailingToolActivityAfterFinalAssistant(Array.isArray(payload?.messages) ? payload.messages : [])) continue;
             const evidence = readFinalAssistantTranscriptEvidence(payload);
             if (!evidence.finalSummary) continue;
             const result = reconcileDirectDispatchCompletionFromTranscript({
