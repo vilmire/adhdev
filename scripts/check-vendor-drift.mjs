@@ -35,6 +35,7 @@ function run(cmd, args) {
   execFileSync(cmd, args, { stdio: 'inherit', cwd: root, shell: isWin });
 }
 
+run(npm, ['run', 'build', '-w', 'packages/mesh-shared']);
 run(npm, ['run', 'build', '-w', 'packages/mcp-server']);
 run(npm, ['run', 'bundle:vendor', '-w', 'packages/daemon-standalone']);
 

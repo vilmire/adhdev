@@ -25,7 +25,6 @@ import * as fs3 from "fs";
 import * as net from "net";
 import {
   SessionHostRegistry,
-  classifyTermination,
   createLineParser,
   createResponseEnvelope,
   getDefaultSessionHostEndpoint
@@ -269,16 +268,13 @@ var PtySessionRuntime = class {
       this.respondToTerminalQueries(data);
       this.onDataCallback(data);
     });
-    this.ptyProcess.onExit(({ exitCode, signal }) => {
+    this.ptyProcess.onExit(({ exitCode }) => {
       this.ptyProcess = null;
       this.screenMirror?.dispose();
       this.screenMirror = null;
       this.pendingQueryScanTail = "";
       this.terminalModeScanTail = "";
-      this.onExitCallback(
-        typeof exitCode === "number" ? exitCode : null,
-        typeof signal === "number" ? signal : null
-      );
+      this.onExitCallback(exitCode ?? null);
     });
     return this.ptyProcess.pid;
   }
@@ -390,12 +386,10 @@ import * as path from "path";
 var SessionHostStorage = class {
   rootDir;
   runtimesDir;
-  tombstonesDir;
   constructor(options = {}) {
     const appName = options.appName || "adhdev";
     this.rootDir = path.join(os2.homedir(), ".adhdev", "session-host", appName);
     this.runtimesDir = path.join(this.rootDir, "runtimes");
-    this.tombstonesDir = path.join(this.rootDir, "tombstones");
   }
   loadAll() {
     if (!fs2.existsSync(this.runtimesDir)) return [];
@@ -426,52 +420,6 @@ var SessionHostStorage = class {
   }
   remove(sessionId) {
     const filePath = path.join(this.runtimesDir, `${sessionId}.json`);
-    try {
-      fs2.unlinkSync(filePath);
-    } catch {
-    }
-  }
-  /**
-   * Persist a compact termination tombstone. Kept in a separate directory from
-   * live runtimes so it survives the post-exit cleanup of the runtime file and
-   * remains inspectable for post-mortem diagnostics.
-   */
-  saveTombstone(sessionId, termination) {
-    fs2.mkdirSync(this.tombstonesDir, { recursive: true });
-    const filePath = path.join(this.tombstonesDir, `${sessionId}.json`);
-    const payload = {
-      sessionId,
-      termination,
-      updatedAt: Date.now()
-    };
-    fs2.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf8");
-  }
-  loadTombstone(sessionId) {
-    const filePath = path.join(this.tombstonesDir, `${sessionId}.json`);
-    try {
-      const parsed = JSON.parse(fs2.readFileSync(filePath, "utf8"));
-      return parsed?.sessionId ? parsed : null;
-    } catch {
-      return null;
-    }
-  }
-  loadAllTombstones() {
-    if (!fs2.existsSync(this.tombstonesDir)) return [];
-    const entries = fs2.readdirSync(this.tombstonesDir, { withFileTypes: true });
-    const states = [];
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const fullPath = path.join(this.tombstonesDir, entry.name);
-      try {
-        const parsed = JSON.parse(fs2.readFileSync(fullPath, "utf8"));
-        if (parsed?.sessionId) states.push(parsed);
-      } catch {
-      }
-    }
-    return states.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  }
-  removeTombstone(sessionId) {
-    const filePath = path.join(this.tombstonesDir, `${sessionId}.json`);
     try {
       fs2.unlinkSync(filePath);
     } catch {
@@ -692,9 +640,6 @@ var SessionHostServer = class extends EventEmitter {
   recentTransitions = [];
   exitWaiters = /* @__PURE__ */ new Map();
   lastNoOutputInputWarnAt = /* @__PURE__ */ new Map();
-  // Records the most recent explicit stop/delete/restart/prune request per
-  // session so the termination diagnostic can attribute the exit to it.
-  stopRequests = /* @__PURE__ */ new Map();
   constructor(options = {}) {
     super();
     this.endpoint = options.endpoint || getDefaultSessionHostEndpoint(options.appName || "adhdev");
@@ -892,7 +837,6 @@ var SessionHostServer = class extends EventEmitter {
           return { success: true, result: this.registry.getSession(request.payload.sessionId) };
         }
         case "stop_session": {
-          this.stopRequests.set(request.payload.sessionId, "stop");
           this.registry.setLifecycle(request.payload.sessionId, "stopping");
           this.persistNow(request.payload.sessionId);
           this.requireRuntime(request.payload.sessionId).stop();
@@ -907,7 +851,6 @@ var SessionHostServer = class extends EventEmitter {
             if (!request.payload.force) {
               return { success: false, error: `Session ${record.sessionId} is still running; pass force to stop and delete it` };
             }
-            this.stopRequests.set(record.sessionId, "delete");
             this.registry.setLifecycle(record.sessionId, "stopping");
             this.persistNow(record.sessionId);
             this.requireRuntime(record.sessionId).stop();
@@ -917,8 +860,6 @@ var SessionHostServer = class extends EventEmitter {
           }
           this.registry.deleteSession(record.sessionId);
           this.storage.remove(record.sessionId);
-          this.storage.removeTombstone(record.sessionId);
-          this.stopRequests.delete(record.sessionId);
           this.emitEvent({ type: "session_deleted", sessionId: record.sessionId });
           this.recordRuntimeTransition(record.sessionId, "delete_session", record.lifecycle, void 0, true);
           return { success: true, result: { sessionId: record.sessionId, deleted: true } };
@@ -1226,7 +1167,6 @@ var SessionHostServer = class extends EventEmitter {
       throw new Error(`Unknown session: ${sessionId}`);
     }
     if (this.runtimes.has(sessionId)) {
-      this.stopRequests.set(sessionId, "restart");
       this.registry.setLifecycle(sessionId, "stopping");
       this.persistNow(sessionId);
       this.recordRuntimeTransition(sessionId, "restart_requested", "stopping", void 0, true);
@@ -1297,7 +1237,6 @@ var SessionHostServer = class extends EventEmitter {
       true
     );
     if (this.runtimes.has(record.sessionId)) {
-      this.stopRequests.set(record.sessionId, "prune");
       this.registry.setLifecycle(record.sessionId, "stopping");
       this.persistNow(record.sessionId);
       this.requireRuntime(record.sessionId).stop();
@@ -1307,8 +1246,6 @@ var SessionHostServer = class extends EventEmitter {
     }
     this.registry.deleteSession(record.sessionId);
     this.storage.remove(record.sessionId);
-    this.storage.removeTombstone(record.sessionId);
-    this.stopRequests.delete(record.sessionId);
   }
   startRuntime(record, payload, startEventType) {
     const runtime = new PtySessionRuntime({
@@ -1319,7 +1256,22 @@ var SessionHostServer = class extends EventEmitter {
         this.schedulePersist(record.sessionId);
         this.emitEvent({ type: "session_output", sessionId: record.sessionId, seq, data });
       },
-      onExit: (exitCode, signal) => this.handleRuntimeExit(record, exitCode, signal)
+      onExit: (exitCode) => {
+        this.registry.markStopped(record.sessionId, exitCode === 0 ? "stopped" : "failed");
+        this.runtimes.delete(record.sessionId);
+        this.resolveExitWaiters(record.sessionId, exitCode);
+        this.persistNow(record.sessionId);
+        this.emitEvent({ type: "session_exit", sessionId: record.sessionId, exitCode });
+        this.recordRuntimeTransition(
+          record.sessionId,
+          "session_exit",
+          exitCode === 0 ? "stopped" : "failed",
+          void 0,
+          exitCode === 0,
+          exitCode === 0 ? void 0 : `exitCode=${exitCode}`
+        );
+        setTimeout(() => this.storage.remove(record.sessionId), 5e3);
+      }
     });
     this.registry.setLifecycle(record.sessionId, "starting");
     const pid = runtime.start();
@@ -1329,58 +1281,6 @@ var SessionHostServer = class extends EventEmitter {
     this.emitEvent({ type: startEventType, sessionId: record.sessionId, pid });
     this.recordRuntimeTransition(record.sessionId, startEventType, startedRecord.lifecycle, `pid=${pid}`, true);
     return startedRecord;
-  }
-  /**
-   * Handle a PTY termination: classify the (exitCode, signal) pair, stamp the
-   * record + tombstone, emit exactly one structured diagnostic, and schedule
-   * cleanup of the live persistence file (the tombstone is retained).
-   */
-  handleRuntimeExit(record, exitCode, signal) {
-    const priorRecord = this.registry.getSession(record.sessionId);
-    const termination = classifyTermination({
-      exitCode,
-      signal,
-      osPid: priorRecord?.osPid,
-      previousLifecycle: priorRecord?.lifecycle,
-      lastOutputAt: priorRecord?.lastActivityAt,
-      requestedStop: this.stopRequests.get(record.sessionId),
-      terminatedAt: Date.now()
-    });
-    this.stopRequests.delete(record.sessionId);
-    this.registry.markStopped(record.sessionId, termination.lifecycle, termination);
-    this.runtimes.delete(record.sessionId);
-    this.resolveExitWaiters(record.sessionId, exitCode);
-    this.persistNow(record.sessionId);
-    this.storage.saveTombstone(record.sessionId, termination);
-    this.emitEvent({ type: "session_exit", sessionId: record.sessionId, exitCode, signal, termination });
-    const summary = `reason=${termination.reason} exitCode=${termination.exitCode === null ? "unknown" : termination.exitCode} signal=${termination.signal ?? "none"}`;
-    this.recordHostLog(
-      termination.lifecycle === "stopped" ? "info" : "warn",
-      `session terminated: ${summary}`,
-      record.sessionId,
-      {
-        runtimeKey: record.runtimeKey,
-        providerType: record.providerType,
-        osPid: termination.osPid,
-        exitCode: termination.exitCode,
-        signal: termination.signal,
-        reason: termination.reason,
-        previousLifecycle: termination.previousLifecycle,
-        lifecycle: termination.lifecycle,
-        lastOutputAt: termination.lastOutputAt,
-        requestedStop: termination.requestedStop
-      }
-    );
-    this.recordRuntimeTransition(
-      record.sessionId,
-      "session_exit",
-      termination.lifecycle,
-      summary,
-      termination.lifecycle === "stopped",
-      termination.lifecycle === "stopped" ? void 0 : summary
-    );
-    setTimeout(() => this.storage.remove(record.sessionId), 5e3).unref?.();
-    return termination;
   }
 };
 
