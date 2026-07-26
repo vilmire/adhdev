@@ -1502,7 +1502,7 @@
             "github": "GitHub ↗",
             "features": {
                 "webControlTitle": "Web control of local CLI agents",
-                "webControlDesc": "Drive any local CLI agent — Claude Code, Codex, Gemini — from your browser: send prompts, approve actions, and steer sessions without touching the terminal.",
+                "webControlDesc": "Drive any local CLI agent — Claude Code, Codex, Cursor CLI — from your browser: send prompts, approve actions, and steer sessions without touching the terminal.",
                 "chatRelayTitle": "Agent chat relay",
                 "chatRelayDesc": "Read and respond to agent conversations from anywhere, including mobile surfaces.",
                 "liveViewTitle": "Live session view",
@@ -1518,7 +1518,7 @@
                 "step2Title": "Sign In",
                 "step2Desc": "Sign in with GitHub or Google and the daemon pairs itself to your account — no token to copy.",
                 "step3Title": "Drive Your Agents from Anywhere",
-                "step3Desc": "The machine appears in your dashboard instantly. Launch and control Claude Code, Codex, Gemini, and other CLI agents from the web — IDE sessions too."
+                "step3Desc": "The machine appears in your dashboard instantly. Launch and control Claude Code, Codex, Cursor CLI, and other CLI agents from the web — IDE sessions too."
             },
             "plans": {
                 "freeName": "Free",
@@ -2917,10 +2917,10 @@
         },
         "what": {
             "sectionTitle": "Any agent, mixed freely",
-            "sectionSubtitle": "Vendor-neutral by design. Run Claude Code on the Mac, Codex on the Windows GPU box, Gemini for review passes — in the same mesh, under the same policies. Switch vendors without switching platforms.",
+            "sectionSubtitle": "Vendor-neutral by design. Run Claude Code on the Mac, Codex on the Windows GPU box, Cursor CLI for review passes — in the same mesh, under the same policies. Switch vendors without switching platforms.",
             "cliHighlight": "CLI agents",
             "cliTitle": "Drive any terminal agent from the web",
-            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi, and OpenCode — attached on your machine through a PTY adapter with proper resume and reconnect, driven from your browser. Send prompts and provide visual context instantly (paste, drag & drop, or upload multiple images at once, up to 5 images / 10MB each). Aider, Gemini CLI, Goose, and other ACP agents connect over stdio.",
+            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi, and OpenCode — attached on your machine through a PTY adapter with proper resume and reconnect, driven from your browser. Send prompts and provide visual context instantly (paste, drag & drop, or upload multiple images at once, up to 5 images / 10MB each). Aider, Goose, and other ACP agents connect over stdio.",
             "uiHighlight": "One UI",
             "uiTitle": "Same dashboard, any device",
             "uiDesc": "Cloud-hosted at adhf.dev — drive every agent from a laptop or phone, whether you're at your desk or away from it.",
@@ -2950,7 +2950,7 @@
             "hintCli": "Driven through a PTY adapter with resume and reconnect.",
             "groupExtensions": "In-IDE extension agents",
             "hintExtensions": "CDP webview attachment for agents that live inside another IDE.",
-            "acpFootnote": "Plus {{count}}+ ACP agents over stdio (Agent Client Protocol): Codex, Claude Agent, Gemini, Goose, Cline, OpenHands, and more."
+            "acpFootnote": "Plus {{count}}+ ACP agents over stdio (Agent Client Protocol): Codex, Claude Agent, Goose, Cline, OpenHands, and more."
         },
         "pricing": {
             "sectionTitle": "Simple pricing as your agents grow",

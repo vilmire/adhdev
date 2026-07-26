@@ -1502,7 +1502,7 @@
             "github": "GitHub ↗",
             "features": {
                 "webControlTitle": "Control web de agentes CLI locales",
-                "webControlDesc": "Controla cualquier agente CLI local — Claude Code, Codex, Gemini — desde tu navegador: envía prompts, aprueba acciones y dirige sesiones sin tocar la terminal.",
+                "webControlDesc": "Controla cualquier agente CLI local — Claude Code, Codex, Cursor CLI — desde tu navegador: envía prompts, aprueba acciones y dirige sesiones sin tocar la terminal.",
                 "chatRelayTitle": "Relé de chat de agentes",
                 "chatRelayDesc": "Lee y responde conversaciones de agentes desde cualquier lugar, incluidas las superficies móviles.",
                 "liveViewTitle": "Vista de sesión en vivo",
@@ -1518,7 +1518,7 @@
                 "step2Title": "Iniciar sesión",
                 "step2Desc": "Inicia sesión con GitHub o Google y el daemon se empareja con tu cuenta — sin ningún token que copiar.",
                 "step3Title": "Controla tus agentes desde cualquier lugar",
-                "step3Desc": "La máquina aparece en tu panel al instante. Inicia y controla Claude Code, Codex, Gemini y otros agentes CLI desde la web — también las sesiones de IDE."
+                "step3Desc": "La máquina aparece en tu panel al instante. Inicia y controla Claude Code, Codex, Cursor CLI y otros agentes CLI desde la web — también las sesiones de IDE."
             },
             "plans": {
                 "freeName": "Free",
@@ -2916,10 +2916,10 @@
         },
         "what": {
             "sectionTitle": "Cualquier agente, mezclado libremente",
-            "sectionSubtitle": "Neutral respecto al proveedor por diseño. Ejecuta Claude Code en el Mac, Codex en la máquina GPU con Windows, Gemini para las pasadas de revisión, en el mismo mesh y bajo las mismas políticas. Cambia de proveedor sin cambiar de plataforma.",
+            "sectionSubtitle": "Neutral respecto al proveedor por diseño. Ejecuta Claude Code en el Mac, Codex en la máquina GPU con Windows, Cursor CLI para las pasadas de revisión, en el mismo mesh y bajo las mismas políticas. Cambia de proveedor sin cambiar de plataforma.",
             "cliHighlight": "Agentes CLI",
             "cliTitle": "Controla cualquier agente de terminal desde la web",
-            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi y OpenCode: conectados en tu máquina mediante un adaptador PTY con reanudación y reconexión adecuadas, controlados desde tu navegador. Envía prompts y aporta contexto visual al instante (pega, arrastra y suelta, o sube varias imágenes a la vez, hasta 5 imágenes / 10MB cada una). Aider, Gemini CLI, Goose y otros agentes ACP se conectan por stdio.",
+            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi y OpenCode: conectados en tu máquina mediante un adaptador PTY con reanudación y reconexión adecuadas, controlados desde tu navegador. Envía prompts y aporta contexto visual al instante (pega, arrastra y suelta, o sube varias imágenes a la vez, hasta 5 imágenes / 10MB cada una). Aider, Goose y otros agentes ACP se conectan por stdio.",
             "uiHighlight": "Una sola UI",
             "uiTitle": "El mismo panel, cualquier dispositivo",
             "uiDesc": "Alojado en la nube en adhf.dev: controla cada agente desde una laptop o un teléfono, ya sea en tu escritorio o lejos de él.",
@@ -2949,7 +2949,7 @@
             "hintCli": "Controlados a través de un adaptador PTY con reanudación y reconexión.",
             "groupExtensions": "Agentes de extensión dentro del IDE",
             "hintExtensions": "Conexión de webview por CDP para agentes que viven dentro de otro IDE.",
-            "acpFootnote": "Además de {{count}}+ agentes ACP por stdio (Agent Client Protocol): Codex, Claude Agent, Gemini, Goose, Cline, OpenHands y más."
+            "acpFootnote": "Además de {{count}}+ agentes ACP por stdio (Agent Client Protocol): Codex, Claude Agent, Goose, Cline, OpenHands y más."
         },
         "pricing": {
             "sectionTitle": "Precios sencillos a medida que crecen tus agentes",

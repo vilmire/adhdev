@@ -1502,7 +1502,7 @@
             "github": "GitHub ↗",
             "features": {
                 "webControlTitle": "로컬 CLI 에이전트 웹 제어",
-                "webControlDesc": "Claude Code, Codex, Gemini 등 어떤 로컬 CLI 에이전트든 브라우저에서 구동하세요: 프롬프트 전송, 액션 승인, 터미널 없이 세션 조종.",
+                "webControlDesc": "Claude Code, Codex, Cursor CLI 등 어떤 로컬 CLI 에이전트든 브라우저에서 구동하세요: 프롬프트 전송, 액션 승인, 터미널 없이 세션 조종.",
                 "chatRelayTitle": "에이전트 채팅 릴레이",
                 "chatRelayDesc": "모바일 포함 어디서든 에이전트 대화를 읽고 응답합니다.",
                 "liveViewTitle": "실시간 세션 보기",
@@ -1518,7 +1518,7 @@
                 "step2Title": "로그인",
                 "step2Desc": "GitHub 또는 Google로 한 번 로그인하면 데몬이 계정에 스스로 페어링됩니다 — 복사할 토큰이 없습니다.",
                 "step3Title": "어디서든 에이전트 구동",
-                "step3Desc": "머신이 즉시 대시보드에 나타납니다. Claude Code, Codex, Gemini 등 CLI 에이전트를 웹에서 실행하고 제어하세요 — IDE 세션도 마찬가지입니다."
+                "step3Desc": "머신이 즉시 대시보드에 나타납니다. Claude Code, Codex, Cursor CLI 등 CLI 에이전트를 웹에서 실행하고 제어하세요 — IDE 세션도 마찬가지입니다."
             },
             "plans": {
                 "freeName": "Free",
@@ -2917,10 +2917,10 @@
         },
         "what": {
             "sectionTitle": "어떤 에이전트든, 자유롭게 혼합",
-            "sectionSubtitle": "설계부터 벤더 중립. Mac에서 Claude Code, Windows GPU 박스에서 Codex, 리뷰 패스에 Gemini — 동일한 메시에서, 동일한 정책 아래. 플랫폼을 바꾸지 않고 벤더를 바꿉니다.",
+            "sectionSubtitle": "설계부터 벤더 중립. Mac에서 Claude Code, Windows GPU 박스에서 Codex, 리뷰 패스에 Cursor CLI — 동일한 메시에서, 동일한 정책 아래. 플랫폼을 바꾸지 않고 벤더를 바꿉니다.",
             "cliHighlight": "CLI 에이전트",
             "cliTitle": "어떤 터미널 에이전트든 웹에서 구동",
-            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi, OpenCode — PTY 어댑터를 통해 머신에 연결되어 재개 및 재연결이 가능하며, 브라우저에서 구동됩니다. 즉시 프롬프트를 보내고 시각적 컨텍스트를 제공하세요(붙여넣기, 드래그 앤 드롭, 또는 한 번에 최대 5개 이미지/10MB 업로드). Aider, Gemini CLI, Goose 등 ACP 에이전트는 stdio로 연결됩니다.",
+            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi, OpenCode — PTY 어댑터를 통해 머신에 연결되어 재개 및 재연결이 가능하며, 브라우저에서 구동됩니다. 즉시 프롬프트를 보내고 시각적 컨텍스트를 제공하세요(붙여넣기, 드래그 앤 드롭, 또는 한 번에 최대 5개 이미지/10MB 업로드). Aider, Goose 등 ACP 에이전트는 stdio로 연결됩니다.",
             "uiHighlight": "하나의 UI",
             "uiTitle": "같은 대시보드, 어떤 기기에서든",
             "uiDesc": "adhf.dev에 클라우드로 호스팅 — 책상에 있든 없든 노트북이나 폰에서 모든 에이전트를 구동합니다.",
@@ -2950,7 +2950,7 @@
             "hintCli": "재개 및 재연결이 가능한 PTY 어댑터로 구동.",
             "groupExtensions": "IDE 내장 익스텐션 에이전트",
             "hintExtensions": "다른 IDE 안에서 실행되는 에이전트를 위한 CDP 웹뷰 연결.",
-            "acpFootnote": "stdio(Agent Client Protocol)를 통한 {{count}}개 이상의 ACP 에이전트 추가 지원: Codex, Claude Agent, Gemini, Goose, Cline, OpenHands 등."
+            "acpFootnote": "stdio(Agent Client Protocol)를 통한 {{count}}개 이상의 ACP 에이전트 추가 지원: Codex, Claude Agent, Goose, Cline, OpenHands 등."
         },
         "pricing": {
             "sectionTitle": "에이전트 규모에 맞는 단순한 요금제",
