@@ -572,12 +572,13 @@ function evaluateMeshEventSuppression(
         eventNodeId: string;
         eventTimestamp: number | null;
         workerCoordinatorDaemonId: string | undefined;
+        components: DaemonComponents;
     },
 ):
     | { kind: 'suppress'; result: { success: true; forwarded: 0; suppressed: true; [extra: string]: unknown } }
     | { kind: 'reconcile'; metadataEvent: Record<string, unknown> }
     | null {
-    const { traceCtx, eventSessionId, eventNodeId, eventTimestamp, workerCoordinatorDaemonId } = ctx;
+    const { traceCtx, eventSessionId, eventNodeId, eventTimestamp, workerCoordinatorDaemonId, components } = ctx;
 
     const intentionalCleanupStop = shouldSuppressIntentionalCleanupStop({
         event: args.event,
@@ -647,6 +648,45 @@ function evaluateMeshEventSuppression(
         }
     }
     if (args.event === 'agent:generating_completed' && eventSessionId) {
+        // MID-TURN-LIVE-STATE-GATE (broader false-idle RCA, mid-turn follow-up): before trusting
+        // ANY incoming completion, independently re-verify a resolvable LOCAL live instance's
+        // CURRENT turn state — not just the event's self-reported diagnostic — via the exact same
+        // discriminators the instance's OWN emission gate (getCompletedFinalizationBlock) uses
+        // (adapter pending-response: isWaitingForResponse / currentTurnScope / isProcessing() /
+        // a non-empty partial response; or a live approval/choice modal). A screen-redraw parse
+        // artifact, a decoupled-immediate emit, or a TOCTOU between emit and receipt can let a
+        // genuinely mid-turn session's completion reach here; this is a stateless, synchronous
+        // safety net for that race.
+        //
+        // Scope: ONLY when components.instanceManager.getInstance(sessionId) resolves a live
+        // instance exposing hasLiveTurnPendingEvidence() — i.e. a co-located worker/coordinator or
+        // single-daemon (standalone) topology. A REMOTE session (no live instance on this daemon)
+        // is untouched by this gate — absence of a resolvable instance is NOT treated as pending
+        // evidence, so a remote/unknown session is never fail-closed here; its existing async
+        // reconcile-loop protections (evaluateEarlyIdleTranscriptArm, transcript trailing-tool-
+        // activity checks) remain the operative safety net, unchanged.
+        //
+        // Bounded / never wedges: this SUPPRESSES only the ONE premature event and persists no new
+        // hold state — it relies on the adapter's OWN bounded finalization retry (which already
+        // owns re-emitting once genuinely idle, COMPLETED_FINALIZATION_MAX_WAIT_MS) plus the
+        // existing reconcile-loop completion nets (PHASE 4 transcript synth, assigned-stranded
+        // deadline, acked-hold death backstop) as fail-open backstops if the adapter's re-emit is
+        // itself ever lost. A later genuine completion (pending evidence cleared) is NOT touched by
+        // this gate and is processed normally.
+        const liveInstance = components.instanceManager?.getInstance?.(eventSessionId) as
+            { hasLiveTurnPendingEvidence?: () => boolean } | undefined;
+        if (typeof liveInstance?.hasLiveTurnPendingEvidence === 'function') {
+            let midTurnPending = false;
+            try { midTurnPending = liveInstance.hasLiveTurnPendingEvidence() === true; } catch { /* fail open — never block on a diagnostic throw */ }
+            if (midTurnPending) {
+                LOG.info('MeshEvents', `Suppressed agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}): live adapter re-check shows the turn is still pending (mid-tool / streaming / modal) — treating as a premature/redraw-race emit; the adapter's own finalization retry or the reconcile loop's transcript evidence will surface the real completion`);
+                traceMeshEventDrop('mid_turn_live_state_pending', traceCtx);
+                return {
+                    kind: 'suppress',
+                    result: { success: true, forwarded: 0, suppressed: true, midTurnLiveStatePending: true },
+                };
+            }
+        }
         // CAUSAL-COMPLETION-GATE (Fix A): fail closed ONLY for the scoped auto-launch race —
         // an in-window, still-'pending' task whose autoLaunch record names this exact session,
         // with neither a consumed delivery nor a matching task_dispatched ledger entry. Every
@@ -1118,6 +1158,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         eventNodeId,
         eventTimestamp,
         workerCoordinatorDaemonId,
+        components,
     });
     if (suppression) {
         if (suppression.kind === 'reconcile') {

@@ -1210,6 +1210,24 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /**
+     * MID-TURN-LIVE-STATE-GATE (broader false-idle RCA, mid-turn follow-up): a live,
+     * synchronous re-check of whether this session's CURRENT turn genuinely still has
+     * unresolved work. Public wrapper so the coordinator (mesh-event-forwarding) can
+     * independently re-verify an incoming agent:generating_completed for a LOCAL session
+     * before trusting it — defense-in-depth against a race where the completion emit and the
+     * coordinator's receipt straddle a state change (screen-redraw parse artifact, decoupled-
+     * immediate emit). Reuses the EXACT same discriminators this instance's own finalization
+     * gate (getCompletedFinalizationBlock) uses — hasAdapterPendingResponse() (adapter
+     * isWaitingForResponse / currentTurnScope / isProcessing() / a non-empty partial response)
+     * OR isModalParked() (a live approval/choice modal) — so a session this method reports
+     * pending is, by construction, one the local finalization gate would also refuse to
+     * finalize right now.
+     */
+    hasLiveTurnPendingEvidence(): boolean {
+        return this.hasAdapterPendingResponse() || this.isModalParked();
+    }
+
+    /**
      * PTY-OVERTRUST-DRAIN (Defect B). The deliverability/drain status the mesh
      * reconcile loop must consult — the RAW adapter turn-state, with the
      * auto-approve "hold-idle" visual mask STRIPPED.
