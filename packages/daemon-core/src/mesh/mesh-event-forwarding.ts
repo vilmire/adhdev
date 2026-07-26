@@ -687,6 +687,31 @@ function evaluateMeshEventSuppression(
                 };
             }
         }
+        // NO-DISPATCH-NATIVE-COMPLETION-GATE (rc.16 follow-up): a session that was launched
+        // but never given ANY task can still emit its own native agent:generating_completed off
+        // a startup/greeting artifact (e.g. cursor-cli's "→ Plan, search, build anything" idle
+        // prompt right after boot) — the WARMUPGAP note on markSessionTerminal below already
+        // recognizes this shape (no echoed taskId, no active assignment) but only skips the
+        // dispatch-row side effect; the event itself still becomes a coordinator-visible
+        // task_completed. Suppress it outright here, narrowly: the event carries no taskId, the
+        // session holds no active assignment (queue OR direct-dispatch), AND the session has NO
+        // terminal ledger history at all (a session with a PRIOR terminal has been dispatched at
+        // least once before and falls through to the existing terminal/dedup logic below
+        // unchanged). Structural/causal only — no message-content inspection. A completion that
+        // is NOT weak (a real final summary / worker result, not a bare false-idle status flag)
+        // still passes through: a session that was somehow handed a genuine answer without a
+        // tracked dispatch must not have that answer silently dropped.
+        if (!readNonEmptyString(args.metadataEvent.taskId)
+            && !sessionHasActiveAssignment(args.meshId, eventSessionId)
+            && !findRecentTerminalLedgerEvidence({ meshId: args.meshId, sessionId: eventSessionId, nodeId: eventNodeId || undefined })
+            && isWeakCompletionEvidence(args.metadataEvent)) {
+            LOG.info('MeshEvents', `Suppressed agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}): no taskId, no active assignment, and no prior terminal ledger evidence — a pre-dispatch startup/greeting artifact, not a real task completion`);
+            traceMeshEventDrop('no_dispatch_native_completion', traceCtx);
+            return {
+                kind: 'suppress',
+                result: { success: true, forwarded: 0, suppressed: true, noDispatchNativeCompletion: true },
+            };
+        }
         // CAUSAL-COMPLETION-GATE (Fix A): fail closed ONLY for the scoped auto-launch race —
         // an in-window, still-'pending' task whose autoLaunch record names this exact session,
         // with neither a consumed delivery nor a matching task_dispatched ledger entry. Every

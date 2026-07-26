@@ -1222,9 +1222,35 @@ export class CliProviderInstance implements ProviderInstance {
      * OR isModalParked() (a live approval/choice modal) — so a session this method reports
      * pending is, by construction, one the local finalization gate would also refuse to
      * finalize right now.
+     *
+     * NATIVE-TRAILING-TOOL-GATE (rc.16 follow-up): the three adapter-state discriminators
+     * above are blind to a background shell tool that keeps a turn alive without the adapter
+     * reporting a pending response — e.g. a backgrounded `sleep 40 &` between narration
+     * bubbles on a write-lag native-source provider (claude-cli), which is deliberately
+     * un-floored (noExternalTranscriptSource omitted, mission f2f6da1b owner decision) so its
+     * transcript write-lag emits promptly. That un-flooring is correct for the ordinary
+     * fraction-of-a-second trail, but it also means the growth-hold / busy-lease protections
+     * in getCompletedFinalizationBlock never engage for claude-cli, so an interim final-
+     * LOOKING bubble followed by continuing tool calls can still finalize as a completion
+     * while the transcript demonstrably shows the turn still executing. Close that gap here,
+     * narrowly: for a native-source provider only, reuse the SAME bounded transcript read the
+     * class's own completion judgment already performs (probeNativeTranscriptSignals) and
+     * apply the SAME trailing-tool-activity veto the transcript-synth admission choke point
+     * uses (hasTrailingToolActivityAfterFinalAssistant) — the latest final-looking assistant
+     * bubble followed by tool/terminal activity is interim narration, not a turn end. Fail-open
+     * by construction: a non-native-source class (probe returns null), an unresolved
+     * transcript, or a read error never reaches the veto, so a missing/unavailable transcript
+     * can never wedge a session as "pending" forever.
      */
     hasLiveTurnPendingEvidence(): boolean {
-        return this.hasAdapterPendingResponse() || this.isModalParked();
+        if (this.hasAdapterPendingResponse() || this.isModalParked()) return true;
+        try {
+            const probe = this.probeNativeTranscriptSignals();
+            if (probe?.snapshot?.available === true && Array.isArray(probe.messages)) {
+                if (hasTrailingToolActivityAfterFinalAssistant(probe.messages as ChatMessage[])) return true;
+            }
+        } catch { /* fail open — a probe error must never fabricate pending evidence */ }
+        return false;
     }
 
     /**
