@@ -8,6 +8,7 @@ import {
     AutoApproveRiskBadge,
     DangerousAutoApproveModeDialog,
 } from '../../components/dashboard/AutoApproveModeSelector'
+import LaunchConfirmDialog from '../../components/machine/LaunchConfirmDialog'
 import { deriveAutoApproveModeRisk } from '../../utils/auto-approve-modes'
 import {
     resolveEffectiveAutoApprove,
@@ -34,6 +35,10 @@ interface Props {
     machineAutoApproveEnabled: boolean
     /** Machine-local dangerous opt-in (delegatedWorkerDangerousModeAllow; default false). */
     machineDangerousAllowed: boolean
+    /** Mesh-policy patch writer (update_mesh). When present, the machine-authorization card becomes editable. */
+    onUpdatePolicy?: (patch: Record<string, unknown>) => void
+    /** True while a mesh-policy save is in flight. */
+    savingPolicy?: boolean
     sendCommand: (daemonId: string, command: string, payload?: any) => Promise<any>
 }
 
@@ -69,6 +74,8 @@ export function MeshProviderAutoApproveSection({
     hostProviders,
     machineAutoApproveEnabled,
     machineDangerousAllowed,
+    onUpdatePolicy,
+    savingPolicy,
     sendCommand,
 }: Props) {
     const { t } = useTranslation('common')
@@ -83,8 +90,15 @@ export function MeshProviderAutoApproveSection({
     const [saved, setSaved] = useState(false)
     // Pending dangerous selection awaiting confirmation: {type, mode}.
     const [pendingDangerous, setPendingDangerous] = useState<{ type: string; mode: AutoApproveMode } | null>(null)
+    // Dangerous machine opt-in awaiting confirmation (turning OFF needs none — it is
+    // the fail-closed direction).
+    const [confirmDangerousOptIn, setConfirmDangerousOptIn] = useState(false)
 
     const canConfigure = !!hostDaemonId && hostOnline && !!hostWorkspace
+    // Machine-authorization toggles write the machine-local mesh policy via the
+    // update_mesh seam the parent already owns; the saved policy flows back down as
+    // the machineAutoApproveEnabled/machineDangerousAllowed props after reload.
+    const canEditPolicy = !!onUpdatePolicy && !savingPolicy
 
     const loadDefaults = useCallback(async () => {
         if (!canConfigure) return
@@ -177,6 +191,48 @@ export function MeshProviderAutoApproveSection({
             collapsible
             defaultOpen={false}
         >
+            {/* ── Section 2: machine authorization (mesh policy, editable) ──
+                Rendered unconditionally: this machine's opt-in must stay reachable
+                even when the host is offline or advertises no providers. */}
+            <div className="rounded-xl border border-border-subtle bg-bg-secondary/40 p-3.5">
+                <div className="text-sm font-semibold text-text-primary">{t('repoMesh.providerAutoApprove.machineSection.title')}</div>
+                <div className="mt-1 text-[11px] text-text-muted">{t('repoMesh.providerAutoApprove.machineSection.hint')}</div>
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+                    <span className={`rounded-full border px-2 py-0.5 font-semibold ${machineAutoApproveEnabled ? 'border-status-online/25 bg-status-online/10 text-status-online' : 'border-border-subtle bg-bg-tertiary/40 text-text-muted'}`}>
+                        {machineAutoApproveEnabled
+                            ? t('repoMesh.providerAutoApprove.machineSection.autoApproveOn')
+                            : t('repoMesh.providerAutoApprove.machineSection.autoApproveOff')}
+                    </span>
+                    <span className={`rounded-full border px-2 py-0.5 font-semibold ${machineDangerousAllowed ? 'border-status-error/30 bg-status-error/10 text-status-error' : 'border-border-subtle bg-bg-tertiary/40 text-text-muted'}`}>
+                        {machineDangerousAllowed
+                            ? t('repoMesh.providerAutoApprove.machineSection.dangerousOn')
+                            : t('repoMesh.providerAutoApprove.machineSection.dangerousOff')}
+                    </span>
+                </div>
+                <div className="mt-3 space-y-2">
+                    <MachinePolicyToggle
+                        label={t('repoMesh.providerAutoApprove.machineSection.autoApproveToggleLabel')}
+                        hint={t('repoMesh.providerAutoApprove.machineSection.autoApproveToggleHint')}
+                        checked={machineAutoApproveEnabled}
+                        disabled={!canEditPolicy}
+                        onChange={next => onUpdatePolicy?.({ delegatedWorkerAutoApprove: next })}
+                    />
+                    <MachinePolicyToggle
+                        label={t('repoMesh.providerAutoApprove.machineSection.dangerousToggleLabel')}
+                        hint={machineAutoApproveEnabled
+                            ? t('repoMesh.providerAutoApprove.machineSection.dangerousToggleHint')
+                            : t('repoMesh.providerAutoApprove.machineSection.dangerousDisabledHint')}
+                        checked={machineDangerousAllowed}
+                        disabled={!canEditPolicy || !machineAutoApproveEnabled}
+                        onChange={next => {
+                            // Opting IN opens a confirmation; opting out applies immediately.
+                            if (next) setConfirmDangerousOptIn(true)
+                            else onUpdatePolicy?.({ delegatedWorkerDangerousModeAllow: false })
+                        }}
+                    />
+                </div>
+            </div>
+
             {!canConfigure ? (
                 <div className="text-[13px] text-text-muted">{t('repoMesh.providerAutoApprove.noHostDaemon')}</div>
             ) : loading ? (
@@ -186,25 +242,6 @@ export function MeshProviderAutoApproveSection({
             ) : (
                 <div className="space-y-6">
                     {loadError && <AlertBanner variant="error" onDismiss={() => setLoadError(null)}>{loadError}</AlertBanner>}
-
-                    {/* ── Section 2: machine authorization (read-only readout) ── */}
-                    <div className="rounded-xl border border-border-subtle bg-bg-secondary/40 p-3.5">
-                        <div className="text-sm font-semibold text-text-primary">{t('repoMesh.providerAutoApprove.machineSection.title')}</div>
-                        <div className="mt-1 text-[11px] text-text-muted">{t('repoMesh.providerAutoApprove.machineSection.hint')}</div>
-                        <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
-                            <span className={`rounded-full border px-2 py-0.5 font-semibold ${machineAutoApproveEnabled ? 'border-status-online/25 bg-status-online/10 text-status-online' : 'border-border-subtle bg-bg-tertiary/40 text-text-muted'}`}>
-                                {machineAutoApproveEnabled
-                                    ? t('repoMesh.providerAutoApprove.machineSection.autoApproveOn')
-                                    : t('repoMesh.providerAutoApprove.machineSection.autoApproveOff')}
-                            </span>
-                            <span className={`rounded-full border px-2 py-0.5 font-semibold ${machineDangerousAllowed ? 'border-status-error/30 bg-status-error/10 text-status-error' : 'border-border-subtle bg-bg-tertiary/40 text-text-muted'}`}>
-                                {machineDangerousAllowed
-                                    ? t('repoMesh.providerAutoApprove.machineSection.dangerousOn')
-                                    : t('repoMesh.providerAutoApprove.machineSection.dangerousOff')}
-                            </span>
-                        </div>
-                        <div className="mt-2 text-[11px] text-text-muted">{t('repoMesh.providerAutoApprove.machineSection.editHint')}</div>
-                    </div>
 
                     {/* ── Section 1: repository default (editable) + Section 3 per provider ── */}
                     <div className="space-y-1">
@@ -274,6 +311,31 @@ export function MeshProviderAutoApproveSection({
                 </div>
             )}
 
+            {confirmDangerousOptIn && (
+                // Same confirm shell DangerousAutoApproveModeDialog wraps, but with
+                // opt-in copy: the machine-wide opt-in is not tied to one provider
+                // mode, so the mode-specific dialog (warning + launchArgs) does not fit.
+                <LaunchConfirmDialog
+                    title={t('repoMesh.providerAutoApprove.machineSection.confirmTitle')}
+                    description={t('repoMesh.providerAutoApprove.machineSection.confirmDescription')}
+                    details={[
+                        {
+                            label: t('repoMesh.providerAutoApprove.machineSection.confirmScopeLabel'),
+                            value: t('repoMesh.providerAutoApprove.machineSection.confirmScopeValue'),
+                        },
+                        {
+                            label: t('repoMesh.providerAutoApprove.machineSection.confirmEffectLabel'),
+                            value: t('repoMesh.providerAutoApprove.machineSection.confirmEffectValue'),
+                        },
+                    ]}
+                    confirmLabel={t('repoMesh.providerAutoApprove.machineSection.confirmConfirm')}
+                    onConfirm={() => {
+                        setConfirmDangerousOptIn(false)
+                        onUpdatePolicy?.({ delegatedWorkerDangerousModeAllow: true })
+                    }}
+                    onCancel={() => setConfirmDangerousOptIn(false)}
+                />
+            )}
             {pendingDangerous && (
                 <DangerousAutoApproveModeDialog
                     mode={pendingDangerous.mode}
@@ -346,5 +408,39 @@ function EffectiveResultRow({
             )}
             <span className="min-w-0">{text}</span>
         </div>
+    )
+}
+
+/** Switch row for a machine-authorization policy flag (same switch idiom as LegacyAutoApproveToggle). */
+function MachinePolicyToggle({
+    label,
+    hint,
+    checked,
+    disabled = false,
+    onChange,
+}: {
+    label: string
+    hint: string
+    checked: boolean
+    disabled?: boolean
+    onChange: (checked: boolean) => void
+}) {
+    return (
+        <button
+            type="button"
+            role="switch"
+            aria-checked={checked}
+            className="flex w-full items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-primary/60 px-3.5 py-2.5 text-left disabled:opacity-50"
+            onClick={() => onChange(!checked)}
+            disabled={disabled}
+        >
+            <span>
+                <span className="block text-[13px] font-semibold text-text-primary">{label}</span>
+                <span className="mt-0.5 block text-[11px] text-text-muted">{hint}</span>
+            </span>
+            <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-accent-primary' : 'bg-bg-tertiary'}`}>
+                <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
+            </span>
+        </button>
     )
 }

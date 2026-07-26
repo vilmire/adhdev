@@ -1079,7 +1079,18 @@
                 "autoApproveOff": "Auto-approve disabled",
                 "dangerousOn": "Dangerous modes allowed",
                 "dangerousOff": "Dangerous modes not allowed (will downgrade)",
-                "editHint": "Edit these in the mesh Policy section above."
+                "autoApproveToggleLabel": "委派工作器自动批准",
+                "autoApproveToggleHint": "关闭后，委派到本机的工作器会在每个批准提示处停下。",
+                "dangerousToggleLabel": "允许本机使用 dangerous 模式",
+                "dangerousToggleHint": "选择加入：本机的工作器可以以无需任何批准即可执行工具的 dangerous 模式运行。",
+                "dangerousDisabledHint": "在上方自动批准关闭期间不生效。",
+                "confirmTitle": "选择加入 dangerous 模式",
+                "confirmDescription": "这将允许本机上的委派工作器以 dangerous 提供商模式运行。在 dangerous 模式下，代理会在没有任何批准提示的情况下执行工具和命令。",
+                "confirmScopeLabel": "适用范围",
+                "confirmScopeValue": "仅本机（本地 meshes.json — 不会提交）",
+                "confirmEffectLabel": "效果",
+                "confirmEffectValue": "仓库请求的 dangerous 模式（如 Force、fully autonomous）在本机上不再被降级为交互式 PTY 解析。",
+                "confirmConfirm": "选择加入"
             },
             "effectiveSection": {
                 "title": "Effective result on this machine",

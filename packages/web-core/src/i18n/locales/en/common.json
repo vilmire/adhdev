@@ -1079,7 +1079,18 @@
                 "autoApproveOff": "Auto-approve disabled",
                 "dangerousOn": "Dangerous modes allowed",
                 "dangerousOff": "Dangerous modes not allowed (will downgrade)",
-                "editHint": "Edit these in the mesh Policy section above."
+                "autoApproveToggleLabel": "Delegated worker auto-approve",
+                "autoApproveToggleHint": "When off, workers delegated to this machine stop at every approval prompt.",
+                "dangerousToggleLabel": "Allow dangerous modes on this machine",
+                "dangerousToggleHint": "Opt-in: workers on this machine may run dangerous modes that execute tools with no approval at all.",
+                "dangerousDisabledHint": "No effect while auto-approve above is off.",
+                "confirmTitle": "Opt in to dangerous modes",
+                "confirmDescription": "This allows delegated workers on this machine to run dangerous provider modes. In a dangerous mode the agent executes tools and commands with no approval prompts at all.",
+                "confirmScopeLabel": "Scope",
+                "confirmScopeValue": "This machine only (local meshes.json — never committed)",
+                "confirmEffectLabel": "Effect",
+                "confirmEffectValue": "Repo-requested dangerous modes (e.g. Force, fully autonomous) are no longer downgraded to interactive PTY parsing on this machine.",
+                "confirmConfirm": "Opt in"
             },
             "effectiveSection": {
                 "title": "Effective result on this machine",

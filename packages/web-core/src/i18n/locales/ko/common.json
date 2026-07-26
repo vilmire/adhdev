@@ -1079,7 +1079,18 @@
                 "autoApproveOff": "자동 승인 비활성화됨",
                 "dangerousOn": "dangerous 모드 허용됨",
                 "dangerousOff": "dangerous 모드 미허용 (강등됨)",
-                "editHint": "위 메시 정책 섹션에서 편집하세요."
+                "autoApproveToggleLabel": "위임 워커 자동 승인",
+                "autoApproveToggleHint": "끄면 이 머신에 위임된 워커가 모든 승인 프롬프트에서 멈춥니다.",
+                "dangerousToggleLabel": "이 머신에서 dangerous 모드 허용",
+                "dangerousToggleHint": "옵트인: 이 머신의 워커가 승인 없이 도구를 실행하는 dangerous 모드로 동작할 수 있습니다.",
+                "dangerousDisabledHint": "위의 자동 승인이 꺼져 있는 동안에는 적용되지 않습니다.",
+                "confirmTitle": "dangerous 모드 옵트인",
+                "confirmDescription": "이 머신에서 위임 워커가 dangerous 프로바이더 모드로 실행되는 것을 허용합니다. dangerous 모드에서는 에이전트가 어떤 승인 프롬프트도 없이 도구와 명령을 실행합니다.",
+                "confirmScopeLabel": "적용 범위",
+                "confirmScopeValue": "이 머신에만 적용 (로컬 meshes.json — 커밋되지 않음)",
+                "confirmEffectLabel": "효과",
+                "confirmEffectValue": "저장소가 요청한 dangerous 모드(Force, fully autonomous 등)가 이 머신에서 더 이상 대화형 PTY 파싱으로 강등되지 않습니다.",
+                "confirmConfirm": "옵트인"
             },
             "effectiveSection": {
                 "title": "이 머신에서의 실제 결과",

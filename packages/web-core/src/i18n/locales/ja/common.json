@@ -1079,7 +1079,18 @@
                 "autoApproveOff": "Auto-approve disabled",
                 "dangerousOn": "Dangerous modes allowed",
                 "dangerousOff": "Dangerous modes not allowed (will downgrade)",
-                "editHint": "Edit these in the mesh Policy section above."
+                "autoApproveToggleLabel": "委譲ワーカーの自動承認",
+                "autoApproveToggleHint": "オフにすると、このマシンに委譲されたワーカーはすべての承認プロンプトで停止します。",
+                "dangerousToggleLabel": "このマシンで dangerous モードを許可",
+                "dangerousToggleHint": "オプトイン: このマシンのワーカーが、承認なしでツールを実行する dangerous モードで動作できるようになります。",
+                "dangerousDisabledHint": "上の自動承認がオフの間は適用されません。",
+                "confirmTitle": "dangerous モードへのオプトイン",
+                "confirmDescription": "このマシンで委譲ワーカーが dangerous プロバイダーモードで実行されることを許可します。dangerous モードでは、エージェントは承認プロンプトなしでツールやコマンドを実行します。",
+                "confirmScopeLabel": "適用範囲",
+                "confirmScopeValue": "このマシンのみ (ローカル meshes.json — コミットされません)",
+                "confirmEffectLabel": "効果",
+                "confirmEffectValue": "リポジトリが要求した dangerous モード (Force、fully autonomous など) がこのマシンでインタラクティブ PTY パースにダウングレードされなくなります。",
+                "confirmConfirm": "オプトイン"
             },
             "effectiveSection": {
                 "title": "Effective result on this machine",

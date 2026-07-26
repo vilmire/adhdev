@@ -445,6 +445,8 @@ export function MeshDetailView({
                 hostProviders={(daemons.find(d => d.id === coordinatorDaemonId) as any)?.availableProviders || []}
                 machineAutoApproveEnabled={policy.delegatedWorkerAutoApprove !== false}
                 machineDangerousAllowed={policy.delegatedWorkerDangerousModeAllow === true}
+                onUpdatePolicy={onUpdatePolicy}
+                savingPolicy={savingPolicy}
                 sendCommand={sendCommand}
             />
 

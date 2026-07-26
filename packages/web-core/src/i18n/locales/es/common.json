@@ -1079,7 +1079,18 @@
                 "autoApproveOff": "Auto-approve disabled",
                 "dangerousOn": "Dangerous modes allowed",
                 "dangerousOff": "Dangerous modes not allowed (will downgrade)",
-                "editHint": "Edit these in the mesh Policy section above."
+                "autoApproveToggleLabel": "Aprobación automática de workers delegados",
+                "autoApproveToggleHint": "Si está desactivada, los workers delegados en esta máquina se detienen en cada solicitud de aprobación.",
+                "dangerousToggleLabel": "Permitir modos dangerous en esta máquina",
+                "dangerousToggleHint": "Opt-in: los workers de esta máquina pueden ejecutarse en modos dangerous que ejecutan herramientas sin ninguna aprobación.",
+                "dangerousDisabledHint": "Sin efecto mientras la aprobación automática de arriba esté desactivada.",
+                "confirmTitle": "Opt-in a modos dangerous",
+                "confirmDescription": "Esto permite que los workers delegados en esta máquina se ejecuten en modos dangerous del proveedor. En un modo dangerous, el agente ejecuta herramientas y comandos sin ninguna solicitud de aprobación.",
+                "confirmScopeLabel": "Ámbito",
+                "confirmScopeValue": "Solo esta máquina (meshes.json local — nunca se confirma en el repo)",
+                "confirmEffectLabel": "Efecto",
+                "confirmEffectValue": "Los modos dangerous solicitados por el repositorio (p. ej. Force, fully autonomous) dejan de degradarse a parseo PTY interactivo en esta máquina.",
+                "confirmConfirm": "Opt-in"
             },
             "effectiveSection": {
                 "title": "Effective result on this machine",
