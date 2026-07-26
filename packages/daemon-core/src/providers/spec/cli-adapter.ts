@@ -864,6 +864,16 @@ export class SpecCliAdapter implements CliAdapter {
     }
     refreshProviderDefinition(): void { /* hot reload handled by SpecDriver fs.watch */ }
 
+    /**
+     * TX-FSM Stage 0 (shadow): forward the daemon's normalized signal
+     * observation into the FSM driver. Observation-only — failures here must
+     * never break the adapter, and the driver treats the envelope as a pure
+     * injected value (no reads cross the engine boundary).
+     */
+    setSignalObservation(snapshot: import('./signal-envelope.js').SignalSnapshot | null): void {
+        try { this.driver.setSignalObservation?.(snapshot); } catch { /* shadow-only: never break the adapter */ }
+    }
+
     private handleEvent(ev: DashboardEvent): void {
         this.lastEvent = ev;
         switch (ev.kind) {

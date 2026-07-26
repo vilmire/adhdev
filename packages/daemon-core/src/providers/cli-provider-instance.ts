@@ -18,6 +18,7 @@ import { shortHash } from '../system/hash.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
 import type { MeshSendKeyItem, MeshSendKeyName } from '../cli-adapters/provider-cli-shared.js';
 import { resolveTranscriptAuthorityProfile } from './transcript-evidence.js';
+import { TranscriptSignalSource } from './transcript-signal-source.js';
 import { createCliAdapter } from './spec/route.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
@@ -1426,6 +1427,10 @@ export class CliProviderInstance implements ProviderInstance {
     private completedDebounceTimer: NodeJS.Timeout | null = null;
     private completedDebouncePending: CompletedDebouncePending | null = null;
     private lastExternalCompletionProbe: ExternalTranscriptProbe | null = null;
+    /** TX-FSM Stage 0 (shadow): lazily-created transcript signal normalizer.
+     *  Fed ONLY by transcript reads this instance already performs — it adds
+     *  zero I/O and its output never feeds back into any verdict. */
+    private transcriptSignalSource: TranscriptSignalSource | null = null;
     /**
      * The final assistant summary of the last completed turn, cached at
      * completion-emit time. For a native-source provider (antigravity) whose
@@ -1649,6 +1654,7 @@ export class CliProviderInstance implements ProviderInstance {
         });
         if (restoredHistory.source !== 'provider-native') {
             this.lastExternalCompletionProbe = null;
+            this.publishTranscriptSignalObservation(null);
             return null;
         }
         this.lastExternalCompletionProbe = buildExternalTranscriptProbe(
@@ -1656,7 +1662,47 @@ export class CliProviderInstance implements ProviderInstance {
             restoredHistory.sourcePath,
             restoredHistory.sourceMtimeMs,
         );
+        this.publishTranscriptSignalObservation(restoredHistory.messages);
         return restoredHistory.messages;
+    }
+
+    /**
+     * TX-FSM Stage 0 (shadow): normalize the transcript read that JUST
+     * happened into a SignalSnapshot and inject it into the FSM driver as a
+     * pure observation (daemon → SpecCliAdapter → FsmDriver). Fed ONLY by
+     * reads this method's caller already performs — it adds zero I/O, so the
+     * getState() zero-native-read invariant and the stall-path read cadence
+     * are untouched. The snapshot is shadow data: nothing on this path feeds
+     * back into completion/stall/redrive verdicts. Fail-open end to end — a
+     * missing adapter hook (non-spec providers), an unresolved transcript, or
+     * any throw degrades to "no observation", never to a wedge.
+     */
+    private publishTranscriptSignalObservation(messages: unknown[] | null, error = false): void {
+        const adapter = this.adapter as { setSignalObservation?: (snapshot: unknown) => void } | null | undefined;
+        if (typeof adapter?.setSignalObservation !== 'function') return; // non-spec path: no FSM consumer
+        try {
+            if (!this.transcriptSignalSource) {
+                this.transcriptSignalSource = new TranscriptSignalSource({
+                    label: this.type,
+                    // Choke point: class/timing come from the P0 profile
+                    // resolver, never from raw predicates or provider names.
+                    profile: resolveTranscriptAuthorityProfile(this.provider),
+                    turnStartedAt: () => {
+                        const t = (this.adapter as any)?.currentTurnStartedAt;
+                        return typeof t === 'number' && Number.isFinite(t) ? t : undefined;
+                    },
+                    // Reuse the exact completion machinery (I1) for the
+                    // final_assistant_present signal rather than duplicating
+                    // the message scan.
+                    finalAssistantPresent: (msgs, ts) => this.completionHasFinalAssistantMessage(msgs, ts),
+                    growthQuietMs: MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS,
+                });
+            }
+            const snapshot = this.transcriptSignalSource.update(
+                { messages, probe: this.lastExternalCompletionProbe, error },
+            );
+            adapter.setSignalObservation(snapshot);
+        } catch { /* shadow-only: signal collection must never break the read path */ }
     }
 
     /**

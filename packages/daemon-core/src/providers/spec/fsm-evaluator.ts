@@ -22,6 +22,7 @@ import {
     type CliSpecV4, type FsmCondition, type FsmTransition,
     outgoingTransitions, stateById,
 } from './fsm-types.js';
+import { evaluateSignalLeaf, type SignalSnapshot } from './signal-envelope.js';
 
 export interface FsmClock {
     /** Wall-clock now (ms). Passed in so the evaluator stays pure. */
@@ -37,7 +38,7 @@ export interface FsmClock {
 
 /** Per-condition evaluation detail — the debugging payload. */
 export interface CondResult {
-    kind: 'regex' | 'changed' | 'elapsed' | 'stable' | 'all' | 'any' | 'not';
+    kind: 'regex' | 'changed' | 'elapsed' | 'stable' | 'signal' | 'all' | 'any' | 'not';
     result: boolean;
     detail: string;
     /** Remaining ms until a time-based condition would flip to true. 0 if
@@ -47,6 +48,12 @@ export interface CondResult {
      *  snapshot shows WHAT text the rule fired on — not just which regex. Never
      *  read by the FSM; purely for the Spec Debug Snapshot. */
     matchedText?: string;
+    /** TX-FSM Stage 0 (shadow): present only on `signal` leaves. `result` above
+     *  is ALWAYS true for a signal leaf (Stage-0 pass-through — the leaf never
+     *  gates a transition); this payload records what the leaf WOULD have
+     *  decided against the injected snapshot. shadowResult null = the signal
+     *  was unavailable/unknown (fail-open). */
+    signal?: { name: string; available: boolean; value: boolean | null; shadowResult: boolean | null };
     children?: CondResult[];
 }
 
@@ -66,6 +73,16 @@ export interface TransitionEval {
     /** Overall: would this transition fire? */
     fires: boolean;
     priority: number;
+    /**
+     * TX-FSM Stage 0 (shadow): present only when the guard contains at least
+     * one `signal` leaf. Records the verdict the transition WOULD have
+     * produced if signal leaves gated (condResult/fires), so the shadow log
+     * can compare it against the real PTY-only outcome. `unknown` = at least
+     * one signal leaf had no observation (fail-open); the shadow verdict is
+     * then informational, not a counterfactual proof. NEVER consumed by the
+     * driver for any transition decision — log/debug surface only.
+     */
+    shadow?: { condResult: boolean; fires: boolean; unknown: boolean };
 }
 
 export interface FsmEvaluation {
@@ -123,11 +140,69 @@ function isAny(c: FsmCondition): c is import('./fsm-types.js').FsmAnyCondition {
 function isNot(c: FsmCondition): c is import('./fsm-types.js').FsmNotCondition {
     return 'not' in c;
 }
+function isSignal(c: FsmCondition): c is import('./fsm-types.js').FsmSignalCondition {
+    return 'signal' in c;
+}
+
+/** True when the condition tree contains at least one `signal` leaf — only
+ *  those trees get a Stage-0 shadow verdict. */
+function containsSignal(c: FsmCondition): boolean {
+    if (isSignal(c)) return true;
+    if (isAll(c)) return c.all.some(containsSignal);
+    if (isAny(c)) return c.any.some(containsSignal);
+    if (isNot(c)) return containsSignal(c.not);
+    return false;
+}
+
+/**
+ * Fold an already-evaluated CondResult tree into the Stage-0 SHADOW verdict:
+ * signal leaves contribute their shadowResult (what they WOULD have decided),
+ * every other leaf contributes its real result, and all/any/not compose
+ * exactly as they did for the real verdict. Pure tree fold — no re-evaluation,
+ * so the shadow can never diverge from the real eval on PTY leaves.
+ *
+ * `unknown` tracks three-valued logic precisely: a definite child verdict
+ * decides the parent (false child ⇒ all is definitely false; true child ⇒ any
+ * is definitely true); only when no child decides does an unknown signal leaf
+ * make the parent unknown.
+ */
+function foldShadow(cond: CondResult): { value: boolean; unknown: boolean } {
+    if (cond.kind === 'signal') {
+        const s = cond.signal;
+        if (s && s.shadowResult !== null && s.shadowResult !== undefined) {
+            return { value: s.shadowResult, unknown: false };
+        }
+        return { value: true, unknown: true }; // fail-open placeholder
+    }
+    if (cond.kind === 'not' && cond.children?.length) {
+        const c = foldShadow(cond.children[0]);
+        return { value: !c.value, unknown: c.unknown };
+    }
+    if (cond.kind === 'all' && cond.children) {
+        const kids = cond.children.map(foldShadow);
+        if (kids.some(k => !k.unknown && !k.value)) return { value: false, unknown: false };
+        if (kids.some(k => k.unknown)) return { value: true, unknown: true };
+        return { value: true, unknown: false };
+    }
+    if (cond.kind === 'any' && cond.children) {
+        const kids = cond.children.map(foldShadow);
+        if (kids.some(k => !k.unknown && k.value)) return { value: true, unknown: false };
+        if (kids.some(k => k.unknown)) return { value: false, unknown: true };
+        return { value: false, unknown: false };
+    }
+    return { value: cond.result, unknown: false };
+}
 
 /**
  * Evaluate a single FSM condition into a {result, detail, remainingMs, children}.
  * Recurses through all/any/not; defers regex/changed to the shared evaluator;
  * handles elapsed_ms/stable_ms against the clock.
+ *
+ * `signalSnapshot` is the daemon-injected observation (TX-FSM Stage 0). A
+ * `signal` leaf evaluates to result=true UNCONDITIONALLY (Stage-0 pass-through
+ * — the leaf never gates a transition) and records its would-be verdict in
+ * CondResult.signal for the shadow fold. The pass-through, not the snapshot,
+ * is what the FSM sees.
  */
 function evalCond(
     cond: FsmCondition,
@@ -138,17 +213,18 @@ function evalCond(
     clock: FsmClock,
     legacyTrace: TraceEntry[],
     stateId: string,
+    signalSnapshot?: SignalSnapshot | null,
 ): CondResult {
     if (isAll(cond)) {
         const children = cond.all.map(c =>
-            evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId));
+            evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot));
         const result = children.every(c => c.result);
         const remainingMs = result ? 0 : Math.max(0, ...children.filter(c => !c.result).map(c => c.remainingMs ?? 0));
         return { kind: 'all', result, detail: `all(${children.length})`, remainingMs, children };
     }
     if (isAny(cond)) {
         const children = cond.any.map(c =>
-            evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId));
+            evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot));
         const result = children.some(c => c.result);
         // remaining = the soonest child that could flip true
         const pending = children.filter(c => !c.result).map(c => c.remainingMs ?? Infinity);
@@ -156,8 +232,25 @@ function evalCond(
         return { kind: 'any', result, detail: `any(${children.length})`, remainingMs: Number.isFinite(remainingMs) ? remainingMs : 0, children };
     }
     if (isNot(cond)) {
-        const child = evalCond(cond.not, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId);
+        const child = evalCond(cond.not, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot);
         return { kind: 'not', result: !child.result, detail: `not`, remainingMs: 0, children: [child] };
+    }
+    if (isSignal(cond)) {
+        const leaf = evaluateSignalLeaf(cond, signalSnapshot);
+        // STAGE-0 PASS-THROUGH: result is always true so the leaf can never
+        // change `fires` — not even when a spec author adds a signal condition
+        // today. The shadow fold (foldShadow) reads `signal.shadowResult`.
+        return {
+            kind: 'signal',
+            result: true,
+            detail: `${leaf.detail} (stage0 shadow — pass-through)`,
+            signal: {
+                name: cond.signal,
+                available: !!signalSnapshot?.available,
+                value: leaf.value,
+                shadowResult: leaf.shadowResult,
+            },
+        };
     }
     if (isElapsed(cond)) {
         const age = clock.now - clock.stateEnteredAt;
@@ -221,6 +314,7 @@ export function evaluateFsm(
     cursor: { row: number; col: number } | undefined,
     prevLines: string[] | undefined,
     clock: FsmClock,
+    signalSnapshot?: SignalSnapshot | null,
 ): FsmEvaluation {
     const legacyTrace: TraceEntry[] = [];
     const lines = screenText.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
@@ -240,7 +334,7 @@ export function evaluateFsm(
         let cond: CondResult | undefined;
         let condResult = true;
         if (t.when) {
-            cond = evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, legacyTrace, `${currentStateId}→${t.to}`);
+            cond = evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, legacyTrace, `${currentStateId}→${t.to}`, signalSnapshot);
             condResult = cond.result;
         }
 
@@ -256,6 +350,17 @@ export function evaluateFsm(
             fires,
             priority: t.priority ?? 0,
         };
+        // TX-FSM Stage 0 (shadow): record the counterfactual verdict for any
+        // guard containing a signal leaf. Read-only — `fires` above is already
+        // fixed by the pass-through rule before this runs.
+        if (t.when && containsSignal(t.when) && cond) {
+            const folded = foldShadow(cond);
+            te.shadow = {
+                condResult: folded.value,
+                fires: holdSatisfied && folded.value,
+                unknown: folded.unknown,
+            };
+        }
         transitions.push(te);
         if (fires && !fired) fired = te;
     }

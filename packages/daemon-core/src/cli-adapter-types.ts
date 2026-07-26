@@ -173,6 +173,13 @@ export interface CliAdapter {
     // back to resolveModal + the resolution-cooldown check).
     resolveModalMatched?(buttonIndex: number): boolean;
     isApprovalRecentlyResolved?(): boolean;
+    /**
+     * TX-FSM Stage 0 (shadow): receive the daemon-normalized transcript signal
+     * observation (SignalSnapshot envelope, providers/spec/signal-envelope.ts).
+     * Optional — only the spec-driven FSM adapter implements it; callers must
+     * typeof-guard. Shadow-only: the observation can never gate a transition.
+     */
+    setSignalObservation?(snapshot: unknown): void;
  // Raw PTY I/O (for terminal view)
     setOnPtyData?(callback: (data: string) => void): void;
     writeRaw?(data: string): void;

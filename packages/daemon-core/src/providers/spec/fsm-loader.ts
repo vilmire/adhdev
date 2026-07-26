@@ -113,6 +113,13 @@ function validateCondition(c: FsmCondition, sectionIds: Set<string>, path: strin
         return errs;
     }
     if ('cursor_above' in w && 'changed' in w) return errs;
+    if ('signal' in w) {
+        // TX-FSM Stage 0 (shadow) leaf — validated so a spec can declare it
+        // today (evaluation is shadow-only; see fsm-evaluator).
+        if (typeof w.signal !== 'string' || !w.signal.trim()) errs.push(`${path}.signal must be a non-empty string`);
+        if (w.equals !== undefined && typeof w.equals !== 'boolean') errs.push(`${path}.equals must be a boolean`);
+        return errs;
+    }
     if ('elapsed_ms' in w) { if (typeof w.elapsed_ms !== 'number') errs.push(`${path}.elapsed_ms must be a number`); return errs; }
     if ('stable_ms' in w) {
         if (typeof w.stable_ms !== 'number') errs.push(`${path}.stable_ms must be a number`);
