@@ -1502,7 +1502,7 @@
             "github": "GitHub ↗",
             "features": {
                 "webControlTitle": "ローカル CLI エージェントの Web 操作",
-                "webControlDesc": "任意のローカル CLI エージェント — Claude Code、Codex、Gemini — をブラウザから操作。ターミナルに触れることなく、プロンプトの送信、アクションの承認、セッションの制御が可能です。",
+                "webControlDesc": "任意のローカル CLI エージェント — Claude Code、Codex、Cursor CLI — をブラウザから操作。ターミナルに触れることなく、プロンプトの送信、アクションの承認、セッションの制御が可能です。",
                 "chatRelayTitle": "エージェントチャットリレー",
                 "chatRelayDesc": "モバイルを含め、どこからでもエージェントとの会話を読んで返信できます。",
                 "liveViewTitle": "ライブセッションビュー",
@@ -1518,7 +1518,7 @@
                 "step2Title": "サインイン",
                 "step2Desc": "GitHub または Google でサインインすると、デーモンが自動的にアカウントとペアリングされます — トークンをコピーする必要はありません。",
                 "step3Title": "どこからでもエージェントを操作",
-                "step3Desc": "マシンはすぐにダッシュボードに表示されます。Claude Code、Codex、Gemini などの CLI エージェントを Web から起動・制御 — IDE セッションも同様です。"
+                "step3Desc": "マシンはすぐにダッシュボードに表示されます。Claude Code、Codex、Cursor CLI などの CLI エージェントを Web から起動・制御 — IDE セッションも同様です。"
             },
             "plans": {
                 "freeName": "Free",
@@ -2916,10 +2916,10 @@
         },
         "what": {
             "sectionTitle": "あらゆるエージェントを自由に混在",
-            "sectionSubtitle": "設計からしてベンダーニュートラル。Mac で Claude Code、Windows の GPU マシンで Codex、レビューパスに Gemini を — 同じメッシュ内、同じポリシーの下で実行します。プラットフォームを変えずにベンダーを切り替えられます。",
+            "sectionSubtitle": "設計からしてベンダーニュートラル。Mac で Claude Code、Windows の GPU マシンで Codex、レビューパスに Cursor CLI を — 同じメッシュ内、同じポリシーの下で実行します。プラットフォームを変えずにベンダーを切り替えられます。",
             "cliHighlight": "CLI エージェント",
             "cliTitle": "あらゆるターミナルエージェントを Web から操作",
-            "cliDesc": "Claude Code、Codex CLI、Cursor CLI、Antigravity CLI、Hermes、Kimi、OpenCode — 適切な再開と再接続を備えた PTY アダプター経由であなたのマシンに接続し、ブラウザから操作します。プロンプトを送信し、視覚的なコンテキストを即座に提供できます（貼り付け、ドラッグ＆ドロップ、または複数画像の一括アップロード、最大 5 枚 / 各 10MB まで）。Aider、Gemini CLI、Goose など他の ACP エージェントは stdio 経由で接続します。",
+            "cliDesc": "Claude Code、Codex CLI、Cursor CLI、Antigravity CLI、Hermes、Kimi、OpenCode — 適切な再開と再接続を備えた PTY アダプター経由であなたのマシンに接続し、ブラウザから操作します。プロンプトを送信し、視覚的なコンテキストを即座に提供できます（貼り付け、ドラッグ＆ドロップ、または複数画像の一括アップロード、最大 5 枚 / 各 10MB まで）。Aider、Goose など他の ACP エージェントは stdio 経由で接続します。",
             "uiHighlight": "1 つの UI",
             "uiTitle": "同じダッシュボード、あらゆるデバイス",
             "uiDesc": "adhf.dev でクラウドホスト — デスクにいても外出中でも、ノート PC やスマホからあらゆるエージェントを操作できます。",
@@ -2949,7 +2949,7 @@
             "hintCli": "PTY アダプター経由で駆動し、再開と再接続に対応します。",
             "groupExtensions": "IDE 内拡張エージェント",
             "hintExtensions": "別の IDE 内に存在するエージェント向けの CDP webview 接続。",
-            "acpFootnote": "さらに stdio 経由の ACP エージェント（Agent Client Protocol）が {{count}}+ 種類：Codex、Claude Agent、Gemini、Goose、Cline、OpenHands など。"
+            "acpFootnote": "さらに stdio 経由の ACP エージェント（Agent Client Protocol）が {{count}}+ 種類：Codex、Claude Agent、Goose、Cline、OpenHands など。"
         },
         "pricing": {
             "sectionTitle": "エージェントの成長に合わせたシンプルな料金",
