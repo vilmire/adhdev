@@ -481,9 +481,10 @@ function deliverTaskToSession(
         ]);
     }
 
-    guarded.then(() => {
+    guarded.then((res: any) => {
         if (timer) clearTimeout(timer);
-        updateSessionDeliveryStatus(delivery.id, 'delivered');
+        const isQueued = res && typeof res === 'object' && res.queued === true;
+        updateSessionDeliveryStatus(delivery.id, isQueued ? 'queued' : 'delivered');
     }).catch((e: any) => {
         if (timer) clearTimeout(timer);
         // A dispatch failure (transport reject OR hang timeout) is most often transient —

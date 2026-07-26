@@ -46,7 +46,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
   it('queues a new prompt while a response is still in progress for providers that do not allow intervention', async () => {
     const adapter = buildAdapter()
 
-    await expect(adapter.sendMessage('second prompt')).resolves.toBeUndefined()
+    await expect(adapter.sendMessage('second prompt')).resolves.toEqual({ status: 'queued' })
     expect(adapter.pendingOutboundQueue).toHaveLength(1)
     expect(adapter.pendingOutboundQueue[0]).toMatchObject({
       role: 'user',
@@ -63,7 +63,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     adapter.runDetectStatus = vi.fn(() => 'idle')
     adapter.terminalScreen = { getText: () => '❯\n' }
 
-    await expect(adapter.sendMessage('next prompt')).resolves.toBeUndefined()
+    await expect(adapter.sendMessage('next prompt')).resolves.toEqual({ status: 'delivered' })
     expect(adapter.isWaitingForResponse).toBe(true)
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('next prompt\r')
   })
@@ -87,7 +87,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
       ],
     }))
 
-    await expect(adapter.sendMessage('Reply with exactly TURN-TWO and nothing else.')).resolves.toBeUndefined()
+    await expect(adapter.sendMessage('Reply with exactly TURN-TWO and nothing else.')).resolves.toEqual({ status: 'queued' })
     expect(adapter.pendingOutboundQueue.map((message: any) => message.content)).toEqual([
       'Reply with exactly TURN-TWO and nothing else.',
     ])
@@ -144,7 +144,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
       activeModal: null,
     }))
 
-    await expect(adapter.sendMessage('Reply with exactly TURN-TWO and nothing else.')).resolves.toBeUndefined()
+    await expect(adapter.sendMessage('Reply with exactly TURN-TWO and nothing else.')).resolves.toEqual({ status: 'delivered' })
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('Reply with exactly TURN-TWO and nothing else.\r')
   })
 
@@ -172,7 +172,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
       activeModal: null,
     }))
 
-    await expect(adapter.sendMessage('Reply with exactly TURN-TWO and nothing else.')).resolves.toBeUndefined()
+    await expect(adapter.sendMessage('Reply with exactly TURN-TWO and nothing else.')).resolves.toEqual({ status: 'delivered' })
     expect(adapter.currentTurnScope?.prompt).toBe('Reply with exactly TURN-TWO and nothing else.')
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('Reply with exactly TURN-TWO and nothing else.\r')
   })
@@ -191,7 +191,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     await vi.runAllTicks()
     adapter.responseBuffer = 'Reply with BEGIN, then the numbers 1 through 40 with one number per line, then END.'
     await vi.advanceTimersByTimeAsync(1000)
-    await expect(sendPromise).resolves.toBeUndefined()
+    await expect(sendPromise).resolves.toEqual({ status: 'delivered' })
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('Reply with BEGIN, then the numbers 1 through 40 with one number per line, then END.\r')
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('\r')
   })
@@ -214,7 +214,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     await vi.runAllTicks()
     adapter.responseBuffer = 'Reply with BEGIN, then the numbers 1 through 40 with one number per line, then END.'
     await vi.advanceTimersByTimeAsync(1000)
-    await expect(sendPromise).resolves.toBeUndefined()
+    await expect(sendPromise).resolves.toEqual({ status: 'delivered' })
     expect(adapter.ptyProcess.write).toHaveBeenCalledTimes(1)
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('Reply with BEGIN, then the numbers 1 through 40 with one number per line, then END.\r')
   })
@@ -257,7 +257,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
   it('allows an intervention prompt during generation for providers that explicitly opt in', async () => {
     const adapter = buildAdapter({ allowInputDuringGeneration: true })
 
-    await expect(adapter.sendMessage('interrupt now')).resolves.toBeUndefined()
+    await expect(adapter.sendMessage('interrupt now')).resolves.toEqual({ status: 'delivered' })
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('interrupt now\r')
   })
 
@@ -266,7 +266,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
 
     const sendPromise = adapter.sendMessage('send now', { force: true })
     await vi.advanceTimersByTimeAsync(1600)
-    await expect(sendPromise).resolves.toBeUndefined()
+    await expect(sendPromise).resolves.toEqual({ status: 'delivered' })
 
     expect(adapter.pendingOutboundQueue).toHaveLength(0)
     // The text and the submit key now land as a single atomic PTY write after
@@ -291,7 +291,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
 
     // After the settle gap, the text and Enter land together as a single write.
     await vi.advanceTimersByTimeAsync(1600)
-    await expect(writePromise).resolves.toBeUndefined()
+    await expect(writePromise).resolves.toEqual({ status: 'delivered' })
     expect(adapter.ptyProcess.write).toHaveBeenCalledTimes(1)
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('forced prompt\r')
     // The submit key is never written on its own (no lone detached '\r').
@@ -307,7 +307,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     const writePromise = adapter.forceSendMessage('echoed force prompt that is long enough to verify')
 
     await vi.advanceTimersByTimeAsync(300)
-    await expect(writePromise).resolves.toBeUndefined()
+    await expect(writePromise).resolves.toEqual({ status: 'delivered' })
     expect(adapter.ptyProcess.write).toHaveBeenCalledTimes(1)
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('echoed force prompt that is long enough to verify\r')
     expect(adapter.ptyProcess.write).not.toHaveBeenCalledWith('\r')
@@ -337,7 +337,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     await vi.runAllTicks()
     await vi.advanceTimersByTimeAsync(2500)
 
-    await expect(sendPromise).resolves.toBeUndefined()
+    await expect(sendPromise).resolves.toEqual({ status: 'delivered' })
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('prompt that never echoes')
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('\r')
     expect(adapter.isWaitingForResponse).toBe(true)
@@ -365,7 +365,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
       getText: () => '⚠️ Dangerous Command\nAllow once\nDeny\n❯\n'
     }
 
-    await expect(adapter.sendMessage('continue anyway')).resolves.toBeUndefined()
+    await expect(adapter.sendMessage('continue anyway')).resolves.toEqual({ status: 'delivered' })
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('continue anyway\r')
   })
 
@@ -624,7 +624,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     adapter.accumulatedBuffer = adapter.responseBuffer
     adapter.accumulatedRawBuffer = adapter.responseBuffer
 
-    await expect(adapter.sendMessage('Reply with exactly OK and nothing else.')).resolves.toBeUndefined()
+    await expect(adapter.sendMessage('Reply with exactly OK and nothing else.')).resolves.toEqual({ status: 'delivered' })
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('Reply with exactly OK and nothing else.\r')
   })
 
@@ -712,7 +712,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     adapter.runDetectStatus = vi.fn(() => 'idle')
     adapter.runParseApproval = vi.fn(() => null)
 
-    await expect(adapter.sendMessage('continue previous checks')).resolves.toBeUndefined()
+    await expect(adapter.sendMessage('continue previous checks')).resolves.toEqual({ status: 'delivered' })
     expect(adapter.ready).toBe(true)
     expect(adapter.currentStatus).toBe('idle')
     expect(adapter.currentTurnScope?.prompt).toBe('continue previous checks')

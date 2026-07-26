@@ -365,7 +365,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
             // session host reported them — never collapse null to 0, which would
             // make a signal-terminated process indistinguishable from a clean exit.
             const exitCode = typeof event.exitCode === 'number' ? event.exitCode : null;
-            const signal = typeof event.signal === 'number' ? event.signal : null;
+            const signal = typeof (event as any).signal === 'number' ? (event as any).signal : null;
             for (const callback of this.exitCallbacks) {
                 callback({ exitCode, signal });
             }

@@ -180,7 +180,7 @@ export class SpecCliAdapter implements CliAdapter {
         this.spawnedAtMs = Date.now();
     }
 
-    async sendMessage(text: string): Promise<void> {
+    async sendMessage(text: string): Promise<{ status: 'queued' | 'delivered' } | void> {
         // Content-free at info — the prompt body is user data.
         LOG.info('SpecAdapter', `[${this.cliType}] sendMessage(len=${text.length})`);
         LOG.debug('SpecAdapter', `[${this.cliType}] sendMessage body=${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? '…' : ''}`);
