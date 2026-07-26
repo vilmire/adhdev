@@ -255,45 +255,67 @@ describe('CliProviderInstance.checkMeshWorkerStall', () => {
   // A pure-PTY native-source worker (transcriptAuthority=provider — e.g. kimi's
   // wire.jsonl) running a long, screen-quiet tool emits no viewport bytes for
   // minutes, so the lastOutputAt clock reads it as stalled. Before firing the false
-  // stall, the watchdog samples the transcript's progress fingerprint; if it
-  // advanced (more records OR fresher source mtime) the worker is proven alive, so
-  // the anchor re-arms instead of paging the coordinator. Only a transcript that is
-  // ALSO static falls through to the genuine-stall fire.
+  // stall, the watchdog consults the SHARED TranscriptSignalSource's
+  // in_turn_progress signal (TX-FSM Stage 1 delegation — previously a private
+  // fingerprint compare); if the transcript is advancing the worker is proven
+  // alive, so the anchor re-arms instead of paging the coordinator. Only a
+  // transcript that is ALSO static falls through to the genuine-stall fire.
 
-  // Configure an instance as a native-source provider whose transcript sampling is
-  // stubbed: readExternalCompletionMessages populates lastExternalCompletionProbe,
-  // which sampleNativeTranscriptProgress reads. We drive that probe directly.
+  // A minimal available SignalSnapshot, as the shared TranscriptSignalSource
+  // would normalize it. The instance consumes ONLY `available` /
+  // `signals.in_turn_progress` (+ detail for the trace), so the crafted shape
+  // pins exactly the delegated contract.
+  function makeSignalSnapshot(opts: { inTurnProgress: boolean | null; msgCount?: number; sourceMtimeMs?: number }) {
+    return {
+      kind: 'adhdev:fsm/signal-snapshot@0',
+      sampledAt: 0,
+      available: true,
+      profile: { class: 'native-source', timing: 'floor' },
+      signals: {
+        final_assistant_present: null,
+        in_turn_progress: opts.inTurnProgress,
+        transcript_growing: null,
+      },
+      detail: {
+        msgCount: opts.msgCount ?? 2,
+        sourceMtimeMs: opts.sourceMtimeMs ?? 1_000,
+        ageMs: null,
+      },
+    }
+  }
+
+  // Configure an instance as a native-source provider whose signal probe is
+  // stubbed at the Stage-1 delegation seam: probeNativeTranscriptSignals
+  // returns the crafted snapshot. `signalState.inTurnProgress` models an
+  // advancing (true) / static (false) transcript between ticks.
   function makeNativeSourceInstance(opts: Parameters<typeof makeInstance>[0]) {
     const made = makeInstance(opts)
     const instance = made.instance
     // Native-source provider marker (mode !== disabled/materialized-mirror →
-    // isNativeSourceCanonicalHistory true).
+    // the authority profile classifies native-source).
     instance.provider = { nativeHistory: { mode: 'native-source' } }
-    instance.meshStallNativeTranscriptSample = null
-    // The probe the stub read populates; the test mutates it between ticks to
-    // model an advancing / static transcript.
-    const probe = { msgCount: 2, sourceMtimeMs: 1_000 }
-    instance.lastExternalCompletionProbe = probe
-    instance.readExternalCompletionMessages = () => {
-      // Real impl refreshes lastExternalCompletionProbe as a side effect; the stub
-      // leaves the test-controlled probe in place.
-      return []
-    }
-    return { ...made, probe }
+    instance.meshStallTranscriptSignalSampled = false
+    const signalState = { inTurnProgress: false, msgCount: 2, sourceMtimeMs: 1_000 }
+    instance.probeNativeTranscriptSignals = () => ({
+      snapshot: makeSignalSnapshot(signalState),
+      messages: [],
+    })
+    return { ...made, signalState }
   }
 
   it('does NOT fire when a native-source transcript keeps advancing (PTY quiet, wire.jsonl growing)', () => {
     const outputAt = 10_000
-    const { instance, emitted, probe } = makeNativeSourceInstance({
+    const { instance, emitted, signalState } = makeNativeSourceInstance({
       settings: meshSettings, lastOutputAt: outputAt, status: 'generating', turnActive: true,
     })
     instance.checkMeshWorkerStall(outputAt) // arm
     // Past the raised turn bound with NO new PTY output — but the transcript grew.
-    probe.msgCount = 5
+    signalState.inTurnProgress = true
     instance.checkMeshWorkerStall(outputAt + TURN_STALL_MS)
     expect(emitted).toHaveLength(0) // suppressed: transcript advancing
     // Transcript grows again on the next crossing — still suppressed.
-    probe.sourceMtimeMs = 2_000
+    signalState.msgCount = 5
+    signalState.sourceMtimeMs = 2_000
     instance.checkMeshWorkerStall(outputAt + TURN_STALL_MS * 2)
     expect(emitted).toHaveLength(0)
   })
@@ -303,12 +325,14 @@ describe('CliProviderInstance.checkMeshWorkerStall', () => {
     const { instance, emitted } = makeNativeSourceInstance({
       settings: meshSettings, lastOutputAt: outputAt, status: 'generating', turnActive: true,
     })
-    instance.checkMeshWorkerStall(outputAt) // arm; first sample records the baseline
-    // First threshold crossing establishes the transcript baseline (prev == null →
-    // treated as "advanced" once) and re-arms — no emit yet.
+    instance.checkMeshWorkerStall(outputAt) // arm
+    // First threshold crossing establishes the episode baseline (first usable
+    // sample → re-arm once, the historical `!prev → advanced` semantics) — no
+    // emit yet.
     instance.checkMeshWorkerStall(outputAt + TURN_STALL_MS)
     expect(emitted).toHaveLength(0)
-    // Neither PTY output NOR the transcript advanced since — a real wedge fires.
+    // Neither PTY output NOR the transcript advanced since (in_turn_progress
+    // false) — a real wedge fires.
     instance.checkMeshWorkerStall(outputAt + TURN_STALL_MS * 2)
     expect(emitted).toHaveLength(1)
     expect(emitted[0].event).toBe('monitor:no_progress')

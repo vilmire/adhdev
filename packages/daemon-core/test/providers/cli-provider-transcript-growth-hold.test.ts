@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { TranscriptSignalSource } from '../../src/providers/transcript-signal-source.js'
 import {
   CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS,
   MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS,
@@ -16,6 +17,12 @@ import {
 // but transcript advancing") — but it was never wired into the completion judgment.
 // The hold engages ONLY on positive growth evidence (fresh source mtime): a growing
 // transcript blocks the emit; absent/stale/quiet transcript information NEVER does.
+//
+// TX-FSM Stage 1: the freshness judgment is DELEGATED to the shared
+// TranscriptSignalSource's transcript_growing signal. The harness below drives the
+// flush through the REAL normalizer (buildSnapshot over the probe fingerprint) and
+// stubs only the instance's probeNativeTranscriptSignals seam — so these cases pin
+// both the delegation AND the source's freshness boundary.
 
 const NOW = 1_000_000_000
 
@@ -65,8 +72,26 @@ function makeInstance(opts: {
     allowTimeout: true,
     noExternalTranscriptSource: true,
   })
-  // The signal under test: the native transcript progress fingerprint.
-  instance.sampleNativeTranscriptProgress = () => opts.nativeSample
+  // The signal under test, run through the REAL shared normalizer: the probe
+  // fingerprint goes in, the normalized snapshot comes out, and the instance
+  // seam (probeNativeTranscriptSignals) returns it. null models a
+  // non-native-source class (the probe returns null — no native source).
+  const signalSource = new TranscriptSignalSource({
+    label: opts.type,
+    profile: { class: 'native-source', timing: 'floor', providerOwnsTranscript: true, emitsPtyTurnEvents: false },
+    finalAssistantPresent: () => false,
+    growthQuietMs: MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS,
+  })
+  instance.probeNativeTranscriptSignals = () => {
+    if (!opts.nativeSample) return null
+    return {
+      snapshot: signalSource.buildSnapshot(
+        { messages: [], probe: opts.nativeSample },
+        NOW,
+      ),
+      messages: [],
+    }
+  }
   instance.shouldAutoApprove = () => false
   instance.autoApproveBusy = false
   instance.shouldSuppressStaleParsedBusyStatus = () => false

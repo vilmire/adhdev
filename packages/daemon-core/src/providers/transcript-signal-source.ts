@@ -1,12 +1,21 @@
 /**
- * TranscriptSignalSource — TX-FSM Stage 0 (shadow), daemon side.
+ * TranscriptSignalSource — TX-FSM transcript signal normalizer, daemon side.
  *
  * Owns the collection/normalization half of the dual-source redesign: given
  * the daemon's EXISTING native-transcript reads (file discovery + session pin
  * + parsing all stay in CliProviderInstance.readExternalCompletionMessages,
  * which resolves providerSessionId / persisted pins / floor-claims), this
  * source normalizes each read into the provider-agnostic SignalSnapshot
- * envelope (spec/signal-envelope.ts) that gets injected into the FsmDriver.
+ * envelope (spec/signal-envelope.ts).
+ *
+ * Consumers:
+ *  - Stage 0 (shadow): the snapshot is injected into the FsmDriver as a pure
+ *    observation; `signal` conditions stay pass-through there (fsm-evaluator).
+ *  - Stage 1 (delegation): the instance's OWN stall/growth-hold judgments
+ *    (checkMeshWorkerStall's transcript-advancing axis, the TRANSCRIPT-
+ *    GROWTH-HOLD, and tryReconcileTranscriptCompletionForStall — the FIX 3
+ *    probe) consume the SAME normalized snapshot instead of running private
+ *    transcript scans. The FSM-side consumption remains shadow/pass-through.
  *
  * Hard contracts:
  *  - ZERO added I/O. update() is fed by transcript reads the daemon already
@@ -16,10 +25,9 @@
  *    P0 choke point) — never raw isNativeSourceCanonicalHistory /
  *    isPurePtyTranscriptProvider calls, and never a provider-name branch.
  *  - Fail-open: a non-native-source class, an unresolved transcript, or a
- *    read error yields an unavailable snapshot — the FSM side treats every
- *    signal as null and every signal condition passes through.
- *  - SHADOW ONLY: the emitted shadow log line is the Stage-0 deliverable (the
- *    Stage 1-3 judgment data). Nothing here feeds back into any verdict.
+ *    read error yields an unavailable snapshot — consumers treat every signal
+ *    as null and keep their pre-delegation fallbacks; a missing signal must
+ *    never wedge a session or fabricate a completion.
  *  - No approval signal (Stage 4 scope — see signal-envelope.ts).
  */
 'use strict';

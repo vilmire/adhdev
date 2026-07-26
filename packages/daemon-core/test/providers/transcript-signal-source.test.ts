@@ -67,6 +67,23 @@ describe('TranscriptSignalSource — envelope normalization', () => {
         expect(snap.signals.in_turn_progress).toBe(false);
     });
 
+    it('transcript_growing is fresh strictly INSIDE the growth window (Stage-1 growth-hold boundary lock)', () => {
+        const src = makeSource();
+        // age = growthQuietMs - 1 → still growing (the growth-hold holds).
+        const inside = src.buildSnapshot({
+            messages: [],
+            probe: { msgCount: 5, sourceMtimeMs: NOW - (GROWTH_QUIET_MS - 1) },
+        }, NOW);
+        expect(inside.signals.transcript_growing).toBe(true);
+        expect(inside.detail.ageMs).toBe(GROWTH_QUIET_MS - 1);
+        // age = growthQuietMs exactly → no longer fresh (the growth-hold releases).
+        const at = src.buildSnapshot({
+            messages: [],
+            probe: { msgCount: 5, sourceMtimeMs: NOW - GROWTH_QUIET_MS },
+        }, NOW);
+        expect(at.signals.transcript_growing).toBe(false);
+    });
+
     it('mtime 0 = no freshness evidence → transcript_growing stays null (growth-hold lock parity)', () => {
         const src = makeSource();
         const snap = src.buildSnapshot({

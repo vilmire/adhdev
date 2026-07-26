@@ -19,6 +19,7 @@ import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js'
 import type { MeshSendKeyItem, MeshSendKeyName } from '../cli-adapters/provider-cli-shared.js';
 import { resolveTranscriptAuthorityProfile } from './transcript-evidence.js';
 import { TranscriptSignalSource } from './transcript-signal-source.js';
+import type { SignalSnapshot } from './spec/signal-envelope.js';
 import { createCliAdapter } from './spec/route.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
@@ -337,18 +338,20 @@ export class CliProviderInstance implements ProviderInstance {
     // MESH_WORKER_STALL_REFIRE_COOLDOWN_MS between successive emissions across
     // anchor re-arms (the per-anchor guard only covers a single continuous stall).
     private meshStallLastFiredAt = -1;
-    // KIMI-MESH-COMPLETION-EMIT (axis 1): the native-source transcript progress
-    // fingerprint (record count + source mtime) observed the LAST time the stall
-    // watchdog checked a native-source provider (transcriptAuthority=provider — e.g.
-    // kimi wire.jsonl). A pure-PTY native-source worker running a long, screen-quiet
-    // tool (no viewport bytes for minutes) looks stalled by the lastOutputAt clock
-    // even though its transcript file is still growing. Before firing the stall, we
-    // compare the current transcript fingerprint against this snapshot; if the
-    // transcript advanced, the "stall" is a false positive of PTY-render stasis, so
-    // we re-arm the anchor instead of paging the coordinator (whose no_progress
-    // handling can lead to the worker being stopped mid-work → completion never
-    // emitted). null = not yet sampled for this session/anchor.
-    private meshStallNativeTranscriptSample: { msgCount: number; sourceMtimeMs: number } | null = null;
+    // KIMI-MESH-COMPLETION-EMIT (axis 1) — TX-FSM Stage 1: whether the stall
+    // watchdog has consumed a usable native-transcript SIGNAL SNAPSHOT for the
+    // current stall episode. A pure-PTY native-source worker running a long,
+    // screen-quiet tool (no viewport bytes for minutes) looks stalled by the
+    // lastOutputAt clock even though its transcript file is still growing.
+    // Before firing the stall, the watchdog consults the shared
+    // TranscriptSignalSource's in_turn_progress signal; if the transcript is
+    // advancing, the "stall" is a false positive of PTY-render stasis, so we
+    // re-arm the anchor instead of paging the coordinator (whose no_progress
+    // handling can lead to the worker being stopped mid-work → completion
+    // never emitted). The FIRST usable sample of an episode still re-arms
+    // unconditionally (no episode-scoped baseline exists yet to prove stasis
+    // against) — the historical `!prev → advanced` semantics, preserved.
+    private meshStallTranscriptSignalSampled = false;
     // FALSE-IDLE continuity epoch: monotonically bumped on EVERY entry into a busy
     // phase (→generating or →waiting_approval). The completedDebouncePending snapshots
     // this value at arm time (busyEpochAtArm); the flush guard requires it UNCHANGED
@@ -1427,10 +1430,17 @@ export class CliProviderInstance implements ProviderInstance {
     private completedDebounceTimer: NodeJS.Timeout | null = null;
     private completedDebouncePending: CompletedDebouncePending | null = null;
     private lastExternalCompletionProbe: ExternalTranscriptProbe | null = null;
-    /** TX-FSM Stage 0 (shadow): lazily-created transcript signal normalizer.
-     *  Fed ONLY by transcript reads this instance already performs — it adds
-     *  zero I/O and its output never feeds back into any verdict. */
+    /** TX-FSM: lazily-created transcript signal normalizer. Fed ONLY by
+     *  transcript reads this instance already performs — it adds zero I/O.
+     *  Stage 0: its output was a pure shadow observation for the FSM driver.
+     *  Stage 1: the instance's own stall/growth-hold judgments consume the
+     *  normalized snapshot too (single source of truth). */
     private transcriptSignalSource: TranscriptSignalSource | null = null;
+    /** TX-FSM Stage 1: the latest snapshot the source produced (set inside
+     *  publishTranscriptSignalObservation). Consumed the same tick by the
+     *  stall-path / growth-hold judgments via probeNativeTranscriptSignals —
+     *  never treated as fresh across ticks. */
+    private lastTranscriptSignalSnapshot: SignalSnapshot | null = null;
     /**
      * The final assistant summary of the last completed turn, cached at
      * completion-emit time. For a native-source provider (antigravity) whose
@@ -1667,19 +1677,21 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /**
-     * TX-FSM Stage 0 (shadow): normalize the transcript read that JUST
-     * happened into a SignalSnapshot and inject it into the FSM driver as a
-     * pure observation (daemon → SpecCliAdapter → FsmDriver). Fed ONLY by
-     * reads this method's caller already performs — it adds zero I/O, so the
-     * getState() zero-native-read invariant and the stall-path read cadence
-     * are untouched. The snapshot is shadow data: nothing on this path feeds
-     * back into completion/stall/redrive verdicts. Fail-open end to end — a
-     * missing adapter hook (non-spec providers), an unresolved transcript, or
-     * any throw degrades to "no observation", never to a wedge.
+     * TX-FSM: normalize the transcript read that JUST happened into a
+     * SignalSnapshot. Stage 0 injected it into the FSM driver as a pure
+     * shadow observation (daemon → SpecCliAdapter → FsmDriver); Stage 1
+     * additionally caches it (lastTranscriptSignalSnapshot) so the instance's
+     * OWN stall/growth-hold judgments consume the SAME normalized snapshot
+     * instead of re-running private transcript scans. Fed ONLY by reads this
+     * method's caller already performs — it adds zero I/O, so the getState()
+     * zero-native-read invariant and the stall-path read cadence are
+     * untouched. The source update runs regardless of the adapter hook so a
+     * non-spec provider still produces the instance-side snapshot (the FSM
+     * injection is simply skipped there). Fail-open end to end — an
+     * unresolved transcript or any throw degrades to "no observation", never
+     * to a wedge.
      */
     private publishTranscriptSignalObservation(messages: unknown[] | null, error = false): void {
-        const adapter = this.adapter as { setSignalObservation?: (snapshot: unknown) => void } | null | undefined;
-        if (typeof adapter?.setSignalObservation !== 'function') return; // non-spec path: no FSM consumer
         try {
             if (!this.transcriptSignalSource) {
                 this.transcriptSignalSource = new TranscriptSignalSource({
@@ -1689,7 +1701,13 @@ export class CliProviderInstance implements ProviderInstance {
                     profile: resolveTranscriptAuthorityProfile(this.provider),
                     turnStartedAt: () => {
                         const t = (this.adapter as any)?.currentTurnStartedAt;
-                        return typeof t === 'number' && Number.isFinite(t) ? t : undefined;
+                        if (typeof t === 'number' && Number.isFinite(t)) return t;
+                        // Mesh fallback: for an emitsPtyTurnEvents=false worker
+                        // (idle→idle collapse) currentTurnStartedAt may never
+                        // bind; scope to the task injection instead — the SAME
+                        // boundary the stall-path rescue uses, so the signal and
+                        // the rescue's payload extraction agree on the turn.
+                        return this.meshTaskInjectedAt > 0 ? this.meshTaskInjectedAt : undefined;
                     },
                     // Reuse the exact completion machinery (I1) for the
                     // final_assistant_present signal rather than duplicating
@@ -1701,8 +1719,12 @@ export class CliProviderInstance implements ProviderInstance {
             const snapshot = this.transcriptSignalSource.update(
                 { messages, probe: this.lastExternalCompletionProbe, error },
             );
-            adapter.setSignalObservation(snapshot);
-        } catch { /* shadow-only: signal collection must never break the read path */ }
+            this.lastTranscriptSignalSnapshot = snapshot;
+            const adapter = this.adapter as { setSignalObservation?: (snapshot: unknown) => void } | null | undefined;
+            if (typeof adapter?.setSignalObservation === 'function') {
+                adapter.setSignalObservation(snapshot);
+            }
+        } catch { /* signal collection must never break the read path */ }
     }
 
     /**
@@ -2552,31 +2574,38 @@ export class CliProviderInstance implements ProviderInstance {
         const stalledMs = now - this.meshStallAnchorAt;
         if (stalledMs < threshold) return;
 
-        // KIMI-MESH-COMPLETION-EMIT (axis 1): transcript-aware stall for native-source
-        // providers. A pure-PTY native-source worker (transcriptAuthority=provider,
-        // e.g. kimi) running a long, screen-quiet tool emits no viewport bytes for
-        // minutes, so the lastOutputAt clock above reads it as stalled — but its
-        // authoritative transcript (wire.jsonl) is still being appended. Firing
-        // monitor:no_progress here surfaces a false stall to the coordinator whose
-        // downstream handling can stop the worker mid-work, killing the emit window
-        // before the real completion propagates. So before firing, sample the native
-        // transcript's progress fingerprint: if it advanced (more records OR a fresher
-        // source mtime) since the last sample, the worker is demonstrably alive — treat
-        // it as progress. Re-arm the anchor to `now` and reset the episode so the clock
-        // restarts from this proven-live moment; only a transcript that is ALSO static
-        // falls through to the genuine-stall fire below. No-op for pure-PTY providers
-        // (sample is null → unchanged behavior).
-        const nativeSample = this.sampleNativeTranscriptProgress();
-        if (nativeSample) {
-            const prev = this.meshStallNativeTranscriptSample;
-            const advanced = !prev
-                || nativeSample.msgCount > prev.msgCount
-                || nativeSample.sourceMtimeMs > prev.sourceMtimeMs;
-            this.meshStallNativeTranscriptSample = nativeSample;
-            if (advanced) {
+        // KIMI-MESH-COMPLETION-EMIT (axis 1) — TX-FSM Stage 1: transcript-aware
+        // stall for native-source providers, now delegated to the SHARED
+        // TranscriptSignalSource. A pure-PTY native-source worker
+        // (transcriptAuthority=provider, e.g. kimi) running a long, screen-quiet
+        // tool emits no viewport bytes for minutes, so the lastOutputAt clock
+        // above reads it as stalled — but its authoritative transcript
+        // (wire.jsonl) is still being appended. Firing monitor:no_progress here
+        // surfaces a false stall to the coordinator whose downstream handling
+        // can stop the worker mid-work, killing the emit window before the real
+        // completion propagates. So before firing, consume the signal source's
+        // in_turn_progress (transcript advanced since the previous sample OR
+        // source mtime inside the growth-quiet window — the same liveness test
+        // the completion growth-hold uses, normalized from the ONE read this
+        // tick): if true, the worker is demonstrably alive — treat it as
+        // progress. Re-arm the anchor to `now` and reset the episode so the
+        // clock restarts from this proven-live moment; only a transcript that
+        // is ALSO static falls through to the genuine-stall fire below. The
+        // FIRST usable sample of an episode re-arms unconditionally — no
+        // episode-scoped baseline exists yet to prove stasis against (the
+        // historical `!prev → advanced` semantics). Fail-open: a non-native-
+        // source class, an unresolved transcript, or a read error yields no
+        // usable snapshot → fall through to the unchanged lastOutputAt-only
+        // judgment.
+        const transcriptSignals = this.probeNativeTranscriptSignals();
+        if (transcriptSignals?.snapshot?.available === true) {
+            const firstSampleThisEpisode = !this.meshStallTranscriptSignalSampled;
+            this.meshStallTranscriptSignalSampled = true;
+            const signalDetail = transcriptSignals.snapshot.detail;
+            if (firstSampleThisEpisode || transcriptSignals.snapshot.signals.in_turn_progress === true) {
                 if (this.isMeshWorkerSession()) {
                     traceMeshEventDrop('mesh_worker_stall_transcript_advancing', this.meshTraceCtx('monitor:no_progress'),
-                        `msgCount=${nativeSample.msgCount} sourceMtime=${nativeSample.sourceMtimeMs} (PTY quiet ${Math.round(stalledMs / 1000)}s but transcript advancing)`);
+                        `msgCount=${signalDetail.msgCount} sourceMtime=${signalDetail.sourceMtimeMs} (PTY quiet ${Math.round(stalledMs / 1000)}s but transcript advancing)`);
                 }
                 this.meshStallAnchorAt = now;
                 this.meshStallEmittedForAnchor = false;
@@ -2591,11 +2620,12 @@ export class CliProviderInstance implements ProviderInstance {
         // collapse) sits at a STATIC idle prompt; the status-agnostic watchdog
         // would misread that finished-but-quiet state as a wedge and false-fire
         // monitor:no_progress. If the class-appropriate transcript (PTY parse or
-        // authoritative native history — completionFinalSummary picks) proves a
-        // finished turn, emit the missing completion and SUPPRESS the stall. A
-        // genuinely mid-turn / wedged worker with no in-turn final assistant falls
-        // through and the real stall fires below unchanged.
-        if (this.tryReconcileTranscriptCompletionForStall(observedStatus)) {
+        // authoritative native history) proves a finished turn, emit the missing
+        // completion and SUPPRESS the stall. A genuinely mid-turn / wedged worker
+        // with no in-turn final assistant falls through and the real stall fires
+        // below unchanged. TX-FSM Stage 1: the native-source verdict consumes the
+        // SAME snapshot axis 1 just produced — no second read.
+        if (this.tryReconcileTranscriptCompletionForStall(observedStatus, transcriptSignals)) {
             this.meshStallEmittedForAnchor = true;
             return;
         }
@@ -2650,49 +2680,51 @@ export class CliProviderInstance implements ProviderInstance {
         this.meshStallEmittedForAnchor = false;
         this.meshStallTurnActiveLast = undefined;
         this.meshStallLastFiredAt = -1;
-        this.meshStallNativeTranscriptSample = null;
+        this.meshStallTranscriptSignalSampled = false;
     }
 
+    /** The result of one native-transcript signal probe: the normalized
+     *  snapshot the shared TranscriptSignalSource produced from the read, and
+     *  the very messages it was normalized from (so a judgment site can pull
+     *  a payload — e.g. the final summary — from the SAME read with zero
+     *  added I/O). */
     /**
-     * KIMI-MESH-COMPLETION-EMIT (axis 1). For a native-source provider
-     * (transcriptAuthority=provider — its authoritative history is an on-disk
-     * transcript file, e.g. kimi's wire.jsonl), sample the transcript's current
-     * progress fingerprint (record count + source-file mtime) WITHOUT parsing the
-     * PTY. Used by the stall watchdog to distinguish "PTY render is quiet but the
-     * worker is still doing long tool work (transcript growing)" from a genuine
-     * wedge. Returns null for a pure-PTY provider (no native source) or when the
-     * source cannot be resolved this tick — the caller then falls back to the
-     * unchanged lastOutputAt-only judgment.
+     * TX-FSM Stage 1 — the single native-transcript signal probe (replaces
+     * the Stage-0 sampleNativeTranscriptProgress fingerprint sampler). For a
+     * native-source provider (its authoritative history is an on-disk
+     * transcript file, e.g. kimi's wire.jsonl), perform the read this
+     * judgment point already owns — SAME cadence as before, one
+     * readExternalCompletionMessages() per call, never more — and return the
+     * NORMALIZED SignalSnapshot the shared TranscriptSignalSource produced
+     * from it (publishTranscriptSignalObservation runs inside the read), plus
+     * the messages that read returned. Judgment sites (the stall watchdog's
+     * transcript-advancing axis, the completion growth-hold, the stall-path
+     * completion rescue) consume the snapshot's SIGNALS instead of running
+     * their own fingerprint/freshness/final-assistant scans — one source of
+     * truth for "what does the transcript say right now".
      *
-     * Generalized on the provider's native-source flag, NOT a hardcoded provider
-     * type, so every current and future pure-PTY long-tool native-source provider
-     * benefits. Cheap enough for the stall path: it runs only at the stall threshold
-     * (≥180s of PTY stasis), never on the routine 5s tick.
+     * Class gating goes through resolveTranscriptAuthorityProfile ONLY.
+     * Returns null for a non-native-source class (nothing to signal from) and
+     * a null snapshot when the read threw — callers keep their fail-open
+     * fallbacks ("couldn't tell" never blocks an idle verdict and never
+     * fabricates a completion). Cheap enough for the stall path: it runs
+     * only at the stall threshold (≥180s of PTY stasis) or during an armed
+     * completion-debounce retry, never on the routine 5s tick.
      */
-    private sampleNativeTranscriptProgress(): { msgCount: number; sourceMtimeMs: number } | null {
-        // authority-ok: native fingerprint SAMPLING, not a stall verdict. This only
-        // decides whether a native source exists to sample a progress fingerprint from;
-        // the caller (checkMeshWorkerStall) makes the stall/no-progress decision over the
-        // returned fingerprint. Non-native-source classes have nothing to sample here and
-        // fall back to the unchanged lastOutputAt-only judgment.
-        if (!isNativeSourceCanonicalHistory(this.provider?.nativeHistory)) return null;
+    private probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null {
+        if (resolveTranscriptAuthorityProfile(this.provider).class !== 'native-source') return null;
         // readExternalCompletionMessages resolves this session's OWN native-source
         // conversation (providerSessionId / persisted pin / floor claim) and, as a
-        // side effect, refreshes this.lastExternalCompletionProbe with the source
-        // path, mtime, and message count. Reusing it keeps the resolution logic in
-        // one place and immune to the antigravity-style session-id quirks.
+        // side effect, feeds the shared TranscriptSignalSource (which refreshes
+        // this.lastTranscriptSignalSnapshot). Reusing it keeps the resolution
+        // logic in one place and immune to the antigravity-style session-id quirks.
         let messages: unknown[] | null = null;
         try {
             messages = this.readExternalCompletionMessages();
         } catch {
-            return null; // best-effort: an unresolved transcript → fall back to PTY clock
+            return { snapshot: null, messages: null }; // best-effort: fail-open
         }
-        const probe = this.lastExternalCompletionProbe;
-        if (!probe) return null;
-        return {
-            msgCount: typeof probe.msgCount === 'number' ? probe.msgCount : (Array.isArray(messages) ? messages.length : 0),
-            sourceMtimeMs: typeof probe.sourceMtimeMs === 'number' ? probe.sourceMtimeMs : 0,
-        };
+        return { snapshot: this.lastTranscriptSignalSnapshot, messages };
     }
 
     /**
@@ -2795,8 +2827,25 @@ export class CliProviderInstance implements ProviderInstance {
      * false for a daemon-owned provider and for a genuinely mid-turn / wedged
      * worker with no in-turn final assistant, so a real stall still fires
      * unchanged. Evidence bar is identical to flushMeshCompletionBeforeCleanup.
+     *
+     * TX-FSM Stage 1 (FIX 3 probe delegation): for a native-source class the
+     * completion VERDICT is the shared TranscriptSignalSource's
+     * final_assistant_present signal, normalized from the ONE transcript read
+     * the stall watchdog already performed this tick (passed in as
+     * `transcriptSignals`) — not a second private read + scan. The emit
+     * payload (finalSummary) is extracted from the SAME messages the signal
+     * was normalized from, with the SAME turn boundary the legacy path used,
+     * so the extraction re-proves the turn scope the signal checked. Fail-open
+     * both ways: no usable snapshot (read failed / unresolved / a pure-PTY
+     * class, which has no native signal by construction) → the legacy
+     * class-appropriate evidence path (completionFinalSummary), unchanged; and
+     * a present-but-unextractable signal yields false rather than a
+     * payload-less emit.
      */
-    private tryReconcileTranscriptCompletionForStall(observedStatus: string): boolean {
+    private tryReconcileTranscriptCompletionForStall(
+        observedStatus: string,
+        transcriptSignals?: { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null,
+    ): boolean {
         // daemon-owned transcripts get real PTY turn events — an idle-quiet
         // daemon-owned worker with no completion emit is a genuine anomaly the
         // stall should surface, exactly as before this unification.
@@ -2825,14 +2874,29 @@ export class CliProviderInstance implements ProviderInstance {
         try {
             parsedMessages = this.adapter?.getScriptParsedStatus?.()?.messages;
         } catch { parsedMessages = undefined; }
-        // completionFinalSummary turn-scopes the class-appropriate transcript (native
-        // history for a native-source provider, the PTY parse otherwise) — a stale
-        // prior-turn tail or a mid-turn worker with no in-turn final assistant yields
-        // '' → return false below.
+        // TX-FSM Stage 1: a native-source class with a usable signal snapshot
+        // takes its verdict from the SHARED signal source (final_assistant_present),
+        // and the payload from the SAME messages — zero added I/O. Every other
+        // case falls back to completionFinalSummary, which turn-scopes the
+        // class-appropriate transcript (native history for a native-source
+        // provider, the PTY parse otherwise) — a stale prior-turn tail or a
+        // mid-turn worker with no in-turn final assistant yields '' → return
+        // false below.
         let finalSummary: string | undefined;
-        try {
-            finalSummary = this.completionFinalSummary(parsedMessages, turnStartedAt);
-        } catch { finalSummary = undefined; }
+        const signalSnapshot = transcriptSignals?.snapshot;
+        if (profile.class === 'native-source' && signalSnapshot?.available === true) {
+            // The signal is the verdict; the turn-scoped extraction re-proves
+            // the scope and supplies the emit payload from the same read.
+            if (signalSnapshot.signals.final_assistant_present !== true) return false;
+            finalSummary = extractFinalSummaryFromMessagesAfter(
+                (Array.isArray(transcriptSignals?.messages) ? transcriptSignals.messages : []) as any,
+                turnStartedAt,
+            ) || undefined;
+        } else {
+            try {
+                finalSummary = this.completionFinalSummary(parsedMessages, turnStartedAt);
+            } catch { finalSummary = undefined; }
+        }
         // No in-turn final assistant evidence → not a proven turn-end. Let the real
         // stall fire so a genuinely-wedged worker is still surfaced.
         if (!finalSummary) return false;
@@ -3214,20 +3278,27 @@ export class CliProviderInstance implements ProviderInstance {
             // untouched; claude-cli's write-lag CANON-C immediate emit is likewise
             // untouched (its block deliberately omits noExternalTranscriptSource).
             if (blockReason === 'missing_final_assistant' && block.noExternalTranscriptSource === true) {
-                let nativeSample: { msgCount: number; sourceMtimeMs: number } | null = null;
-                try { nativeSample = this.sampleNativeTranscriptProgress(); } catch { nativeSample = null; }
-                const sourceMtimeMs = nativeSample?.sourceMtimeMs ?? 0;
-                if (nativeSample && sourceMtimeMs > 0 && Date.now() - sourceMtimeMs < MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS) {
+                // TX-FSM Stage 1: the freshness judgment is the shared signal
+                // source's transcript_growing signal (same growth-quiet window,
+                // normalized from the ONE re-probe this retry performs) instead
+                // of a private mtime scan. Fail-open identically: no signal
+                // (non-native-source / unresolved / read error / unknown mtime)
+                // → falls through to the unchanged floor/cap logic.
+                let growthSnapshot: SignalSnapshot | null = null;
+                try { growthSnapshot = this.probeNativeTranscriptSignals()?.snapshot ?? null; } catch { growthSnapshot = null; }
+                if (growthSnapshot?.available === true && growthSnapshot.signals.transcript_growing === true) {
+                    const growthDetail = growthSnapshot.detail;
+                    const mtimeAgeMs = growthDetail.ageMs ?? 0; // growing ⇒ ageMs non-null
                     if (pending.loggedBlockReason !== 'native_transcript_advancing') {
-                        LOG.info('CLI', `[${this.type}] holding pending completed (native_transcript_advancing: msgCount=${nativeSample.msgCount} mtimeAge=${Date.now() - sourceMtimeMs}ms < ${MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS}ms) — transcript still growing, screen-idle verdict not trusted`);
+                        LOG.info('CLI', `[${this.type}] holding pending completed (native_transcript_advancing: msgCount=${growthDetail.msgCount} mtimeAge=${mtimeAgeMs}ms < ${MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS}ms) — transcript still growing, screen-idle verdict not trusted`);
                         if (this.isMeshWorkerSession()) {
-                            traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `native_transcript_advancing msgCount=${nativeSample.msgCount} mtimeAge=${Date.now() - sourceMtimeMs}ms`);
+                            traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `native_transcript_advancing msgCount=${growthDetail.msgCount} mtimeAge=${mtimeAgeMs}ms`);
                         }
                         if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
                             blockReason: 'native_transcript_advancing',
                             latestVisibleStatus,
-                            msgCount: nativeSample.msgCount,
-                            sourceMtimeAgeMs: Date.now() - sourceMtimeMs,
+                            msgCount: growthDetail.msgCount,
+                            sourceMtimeAgeMs: mtimeAgeMs,
                             growthQuietMs: MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS,
                             waitedMs,
                         });

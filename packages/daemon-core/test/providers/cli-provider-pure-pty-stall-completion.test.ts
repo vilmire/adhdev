@@ -184,4 +184,129 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
       expect(emitted).toHaveLength(0)
     })
   }
+
+  // ── TX-FSM Stage 1: FIX 3 probe delegation to the shared signal source ──────
+  //
+  // For a native-source class the stall-path completion VERDICT is the shared
+  // TranscriptSignalSource's final_assistant_present signal, normalized from the
+  // ONE transcript read the stall watchdog already performed that tick (passed
+  // in as the second argument) — not a second private read + scan. The emit
+  // payload is extracted from the SAME messages with the SAME turn boundary.
+  // Fail-open: no usable snapshot → the legacy completionFinalSummary path.
+  describe('Stage 1 signal delegation', () => {
+  function makeAvailableSnapshot(finalAssistantPresent: boolean | null) {
+    return {
+      kind: 'adhdev:fsm/signal-snapshot@0',
+      sampledAt: 0,
+      available: true,
+      profile: { class: 'native-source', timing: 'floor' },
+      signals: {
+        final_assistant_present: finalAssistantPresent,
+        in_turn_progress: false,
+        transcript_growing: false,
+      },
+      detail: { msgCount: 3, sourceMtimeMs: 4_000, ageMs: 120_000 },
+    }
+  }
+  const unavailableSnapshot = {
+    kind: 'adhdev:fsm/signal-snapshot@0',
+    sampledAt: 0,
+    available: false,
+    unavailableReason: 'unresolved',
+    signals: { final_assistant_present: null, in_turn_progress: null, transcript_growing: null },
+    detail: { msgCount: 0, sourceMtimeMs: 0, ageMs: null },
+  }
+
+  it('native-source: emits from the signal verdict, payload extracted from the SAME messages (legacy path NOT consulted)', () => {
+    const { instance, emitted } = makeInstance({
+      provider: nativeSourceProvider,
+      settings: meshSettings,
+      // Realistic ms-scale timestamps: readChatMessageTimestampMs treats
+      // values < 1e10 as SECONDS, so turn/message times must share the scale.
+      meshTaskInjectedAt: 1_000_002_000_000,
+      turnStartedAt: 1_000_003_000_000,
+      finalSummary: undefined,
+    })
+    // The delegation must not touch the legacy evidence path at all.
+    instance.completionFinalSummary = () => { throw new Error('legacy path must not run') }
+    const transcriptSignals = {
+      snapshot: makeAvailableSnapshot(true),
+      messages: [{ role: 'assistant', content: 'done: implemented and committed', timestamp: 1_000_004_000_000 }],
+    }
+    const result = instance.tryReconcileTranscriptCompletionForStall('idle', transcriptSignals)
+    expect(result).toBe(true)
+    expect(emitted).toHaveLength(1)
+    expect(emitted[0].event).toBe('agent:generating_completed')
+    expect(emitted[0].finalSummary).toBe('done: implemented and committed')
+    expect(emitted[0].evidenceLevel).toBe('transcript')
+    expect(emitted[0].completionDiagnostic).toMatchObject({ source: 'stall_native_source_transcript_completion' })
+  })
+
+  it('native-source: returns false when final_assistant_present is not true (mid-turn / wedge)', () => {
+    const { instance, emitted } = makeInstance({
+      provider: nativeSourceProvider,
+      settings: meshSettings,
+      meshTaskInjectedAt: 2_000,
+      turnStartedAt: 3_000,
+      finalSummary: undefined,
+    })
+    instance.completionFinalSummary = () => { throw new Error('legacy path must not run') }
+    const transcriptSignals = { snapshot: makeAvailableSnapshot(false), messages: [] }
+    expect(instance.tryReconcileTranscriptCompletionForStall('idle', transcriptSignals)).toBe(false)
+    expect(emitted).toHaveLength(0)
+  })
+
+  it('native-source: returns false when the signal is present but the turn scope proves the bubble stale', () => {
+    const { instance, emitted } = makeInstance({
+      provider: nativeSourceProvider,
+      settings: meshSettings,
+      meshTaskInjectedAt: 1_000_002_000_000,
+      turnStartedAt: 1_000_003_000_000,
+      finalSummary: undefined,
+    })
+    instance.completionFinalSummary = () => { throw new Error('legacy path must not run') }
+    const transcriptSignals = {
+      snapshot: makeAvailableSnapshot(true),
+      // The only assistant bubble PREDATES the turn start → the turn-scoped
+      // extraction rejects it even though the (crafted) signal says present.
+      messages: [{ role: 'assistant', content: 'stale tail from a prior task', timestamp: 1_000_002_500_000 }],
+    }
+    expect(instance.tryReconcileTranscriptCompletionForStall('idle', transcriptSignals)).toBe(false)
+    expect(emitted).toHaveLength(0)
+  })
+
+  it('native-source: fails open to the legacy evidence path when the snapshot is unavailable', () => {
+    const { instance, emitted } = makeInstance({
+      provider: nativeSourceProvider,
+      settings: meshSettings,
+      meshTaskInjectedAt: 2_000,
+      turnStartedAt: 3_000,
+      finalSummary: 'done: recovered by the legacy read',
+    })
+    const transcriptSignals = { snapshot: unavailableSnapshot, messages: null }
+    const result = instance.tryReconcileTranscriptCompletionForStall('idle', transcriptSignals)
+    expect(result).toBe(true)
+    expect(emitted).toHaveLength(1)
+    expect(emitted[0].finalSummary).toBe('done: recovered by the legacy read')
+    expect(emitted[0].completionDiagnostic).toMatchObject({ source: 'stall_native_source_transcript_completion' })
+  })
+
+  it('pure-PTY: keeps the PTY-parse evidence path even when a snapshot slot is passed (no native signal exists)', () => {
+    const { instance, emitted } = makeInstance({
+      provider: purePtyProvider,
+      settings: meshSettings,
+      meshTaskInjectedAt: 2_000,
+      turnStartedAt: 3_000,
+      finalSummary: 'done: committed and pushed',
+    })
+    // A pure-PTY worker produces no native snapshot; even a crafted one must
+    // not divert it from the legacy class-appropriate evidence path.
+    const transcriptSignals = { snapshot: makeAvailableSnapshot(false), messages: [] }
+    const result = instance.tryReconcileTranscriptCompletionForStall('idle', transcriptSignals)
+    expect(result).toBe(true)
+    expect(emitted).toHaveLength(1)
+    expect(emitted[0].finalSummary).toBe('done: committed and pushed')
+    expect(emitted[0].completionDiagnostic).toMatchObject({ source: 'stall_pure_pty_transcript_completion' })
+  })
+})
 })
