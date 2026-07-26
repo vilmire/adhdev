@@ -36,6 +36,8 @@ function run(cmd, args) {
 }
 
 run(npm, ['run', 'build', '-w', 'packages/mesh-shared']);
+run(npm, ['run', 'build', '-w', 'packages/session-host-core']);
+run(npm, ['run', 'build', '-w', 'packages/session-host-daemon']);
 run(npm, ['run', 'build', '-w', 'packages/mcp-server']);
 run(npm, ['run', 'bundle:vendor', '-w', 'packages/daemon-standalone']);
 
