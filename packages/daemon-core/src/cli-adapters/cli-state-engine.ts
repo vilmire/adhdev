@@ -1375,6 +1375,7 @@ export class CliStateEngine {
             // Re-checking currentStatus there meant idle was unreachable.
             this.setStatus('idle', reason);
             this.callbacks.onStatusChange();
+            this.transport.flushOutboundQueue();
         }, IDLE_CONFIRMATION_GRACE_MS);
     }
 

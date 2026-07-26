@@ -36,8 +36,8 @@ export interface CliAdapter {
     workingDir: string;
     _acpInstance?: AcpAdapterHandle;
     spawn(): Promise<void>;
-    sendMessage(text: string, options?: { force?: boolean; meshTaskId?: string }): Promise<void>;
-    forceSendMessage?(text: string, meshTaskId?: string): Promise<void>;
+    sendMessage(text: string, options?: { force?: boolean; meshTaskId?: string }): Promise<{ status: 'queued' | 'delivered' } | void>;
+    forceSendMessage?(text: string, meshTaskId?: string): Promise<{ status: 'queued' | 'delivered' } | void>;
     getStatus(): CliAdapterStatus;
     getScriptParsedStatus?(): unknown;
     invokeScript?(scriptName: string, args?: Record<string, unknown>): Promise<unknown>;

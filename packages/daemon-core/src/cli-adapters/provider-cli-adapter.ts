@@ -1659,18 +1659,17 @@ export class ProviderCliAdapter implements CliAdapter {
         ), 50);
     }
 
-    async sendMessage(text: string, options: { force?: boolean; meshTaskId?: string } = {}): Promise<void> {
+    async sendMessage(text: string, options: { force?: boolean; meshTaskId?: string } = {}): Promise<{ status: 'queued' | 'delivered' }> {
         if (options.force === true) {
-            await this.forceSendMessage(text, options.meshTaskId);
-            return;
+            return await this.forceSendMessage(text, options.meshTaskId);
         }
-        await this.sendMessageNow(text, true, options.meshTaskId);
+        return await this.sendMessageNow(text, true, options.meshTaskId);
     }
 
-    async forceSendMessage(text: string, meshTaskId?: string): Promise<void> {
+    async forceSendMessage(text: string, meshTaskId?: string): Promise<{ status: 'queued' | 'delivered' }> {
         if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
         const content = String(text || '');
-        if (!content.trim()) return;
+        if (!content.trim()) return { status: 'delivered' };
         // ARCH-REFACTOR R1: a force-send (mesh coordinator dispatch / reconcile
         // redelivery) bypasses the normal turnScope pipeline (raw PTY write), so there is
         // no turnScope to carry the taskId. Bind it directly on the engine so the
@@ -1688,7 +1687,7 @@ export class ProviderCliAdapter implements CliAdapter {
         // (that is the deadlock the force path exists to break).
         if (this.engine.currentStatus === 'waiting_approval' || this.engine.hasActionableApproval()) {
             LOG.info('CLI', `[${this.cliType}] force-send held — session parked on approval modal (status=${this.engine.currentStatus})`);
-            return;
+            return { status: 'queued' };
         }
         LOG.info('CLI', `[${this.cliType}] force-sending prompt while status=${this.engine.currentStatus}`);
         // Settle, then submit atomically. The previous split-write fix
@@ -1707,6 +1706,7 @@ export class ProviderCliAdapter implements CliAdapter {
         await this.waitForForceSubmitSettle();
         await this.writeToPty(content + this.sendKey);
         this.onStatusChange?.();
+        return { status: 'delivered' };
     }
 
     private async waitForForceSubmitSettle(): Promise<void> {
@@ -1836,7 +1836,7 @@ export class ProviderCliAdapter implements CliAdapter {
         }
     }
 
-    private async sendMessageNow(text: string, allowQueue: boolean, meshTaskId?: string): Promise<void> {
+    private async sendMessageNow(text: string, allowQueue: boolean, meshTaskId?: string): Promise<{ status: 'queued' | 'delivered' }> {
         if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
         const allowInputDuringGeneration = this.provider.allowInputDuringGeneration === true;
         const allowInterventionPrompt = allowInputDuringGeneration
@@ -1861,7 +1861,7 @@ export class ProviderCliAdapter implements CliAdapter {
         const queueReason = this.shouldQueuePendingOutboundMessage(parsedStatusBeforeSend);
         if (allowQueue && queueReason) {
             this.enqueuePendingOutboundMessage(text, queueReason, meshTaskId);
-            return;
+            return { status: 'queued' };
         }
         if (!allowInterventionPrompt) {
             await this.waitForInteractivePrompt();
@@ -1889,7 +1889,7 @@ export class ProviderCliAdapter implements CliAdapter {
             // (e.g. an internal flush) still throws so it isn't silently swallowed.
             if (allowQueue) {
                 this.enqueuePendingOutboundMessage(text, 'not_ready_pending_prompt', meshTaskId);
-                return;
+                return { status: 'queued' };
             }
             throw new Error(`${this.cliName} not ready (status: ${this.engine.currentStatus})`);
         }
@@ -1912,7 +1912,7 @@ export class ProviderCliAdapter implements CliAdapter {
             if (!terminalLooksIdle) {
                 if (allowQueue) {
                     this.enqueuePendingOutboundMessage(text, `parsed_status_${parsedSessionStatus}`, meshTaskId);
-                    return;
+                    return { status: 'queued' };
                 }
                 throw new Error(`${this.cliName} is still processing the previous prompt`);
             }
@@ -1925,7 +1925,7 @@ export class ProviderCliAdapter implements CliAdapter {
             ) {
                 if (allowQueue) {
                     this.enqueuePendingOutboundMessage(text, 'waiting_for_response', meshTaskId);
-                    return;
+                    return { status: 'queued' };
                 }
                 throw new Error(`${this.cliName} is still processing the previous prompt`);
             }
@@ -2004,6 +2004,7 @@ export class ProviderCliAdapter implements CliAdapter {
         });
         // Schedule settle after successful send
         this.engine.scheduleSettle();
+        return { status: 'delivered' };
     }
 
     getPartialResponse(): string {
