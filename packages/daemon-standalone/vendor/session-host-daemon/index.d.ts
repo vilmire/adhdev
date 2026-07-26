@@ -21,6 +21,7 @@ declare class SessionHostServer extends EventEmitter {
     private recentTransitions;
     private exitWaiters;
     private lastNoOutputInputWarnAt;
+    private stopRequests;
     constructor(options?: SessionHostServerOptions);
     start(): Promise<void>;
     stop(): Promise<void>;
@@ -47,6 +48,12 @@ declare class SessionHostServer extends EventEmitter {
     private restorePersistedRuntimes;
     private pruneDuplicateRuntime;
     private startRuntime;
+    /**
+     * Handle a PTY termination: classify the (exitCode, signal) pair, stamp the
+     * record + tombstone, emit exactly one structured diagnostic, and schedule
+     * cleanup of the live persistence file (the tombstone is retained).
+     */
+    private handleRuntimeExit;
 }
 
 export { SessionHostServer, type SessionHostServerOptions };
