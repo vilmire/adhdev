@@ -1000,12 +1000,19 @@ var MESH_FAST_FORWARD_NODE_TOOL = {
 };
 var MESH_RESTART_DAEMON_TOOL = {
   name: "mesh_restart_daemon",
-  description: `Update a mesh node's daemon to the latest published version on its release channel and restart it \u2014 the same path as the dashboard "preview update" button, exposed as a mesh command so a coordinator can roll a worker daemon onto a freshly deployed version without a manual restart round-trip. No agent session is launched. Idle-gated: a node whose daemon has an active session (generating / waiting_approval / starting) is refused with code "blocking_sessions" so an in-flight turn is never interrupted. If the node is already on the latest version it is a no-op (no restart), matching the dashboard button (returns alreadyLatest:true). Targets a single node \u2014 call other (idle) nodes first; restarting the coordinator's OWN daemon is naturally refused while its calling turn is active. Passing channel switches the daemon's release channel (and server URL) before restarting; omit it to keep the daemon on its configured channel.`,
+  description: `Restart a mesh node's daemon, optionally updating it first \u2014 the same path as the dashboard "preview update" button, exposed as a mesh command so a coordinator can roll a worker daemon without a manual restart round-trip. No agent session is launched. mode="upgrade" (default): update to the latest published version on the release channel, then restart; already-latest is a no-op (no restart, returns alreadyLatest:true). mode="restart": pure re-spawn with no reinstall \u2014 restarts even when already latest, with much shorter downtime; use it to reset wedged daemon state (memory leaks, zombie sessions). Idle-gated: a node whose daemon has an active session (generating / waiting_approval / starting) is refused with code "blocking_sessions" so an in-flight turn is never interrupted. self_only=true waives ONLY this mesh's own coordinator session (the structural self-deadlock case \u2014 the coordinator is always generating while it calls). Other sessions still refuse. force=true bypasses the gate entirely: in-flight turns die and the unpersisted pendingOutboundQueue is lost. when_idle=true schedules the restart to run automatically once the daemon goes idle (the safest path \u2014 no queue loss); cancel_when_idle=true cancels it and every response reports the schedule under deferredRestart. kill_session_host=true additionally stops the session-host process, destroying ALL hosted CLI sessions (hard refresh; this is what Windows already does on every upgrade). Default off. Note: on Windows any daemon restart/upgrade terminates all hosted sessions regardless of options; on POSIX hosted sessions survive a plain restart and rebind on next boot. Passing channel switches the daemon's release channel (and server URL) before restarting; omit it to keep the daemon on its configured channel.`,
   inputSchema: {
     type: "object",
     properties: {
-      node_id: { type: "string", description: "Target node ID \u2014 the daemon that owns this node is updated and restarted." },
-      channel: { type: "string", enum: ["stable", "preview"], description: "Optional release channel to update from. Defaults to the daemon's configured updateChannel. Setting it also repoints the daemon's server URL to that channel." }
+      node_id: { type: "string", description: "Target node ID \u2014 the daemon that owns this node is restarted (and updated, in upgrade mode)." },
+      channel: { type: "string", enum: ["stable", "preview"], description: "Optional release channel to update from (upgrade mode only). Defaults to the daemon's configured updateChannel. Setting it also repoints the daemon's server URL to that channel." },
+      mode: { type: "string", enum: ["upgrade", "restart"], description: "upgrade (default): update to latest on channel, then restart (already-latest is a no-op). restart: pure re-spawn, no reinstall \u2014 restarts even when already latest." },
+      force: { type: "boolean", description: "Bypass the idle-gate entirely. Destructive: in-flight turns are killed and the in-memory pendingOutboundQueue is permanently lost. Default false." },
+      self_only: { type: "boolean", description: "Waive only this mesh's own coordinator session when it blocks the restart (the coordinator self-deadlock). Other nodes' active sessions still refuse. Default false." },
+      when_idle: { type: "boolean", description: "If blocked, schedule the restart to execute automatically once the daemon goes idle (safest \u2014 no pendingOutboundQueue loss). The schedule expires after timeout_ms (default 30 min). Default false." },
+      cancel_when_idle: { type: "boolean", description: "Cancel a previously scheduled when_idle restart on the owning daemon." },
+      timeout_ms: { type: "number", description: "Expiry for a when_idle schedule in milliseconds (default 1800000 = 30 min, max 6 h)." },
+      kill_session_host: { type: "boolean", description: "Hard refresh: also stop the session-host process, destroying ALL hosted CLI sessions on the machine. Default false." }
     },
     required: ["node_id"]
   }
@@ -7365,7 +7372,14 @@ async function meshRestartDaemon(ctx, args) {
       meshId: ctx.mesh.id,
       nodeId: node.id,
       inlineMesh: ctx.mesh,
-      ...args.channel ? { channel: args.channel } : {}
+      ...args.channel ? { channel: args.channel } : {},
+      ...args.mode ? { mode: args.mode } : {},
+      ...args.force === true ? { force: true } : {},
+      ...args.self_only === true ? { selfOnly: true } : {},
+      ...args.when_idle === true ? { whenIdle: true } : {},
+      ...args.cancel_when_idle === true ? { cancelWhenIdle: true } : {},
+      ...typeof args.timeout_ms === "number" ? { timeoutMs: args.timeout_ms } : {},
+      ...args.kill_session_host === true ? { killSessionHost: true } : {}
     });
     return JSON.stringify(unwrapCommandPayload(result), null, 2);
   } catch (e) {
