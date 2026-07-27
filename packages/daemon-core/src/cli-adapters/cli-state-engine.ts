@@ -729,7 +729,25 @@ export class CliStateEngine {
         if (!session) return;
 
         const { status, messages } = session;
-        const modal = (session as any).activeModal ?? session.modal ?? null;
+        // RC17-APPROVAL-NO-MODAL: a provider's own detectStatus/parseSession script can
+        // report status='waiting_approval' with a modal object whose buttons array is
+        // empty (a half-rendered approval frame, or — as observed live on a Claude
+        // session with no actionable modal anywhere in the raw PTY — a bare status flip
+        // with no real prompt at all). Previously this raw modal was latched straight
+        // into this.activeModal and dispatched through applyWaitingApproval's
+        // ALREADY-actionable branch (line ~1042 below), which sets status +
+        // fires agent:waiting_approval unconditionally — the "!modal" hysteresis/warn
+        // path (the one place button-validity was actually enforced) only runs when the
+        // modal is null, not when it merely has no buttons. Treat a buttons-empty modal
+        // as no modal here so it flows into that same proven hysteresis: it warns, waits
+        // out approvalCooldown, and never fires an event unless a LATER settle pass
+        // observes a genuinely actionable modal. Mirrors hasNonEmptyCliModalButtons used
+        // elsewhere (resolveModal, stabilizeFlappingApprovalStatus) — same predicate,
+        // applied at the point the modal first enters the FSM.
+        const rawModal = (session as any).activeModal ?? session.modal ?? null;
+        const modal = rawModal && Array.isArray(rawModal.buttons) && rawModal.buttons.some(
+            (button: unknown) => typeof button === 'string' && button.trim().length > 0,
+        ) ? rawModal : null;
         const parsedStatus = (session as any).parsedStatus ?? null;
         const parsedMessages = normalizeCliParsedMessages(messages, {
             scope: null,

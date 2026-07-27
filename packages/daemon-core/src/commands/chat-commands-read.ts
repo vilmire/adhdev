@@ -24,7 +24,7 @@ import {
     type ChatSourceTransitionCause,
 } from '../chat/source-resolver.js';
 import type { ChatMessage } from '../types.js';
-import { filterUserFacingChatMessages, isActivityChatMessage, isUserFacingChatMessage, normalizeChatMessages } from '../providers/chat-message-normalization.js';
+import { filterUserFacingChatMessages, isActivityChatMessage, isUserFacingChatMessage, normalizeChatMessages, hasTrailingToolActivityAfterFinalAssistant } from '../providers/chat-message-normalization.js';
 import {
     READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS,
     type RuntimeChatMessageMerger,
@@ -2480,11 +2480,43 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     });
                 }
             }
+            // RC17-NATIVE-FINAL-ASSISTANT-MIDTURN: hasFinalVisibleAssistantMessage only
+            // checks that the LAST visible native-transcript message is a non-empty
+            // assistant/model bubble — it has no notion of whether that bubble is
+            // actually the end of the turn. A live Claude repro showed this reconciling
+            // generating→idle on an INTERIM narration bubble ("Starting the collector
+            // now, before the two-turn protocol.") emitted mid-turn, well before the
+            // real two-turn protocol/tool work ran — exactly the false-completion class
+            // rc.16 (9452bd03/6677a565) closed for the mesh-event ingress via
+            // hasTrailingToolActivityAfterFinalAssistant + hasLiveTurnPendingEvidence.
+            // This read_chat status ingress is a SEPARATE consumer of the same
+            // native-final-assistant signal (it feeds the `status` field returned to
+            // read_chat/dashboard, not the mesh agent:generating_completed event) and
+            // never got the equivalent veto. This reconciliation exists precisely for a
+            // PTY/adapter status detector that never transitions to idle on its own (see
+            // read-chat-completed-session-fallback.test.ts's antigravity stuck-busy
+            // case: isProcessing() stays true forever, empty PTY messages, and native
+            // history is the only signal that ever resolves it) — so gating on the
+            // adapter's own pending-response bit here would neuter this reconciliation
+            // for that exact intended case. Apply only STRUCTURAL, evidence-based vetoes
+            // instead, mirroring rc.16's hasLiveTurnPendingEvidence: trailing tool/
+            // terminal activity after the final-looking assistant bubble, scanned in (a)
+            // the native messages being judged — the transcript's own admission that its
+            // "final" bubble kept going — and (b) the live PTY-parsed tail
+            // (returnedMessages), which carries no native-transcript write-lag and is
+            // exactly how a live Claude repro was caught: the native JSONL's last row was
+            // still the interim narration bubble (no trailing tool row landed there yet),
+            // but the PTY had already rendered the very next "Auto-approved: Yes\nBash
+            // command" tool activity. The antigravity stuck-busy case has an EMPTY PTY
+            // message list, so (b) is a no-op there (the function short-circuits false on
+            // an empty/absent array) and the existing regression is unaffected.
             if (
                 isGeneratingLikeStatus(selectedStatus)
                 && selectedTranscriptAuthority === 'provider'
                 && !hasNonEmptyModalButtons(activeModal)
                 && hasFinalVisibleAssistantMessage(selectedMessages)
+                && !hasTrailingToolActivityAfterFinalAssistant(selectedMessages as any)
+                && !hasTrailingToolActivityAfterFinalAssistant(returnedMessages as any)
             ) {
                 selectedStatus = 'idle';
                 selectedMessages = finalizeStreamingMessagesWhenIdle(selectedMessages, selectedStatus);

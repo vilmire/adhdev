@@ -512,30 +512,48 @@ export async function meshSendTask(
             // Busy/generating sessions must not receive immediate send_chat injection.
             if (explicitTargetSession && !isIdleSessionRecord(explicitTargetSession) && !isTerminalSessionRecord(explicitTargetSession)) {
                 const sessionStatus = typeof explicitTargetSession?.status === 'string' ? explicitTargetSession.status : 'unknown';
-                const { createSessionDelivery: createDelivery, resolveDeliveryDecision } = await import('@adhdev/daemon-core');
+                const { resolveDeliveryDecision } = await import('@adhdev/daemon-core');
                 const policyResult = resolveDeliveryDecision(sessionStatus, { kind: 'task' });
                 if (policyResult.decision === 'queued') {
-                    const delivery = createDelivery({
-                        meshId: ctx.mesh.id,
-                        nodeId: args.node_id,
-                        sessionId: args.session_id,
-                        providerType: resolvedProviderType,
-                        kind: 'task',
-                        message: message,
-                        status: 'queued',
+                    // RC17-QUEUED-DELIVERY-STRANDED: this branch used to create a standalone
+                    // SessionDelivery row (status:'queued') and hand the caller a deliveryId to
+                    // poll. Nothing in the codebase ever reads getActiveSessionDeliveries() to
+                    // re-drive that row — the queue-claim funnel (tryAssignQueueTask, wired to
+                    // fire automatically on the session's idle transition in
+                    // mesh-event-forwarding.ts) only claims rows created via enqueueTask/
+                    // claimNextTask. The record was a dead end: a busy session that went idle
+                    // left the delivery permanently stuck at 'queued' with no consumer ever
+                    // flushing it (live repro: a Codex session that went generating→idle ~10s
+                    // after launch never saw its queued delivery deliver).
+                    //
+                    // Fix: route through enqueueTask with targetNodeId/targetSessionId pinned to
+                    // this exact node+session, the same call the untargeted branch below already
+                    // uses. claimNextTask's candidate query (mesh-runtime-store.ts) filters
+                    // strictly on targetSessionId equivalence, so only this session can claim it,
+                    // and the existing agent:generating_completed / agent:ready handlers already
+                    // call tryAssignQueueTask the moment this session goes idle — no new dispatch
+                    // path, no new idle-transition wiring, just reusing the funnel that already
+                    // auto-flushes reliably.
+                    const queuedTask = enqueueTask(ctx.mesh.id, message, {
+                        targetNodeId: args.node_id,
+                        targetSessionId: args.session_id,
+                        taskMode,
+                        ...(readonly ? { readonly: true } : {}),
+                        ...(missionId ? { missionId } : {}),
+                        ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
                     });
                     return JSON.stringify({
                         success: true,
                         dispatched: false,
                         decision: 'queued_delivery',
-                        deliveryId: delivery.id,
+                        taskId: queuedTask.id,
                         reason: policyResult.reason,
                         nodeId: args.node_id,
                         sessionId: args.session_id,
                         sessionStatus,
                         taskMode: taskMode || undefined,
                         message: policyResult.message,
-                        nextAction: `Use mesh_status to watch for session idle transition, or use mesh_enqueue_task for queue-based assignment. Check deliveryId '${delivery.id}' to track queued delivery.`,
+                        nextAction: `Task '${queuedTask.id}' is queued and pinned to session '${args.session_id}' — it auto-delivers the moment the session goes idle. Use mesh_status or mesh_task_history to track it; no manual resend needed.`,
                     });
                 }
             }
