@@ -366,6 +366,49 @@ describe('session → attempt resolution', () => {
     });
 });
 
+describe('restart reconstruction', () => {
+    it('produces the identical projection before and after a daemon restart', () => {
+        const taskId = `task-${randomUUID().slice(0, 8)}`;
+        const sessionId = `sess-${randomUUID().slice(0, 8)}`;
+        const attempt = openAttempt({ taskId, sessionId });
+        driveToGenerating(MESH, taskId, sessionId);
+
+        const before = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'generating', surface: 'session_status' });
+        expect(before.stage).toBe('generating');
+
+        // Simulate a daemon restart: drop the in-memory store singleton — the
+        // attempt rows persist in SQLite and the next resolve reopens them.
+        MeshRuntimeStore.resetForTests();
+
+        const after = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'generating', surface: 'session_status' });
+        expect(after.authority).toBe('turn_reducer');
+        expect(after.attemptId).toBe(attempt.attemptId);
+        expect(after.stage).toBe(before.stage);
+        expect(after.status).toBe(before.status);
+        expect(after.consumedAt).toBe(before.consumedAt);
+        expect(after.terminalOutcome).toBeNull();
+    });
+
+    it('a committed terminal projection survives restart and stays exactly-once', () => {
+        const taskId = `task-${randomUUID().slice(0, 8)}`;
+        const sessionId = `sess-${randomUUID().slice(0, 8)}`;
+        openAttempt({ taskId, sessionId });
+        driveToGenerating(MESH, taskId, sessionId);
+        proposeTurnCompletion({ meshId: MESH, taskId, sessionId, outcome: 'completed', source: 'provider_event' });
+
+        MeshRuntimeStore.resetForTests();
+
+        const p = resolveSessionTurnPresentation({ sessionId, surface: 'notification' });
+        expect(p.stage).toBe('completed');
+        expect(p.terminalOutcome).toBe('completed');
+        // A late duplicate proposal after restart is an idempotent no-op, never
+        // a second completion.
+        const dup = proposeTurnCompletion({ meshId: MESH, taskId, sessionId, outcome: 'completed', source: 'provider_event' });
+        expect(dup.committed).toBe(true);
+        expect(dup.duplicate).toBe(true);
+    });
+});
+
 describe('observability', () => {
     it('exposes bounded projection-source and age gauges, content-free', () => {
         const taskId = `task-${randomUUID().slice(0, 8)}`;
