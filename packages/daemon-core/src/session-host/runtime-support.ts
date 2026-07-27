@@ -78,11 +78,18 @@ async function waitForReady(
 
 export async function ensureSessionHostReady(options: {
     appName?: string;
+    /**
+     * Explicit endpoint to probe/await. The managed-host factory passes its
+     * instance-namespaced endpoint here so the connect probe, the spawned
+     * child, and the wait loop all target the SAME namespace; when omitted the
+     * legacy default endpoint for appName is derived (no instance key).
+     */
+    endpoint?: SessionHostEndpoint;
     spawnHost: () => void;
     timeoutMs?: number;
     requiredRequestTypes?: readonly SessionHostRequestType[];
 }): Promise<SessionHostEndpoint> {
-    const endpoint = getDefaultSessionHostEndpoint(options.appName || 'adhdev');
+    const endpoint = options.endpoint || getDefaultSessionHostEndpoint(options.appName || 'adhdev');
     const requiredRequestTypes = options.requiredRequestTypes || [];
     if (await canConnect(endpoint, requiredRequestTypes)) return endpoint;
     options.spawnHost();

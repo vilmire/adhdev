@@ -8,16 +8,16 @@
  * `this`-free module helper) is relocated here unchanged.
  */
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { getConfigDir } from '../../config/config.js';
 
 function resolveSpecPathInProviders(
     specPath: string,
     fsm: typeof import('node:fs'),
     pathm: typeof import('node:path'),
-    osm: typeof import('node:os'),
 ): { ok: true; path: string } | { ok: false; error: string } {
     let rootReal: string;
     try {
-        rootReal = fsm.realpathSync(pathm.join(osm.homedir(), '.adhdev', 'providers'));
+        rootReal = fsm.realpathSync(pathm.join(getConfigDir(), 'providers'));
     } catch (e) {
         return { ok: false, error: `providers root unavailable: ${(e as Error).message}` };
     }
@@ -71,11 +71,10 @@ export const specProviderDevHandlers: Record<string, LowFamilyHandler> = {
     // ── Spec source read/write for the debug panel's live editor.
     //    Lets the dashboard load a session's spec.json, edit it, and save it back —
     //    the driver's fs.watch picks up the change and hot-reloads the FSM with no
-    //    restart. Writes are confined to files under ~/.adhdev/providers.
+    //    restart. Writes are confined to files under <configDir>/providers.
     get_spec_source: async (ctx: LowFamilyContext, args: any) => {
         const fsm = await import('node:fs');
         const pathm = await import('node:path');
-        const osm = await import('node:os');
         const sessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim()
             : typeof args?.sessionId === 'string' ? args.sessionId.trim() : '';
         let specPath = typeof args?.specPath === 'string' ? args.specPath : '';
@@ -88,7 +87,7 @@ export const specProviderDevHandlers: Record<string, LowFamilyHandler> = {
         if (!specPath) return { success: false, error: 'specPath or resolvable targetSessionId required' };
         // Confine reads to the providers tree, resolving symlinks so a crafted path
         // can't escape via a symlinked spec file.
-        const safe = resolveSpecPathInProviders(specPath, fsm, pathm, osm);
+        const safe = resolveSpecPathInProviders(specPath, fsm, pathm);
         if (!safe.ok) return { success: false, error: safe.error, specPath };
         try {
             const content = fsm.readFileSync(safe.path, 'utf8');
@@ -101,13 +100,12 @@ export const specProviderDevHandlers: Record<string, LowFamilyHandler> = {
     write_spec_source: async (_ctx: LowFamilyContext, args: any) => {
         const fsm = await import('node:fs');
         const pathm = await import('node:path');
-        const osm = await import('node:os');
         const specPath = typeof args?.specPath === 'string' ? args.specPath : '';
         const content = typeof args?.content === 'string' ? args.content : '';
         if (!specPath) return { success: false, error: 'specPath required' };
         if (!content) return { success: false, error: 'content required' };
         // Confine writes to the providers tree (symlink-safe — see helper).
-        const safe = resolveSpecPathInProviders(specPath, fsm, pathm, osm);
+        const safe = resolveSpecPathInProviders(specPath, fsm, pathm);
         if (!safe.ok) return { success: false, error: safe.error };
         // Validate JSON + (if v4) FSM structure before writing so a bad edit can't
         // break the live session — return precise errors.

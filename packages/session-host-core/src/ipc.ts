@@ -26,17 +26,39 @@ export interface SessionHostEndpoint {
   path: string;
 }
 
-export function getDefaultSessionHostEndpoint(appName = 'adhdev'): SessionHostEndpoint {
-  if (process.platform === 'win32') {
+export interface SessionHostEndpointOptions {
+  /**
+   * Instance IPC namespace key (see instance-key.ts). '' / omitted yields the
+   * legacy default-instance endpoint; a non-empty key suffixes the endpoint so
+   * each config-dir instance gets its own socket/pipe.
+   */
+  ipcKey?: string;
+  /** Test seam: override the platform the endpoint shape is derived for. */
+  platform?: NodeJS.Platform;
+}
+
+export function getDefaultSessionHostEndpoint(
+  appName = 'adhdev',
+  options: SessionHostEndpointOptions = {},
+): SessionHostEndpoint {
+  const rawKey = typeof options.ipcKey === 'string' ? options.ipcKey.trim() : '';
+  // Fail closed on a malformed key: silently dropping it would collapse the
+  // endpoint back onto the default instance's namespace — a cross-instance leak.
+  if (rawKey && !/^[0-9a-f]{12}$/.test(rawKey)) {
+    throw new Error(`Invalid session-host ipcKey "${rawKey}" — expected '' or a 12-hex-char instance key`);
+  }
+  const suffix = rawKey ? `-${rawKey}` : '';
+  const platform = options.platform || process.platform;
+  if (platform === 'win32') {
     return {
       kind: 'pipe',
-      path: `\\\\.\\pipe\\${appName}-session-host`,
+      path: `\\\\.\\pipe\\${appName}-session-host${suffix}`,
     };
   }
 
   return {
     kind: 'unix',
-    path: path.join(os.tmpdir(), `${appName}-session-host.sock`),
+    path: path.join(os.tmpdir(), `${appName}-session-host${suffix}.sock`),
   };
 }
 

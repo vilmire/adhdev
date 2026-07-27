@@ -19,7 +19,7 @@ import type { ProviderInstanceManager } from '../providers/provider-instance-man
 import type { ProviderModule, ProviderScripts } from '../providers/contracts.js';
 import type { DaemonAgentStreamManager } from '../agent-stream/index.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
-import { loadConfig } from '../config/config.js';
+import { loadConfig, getConfigDir } from '../config/config.js';
 import { resolveRegistryBaseUrl } from '../config/registry-resolver.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import type { SessionRegistry, SessionRuntimeTarget } from '../sessions/registry.js';
@@ -661,14 +661,13 @@ export class DaemonCommandHandler implements CommandHelpers {
      * the manifests inherit the official-trust badge instead of the
      * untrusted-external one.
      *
-     * Path matches ProviderLoader.upstreamDir but we recompute it from
-     * homedir() so this method stays usable in dev where userDir can
-     * point at a sibling git checkout.
+     * Resolved through the instance config dir (matches
+     * ProviderLoader.upstreamDir) so a preview/standalone instance seeds its
+     * own upstream cache and never writes into another instance's store.
      */
     private getUpstreamInstallRoot(): string {
-        const os = require('os') as typeof import('os');
         const path = require('path') as typeof import('path');
-        return path.join(os.homedir(), '.adhdev', 'providers', '.upstream');
+        return path.join(getConfigDir(), 'providers', '.upstream');
     }
 
     /**

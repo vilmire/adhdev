@@ -16,6 +16,7 @@ import {
   stopOwnedProcessesForPrefixes,
   waitForPidExit,
 } from './process-lifecycle.js';
+import { canonicalizeInstancePath } from '@adhdev/session-host-core';
 import { getConfigDir } from '../config/config.js';
 
 const UPGRADE_HELPER_ENV = 'ADHDEV_DAEMON_UPGRADE_HELPER';
@@ -39,6 +40,15 @@ export interface DaemonUpgradeHelperPayload {
   restartArgv: string[];
   cwd?: string;
   sessionHostAppName?: string;
+  /**
+   * Instance identity handoff: the calling daemon's config dir. The detached
+   * helper pins it into the child env (ADHDEV_CONFIG_DIR) so the helper's own
+   * log/pid/notice paths and the re-spawned daemon stay inside the CALLER's
+   * instance — an upgrade/restart must never write preview state into the
+   * stable directory (or vice-versa), even when the caller resolved its
+   * instance implicitly. Absent → the current process's getConfigDir().
+   */
+  configDir?: string;
   /**
    * Restart-only mode: wait for the parent daemon to exit, then re-spawn it
    * without running any npm install. Used by daemon_restart (mesh
@@ -72,16 +82,20 @@ export interface PinnedGlobalInstallCommand {
 
 export type NpmExecOptions = { shell: boolean; windowsHide?: boolean };
 
-function getUpgradeLogPath(home: string = os.homedir()): string {
-  const dir = path.join(home, '.adhdev');
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, 'daemon-upgrade.log');
+// Upgrade handoff paths live under the instance config dir (default
+// `~/.adhdev`, preview `~/.adhdev-preview`, …) so a detached helper never
+// writes one instance's upgrade log/notice into another's directory. The
+// default parameter is getConfigDir(), which the helper child inherits pinned
+// via ADHDEV_CONFIG_DIR (see buildUpgradeHelperChildEnv).
+function getUpgradeLogPath(configDir: string = getConfigDir()): string {
+  fs.mkdirSync(configDir, { recursive: true });
+  return path.join(configDir, 'daemon-upgrade.log');
 }
 
-function appendUpgradeLog(message: string, homeDir: string = os.homedir()): void {
+function appendUpgradeLog(message: string, configDir: string = getConfigDir()): void {
   const line = `[${new Date().toISOString()}] ${message}\n`;
   try {
-    fs.appendFileSync(getUpgradeLogPath(homeDir), line, 'utf8');
+    fs.appendFileSync(getUpgradeLogPath(configDir), line, 'utf8');
   } catch {
     // noop
   }
@@ -331,8 +345,8 @@ function isManagedSessionHostPid(pid: number): boolean {
   return !!commandLine && /session-host-daemon/i.test(commandLine);
 }
 
-export async function stopSessionHostProcesses(appName: string): Promise<void> {
-  const pidFile = path.join(os.homedir(), '.adhdev', `${appName}-session-host.pid`);
+export async function stopSessionHostProcesses(appName: string, configDir: string = getConfigDir()): Promise<void> {
+  const pidFile = path.join(configDir, `${appName}-session-host.pid`);
   let killedPid: number | null = null;
   try {
     if (fs.existsSync(pidFile)) {
@@ -467,14 +481,13 @@ export async function stopForeignNativeAddonHolders(
   return results;
 }
 
-function getUpgradeFailureNoticePath(home: string = os.homedir()): string {
-  const dir = path.join(home, '.adhdev');
+function getUpgradeFailureNoticePath(configDir: string = getConfigDir()): string {
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(configDir, { recursive: true });
   } catch {
     // noop — appendUpgradeLog already creates the dir; this is best-effort.
   }
-  return path.join(dir, 'daemon-upgrade-last-error.txt');
+  return path.join(configDir, 'daemon-upgrade-last-error.txt');
 }
 
 function buildManualRecoveryCommand(installCommand: PinnedGlobalInstallCommand): string {
@@ -488,11 +501,11 @@ function buildManualRecoveryCommand(installCommand: PinnedGlobalInstallCommand):
  * log line: the pids/commandlines still holding the lock and a paste-ready
  * recovery command. Written to a stable path the CLI can surface on next boot.
  */
-export function emitUpgradeFailureNotice(lines: string[], homeDir: string = os.homedir()): void {
+export function emitUpgradeFailureNotice(lines: string[], configDir: string = getConfigDir()): void {
   const body = lines.join('\n');
-  appendUpgradeLog(`Upgrade blocked — user action required:\n${body}`, homeDir);
+  appendUpgradeLog(`Upgrade blocked — user action required:\n${body}`, configDir);
   try {
-    fs.writeFileSync(getUpgradeFailureNoticePath(homeDir), `[${new Date().toISOString()}]\n${body}\n`, 'utf8');
+    fs.writeFileSync(getUpgradeFailureNoticePath(configDir), `[${new Date().toISOString()}]\n${body}\n`, 'utf8');
   } catch {
     // noop
   }
@@ -509,8 +522,8 @@ function isRetriableInstallLockError(error: any): boolean {
   return /\bEBUSY\b|\bEPERM\b|resource busy or locked/i.test(text);
 }
 
-function removeDaemonPidFile(): void {
-  const pidFile = path.join(os.homedir(), '.adhdev', 'daemon.pid');
+function removeDaemonPidFile(configDir: string = getConfigDir()): void {
+  const pidFile = path.join(configDir, 'daemon.pid');
   try {
     fs.unlinkSync(pidFile);
   } catch {
@@ -580,7 +593,7 @@ export function cleanupStaleGlobalInstallDirs(pkgName: string, surface: CurrentG
 }
 
 export function spawnDetachedDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): void {
-  const env = { ...process.env, [UPGRADE_HELPER_ENV]: JSON.stringify(payload) };
+  const env = buildUpgradeHelperChildEnv(payload);
   const child = spawn(process.execPath, process.argv.slice(1), {
     detached: true,
     stdio: 'ignore',
@@ -589,6 +602,27 @@ export function spawnDetachedDaemonUpgradeHelper(payload: DaemonUpgradeHelperPay
     env,
   });
   child.unref();
+}
+
+/**
+ * Build the detached helper's environment. The helper payload is threaded
+ * through ADHDEV_DAEMON_UPGRADE_HELPER and the instance identity is PINNED via
+ * ADHDEV_CONFIG_DIR (payload.configDir, else the caller's own resolved config
+ * dir). Pinning — rather than hoping the caller's env happens to carry the
+ * override — guarantees the helper's log/pid/notice paths and the eventually
+ * re-spawned daemon land in the caller's instance even when the caller itself
+ * resolved the default instance implicitly.
+ */
+export function buildUpgradeHelperChildEnv(
+  payload: DaemonUpgradeHelperPayload,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const configDir = payload.configDir || getConfigDir();
+  return {
+    ...baseEnv,
+    ADHDEV_CONFIG_DIR: configDir,
+    [UPGRADE_HELPER_ENV]: JSON.stringify({ ...payload, configDir }),
+  };
 }
 
 async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Promise<void> {
@@ -814,6 +848,17 @@ export async function maybeRunDaemonUpgradeHelperFromEnv(): Promise<boolean> {
 
   try {
     const payload = JSON.parse(raw) as DaemonUpgradeHelperPayload;
+    // Fail closed on a conflicting instance identity: a payload naming one
+    // config dir handed to a process env-pinned to another must abort, never
+    // merge namespaces or retarget mid-upgrade.
+    const envConfigDir = (process.env.ADHDEV_CONFIG_DIR || '').trim();
+    if (payload.configDir && envConfigDir
+      && canonicalizeInstancePath(payload.configDir) !== canonicalizeInstancePath(envConfigDir)) {
+      throw new Error(
+        `Upgrade helper instance conflict: payload configDir "${payload.configDir}" vs `
+        + `ADHDEV_CONFIG_DIR "${envConfigDir}" — refusing to run across instances`,
+      );
+    }
     await runDaemonUpgradeHelper(payload);
     process.exit(0);
   } catch (error: any) {

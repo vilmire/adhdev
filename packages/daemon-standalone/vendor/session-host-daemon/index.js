@@ -36,15 +36,14 @@ __export(index_exports, {
 module.exports = __toCommonJS(index_exports);
 var import_crypto = require("crypto");
 var fs4 = __toESM(require("fs"));
-var os3 = __toESM(require("os"));
 var path2 = __toESM(require("path"));
-var import_session_host_core5 = require("@adhdev/session-host-core");
+var import_session_host_core6 = require("@adhdev/session-host-core");
 
 // src/server.ts
 var import_events = require("events");
 var fs3 = __toESM(require("fs"));
 var net = __toESM(require("net"));
-var import_session_host_core4 = require("@adhdev/session-host-core");
+var import_session_host_core5 = require("@adhdev/session-host-core");
 
 // src/runtime.ts
 var fs = __toESM(require("fs"));
@@ -395,15 +394,15 @@ var PtySessionRuntime = class {
 
 // src/storage.ts
 var fs2 = __toESM(require("fs"));
-var os2 = __toESM(require("os"));
 var path = __toESM(require("path"));
+var import_session_host_core2 = require("@adhdev/session-host-core");
 var SessionHostStorage = class {
   rootDir;
   runtimesDir;
   tombstonesDir;
   constructor(options = {}) {
     const appName = options.appName || "adhdev";
-    this.rootDir = path.join(os2.homedir(), ".adhdev", "session-host", appName);
+    this.rootDir = options.rootDir || path.join((0, import_session_host_core2.resolveInstanceConfigDir)(process.env), "session-host", appName);
     this.runtimesDir = path.join(this.rootDir, "runtimes");
     this.tombstonesDir = path.join(this.rootDir, "tombstones");
   }
@@ -490,7 +489,7 @@ var SessionHostStorage = class {
 };
 
 // src/session-diagnostics.ts
-var import_session_host_core2 = require("@adhdev/session-host-core");
+var import_session_host_core3 = require("@adhdev/session-host-core");
 var MAX_RECENT_DIAGNOSTICS = 200;
 function pushRecent(bucket, entry, max = MAX_RECENT_DIAGNOSTICS) {
   bucket.push(entry);
@@ -546,7 +545,7 @@ function buildHostDiagnostics(params) {
     hostStartedAt: params.hostStartedAt,
     endpoint: params.endpointPath,
     runtimeCount: params.runtimeCount,
-    supportedRequestTypes: [...import_session_host_core2.SESSION_HOST_SUPPORTED_REQUEST_TYPES],
+    supportedRequestTypes: [...import_session_host_core3.SESSION_HOST_SUPPORTED_REQUEST_TYPES],
     sessions,
     liveRuntimes,
     recoverySnapshots,
@@ -558,7 +557,7 @@ function buildHostDiagnostics(params) {
 }
 
 // src/session-lifecycle.ts
-var import_session_host_core3 = require("@adhdev/session-host-core");
+var import_session_host_core4 = require("@adhdev/session-host-core");
 function compareDuplicateCandidates(a, b) {
   const score = (record) => {
     const lifecycleScore = record.lifecycle === "running" ? 4 : record.lifecycle === "starting" ? 3 : record.lifecycle === "stopping" ? 2 : record.lifecycle === "interrupted" ? 1 : 0;
@@ -623,8 +622,8 @@ function buildPayloadFromRecord(record) {
     category: record.category,
     workspace: record.workspace,
     launchCommand: record.launchCommand,
-    cols: (0, import_session_host_core3.resolveSessionHostCols)(typeof record.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : void 0),
-    rows: (0, import_session_host_core3.resolveSessionHostRows)(typeof record.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : void 0),
+    cols: (0, import_session_host_core4.resolveSessionHostCols)(typeof record.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : void 0),
+    rows: (0, import_session_host_core4.resolveSessionHostRows)(typeof record.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : void 0),
     meta: record.meta
   };
 }
@@ -682,7 +681,7 @@ function mergeRuntimeSnapshot(base, record, opts) {
 // src/server.ts
 var SessionHostServer = class extends import_events.EventEmitter {
   endpoint;
-  registry = new import_session_host_core4.SessionHostRegistry();
+  registry = new import_session_host_core5.SessionHostRegistry();
   runtimes = /* @__PURE__ */ new Map();
   storage;
   ipcServer = null;
@@ -702,8 +701,11 @@ var SessionHostServer = class extends import_events.EventEmitter {
   stopRequests = /* @__PURE__ */ new Map();
   constructor(options = {}) {
     super();
-    this.endpoint = options.endpoint || (0, import_session_host_core4.getDefaultSessionHostEndpoint)(options.appName || "adhdev");
-    this.storage = new SessionHostStorage({ appName: options.appName || "adhdev" });
+    this.endpoint = options.endpoint || (0, import_session_host_core5.getDefaultSessionHostEndpoint)(options.appName || "adhdev");
+    this.storage = new SessionHostStorage({
+      appName: options.appName || "adhdev",
+      rootDir: options.storageRootDir
+    });
   }
   async start() {
     if (this.endpoint.kind === "unix") {
@@ -727,7 +729,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
         } catch {
         }
       });
-      socket.on("data", (0, import_session_host_core4.createLineParser)((envelope) => {
+      socket.on("data", (0, import_session_host_core5.createLineParser)((envelope) => {
         if (envelope.kind !== "request") return;
         void this.handleIncomingRequest(socket, envelope);
       }));
@@ -1038,7 +1040,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
       durationMs: Math.max(0, Date.now() - startedAt),
       error: response.success ? void 0 : response.error
     });
-    this.writeEnvelopeSafely(socket, (0, import_session_host_core4.createResponseEnvelope)(envelope.requestId, response));
+    this.writeEnvelopeSafely(socket, (0, import_session_host_core5.createResponseEnvelope)(envelope.requestId, response));
   }
   writeEnvelopeSafely(socket, envelope) {
     if (socket.destroyed || !socket.writable || socket.writableEnded) {
@@ -1342,7 +1344,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
    */
   handleRuntimeExit(record, exitCode, signal) {
     const priorRecord = this.registry.getSession(record.sessionId);
-    const termination = (0, import_session_host_core4.classifyTermination)({
+    const termination = (0, import_session_host_core5.classifyTermination)({
       exitCode,
       signal,
       osPid: priorRecord?.osPid,
@@ -1391,8 +1393,16 @@ var SessionHostServer = class extends import_events.EventEmitter {
 
 // src/index.ts
 var SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || "adhdev";
+var INSTANCE_CONFIG_DIR = (0, import_session_host_core6.resolveInstanceConfigDir)(process.env);
+var INSTANCE_IPC_KEY = (0, import_session_host_core6.resolveSessionHostIpcKey)(INSTANCE_CONFIG_DIR);
+function getSessionHostEndpoint() {
+  return (0, import_session_host_core6.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME, { ipcKey: INSTANCE_IPC_KEY });
+}
+function getSessionHostStorageRoot() {
+  return path2.join(INSTANCE_CONFIG_DIR, "session-host", SESSION_HOST_APP_NAME);
+}
 function getSessionHostPidFile(appName) {
-  const dir = path2.join(os3.homedir(), ".adhdev");
+  const dir = INSTANCE_CONFIG_DIR;
   if (!fs4.existsSync(dir)) fs4.mkdirSync(dir, { recursive: true });
   return path2.join(dir, `${appName}-session-host.pid`);
 }
@@ -1420,7 +1430,11 @@ function parseArgs(argv) {
   };
 }
 async function runServer() {
-  const server = new SessionHostServer({ appName: SESSION_HOST_APP_NAME });
+  const server = new SessionHostServer({
+    appName: SESSION_HOST_APP_NAME,
+    endpoint: getSessionHostEndpoint(),
+    storageRootDir: getSessionHostStorageRoot()
+  });
   writeSessionHostPid(SESSION_HOST_APP_NAME);
   await server.start();
   process.on("SIGINT", async () => {
@@ -1441,7 +1455,7 @@ async function runServer() {
   });
 }
 async function listRuntimes(showAll = false) {
-  const client = new import_session_host_core5.SessionHostClient({ endpoint: (0, import_session_host_core5.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME) });
+  const client = new import_session_host_core6.SessionHostClient({ endpoint: getSessionHostEndpoint() });
   try {
     const response = await client.request({
       type: "list_sessions",
@@ -1460,7 +1474,7 @@ async function listRuntimes(showAll = false) {
       console.log([
         runtime.runtimeKey,
         runtime.lifecycle,
-        (0, import_session_host_core5.formatRuntimeOwner)(runtime),
+        (0, import_session_host_core6.formatRuntimeOwner)(runtime),
         runtime.workspaceLabel,
         runtime.sessionId,
         runtime.displayName
@@ -1472,7 +1486,7 @@ async function listRuntimes(showAll = false) {
   }
 }
 async function attachRuntime(target, readOnly = false, takeover = false) {
-  const client = new import_session_host_core5.SessionHostClient({ endpoint: (0, import_session_host_core5.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME) });
+  const client = new import_session_host_core6.SessionHostClient({ endpoint: getSessionHostEndpoint() });
   const clientId = `local-terminal-${process.pid}-${(0, import_crypto.randomUUID)().slice(0, 8)}`;
   let lastSeq = 0;
   let restoredRawMode = false;
@@ -1567,7 +1581,7 @@ async function attachRuntime(target, readOnly = false, takeover = false) {
     if (!listResponse.success || !listResponse.result) {
       throw new Error(listResponse.error || "Failed to list runtimes");
     }
-    let runtimeRecord = (0, import_session_host_core5.resolveAttachableRuntimeRecord)(listResponse.result, target);
+    let runtimeRecord = (0, import_session_host_core6.resolveAttachableRuntimeRecord)(listResponse.result, target);
     runtimeId = runtimeRecord.sessionId;
     if (runtimeRecord.lifecycle === "interrupted" && !readOnly) {
       const resumeResponse = await client.request({
@@ -1710,13 +1724,13 @@ async function main() {
     if (!target) {
       throw new Error("runtime target is required: adhdev-sessiond resume <runtimeId|runtimeKey>");
     }
-    const client = new import_session_host_core5.SessionHostClient({ endpoint: (0, import_session_host_core5.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME) });
+    const client = new import_session_host_core6.SessionHostClient({ endpoint: getSessionHostEndpoint() });
     try {
       const listResponse = await client.request({ type: "list_sessions", payload: {} });
       if (!listResponse.success || !listResponse.result) {
         throw new Error(listResponse.error || "Failed to list runtimes");
       }
-      const runtimeRecord = (0, import_session_host_core5.resolveRuntimeRecord)(listResponse.result, target);
+      const runtimeRecord = (0, import_session_host_core6.resolveRuntimeRecord)(listResponse.result, target);
       const resumeResponse = await client.request({
         type: "resume_session",
         payload: {

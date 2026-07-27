@@ -5,6 +5,8 @@ import { SessionHostEndpoint, SessionHostRegistry, SessionHostRequest, SessionHo
 interface SessionHostServerOptions {
     endpoint?: SessionHostEndpoint;
     appName?: string;
+    /** Explicit session-host state root (runtime records + tombstones). */
+    storageRootDir?: string;
 }
 declare class SessionHostServer extends EventEmitter {
     readonly endpoint: SessionHostEndpoint;

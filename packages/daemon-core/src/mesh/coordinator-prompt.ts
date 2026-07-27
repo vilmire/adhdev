@@ -10,10 +10,10 @@
  * The prompt is generated dynamically from the current mesh state.
  *
  * User customization:
- *   ~/.adhdev/coordinator-prompts/<cliType>.md         — full override
- *   ~/.adhdev/coordinator-prompts/<cliType>.append.md  — appended to default
- *   ~/.adhdev/coordinator-prompts/default.md           — full override (any CLI)
- *   ~/.adhdev/coordinator-prompts/default.append.md    — appended to default (any CLI)
+ *   <configDir>/coordinator-prompts/<cliType>.md         — full override
+ *   <configDir>/coordinator-prompts/<cliType>.append.md  — appended to default
+ *   <configDir>/coordinator-prompts/default.md           — full override (any CLI)
+ *   <configDir>/coordinator-prompts/default.append.md    — appended to default (any CLI)
  *
  * CLI-specific files take precedence over default.* files. The override file
  * still gets the node/policy facts substituted via the same {{placeholders}}
@@ -22,7 +22,6 @@
  */
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
 import type {
@@ -33,6 +32,7 @@ import type {
 } from '../repo-mesh-types.js';
 import { mergeAndNormalizePolicy, resolveProviderMaxParallel } from '../repo-mesh-types.js';
 import { getDifficultyBrains } from '../config/mesh-config.js';
+import { getConfigDir } from '../config/config.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { isNoteExpired, OPERATING_NOTE_CATEGORY_TTL_DAYS } from './mesh-ledger.js';
 import { MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
@@ -164,12 +164,12 @@ export interface CoordinatorPromptContext {
  *      Context"). Never wins as a base — it's launch-scope context.
  *   2. Mesh-level append (`mesh.coordinator.systemPromptAppend` or the legacy
  *      `systemPromptSuffix`). Stacks after whichever base won.
- *   3. User-file append (`~/.adhdev/coordinator-prompts/<cli>.append.md` or
+ *   3. User-file append (`<configDir>/coordinator-prompts/<cli>.append.md` or
  *      `default.append.md`). Also stacks; same placeholder expansion as the
  *      override path.
  *   4. Base prompt, picked in this order:
  *      a. `mesh.coordinator.systemPromptOverride` (mesh-level override)
- *      b. user-file override (`~/.adhdev/coordinator-prompts/<cli>.md` or
+ *      b. user-file override (`<configDir>/coordinator-prompts/<cli>.md` or
  *         `default.md`)
  *      c. daemon default (assembled from identity/nodes/policy/tools/…)
  *
@@ -354,7 +354,7 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
 }
 
 /**
- * Look up a user-customization file under ~/.adhdev/coordinator-prompts/.
+ * Look up a user-customization file under <configDir>/coordinator-prompts/.
  *
  * Lookup order:
  *   1. <cliType>.<suffix>   — provider-specific
@@ -367,7 +367,7 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
  * launch, it should just behave as if the file weren't there.
  */
 function readUserPromptFile(cliType: string | undefined, suffix: string): string | null {
-    const dir = path.join(os.homedir(), '.adhdev', 'coordinator-prompts');
+    const dir = path.join(getConfigDir(), 'coordinator-prompts');
     const candidates: string[] = [];
     if (cliType) candidates.push(path.join(dir, `${cliType}.${suffix}`));
     candidates.push(path.join(dir, `default.${suffix}`));

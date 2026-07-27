@@ -1,6 +1,6 @@
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
+import { resolveInstanceConfigDir } from '@adhdev/session-host-core';
 import type { SessionBufferSnapshot, SessionHostRecord, SessionTermination } from '@adhdev/session-host-core';
 
 export interface PersistedRuntimeState {
@@ -17,6 +17,14 @@ export interface PersistedTombstone {
 
 interface SessionHostStorageOptions {
   appName?: string;
+  /**
+   * Explicit storage root (the instance's session-host state dir). Defaults to
+   * `<instanceConfigDir>/session-host/<appName>` — derived from
+   * ADHDEV_CONFIG_DIR so each daemon instance persists its own runtime records
+   * and tombstones. The default instance resolves to `<home>/.adhdev`,
+   * byte-identical to the pre-instance layout.
+   */
+  rootDir?: string;
 }
 
 export class SessionHostStorage {
@@ -26,7 +34,8 @@ export class SessionHostStorage {
 
   constructor(options: SessionHostStorageOptions = {}) {
     const appName = options.appName || 'adhdev';
-    this.rootDir = path.join(os.homedir(), '.adhdev', 'session-host', appName);
+    this.rootDir = options.rootDir
+      || path.join(resolveInstanceConfigDir(process.env), 'session-host', appName);
     this.runtimesDir = path.join(this.rootDir, 'runtimes');
     this.tombstonesDir = path.join(this.rootDir, 'tombstones');
   }

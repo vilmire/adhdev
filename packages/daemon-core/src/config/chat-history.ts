@@ -11,11 +11,16 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
+import { getConfigDir } from './config.js';
 import { buildRuntimeSystemChatMessage } from '../providers/chat-message-normalization.js';
 import type { ProviderCanonicalHistoryConfig, ProviderHistoryBehavior } from '../providers/contracts.js';
 
-const HISTORY_DIR = path.join(os.homedir(), '.adhdev', 'history');
+// Lazy per call: history lives under the instance config dir
+// (<configDir>/history/{agentType}/YYYY-MM-DD.jsonl), and this module can be
+// imported before the entrypoint pins ADHDEV_CONFIG_DIR.
+function getHistoryDir(): string {
+    return path.join(getConfigDir(), 'history');
+}
 const RETAIN_DAYS = 30;
 const SAVED_HISTORY_INDEX_VERSION = 1;
 const SAVED_HISTORY_INDEX_FILE = '.saved-history-index.json';
@@ -840,7 +845,7 @@ export class ChatHistoryWriter {
             if (newMessages.length === 0) return;
 
  // Append to file — keyed by persistent history session when available
-            const dir = path.join(HISTORY_DIR, this.sanitize(agentType));
+            const dir = path.join(getHistoryDir(), this.sanitize(agentType));
             fs.mkdirSync(dir, { recursive: true });
 
             const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
@@ -969,7 +974,7 @@ export class ChatHistoryWriter {
         const ws = String(workspace || '').trim();
         if (!id || !ws) return;
         try {
-            const dir = path.join(HISTORY_DIR, this.sanitize(agentType));
+            const dir = path.join(getHistoryDir(), this.sanitize(agentType));
             fs.mkdirSync(dir, { recursive: true });
             const date = new Date().toISOString().slice(0, 10);
             const fileName = `${this.sanitize(id)}_${date}.jsonl`;
@@ -1027,7 +1032,7 @@ export class ChatHistoryWriter {
                 this.lastSeenCounts.delete(fromDedupKey);
             }
 
-            const dir = path.join(HISTORY_DIR, this.sanitize(agentType));
+            const dir = path.join(getHistoryDir(), this.sanitize(agentType));
             if (!fs.existsSync(dir)) return;
 
             const fromPrefix = `${this.sanitize(fromId)}_`;
@@ -1077,7 +1082,7 @@ export class ChatHistoryWriter {
         if (!sessionId) return;
 
         try {
-            const dir = path.join(HISTORY_DIR, this.sanitize(agentType));
+            const dir = path.join(getHistoryDir(), this.sanitize(agentType));
             if (!fs.existsSync(dir)) return;
 
             const prefix = `${this.sanitize(sessionId)}_`;
@@ -1141,14 +1146,14 @@ export class ChatHistoryWriter {
  /** Delete history files older than 30 days */
     private async rotateOldFiles(): Promise<void> {
         try {
-            if (!fs.existsSync(HISTORY_DIR)) return;
+            if (!fs.existsSync(getHistoryDir())) return;
             const cutoff = Date.now() - RETAIN_DAYS * 24 * 60 * 60 * 1000;
 
-            const agentDirs = fs.readdirSync(HISTORY_DIR, { withFileTypes: true })
+            const agentDirs = fs.readdirSync(getHistoryDir(), { withFileTypes: true })
                 .filter(d => d.isDirectory());
 
             for (const dir of agentDirs) {
-                const dirPath = path.join(HISTORY_DIR, dir.name);
+                const dirPath = path.join(getHistoryDir(), dir.name);
                 const files = fs.readdirSync(dirPath)
                     .filter(f => f.endsWith('.jsonl') || f.endsWith('.terminal.log'));
                 let removedAny = false;
@@ -1551,7 +1556,7 @@ export function readChatHistory(
 ): { messages: HistoryMessage[]; hasMore: boolean } {
     try {
         const sanitized = agentType.replace(/[^a-zA-Z0-9_-]/g, '_');
-        const dir = path.join(HISTORY_DIR, sanitized);
+        const dir = path.join(getHistoryDir(), sanitized);
         if (!fs.existsSync(dir)) return { messages: [], hasMore: false };
 
  // JSONL file list — filter by persistent history key when specified
@@ -1618,7 +1623,7 @@ export function listSavedHistorySessions(
 ): { sessions: SavedHistorySessionSummary[]; hasMore: boolean } {
     try {
         const sanitized = agentType.replace(/[^a-zA-Z0-9_-]/g, '_');
-        const dir = path.join(HISTORY_DIR, sanitized);
+        const dir = path.join(getHistoryDir(), sanitized);
         if (!fs.existsSync(dir)) {
             savedHistorySessionCache.delete(sanitized);
             return { sessions: [], hasMore: false };
@@ -1686,7 +1691,7 @@ export function listSavedHistorySessions(
 
 function readExistingSessionStartRecord(agentType: string, historySessionId: string): HistoryMessage | null {
     try {
-        const dir = path.join(HISTORY_DIR, agentType);
+        const dir = path.join(getHistoryDir(), agentType);
         if (!fs.existsSync(dir)) return null;
         const files = listHistoryFiles(dir, historySessionId).sort();
         for (const file of files) {
@@ -1712,7 +1717,7 @@ function readExistingSessionStartRecord(agentType: string, historySessionId: str
 function rewriteCanonicalSavedHistory(agentType: string, historySessionId: string, records: HistoryMessage[]): boolean {
     if (records.length === 0) return false;
     try {
-        const dir = path.join(HISTORY_DIR, agentType);
+        const dir = path.join(getHistoryDir(), agentType);
         fs.mkdirSync(dir, { recursive: true });
         const prefix = `${historySessionId.replace(/[^a-zA-Z0-9_-]/g, '_')}_`;
         for (const file of fs.readdirSync(dir)) {

@@ -2,8 +2,10 @@
  * RF-ROUTER LOW family — coordinator-prompt override/append file commands.
  *
  * Extracted verbatim from DaemonCommandRouter.executeDaemonCommand. Both handlers
- * read/write only the on-disk ~/.adhdev/coordinator-prompts directory (no router
+ * read/write only the on-disk <configDir>/coordinator-prompts directory (no router
  * instance state) and return the same CommandRouterResult the inlined cases did.
+ * The directory follows the instance config dir so one instance's prompt
+ * overrides never rewrite another's.
  */
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 
@@ -64,8 +66,8 @@ export const coordinatorPromptHandlers: Record<string, LowFamilyHandler> = {
     list_coordinator_prompts: async (_ctx: LowFamilyContext, _args: any) => {
         const fs = await import('node:fs');
         const path = await import('node:path');
-        const os = await import('node:os');
-        const dir = path.join(os.homedir(), '.adhdev', 'coordinator-prompts');
+        const { getConfigDir } = await import('../../config/config.js');
+        const dir = path.join(getConfigDir(), 'coordinator-prompts');
         const entries: Record<string, { override: string; append: string }> = {};
         try {
             if (fs.existsSync(dir)) {
@@ -96,7 +98,7 @@ export const coordinatorPromptHandlers: Record<string, LowFamilyHandler> = {
     write_coordinator_prompt: async (_ctx: LowFamilyContext, args: any) => {
         const fs = await import('node:fs');
         const path = await import('node:path');
-        const os = await import('node:os');
+        const { getConfigDir } = await import('../../config/config.js');
         const key = typeof args?.key === 'string' ? args.key.trim() : '';
         const kind = args?.kind === 'append' ? 'append' : 'override';
         const content = typeof args?.content === 'string' ? args.content : '';
@@ -105,7 +107,7 @@ export const coordinatorPromptHandlers: Record<string, LowFamilyHandler> = {
         if (!key || !/^[a-zA-Z0-9_.-]+$/.test(key)) {
             return { success: false, error: 'key must match [a-zA-Z0-9_.-]+' };
         }
-        const dir = path.join(os.homedir(), '.adhdev', 'coordinator-prompts');
+        const dir = path.join(getConfigDir(), 'coordinator-prompts');
         const filename = kind === 'append' ? `${key}.append.md` : `${key}.md`;
         const full = path.join(dir, filename);
         try {

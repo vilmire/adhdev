@@ -2,7 +2,7 @@
  * Provider Version Detection & Archiving
  *
  * Detects installed versions for all provider categories (IDE, CLI, ACP, Extension).
- * Archives version history to ~/.adhdev/version-history.json for compatibility tracking.
+ * Archives version history to <configDir>/version-history.json for compatibility tracking.
  *
  * Usage:
  *   const archive = new VersionArchive();
@@ -14,6 +14,7 @@ import * as path from 'path';
 import * as os from 'os';
 // Removed execSync import
 import { platform } from 'os';
+import { getConfigDir } from '../config/config.js';
 import type { ProviderLoader } from './provider-loader.js';
 import type { ProviderModule } from './contracts.js';
 import { isKnownWin32GuiExe, readWin32IdeVersionFromDisk } from '../detection/win32-ide-version.js';
@@ -48,7 +49,12 @@ export interface VersionHistory {
 
 // ─── Version Archive ──────────────────────────────
 
-const ARCHIVE_PATH = path.join(os.homedir(), '.adhdev', 'version-history.json');
+// Lazy: resolved per call so the archive follows the instance config dir
+// (ADHDEV_CONFIG_DIR) even when this module was imported before the
+// entrypoint pinned it. Default instance → ~/.adhdev/version-history.json.
+function getArchivePath(): string {
+  return path.join(getConfigDir(), 'version-history.json');
+}
 const MAX_ENTRIES_PER_PROVIDER = 20;
 
 export class VersionArchive {
@@ -60,8 +66,8 @@ export class VersionArchive {
 
   private load(): void {
     try {
-      if (fs.existsSync(ARCHIVE_PATH)) {
-        this.history = JSON.parse(fs.readFileSync(ARCHIVE_PATH, 'utf-8'));
+      if (fs.existsSync(getArchivePath())) {
+        this.history = JSON.parse(fs.readFileSync(getArchivePath(), 'utf-8'));
       }
     } catch {
       this.history = {};
@@ -110,8 +116,8 @@ export class VersionArchive {
 
   private save(): void {
     try {
-      fs.mkdirSync(path.dirname(ARCHIVE_PATH), { recursive: true });
-      fs.writeFileSync(ARCHIVE_PATH, JSON.stringify(this.history, null, 2));
+      fs.mkdirSync(path.dirname(getArchivePath()), { recursive: true });
+      fs.writeFileSync(getArchivePath(), JSON.stringify(this.history, null, 2));
     } catch { /* ignore write errors */ }
   }
 }

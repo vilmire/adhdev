@@ -9,14 +9,15 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
 // src/index.ts
 import { randomUUID } from "crypto";
 import * as fs4 from "fs";
-import * as os3 from "os";
 import * as path2 from "path";
 import {
   SessionHostClient,
   formatRuntimeOwner,
   getDefaultSessionHostEndpoint as getDefaultSessionHostEndpoint2,
   resolveAttachableRuntimeRecord,
-  resolveRuntimeRecord
+  resolveInstanceConfigDir as resolveInstanceConfigDir2,
+  resolveRuntimeRecord,
+  resolveSessionHostIpcKey
 } from "@adhdev/session-host-core";
 
 // src/server.ts
@@ -385,15 +386,15 @@ var PtySessionRuntime = class {
 
 // src/storage.ts
 import * as fs2 from "fs";
-import * as os2 from "os";
 import * as path from "path";
+import { resolveInstanceConfigDir } from "@adhdev/session-host-core";
 var SessionHostStorage = class {
   rootDir;
   runtimesDir;
   tombstonesDir;
   constructor(options = {}) {
     const appName = options.appName || "adhdev";
-    this.rootDir = path.join(os2.homedir(), ".adhdev", "session-host", appName);
+    this.rootDir = options.rootDir || path.join(resolveInstanceConfigDir(process.env), "session-host", appName);
     this.runtimesDir = path.join(this.rootDir, "runtimes");
     this.tombstonesDir = path.join(this.rootDir, "tombstones");
   }
@@ -698,7 +699,10 @@ var SessionHostServer = class extends EventEmitter {
   constructor(options = {}) {
     super();
     this.endpoint = options.endpoint || getDefaultSessionHostEndpoint(options.appName || "adhdev");
-    this.storage = new SessionHostStorage({ appName: options.appName || "adhdev" });
+    this.storage = new SessionHostStorage({
+      appName: options.appName || "adhdev",
+      rootDir: options.storageRootDir
+    });
   }
   async start() {
     if (this.endpoint.kind === "unix") {
@@ -1386,8 +1390,16 @@ var SessionHostServer = class extends EventEmitter {
 
 // src/index.ts
 var SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || "adhdev";
+var INSTANCE_CONFIG_DIR = resolveInstanceConfigDir2(process.env);
+var INSTANCE_IPC_KEY = resolveSessionHostIpcKey(INSTANCE_CONFIG_DIR);
+function getSessionHostEndpoint() {
+  return getDefaultSessionHostEndpoint2(SESSION_HOST_APP_NAME, { ipcKey: INSTANCE_IPC_KEY });
+}
+function getSessionHostStorageRoot() {
+  return path2.join(INSTANCE_CONFIG_DIR, "session-host", SESSION_HOST_APP_NAME);
+}
 function getSessionHostPidFile(appName) {
-  const dir = path2.join(os3.homedir(), ".adhdev");
+  const dir = INSTANCE_CONFIG_DIR;
   if (!fs4.existsSync(dir)) fs4.mkdirSync(dir, { recursive: true });
   return path2.join(dir, `${appName}-session-host.pid`);
 }
@@ -1415,7 +1427,11 @@ function parseArgs(argv) {
   };
 }
 async function runServer() {
-  const server = new SessionHostServer({ appName: SESSION_HOST_APP_NAME });
+  const server = new SessionHostServer({
+    appName: SESSION_HOST_APP_NAME,
+    endpoint: getSessionHostEndpoint(),
+    storageRootDir: getSessionHostStorageRoot()
+  });
   writeSessionHostPid(SESSION_HOST_APP_NAME);
   await server.start();
   process.on("SIGINT", async () => {
@@ -1436,7 +1452,7 @@ async function runServer() {
   });
 }
 async function listRuntimes(showAll = false) {
-  const client = new SessionHostClient({ endpoint: getDefaultSessionHostEndpoint2(SESSION_HOST_APP_NAME) });
+  const client = new SessionHostClient({ endpoint: getSessionHostEndpoint() });
   try {
     const response = await client.request({
       type: "list_sessions",
@@ -1467,7 +1483,7 @@ async function listRuntimes(showAll = false) {
   }
 }
 async function attachRuntime(target, readOnly = false, takeover = false) {
-  const client = new SessionHostClient({ endpoint: getDefaultSessionHostEndpoint2(SESSION_HOST_APP_NAME) });
+  const client = new SessionHostClient({ endpoint: getSessionHostEndpoint() });
   const clientId = `local-terminal-${process.pid}-${randomUUID().slice(0, 8)}`;
   let lastSeq = 0;
   let restoredRawMode = false;
@@ -1705,7 +1721,7 @@ async function main() {
     if (!target) {
       throw new Error("runtime target is required: adhdev-sessiond resume <runtimeId|runtimeKey>");
     }
-    const client = new SessionHostClient({ endpoint: getDefaultSessionHostEndpoint2(SESSION_HOST_APP_NAME) });
+    const client = new SessionHostClient({ endpoint: getSessionHostEndpoint() });
     try {
       const listResponse = await client.request({ type: "list_sessions", payload: {} });
       if (!listResponse.success || !listResponse.result) {

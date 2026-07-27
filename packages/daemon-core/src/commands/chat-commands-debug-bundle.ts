@@ -4,9 +4,9 @@
  */
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { getConfigDir } from '../config/config.js';
 import type { CommandResult, CommandHelpers } from './handler.js';
 import type { ProviderModule } from '../providers/contracts.js';
 import { LOG, getRecentLogs } from '../logging/logger.js';
@@ -190,7 +190,7 @@ function getChatDebugBundleDir(): string {
     const override = typeof process.env.ADHDEV_DEBUG_BUNDLE_DIR === 'string'
         ? process.env.ADHDEV_DEBUG_BUNDLE_DIR.trim()
         : '';
-    return override || path.join(os.homedir(), '.adhdev', 'debug-bundles', 'chat');
+    return override || path.join(getConfigDir(), 'debug-bundles', 'chat');
 }
 
 function safeBundleIdSegment(value: unknown, fallback: string): string {

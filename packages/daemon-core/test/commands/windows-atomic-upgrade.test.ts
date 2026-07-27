@@ -169,7 +169,9 @@ describe('Windows installer-managed atomic upgrade', () => {
 
   it('writes an actionable last-error notice for non-lock failures', () => {
     const { layout } = fixture()
-    emitUpgradeFailureNotice(['adhdev upgrade failed: ordinary npm failure', 'Previous version preserved.'], layout.homeDir)
+    // Second arg is the instance config dir (post Stage 3) — home/.adhdev is
+    // the default instance, so the notice lands at the same path as before.
+    emitUpgradeFailureNotice(['adhdev upgrade failed: ordinary npm failure', 'Previous version preserved.'], path.join(layout.homeDir, '.adhdev'))
     const notice = fs.readFileSync(path.join(layout.homeDir, '.adhdev', 'daemon-upgrade-last-error.txt'), 'utf8')
     expect(notice).toContain('ordinary npm failure')
     expect(notice).toContain('Previous version preserved')

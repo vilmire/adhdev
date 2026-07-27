@@ -24,7 +24,13 @@ interface TerminalMuxClientState {
 }
 
 export function getRootDir(): string {
-  return path.join(os.homedir(), '.adhdev', 'terminal-mux');
+  // Instance-scoped mutable state: honor ADHDEV_CONFIG_DIR so coexisting
+  // instances (stable/preview/standalone) keep separate mux workspace state.
+  // The default instance resolves to ~/.adhdev — identical to before.
+  const override = typeof process.env.ADHDEV_CONFIG_DIR === 'string'
+    ? process.env.ADHDEV_CONFIG_DIR.trim()
+    : '';
+  return path.join(override || path.join(os.homedir(), '.adhdev'), 'terminal-mux');
 }
 
 const WINDOW_MARKER = '--w--';

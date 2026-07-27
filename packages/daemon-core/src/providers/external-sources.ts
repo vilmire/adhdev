@@ -13,8 +13,8 @@
 'use strict';
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
+import { getConfigDir } from '../config/config.js';
 
 export interface ExternalSource {
     /** Unique short identifier, e.g. "@vendor-x". User-supplied or derived from the URL. */
@@ -48,7 +48,9 @@ const SOURCES_FILENAME = 'providers-sources.json';
 const ACTIVE_FILENAME = 'providers-active.json';
 
 function adhdevDir(): string {
-    return path.join(os.homedir(), '.adhdev');
+    // Instance config dir — external source clones and the active-selection
+    // pointers are per-instance mutable state.
+    return getConfigDir();
 }
 
 export function externalRoot(): string {

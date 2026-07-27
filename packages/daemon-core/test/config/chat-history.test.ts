@@ -124,11 +124,15 @@ describe('chat-history config helpers', () => {
 
   beforeEach(() => {
     mockHomeDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-chat-history-'))
+    // chat-history resolves its dir through the instance config dir (Stage 3);
+    // pin it to the mocked home this suite stages fixtures under.
+    process.env.ADHDEV_CONFIG_DIR = path.join(mockHomeDir, '.adhdev')
     vi.resetModules()
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
+    delete process.env.ADHDEV_CONFIG_DIR
     if (mockHomeDir) fs.rmSync(mockHomeDir, { recursive: true, force: true })
     mockHomeDir = ''
   })

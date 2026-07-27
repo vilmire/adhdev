@@ -44,6 +44,8 @@ import {
 export interface SessionHostServerOptions {
   endpoint?: SessionHostEndpoint;
   appName?: string;
+  /** Explicit session-host state root (runtime records + tombstones). */
+  storageRootDir?: string;
 }
 
 export class SessionHostServer extends EventEmitter {
@@ -70,7 +72,10 @@ export class SessionHostServer extends EventEmitter {
   constructor(options: SessionHostServerOptions = {}) {
     super();
     this.endpoint = options.endpoint || getDefaultSessionHostEndpoint(options.appName || 'adhdev');
-    this.storage = new SessionHostStorage({ appName: options.appName || 'adhdev' });
+    this.storage = new SessionHostStorage({
+      appName: options.appName || 'adhdev',
+      rootDir: options.storageRootDir,
+    });
   }
 
   async start(): Promise<void> {

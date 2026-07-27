@@ -32,10 +32,15 @@ function writePidFile(appName: string, pid: number): string {
 // suite deterministically exercises the POSIX path regardless of the host OS the
 // tests run on (e.g. a Windows dev machine).
 let platformDescriptor: PropertyDescriptor | undefined
+let originalConfigDir: string | undefined
 
 beforeEach(() => {
   mocks.execFileSync.mockReset()
   mocks.spawn.mockClear()
+  // The stop path resolves the pid file through the instance config dir
+  // (Stage 3); pin it to the legacy default this suite writes against.
+  originalConfigDir = process.env.ADHDEV_CONFIG_DIR
+  process.env.ADHDEV_CONFIG_DIR = path.join(os.homedir(), '.adhdev')
   // SIGTERM (kill request) succeeds; the signal-0 liveness probe in
   // waitForPidExit throws to signal the process is already gone, so the
   // post-kill wait resolves immediately instead of spinning for 15s.
@@ -54,6 +59,8 @@ afterEach(() => {
   if (platformDescriptor) {
     Object.defineProperty(process, 'platform', platformDescriptor)
   }
+  if (originalConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+  else process.env.ADHDEV_CONFIG_DIR = originalConfigDir
   for (const appName of createdAppNames.splice(0)) {
     fs.rmSync(pidFileFor(appName), { force: true })
   }

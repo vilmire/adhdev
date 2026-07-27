@@ -206,6 +206,13 @@ export type { IDaemonCore, DaemonCoreOptions } from './daemon-core.js';
 
 // ── Config ──
 export { loadConfig, saveConfig, resetConfig, isSetupComplete, markSetupComplete, updateConfig, getConfigDir, getDaemonDataDir } from './config/config.js';
+export {
+  getProcessInstanceContext,
+  InstanceContextConflictError,
+  resetProcessInstanceContextForTests,
+  resolveInstanceContext,
+} from './config/instance-context.js';
+export type { InstanceContext, ResolveInstanceContextOptions } from './config/instance-context.js';
 export { getWorkspaceState } from './config/workspaces.js';
 export { appendRecentActivity, getRecentActivity } from './config/recent-activity.js';
 export type { RecentActivityEntry } from './config/recent-activity.js';

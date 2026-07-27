@@ -13,6 +13,7 @@ import { createManagedSessionHost } from '../../src/session-host/managed-host'
 
 const tempRoots: string[] = []
 let platformDescriptor: PropertyDescriptor | undefined
+let originalConfigDir: string | undefined
 
 describe('managed session-host prefix guard', () => {
   beforeEach(() => {
@@ -21,12 +22,15 @@ describe('managed session-host prefix guard', () => {
     cp.spawn.mockImplementation(() => ({ unref: vi.fn(), pid: 4242 }))
     platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    originalConfigDir = process.env.ADHDEV_CONFIG_DIR
   })
 
   afterEach(() => {
     if (platformDescriptor) {
       Object.defineProperty(process, 'platform', platformDescriptor)
     }
+    if (originalConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+    else process.env.ADHDEV_CONFIG_DIR = originalConfigDir
     for (const root of tempRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
   })
 
@@ -40,6 +44,9 @@ describe('managed session-host prefix guard', () => {
     const homeDir = makeTempHome()
     const originalHome = process.env.HOME
     process.env.HOME = homeDir
+    // Instance-aware pid file resolution (Stage 3) follows ADHDEV_CONFIG_DIR;
+    // pin it to the legacy default this test stages.
+    process.env.ADHDEV_CONFIG_DIR = path.join(homeDir, '.adhdev')
     const appName = `adhdev-guard-${process.pid}-${Date.now()}`
     const stalePid = 14720
     const pidFile = path.join(homeDir, '.adhdev', `${appName}-session-host.pid`)
@@ -77,6 +84,7 @@ describe('managed session-host prefix guard', () => {
     const homeDir = makeTempHome()
     const originalHome = process.env.HOME
     process.env.HOME = homeDir
+    process.env.ADHDEV_CONFIG_DIR = path.join(homeDir, '.adhdev')
     const appName = `adhdev-guard-matching-${process.pid}-${Date.now()}`
     const currentPid = 14721
     const pidFile = path.join(homeDir, '.adhdev', `${appName}-session-host.pid`)

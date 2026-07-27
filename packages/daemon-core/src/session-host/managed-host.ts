@@ -11,6 +11,7 @@ import {
 import { getProcessCommandLine, parseNodeScriptPath } from '../commands/process-lifecycle.js';
 import { findPortableNode22 } from '../commands/windows-atomic-upgrade.js';
 import { resolveInstanceDir } from '../commands/upgrade-helper.js';
+import { getProcessInstanceContext } from '../config/instance-context.js';
 import { LOG } from '../logging/logger.js';
 import { ensureSessionHostReady as ensureSharedSessionHostReady } from './runtime-support.js';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../runtime-defaults.js';
@@ -79,12 +80,26 @@ export interface ManagedSessionHost {
 export function createManagedSessionHost(options: ManagedSessionHostOptions): ManagedSessionHost {
     const appName = options.appName;
     const timeoutMs = options.timeoutMs ?? DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
-    const endpoint = getDefaultSessionHostEndpoint(appName);
     const isManagedPid = options.isManagedPid ?? (() => true);
+
+    // Instance context is resolved lazily (per call, cached per process) rather
+    // than at factory creation: entrypoints like daemon-standalone pin
+    // ADHDEV_CONFIG_DIR during their bootstrap import, which can run after this
+    // module is first evaluated. Every derivation below must follow the SAME
+    // resolved instance — never a re-derived or hardcoded ~/.adhdev.
+    const instance = () => getProcessInstanceContext();
+    const getEndpoint = (): SessionHostEndpoint =>
+        getDefaultSessionHostEndpoint(appName, { ipcKey: instance().ipcKey });
 
     function buildEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
         const env = sanitizeSpawnEnv(baseEnv) as NodeJS.ProcessEnv;
         env.ADHDEV_SESSION_HOST_NAME = appName;
+        // Pin the instance identity across the detached child: the spawned host
+        // derives its socket/pid/storage namespace from ADHDEV_CONFIG_DIR, and a
+        // pinned env can never be retargeted by another install editing a shared
+        // config file. For the default instance this pins `<home>/.adhdev`,
+        // which canonicalizes back to the legacy (unkeyed) endpoint.
+        env.ADHDEV_CONFIG_DIR = instance().configDir;
         return env;
     }
 
@@ -112,7 +127,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     }
 
     function getPidFile(): string {
-        return path.join(os.homedir(), '.adhdev', `${appName}-session-host.pid`);
+        return path.join(instance().configDir, `${appName}-session-host.pid`);
     }
 
     function getPid(): number | null {
@@ -190,7 +205,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         let stdio: StdioOptions = 'ignore';
         let logFd: number | null = null;
         if (options.spawnStdio === 'logfile') {
-            const logDir = path.join(os.homedir(), '.adhdev', 'logs');
+            const logDir = path.join(instance().configDir, 'logs');
             fs.mkdirSync(logDir, { recursive: true });
             logFd = fs.openSync(path.join(logDir, 'session-host.log'), 'a');
             stdio = ['ignore', logFd, logFd];
@@ -228,7 +243,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         }
 
         if (options.extraStop) {
-            stopped = options.extraStop(endpoint) || stopped;
+            stopped = options.extraStop(getEndpoint()) || stopped;
         }
 
         return stopped;
@@ -261,6 +276,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         try {
             return await ensureSharedSessionHostReady({
                 appName,
+                endpoint: getEndpoint(),
                 spawnHost,
                 timeoutMs,
                 requiredRequestTypes: options.requiredRequestTypes,
@@ -269,6 +285,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             stopManagedSessionHostProcess();
             return ensureSharedSessionHostReady({
                 appName,
+                endpoint: getEndpoint(),
                 spawnHost,
                 timeoutMs,
                 requiredRequestTypes: options.requiredRequestTypes,
@@ -282,7 +299,9 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
 
     return {
         appName,
-        endpoint,
+        get endpoint() {
+            return getEndpoint();
+        },
         getPidFile,
         getPid,
         buildEnv,
@@ -292,7 +311,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         stopManagedSessionHostProcess,
         ensureReady,
         getStatusPaths() {
-            return { pidFile: getPidFile(), endpoint };
+            return { pidFile: getPidFile(), endpoint: getEndpoint() };
         },
     };
 }

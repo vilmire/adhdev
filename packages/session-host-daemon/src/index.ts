@@ -2,14 +2,15 @@
 
 import { randomUUID } from 'crypto';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import {
   SessionHostClient,
   formatRuntimeOwner,
   getDefaultSessionHostEndpoint,
   resolveAttachableRuntimeRecord,
+  resolveInstanceConfigDir,
   resolveRuntimeRecord,
+  resolveSessionHostIpcKey,
   type SessionHostEvent,
   type SessionHostRecord,
 } from '@adhdev/session-host-core';
@@ -20,8 +21,26 @@ export type { SessionHostServerOptions } from './server.js';
 
 const SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev';
 
+// Instance identity comes from the parent daemon's pinned env
+// (ADHDEV_CONFIG_DIR — see managed-host buildEnv). The endpoint, pid file, and
+// storage root all derive from that ONE resolution so the host process lives
+// entirely inside its own instance's namespace: two simultaneous instances
+// (stable/preview/standalone/custom) can never attach to, kill, or persist
+// over each other's session host. The default instance yields the legacy
+// un-suffixed socket and `<home>/.adhdev` paths, byte-identical to before.
+const INSTANCE_CONFIG_DIR = resolveInstanceConfigDir(process.env);
+const INSTANCE_IPC_KEY = resolveSessionHostIpcKey(INSTANCE_CONFIG_DIR);
+
+function getSessionHostEndpoint() {
+  return getDefaultSessionHostEndpoint(SESSION_HOST_APP_NAME, { ipcKey: INSTANCE_IPC_KEY });
+}
+
+function getSessionHostStorageRoot(): string {
+  return path.join(INSTANCE_CONFIG_DIR, 'session-host', SESSION_HOST_APP_NAME);
+}
+
 function getSessionHostPidFile(appName: string): string {
-  const dir = path.join(os.homedir(), '.adhdev');
+  const dir = INSTANCE_CONFIG_DIR;
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, `${appName}-session-host.pid`);
 }
@@ -54,7 +73,11 @@ function parseArgs(argv: string[]) {
 }
 
 async function runServer(): Promise<void> {
-  const server = new SessionHostServer({ appName: SESSION_HOST_APP_NAME });
+  const server = new SessionHostServer({
+    appName: SESSION_HOST_APP_NAME,
+    endpoint: getSessionHostEndpoint(),
+    storageRootDir: getSessionHostStorageRoot(),
+  });
   writeSessionHostPid(SESSION_HOST_APP_NAME);
   await server.start();
 
@@ -81,7 +104,7 @@ async function runServer(): Promise<void> {
 }
 
 async function listRuntimes(showAll = false): Promise<void> {
-  const client = new SessionHostClient({ endpoint: getDefaultSessionHostEndpoint(SESSION_HOST_APP_NAME) });
+  const client = new SessionHostClient({ endpoint: getSessionHostEndpoint() });
   try {
     const response = await client.request<SessionHostRecord[]>({
       type: 'list_sessions',
@@ -112,7 +135,7 @@ async function listRuntimes(showAll = false): Promise<void> {
 }
 
 async function attachRuntime(target: string, readOnly = false, takeover = false): Promise<void> {
-  const client = new SessionHostClient({ endpoint: getDefaultSessionHostEndpoint(SESSION_HOST_APP_NAME) });
+  const client = new SessionHostClient({ endpoint: getSessionHostEndpoint() });
   const clientId = `local-terminal-${process.pid}-${randomUUID().slice(0, 8)}`;
   let lastSeq = 0;
   let restoredRawMode = false;
@@ -356,7 +379,7 @@ async function main(): Promise<void> {
     if (!target) {
       throw new Error('runtime target is required: adhdev-sessiond resume <runtimeId|runtimeKey>');
     }
-    const client = new SessionHostClient({ endpoint: getDefaultSessionHostEndpoint(SESSION_HOST_APP_NAME) });
+    const client = new SessionHostClient({ endpoint: getSessionHostEndpoint() });
     try {
       const listResponse = await client.request<SessionHostRecord[]>({ type: 'list_sessions', payload: {} });
       if (!listResponse.success || !listResponse.result) {
