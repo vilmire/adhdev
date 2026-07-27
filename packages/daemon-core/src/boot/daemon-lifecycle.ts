@@ -182,7 +182,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     installGlobalInterceptor();
     loadMeshCoordinatorRegistry();
 
-    // 2. ProviderLoader (provider source mode from config.json)
+    // 2. ProviderLoader (provider source mode + channel from config.json)
     const appConfig = loadConfig();
     const providerSourceMode = appConfig.providerSourceMode || 'normal';
     const disableUpstream = providerSourceMode === 'no-upstream';
@@ -192,6 +192,8 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         userDir: appConfig.providerDir,
         registryUrl: appConfig.registryUrl,
         providerTarballUrl: appConfig.providerTarballUrl,
+        channel: appConfig.providerChannel,
+        allowUnverifiedTarball: appConfig.providerAllowUnverifiedTarball,
     });
 
     // Boot-time auto-sync is intentionally disabled. The user picks which

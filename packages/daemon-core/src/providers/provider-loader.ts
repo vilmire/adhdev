@@ -46,6 +46,13 @@ import {
 import type { ProviderSourceConfigSnapshot, ProviderUserDirSource } from '../config/provider-source-config.js';
 import { executeNativeHistory, executeNativeHistoryList } from './spec/native-history-executor.js';
 import { createNativeHistoryDispatcher, type ReaderId } from './native-history/dispatcher.js';
+import { resolveProviderChannel, type ProviderChannel } from './channel/contract.js';
+import { ProviderChannelStore } from './channel/store.js';
+import {
+  ProviderChannelRuntime,
+  collectSyncTargetTypes,
+  type ChannelSyncReport,
+} from './channel/runtime.js';
 
 /**
  * Adds a provider-script root to the require whitelist. Wrapped in a
@@ -210,9 +217,23 @@ export class ProviderLoader {
   private static readonly REPO_PROVIDER_DIRNAME = 'adhdev-providers';
   private static readonly SIBLING_MARKER_FILE = '.adhdev-provider-root';
   private static readonly SIBLING_ENV_VAR = 'ADHDEV_USE_SIBLING_PROVIDERS';
+  /**
+   * Development-only env opt-in for the legacy unverified `main.tar.gz`
+   * upstream fallback. Even with this set, the fallback is refused whenever
+   * the resolved provider channel is 'stable' (production mode).
+   */
+  private static readonly UNVERIFIED_TARBALL_ENV_VAR = 'ADHDEV_PROVIDER_ALLOW_UNVERIFIED_TARBALL';
+
+  /** Resolved explicit provider channel (absent/ambiguous → 'stable'). */
+  readonly channel: ProviderChannel;
+  private readonly allowUnverifiedTarball: boolean;
+  private readonly channelStore: ProviderChannelStore | null;
 
   private probeStarts: string[] = [];
   private siblingLogged = false;
+  private siblingRefusalLogged = false;
+  /** Active verified-channel object dirs, refreshed by loadAll(). */
+  private channelObjectRoots: string[] = [];
   private userDirSource: ProviderUserDirSource = 'home-default';
 
   /** Process-level dedup for stderr sibling-adoption notices (shared across all ProviderLoader instances). */
@@ -250,6 +271,22 @@ export class ProviderLoader {
         if (ProviderLoader.looksLikeProviderRoot(siblingCandidate)) {
           const hasMarker = ProviderLoader.hasProviderRootMarker(siblingCandidate);
           if (envOptIn || hasMarker) {
+            // Stage 2 channel policy: a stable (production) runtime NEVER
+            // adopts a sibling checkout — `.adhdev-provider-root` must not
+            // silently override verified channel activations. Non-stable
+            // development use still requires the explicit opt-in (marker
+            // file or env var).
+            if (this.channel === 'stable') {
+              if (!this.siblingRefusalLogged) {
+                this.siblingRefusalLogged = true;
+                this.log(`Refusing sibling provider checkout (channel=stable): ${siblingCandidate}. Set providerChannel=preview (or ${'ADHDEV_PROVIDER_CHANNEL'}=preview) to opt in for development.`);
+                try {
+                  process.stderr.write(
+                    `[adhdev] Ignoring sibling adhdev-providers checkout on stable channel: ${siblingCandidate}\n`,
+                  );
+                } catch { /* ignore */ }
+              }
+            } else {
             const source: 'sibling-env' | 'sibling-marker' = hasMarker ? 'sibling-marker' : 'sibling-env';
             if (!this.siblingLogged) {
               this.log(`Using sibling provider checkout (${source}): ${siblingCandidate}`);
@@ -266,6 +303,7 @@ export class ProviderLoader {
               } catch { /* ignore */ }
             }
             return { path: siblingCandidate, source };
+            }
           }
         }
         const parent = path.dirname(current);
@@ -300,11 +338,40 @@ export class ProviderLoader {
      * Highest-priority resolver source, ahead of ADHDEV_PROVIDER_TARBALL_URL + default.
      */
     providerTarballUrl?: string;
+    /**
+     * Explicit provider artifact channel (config.providerChannel /
+     * ADHDEV_PROVIDER_CHANNEL). Absent or ambiguous → 'stable'. A stable
+     * runtime refuses sibling-checkout adoption and the unverified tarball
+     * fallback; verified channel activations are always loaded.
+     */
+    channel?: string;
+    /**
+     * Development-only opt-in for the legacy unverified `main.tar.gz`
+     * fallback (config.providerAllowUnverifiedTarball /
+     * ADHDEV_PROVIDER_ALLOW_UNVERIFIED_TARBALL=1). Refused on the stable
+     * channel regardless of this flag.
+     */
+    allowUnverifiedTarball?: boolean;
+    /**
+     * Verified channel store override (tests). Pass `null` to disable the
+     * verified channel layer entirely. Defaults to the content-addressed
+     * store under `<configDir>/providers/.store`.
+     */
+    channelStore?: ProviderChannelStore | null;
   }) {
     this.logFn = options?.logFn || LOG.forComponent('Provider').asLogFn();
     this.probeStarts = options?.probeStarts ?? [process.cwd(), __dirname];
     this.registryBaseUrl = resolveRegistryBaseUrl(options?.registryUrl);
     this.providerTarballUrl = resolveProviderTarballUrl(options?.providerTarballUrl);
+    // Channel resolution MUST happen before detectDefaultUserDir() below:
+    // sibling-checkout adoption is gated on the resolved channel.
+    this.channel = resolveProviderChannel(options?.channel);
+    this.allowUnverifiedTarball =
+      options?.allowUnverifiedTarball === true ||
+      process.env[ProviderLoader.UNVERIFIED_TARBALL_ENV_VAR] === '1';
+    this.channelStore = options?.channelStore === null
+      ? null
+      : (options?.channelStore ?? new ProviderChannelStore(ProviderChannelStore.defaultRoot(), this.logFn));
 
     // Default directory for auto-downloads. Resolved via getConfigDir() so
     // ADHDEV_CONFIG_DIR (preview/stable instance isolation) is honored instead
@@ -379,12 +446,15 @@ export class ProviderLoader {
    * Highest-priority editable overrides come first.
    */
   getProviderRoots(): string[] {
-    // Order matters: user customs > external (3rd-party sources) > upstream
-    // (official auto-sync). findProviderDirInternal walks this list in order
-    // to locate the provider dir containing the scripts/, so external must
-    // be included here even though loadAll() also reads it directly.
+    // Order matters: user customs > external (3rd-party sources) > verified
+    // channel activations (Stage 2 store) > upstream (official auto-sync).
+    // findProviderDirInternal walks this list in order to locate the
+    // provider dir containing the scripts/, so external must be included
+    // here even though loadAll() also reads it directly. The verified
+    // channel roots sit above .upstream so digest-verified bytes win over
+    // legacy manifest installs of the same type, mirroring loadAll().
     const externalDir = path.join(getConfigDir(), 'external');
-    return [this.userDir, externalDir, this.upstreamDir];
+    return [this.userDir, externalDir, ...this.channelObjectRoots, this.upstreamDir];
   }
 
   getSourceConfig(): ProviderSourceConfigSnapshot {
@@ -499,6 +569,12 @@ export class ProviderLoader {
       this.log('Upstream loading disabled (sourceMode=no-upstream)');
     }
 
+ // 1.5 Verified channel activations (Stage 2 content-addressed store).
+ //     Occupies the upstream precedence slot: loaded after .upstream so
+ //     digest-verified bytes win over legacy manifest installs of the same
+ //     type, while external sources and user customs still outrank it.
+    this.loadVerifiedChannelActivations();
+
  // 2. Load external providers from ~/.adhdev/external/<source-name>/
  //    (3rd-party git sources). Overrides upstream but is itself overridden
  //    by user customs in step 3.
@@ -596,6 +672,96 @@ export class ProviderLoader {
     if (this.providers.size === 0) {
       this.log(`❌ No providers loaded! Run 'adhdev daemon' with internet to download providers.`);
     }
+  }
+
+ // ─── Verified provider channel (Stage 2) ─────────────────
+
+ /**
+  * Load digest-verified channel activations from the content-addressed
+  * store. Only objects referenced by an active pointer are read, so a
+  * partially staged or interrupted sync is never observed. Corrupt pointers
+  * / missing objects are logged as typed errors and skipped (fail closed).
+  */
+  private loadVerifiedChannelActivations(): void {
+    this.channelObjectRoots = [];
+    if (!this.channelStore) return;
+    let result: ReturnType<ProviderChannelStore['listActiveActivations']>;
+    try {
+      result = this.channelStore.listActiveActivations(this.channel);
+    } catch (e: any) {
+      this.log(`⚠ Verified channel store unreadable (${this.channel}): ${e?.message || e}`);
+      return;
+    }
+    for (const err of result.errors) {
+      this.log(`⚠ Verified channel: ${err.code}: ${err.message}`);
+    }
+    let count = 0;
+    for (const { objectDir } of result.activations) {
+      count += this.loadDir(objectDir);
+      this.channelObjectRoots.push(objectDir);
+    }
+    if (count > 0) {
+      this.log(`Loaded ${count} verified channel providers (${this.channel}, content-addressed store)`);
+    }
+  }
+
+ /**
+  * Sync verified channel activations for the installed provider set
+  * (providers installed into .upstream via the dashboard install flow, plus
+  * everything already activated on this channel).
+  *
+  * Fail-closed / last-known-good: on any metadata or transport failure
+  * nothing new is activated and the previous active objects keep loading.
+  * Reloads providers when at least one activation changed.
+  */
+  async syncVerifiedChannel(): Promise<ChannelSyncReport> {
+    if (!this.channelStore) {
+      return {
+        channel: this.channel,
+        status: 'error',
+        activated: [],
+        skipped: [],
+        errors: [{ code: 'STORE_CORRUPT', message: 'verified channel store is disabled' }],
+      };
+    }
+    const runtime = new ProviderChannelRuntime({
+      store: this.channelStore,
+      registryBaseUrl: this.registryBaseUrl,
+      providerTarballUrl: this.providerTarballUrl,
+      logFn: this.logFn,
+    });
+    const targetTypes = collectSyncTargetTypes(this.upstreamDir, this.channelStore, this.channel);
+    const report = await runtime.sync({ channel: this.channel, targetTypes });
+    for (const skip of report.skipped) {
+      this.log(`⚠ Verified channel skip: ${skip.reason}`);
+    }
+    for (const err of report.errors) {
+      this.log(`⚠ Verified channel error: ${err.code}: ${err.message}`);
+    }
+    if (report.activated.length > 0) {
+      this.loadAll();
+    }
+    return report;
+  }
+
+ /**
+  * Roll a provider back to its previously activated verified object. Pure
+  * local pointer flip — no network. Returns the new active digest, or null
+  * when there is no rollback target.
+  */
+  rollbackVerifiedChannel(providerType: string): string | null {
+    if (!this.channelStore) return null;
+    const ref = this.channelStore.rollback(this.channel, providerType);
+    if (ref) this.loadAll();
+    return ref?.digest ?? null;
+  }
+
+ /** Remove a verified activation (e.g. the provider was uninstalled). */
+  deactivateVerifiedChannel(providerType: string): boolean {
+    if (!this.channelStore) return false;
+    const removed = this.channelStore.removePointer(this.channel, providerType);
+    if (removed) this.loadAll();
+    return removed;
   }
 
  /**
@@ -1714,6 +1880,20 @@ export class ProviderLoader {
       this.log('Upstream fetch skipped (sourceMode=no-upstream)');
       return { updated: false };
     }
+    // Stage 2: the unauthenticated main.tar.gz fallback is no longer a
+    // production path. It requires an unmistakable development-only opt-in
+    // (config.providerAllowUnverifiedTarball or
+    // ADHDEV_PROVIDER_ALLOW_UNVERIFIED_TARBALL=1) AND a non-stable channel;
+    // stable production mode always refuses it. The verified channel sync
+    // (syncVerifiedChannel) is the production loading path.
+    if (!this.isUnverifiedTarballAllowed()) {
+      const msg =
+        `TARBALL_FALLBACK_REFUSED: unverified provider tarball fallback is disabled ` +
+        `(channel=${this.channel}, opt-in=${this.allowUnverifiedTarball ? 'on' : 'off'}). ` +
+        `Use the verified channel sync instead.`;
+      this.log(`⚠ ${msg}`);
+      return { updated: false, error: msg };
+    }
     const https = require('https') as typeof import('https');
     const { exec } = require('child_process') as typeof import('child_process');
     const { promisify } = require('util');
@@ -1866,9 +2046,17 @@ export class ProviderLoader {
     }
   }
 
+ /**
+  * Development-only gate for the legacy unverified tarball fallback: the
+  * explicit opt-in must be on AND the resolved channel must be non-stable.
+  * Stable (production) always refuses.
+  */
+  private isUnverifiedTarballAllowed(): boolean {
+    return this.allowUnverifiedTarball && this.channel !== 'stable';
+  }
+
  /** HTTP(S) file download (follows redirects) */
-  private downloadFile(url: string, destPath: string): Promise<void> {
-    const https = require('https') as typeof import('https');
+  private downloadFile(url: string, destPath: string): Promise<void> {    const https = require('https') as typeof import('https');
     const http = require('http') as typeof import('http');
 
     return new Promise((resolve, reject) => {
@@ -2418,9 +2606,13 @@ export class ProviderLoader {
             // uses this to render trust badges; non-spec external manifests
             // need an explicit user confirm before activation.
             const externalDirAbs = path.join(getConfigDir(), 'external');
+            // The verified channel store (<configDir>/providers/.store/…)
+            // lives under the default user dir but is verified upstream
+            // content, not a user override — exclude it explicitly.
+            const isChannelStoreObject = d.includes(`${path.sep}.store${path.sep}`);
             const layer: 'user' | 'upstream' | 'external' = d.startsWith(externalDirAbs)
               ? 'external'
-              : (d.startsWith(this.userDir) && !d.includes('.upstream') ? 'user' : 'upstream');
+              : (d.startsWith(this.userDir) && !d.includes('.upstream') && !isChannelStoreObject ? 'user' : 'upstream');
             try {
               const { inspectManifestShape, classifyTrust } =
                 require('./provider-trust.js') as typeof import('./provider-trust.js');

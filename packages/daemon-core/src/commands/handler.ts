@@ -1060,6 +1060,13 @@ export class DaemonCommandHandler implements CommandHelpers {
 
             fs.rmSync(targetDir, { recursive: true, force: true });
 
+            // Also drop any verified channel activation for this type so an
+            // uninstalled provider does not keep loading from the
+            // content-addressed store. Local pointer removal — no network.
+            try {
+                this._ctx.providerLoader?.deactivateVerifiedChannel?.(type);
+            } catch { /* best-effort — uninstall of the upstream dir already succeeded */ }
+
             if (this._ctx.providerLoader) {
                 this._ctx.providerLoader.reload();
                 this._ctx.providerLoader.registerToDetector();
@@ -1190,7 +1197,18 @@ export class DaemonCommandHandler implements CommandHelpers {
             })
         );
 
-        return { success: true, providers: checks };
+        // Stage 2: attempt a verified channel sync (fail-closed — on any
+        // failure the last-known-good activations keep loading). This is the
+        // manual sync entry point named by the boot path; boot itself stays
+        // network-free.
+        let channelSync: unknown = null;
+        try {
+            channelSync = await this._ctx.providerLoader?.syncVerifiedChannel?.() ?? null;
+        } catch (e: any) {
+            channelSync = { error: e?.message ?? String(e) };
+        }
+
+        return { success: true, providers: checks, channelSync };
     }
 
     // ─── External provider sources (3rd-party git URLs) ──────────────

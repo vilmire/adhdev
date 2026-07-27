@@ -103,7 +103,9 @@ describe('ProviderLoader source root selection', () => {
     mkdirSync(join(siblingDir, 'cli'), { recursive: true });
     writeFileSync(join(siblingDir, '.adhdev-provider-root'), '', 'utf-8');
 
-    const loader = new ProviderLoader({ probeStarts: [projectDir] });
+    // Sibling adoption is a development-only path: it requires a non-stable
+    // channel. A stable runtime refuses it (see channel policy tests).
+    const loader = new ProviderLoader({ probeStarts: [projectDir], channel: 'preview' });
 
     expect(loader.getUserDir()).toBe(siblingDir);
     expect(loader.getSourceConfig().userDirSource).toBe('sibling-marker');
@@ -113,7 +115,7 @@ describe('ProviderLoader source root selection', () => {
     mkdirSync(join(siblingDir, 'cli'), { recursive: true });
     process.env.ADHDEV_USE_SIBLING_PROVIDERS = '1';
 
-    const loader = new ProviderLoader({ probeStarts: [projectDir] });
+    const loader = new ProviderLoader({ probeStarts: [projectDir], channel: 'preview' });
 
     expect(loader.getUserDir()).toBe(siblingDir);
     expect(loader.getSourceConfig().userDirSource).toBe('sibling-env');
@@ -124,7 +126,7 @@ describe('ProviderLoader source root selection', () => {
     writeFileSync(join(siblingDir, '.adhdev-provider-root'), '', 'utf-8');
     process.env.ADHDEV_USE_SIBLING_PROVIDERS = '1';
 
-    const loader = new ProviderLoader({ probeStarts: [projectDir] });
+    const loader = new ProviderLoader({ probeStarts: [projectDir], channel: 'preview' });
 
     expect(loader.getSourceConfig().userDirSource).toBe('sibling-marker');
   });
@@ -1023,10 +1025,16 @@ describe('ProviderLoader upstream fetch cooldown vs empty upstream', () => {
   function newLoader(logs: string[]) {
     // upstreamDir is derived from getConfigDir(), not from a userDir option, so we
     // redirect ADHDEV_CONFIG_DIR to the temp root (done in beforeEach) rather than
-    // passing a userDir here.
+    // passing a userDir here. The legacy tarball path is development-only in
+    // Stage 2: exercise it with the explicit opt-in on a non-stable channel.
     return new ProviderLoader({
       providerTarballUrl: UNREACHABLE,
       logFn: (msg) => logs.push(msg),
+      channel: 'preview',
+      allowUnverifiedTarball: true,
+      // Hermetic sibling probing: a preview-channel loader would otherwise
+      // adopt a real sibling adhdev-providers checkout from the dev machine.
+      probeStarts: [join(tmpRoot, 'no-sibling-here')],
     });
   }
 

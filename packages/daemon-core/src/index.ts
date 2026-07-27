@@ -506,6 +506,27 @@ export { forwardAgentStreamsToIdeInstance } from './agent-stream/forward.js';
 
 // ── Providers ──
 export { ProviderLoader } from './providers/provider-loader.js';
+export {
+  resolveProviderChannel,
+  partitionChannelEntries,
+  ProviderChannelError,
+  KNOWN_DIGEST_ALGORITHMS,
+  LEGACY_UNVERIFIED_ALGORITHM,
+  DEFAULT_PROVIDER_CHANNEL,
+  PROVIDER_CHANNEL_ENV_VAR,
+} from './providers/channel/contract.js';
+export type {
+  ProviderChannel,
+  ChannelEntry,
+  ActivatableEntry,
+  SkippedEntry,
+  ProviderChannelErrorCode,
+} from './providers/channel/contract.js';
+export { computeProviderTreeDigest, TREE_DIGEST_ALGORITHM } from './providers/channel/tree-digest.js';
+export { ProviderChannelStore } from './providers/channel/store.js';
+export type { ActivationRef, ActivationPointer, ActivateResult } from './providers/channel/store.js';
+export { ProviderChannelRuntime, collectSyncTargetTypes } from './providers/channel/runtime.js';
+export type { ChannelSyncReport, ChannelSyncError, ProviderChannelRuntimeOptions } from './providers/channel/runtime.js';
 export { ProviderInstanceManager } from './providers/provider-instance-manager.js';
 export { IdeProviderInstance } from './providers/ide-provider-instance.js';
 export { CliProviderInstance } from './providers/cli-provider-instance.js';

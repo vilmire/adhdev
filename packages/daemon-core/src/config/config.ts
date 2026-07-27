@@ -139,6 +139,20 @@ export interface ADHDevConfig {
      */
     providerTarballUrl?: string;
 
+    /**
+     * Explicit provider artifact channel ('stable' | 'preview'). Absent or
+     * ambiguous values resolve to 'stable' at runtime; stable never falls
+     * through to preview. See providers/channel/contract.ts.
+     */
+    providerChannel?: string;
+
+    /**
+     * Development-only opt-in: allow the legacy unverified `main.tar.gz`
+     * upstream fallback. Refused whenever the resolved provider channel is
+     * 'stable' (production mode), regardless of this flag.
+     */
+    providerAllowUnverifiedTarball?: boolean;
+
     /** Preferred daemon update channel. Defaults to stable/latest. */
     updateChannel?: ReleaseChannel;
 
@@ -251,6 +265,8 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
         providerDir: asOptionalString(parsed.providerDir),
         registryUrl: asOptionalString(parsed.registryUrl),
         providerTarballUrl: asOptionalString(parsed.providerTarballUrl),
+        providerChannel: asOptionalString(parsed.providerChannel),
+        providerAllowUnverifiedTarball: asBoolean(parsed.providerAllowUnverifiedTarball, false),
         updateChannel: parsed.updateChannel === 'preview' ? 'preview' : 'stable',
         terminalSizingMode: parsed.terminalSizingMode === 'fit' ? 'fit' : 'measured',
     };
