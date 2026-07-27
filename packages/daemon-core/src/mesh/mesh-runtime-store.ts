@@ -435,6 +435,94 @@ export class MeshRuntimeStore {
 
             CREATE INDEX IF NOT EXISTS idx_mesh_inflight_hold_mesh
                 ON mesh_inflight_hold(mesh_id);
+
+            -- TURN-LEDGER (Stage 5): the authoritative causal turn transaction per task
+            -- ATTEMPT. One row per (mesh_id, task_id, attempt_seq); attempt_seq is the
+            -- dispatch nonce the attempt was opened under (monotonic per task), so a
+            -- reclaim/re-dispatch opens a NEW attempt row while late events against the
+            -- old attempt are rejected by identity, never applied. The stage column is a
+            -- monotonic causal FSM (accepted → delivered → consumed → generating →
+            -- [waiting_approval|waiting_choice] → finalizing → terminal); terminal_outcome
+            -- is committed at most once via a conditional UPDATE (exactly-once logical
+            -- completion). JSONL/ledger tables remain audit/export only — THIS table is
+            -- the single mutable source of truth for turn state.
+            CREATE TABLE IF NOT EXISTS mesh_turn_attempts (
+                attempt_id TEXT PRIMARY KEY,
+                mesh_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                attempt_seq INTEGER NOT NULL,
+                node_id TEXT,
+                session_id TEXT,
+                provider_type TEXT,
+                coordinator_daemon_id TEXT,
+                coordinator_session_id TEXT,
+                dispatch_nonce INTEGER,
+                stage TEXT NOT NULL DEFAULT 'accepted',
+                redrive_count INTEGER NOT NULL DEFAULT 0,
+                lease_deadline_ms INTEGER,
+                accepted_at TEXT,
+                delivered_at TEXT,
+                consumed_at TEXT,
+                terminal_outcome TEXT,
+                terminal_reason TEXT,
+                terminal_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (mesh_id, task_id, attempt_seq)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_task
+                ON mesh_turn_attempts(mesh_id, task_id, attempt_seq);
+            CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_session
+                ON mesh_turn_attempts(mesh_id, session_id);
+            CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_stage
+                ON mesh_turn_attempts(mesh_id, stage);
+
+            -- TURN-LEDGER (Stage 5): append-only, idempotency-keyed causal event log per
+            -- attempt. UNIQUE(attempt_id, kind, dedupe_key) makes repeated/reordered ACKs
+            -- and duplicate completion proposals insert-once (INSERT OR IGNORE → the
+            -- reducer reads the existing row and treats the re-arrival as a duplicate).
+            CREATE TABLE IF NOT EXISTS mesh_turn_events (
+                event_id TEXT PRIMARY KEY,
+                mesh_id TEXT NOT NULL,
+                attempt_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                dedupe_key TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL DEFAULT '{}',
+                occurred_at_ms INTEGER,
+                recorded_at TEXT NOT NULL,
+                UNIQUE (attempt_id, kind, dedupe_key)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_turn_events_task
+                ON mesh_turn_events(mesh_id, task_id, kind);
+
+            -- TURN-LEDGER (Stage 5): durable outbound delivery state (coordinator-bound
+            -- completion / ACK notifications) for restart recovery. A row is enqueued in
+            -- the SAME transaction as the reducer's terminal commit, so a crash between
+            -- commit and network delivery can never lose the notification; on boot the
+            -- drain resumes from status='pending' rows. Exactly-once logical delivery is
+            -- enforced by the row id (the attempt's terminal event id) — re-enqueue is
+            -- INSERT OR IGNORE — and by the downstream pending-events fingerprint dedup.
+            CREATE TABLE IF NOT EXISTS mesh_turn_outbox (
+                id TEXT PRIMARY KEY,
+                mesh_id TEXT NOT NULL,
+                attempt_id TEXT,
+                task_id TEXT,
+                kind TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at_ms INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_turn_outbox_due
+                ON mesh_turn_outbox(status, next_attempt_at_ms);
+            CREATE INDEX IF NOT EXISTS idx_mesh_turn_outbox_mesh
+                ON mesh_turn_outbox(mesh_id, status);
         `);
         this.migrateMeshIsolationColumns();
     }
@@ -2439,6 +2527,337 @@ export class MeshRuntimeStore {
         ).run(undrainedCutoff).changes;
         return removed;
     }
+
+    // ── TURN-LEDGER (Stage 5): authoritative turn attempts ───────────────────
+
+    /**
+     * Insert a new turn attempt. INSERT OR IGNORE on the PRIMARY KEY / the
+     * UNIQUE(mesh_id, task_id, attempt_seq) constraint makes a retried open (e.g. a
+     * dispatch restarted after a crash between the queue claim and this write)
+     * idempotent: returns true when this call inserted the row, false when an
+     * attempt for that identity already exists (caller then reads it back).
+     */
+    insertTurnAttempt(row: {
+        attemptId: string; meshId: string; taskId: string; attemptSeq: number;
+        nodeId?: string; sessionId?: string; providerType?: string;
+        coordinatorDaemonId?: string; coordinatorSessionId?: string;
+        dispatchNonce?: number; stage: string; leaseDeadlineMs?: number | null;
+        acceptedAt?: string; createdAt: string; updatedAt: string;
+    }): boolean {
+        const res = this.db.prepare(`
+            INSERT OR IGNORE INTO mesh_turn_attempts (
+                attempt_id, mesh_id, task_id, attempt_seq, node_id, session_id,
+                provider_type, coordinator_daemon_id, coordinator_session_id,
+                dispatch_nonce, stage, lease_deadline_ms, accepted_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            row.attemptId, row.meshId, row.taskId, row.attemptSeq,
+            row.nodeId ?? null, row.sessionId ?? null, row.providerType ?? null,
+            row.coordinatorDaemonId ?? null, row.coordinatorSessionId ?? null,
+            row.dispatchNonce ?? null, row.stage, row.leaseDeadlineMs ?? null,
+            row.acceptedAt ?? null, row.createdAt, row.updatedAt,
+        );
+        this.maybeCheckpointWal();
+        return res.changes > 0;
+    }
+
+    getTurnAttempt(attemptId: string): MeshTurnAttemptRow | null {
+        const row = this.db.prepare('SELECT * FROM mesh_turn_attempts WHERE attempt_id = ?')
+            .get(attemptId) as Record<string, unknown> | undefined;
+        return row ? meshTurnAttemptFromRow(row) : null;
+    }
+
+    /**
+     * The CURRENT attempt for a task: the highest attempt_seq row. Reassignment
+     * monotonically increases the seq (it is the dispatch nonce), so the max-seq row
+     * is the only attempt late events may still mutate.
+     */
+    getCurrentTurnAttempt(meshId: string, taskId: string): MeshTurnAttemptRow | null {
+        const row = this.db.prepare(`
+            SELECT * FROM mesh_turn_attempts
+            WHERE mesh_id = ? AND task_id = ?
+            ORDER BY attempt_seq DESC LIMIT 1
+        `).get(meshId, taskId) as Record<string, unknown> | undefined;
+        return row ? meshTurnAttemptFromRow(row) : null;
+    }
+
+    getTurnAttemptBySeq(meshId: string, taskId: string, attemptSeq: number): MeshTurnAttemptRow | null {
+        const row = this.db.prepare(`
+            SELECT * FROM mesh_turn_attempts WHERE mesh_id = ? AND task_id = ? AND attempt_seq = ?
+        `).get(meshId, taskId, attemptSeq) as Record<string, unknown> | undefined;
+        return row ? meshTurnAttemptFromRow(row) : null;
+    }
+
+    listTurnAttemptsForTask(meshId: string, taskId: string): MeshTurnAttemptRow[] {
+        const rows = this.db.prepare(`
+            SELECT * FROM mesh_turn_attempts WHERE mesh_id = ? AND task_id = ? ORDER BY attempt_seq ASC
+        `).all(meshId, taskId) as Array<Record<string, unknown>>;
+        return rows.map(meshTurnAttemptFromRow);
+    }
+
+    /** Nonterminal attempts — the restart-recovery reconstruction set. */
+    listActiveTurnAttempts(meshId: string): MeshTurnAttemptRow[] {
+        const rows = this.db.prepare(`
+            SELECT * FROM mesh_turn_attempts
+            WHERE mesh_id = ? AND terminal_outcome IS NULL
+            ORDER BY created_at ASC
+        `).all(meshId) as Array<Record<string, unknown>>;
+        return rows.map(meshTurnAttemptFromRow);
+    }
+
+    /**
+     * Monotonic, idempotent nonterminal stage advance. The SQL guard accepts the
+     * write only when `allowedFrom` (a comma-free SQL CASE whitelist built by the
+     * reducer) matches the CURRENT stage — the transition rules live in exactly one
+     * place (mesh-turn-ledger.ts) and are enforced inside the DB write so a
+     * concurrent reducer instance cannot sneak a regression past the check.
+     * Returns the stage the row is in AFTER this call (post-write read-back), so
+     * idempotent/reordered events converge on the same observable result.
+     */
+    advanceTurnAttemptStage(
+        attemptId: string,
+        toStage: string,
+        allowedFromCsv: string,
+        opts: { updatedAt: string; leaseDeadlineMs?: number | null; deliveredAt?: string; consumedAt?: string },
+    ): string | null {
+        const fromList = allowedFromCsv.split(',').map(s => `'${s}'`).join(',');
+        this.db.prepare(`
+            UPDATE mesh_turn_attempts
+            SET stage = @toStage, updated_at = @updatedAt,
+                lease_deadline_ms = COALESCE(@leaseDeadlineMs, lease_deadline_ms),
+                delivered_at = COALESCE(@deliveredAt, delivered_at),
+                consumed_at = COALESCE(@consumedAt, consumed_at)
+            WHERE attempt_id = @attemptId
+              AND terminal_outcome IS NULL
+              AND stage IN (${fromList})
+        `).run({
+            attemptId, toStage, updatedAt: opts.updatedAt,
+            leaseDeadlineMs: opts.leaseDeadlineMs ?? null,
+            deliveredAt: opts.deliveredAt ?? null,
+            consumedAt: opts.consumedAt ?? null,
+        });
+        this.maybeCheckpointWal();
+        const after = this.getTurnAttempt(attemptId);
+        return after ? after.stage : null;
+    }
+
+    /**
+     * EXACTLY-ONCE terminal commit. The conditional UPDATE wins only while
+     * terminal_outcome IS NULL, so two concurrent completion proposals commit at
+     * most one terminal transaction; the loser reads back the winner's outcome.
+     * Returns the row after the attempt (always re-read).
+     */
+    commitTurnAttemptTerminal(
+        attemptId: string,
+        outcome: string,
+        reason: string | null,
+        terminalAt: string,
+    ): { committed: boolean; row: MeshTurnAttemptRow | null } {
+        const res = this.db.prepare(`
+            UPDATE mesh_turn_attempts
+            SET terminal_outcome = ?, terminal_reason = ?, terminal_at = ?, stage = ?, updated_at = ?
+            WHERE attempt_id = ? AND terminal_outcome IS NULL
+        `).run(outcome, reason, terminalAt, outcome, terminalAt, attemptId);
+        this.maybeCheckpointWal();
+        return { committed: res.changes > 0, row: this.getTurnAttempt(attemptId) };
+    }
+
+    /** Redrive bookkeeping: bump the durable redrive counter and set the next lease deadline. */
+    markTurnAttemptRedriven(attemptId: string, leaseDeadlineMs: number, updatedAt: string): void {
+        this.db.prepare(`
+            UPDATE mesh_turn_attempts
+            SET redrive_count = redrive_count + 1, lease_deadline_ms = ?, updated_at = ?
+            WHERE attempt_id = ? AND terminal_outcome IS NULL
+        `).run(leaseDeadlineMs, updatedAt, attemptId);
+        this.maybeCheckpointWal();
+    }
+
+    // ── TURN-LEDGER (Stage 5): idempotency-keyed causal events ───────────────
+
+    /**
+     * Append a causal event. INSERT OR IGNORE on UNIQUE(attempt_id, kind, dedupe_key)
+     * makes repeated/reordered arrivals insert-once. Returns true when this call
+     * inserted (first arrival), false on a duplicate.
+     */
+    insertTurnEvent(row: {
+        eventId: string; meshId: string; attemptId: string; taskId: string;
+        kind: string; dedupeKey?: string; payload?: string;
+        occurredAtMs?: number | null; recordedAt: string;
+    }): boolean {
+        const res = this.db.prepare(`
+            INSERT OR IGNORE INTO mesh_turn_events (
+                event_id, mesh_id, attempt_id, task_id, kind, dedupe_key, payload, occurred_at_ms, recorded_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            row.eventId, row.meshId, row.attemptId, row.taskId, row.kind,
+            row.dedupeKey ?? '', row.payload ?? '{}', row.occurredAtMs ?? null, row.recordedAt,
+        );
+        return res.changes > 0;
+    }
+
+    hasTurnEvent(attemptId: string, kind: string, dedupeKey = ''): boolean {
+        const row = this.db.prepare(
+            'SELECT 1 FROM mesh_turn_events WHERE attempt_id = ? AND kind = ? AND dedupe_key = ? LIMIT 1',
+        ).get(attemptId, kind, dedupeKey);
+        return row !== undefined;
+    }
+
+    listTurnEventsForTask(meshId: string, taskId: string): Array<{
+        eventId: string; attemptId: string; kind: string; dedupeKey: string;
+        payload: string; occurredAtMs: number | null; recordedAt: string;
+    }> {
+        const rows = this.db.prepare(`
+            SELECT * FROM mesh_turn_events WHERE mesh_id = ? AND task_id = ? ORDER BY recorded_at ASC, event_id ASC
+        `).all(meshId, taskId) as Array<Record<string, unknown>>;
+        return rows.map(r => ({
+            eventId: r.event_id as string,
+            attemptId: r.attempt_id as string,
+            kind: r.kind as string,
+            dedupeKey: (r.dedupe_key as string) ?? '',
+            payload: r.payload as string,
+            occurredAtMs: r.occurred_at_ms as number | null,
+            recordedAt: r.recorded_at as string,
+        }));
+    }
+
+    // ── TURN-LEDGER (Stage 5): durable outbound delivery (outbox) ────────────
+
+    /** Enqueue an outbound notification. INSERT OR IGNORE on the row id = exactly-once. */
+    enqueueTurnOutbox(row: {
+        id: string; meshId: string; attemptId?: string; taskId?: string;
+        kind: string; payload?: string; nextAttemptAtMs?: number | null;
+        createdAt: string; updatedAt: string;
+    }): boolean {
+        const res = this.db.prepare(`
+            INSERT OR IGNORE INTO mesh_turn_outbox (
+                id, mesh_id, attempt_id, task_id, kind, payload, status, next_attempt_at_ms, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        `).run(
+            row.id, row.meshId, row.attemptId ?? null, row.taskId ?? null,
+            row.kind, row.payload ?? '{}', row.nextAttemptAtMs ?? null, row.createdAt, row.updatedAt,
+        );
+        this.maybeCheckpointWal();
+        return res.changes > 0;
+    }
+
+    /** Due pending outbox rows (status='pending', next_attempt_at_ms NULL or <= nowMs). */
+    listDueTurnOutbox(nowMs: number, meshId?: string): Array<{
+        id: string; meshId: string; attemptId: string | null; taskId: string | null;
+        kind: string; payload: string; attemptCount: number; createdAt: string;
+    }> {
+        const rows = (meshId
+            ? this.db.prepare(`
+                SELECT * FROM mesh_turn_outbox
+                WHERE status = 'pending' AND mesh_id = ? AND (next_attempt_at_ms IS NULL OR next_attempt_at_ms <= ?)
+                ORDER BY created_at ASC
+            `).all(meshId, nowMs)
+            : this.db.prepare(`
+                SELECT * FROM mesh_turn_outbox
+                WHERE status = 'pending' AND (next_attempt_at_ms IS NULL OR next_attempt_at_ms <= ?)
+                ORDER BY created_at ASC
+            `).all(nowMs)) as Array<Record<string, unknown>>;
+        return rows.map(r => ({
+            id: r.id as string,
+            meshId: r.mesh_id as string,
+            attemptId: r.attempt_id as string | null,
+            taskId: r.task_id as string | null,
+            kind: r.kind as string,
+            payload: r.payload as string,
+            attemptCount: r.attempt_count as number,
+            createdAt: r.created_at as string,
+        }));
+    }
+
+    /** Oldest pending outbox row age in ms (observability: outbox backlog age). */
+    oldestPendingTurnOutboxAgeMs(nowMs: number): number | null {
+        const row = this.db.prepare(`
+            SELECT MIN(created_at) AS oldest FROM mesh_turn_outbox WHERE status = 'pending'
+        `).get() as { oldest: string | null } | undefined;
+        if (!row?.oldest) return null;
+        const parsed = Date.parse(row.oldest);
+        return Number.isNaN(parsed) ? null : Math.max(0, nowMs - parsed);
+    }
+
+    markTurnOutboxDelivered(id: string, updatedAt: string): void {
+        this.db.prepare(`
+            UPDATE mesh_turn_outbox SET status = 'delivered', updated_at = ? WHERE id = ? AND status = 'pending'
+        `).run(updatedAt, id);
+        this.maybeCheckpointWal();
+    }
+
+    /** Record a failed delivery attempt and schedule the retry (or park as 'failed' when no retry remains). */
+    markTurnOutboxAttemptFailed(id: string, opts: { updatedAt: string; nextAttemptAtMs?: number | null; terminal?: boolean }): void {
+        if (opts.terminal) {
+            this.db.prepare(`
+                UPDATE mesh_turn_outbox SET status = 'failed', attempt_count = attempt_count + 1, updated_at = ?
+                WHERE id = ? AND status = 'pending'
+            `).run(opts.updatedAt, id);
+        } else {
+            this.db.prepare(`
+                UPDATE mesh_turn_outbox SET attempt_count = attempt_count + 1, next_attempt_at_ms = ?, updated_at = ?
+                WHERE id = ? AND status = 'pending'
+            `).run(opts.nextAttemptAtMs ?? null, opts.updatedAt, id);
+        }
+        this.maybeCheckpointWal();
+    }
+
+    countTurnOutboxByStatus(): Record<string, number> {
+        const rows = this.db.prepare('SELECT status, COUNT(*) AS n FROM mesh_turn_outbox GROUP BY status').all() as Array<{ status: string; n: number }>;
+        const out: Record<string, number> = {};
+        for (const r of rows) out[r.status] = r.n;
+        return out;
+    }
+}
+
+/** Row shape returned by the mesh_turn_attempts accessors (camelCase, store-agnostic). */
+export interface MeshTurnAttemptRow {
+    attemptId: string;
+    meshId: string;
+    taskId: string;
+    attemptSeq: number;
+    nodeId: string | null;
+    sessionId: string | null;
+    providerType: string | null;
+    coordinatorDaemonId: string | null;
+    coordinatorSessionId: string | null;
+    dispatchNonce: number | null;
+    stage: string;
+    redriveCount: number;
+    leaseDeadlineMs: number | null;
+    acceptedAt: string | null;
+    deliveredAt: string | null;
+    consumedAt: string | null;
+    terminalOutcome: string | null;
+    terminalReason: string | null;
+    terminalAt: string | null;
+    createdAt: string;
+    updatedAt: string;
+}
+
+function meshTurnAttemptFromRow(r: Record<string, unknown>): MeshTurnAttemptRow {
+    return {
+        attemptId: r.attempt_id as string,
+        meshId: r.mesh_id as string,
+        taskId: r.task_id as string,
+        attemptSeq: r.attempt_seq as number,
+        nodeId: r.node_id as string | null,
+        sessionId: r.session_id as string | null,
+        providerType: r.provider_type as string | null,
+        coordinatorDaemonId: r.coordinator_daemon_id as string | null,
+        coordinatorSessionId: r.coordinator_session_id as string | null,
+        dispatchNonce: r.dispatch_nonce as number | null,
+        stage: r.stage as string,
+        redriveCount: r.redrive_count as number,
+        leaseDeadlineMs: r.lease_deadline_ms as number | null,
+        acceptedAt: r.accepted_at as string | null,
+        deliveredAt: r.delivered_at as string | null,
+        consumedAt: r.consumed_at as string | null,
+        terminalOutcome: r.terminal_outcome as string | null,
+        terminalReason: r.terminal_reason as string | null,
+        terminalAt: r.terminal_at as string | null,
+        createdAt: r.created_at as string,
+        updatedAt: r.updated_at as string,
+    };
 }
 
 // ─── Mesh runtime retention windows (SoT 1-11 (b) / gap I-10) ────────────────

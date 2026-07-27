@@ -27,6 +27,7 @@ import { readLedgerEntries } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
 import { reconcileDirectDispatchCompletionFromTranscript, resolveLiveTurnPendingEvidence } from './mesh-events-stale.js';
 import { extractFinalAssistantSummaryEvidence, hasTrailingToolActivityAfterFinalAssistant, readChatMessageTimestampMs } from '../providers/chat-message-normalization.js';
+import { runSessionEvidenceCollection } from './mesh-turn-ledger.js';
 import type { ChatMessage } from '../types.js';
 import {
     getMeshV2BackstopCounters,
@@ -606,7 +607,10 @@ export async function pollAssignedTaskInTurnProgress(
     const dispatchedAtMs = Date.parse(readNonEmptyString(row.dispatchTimestamp));
     if (!Number.isFinite(dispatchedAtMs)) return false;
 
-    const payload = await fetchAssignedTaskChatTail(components, mesh, row);
+    // TURN-LEDGER (Stage 5): the transcript read is evidence collection — strictly
+    // ordered against any destructive stop/teardown queued for the same session, so
+    // teardown can never destroy the evidence source mid-read (the 6ms race).
+    const payload = await runSessionEvidenceCollection(sessionId, () => fetchAssignedTaskChatTail(components, mesh, row));
     if (!payload) return false;
 
     const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
@@ -659,7 +663,8 @@ export async function pollAssignedTaskTerminalEvidence(
     if (!sessionId || !nodeId) return null; // no worker to read
 
     const providerType = readNonEmptyString(row.assignedProviderType);
-    const payload = await fetchAssignedTaskChatTail(components, mesh, row);
+    // TURN-LEDGER (Stage 5): strictly ordered evidence collection (see above).
+    const payload = await runSessionEvidenceCollection(sessionId, () => fetchAssignedTaskChatTail(components, mesh, row));
     if (!payload) return null;
 
     // Only a settled-idle session is a turn-end; a generating/waiting session is mid-turn and

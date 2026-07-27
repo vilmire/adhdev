@@ -230,7 +230,7 @@ export interface ProviderInstance {
     /** Stamp a direct-dispatch mesh task assignment so generating_completed
      *  events route back to the originating coordinator. Cleared by
      *  detachMeshAssignment when the task reaches a terminal state. */
-    attachMeshAssignment?(assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void;
+    attachMeshAssignment?(assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void;
     detachMeshAssignment?(): void;
 
     /** Refresh static provider definition/scripts without restarting the live runtime. */

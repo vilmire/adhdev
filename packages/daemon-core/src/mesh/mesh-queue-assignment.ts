@@ -28,6 +28,7 @@ import { isWorktreeBootstrapStaleRunning, shouldDeferDispatchForBootstrap } from
 import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
 import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { isModelCompatibleWithProvider } from './model-provider-compat.js';
+import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertPromptInjectionAllowed } from './mesh-turn-ledger.js';
 
 /**
  * CANON: the single canonical coordinator-daemon id this daemon stamps onto every
@@ -485,6 +486,22 @@ function deliverTaskToSession(
         if (timer) clearTimeout(timer);
         const isQueued = res && typeof res === 'object' && res.status === 'queued';
         updateSessionDeliveryStatus(delivery.id, isQueued ? 'queued' : 'delivered');
+        // TURN-LEDGER (Stage 5): the transport confirm IS the delivered evidence — the
+        // prompt/input submission reached the provider/PTY boundary and the durable
+        // delivery record was just committed above. Record the ACK idempotently; a
+        // consumed-stage attempt (worker ack raced ahead) is left untouched by the
+        // monotonic guard.
+        if (!isQueued && ctx.task.attemptId) {
+            try {
+                recordTurnAck({
+                    meshId: ctx.meshId,
+                    taskId: ctx.task.id,
+                    kind: 'delivered',
+                    attemptId: ctx.task.attemptId,
+                    sessionId: ctx.sessionId,
+                });
+            } catch { /* ACK is best-effort — the delivery record above is the pre-Stage-5 witness */ }
+        }
     }).catch((e: any) => {
         if (timer) clearTimeout(timer);
         // A dispatch failure (transport reject OR hang timeout) is most often transient —
@@ -499,6 +516,11 @@ function deliverTaskToSession(
         // requeue/re-claim is not blocked as if a worker were still generating.
         endTaskDispatchInFlight(ctx.meshId, ctx.task.id);
         updateTaskStatus(ctx.meshId, ctx.task.id, 'pending');
+        // TURN-LEDGER (Stage 5): the dispatch never reached the worker — close this
+        // attempt (reassigned:dispatch_failed); the re-claim opens a fresh attempt.
+        try {
+            closeAttemptForReassignment({ meshId: ctx.meshId, taskId: ctx.task.id, reason: 'dispatch_failed' });
+        } catch { /* best-effort */ }
         try {
             appendLedgerEntry(ctx.meshId, {
                 kind: 'dispatch_failed' as any,
@@ -738,6 +760,44 @@ export function tryAssignQueueTask(
 
     LOG.info('MeshQueue', `Node ${nodeId} (${sessionId}) pulled task ${task.id}`);
 
+    // TURN-LEDGER (Stage 5): open the authoritative attempt for THIS dispatch. The
+    // claim already bumped the dispatch nonce, so the attempt's seq (= nonce) makes a
+    // crash-retried open idempotent and a later reclaim's re-dispatch a NEW attempt.
+    // Stamping entry.attemptId persists the correlation key on the queue row; the
+    // meshContext below carries it to the worker, which echoes it on every lifecycle
+    // event. Best-effort: a store failure degrades to the pre-Stage-5 nonce-only path.
+    let dispatchAttemptId: string | undefined;
+    try {
+        const { attempt } = openTurnAttempt({
+            meshId,
+            taskId: task.id,
+            dispatchNonce: task.dispatchNonce ?? 0,
+            nodeId,
+            sessionId,
+            providerType,
+            coordinatorDaemonId: localCoordinatorDaemonId(),
+            coordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) || undefined,
+        });
+        dispatchAttemptId = attempt.attemptId;
+        task.attemptId = attempt.attemptId;
+        MeshRuntimeStore.getInstance().updateQueueEntry(task);
+    } catch (e: any) {
+        LOG.warn('TurnLedger', `Failed to open turn attempt for task ${task.id} (dispatch proceeds on the legacy nonce path): ${e?.message || e}`);
+    }
+    // TURN-LEDGER (Stage 5): a prompt must never be injected into an attempt that has
+    // already CONSUMED one. The fresh claim above normally guarantees a pre-consumed
+    // attempt, but a same-tick duplicate dispatch path (or a crash/replay) must fail
+    // closed here rather than double-execute the task.
+    if (dispatchAttemptId) {
+        try {
+            const attemptRow = MeshRuntimeStore.getInstance().getTurnAttempt(dispatchAttemptId);
+            if (!assertPromptInjectionAllowed(attemptRow, `queue claim dispatch task ${task.id} → session ${sessionId}`)) {
+                updateTaskStatus(meshId, task.id, 'pending');
+                return false;
+            }
+        } catch { /* guard is best-effort */ }
+    }
+
     // LEDGER-TASK-TRACEABILITY (C): the task just transitioned pending→assigned. Record
     // the claim (distinct from the later task_dispatched, which fires when the message is
     // handed to the transport in deliverTaskToSession). This is the single funnel every
@@ -821,6 +881,10 @@ export function tryAssignQueueTask(
                         // back on generating_started; a reclaim bumps this row's nonce, making an
                         // already-in-flight stale inject rejectable on arrival.
                         ...(typeof task.dispatchNonce === 'number' ? { dispatchNonce: task.dispatchNonce } : {}),
+                        // TURN-LEDGER (Stage 5): the opaque attempt identity for this dispatch —
+                        // echoed on the worker's lifecycle events so ACKs/completion proposals
+                        // correlate to (taskId, attemptId, session), not just the nonce.
+                        ...(dispatchAttemptId ? { attemptId: dispatchAttemptId } : {}),
                         ...(localDaemonIdForDispatch ? { coordinatorDaemonId: localDaemonIdForDispatch } : {}),
                         ...(sourceCoordinatorSessionId ? { coordinatorSessionId: sourceCoordinatorSessionId } : {}),
                         ...(silentIdlePushOnDispatch ? { silentIdlePush: true } : {}),
@@ -911,6 +975,8 @@ export function tryAssignQueueTask(
                 taskId: task.id,
                 // REDRIVE-DUP: carry the current dispatch nonce (see remote branch above).
                 ...(typeof task.dispatchNonce === 'number' ? { dispatchNonce: task.dispatchNonce } : {}),
+                // TURN-LEDGER (Stage 5): the opaque attempt identity (see remote branch above).
+                ...(dispatchAttemptId ? { attemptId: dispatchAttemptId } : {}),
                 ...(localCoordinatorDaemonId() ? { coordinatorDaemonId: localCoordinatorDaemonId() } : {}),
                 ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { coordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
                 ...(silentIdlePushOnDispatch ? { silentIdlePush: true } : {}),

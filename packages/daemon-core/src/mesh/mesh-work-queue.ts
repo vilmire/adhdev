@@ -9,6 +9,7 @@ import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshLedgerKind } from './mesh-ledger.js';
 import { createSessionDelivery } from './mesh-delivery-policy.js';
 import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
+import { closeAttemptForReassignment, openTurnAttempt, proposeTurnCompletion, recordTurnAck } from './mesh-turn-ledger.js';
 import { sessionIdsEquivalent, isMeshTaskDifficulty, normalizeNodeCapabilitySlots, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
@@ -670,6 +671,19 @@ export interface MeshWorkQueueEntry {
      */
     dispatchNonce?: number;
     /**
+     * TURN-LEDGER (Stage 5): the opaque attempt identity of the CURRENT dispatch of
+     * this task — distinct from both the taskId and the monotonic dispatchNonce.
+     * Stamped when the dispatch opens its attempt (openTurnAttempt, seq = the
+     * post-bump dispatchNonce) and carried to the worker in meshContext.attemptId;
+     * the worker echoes it on its lifecycle events so every ACK/completion proposal
+     * correlates to (meshId, taskId, attemptId, coordinator identity, session). A
+     * reclaim/reassign closes this attempt and the re-dispatch opens a NEW one, so
+     * late old-attempt events are rejected by identity. Rides in the payload JSON
+     * (no column migration); absent on pre-Stage-5 rows → the reducer lazily opens
+     * a deterministic legacy attempt (never fabricating evidence) on first touch.
+     */
+    attemptId?: string;
+    /**
      * (3) The ORIGINATING coordinator session that enqueued this task. Stamped onto the
      * worker at dispatch (meshCoordinatorSessionId) so the task's completion routes back to
      * the exact coordinator session — even when several coordinator sessions share one
@@ -1128,6 +1142,25 @@ export function recordDirectDispatchTask(
             updatedAt: now,
         };
         MeshRuntimeStore.getInstance().insertQueueEntry(entry);
+        // TURN-LEDGER (Stage 5): the direct dispatch was already confirmed handed to
+        // the transport (result.success) before this row materialised, so open the
+        // attempt at 'accepted' and immediately record the 'delivered' ACK — the same
+        // causal stage the 'delivered' delivery record below attests to. The attempt
+        // gives this task's completion an authoritative (taskId, attemptId, session)
+        // correlation instead of the session-scalar heuristic.
+        try {
+            entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
+            const { attempt } = openTurnAttempt({
+                meshId,
+                taskId,
+                dispatchNonce: entry.dispatchNonce,
+                nodeId: opts.assignedNodeId,
+                sessionId: opts.assignedSessionId,
+            });
+            entry.attemptId = attempt.attemptId;
+            MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+            recordTurnAck({ meshId, taskId, kind: 'delivered', attemptId: attempt.attemptId, sessionId: opts.assignedSessionId });
+        } catch { /* best-effort — the assigned row is already recorded */ }
         // R2 / NOTIF-DROP: a mission-attributed DIRECT dispatch (mesh_send_task) has
         // already been handed to the transport by the time we materialise this assigned
         // row — unlike a queue claim, there is no later delivery-confirmation write for
@@ -1394,8 +1427,21 @@ export function cancelTask(
         // now-orphaned worker later echoes carries a stale nonce and is rejected by the
         // coordinator's stale-nonce guard — same mechanism reclaimStrandedAssignedTask uses.
         entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
+        delete entry.attemptId;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         endTaskDispatchInFlight(meshId, taskId);
+        // TURN-LEDGER (Stage 5): cancellation is a terminal CompletionProposal like any
+        // other — routed through the reducer so a cancel that races a late worker
+        // completion commits exactly one terminal outcome (no resurrection either way).
+        try {
+            proposeTurnCompletion({
+                meshId,
+                taskId,
+                outcome: 'cancelled',
+                source: 'cancellation',
+                reason: opts?.reason ?? 'operator_cancel',
+            });
+        } catch { /* reducer proposal is best-effort — the cancel already committed above */ }
         const cascaded = propagateDependencyFailure(meshId, taskId);
         return { entry, cascaded, priorAssignment };
     });
@@ -1601,6 +1647,15 @@ export function reclaimStrandedAssignedTask(
         entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
         entry.strandedReclaimCount = reclaims;
         entry.updatedAt = now;
+        // TURN-LEDGER (Stage 5): reassignment closes the CURRENT attempt (terminal
+        // 'cancelled' / reassigned:<reason>) — the TASK continues, and the re-dispatch
+        // under the just-bumped nonce opens a NEW attempt identity. Late events naming
+        // the old attempt are rejected as stale from here on and can never mutate the
+        // new attempt. Best-effort: a missing attempt (legacy row) is a no-op.
+        try {
+            closeAttemptForReassignment({ meshId, taskId, reason });
+        } catch { /* attempt close is best-effort — the queue mutation above already landed */ }
+        delete entry.attemptId;
         // The stranded assignment is being torn down (→ pending or failed); end its
         // single-flight window so a re-claim/requeue is not blocked.
         endTaskDispatchInFlight(meshId, taskId);

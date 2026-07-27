@@ -87,6 +87,8 @@ import {
     type AssignedTaskTerminalEvidence,
 } from './mesh-completion-synthesis.js';
 import { sessionStatusFromNodes } from './mesh-active-work.js';
+import { drainMeshTurnOutbox } from './mesh-event-forwarding.js';
+import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reconstructActiveAttempts } from './mesh-turn-ledger.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
 // the reconcile-loop test suite) keep their `from './mesh-reconcile-loop.js'` paths.
@@ -1017,6 +1019,47 @@ function propagateWatchdogTranscriptCompletion(
 // never reclaimed here. And the deadline is generous so a slow-but-live dispatch still in
 // its normal confirm window is never reclaimed early. Reclaimed rows return to 'pending'
 // with ownership cleared, so the PHASE 3 trigger below re-dispatches them this same tick.
+
+/**
+ * TURN-LEDGER (Stage 5): route a reconcile-driven terminal flip through the reducer
+ * BEFORE touching the queue row. Returns true when the legacy flip may proceed —
+ * the proposal committed (or is an idempotent duplicate), or the reducer is
+ * unavailable / the task has no attempt (pre-Stage-5 shadow mode). Returns false
+ * when the reducer REJECTED the terminal (stale attempt / session mismatch /
+ * already terminal differently): this writer must not flip the row — the attempt's
+ * committed outcome is the one causal authority.
+ */
+function reconcileTerminalViaReducer(args: {
+    meshId: string;
+    taskId: string;
+    outcome: 'completed' | 'failed';
+    source: 'transcript' | 'stall_reconcile';
+    sessionId?: string;
+    reason?: string;
+}): boolean {
+    try {
+        const decision = proposeTurnCompletion({
+            meshId: args.meshId,
+            taskId: args.taskId,
+            outcome: args.outcome,
+            source: args.source,
+            sessionId: args.sessionId,
+            reason: args.reason,
+        });
+        if (!decision.committed) {
+            LOG.info('TurnLedger', `Reconcile terminal (${args.outcome}/${args.source}) for task ${args.taskId} rejected by the turn reducer: ${decision.reason} — queue-row flip skipped`);
+            traceMeshEventDrop('turn_reducer_reconcile_terminal_rejected', {
+                taskId: args.taskId,
+                sessionId: args.sessionId,
+                meshId: args.meshId,
+                event: 'agent:generating_completed',
+            }, decision.reason);
+            return false;
+        }
+    } catch { /* reducer unavailable — the pre-Stage-5 writers govern (shadow mode) */ }
+    return true;
+}
+
 async function recoverStrandedAssignedDispatches(
     components: DaemonComponents,
     mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
@@ -1180,7 +1223,10 @@ async function recoverStrandedAssignedDispatches(
             const terminal = findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id });
             if (terminal) {
                 const status = terminal.kind === 'task_completed' ? 'completed' : 'failed';
-                updateTaskStatus(meshId, row.id, status);
+                // TURN-LEDGER (Stage 5): the reducer arbitrates this terminal first.
+                if (reconcileTerminalViaReducer({ meshId, taskId: row.id, outcome: status, source: 'stall_reconcile', sessionId: row.assignedSessionId, reason: terminal.kind })) {
+                    updateTaskStatus(meshId, row.id, status);
+                }
                 continue;
             }
             // GENERATING-STARTED-CONSUME-RACE (fix B): the delivery-consume that clears this
@@ -1301,6 +1347,28 @@ async function recoverStrandedAssignedDispatches(
                         continue;
                     }
                 }
+                // TURN-LEDGER (Stage 5): the DURABLE redrive gate. A delivered-but-unconsumed
+                // attempt may re-drive only while its evidence says the prompt was never
+                // consumed, within its lease, and within its redrive budget — and a CONSUMED
+                // (or terminal) attempt NEVER re-drives, even when the delivery rows and the
+                // attempt stage disagree (the attempt is the authority). Legacy rows without
+                // an attempt ('no_attempt' / store error) keep the pre-Stage-5 behavior.
+                const redriveEval = (() => {
+                    try { return evaluateRedrive(meshId, row.id, nowMs); } catch { return null; }
+                })();
+                const shortRedriveAllowed = !redriveEval || (!redriveEval.allowed && redriveEval.reason === 'no_attempt') || redriveEval.allowed;
+                if (!shortRedriveAllowed) {
+                    traceMeshEventDrop('short_redrive_blocked_by_turn_ledger', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_started',
+                    }, !redriveEval || redriveEval.allowed ? 'n/a' : redriveEval.reason);
+                } else {
+                try {
+                    markAttemptRedriven({ meshId, taskId: row.id, leaseDurationMs: ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS, nowMs });
+                } catch { /* best-effort durable lease */ }
                 const redriven = reclaimStrandedAssignedTask(meshId, row.id, {
                     reason: 'delivered_not_consumed_redrive',
                     ageMs,
@@ -1319,6 +1387,7 @@ async function recoverStrandedAssignedDispatches(
                     }, `delivered_not_consumed ${Math.round(ageMs / 1000)}s → ${redriven.status}`);
                     continue;
                 }
+                }
             }
         }
         if (ageMs < ASSIGNED_STRANDED_DEADLINE_MS) continue;  // still in confirm window
@@ -1328,7 +1397,10 @@ async function recoverStrandedAssignedDispatches(
         });
         if (terminal) {
             const status = terminal.kind === 'task_completed' ? 'completed' : 'failed';
-            updateTaskStatus(meshId, row.id, status);
+            // TURN-LEDGER (Stage 5): the reducer arbitrates this terminal first.
+            if (reconcileTerminalViaReducer({ meshId, taskId: row.id, outcome: status, source: 'stall_reconcile', sessionId: row.assignedSessionId, reason: terminal.kind })) {
+                updateTaskStatus(meshId, row.id, status);
+            }
             LOG.warn('MeshReconcile', `Skipped stranded reclaim redispatch for terminal task ${row.id} on mesh ${meshId}; ${terminal.kind} ledger evidence already exists`);
             traceMeshEventDrop('assigned_stranded_terminal_ledger', {
                 taskId: row.id,
@@ -1424,6 +1496,19 @@ async function recoverStrandedAssignedDispatches(
             const terminalEvidence = await pollAssignedTaskTerminalEvidence(components, mesh, row);
             if (terminalEvidence) {
                 deliveredNoTurnUnknownStreak.delete(streakKey);
+                // TURN-LEDGER (Stage 5): transcript terminal evidence is a CompletionProposal
+                // like any other — the reducer arbitrates BEFORE the row flips. A rejection
+                // (e.g. the attempt already closed differently) skips every write below.
+                if (!reconcileTerminalViaReducer({
+                    meshId,
+                    taskId: row.id,
+                    outcome: terminalEvidence.outcome,
+                    source: 'transcript',
+                    sessionId: row.assignedSessionId,
+                    reason: 'redrive_deadline_transcript_evidence',
+                })) {
+                    continue;
+                }
                 // updateTaskStatus ends the single-flight dispatch window on any transition off
                 // 'assigned', so a later requeue/re-dispatch is never blocked by a stale mark.
                 updateTaskStatus(meshId, row.id, terminalEvidence.outcome);
@@ -1635,6 +1720,17 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         } catch (e: any) {
             LOG.warn('MeshReconcile', `Unresolved-delegate forward retry failed: ${e?.message || e}`);
         }
+    }
+
+    // ── PHASE 0.1: drain the durable TURN-LEDGER outbox (Stage 5) ────────────
+    // Coordinator-bound terminal notifications persisted at reducer commit time.
+    // Rows whose delivery failed are rescheduled with backoff — this per-tick drain
+    // is their retry pump (the commit-time and boot drains cover the happy paths).
+    // Exactly-once: pending-events fingerprint dedup collapses any redelivery.
+    try {
+        await drainMeshTurnOutbox();
+    } catch (e: any) {
+        LOG.warn('MeshReconcile', `Turn outbox drain failed: ${e?.message || e}`);
     }
 
     // ── PHASE 0.5: merge file-config membership into the router's inline cache ─
@@ -2404,6 +2500,39 @@ interface ReconcileLoopHandle {
 export function setupMeshReconcileLoop(components: DaemonComponents): ReconcileLoopHandle {
     const intervalMs = resolveReconcileIntervalMs();
     let running = false;
+    // TURN-LEDGER (Stage 5) restart recovery, once at loop start (before the first
+    // tick can make redrive/completion decisions from incomplete state):
+    //   1. reconstruct the durable active-attempt set per mesh — the reconcile
+    //      redrive/deadline gates read the SAME attempt rows, so a restart resumes
+    //      delivery/reconciliation from durable state instead of the lost in-memory
+    //      streaks, and a recovered ≥consumed attempt is injection-ineligible by
+    //      construction (no duplicate prompt injection);
+    //   2. drain the durable turn outbox — any coordinator completion committed
+    //      before the crash but not yet delivered is re-queued now (exactly-once via
+    //      the outbox id + pending-events fingerprint dedup).
+    setImmediate(() => {
+        void (async () => {
+            try {
+                for (const mesh of listMeshes()) {
+                    const recovered = reconstructActiveAttempts(mesh.id);
+                    if (recovered.length > 0) {
+                        LOG.info('TurnLedger', `Restart recovery: reconstructed ${recovered.length} active turn attempt(s) for mesh ${mesh.id} `
+                            + `(${recovered.map(a => `${a.taskId.slice(0, 8)}@${a.stage}`).join(', ')})`);
+                    }
+                }
+            } catch (e: any) {
+                LOG.warn('TurnLedger', `Restart attempt reconstruction failed (reconcile continues on row state): ${e?.message || e}`);
+            }
+            try {
+                const drained = await drainMeshTurnOutbox();
+                if (drained.delivered + drained.failed + drained.rescheduled > 0) {
+                    LOG.info('TurnLedger', `Restart outbox drain: delivered=${drained.delivered} rescheduled=${drained.rescheduled} failed=${drained.failed}`);
+                }
+            } catch (e: any) {
+                LOG.warn('TurnLedger', `Restart outbox drain failed (rows stay pending; retried on next commit/boot): ${e?.message || e}`);
+            }
+        })();
+    });
     const timer = setInterval(() => {
         if (running) return; // never overlap ticks
         running = true;

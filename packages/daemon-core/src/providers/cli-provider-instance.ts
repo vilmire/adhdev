@@ -1035,7 +1035,7 @@ export class CliProviderInstance implements ProviderInstance {
      * completion events silently drop because the forwarder has nothing to
      * match against.
      */
-    attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
+    attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
         if (!assignment?.meshId) return;
         // ANTIGRAVITY-PREMATURE-COMPLETION gate: stamp the injection moment for a task
         // attach so injectedTaskHasStartedGenerating() can require the producing turn to
@@ -1059,6 +1059,11 @@ export class CliProviderInstance implements ProviderInstance {
             // coordinator can reject a stale (reclaimed) dispatch. Cleared with meshActiveTaskId
             // on detach so a subsequent unrelated turn never re-echoes a prior task's nonce.
             ...(typeof assignment.dispatchNonce === 'number' ? { meshActiveDispatchNonce: assignment.dispatchNonce } : {}),
+            // TURN-LEDGER (Stage 5): the opaque attempt identity for this dispatch, echoed
+            // on lifecycle events so the coordinator's reducer correlates ACKs/completion
+            // proposals to (taskId, attemptId, session). Cleared with meshActiveTaskId on
+            // detach so a later unrelated turn never re-echoes a prior attempt.
+            ...(assignment.attemptId ? { meshActiveAttemptId: assignment.attemptId } : {}),
             ...(assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {}),
             // Session-level routing anchor: the originating coordinator session, so this
             // worker's completion events route back to the exact session that dispatched it.
@@ -1097,14 +1102,14 @@ export class CliProviderInstance implements ProviderInstance {
         if (this.settings.launchedByCoordinator === true) {
             if (!this.settings.meshActiveTaskId) return;
             // REDRIVE-DUP: clear the task-level dispatch nonce with the task marker.
-            const { meshActiveTaskId, meshActiveDispatchNonce, ...rest } = this.settings;
-            void meshActiveTaskId; void meshActiveDispatchNonce;
+            const { meshActiveTaskId, meshActiveDispatchNonce, meshActiveAttemptId, ...rest } = this.settings;
+            void meshActiveTaskId; void meshActiveDispatchNonce; void meshActiveAttemptId;
             this.settings = rest;
             this.adapter.updateRuntimeSettings?.(this.settings);
             return;
         }
-        const { meshNodeFor, meshNodeId, meshActiveTaskId, meshActiveDispatchNonce, ...rest } = this.settings;
-        void meshNodeFor; void meshActiveTaskId; void meshActiveDispatchNonce;
+        const { meshNodeFor, meshNodeId, meshActiveTaskId, meshActiveDispatchNonce, meshActiveAttemptId, ...rest } = this.settings;
+        void meshNodeFor; void meshActiveTaskId; void meshActiveDispatchNonce; void meshActiveAttemptId;
         // WTCLAIM (A): clear the active binding but PRESERVE the last bound node id
         // (meshLastNodeId) so a later sessionless dispatch can re-adopt this idle
         // session ONLY for the node it last served. Carry the id being cleared, or
@@ -5077,6 +5082,11 @@ export class CliProviderInstance implements ProviderInstance {
             // dispatch and stop this worker before it double-executes the reclaimed task.
             if (enrichedEvent.dispatchNonce === undefined && typeof this.settings.meshActiveDispatchNonce === 'number') {
                 enrichedEvent.dispatchNonce = this.settings.meshActiveDispatchNonce;
+            }
+            // TURN-LEDGER (Stage 5): echo the attempt identity alongside the nonce so the
+            // coordinator's reducer correlates this event to (taskId, attemptId, session).
+            if (enrichedEvent.attemptId === undefined && typeof this.settings.meshActiveAttemptId === 'string' && this.settings.meshActiveAttemptId) {
+                enrichedEvent.attemptId = this.settings.meshActiveAttemptId;
             }
         }
         if (this.context?.emitProviderEvent) {

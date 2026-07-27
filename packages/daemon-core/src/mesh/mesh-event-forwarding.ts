@@ -40,6 +40,15 @@ import {
 } from './mesh-events-utils.js';
 import { isMeshCoordinatorEvent, shouldForceInjectMeshEvent, EVENT_TO_LEDGER_KIND } from './mesh-event-classify.js';
 import {
+    classifyNonceEcho,
+    drainTurnOutbox,
+    enqueueTerminalOutbox,
+    proposeTurnCompletion,
+    recordTurnAck,
+    recordTurnStage,
+    runSessionDestructiveAction,
+} from './mesh-turn-ledger.js';
+import {
     getMeshWithCache,
     tryAssignQueueTask,
     triggerMeshQueue,
@@ -894,6 +903,53 @@ function shouldSuppressAutoApprovingWorkerApproval(components: DaemonComponents,
 }
 
 /**
+ * TURN-LEDGER (Stage 5): deliver due durable outbox rows (coordinator-bound terminal
+ * notifications) into the pending-events queue. Exactly-once is preserved TWO ways:
+ * the outbox row id (`<attemptId>:terminal`) is INSERT-OR-IGNORE at enqueue, and the
+ * pending-events fingerprint dedup collapses a redelivery onto the same
+ * [meshId, event, taskId, weak|genuine] fingerprint the original completion used —
+ * so a crash between the reducer's terminal commit and the normal queue write, or a
+ * restart with a pending outbox row, still yields exactly one coordinator completion.
+ */
+export async function drainMeshTurnOutbox(opts?: { meshId?: string }): Promise<{ delivered: number; failed: number; rescheduled: number }> {
+    return drainTurnOutbox(async (row) => {
+        const payload = row.payload as Record<string, unknown>;
+        const event = typeof payload.event === 'string' ? payload.event : 'agent:generating_completed';
+        const metadataEvent: Record<string, unknown> = {
+            ...(row.taskId ? { taskId: row.taskId } : {}),
+            ...(typeof payload.sessionId === 'string' ? { sessionId: payload.sessionId } : {}),
+            ...(typeof payload.providerType === 'string' ? { providerType: payload.providerType } : {}),
+            // Fingerprint parity with the original completion: weak originals stamped
+            // evidenceLevel=insufficient; a bare record (no completionDiagnostic) reads
+            // as genuine — see isWeakCompletionEvidence / buildPendingEventFingerprint.
+            ...(payload.weak === true ? { evidenceLevel: 'insufficient' } : {}),
+            source: 'turn_outbox_redelivery',
+            outboxRedelivery: true,
+        };
+        const queued = queuePendingMeshCoordinatorEvent({
+            event,
+            meshId: row.meshId,
+            nodeId: typeof payload.nodeId === 'string' ? payload.nodeId : undefined,
+            metadataEvent,
+            queuedAt: Date.now(),
+        } as PendingMeshCoordinatorEvent);
+        if (!queued) throw new Error('pending queue rejected outbox redelivery');
+    }, { meshId: opts?.meshId });
+}
+
+let turnOutboxDrainScheduled = false;
+
+/** Best-effort async drain trigger (coalesced) after a terminal commit enqueued a row. */
+function scheduleTurnOutboxDrain(): void {
+    if (turnOutboxDrainScheduled) return;
+    turnOutboxDrainScheduled = true;
+    setImmediate(() => {
+        turnOutboxDrainScheduled = false;
+        drainMeshTurnOutbox().catch(() => { /* failure leaves rows pending — retried on the next trigger/boot drain */ });
+    });
+}
+
+/**
  * REDRIVE-DUP: stop a worker session that started a STALE (reclaimed) mesh dispatch,
  * so it discards the reclaimed task before it double-executes it. Prefers the local
  * transport when the session's adapter lives on this daemon; otherwise forwards a
@@ -906,51 +962,60 @@ function stopStaleMeshWorker(
     args: { meshId: string; sessionId: string; nodeId?: string; providerType?: string; daemonId?: string },
 ): void {
     const { meshId, sessionId, providerType } = args;
-    const stopArgs: Record<string, unknown> = {
-        targetSessionId: sessionId,
-        ...(providerType ? { cliType: providerType } : {}),
-        mode: 'hard',
-        reason: 'stale_mesh_dispatch_reclaimed',
-    };
-    try {
-        const isLocal = components.cliManager?.adapters?.has?.(sessionId) === true;
-        if (isLocal) {
-            // cliType is required by stop_cli; resolve it from the local adapter when the
-            // event carried no providerType.
-            if (!stopArgs.cliType) {
-                const localType = components.cliManager?.adapters?.get?.(sessionId)?.cliType;
-                if (localType) stopArgs.cliType = localType;
+    // TURN-LEDGER (Stage 5): a destructive stop/kill/teardown is strictly ordered AFTER
+    // every evidence collection already in flight for this session (and the reducer
+    // decision built on it). The historical 6ms race issued a transcript read and a
+    // stop CONCURRENTLY against the same session, and teardown destroyed the only
+    // evidence source before the read completed. The per-session ordering chain makes
+    // that interleaving structurally impossible — this stop runs only after prior
+    // reads resolve. Fire-and-forget from the caller's perspective, as before.
+    void runSessionDestructiveAction(sessionId, () => {
+        const stopArgs: Record<string, unknown> = {
+            targetSessionId: sessionId,
+            ...(providerType ? { cliType: providerType } : {}),
+            mode: 'hard',
+            reason: 'stale_mesh_dispatch_reclaimed',
+        };
+        try {
+            const isLocal = components.cliManager?.adapters?.has?.(sessionId) === true;
+            if (isLocal) {
+                // cliType is required by stop_cli; resolve it from the local adapter when the
+                // event carried no providerType.
+                if (!stopArgs.cliType) {
+                    const localType = components.cliManager?.adapters?.get?.(sessionId)?.cliType;
+                    if (localType) stopArgs.cliType = localType;
+                }
+                Promise.resolve(components.cliManager?.handleCliCommand?.('stop_cli', stopArgs))
+                    .catch((e: any) => LOG.warn('MeshQueue', `Local stop of stale worker ${sessionId} failed: ${e?.message || e}`));
+                return;
             }
-            Promise.resolve(components.cliManager?.handleCliCommand?.('stop_cli', stopArgs))
-                .catch((e: any) => LOG.warn('MeshQueue', `Local stop of stale worker ${sessionId} failed: ${e?.message || e}`));
-            return;
+            // Remote: resolve the worker node's daemon id (event metadata first, then the mesh node).
+            let daemonId = args.daemonId;
+            if (!daemonId && args.nodeId) {
+                try {
+                    const mesh = getMeshWithCache(components, meshId);
+                    const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, args.nodeId!));
+                    daemonId = node ? readMeshNodeDaemonId(node) || undefined : undefined;
+                } catch { /* best-effort */ }
+            }
+            if (daemonId && components.dispatchMeshCommand) {
+                // OFFLINE-NODE-BLOCKING: this stop is fire-and-forget. Without a short connect-wait,
+                // a stop_cli to a worker node whose daemon is powered off leaves a pending request
+                // hanging for the full 90s connect deadline before its .catch fires (a leaked
+                // pending per stale worker). Stamp the status-origin marker so the daemon-cloud relay
+                // grants the SHORT connect-wait budget — an offline node rejects in ~2s and the .catch
+                // logs it immediately. The marker only affects the connect wait and is stripped before
+                // stop_cli executes, so a live worker is stopped identically. (Best-effort by design:
+                // a failed stop only loses the belt-and-suspenders stop; the ack was already rejected.)
+                Promise.resolve(components.dispatchMeshCommand(daemonId, 'stop_cli', withStatusProbeMarker(stopArgs)))
+                    .catch((e: any) => LOG.warn('MeshQueue', `Remote stop of stale worker ${sessionId} on daemon ${daemonId} failed: ${e?.message || e}`));
+            } else {
+                LOG.warn('MeshQueue', `Cannot stop stale worker ${sessionId}: no local adapter and no resolvable remote daemon id (node ${args.nodeId ?? '?'}). Ack already rejected — task will re-strand-and-fail if the worker completes.`);
+            }
+        } catch (e: any) {
+            LOG.warn('MeshQueue', `stopStaleMeshWorker error for ${sessionId}: ${e?.message || e}`);
         }
-        // Remote: resolve the worker node's daemon id (event metadata first, then the mesh node).
-        let daemonId = args.daemonId;
-        if (!daemonId && args.nodeId) {
-            try {
-                const mesh = getMeshWithCache(components, meshId);
-                const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, args.nodeId!));
-                daemonId = node ? readMeshNodeDaemonId(node) || undefined : undefined;
-            } catch { /* best-effort */ }
-        }
-        if (daemonId && components.dispatchMeshCommand) {
-            // OFFLINE-NODE-BLOCKING: this stop is fire-and-forget. Without a short connect-wait,
-            // a stop_cli to a worker node whose daemon is powered off leaves a pending request
-            // hanging for the full 90s connect deadline before its .catch fires (a leaked
-            // pending per stale worker). Stamp the status-origin marker so the daemon-cloud relay
-            // grants the SHORT connect-wait budget — an offline node rejects in ~2s and the .catch
-            // logs it immediately. The marker only affects the connect wait and is stripped before
-            // stop_cli executes, so a live worker is stopped identically. (Best-effort by design:
-            // a failed stop only loses the belt-and-suspenders stop; the ack was already rejected.)
-            Promise.resolve(components.dispatchMeshCommand(daemonId, 'stop_cli', withStatusProbeMarker(stopArgs)))
-                .catch((e: any) => LOG.warn('MeshQueue', `Remote stop of stale worker ${sessionId} on daemon ${daemonId} failed: ${e?.message || e}`));
-        } else {
-            LOG.warn('MeshQueue', `Cannot stop stale worker ${sessionId}: no local adapter and no resolvable remote daemon id (node ${args.nodeId ?? '?'}). Ack already rejected — task will re-strand-and-fail if the worker completes.`);
-        }
-    } catch (e: any) {
-        LOG.warn('MeshQueue', `stopStaleMeshWorker error for ${sessionId}: ${e?.message || e}`);
-    }
+    });
 }
 
 /**
@@ -1196,6 +1261,26 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return suppression.result;
     }
 
+    // TURN-LEDGER (Stage 5): approval and choice are NONTERMINAL suspended states of the
+    // attempt — never completion writes. Record the suspension idempotently so the reducer
+    // (and the Stage 6 projection) sees waiting_approval / waiting_choice; a later
+    // generating event resumes the SAME attempt (no new prompt, no new attempt).
+    if ((args.event === 'agent:waiting_approval' || args.event === 'agent:waiting_choice') && eventSessionId) {
+        const suspendedTaskId = readNonEmptyString(args.metadataEvent.taskId);
+        if (suspendedTaskId) {
+            try {
+                recordTurnStage({
+                    meshId: args.meshId,
+                    taskId: suspendedTaskId,
+                    stage: args.event === 'agent:waiting_approval' ? 'waiting_approval' : 'waiting_choice',
+                    attemptId: readNonEmptyString(args.metadataEvent.attemptId) || undefined,
+                    sessionId: eventSessionId,
+                    occurredAtMs: eventTimestamp ?? undefined,
+                });
+            } catch { /* turn-ledger recording is best-effort */ }
+        }
+    }
+
     function markSessionTerminal(sessionId: string, outcome: 'completed' | 'failed', occurredAtMs?: number | null, opts?: { tentativeIfDirect?: boolean }): { id?: string } | null {
         // C2: prefer an exact taskId match when the completion event carries one —
         // it's immune to coordinator↔worker clock skew that can hide the assigned row.
@@ -1226,6 +1311,72 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const weakCompleted = outcome === 'completed'
             && isWeakCompletionEvidence(args.metadataEvent)
             && !emittedAfterFinalizationTimeout;
+        // TURN-LEDGER (Stage 5): the reducer is the single causal authority for terminal
+        // outcomes. A genuine terminal for a taskId-named completion is proposed BEFORE any
+        // row flip; when an attempt exists and the proposal is REJECTED (stale attempt /
+        // session mismatch / already-terminal-differently), the legacy flips below are
+        // skipped — a late/duplicate/wrong-session completion can no longer re-complete or
+        // resurrect state. The weak-completed tentative path (kept 'assigned') is not a
+        // terminal and bypasses the reducer by design. Legacy tasks (no attempt row) get a
+        // deterministic lazy attempt and the same exactly-once guarantee.
+        let reducerAllowsFlip = true;
+        if (eventTaskId && !weakCompleted) {
+            try {
+                recordTurnStage({
+                    meshId: args.meshId,
+                    taskId: eventTaskId,
+                    stage: 'finalizing',
+                    attemptId: readNonEmptyString(args.metadataEvent.attemptId) || undefined,
+                    sessionId,
+                    occurredAtMs: occurredAtMs ?? undefined,
+                });
+                const decision = proposeTurnCompletion({
+                    meshId: args.meshId,
+                    taskId: eventTaskId,
+                    attemptId: readNonEmptyString(args.metadataEvent.attemptId) || undefined,
+                    sessionId,
+                    epoch: typeof args.metadataEvent.dispatchNonce === 'number' ? args.metadataEvent.dispatchNonce : undefined,
+                    outcome,
+                    source: 'provider_event',
+                    occurredAtMs: occurredAtMs ?? undefined,
+                    evidence: {
+                        event: args.event,
+                        ...(readNonEmptyString(args.metadataEvent.evidenceLevel) ? { evidenceLevel: readNonEmptyString(args.metadataEvent.evidenceLevel) } : {}),
+                    },
+                });
+                if (!decision.committed) {
+                    reducerAllowsFlip = false;
+                    LOG.info('TurnLedger', `Completion for task ${eventTaskId} (session ${sessionId}, outcome ${outcome}) rejected by the turn reducer: ${decision.reason} — skipping queue/dispatch flips`);
+                    traceMeshEventDrop('turn_reducer_completion_rejected', traceCtx, decision.reason);
+                } else if (!decision.duplicate) {
+                    // Persist the outbound coordinator-completion delivery state in the same
+                    // commit window, so a crash between this commit and the pending-event
+                    // queue write below is recoverable on restart (outbox drain re-queues an
+                    // equivalent event; the pending-events fingerprint dedup keeps it
+                    // exactly-once).
+                    try {
+                        enqueueTerminalOutbox({
+                            meshId: args.meshId,
+                            taskId: eventTaskId,
+                            attemptId: decision.attemptId,
+                            outcome,
+                            payload: {
+                                event: args.event,
+                                nodeId: readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
+                                sessionId,
+                                providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+                                weak: isWeakCompletionEvidence(args.metadataEvent),
+                            },
+                        });
+                        scheduleTurnOutboxDrain();
+                    } catch { /* outbox is a recovery backstop — never fail the completion */ }
+                }
+            } catch { /* reducer unavailable — the pre-Stage-5 writers govern (shadow mode) */ }
+        }
+        if (!reducerAllowsFlip) {
+            // The reducer rejected this terminal — no queue/dispatch/delivery mutation.
+            return null;
+        }
         const task = weakCompleted
             ? updateSessionTaskStatus(args.meshId, sessionId, 'assigned', {
                 occurredAt: occurredAtMs != null ? new Date(occurredAtMs).toISOString() : undefined,
@@ -1503,7 +1654,31 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     catch { return null; }
                 })();
                 const currentNonce = typeof currentRow?.dispatchNonce === 'number' ? currentRow.dispatchNonce : undefined;
-                if (currentNonce !== undefined && startedNonce < currentNonce) {
+                // TURN-LEDGER (Stage 5): the (taskId, attemptId, session) authority now
+                // classifies the echo. A nonce below the row's current value is STALE only
+                // when it comes from a DIFFERENT session than the current attempt's worker
+                // (a genuinely superseded dispatch). When the echo comes FROM the current
+                // assignee session — e.g. a reclaim bumped the nonce and re-dispatched to
+                // the SAME session, and the resumed worker echoes its pre-reclaim nonce —
+                // it is a resumption artifact: accept it and NEVER stop that worker (the
+                // old guard killed the current legitimate assignee here).
+                const classification = classifyNonceEcho({
+                    meshId: args.meshId,
+                    taskId: startedTaskId,
+                    sessionId,
+                    nonce: startedNonce,
+                    currentNonce,
+                });
+                if (classification === 'same_session_compat') {
+                    traceMeshEventStage('same_session_stale_nonce_compat', {
+                        taskId: startedTaskId,
+                        sessionId,
+                        nodeId,
+                        meshId: args.meshId,
+                        event: 'agent:generating_started',
+                    }, `nonce ${startedNonce} < ${currentNonce} accepted (current assignee)`);
+                }
+                if (classification === 'stale' && currentNonce !== undefined && startedNonce < currentNonce) {
                     LOG.warn('MeshQueue', `Rejecting stale mesh dispatch: task ${startedTaskId} generating_started from session ${sessionId} `
                         + `(node ${nodeId ?? '?'}) carries dispatchNonce ${startedNonce} < current ${currentNonce} — the task was reclaimed and `
                         + `re-dispatched; stopping this worker to prevent duplicate execution.`);
@@ -1557,6 +1732,48 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             // taskDeliveryConsumed() keys on. The store's monotonic guard only advances the row.
             // With a named taskId, key on (mesh, task); otherwise fall back to the whole session.
             consumeSessionDelivery(args.meshId, sessionId, 'acked', startedTaskId);
+            // TURN-LEDGER (Stage 5): provider turn start IS the consumed evidence — the
+            // prompt provably belongs to the active attempt. Record the consumed ACK and
+            // the generating stage (idempotent; reordered/duplicate arrivals are no-ops).
+            // From here on the attempt is injection-ineligible — no redrive may ever
+            // re-inject this prompt.
+            if (startedTaskId) {
+                try {
+                    const echoAttemptId = readNonEmptyString(args.metadataEvent.attemptId) || undefined;
+                    // Session authority over the echoed id (Stage 5 contract): a same-session
+                    // resumption may echo the PRE-reclaim attemptId. When the CURRENT attempt
+                    // is bound to THIS session, the event belongs to the current attempt
+                    // regardless of the echoed id; an echo from a DIFFERENT session keeps the
+                    // echoed id so the reducer records it as a stale old-attempt event (inert).
+                    const attemptIdForAck = (() => {
+                        try {
+                            const store = MeshRuntimeStore.getInstance();
+                            const current = store.getCurrentTurnAttempt(args.meshId, startedTaskId);
+                            if (!current) return echoAttemptId; // legacy task — reducer resolves lazily
+                            if (!echoAttemptId || echoAttemptId === current.attemptId) return current.attemptId;
+                            if (current.sessionId && sessionIdsEquivalent(current.sessionId, sessionId)) return current.attemptId;
+                            return echoAttemptId;
+                        } catch { return echoAttemptId; }
+                    })();
+                    recordTurnAck({
+                        meshId: args.meshId,
+                        taskId: startedTaskId,
+                        kind: 'consumed',
+                        attemptId: attemptIdForAck,
+                        sessionId,
+                        occurredAtMs: eventTimestamp ?? undefined,
+                        evidence: { event: 'agent:generating_started' },
+                    });
+                    recordTurnStage({
+                        meshId: args.meshId,
+                        taskId: startedTaskId,
+                        stage: 'generating',
+                        attemptId: attemptIdForAck,
+                        sessionId,
+                        occurredAtMs: eventTimestamp ?? undefined,
+                    });
+                } catch { /* turn-ledger recording is best-effort — the delivery consume above already landed */ }
+            }
         }
     } else if (args.event === 'agent:stopped') {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);

@@ -1793,6 +1793,10 @@ export class DaemonCliManager {
                                 // its generating_started event echoes it back for the coordinator's
                                 // stale-nonce guard.
                                 ...(typeof meshContext.dispatchNonce === 'number' ? { dispatchNonce: meshContext.dispatchNonce } : {}),
+                                // TURN-LEDGER (Stage 5): carry the attempt identity onto the
+                                // worker session so its lifecycle events echo it back for the
+                                // coordinator's reducer.
+                                ...(typeof meshContext.attemptId === 'string' && meshContext.attemptId ? { attemptId: meshContext.attemptId } : {}),
                                 ...(typeof meshContext.coordinatorDaemonId === 'string' && meshContext.coordinatorDaemonId ? { coordinatorDaemonId: meshContext.coordinatorDaemonId } : {}),
                             });
                         } catch { /* best-effort — stamping is a routing aid, not a hard requirement */ }
