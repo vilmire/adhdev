@@ -31,12 +31,23 @@ import type {
     NativeHistoryToolMap,
 } from './types.js';
 import { SPAWN_BIND_GRACE_MS } from '../native-history/constants.js';
+import {
+    claimTranscript,
+    isTranscriptClaimedByOther,
+    transcriptClaimOwnerToken,
+} from '../native-history/transcript-claim-registry.js';
 
 export interface NativeHistoryInput {
     agentType?: string;
     sessionId?: string;
     providerSessionId?: string;
     historySessionId?: string;
+    /** Daemon instance id of the reading session (== the session registry
+     *  sessionId == the read path's targetSessionId). Sidecar-workspace stores
+     *  (kimi) derive the transcript-claim owner token from it so two concurrent
+     *  same-cwd sessions never bind the same wire.jsonl. Empty → claiming is
+     *  skipped (legacy single-session behaviour). */
+    instanceId?: string;
     workspace?: string;
     /** Daemon-side wall clock at the moment the session was registered.
      *  Native-history file lookups use this as the lower bound: any file
@@ -72,6 +83,29 @@ export interface NativeHistoryResult {
     sourceMtimeMs: number;
     nativeHistoryCoverage?: 'full' | 'partial' | 'best-effort';
     workspace?: string;
+    /**
+     * Sidecar-workspace stores (kimi): how the resolved transcript was
+     * attributed to this reading session.
+     *   'pinned'          — exact bind by a previously pinned/claimed session id
+     *   'claimed'         — exclusive claim on the single viable candidate
+     *   'stale_reclaimed' — claim taken over from a demonstrably dead owner
+     *   'spawn_evidence'  — unique spawn-proximity evidence (no claim identity)
+     *   'legacy'          — single-candidate bind with no claim identity
+     *   'ambiguous'       — FAIL CLOSED: ≥2 viable same-workspace candidates
+     *   'already_claimed' — FAIL CLOSED: every viable candidate is owned by a
+     *                       DIFFERENT live session
+     * Undefined for non-sidecar sources (their resolution is unchanged).
+     */
+    attribution?: 'pinned' | 'claimed' | 'stale_reclaimed' | 'spawn_evidence' | 'legacy' | 'ambiguous' | 'already_claimed';
+    /** True only when the bind rests on strong evidence (exact pin, an
+     *  exclusive claim, or unique spawn-proximity evidence) — never on a
+     *  newest-mtime guess. Read-path callers may persist a pin only then. */
+    ownerConfirmed?: boolean;
+    /** Typed fail-closed reason. 'attribution_unknown' means two or more viable
+     *  same-workspace candidates could not be uniquely attributed (or all are
+     *  owned by other live sessions); NO messages and NO providerSessionId are
+     *  returned so no durable pin can be written from the ambiguity. */
+    unavailableReason?: string;
 }
 
 const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
@@ -299,7 +333,23 @@ function summarizeSessionFile(
 // ────────────────────────────────────────────────────────────────────────────
 
 function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput): NativeHistoryResult | null {
-    const sourcePath = resolveJsonlSourcePath(src, input);
+    const resolution = resolveJsonlSourcePathDetailed(src, input);
+    const outcome = resolution.outcome;
+    if (outcome && (outcome.attribution === 'ambiguous' || outcome.attribution === 'already_claimed')) {
+        // Fail closed under same-cwd concurrency: never surface a transcript —
+        // or a providerSessionId that could be pinned — from an ambiguous or
+        // foreign-owned resolution.
+        return {
+            messages: [],
+            sourcePath: '',
+            sourceMtimeMs: 0,
+            nativeHistoryCoverage: 'full',
+            attribution: outcome.attribution,
+            ownerConfirmed: false,
+            unavailableReason: outcome.unavailableReason || 'attribution_unknown',
+        };
+    }
+    const sourcePath = resolution.path;
     if (!sourcePath) {
         // Was silent before — a slug miss produced 0 messages with no trace, so
         // a live read_chat returning empty was indistinguishable from "no file"
@@ -367,6 +417,8 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
         sourceMtimeMs: mtime,
         nativeHistoryCoverage: 'full',
         workspace: transcriptWorkspace,
+        attribution: outcome?.attribution,
+        ownerConfirmed: outcome?.ownerConfirmed,
     };
 }
 
@@ -379,8 +431,26 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
  * live transcript without re-parsing every message on each status poll.
  */
 export function resolveJsonlSourcePath(src: NativeHistoryJsonlSource, input: NativeHistoryInput): string | null {
+    return resolveJsonlSourcePathDetailed(src, input).path;
+}
+
+/** The attribution outcome of a sidecar-workspace (kimi) resolution. Only set
+ *  on the sidecar claim paths; every other source resolves exactly as before
+ *  and carries no outcome. */
+interface JsonlClaimOutcome {
+    attribution: NonNullable<NativeHistoryResult['attribution']>;
+    ownerConfirmed?: boolean;
+    unavailableReason?: string;
+}
+
+interface JsonlSourceResolution {
+    path: string | null;
+    outcome?: JsonlClaimOutcome;
+}
+
+function resolveJsonlSourcePathDetailed(src: NativeHistoryJsonlSource, input: NativeHistoryInput): JsonlSourceResolution {
     const resolved = expandPath(src.path, input);
-    if (!resolved) return null;
+    if (!resolved) return { path: null };
 
     const windowMs = typeof src.recent_window_ms === 'number' ? src.recent_window_ms : 5 * 60_000;
     const filePat = src.file_pattern ? globToRegex(src.file_pattern) : /.*\.jsonl$/;
@@ -416,19 +486,17 @@ export function resolveJsonlSourcePath(src: NativeHistoryJsonlSource, input: Nat
         // `wd_<slug>_<sha12>` dir, not the transcript). The filename-uuid pickers
         // can't match here, so select by the directory uuid when pinned, else by
         // the sidecar workDir + recency when workspace-scoped.
-        if (src.session_id_from === 'dir_uuid' || src.workspace_from_sidecar) {
-            // Pinned → match by directory uuid. Unpinned + a workspace hint →
-            // scope to the sidecar workDir and FAIL CLOSED (no workspace-blind
-            // newest-file fallback) so another workspace's session is never
-            // aliased. Only when there is neither a pin nor a workspace hint do
-            // we fall back to newest-recent (single-session dev/test case).
+        if (src.workspace_from_sidecar) {
+            // Claim-based attribution (Stage 4): one live session binds at most
+            // one transcript, one transcript is claimed by at most one live
+            // session, and ambiguity fails closed — newest-mtime is never the
+            // deciding fallback under same-cwd concurrency.
+            return resolveSidecarClaimSource(resolved, filePat, windowMs, sessionFloor, workspaceHint, requestedSessionId, src.workspace_from_sidecar, input);
+        }
+        if (src.session_id_from === 'dir_uuid') {
             sourcePath = pickDirUuidFileAcrossGlob(resolved, filePat, requestedSessionId);
             if (!sourcePath && !requestedSessionId) {
-                if (src.workspace_from_sidecar && workspaceHint) {
-                    sourcePath = pickSidecarWorkspaceFileAcrossGlob(resolved, filePat, windowMs, sessionFloor, workspaceHint, src.workspace_from_sidecar);
-                } else {
-                    sourcePath = newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
-                }
+                sourcePath = newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
             }
         } else {
             sourcePath = pickExactSessionFileAcrossGlob(resolved, filePat, requestedSessionId)
@@ -485,7 +553,191 @@ export function resolveJsonlSourcePath(src: NativeHistoryJsonlSource, input: Nat
             sourcePath = scanProjectsRootForSessionFile(src.path, input, requestedSessionId);
         }
     }
-    return sourcePath;
+    return { path: sourcePath };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Sidecar-workspace claim-based attribution (kimi)
+//
+// kimi exposes no reliable session id at spawn/screen, so two live ADHDev
+// sessions sharing a cwd cannot be attributed by the provider at all — the
+// daemon must own attribution. The rules below are the Stage-4 contract:
+//
+//   - EXCLUSIVE: one transcript path is claimed by at most one live session
+//     (transcript-claim-registry, owner = iid:<instanceId>), and a session's
+//     first claimed bind is then locked in (the read path persists a pin only
+//     from an owner-confirmed bind, and every later read exact-binds on it).
+//   - EVIDENCE ORDER: exact pin → claim exclusion → spawn proximity (birth
+//     time within SPAWN_BIND_GRACE_MS of the session's spawn floor). Newest
+//     mtime is NEVER the deciding fallback when ≥2 viable same-workspace
+//     candidates remain.
+//   - FAIL CLOSED: an ambiguous or foreign-owned resolution returns a typed
+//     outcome (attribution 'ambiguous' / 'already_claimed', unavailableReason
+//     'attribution_unknown') with no path, no messages, no providerSessionId —
+//     so no durable pin can be written from ambiguity.
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Canonical claim key for a transcript path: best-effort realpath so
+ *  /tmp ↔ /private/tmp aliases of the same wire.jsonl share one claim. */
+function claimKeyForPath(p: string): string {
+    try { return fs.realpathSync(p); } catch { return p; }
+}
+
+function failClosedResolution(attribution: 'ambiguous' | 'already_claimed', workspaceHint: string, owner: string): JsonlSourceResolution {
+    LOG.info('TranscriptClaim', `decision=${attribution} provider=kimi workspace=${JSON.stringify(workspaceHint)} owner=${owner || '(none)'} → attribution_unknown (fail closed, no pin)`);
+    return { path: null, outcome: { attribution, ownerConfirmed: false, unavailableReason: 'attribution_unknown' } };
+}
+
+/**
+ * The single candidate whose birth time falls within ±SPAWN_BIND_GRACE_MS of
+ * the session's spawn floor — the spawn-proximity evidence pick. Returns null
+ * when no floor is known or the within-grace set does not hold EXACTLY ONE
+ * candidate (a tie is ambiguity, not evidence). mtime is only the birth-time
+ * fallback for filesystems without birthtime — never an ordering heuristic.
+ *
+ * Exported for tests: the selection rule is deterministic given fabricated
+ * candidates, which is how the mtime-independence guarantee is pinned down
+ * (real birthtimes can't be backdated in a fixture).
+ */
+export function pickUniqueSpawnEvidence(
+    candidates: Array<{ p: string; mtime: number; birth: number }>,
+    sessionFloorMs: number,
+): string | null {
+    if (!(sessionFloorMs > 0) || candidates.length === 0) return null;
+    const within = candidates.filter(c => {
+        const born = c.birth > 0 ? c.birth : c.mtime;
+        return Math.abs(born - sessionFloorMs) <= SPAWN_BIND_GRACE_MS;
+    });
+    return within.length === 1 ? within[0].p : null;
+}
+
+/**
+ * Claim-aware resolution for sidecar-workspace stores (kimi's
+ * `sessions/<wdKey>/session_<uuid>/agents/main/wire.jsonl` + sibling
+ * `state.json` workDir). See the contract comment above.
+ */
+function resolveSidecarClaimSource(
+    template: string,
+    pattern: RegExp,
+    windowMs: number,
+    sessionFloorMs: number,
+    workspaceHint: string,
+    requestedSessionId: string,
+    sidecar: { rel_path: string; workspace_path: string },
+    input: NativeHistoryInput,
+): JsonlSourceResolution {
+    const owner = transcriptClaimOwnerToken(input.instanceId);
+
+    // (1) Pinned/exact bind: the strongest evidence — a previously claimed,
+    //     owner-confirmed session id. Exact-bind the directory uuid and refresh
+    //     the claim. A live FOREIGN claim on the pinned transcript means the
+    //     pin and the registry disagree (contested store) → fail closed rather
+    //     than read a sibling's transcript.
+    if (requestedSessionId) {
+        const pinned = pickDirUuidFileAcrossGlob(template, pattern, requestedSessionId);
+        if (!pinned) return { path: null };
+        if (!owner) return { path: pinned, outcome: { attribution: 'pinned' } };
+        const verdict = claimTranscript(claimKeyForPath(pinned), owner);
+        if (verdict === 'denied') return failClosedResolution('already_claimed', workspaceHint, owner);
+        return {
+            path: pinned,
+            outcome: { attribution: verdict === 'stale_reclaimed' ? 'stale_reclaimed' : 'pinned', ownerConfirmed: true },
+        };
+    }
+
+    // (2) No workspace hint: no scoping evidence at all — keep the legacy
+    //     newest-recent single-session dev/test behaviour.
+    if (!workspaceHint) {
+        return { path: newestRecentFileAcrossGlob(template, pattern, windowMs, sessionFloorMs) };
+    }
+
+    // (3) Workspace-scoped discovery. Candidates: sidecar workDir matches the
+    //     input workspace, inside the recency/spawn-floor window. Claims make
+    //     the pick exclusive; spawn proximity disambiguates; anything else
+    //     fails closed.
+    const candidates = listSidecarWorkspaceCandidates(template, pattern, windowMs, sessionFloorMs, workspaceHint, sidecar);
+    if (candidates.length === 0) return { path: null };
+
+    if (!owner) {
+        // Legacy identity-less resolution (no instanceId — unit tests, early
+        // boot, non-session callers). A single viable candidate binds exactly
+        // as before; with ≥2 candidates only UNIQUE spawn-proximity evidence
+        // may decide — never newest mtime.
+        if (candidates.length === 1) return { path: candidates[0].p, outcome: { attribution: 'legacy' } };
+        const picked = pickUniqueSpawnEvidence(candidates, sessionFloorMs);
+        if (picked) return { path: picked, outcome: { attribution: 'spawn_evidence', ownerConfirmed: true } };
+        return failClosedResolution('ambiguous', workspaceHint, owner);
+    }
+
+    // Claims active: never consider a transcript a DIFFERENT live session owns.
+    const unclaimed = candidates.filter(c => !isTranscriptClaimedByOther(claimKeyForPath(c.p), owner));
+    if (unclaimed.length === 0) return failClosedResolution('already_claimed', workspaceHint, owner);
+
+    // Spawn-floor guard: this session's own wire.jsonl is born at/after it
+    // spawned (minus grace), so a pre-spawn store belongs to an earlier session
+    // and is never bound. With no viable own store yet, return null (wait for
+    // the own transcript on the next read) instead of mis-binding.
+    const eligible = sessionFloorMs > 0
+        ? unclaimed.filter(c => (c.birth > 0 ? c.birth : c.mtime) >= sessionFloorMs - SPAWN_BIND_GRACE_MS)
+        : unclaimed;
+    if (eligible.length === 0) return { path: null };
+
+    let chosen: string | null = null;
+    if (eligible.length === 1) {
+        chosen = eligible[0].p;
+    } else {
+        // ≥2 viable candidates: only unique spawn-proximity evidence may
+        // decide. A wire born within ±grace of THIS session's spawn is its own;
+        // a sibling spawned seconds later falls outside the window, so each
+        // session still resolves its own transcript — independent of mtime
+        // ordering. A genuine tie is ambiguity → fail closed.
+        chosen = pickUniqueSpawnEvidence(eligible, sessionFloorMs);
+    }
+    if (!chosen) return failClosedResolution('ambiguous', workspaceHint, owner);
+
+    const verdict = claimTranscript(claimKeyForPath(chosen), owner);
+    if (verdict === 'denied') return failClosedResolution('already_claimed', workspaceHint, owner);
+    return {
+        path: chosen,
+        outcome: { attribution: verdict === 'stale_reclaimed' ? 'stale_reclaimed' : 'claimed', ownerConfirmed: true },
+    };
+}
+
+/**
+ * Enumerate the viable sidecar-workspace candidates across the glob: wire
+ * files inside the recency/spawn-floor window whose sidecar `state.json`
+ * workDir matches the input workspace. Sorted newest-mtime first ONLY as a
+ * stable enumeration order — selection never uses it as the deciding
+ * heuristic. Each candidate carries its birth time for the spawn-proximity
+ * evidence pick.
+ */
+function listSidecarWorkspaceCandidates(
+    template: string,
+    pattern: RegExp,
+    windowMs: number,
+    sessionFloorMs: number,
+    workspaceHint: string,
+    sidecar: { rel_path: string; workspace_path: string },
+): Array<{ p: string; mtime: number; birth: number }> {
+    let wsResolved = workspaceHint;
+    try { wsResolved = fs.realpathSync(workspaceHint); } catch { /* keep raw */ }
+    const dirs = expandDirGlob(template);
+    const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
+    const out: Array<{ p: string; mtime: number; birth: number }> = [];
+    for (const d of dirs) {
+        for (const p of listMatchingFiles(d, pattern)) {
+            const mtime = safeMtimeMs(p);
+            if (mtime < cutoff) continue;
+            const ws = readSidecarWorkspace(p, sidecar);
+            if (!ws) continue;
+            let wsReal = ws;
+            try { wsReal = fs.realpathSync(ws); } catch { /* keep raw */ }
+            if (ws !== workspaceHint && wsReal !== wsResolved) continue;
+            out.push({ p, mtime, birth: safeBirthtimeMs(p) });
+        }
+    }
+    out.sort((a, b) => b.mtime - a.mtime);
+    return out;
 }
 
 function readSessionMetaWorkspace(lines: any[]): string | undefined {
@@ -1124,6 +1376,21 @@ function safeMtimeMs(p: string): number {
     try { return Math.floor(fs.statSync(p).mtimeMs); } catch { return 0; }
 }
 
+/**
+ * File creation time in ms, for the spawn-proximity evidence pick: a kimi
+ * wire.jsonl is created by the CLI child strictly AFTER the daemon spawned it,
+ * so birthtime > the session's spawn floor for its own transcript. Falls back
+ * to mtime when birthtime is unavailable (0 / not tracked) so the caller still
+ * has a usable ordering key.
+ */
+function safeBirthtimeMs(p: string): number {
+    try {
+        const st = fs.statSync(p);
+        const birth = Math.floor(st.birthtimeMs);
+        return birth > 0 ? birth : Math.floor(st.mtimeMs);
+    } catch { return 0; }
+}
+
 function readRequestedSessionId(input: NativeHistoryInput): string {
     const raw = input.providerSessionId || input.sessionId || input.historySessionId || '';
     const value = typeof raw === 'string' ? raw.trim() : '';
@@ -1173,42 +1440,6 @@ function pickDirUuidFileAcrossGlob(template: string, pattern: RegExp, requestedS
     }
     matches.sort((a, b) => safeMtimeMs(b) - safeMtimeMs(a));
     return matches[0] || null;
-}
-
-/**
- * Workspace-scoped pick across a glob for a sidecar-workspace store (kimi's
- * first read, before a session id is pinned): among candidate wire files within
- * the recency window, keep only those whose sidecar `state.json` workDir matches
- * the input workspace, then take the newest. Fails closed (null) when no sidecar
- * matches so an unrelated workspace's session is never aliased.
- */
-function pickSidecarWorkspaceFileAcrossGlob(
-    template: string,
-    pattern: RegExp,
-    windowMs: number,
-    sessionFloorMs: number,
-    workspaceHint: string,
-    sidecar?: { rel_path: string; workspace_path: string },
-): string | null {
-    if (!sidecar || !workspaceHint) return null;
-    let wsResolved = workspaceHint;
-    try { wsResolved = fs.realpathSync(workspaceHint); } catch { /* keep raw */ }
-    const dirs = expandDirGlob(template);
-    const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
-    let best: { p: string; mtime: number } | null = null;
-    for (const d of dirs) {
-        for (const p of listMatchingFiles(d, pattern)) {
-            const mtime = safeMtimeMs(p);
-            if (mtime < cutoff) continue;
-            const ws = readSidecarWorkspace(p, sidecar);
-            if (!ws) continue;
-            let wsReal = ws;
-            try { wsReal = fs.realpathSync(ws); } catch { /* keep raw */ }
-            if (ws !== workspaceHint && wsReal !== wsResolved) continue;
-            if (!best || mtime > best.mtime) best = { p, mtime };
-        }
-    }
-    return best ? best.p : null;
 }
 
 function pickExactSessionFileAcrossDateWindow(

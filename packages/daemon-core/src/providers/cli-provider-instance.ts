@@ -42,6 +42,10 @@ import {
     claimAntigravityConversation,
     releaseAntigravityOwner,
 } from './native-history/antigravity-claim-registry.js';
+import {
+    releaseTranscriptOwner,
+    transcriptClaimOwnerToken,
+} from './native-history/transcript-claim-registry.js';
 import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages, extractFinalSummaryFromMessagesAfter, readChatMessageTimestampMs, hasTrailingToolActivityAfterFinalAssistant } from './chat-message-normalization.js';
 import { workingDirBasename } from './working-dir.js';
 import { ManualAttendanceTracker } from './manual-attendance.js';
@@ -1459,6 +1463,15 @@ export class CliProviderInstance implements ProviderInstance {
         if (this.type === 'antigravity-cli') {
             const owner = this.antigravityClaimOwner();
             if (owner) releaseAntigravityOwner(owner);
+        }
+        // Same for kimi's transcript claims (Stage 4): the generalized
+        // transcript-claim registry is keyed on the identical iid:<instanceId>
+        // owner token, so this session's wire.jsonl claims are released here
+        // and a later same-cwd session can claim them immediately instead of
+        // waiting on the stale-claim safety net.
+        if (this.type === 'kimi') {
+            const owner = transcriptClaimOwnerToken(this.instanceId);
+            if (owner) releaseTranscriptOwner(owner);
         }
         this.adapter.shutdown();
         this.monitor.reset();

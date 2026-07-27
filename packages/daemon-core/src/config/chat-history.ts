@@ -1752,6 +1752,12 @@ type ProviderNativeHistoryReadResult = {
     // the workspace-latest pin + first-read safe-mapping trust only fire for a
     // confirmed uuid. See dispatcher NativeHistoryResult.ownerConfirmed.
     ownerConfirmed?: boolean;
+    // Sidecar-workspace (kimi) attribution decision for this read — 'pinned' /
+    // 'claimed' / 'stale_reclaimed' / 'spawn_evidence' / 'legacy' on a bind,
+    // 'ambiguous' / 'already_claimed' on a typed fail-closed result. Surfaced
+    // for observability; the fail-closed values always accompany
+    // unavailableReason 'attribution_unknown' and zero records.
+    attribution?: string;
 };
 
 function getNativeHistoryScriptName(canonicalHistory: ProviderCanonicalHistoryConfig | undefined, key: 'readSession' | 'listSessions'): string {
@@ -1860,7 +1866,25 @@ function callProviderNativeHistoryRead(
     });
     if (!result || typeof result !== 'object') return null;
     const records = normalizeProviderNativeHistoryRecords(agentType, normalizedSessionId, (result as any).messages || (result as any).records);
-    if (records.length === 0) return null;
+    const attribution = typeof (result as any).attribution === 'string' ? (result as any).attribution.trim() : undefined;
+    const resultUnavailableReason = typeof (result as any).unavailableReason === 'string' ? (result as any).unavailableReason.trim() : undefined;
+    if (records.length === 0) {
+        // Typed fail-closed (e.g. kimi attribution_unknown under same-cwd
+        // concurrency): surface the decision instead of collapsing to a bare
+        // "no file" so read_chat can log/report WHY nothing was bound — and so
+        // no pin is written from ambiguity (there is no providerSessionId).
+        if (attribution || resultUnavailableReason) {
+            return {
+                records: [],
+                sourcePath: '',
+                sourceMtimeMs: 0,
+                unavailableReason: resultUnavailableReason,
+                ownerConfirmed: false,
+                attribution,
+            };
+        }
+        return null;
+    }
     return {
         records,
         sourcePath: typeof (result as any).sourcePath === 'string' ? (result as any).sourcePath : '',
@@ -1869,8 +1893,9 @@ function callProviderNativeHistoryRead(
         workspace: typeof (result as any).workspace === 'string' ? (result as any).workspace.trim() : undefined,
         nativeHistoryCoverage: typeof (result as any).nativeHistoryCoverage === 'string' ? (result as any).nativeHistoryCoverage.trim() : undefined,
         partialReason: typeof (result as any).partialReason === 'string' ? (result as any).partialReason.trim() : undefined,
-        unavailableReason: typeof (result as any).unavailableReason === 'string' ? (result as any).unavailableReason.trim() : undefined,
+        unavailableReason: resultUnavailableReason,
         ownerConfirmed: typeof (result as any).ownerConfirmed === 'boolean' ? (result as any).ownerConfirmed : undefined,
+        attribution,
     };
 }
 
@@ -1969,10 +1994,24 @@ export function readProviderChatHistory(
     partialReason?: string;
     unavailableReason?: string;
     ownerConfirmed?: boolean;
+    attribution?: string;
 } {
     if (isNativeSourceCanonicalHistory(options.canonicalHistory) && (options.historySessionId || options.workspace)) {
         const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs, options.envOverrides, options.forceRefresh, options.instanceId);
         if (!nativeResult) return { messages: [], hasMore: false, source: 'native-unavailable' };
+        if (nativeResult.records.length === 0) {
+            // Typed fail-closed (attribution_unknown): propagate the decision —
+            // never page an empty record set into a 'provider-native' result
+            // that downstream could mistake for an empty-but-bound transcript.
+            return {
+                messages: [],
+                hasMore: false,
+                source: 'native-unavailable',
+                unavailableReason: nativeResult.unavailableReason,
+                ownerConfirmed: nativeResult.ownerConfirmed,
+                attribution: nativeResult.attribution,
+            };
+        }
         return {
             ...pageHistoryRecords(agentType, nativeResult.records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior),
             source: 'provider-native',
@@ -1984,6 +2023,7 @@ export function readProviderChatHistory(
             partialReason: nativeResult.partialReason,
             unavailableReason: nativeResult.unavailableReason,
             ownerConfirmed: nativeResult.ownerConfirmed,
+            attribution: nativeResult.attribution,
         };
     }
     return {

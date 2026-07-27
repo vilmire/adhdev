@@ -22,29 +22,32 @@
  *
  * Ownership is keyed by a per-session owner token (see antigravityOwnerToken)
  * that BOTH the resolver and the provider instance derive identically from the
- * same inputs (workspace + spawn time, or the instance id), so the instance can
- * release its claims deterministically on shutdown.
+ * same inputs (the instance id), so the instance can release its claims
+ * deterministically on shutdown.
  *
- * A claim not refreshed within CLAIM_STALE_MS is treated as abandoned — a
- * safety net for a session that died without an explicit release. Live sessions
- * poll native history far more frequently than this window, so an active owner
- * never lapses; only a crashed/leaked owner's claim ages out.
+ * Since Stage 4 (kimi transcript claims) the storage and stale-claim semantics
+ * live in the generalized transcript-claim-registry; this module keeps the
+ * proven antigravity-facing API as a thin wrapper so the dispatcher, the
+ * provider instance, and the existing tests are untouched.
  *
  * OSS code (AGPL-3.0). Must not import from packages/ (proprietary).
  */
 'use strict';
 
-interface ConversationClaim {
-  owner: string;
-  /** Last time this owner (re)confirmed the claim. Only consulted by the
-   *  stale-claim safety net; an active owner refreshes it on every resolve. */
-  refreshedAtMs: number;
-}
+import {
+  CLAIM_STALE_MS as TRANSCRIPT_CLAIM_STALE_MS,
+  claimTranscript,
+  isTranscriptClaimedByOther,
+  transcriptClaimOwner,
+  releaseTranscript,
+  releaseTranscriptOwner,
+  transcriptClaimOwnerToken,
+  __resetTranscriptClaimRegistry,
+} from './transcript-claim-registry.js';
 
-const claimsByUuid = new Map<string, ConversationClaim>();
-
-/** A claim older than this with no refresh is reclaimable (owner presumed dead). */
-export const CLAIM_STALE_MS = 10 * 60 * 1000;
+/** A claim older than this with no refresh is reclaimable (owner presumed dead)
+ *  when no liveness probe is installed. */
+export const CLAIM_STALE_MS = TRANSCRIPT_CLAIM_STALE_MS;
 
 function normalizeUuid(uuid: string): string {
   return String(uuid || '').trim().toLowerCase();
@@ -75,8 +78,7 @@ export function antigravityOwnerToken(
   instanceId?: string,
 ): string {
   void workspace; void sessionStartedAtMs;
-  const iid = typeof instanceId === 'string' ? instanceId.trim() : '';
-  return iid ? `iid:${iid}` : '';
+  return transcriptClaimOwnerToken(instanceId);
 }
 
 /**
@@ -86,53 +88,30 @@ export function antigravityOwnerToken(
  * claim after the call.
  */
 export function claimAntigravityConversation(uuid: string, owner: string, now: number = Date.now()): boolean {
-  const key = normalizeUuid(uuid);
-  if (!key || !owner) return false;
-  const existing = claimsByUuid.get(key);
-  if (existing && existing.owner !== owner && (now - existing.refreshedAtMs) < CLAIM_STALE_MS) {
-    return false;
-  }
-  claimsByUuid.set(key, { owner, refreshedAtMs: now });
-  return true;
+  return claimTranscript(normalizeUuid(uuid), owner, now) !== 'denied';
 }
 
 /** True when `uuid` is held by a live owner OTHER than `owner`. */
 export function isAntigravityConversationClaimedByOther(uuid: string, owner: string, now: number = Date.now()): boolean {
-  const key = normalizeUuid(uuid);
-  if (!key) return false;
-  const existing = claimsByUuid.get(key);
-  if (!existing) return false;
-  if (existing.owner === owner) return false;
-  return (now - existing.refreshedAtMs) < CLAIM_STALE_MS;
+  return isTranscriptClaimedByOther(normalizeUuid(uuid), owner, now);
 }
 
 /** The live owner of `uuid`, or undefined when unclaimed or stale. */
 export function antigravityConversationOwner(uuid: string, now: number = Date.now()): string | undefined {
-  const key = normalizeUuid(uuid);
-  if (!key) return undefined;
-  const existing = claimsByUuid.get(key);
-  if (!existing) return undefined;
-  if ((now - existing.refreshedAtMs) >= CLAIM_STALE_MS) return undefined;
-  return existing.owner;
+  return transcriptClaimOwner(normalizeUuid(uuid), now);
 }
 
 /** Release a single conversation, only if held by `owner` (or `owner` empty). */
 export function releaseAntigravityConversation(uuid: string, owner?: string): void {
-  const key = normalizeUuid(uuid);
-  if (!key) return;
-  const existing = claimsByUuid.get(key);
-  if (existing && (!owner || existing.owner === owner)) claimsByUuid.delete(key);
+  releaseTranscript(normalizeUuid(uuid), owner);
 }
 
 /** Release every conversation held by `owner` (called on session shutdown). */
 export function releaseAntigravityOwner(owner: string): void {
-  if (!owner) return;
-  for (const [key, claim] of claimsByUuid) {
-    if (claim.owner === owner) claimsByUuid.delete(key);
-  }
+  releaseTranscriptOwner(owner);
 }
 
 /** Test-only: wipe all claims so each test starts from a clean registry. */
 export function __resetAntigravityClaimRegistry(): void {
-  claimsByUuid.clear();
+  __resetTranscriptClaimRegistry();
 }

@@ -28,6 +28,7 @@ import { detectIDEs, type IDEInfo } from '../detection/ide-detector.js';
 import { detectCLI, detectCLIs, getCachedProviderVersions, setDefaultProviderLoader } from '../detection/cli-detector.js';
 import { getDaemonBuildInfo } from '../build-info.js';
 import { SessionRegistry } from '../sessions/registry.js';
+import { setTranscriptClaimLivenessProbe } from '../providers/native-history/transcript-claim-registry.js';
 import { LOG, installGlobalInterceptor } from '../logging/logger.js';
 import {
     DEFAULT_CDP_DISCOVERY_INTERVAL_MS,
@@ -236,6 +237,16 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     const instanceManager = new ProviderInstanceManager();
     const cdpManagers = new Map<string, DaemonCdpManager>();
     const sessionRegistry = new SessionRegistry();
+    // Transcript-claim liveness (Stage 4): a claim held by a session that is no
+    // longer registered is demonstrably dead and safely reclaimable; a claim
+    // held by a REGISTERED session is never stolen, even past the time-based
+    // stale window (an idle live session may not refresh for a long time).
+    // Owner tokens are iid:<sessionId>; any other form is treated as live.
+    setTranscriptClaimLivenessProbe((owner: string) => {
+        const match = /^iid:(.+)$/.exec(owner);
+        if (!match) return true;
+        return sessionRegistry.get(match[1]) !== undefined;
+    });
     const detectedIdesRef: { value: IDEInfo[] } = { value: [] };
     let agentStreamManager: DaemonAgentStreamManager | null = null;
     let poller: AgentStreamPoller | null = null;
