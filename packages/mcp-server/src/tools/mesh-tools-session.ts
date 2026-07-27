@@ -809,6 +809,10 @@ export async function meshReadChat(
             nodeId: args.node_id,
             sessionId: args.session_id,
             limit: args.tail ?? 10,
+            // Carry the daemon's Stage 6 turn projection (attemptId/turnStage/
+            // authority/terminal outcome) so the slim response stays at parity
+            // with daemon read_chat and mesh_status. Non-content scalars only.
+            preserveTurn: true,
         });
         return JSON.stringify(
             payload.pollingAdvisory ? { ...compactPayload, pollingAdvisory: payload.pollingAdvisory } : compactPayload,

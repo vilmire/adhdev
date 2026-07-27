@@ -639,6 +639,10 @@ export class DaemonCommandHandler implements CommandHelpers {
             const sourceName = (provider as any)._sourceName ?? null;
             return {
                 type: provider.type,
+                // Expose manifest aliases so thin clients (MCP launch_session) can
+                // resolve an alias to the canonical type + category locally instead
+                // of guessing the launch route from the type string's suffix.
+                aliases: Array.isArray(provider.aliases) ? provider.aliases : [],
                 category: provider.category,
                 status: loader.getMachineProviderStatus(provider.type),
                 installed: lastDetection?.ok === true,

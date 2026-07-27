@@ -103,9 +103,48 @@ export function dedupeSummaryFromTail(
   });
 }
 
+/**
+ * Non-content Stage 6 turn-projection fields carried from the daemon's
+ * read_chat `turn` block. Identity/status/terminal scalars only — never
+ * prompt, transcript, or message content.
+ */
+const TURN_IDENTITY_FIELDS = [
+  'authority',
+  'status',
+  'stage',
+  'terminalOutcome',
+  'terminalReason',
+  'meshId',
+  'taskId',
+  'attemptId',
+  'attemptSeq',
+  'sessionId',
+  'nodeId',
+  'providerType',
+  'acceptedAt',
+  'deliveredAt',
+  'consumedAt',
+  'terminalAt',
+  'updatedAt',
+] as const;
+
+/**
+ * Slim a daemon `SessionTurnPresentation` to its non-content identity/status
+ * scalars. Returns null when there is no projection (provider-FSM fallback —
+ * the daemon attaches no `turn` block), matching the daemon's contract.
+ */
+export function slimTurnPresentation(turn: any): Record<string, unknown> | null {
+  if (!turn || typeof turn !== 'object' || Array.isArray(turn)) return null;
+  const slim: Record<string, unknown> = {};
+  for (const key of TURN_IDENTITY_FIELDS) {
+    if (turn[key] !== undefined) slim[key] = turn[key];
+  }
+  return Object.keys(slim).length > 0 ? slim : null;
+}
+
 export function compactChatPayload(
   payload: any,
-  opts: { sessionId?: string | null; nodeId?: string; limit?: number } = {},
+  opts: { sessionId?: string | null; nodeId?: string; limit?: number; preserveTurn?: boolean } = {},
 ): any {
   const rawMessages = Array.isArray(payload?.messages) ? payload.messages : [];
   const visible = rawMessages.filter(isCoordinatorVisibleMessage);
@@ -137,6 +176,12 @@ export function compactChatPayload(
   // filteredMessages = only the non-user-visible messages (for backward compat).
   const filteredMessages = Math.max(0, rawMessages.length - visible.length);
 
+  // Stage 6 parity: when the daemon attached an authoritative turn projection,
+  // carry its non-content identity/stage fields so slim surfaces agree with
+  // daemon read_chat / mesh_status on attemptId + turnStage. Absent (fallback)
+  // stays absent — no fabricated projection.
+  const slimTurn = opts.preserveTurn ? slimTurnPresentation(payload?.turn) : null;
+
   return {
     success: payload?.success !== false,
     compact: true,
@@ -144,6 +189,9 @@ export function compactChatPayload(
     ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
     status: payload?.status ?? null,
     providerSessionId: payload?.providerSessionId ?? null,
+    ...(slimTurn ? { turn: slimTurn } : {}),
+    ...(slimTurn?.attemptId !== undefined ? { attemptId: slimTurn.attemptId } : {}),
+    ...(slimTurn?.stage !== undefined ? { turnStage: slimTurn.stage } : {}),
     totalMessages: rawMessages.length,
     visibleMessages: visible.length,
     filteredMessages,

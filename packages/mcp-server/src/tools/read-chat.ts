@@ -53,7 +53,7 @@ function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'js
 
   const messages: any[] = result?.messages ?? result?.data?.messages ?? [];
   const source = { ...result, messages };
-  const compactPayload = compact ? compactChatPayload(source, { sessionId: sessionId ?? null, limit }) : null;
+  const compactPayload = compact ? compactChatPayload(source, { sessionId: sessionId ?? null, limit, preserveTurn: true }) : null;
   const outputMessages = compact ? compactPayload.messages : messages;
 
   if (format === 'json') {

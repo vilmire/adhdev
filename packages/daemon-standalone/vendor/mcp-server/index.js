@@ -304,6 +304,33 @@ function dedupeSummaryFromTail(messages, summary) {
     return { ...rest, content: "", _sameAsSummary: true };
   });
 }
+var TURN_IDENTITY_FIELDS = [
+  "authority",
+  "status",
+  "stage",
+  "terminalOutcome",
+  "terminalReason",
+  "meshId",
+  "taskId",
+  "attemptId",
+  "attemptSeq",
+  "sessionId",
+  "nodeId",
+  "providerType",
+  "acceptedAt",
+  "deliveredAt",
+  "consumedAt",
+  "terminalAt",
+  "updatedAt"
+];
+function slimTurnPresentation(turn) {
+  if (!turn || typeof turn !== "object" || Array.isArray(turn)) return null;
+  const slim = {};
+  for (const key of TURN_IDENTITY_FIELDS) {
+    if (turn[key] !== void 0) slim[key] = turn[key];
+  }
+  return Object.keys(slim).length > 0 ? slim : null;
+}
 function compactChatPayload(payload, opts = {}) {
   const rawMessages = Array.isArray(payload?.messages) ? payload.messages : [];
   const visible = rawMessages.filter(isCoordinatorVisibleMessage);
@@ -320,6 +347,7 @@ function compactChatPayload(payload, opts = {}) {
   const toolSummaries = rawMessages.filter((m) => !isCoordinatorVisibleMessage(m)).map(summarizeToolMessage).filter((s) => s !== null);
   const omittedMessages = Math.max(0, rawMessages.length - messages.length);
   const filteredMessages = Math.max(0, rawMessages.length - visible.length);
+  const slimTurn = opts.preserveTurn ? slimTurnPresentation(payload?.turn) : null;
   return {
     success: payload?.success !== false,
     compact: true,
@@ -327,6 +355,9 @@ function compactChatPayload(payload, opts = {}) {
     ...opts.sessionId !== void 0 ? { sessionId: opts.sessionId } : {},
     status: payload?.status ?? null,
     providerSessionId: payload?.providerSessionId ?? null,
+    ...slimTurn ? { turn: slimTurn } : {},
+    ...slimTurn?.attemptId !== void 0 ? { attemptId: slimTurn.attemptId } : {},
+    ...slimTurn?.stage !== void 0 ? { turnStage: slimTurn.stage } : {},
     totalMessages: rawMessages.length,
     visibleMessages: visible.length,
     filteredMessages,
@@ -6898,7 +6929,11 @@ async function meshReadChat(ctx, args) {
     const compactPayload = compactChatPayload(payload, {
       nodeId: args.node_id,
       sessionId: args.session_id,
-      limit: args.tail ?? 10
+      limit: args.tail ?? 10,
+      // Carry the daemon's Stage 6 turn projection (attemptId/turnStage/
+      // authority/terminal outcome) so the slim response stays at parity
+      // with daemon read_chat and mesh_status. Non-content scalars only.
+      preserveTurn: true
     });
     return JSON.stringify(
       payload.pollingAdvisory ? { ...compactPayload, pollingAdvisory: payload.pollingAdvisory } : compactPayload,
@@ -7935,7 +7970,7 @@ function formatChatResult(result, sessionId, format, limit = 50, compact = false
   }
   const messages = result?.messages ?? result?.data?.messages ?? [];
   const source = { ...result, messages };
-  const compactPayload = compact ? compactChatPayload(source, { sessionId: sessionId ?? null, limit }) : null;
+  const compactPayload = compact ? compactChatPayload(source, { sessionId: sessionId ?? null, limit, preserveTurn: true }) : null;
   const outputMessages = compact ? compactPayload.messages : messages;
   if (format === "json") {
     if (compact && compactPayload) {
@@ -8668,13 +8703,13 @@ ${raw.output}` : "";
 // src/tools/launch-session.ts
 var LAUNCH_SESSION_TOOL = {
   name: "launch_session",
-  description: "Launch a new agent session on the daemon. Supports CLI agents (e.g. hermes-cli, claude-cli, gemini-cli), ACP agents (e.g. claude-acp), and IDEs (e.g. cursor, vscode).",
+  description: "Launch a new agent session on the daemon. Supports CLI agents (e.g. kimi, hermes-cli, claude-cli, gemini-cli), ACP agents (e.g. claude-acp), and IDEs (e.g. cursor, vscode).",
   inputSchema: {
     type: "object",
     properties: {
       type: {
         type: "string",
-        description: "Provider type to launch. CLI examples: hermes-cli, claude-cli, gemini-cli. ACP examples: claude-acp. IDE examples: cursor, vscode."
+        description: "Provider type to launch. CLI examples: kimi, hermes-cli, claude-cli, gemini-cli. ACP examples: claude-acp. IDE examples: cursor, vscode. Manifest aliases (e.g. codex \u2192 codex-cli) resolve to the canonical provider type."
       },
       workspace: {
         type: "string",
@@ -8688,14 +8723,48 @@ var LAUNCH_SESSION_TOOL = {
     required: ["type"]
   }
 };
+function legacyHeuristicRoute(type) {
+  const isCliOrAcp = type.includes("-cli") || type.includes("-acp") || type === "codex";
+  return { route: isCliOrAcp ? "cli" : "ide", canonicalType: type };
+}
+async function resolveProviderRoute(transport, requestedType) {
+  const type = requestedType.trim();
+  if (!type) return { error: "type is required" };
+  let catalog;
+  try {
+    catalog = await transport.command("list_provider_availability", {});
+  } catch {
+    catalog = null;
+  }
+  const providers = Array.isArray(catalog?.providers) ? catalog.providers : null;
+  if (!catalog || catalog.success === false || !providers) {
+    return legacyHeuristicRoute(type);
+  }
+  const query = type.toLowerCase();
+  const hit = providers.find((p) => {
+    if (!p || typeof p.type !== "string") return false;
+    if (p.type.toLowerCase() === query) return true;
+    const aliases = Array.isArray(p.aliases) ? p.aliases : [];
+    return aliases.some((alias) => typeof alias === "string" && alias.toLowerCase() === query);
+  });
+  if (!hit) {
+    const known = providers.map((p) => p && typeof p.type === "string" ? p.type : null).filter(Boolean).sort();
+    return {
+      error: `Unknown provider type '${type}'. Known provider types: ${known.join(", ")}`
+    };
+  }
+  const route = hit.category === "cli" || hit.category === "acp" ? "cli" : "ide";
+  return { route, canonicalType: hit.type };
+}
 async function launchSession(transport, args) {
-  const isCliOrAcp = args.type.includes("-cli") || args.type.includes("-acp") || args.type === "codex";
-  const commandType = isCliOrAcp ? "launch_cli" : "launch_ide";
-  const payload = isCliOrAcp ? { cliType: args.type, dir: args.workspace ?? "~", ...args.model ? { model: args.model } : {} } : { ideType: args.type, enableCdp: true };
+  const resolved = await resolveProviderRoute(transport, args.type);
+  if ("error" in resolved) return `Error: ${resolved.error}`;
+  const commandType = resolved.route === "cli" ? "launch_cli" : "launch_ide";
+  const payload = resolved.route === "cli" ? { cliType: resolved.canonicalType, dir: args.workspace ?? "~", ...args.model ? { model: args.model } : {} } : { ideType: resolved.canonicalType, enableCdp: true };
   const result = await transport.command(commandType, payload);
   if (result?.success === false) return `Error: ${result.error ?? "launch failed"}`;
   const id = result?.id ?? result?.sessionId;
-  return id ? `Session launched. id: ${id}, type: ${args.type}` : `Launched: ${JSON.stringify(result)}`;
+  return id ? `Session launched. id: ${id}, type: ${resolved.canonicalType}` : `Launched: ${JSON.stringify(result)}`;
 }
 
 // src/tools/stop-session.ts
