@@ -45,13 +45,14 @@
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { daemonLifecycleHandlers } from '../low-family/daemon-lifecycle.js';
 import { LOG } from '../../logging/logger.js';
+import { resolveSessionTurnPresentation, isRestartBlockingPresentation } from '../../mesh/mesh-turn-presentation.js';
 import type { CommandRouterResult } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 
 // Session states that must block a restart: an in-flight turn or a pending
 // approval would be lost when the daemon exits to re-spawn. Mirrors the
 // daemon-cloud mandatory-update idle-gate (hasBlockingSessionsForMandatoryUpdate).
-const RESTART_BLOCKING_STATES = new Set(['generating', 'waiting_approval', 'starting']);
+const RESTART_BLOCKING_STATES = new Set(['generating', 'waiting_approval', 'waiting_choice', 'finalizing', 'starting']);
 
 const DEFERRED_RESTART_DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFERRED_RESTART_MAX_TIMEOUT_MS = 6 * 60 * 60 * 1000;
@@ -69,10 +70,22 @@ function collectBlockingSessions(ctx: MedFamilyContext, meshId: string): Blockin
     const states = ctx.deps.instanceManager.collectAllStates();
     const consider = (state: any) => {
         const status = String(state?.status || '');
-        if (!RESTART_BLOCKING_STATES.has(status)) return;
+        const instanceId = typeof state?.instanceId === 'string' ? state.instanceId : null;
+        // TURN-PRESENTATION (Stage 6): for mesh-owned work (a session with a turn
+        // attempt), block on the AUTHORITATIVE nonterminal turn state — including
+        // finalizing / waiting_approval / waiting_choice — not on a transient
+        // provider idle sample. Equally, a provider sample stuck on 'generating'
+        // must NOT block once the reducer committed the attempt terminal.
+        // Sessions with no attempt keep the legacy sample verdict.
+        const turn = resolveSessionTurnPresentation({
+            sessionId: instanceId,
+            legacyStatus: status,
+            surface: 'restart_gate',
+        });
+        if (!isRestartBlockingPresentation(turn, RESTART_BLOCKING_STATES.has(status))) return;
         blocking.push({
-            instanceId: typeof state?.instanceId === 'string' ? state.instanceId : null,
-            status,
+            instanceId,
+            status: turn.authority === 'turn_reducer' ? turn.status : status,
             // The coordinator marker is stamped by mesh_coordinator_launch and
             // re-stamped on restore (cli-manager.restoreHostedSessions). Ad-hoc
             // coordinator sessions have no marker and are NOT waived by selfOnly.

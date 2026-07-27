@@ -285,7 +285,7 @@ export function deriveStreamConversationStatus(
 export function dedupeAgents(agents: { id: string; name: string; status: string; version?: string }[]): typeof agents {
     if (!Array.isArray(agents) || agents.length <= 1) return agents
     const map = new Map<string, typeof agents[number]>()
-    const priority = ['generating', 'waiting_approval', 'waiting_choice', 'connected', 'idle', 'panel_hidden']
+    const priority = ['generating', 'finalizing', 'waiting_approval', 'waiting_choice', 'connected', 'idle', 'panel_hidden']
     for (const a of agents) {
         const key = (a.name || a.id || '').toLowerCase().replace(/\s+/g, '-')
         const existing = map.get(key)

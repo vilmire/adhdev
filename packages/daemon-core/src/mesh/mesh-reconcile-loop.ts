@@ -88,7 +88,8 @@ import {
 } from './mesh-completion-synthesis.js';
 import { sessionStatusFromNodes } from './mesh-active-work.js';
 import { drainMeshTurnOutbox } from './mesh-event-forwarding.js';
-import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reconstructActiveAttempts } from './mesh-turn-ledger.js';
+import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reconstructActiveAttempts, isTerminalTurnStage } from './mesh-turn-ledger.js';
+import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
 // the reconcile-loop test suite) keep their `from './mesh-reconcile-loop.js'` paths.
@@ -870,6 +871,27 @@ async function evaluateEarlyIdleTranscriptArm(
 ): Promise<boolean> {
     const sessionId = readNonEmptyString(row.assignedSessionId);
     if (!sessionId) return false;
+
+    // TURN-PRESENTATION (Stage 6): the causal attempt stage outranks every
+    // point-sample below. A worker PARKED on approval/choice or FINALIZING can
+    // read idle on the live graph / re-probe while the turn is very much alive —
+    // arming early transcript completion off that sample would race the reducer.
+    // A terminal attempt needs no rescue either. Sessions with no attempt row
+    // keep the legacy sample-based gates unchanged (provider FSM fallback).
+    const turnPresentation = resolveSessionTurnPresentation({
+        meshId: mesh.id,
+        taskId: row.id,
+        sessionId,
+        surface: 'stall_watchdog',
+    });
+    if (turnPresentation.authority === 'turn_reducer' && turnPresentation.stage) {
+        if (turnPresentation.stage === 'waiting_approval'
+            || turnPresentation.stage === 'waiting_choice'
+            || turnPresentation.stage === 'finalizing'
+            || isTerminalTurnStage(turnPresentation.stage)) {
+            return false;
+        }
+    }
 
     // (a) POSITIVE idle evidence.
     const verdict = resolveSessionBusyVerdict(components, sessionId);

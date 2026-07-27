@@ -3,9 +3,46 @@ import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshWorkQueueEntry, DirectDispatchRecord } from './mesh-work-queue.js';
 import { deleteDirectDispatchesByTaskId } from './mesh-work-queue.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { resolveTurnAttemptRow, presentationFromAttemptRow } from './mesh-turn-presentation.js';
+import type { TurnStage } from './mesh-turn-ledger.js';
 
 export type MeshActiveWorkSource = 'queue' | 'direct';
-export type MeshActiveWorkStatus = 'pending' | 'assigned' | 'generating' | 'idle' | 'failed' | 'awaiting_approval' | 'awaiting_choice';
+export type MeshActiveWorkStatus = 'pending' | 'assigned' | 'generating' | 'idle' | 'failed' | 'awaiting_approval' | 'awaiting_choice' | 'finalizing';
+
+/**
+ * TURN-PRESENTATION (Stage 6): task-level active-work status for a task with a
+ * Stage 5 attempt comes from the SAME reducer projection as read_chat /
+ * session_status / mesh_status — so all surfaces agree on stage and attemptId.
+ * `finalizing` is surfaced verbatim (never collapsed to idle) until the reducer
+ * commits terminal. Returns null when no attempt exists (legacy behavior keeps
+ * governing — the ONLY fallback condition).
+ */
+function turnProjectionActiveWorkStatus(meshId: string, taskId: string): { status: MeshActiveWorkStatus; attemptId: string; stage: TurnStage } | null {
+    const row = resolveTurnAttemptRow({ meshId, taskId });
+    if (!row) return null;
+    const presentation = presentationFromAttemptRow(row);
+    const stage = presentation.stage;
+    if (!stage) return null;
+    switch (stage) {
+        case 'accepted':
+        case 'delivered':
+            return { status: 'assigned', attemptId: presentation.attemptId!, stage };
+        case 'consumed':
+        case 'generating':
+            return { status: 'generating', attemptId: presentation.attemptId!, stage };
+        case 'waiting_approval':
+            return { status: 'awaiting_approval', attemptId: presentation.attemptId!, stage };
+        case 'waiting_choice':
+            return { status: 'awaiting_choice', attemptId: presentation.attemptId!, stage };
+        case 'finalizing':
+            return { status: 'finalizing', attemptId: presentation.attemptId!, stage };
+        case 'completed':
+            return { status: 'idle', attemptId: presentation.attemptId!, stage };
+        case 'failed':
+        case 'cancelled':
+            return { status: 'failed', attemptId: presentation.attemptId!, stage };
+    }
+}
 
 export interface MeshActiveWorkRecord {
     taskId: string;
@@ -32,6 +69,9 @@ export interface MeshActiveWorkRecord {
      * Distinct from historical/orphaned stale entries where the node/session is gone.
      */
     staleDispatchUnacknowledged?: boolean;
+    /** Stage 6: attempt identity + causal stage when the reducer projection is authoritative. */
+    attemptId?: string;
+    turnStage?: string;
 }
 
 export interface MeshActiveWorkSummary {
@@ -340,6 +380,7 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
         failed: 0,
         awaiting_approval: 0,
         awaiting_choice: 0,
+        finalizing: 0,
     };
     const sourceCounts: Record<MeshActiveWorkSource, number> = { queue: 0, direct: 0 };
     for (const item of activeWork) {
@@ -388,15 +429,22 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         const queueLive = task.status === 'assigned'
             ? sessionStatusFromNodes(opts.nodes, queueNodeId ?? undefined, queueSessionId ?? undefined)
             : {};
-        const queueStatus: MeshActiveWorkStatus = queueLive.status === 'awaiting_approval'
+        let queueStatus: MeshActiveWorkStatus = queueLive.status === 'awaiting_approval'
             || queueLive.status === 'awaiting_choice'
             || queueLive.status === 'generating'
             ? queueLive.status
             : task.status;
+        // Stage 6: when the task has a turn attempt, the reducer projection is the
+        // status authority (equivalent to read_chat/session_status/dashboard).
+        const turnOverlay = task.status === 'assigned'
+            ? turnProjectionActiveWorkStatus(opts.meshId, task.id)
+            : null;
+        if (turnOverlay) queueStatus = turnOverlay.status;
         records.push({
             taskId: task.id,
             source: 'queue',
             status: queueStatus,
+            ...(turnOverlay ? { attemptId: turnOverlay.attemptId, turnStage: turnOverlay.stage } : {}),
             nodeId: queueNodeId,
             sessionId: queueSessionId,
             taskTitle: title,
@@ -419,9 +467,12 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId ?? undefined, dispatch.sessionId ?? undefined);
             const dbStatus = dispatch.status; // 'dispatched' | 'acked' | 'completed' | 'failed' | 'stale'
             const isTerminal = dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'stale';
+            // Stage 6: the reducer projection outranks the live point sample for
+            // nonterminal direct dispatches (same authority as the queue path).
+            const turnOverlay = isTerminal ? null : turnProjectionActiveWorkStatus(opts.meshId, dispatch.taskId);
             const status: MeshActiveWorkStatus = isTerminal
                 ? (dbStatus === 'completed' ? 'idle' : 'failed')
-                : live.status || (dbStatus === 'acked' ? 'generating' : 'assigned');
+                : turnOverlay?.status || live.status || (dbStatus === 'acked' ? 'generating' : 'assigned');
             const { ledgerOnlyStaleReason, isFreshUnacknowledged } = classifyDirectDispatch({
                 status,
                 isTerminalRow: isTerminal,
@@ -435,6 +486,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
                 taskId: dispatch.taskId,
                 source: 'direct',
                 status,
+                ...(turnOverlay ? { attemptId: turnOverlay.attemptId, turnStage: turnOverlay.stage } : {}),
                 nodeId: dispatch.nodeId ?? undefined,
                 sessionId: dispatch.sessionId ?? undefined,
                 providerType: dispatch.providerType ?? undefined,

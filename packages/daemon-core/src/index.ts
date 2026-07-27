@@ -334,6 +334,8 @@ export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHost
 // ── Mesh Events ──
 export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, clearPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, requeueHeldMeshCoordinatorEvents, serializeV2EnvelopeToWire, readV2EnvelopeFromWire, reconcileDirectDispatchCompletionFromTranscript } from './mesh/mesh-events.js';
 export type { PendingMeshCoordinatorEvent, MeshHeldEventRequeueFilter, MeshHeldEventRequeueResult } from './mesh/mesh-events.js';
+export { resolveSessionTurnPresentation, resolveTurnAttemptRow, presentationFromAttemptRow, turnStageToSurfaceStatus, isRestartBlockingPresentation, classifyShadowDivergence, getTurnPresentationMetrics } from './mesh/mesh-turn-presentation.js';
+export type { SessionTurnPresentation, TurnPresentationAuthority, TurnPresentationSurface, TurnAuthorityLookup, ResolveTurnPresentationArgs, TurnPresentationMetrics, ShadowDivergenceReason } from './mesh/mesh-turn-presentation.js';
 // COORD-EVENT-MISROUTE: coordinator-identity helper so the mcp-server drain path can build a
 // session-scoped drainer identity (identityDeliversTo sibling-session filter) with the same
 // canonical builder daemon-core uses internally, instead of hand-rolling the identity shape.

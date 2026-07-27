@@ -22,8 +22,13 @@ import {
     LIVE_STATUS_ACTIVE_CHAT_OPTIONS,
     normalizeActiveChatData,
     normalizeManagedStatus,
+    type ManagedStatus,
     type NormalizeActiveChatOptions,
 } from './normalize.js';
+import {
+    resolveSessionTurnPresentation,
+    type SessionTurnPresentation,
+} from '../mesh/mesh-turn-presentation.js';
 import { getMeshQueueStats } from '../mesh/mesh-work-queue.js';
 import { SILENT_IDLE_PUSH_TTL_MS } from '../repo-mesh-types.js';
 import { getCoordinatorForSession } from '../mesh/coordinator-registry.js';
@@ -163,6 +168,29 @@ function resolveSessionStatus(
     return chatStatus;
 }
 
+/**
+ * TURN-PRESENTATION (Stage 6): the single status authority for session entries.
+ * The legacy provider-FSM/chat merge above still computes the LEGACY status — it
+ * is the shadow-comparison input and the fallback for sessions with no mesh turn
+ * attempt. When the session owns a Stage 5 attempt, the reducer projection
+ * overrides the presented status (and rides along as `turn`).
+ */
+function resolveSessionStatusUnified(args: {
+    sessionId: string | null | undefined;
+    providerType: string | null | undefined;
+    activeChat: { status?: string | null; activeModal?: { buttons?: unknown[] | null } | null } | null | undefined;
+    providerStatus?: string | null;
+}): { status: ManagedStatus; turn: SessionTurnPresentation } {
+    const legacyStatus = resolveSessionStatus(args.activeChat, args.providerStatus);
+    const turn = resolveSessionTurnPresentation({
+        sessionId: args.sessionId,
+        legacyStatus,
+        providerType: args.providerType,
+        surface: 'session_status',
+    });
+    return { status: turn.status, turn };
+}
+
 function shouldIncludeSessionControls(profile: SessionEntryProfile): boolean {
     return profile !== 'live';
 }
@@ -288,6 +316,7 @@ function buildWorkspaceSession(
     const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
     const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: 'coordinator' as const } : undefined;
     const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : undefined;
+    const resolved = resolveSessionStatusUnified({ sessionId: state.instanceId, providerType: state.type, activeChat, providerStatus: state.status });
     return {
         id: state.instanceId || state.type,
         parentId: null,
@@ -295,7 +324,8 @@ function buildWorkspaceSession(
         providerName: state.name,
         kind: 'workspace',
         transport: 'cdp-page',
-        status: resolveSessionStatus(activeChat, state.status),
+        status: resolved.status,
+        ...(resolved.turn.authority === 'turn_reducer' ? { turn: resolved.turn } : {}),
         title,
         workspace,
         ...(git && { git }),
@@ -334,6 +364,7 @@ function buildExtensionAgentSession(
     const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
     const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: 'coordinator' as const } : undefined;
     const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : undefined;
+    const resolved = resolveSessionStatusUnified({ sessionId: ext.instanceId, providerType: ext.type, activeChat, providerStatus: ext.status });
     return {
         id: ext.instanceId || `${parent.instanceId}:${ext.type}`,
         parentId: parent.instanceId || parent.type,
@@ -342,7 +373,8 @@ function buildExtensionAgentSession(
         providerSessionId: ext.providerSessionId,
         kind: 'agent',
         transport: 'cdp-webview',
-        status: resolveSessionStatus(activeChat, ext.status),
+        status: resolved.status,
+        ...(resolved.turn.authority === 'turn_reducer' ? { turn: resolved.turn } : {}),
         title: activeChat?.title || ext.name,
         workspace,
         ...(git && { git }),
@@ -404,7 +436,8 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
     const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
     const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: 'coordinator' as const } : undefined;
     const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : undefined;
-    const resolvedStatus = resolveSessionStatus(activeChat, state.status);
+    const resolved = resolveSessionStatusUnified({ sessionId: state.instanceId, providerType: state.type, activeChat, providerStatus: state.status });
+    const resolvedStatus = resolved.status;
     return {
         id: state.instanceId,
         parentId: null,
@@ -414,6 +447,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         kind: 'agent',
         transport: 'pty',
         status: resolvedStatus,
+        ...(resolved.turn.authority === 'turn_reducer' ? { turn: resolved.turn } : {}),
         title: activeChat?.title || state.name,
         workspace,
         ...(git && { git }),
@@ -472,7 +506,8 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
     const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
     const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: 'coordinator' as const } : undefined;
     const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : undefined;
-    const resolvedStatus = resolveSessionStatus(activeChat, state.status);
+    const resolved = resolveSessionStatusUnified({ sessionId: state.instanceId, providerType: state.type, activeChat, providerStatus: state.status });
+    const resolvedStatus = resolved.status;
     return {
         id: state.instanceId,
         parentId: null,
@@ -481,6 +516,7 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
         kind: 'agent',
         transport: 'acp',
         status: resolvedStatus,
+        ...(resolved.turn.authority === 'turn_reducer' ? { turn: resolved.turn } : {}),
         title: activeChat?.title || state.name,
         workspace,
         ...(git && { git }),

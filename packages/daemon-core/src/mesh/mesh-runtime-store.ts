@@ -2581,6 +2581,21 @@ export class MeshRuntimeStore {
         return row ? meshTurnAttemptFromRow(row) : null;
     }
 
+    /**
+     * The CURRENT attempt bound to a worker session, across meshes/tasks: the
+     * nonterminal row if one exists, else the most recently touched terminal row.
+     * Stage 6's presentation layer resolves sessions (not tasks) — read_chat,
+     * session status, dashboard and the restart gate all key on sessionId.
+     */
+    getLatestTurnAttemptForSession(sessionId: string): MeshTurnAttemptRow | null {
+        const row = this.db.prepare(`
+            SELECT * FROM mesh_turn_attempts
+            WHERE session_id = ?
+            ORDER BY (terminal_outcome IS NULL) DESC, updated_at DESC LIMIT 1
+        `).get(sessionId) as Record<string, unknown> | undefined;
+        return row ? meshTurnAttemptFromRow(row) : null;
+    }
+
     getTurnAttemptBySeq(meshId: string, taskId: string, attemptSeq: number): MeshTurnAttemptRow | null {
         const row = this.db.prepare(`
             SELECT * FROM mesh_turn_attempts WHERE mesh_id = ? AND task_id = ? AND attempt_seq = ?

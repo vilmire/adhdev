@@ -21,7 +21,7 @@ export interface RuntimeAttachedClient {
 }
 
 /** Session status union (used by SessionEntry.status, legacy recent-launch metadata, etc.) */
-export type SessionStatus = 'idle' | 'generating' | 'waiting_approval' | 'waiting_choice' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
+export type SessionStatus = 'idle' | 'generating' | 'waiting_approval' | 'waiting_choice' | 'finalizing' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
 
 /** Inbox bucket categories for recent sessions */
 export type RecentSessionBucket = 'needs_attention' | 'working' | 'task_complete' | 'idle';

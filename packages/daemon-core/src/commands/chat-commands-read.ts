@@ -12,6 +12,7 @@ import { validateReadChatResultPayload } from '../providers/read-chat-contract.j
 import { isNativeSourceCanonicalHistory, readChatHistory, readProviderChatHistory } from '../config/chat-history.js';
 import { clearPersistedProviderSessionPins, loadPersistedProviderSessionPins, recordPersistedProviderSessionPin } from '../config/state-store.js';
 import { getCoordinatorForSession } from '../mesh/coordinator-registry.js';
+import { resolveSessionTurnPresentation } from '../mesh/mesh-turn-presentation.js';
 import { LOG } from '../logging/logger.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
 import { hashSignatureParts } from '../chat/chat-signatures.js';
@@ -1780,10 +1781,42 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any, h?:
     const debugReadChat = payload?.debugReadChat && typeof payload.debugReadChat === 'object'
         ? payload.debugReadChat
         : undefined;
+    // TURN-PRESENTATION (Stage 6): for a session with a mesh turn attempt, the
+    // reducer projection is the status authority — the legacy point-sample /
+    // null→idle derivations above still run (they feed the shadow comparator and
+    // remain the fallback for sessions with no attempt), but they can no longer
+    // override the projected execution state on this surface.
+    const presentationSessionIdHint = typeof args?.targetSessionId === 'string' && args.targetSessionId.trim()
+        ? args.targetSessionId.trim()
+        : typeof args?.sessionId === 'string' && args.sessionId.trim()
+            ? args.sessionId.trim()
+            : typeof (h?.currentSession as any)?.sessionId === 'string' ? String((h!.currentSession as any).sessionId) : '';
+    const providerHint = typeof args?.cliType === 'string' ? args.cliType
+        : typeof args?.providerType === 'string' ? args.providerType
+        : typeof args?.agentType === 'string' ? args.agentType
+        : '';
+    const legacyStatus = normalizeReadChatCommandStatus(payload?.status, payload?.activeModal);
+    const turnPresentation = resolveSessionTurnPresentation({
+        sessionId: presentationSessionIdHint || undefined,
+        legacyStatus,
+        providerType: providerHint || undefined,
+        surface: 'read_chat',
+    });
+    let effectiveStatus = legacyStatus;
+    if (turnPresentation.authority === 'turn_reducer') {
+        effectiveStatus = turnPresentation.status;
+        // Contract safety: waiting_approval requires activeModal buttons. If the
+        // reducer parked the attempt but the modal is not staged on THIS read yet,
+        // present generating rather than failing the read (the next poll surfaces
+        // the modal) — same rule the legacy path applies.
+        if (effectiveStatus === 'waiting_approval' && !hasNonEmptyModalButtons(payload?.activeModal)) {
+            effectiveStatus = 'generating';
+        }
+    }
     try {
         validatedPayload = validateReadChatResultPayload({
             ...payload,
-            status: normalizeReadChatCommandStatus(payload?.status, payload?.activeModal),
+            status: effectiveStatus,
         }, 'read_chat command result') as Record<string, any>;
     } catch (error: any) {
         return { success: false, error: error?.message || String(error) };
@@ -1795,12 +1828,11 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any, h?:
     // applying it here means we don't have to thread the filter through
     // every one. Driven by the provider setting `showCoordinatorSystemPrompt`
     // + the coordinator-registry entry for the target session.
+    // (sessionIdHint keeps its ORIGINAL semantics for the coordinator-prompt
+    // filter — no current-session fallback — so message content filtering is
+    // unchanged by the Stage 6 status-authority work.)
     const sessionIdHint = typeof args?.targetSessionId === 'string' ? args.targetSessionId
         : typeof args?.sessionId === 'string' ? args.sessionId
-        : '';
-    const providerHint = typeof args?.cliType === 'string' ? args.cliType
-        : typeof args?.providerType === 'string' ? args.providerType
-        : typeof args?.agentType === 'string' ? args.agentType
         : '';
     const filteredMessages = h
         ? maybeHideCoordinatorPromptMessage(h, providerHint, sessionIdHint, messages)
@@ -1840,6 +1872,10 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any, h?:
         ...preservedPayloadFields,
         messages: sync.messages,
         totalMessages: sync.totalMessages,
+        // Stage 6: the authoritative turn presentation rides the read_chat
+        // payload for mesh-owned sessions (identity + stage + evidence
+        // timestamps; the `status` field above already reflects it).
+        ...(turnPresentation.authority === 'turn_reducer' ? { turn: turnPresentation } : {}),
         ...(returnedDebugReadChat ? { debugReadChat: returnedDebugReadChat } : {}),
     };
 }

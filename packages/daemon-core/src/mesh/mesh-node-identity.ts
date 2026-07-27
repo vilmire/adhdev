@@ -17,6 +17,7 @@ import { getDaemonBuildInfo } from '../build-info.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, normalizeMeshNodeFacts, daemonIdsEquivalent, meshWorkspacesEquivalent, sessionIdsEquivalent, withStatusProbeMarker } from '@adhdev/mesh-shared';
 import { buildLocalNodeFacts } from './node-facts.js';
+import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 import type { MeshReportedMemberState } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
@@ -2138,16 +2139,29 @@ export async function hydrateInlineMeshDirectTruth(args: {
 export function summarizeMeshSessionRecord(record: any): Record<string, unknown> {
     const meta = readObjectRecord(record?.meta);
     const isSelfCoordinator = Boolean(readStringValue(meta.meshCoordinatorFor));
-    const chatStatus = readStringValue(record?.chatStatus, record?.activeChat?.status, meta.chatStatus, meta.sessionStatus);
+    let chatStatus = readStringValue(record?.chatStatus, record?.activeChat?.status, meta.chatStatus, meta.sessionStatus);
     const state = readLiveMeshSessionState(record);
     const statusNote = isSelfCoordinator && (!chatStatus || chatStatus === 'idle' || state === 'idle')
         ? 'Coordinator self status is sampled from the session host and may read idle while the coordinator is generating this response.'
         : null;
+    // TURN-PRESENTATION (Stage 6): a session with a mesh turn attempt presents the
+    // reducer-projected status here (same authority as read_chat / session_status /
+    // dashboard); the sampled chatStatus remains the shadow-comparison input and the
+    // fallback when no attempt exists.
+    const sessionId = readStringValue(record?.sessionId) || 'unknown';
+    const turn = resolveSessionTurnPresentation({
+        sessionId: sessionId === 'unknown' ? undefined : sessionId,
+        legacyStatus: chatStatus || state,
+        providerType: readStringValue(record?.providerType) || undefined,
+        surface: 'mesh_status',
+    });
+    if (turn.authority === 'turn_reducer') chatStatus = turn.status;
     return {
-        sessionId: readStringValue(record?.sessionId) || 'unknown',
+        sessionId,
         providerType: readStringValue(record?.providerType),
         state,
         chatStatus,
+        ...(turn.authority === 'turn_reducer' ? { turn, attemptId: turn.attemptId, turnStage: turn.stage } : {}),
         lifecycle: readStringValue(record?.lifecycle),
         surfaceKind: getSessionHostSurfaceKind(record as any),
         recoveryState: readStringValue(meta.runtimeRecoveryState) ?? null,

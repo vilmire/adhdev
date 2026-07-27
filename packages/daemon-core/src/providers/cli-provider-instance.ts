@@ -31,6 +31,8 @@ import { recordDebugTrace } from '../logging/debug-trace.js';
 import { shouldCollectTraceCategory } from '../logging/debug-config.js';
 import { traceMeshEventStage, traceMeshEventDrop } from '../mesh/mesh-event-trace.js';
 import { isWeakCompletionEvidence } from '../mesh/mesh-events-utils.js';
+import { resolveSessionTurnPresentation } from '../mesh/mesh-turn-presentation.js';
+import { isTerminalTurnStage } from '../mesh/mesh-turn-ledger.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
 import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, hasReliableApprovalAffirmative, looksLikeActiveApprovalPromptText, normalizeApprovalLabel } from './approval-utils.js';
@@ -2717,6 +2719,40 @@ export class CliProviderInstance implements ProviderInstance {
             : CliProviderInstance.MESH_WORKER_STALL_IDLE_THRESHOLD_MS;
         const stalledMs = now - this.meshStallAnchorAt;
         if (stalledMs < threshold) return;
+
+        // TURN-PRESENTATION (Stage 6): for mesh-owned work the causal attempt
+        // stage/timestamps — never the PTY quiet clock alone — decide stalled vs
+        // progressing. A worker PARKED on approval/choice or FINALIZING is
+        // expected to be screen-quiet (suspended/committing states of the SAME
+        // live attempt): re-arm instead of false-firing monitor:no_progress.
+        // Likewise a consumed/generating attempt with FRESH causal evidence
+        // (updatedAt inside the threshold window) is progressing by definition —
+        // the evidence timestamp becomes the anchor. A genuinely wedged attempt
+        // accrues no new reducer events, so its updatedAt ages out and the real
+        // stall still fires below. Sessions with no attempt keep the legacy
+        // behavior unchanged (provider FSM fallback).
+        const turnPresentation = resolveSessionTurnPresentation({
+            sessionId: this.instanceId,
+            legacyStatus: observedStatus,
+            providerType: this.type,
+            surface: 'stall_watchdog',
+            nowMs: now,
+        });
+        if (turnPresentation.authority === 'turn_reducer' && turnPresentation.stage) {
+            const stage = turnPresentation.stage;
+            if (stage === 'waiting_approval' || stage === 'waiting_choice' || stage === 'finalizing' || isTerminalTurnStage(stage)) {
+                this.meshStallAnchorAt = now;
+                this.meshStallEmittedForAnchor = false;
+                return;
+            }
+            const causalEvidenceMs = Date.parse(turnPresentation.updatedAt || '');
+            if ((stage === 'consumed' || stage === 'generating')
+                && Number.isFinite(causalEvidenceMs)
+                && now - causalEvidenceMs < threshold) {
+                this.meshStallAnchorAt = Math.max(this.meshStallAnchorAt, causalEvidenceMs);
+                return;
+            }
+        }
 
         // KIMI-MESH-COMPLETION-EMIT (axis 1) — TX-FSM Stage 1: transcript-aware
         // stall for native-source providers, now delegated to the SHARED

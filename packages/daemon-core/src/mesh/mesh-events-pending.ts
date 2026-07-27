@@ -5,6 +5,7 @@ import { LOG } from '../logging/logger.js';
 import { loadConfig } from '../config/config.js';
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { resolveTurnAttemptRow } from './mesh-turn-presentation.js';
 import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId, readMeshCompletionSummary, isWeakCompletionMetadata } from './mesh-events-utils.js';
 import { daemonIdsEquivalent, expandDaemonIdForms } from '@adhdev/mesh-shared';
 import {
@@ -87,6 +88,14 @@ export interface PendingMeshCoordinatorEvent {
      * Absent (undefined/false) on a normally-owned event → the leak guard applies.
      */
     dispatchedBySelfFallback?: boolean;
+
+    // ─── Stage 6 turn-projection annotation (peek-time, additive) ────────────
+    // Stamped by getPendingMeshCoordinatorEvents from the current attempt row so
+    // pending-event surfaces can label the event from the authoritative causal
+    // stage instead of re-deriving status. Never written to the durable queue.
+    attemptId?: string;
+    turnStage?: string;
+    terminalOutcome?: string;
 }
 
 /**
@@ -1396,7 +1405,33 @@ export function getPendingMeshCoordinatorEvents(
         batchSeen: new Set<string>(),
         countMetrics: false,
     });
-    return reconcilePendingMeshCoordinatorEvents(meshId, routed);
+    return reconcilePendingMeshCoordinatorEvents(meshId, routed)
+        .map((event) => annotatePendingEventWithTurnProjection(meshId, event));
+}
+
+/**
+ * TURN-PRESENTATION (Stage 6): annotate a peeked pending event with the
+ * authoritative attempt identity + causal stage from the turn projection, so
+ * coordinator/MCP pending-event surfaces label completion / approval / choice /
+ * finalizing from the SAME authority as every other surface. Read-only: the
+ * event payload and all routing/dedup semantics are unchanged; events whose
+ * task has no attempt pass through untouched (legacy fallback).
+ */
+function annotatePendingEventWithTurnProjection(meshId: string, event: PendingMeshCoordinatorEvent): PendingMeshCoordinatorEvent {
+    try {
+        const taskId = typeof event?.metadataEvent?.taskId === 'string' ? event.metadataEvent.taskId.trim() : '';
+        if (!taskId) return event;
+        const row = resolveTurnAttemptRow({ meshId, taskId });
+        if (!row) return event;
+        return {
+            ...event,
+            attemptId: row.attemptId,
+            turnStage: row.stage,
+            ...(row.terminalOutcome ? { terminalOutcome: row.terminalOutcome } : {}),
+        };
+    } catch {
+        return event;
+    }
 }
 
 /**

@@ -206,6 +206,9 @@ function fsmStateIdsForStatus(status: string | undefined): string[] | undefined 
         case 'starting':
         case 'no_progress':
         case 'long_generating':
+        // Stage 6: finalizing is mid-turn (the reducer is committing terminal
+        // evidence) — controls stay gated as busy until the terminal commit.
+        case 'finalizing':
             return ['busy', 'generating', 'starting'];
         case 'waiting_approval':
         case 'approval':

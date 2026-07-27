@@ -376,6 +376,12 @@ export interface SessionEntry {
     kind: SessionKind;
     transport: SessionTransport;
     status: SessionStatus;
+    /**
+     * Stage 6 unified turn presentation (mesh-owned sessions with a turn
+     * attempt). Authoritative execution status/identity/evidence timestamps
+     * from the turn reducer projection; absent for non-mesh sessions.
+     */
+    turn?: import('./mesh/mesh-turn-presentation.js').SessionTurnPresentation;
     title: string;
     workspace?: string | null;
     git?: GitCompactSummary;
@@ -475,6 +481,8 @@ export interface CompactSessionEntry {
     kind: SessionKind;
     transport: SessionTransport;
     status: SessionStatus;
+    /** Stage 6 unified turn presentation — see SessionEntry.turn. */
+    turn?: import('./mesh/mesh-turn-presentation.js').SessionTurnPresentation;
     title: string;
     workspace: string | null;
     git?: GitCompactSummary;

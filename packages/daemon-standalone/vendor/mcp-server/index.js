@@ -3585,6 +3585,11 @@ async function meshStatus(ctx, args = {}) {
           status: s.status ?? s.lifecycle ?? s.state,
           providerType: s.providerType ?? s.cliType ?? s.type,
           ...s.activeChat?.status ? { chatStatus: s.activeChat.status } : {},
+          // Stage 6: attempt identity + causal stage from the unified turn
+          // projection (present on mesh-owned sessions only), so mesh_status
+          // reports the SAME attemptId/stage as read_chat and the dashboard.
+          ...s.turn?.attemptId ? { attemptId: s.turn.attemptId } : {},
+          ...s.turn?.stage ? { turnStage: s.turn.stage } : {},
           ...isSelfCoordinator ? { isSelfCoordinator: true, role: "coordinator" } : {},
           // [T2] Carry the worker-computed last-message preview through the slim so
           // the coordinator's inbox can show the worker's latest ASSISTANT reply

@@ -6,6 +6,7 @@ export type ManagedStatus =
     | 'generating'
     | 'waiting_approval'
     | 'waiting_choice'
+    | 'finalizing'
     | 'error'
     | 'stopped'
     | 'starting'
@@ -153,6 +154,10 @@ export function normalizeManagedStatus(
     const normalized = String(status || 'idle').trim().toLowerCase();
     if (normalized === 'waiting_approval') return 'waiting_approval';
     if (normalized === 'waiting_choice') return 'waiting_choice';
+    // Stage 6: `finalizing` is a first-class managed status (the turn reducer is
+    // reconciling/committing terminal evidence). It must NOT collapse to `idle` —
+    // every surface keeps showing finalizing until the reducer commits terminal.
+    if (normalized === 'finalizing') return 'finalizing';
     if (WORKING_STATUSES.has(normalized)) return 'generating';
     if (normalized === 'error') return 'error';
     if (normalized === 'stopped') return 'stopped';
