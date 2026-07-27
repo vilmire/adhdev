@@ -205,9 +205,11 @@ function extractButtonLabels(spec: ModalSpec, text: string): string[] {
  */
 function buttonBlockApprovalCue(spec: ModalSpec, text: string): boolean {
   // Defense-in-depth (mission fb2a7053): even if some caller reaches here on a
-  // question picker, its "Enter to select"/"Esc to cancel" footer marks it as a
-  // choice, not an approval — never derive an approval cue from picker rows.
-  if (/Enter to select/i.test(text) && /Esc to cancel/i.test(text)) return false;
+  // question picker, its "Enter to select" footer hint marks it as a choice,
+  // not an approval — never derive an approval cue from picker rows. A genuine
+  // approval modal never renders that hint (rc.19: current claude-cli renders
+  // the picker footer as "Enter to select · ↑/↓ to navigate" — no Esc hint).
+  if (/Enter to select/i.test(text)) return false;
   const labels = extractButtonLabels(spec, text);
   if (labels.length < 2) return false;
   if (pickApprovalButton(labels).index < 0) return false;
@@ -227,26 +229,25 @@ const PICKER_OPTION_ROW = /^\s*(?:[❯›>]\s*)?(?:\[[ xX]\]|[☐☒◻◼]\s*)?
  * it), with no promptId for mesh_answer_question.
  *
  * The picker's distinguishing signature is its footer: the claude TUI select
- * hints "Enter to select" AND "Esc to cancel". A genuine tool-consent approval
- * modal (Yes/No/Allow/Deny) NEVER renders that footer pair — it uses the ordinary
- * "? for shortcuts" prompt line instead — so the footer alone reliably separates
- * the two even though BOTH draw numbered option rows.
+ * hint "Enter to select". A genuine tool-consent approval modal (Yes/No/Allow/
+ * Deny) NEVER renders that hint — its footer is "Esc to cancel · Tab to amend ·
+ * ctrl+e to explain" — so the hint alone reliably separates the two even though
+ * BOTH draw numbered option rows.
  *
- * The original guard additionally required the freeform escape hatch ("Type
- * something" / "Chat about this"). That made the guard collapse whenever the
- * escape-hatch rows were absent or scrolled out of the captured frame: the
- * picker then fell through to the approval matchers → waiting_approval. The
- * escape hatch is therefore DOWNGRADED from a required signal to an optional
- * supporting one: the guard now fires on the select footer plus at least one
- * numbered option row (which every picker draws), and the escape hatch merely
- * reinforces an already-matching footer. The numbered-row requirement keeps a
- * bare "Enter to select" string (e.g. inside prose) from being mistaken for a
- * picker.
+ * The guard originally ALSO required "Esc to cancel" in the footer pair. Older
+ * claude-cli builds rendered "Enter to select · Esc to cancel", but current
+ * builds render "Enter to select · ↑/↓ to navigate" with NO Esc hint — the pair
+ * requirement then collapsed and the picker fell through to the approval
+ * matchers → waiting_approval (rc.19 live defect). The freeform escape hatch
+ * ("Type something" / "Chat about this") had earlier been downgraded the same
+ * way (absent/scrolled-out rows broke the guard). The guard now fires on the
+ * select hint plus at least one numbered option row (which every picker draws);
+ * the numbered-row requirement keeps a bare "Enter to select" string (e.g.
+ * inside prose) from being mistaken for a picker.
  */
 export function isAskUserQuestionPickerSignature(text: string): boolean {
   if (!text) return false;
-  const hasSelectFooter = /Enter to select/i.test(text) && /Esc to cancel/i.test(text);
-  if (!hasSelectFooter) return false;
+  if (!/Enter to select/i.test(text)) return false;
   return PICKER_OPTION_ROW.test(text);
 }
 

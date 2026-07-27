@@ -722,7 +722,26 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
 
         const status = adapter.getStatus();
         const targetInstance = getTargetInstance(h, args);
-        const targetState = targetInstance?.getState?.() as { activeChat?: { status?: string; activeModal?: { message?: string; buttons?: string[] } | null } } | undefined;
+        const targetState = targetInstance?.getState?.() as { activeChat?: { status?: string; activeModal?: { message?: string; buttons?: string[] } | null; activeInteractivePrompt?: { promptId?: string } | null } } | undefined;
+        // ASKUSERQUESTION-NOT-APPROVAL (rc.19 live defect): a session parked on an
+        // AskUserQuestion picker holds an activeInteractivePrompt (waiting_choice). That
+        // is a multi-choice QUESTION, not a yes/no consent — answering it via
+        // resolve_action clicks an arbitrary picker row ("approve" → the first
+        // affirmative-looking label, e.g. Continue), which is semantically wrong. Refuse
+        // and point the caller at the question path, which drives the answer through
+        // setInteractivePromptResponse against the authoritative held prompt.
+        const heldPrompt = (status as { activeInteractivePrompt?: { promptId?: unknown } | null } | null)?.activeInteractivePrompt
+            ?? targetState?.activeChat?.activeInteractivePrompt
+            ?? null;
+        if (heldPrompt && typeof heldPrompt.promptId === 'string' && heldPrompt.promptId) {
+            LOG.info('Command', `[resolveAction] refused — session holds interactive prompt ${heldPrompt.promptId} (waiting_choice, not an approval)`);
+            return {
+                success: false,
+                error: `Session is awaiting a multi-choice answer (waiting_choice), not an approval. Use mesh_answer_question with promptId "${heldPrompt.promptId}" instead of mesh_approve.`,
+                waitingChoice: true,
+                promptId: heldPrompt.promptId,
+            };
+        }
         const surfacedModal = targetState?.activeChat?.activeModal && Array.isArray(targetState.activeChat.activeModal.buttons)
             && targetState.activeChat.activeModal.buttons.some((candidate) => typeof candidate === 'string' && candidate.trim())
             ? targetState.activeChat.activeModal

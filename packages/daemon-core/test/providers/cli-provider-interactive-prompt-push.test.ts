@@ -191,6 +191,84 @@ describe('CliProviderInstance interactive-prompt push (AskUserQuestion / waiting
     expect(approvals[0].modalMessage).toBe('Allow Bash command?')
   })
 
+  it('rc.19 core: an FSM picker modal (kind picker, raw waiting_approval) with a captured prompt emits waiting_choice — NEVER waiting_approval', () => {
+    const { instance, events, setAdapterStatus } = makeInstance()
+    const detect = (instance as any).detectStatusTransition.bind(instance)
+
+    // The exact rc.19 misroute input: the claude FSM sits in its picker state
+    // (statusForState maps ANY modal to 'approval'), so the adapter reports raw
+    // waiting_approval with kind='picker' buttons Continue/Abort/… while the
+    // interactive prompt capture holds the question. This must surface as ONE
+    // agent:waiting_choice carrying the promptId — and must NOT enter the
+    // approval flow (mesh_approve cannot answer a question).
+    setAdapterStatus({
+      status: 'waiting_approval',
+      approvalEntrySeq: 7,
+      activeModal: {
+        message: 'Picker open',
+        buttons: ['Continue', 'Abort', 'Type something.', 'Chat about this'],
+        kind: 'picker',
+      },
+      activeInteractivePrompt: PROMPT,
+    })
+    detect()
+
+    const approvals = events.filter((e) => e.event === 'agent:waiting_approval')
+    expect(approvals.length).toBe(0)
+
+    const choices = events.filter((e) => e.event === 'agent:waiting_choice')
+    expect(choices.length).toBe(1)
+    expect(choices[0].promptId).toBe('ask-user-1')
+    expect(choices[0].interactivePrompt?.promptId).toBe('ask-user-1')
+
+    // A repeat tick of the same picker frame re-emits nothing (edge-triggered).
+    detect()
+    expect(events.filter((e) => e.event === 'agent:waiting_choice').length).toBe(1)
+    expect(events.filter((e) => e.event === 'agent:waiting_approval').length).toBe(0)
+  })
+
+  it('picker answer resume: the approval_resolving transient emits no spurious approval, and a later genuine approval still emits', () => {
+    const { instance, events, setAdapterStatus } = makeInstance()
+    const detect = (instance as any).detectStatusTransition.bind(instance)
+
+    // Enter the picker (fires waiting_choice once).
+    setAdapterStatus({
+      status: 'waiting_approval',
+      approvalEntrySeq: 7,
+      activeModal: { message: 'Picker open', buttons: ['Continue', 'Abort'], kind: 'picker' },
+      activeInteractivePrompt: PROMPT,
+    })
+    detect()
+    expect(events.filter((e) => e.event === 'agent:waiting_choice').length).toBe(1)
+
+    // The answer lands: the FSM drains through approval_resolving — raw
+    // waiting_approval with NO modal — while the held prompt clears on its own
+    // grace. This transient is the picker resolving, NOT a fresh consent: no
+    // agent:waiting_approval (with an empty modal) may fire.
+    setAdapterStatus({ status: 'waiting_approval', activeModal: null, activeInteractivePrompt: null })
+    detect()
+    expect(events.filter((e) => e.event === 'agent:waiting_approval').length).toBe(0)
+
+    // The turn resumes generating on the SAME attempt — no new events at all.
+    setAdapterStatus({ status: 'generating', activeModal: null, activeInteractivePrompt: null })
+    detect()
+    expect(events.filter((e) => e.event === 'agent:waiting_approval').length).toBe(0)
+    expect(events.filter((e) => e.event === 'agent:waiting_choice').length).toBe(1)
+
+    // A subsequent GENUINE approval (kind approval) still flows through the
+    // approval arm unchanged.
+    setAdapterStatus({
+      status: 'waiting_approval',
+      approvalEntrySeq: 8,
+      activeModal: { message: 'Allow Bash command?', buttons: ['Yes', 'No'], kind: 'approval' },
+      activeInteractivePrompt: null,
+    })
+    detect()
+    const approvals = events.filter((e) => e.event === 'agent:waiting_approval')
+    expect(approvals.length).toBe(1)
+    expect(approvals[0].modalMessage).toBe('Allow Bash command?')
+  })
+
   it('clears on prompt gone, then a later real completion emits agent:generating_completed', () => {
     const { instance, events, setAdapterStatus } = makeInstance()
     const detect = (instance as any).detectStatusTransition.bind(instance)

@@ -344,7 +344,8 @@ export interface MeshPendingApproval {
 
 /**
  * Derive the mesh-wide pending-approval inbox from already-built active-work records.
- * Pure filter+projection over `status === 'awaiting_approval'` — no new store, no probe;
+ * Filter+projection over `status === 'awaiting_approval'`, then a deterministic dedup
+ * keyed by (nodeId, sessionId) — no new store, no probe;
  * the caller supplies the records (typically buildMeshActiveWork(...).activeWork so the
  * enumeration reuses the exact classification `mesh_status` already computes). Records
  * without a node/session are skipped: an approval that cannot be routed to a live
@@ -366,9 +367,27 @@ export function collectPendingApprovals(activeWork: MeshActiveWorkRecord[]): Mes
             waitingMs: record.elapsedMs,
         });
     }
+    // DETERMINISTIC DEDUP (rc.19 live defect: mesh_list_pending_approvals returned the
+    // same session twice). One live session exposes exactly ONE modal at a time, so one
+    // (nodeId, sessionId) pair can never need two inbox rows — yet the active-work build
+    // can yield two records for it (a queue-assigned task record AND a direct-dispatch
+    // record bound to the same session, or the MeshRuntimeStore + remote-ledger paths
+    // overlapping). Keyed by node/session identity; the longest-waiting row wins (it is
+    // the most-stalled binding and the one the coordinator should act on first). Ties
+    // keep the first-seen row — activeWork arrives createdAt-sorted, so the outcome is
+    // deterministic across identical inputs.
+    const bySession = new Map<string, MeshPendingApproval>();
+    for (const approval of approvals) {
+        const key = `${approval.nodeId}::${approval.sessionId}`;
+        const existing = bySession.get(key);
+        if (!existing || approval.waitingMs > existing.waitingMs) {
+            bySession.set(key, approval);
+        }
+    }
+    const deduped = [...bySession.values()];
     // Longest-waiting first — the coordinator/inbox should address the most-stalled approval first.
-    approvals.sort((a, b) => b.waitingMs - a.waitingMs);
-    return approvals;
+    deduped.sort((a, b) => b.waitingMs - a.waitingMs);
+    return deduped;
 }
 
 export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): MeshActiveWorkSummary {

@@ -6,7 +6,7 @@ import { validateFsmSpec } from '../../../src/providers/spec/fsm-loader.js';
 import { evaluateFsm, stableRegionKey, type FsmClock } from '../../../src/providers/spec/fsm-evaluator.js';
 import { resolveSections, sectionText, extractButtonsFromRule, extractTitle } from '../../../src/providers/spec/evaluator.js';
 import { filterIgnoredLines } from '../../../src/providers/spec/fsm-driver.js';
-import type { CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
+import { modalKindForState, statusForState, type CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
 
 function resolveSpecPath(): string {
     const here = path.dirname(fileURLToPath(import.meta.url));
@@ -138,7 +138,56 @@ describe('claude-cli v4 FSM — divider-less approval modal', () => {
     });
 });
 
-// ── Leading shell-redirect in an approval command preview (AUTOAPPROVE wedge) ─
+// ── AskUserQuestion picker with the rc.19 footer (no "Esc to cancel") ────────
+// LIVE rc.19 defect: current claude-cli renders the picker footer as
+// "Enter to select · ↑/↓ to navigate". The FSM must classify this screen as the
+// PICKER state (never approval): →approval's picker-signal exclusion and the
+// higher-priority →picker edge both key on the select hint / navigate hint /
+// escape-hatch rows, none of which require "Esc to cancel".
+const askUserQuestionRc19Footer = [
+    '▗ ▗   ▖ ▖  Claude Code v2.1.170',
+    '  ▘▘ ▝▝    ~/Work/adhdev',
+    '',
+    '⏺ One gate remains before the canary ships.',
+    '',
+    ' ☐ Canary gate',
+    '',
+    ' ❯ 1. Continue',
+    '   2. Abort',
+    '   3. Type something.',
+    '   4. Chat about this',
+    '',
+    ' Enter to select · ↑/↓ to navigate',
+].join('\n');
+
+describe('claude-cli v4 FSM — AskUserQuestion picker with rc.19 footer (no Esc to cancel)', () => {
+    const spec = loadSpec();
+
+    it('→picker (NOT →approval) fires on the rc.19 picker screen', () => {
+        const lines = strip(askUserQuestionRc19Footer);
+        const row = lines.length - 1;
+        const ev = evaluateFsm(spec, 'busy', askUserQuestionRc19Footer, { row, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).toBe('picker');
+    });
+
+    it('the picker state is modal_kind picker — the semantic class downstream classification keys on', () => {
+        const picker = spec.states.find(s => s.id === 'picker')!;
+        expect(picker.modal).toBe(true);
+        expect(modalKindForState(picker)).toBe('picker');
+        // Documents the adapter-level collapse the provider layer must handle:
+        // ANY modal state (picker included) still maps to status 'approval' —
+        // which is why a captured interactive prompt is what re-classifies the
+        // picker as waiting_choice above the FSM (cli-provider-instance).
+        expect(statusForState(picker)).toBe('approval');
+    });
+
+    it('a genuine consent screen of the same era still classifies as approval (control)', () => {
+        const lines = strip(dividerlessApproval);
+        const row = lines.length - 1;
+        const ev = evaluateFsm(spec, 'busy', dividerlessApproval, { row, col: 2 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).toBe('approval');
+    });
+});
 // Root cause of a 144s auto-approve wedge: a Bash approval's command preview can
 // wrap so a shell redirect lands at line start (` >/dev/null 2>&1`). The modal
 // `until` anchor's char class used to include a bare `>`, so it mistook that

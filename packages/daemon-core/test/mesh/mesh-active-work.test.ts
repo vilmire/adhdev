@@ -674,6 +674,35 @@ describe('collectPendingApprovals', () => {
         expect(approvals[1].waitingSince).toBe('2026-05-26T00:00:10.000Z');
     });
 
+    it('dedups the same session appearing twice (queue record + direct record) — deterministic by node/session identity', () => {
+        // rc.19 live defect: mesh_list_pending_approvals returned the SAME session
+        // twice. One session exposes one modal — duplicate rows are never actionable.
+        const approvals = collectPendingApprovals([
+            record({ taskId: 'queue-task', source: 'queue', nodeId: 'node-1', sessionId: 'sess-1', elapsedMs: 4000 }),
+            record({ taskId: 'direct-task', source: 'direct', nodeId: 'node-1', sessionId: 'sess-1', elapsedMs: 9000 }),
+            record({ taskId: 'other', source: 'direct', nodeId: 'node-1', sessionId: 'sess-2', elapsedMs: 100 }),
+        ]);
+        expect(approvals).toHaveLength(2);
+        // The longest-waiting binding for sess-1 wins; order stays longest-first.
+        expect(approvals[0]).toMatchObject({ sessionId: 'sess-1', taskId: 'direct-task', waitingMs: 9000 });
+        expect(approvals[1]).toMatchObject({ sessionId: 'sess-2', taskId: 'other' });
+        // Deterministic: identical input → identical output.
+        const again = collectPendingApprovals([
+            record({ taskId: 'queue-task', source: 'queue', nodeId: 'node-1', sessionId: 'sess-1', elapsedMs: 4000 }),
+            record({ taskId: 'direct-task', source: 'direct', nodeId: 'node-1', sessionId: 'sess-1', elapsedMs: 9000 }),
+            record({ taskId: 'other', source: 'direct', nodeId: 'node-1', sessionId: 'sess-2', elapsedMs: 100 }),
+        ]);
+        expect(again).toEqual(approvals);
+    });
+
+    it('keeps awaiting_choice (a question) OUT of the approval inbox even when duplicated', () => {
+        const approvals = collectPendingApprovals([
+            record({ taskId: 'q1', status: 'awaiting_choice', nodeId: 'node-1', sessionId: 'sess-1' }),
+            record({ taskId: 'q2', status: 'awaiting_choice', nodeId: 'node-1', sessionId: 'sess-1' }),
+        ]);
+        expect(approvals).toHaveLength(0);
+    });
+
     it('is a pure derivation of buildMeshActiveWork output — an approval-flagged live session surfaces', () => {
         const result = buildMeshActiveWork({
             meshId: 'mesh-1',

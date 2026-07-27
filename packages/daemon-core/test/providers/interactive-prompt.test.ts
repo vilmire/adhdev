@@ -611,6 +611,76 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
     expect(prompt?.questions[0].allowFreeform).toBeUndefined();
   });
 
+  it('captures the rc.19 picker whose footer drops "Esc to cancel" (Enter to select · ↑/↓ to navigate)', () => {
+    // LIVE rc.19 defect: current claude-cli renders the AskUserQuestion footer as
+    // "Enter to select · ↑/↓ to navigate" — NO "Esc to cancel". The footer-pair
+    // requirement then collapsed the parse, activeInteractivePrompt stayed null,
+    // and the picker was mis-classified as waiting_approval (no promptId →
+    // mesh_answer_question unusable; mesh_approve "approved" Continue). The
+    // select hint alone must be sufficient.
+    const screen = [
+      '☐ Canary gate',
+      '',
+      '❯ 1. Continue',
+      '  2. Abort',
+      '  3. Type something.',
+      '  4. Chat about this',
+      '',
+      'Enter to select · ↑/↓ to navigate',
+    ].join('\n');
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([
+      { screenText: screen },
+    ], { promptId: 'ask-user-rc19', createdAt: 1234 });
+
+    expect(prompt?.promptId).toBe('ask-user-rc19');
+    expect(prompt?.questions).toHaveLength(1);
+    expect(prompt?.questions[0]).toMatchObject({
+      questionId: 'q1',
+      question: 'Canary gate',
+      multiSelect: false,
+      options: [
+        { label: 'Continue' },
+        { label: 'Abort' },
+        { label: 'Type something.' },
+      ],
+      allowFreeform: true,
+    });
+
+    // Answering "Continue" resolves against the parsed options (1-based numeric
+    // select + final submit Enter) — the exact drive mesh_answer_question performs.
+    const steps = buildClaudeInteractiveTuiAnswerSteps(prompt!, {
+      promptId: 'ask-user-rc19',
+      answers: { q1: { selectedLabels: ['Continue'] } },
+    });
+    expect(steps).toEqual(['1', '\r']);
+  });
+
+  it('does NOT parse a genuine approval modal as a question (its Esc-to-cancel footer is not a picker)', () => {
+    // Control case: a real tool-consent modal (claude v2.1.84) renders
+    // "Esc to cancel · Tab to amend · ctrl+e to explain" and no "Enter to select".
+    // It must never produce an InteractivePrompt — it stays waiting_approval.
+    const screen = [
+      ' Bash command',
+      '',
+      ' npm test',
+      ' Run shell command',
+      '',
+      ' Do you want to proceed?',
+      ' ❯ 1. Yes',
+      '   2. Yes, and don\'t ask again for: npm test',
+      '   3. No',
+      '',
+      ' Esc to cancel · Tab to amend · ctrl+e to explain',
+    ].join('\n');
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([
+      { screenText: screen },
+    ], { promptId: 'should-not-parse', createdAt: 1234 });
+
+    expect(prompt).toBeNull();
+  });
+
   it('detects multi-select from checkbox option markers even when the footer hint drifts (regression)', () => {
     // Regression: the dashboard rendered single-select (radio) for a
     // multi-select AskUserQuestion because multiSelect was derived solely from

@@ -470,6 +470,99 @@ describe('handleResolveAction for CLI approval state', () => {
     expect(resolveModal).not.toHaveBeenCalled()
   })
 
+  it('refuses to resolve_action a session holding an AskUserQuestion prompt (waiting_choice, not an approval)', async () => {
+    // rc.19 live defect: mesh_approve on a picker "approved" Continue — semantically
+    // wrong. A session with an activeInteractivePrompt must be answered via
+    // mesh_answer_question, never via resolve_action.
+    const resolveModal = vi.fn()
+    const adapter = {
+      getStatus: () => ({
+        status: 'waiting_approval',
+        messages: [],
+        activeModal: {
+          message: 'Picker open',
+          buttons: ['Continue', 'Abort', 'Type something.', 'Chat about this'],
+          kind: 'picker',
+        },
+        activeInteractivePrompt: {
+          promptId: 'ask-user-rc19',
+          questions: [{ questionId: 'q1', question: 'Canary gate', multiSelect: false, options: [{ label: 'Continue' }, { label: 'Abort' }] }],
+        },
+      }),
+      resolveModal,
+      writeRaw: vi.fn(),
+    }
+
+    const result = await handleResolveAction({
+      getProvider: () => ({ type: 'claude-cli', category: 'cli' }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'claude-cli', sessionId: 'sess-1' },
+      currentProviderType: 'claude-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: { instanceManager: { getInstance: () => null } },
+    } as any, {
+      targetSessionId: 'sess-1',
+      agentType: 'claude-cli',
+      action: 'approve',
+    })
+
+    expect(result.success).toBe(false)
+    expect((result as any).error).toContain('mesh_answer_question')
+    expect((result as any).error).toContain('ask-user-rc19')
+    expect((result as any).waitingChoice).toBe(true)
+    expect(resolveModal).not.toHaveBeenCalled()
+  })
+
+  it('refuses via the instance-state prompt even when the adapter status omits it', async () => {
+    const resolveModal = vi.fn()
+    const adapter = {
+      getStatus: () => ({
+        status: 'waiting_approval',
+        messages: [],
+        activeModal: { message: 'Picker open', buttons: ['Continue', 'Abort'], kind: 'picker' },
+      }),
+      resolveModal,
+      writeRaw: vi.fn(),
+    }
+
+    const result = await handleResolveAction({
+      getProvider: () => ({ type: 'claude-cli', category: 'cli' }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'claude-cli', sessionId: 'sess-1' },
+      currentProviderType: 'claude-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: {
+        instanceManager: {
+          getInstance: () => ({
+            getState: () => ({
+              activeChat: {
+                status: 'waiting_choice',
+                activeModal: null,
+                activeInteractivePrompt: { promptId: 'ask-user-rc19' },
+              },
+            }),
+          }),
+        },
+      },
+    } as any, {
+      targetSessionId: 'sess-1',
+      agentType: 'claude-cli',
+      action: 'approve',
+    })
+
+    expect(result.success).toBe(false)
+    expect((result as any).error).toContain('mesh_answer_question')
+    expect(resolveModal).not.toHaveBeenCalled()
+  })
+
   it('fails closed when a deny/reject action maps to no negative-labeled button', async () => {
     // No button reads as a decline (no|deny|reject|cancel|skip|exit|stop / without / do not),
     // so a deny action must refuse rather than click an arbitrary affirmative. (A modal

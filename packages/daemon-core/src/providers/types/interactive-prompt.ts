@@ -236,7 +236,18 @@ function claudeTuiQuestionHeaders(screenText: string): string[] {
 }
 
 function isClaudeTuiSelectFooter(text: string): boolean {
-  return /Enter to select/i.test(text) && /Esc to cancel/i.test(text);
+  // The picker's defining footer hint is "Enter to select". Older claude-cli
+  // builds paired it with "Esc to cancel" and this guard required BOTH — but
+  // current builds render the footer as "Enter to select · ↑/↓ to navigate"
+  // with NO Esc hint, so the pair requirement collapsed: the headerless picker
+  // failed to parse, activeInteractivePrompt stayed null, and the screen fell
+  // through to the approval matchers → waiting_approval (rc.19 live defect).
+  // A genuine tool-consent modal NEVER renders "Enter to select" (its footer
+  // is "Esc to cancel · Tab to amend · ctrl+e to explain"), so the single hint
+  // is a safe discriminator. The option-block anchor below (numbered option
+  // rows above the footer line) keeps a bare "Enter to select" mention in
+  // prose from parsing as a picker.
+  return /Enter to select/i.test(text);
 }
 
 /**
@@ -303,14 +314,16 @@ function readClaudeOptionDescription(lines: string[], optionLineIndex: number): 
 }
 
 function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index: number): InteractiveQuestion | null {
-  // The claude TUI select footer ("Enter to select" + "Esc to cancel") is the
-  // picker's defining signature. The freeform escape hatch ("Type something" /
-  // "Chat about this") used to be REQUIRED here, but those option rows can be
-  // absent or scrolled out of the captured frame — in which case the picker
-  // failed to parse, activeInteractivePrompt stayed null, and detect-status
-  // then mis-classified the screen as waiting_approval (mission fb2a7053).
-  // Requiring only the footer plus (below) a real option block is sufficient;
-  // the escape hatch, when present, is still picked up as allowFreeform.
+  // The claude TUI select footer ("Enter to select" — older builds paired it
+  // with "Esc to cancel"; current builds render "Enter to select · ↑/↓ to
+  // navigate") is the picker's defining signature. The freeform escape hatch
+  // ("Type something" / "Chat about this") used to be REQUIRED here, but those
+  // option rows can be absent or scrolled out of the captured frame — in which
+  // case the picker failed to parse, activeInteractivePrompt stayed null, and
+  // detect-status then mis-classified the screen as waiting_approval (mission
+  // fb2a7053). Requiring only the footer plus (below) a real option block is
+  // sufficient; the escape hatch, when present, is still picked up as
+  // allowFreeform.
   if (!isClaudeTuiSelectFooter(page.screenText)) return null;
 
   const lines = page.screenText.split(/\r?\n/);

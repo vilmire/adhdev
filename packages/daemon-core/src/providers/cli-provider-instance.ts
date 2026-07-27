@@ -4410,6 +4410,31 @@ export class CliProviderInstance implements ProviderInstance {
         }
         const parsedStatus = null;
         const rawStatus = adapterStatus.status;
+        // ASKUSERQUESTION-NOT-APPROVAL (rc.19 live defect): an AskUserQuestion
+        // picker is a modal the claude FSM reports with status 'approval'
+        // (statusForState maps ANY modal state to 'approval'), carrying
+        // kind='picker'. Left as waiting_approval it emits agent:waiting_approval
+        // and lands in the mesh_approve inbox, which cannot answer a multi-choice
+        // question (the live rc.19 misroute: mesh_approve "approved" Continue).
+        // When the prompt for it was captured (activeInteractivePrompt — the same
+        // signal getState() overlays as waiting_choice), this is a QUESTION, not a
+        // consent: classify it waiting_choice at the authoritative transition layer
+        // so the interactive-prompt arm below emits agent:waiting_choice (promptId +
+        // structured options → mesh_answer_question) and the approval arm never
+        // fires. A genuine consent modal (kind 'approval' or a kind-less modal from
+        // a legacy adapter) keeps waiting_approval even while a prompt is held —
+        // approval wins and the two stay mutually exclusive, unchanged. A
+        // modal-less waiting_approval frame (FSM approval_resolving right after an
+        // answer, while the prompt is still held) also reads as the question — it
+        // is the picker draining, not a fresh consent.
+        const interactivePrompt = adapterStatus.activeInteractivePrompt ?? null;
+        const activeModal = adapterStatus.activeModal ?? null;
+        const activeModalKind = activeModal && typeof activeModal.kind === 'string'
+            ? activeModal.kind
+            : null;
+        const isQuestionPicker = rawStatus === 'waiting_approval'
+            && !!interactivePrompt
+            && (!activeModal || activeModalKind === 'picker');
         const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, now);
         // During the autoApproveBusy window (2s after firing approval key), the PTY
         // can briefly report 'idle' before the next generating phase starts. Treat that
@@ -4417,7 +4442,9 @@ export class CliProviderInstance implements ProviderInstance {
         // push notification. The adapter's status is otherwise authoritative — native
         // transcript shape does NOT override the FSM's busy/idle decision.
         const autoApproveHoldIdle = this.autoApproveBusy && rawStatus === 'idle';
-        const newStatus = autoApproveActive || autoApproveHoldIdle ? 'generating' : rawStatus;
+        const newStatus = isQuestionPicker
+            ? 'waiting_choice'
+            : autoApproveActive || autoApproveHoldIdle ? 'generating' : rawStatus;
         const dirName = workingDirBasename(this.workingDir);
         const chatTitle = `${this.provider.name} · ${dirName}`;
         const partial = this.adapter.getPartialResponse();
@@ -4516,7 +4543,15 @@ export class CliProviderInstance implements ProviderInstance {
                     }
                     this.generatingDebounceTimer = null;
                 }, 3000);
-            } else if (newStatus === 'waiting_approval') {
+            } else if (newStatus === 'waiting_approval'
+                && !(previousStatus === 'waiting_choice' && !adapterStatus.activeModal)) {
+                // The !(waiting_choice → modal-less waiting_approval) guard: right after an
+                // AskUserQuestion answer the FSM drains through approval_resolving (status
+                // 'approval', NO modal extract) while the held prompt clears on its own
+                // grace. That transient is the picker resolving, NOT a fresh consent — running
+                // the approval arm here would emit a spurious agent:waiting_approval with an
+                // empty modal and cancel any pending completion. Skip the arm; lastStatus
+                // still advances below so the subsequent →generating resume reads normally.
                 this.suppressIdleHistoryReplay = false;
                 // Flush pending generating_started if debounce still pending
                 if (this.generatingDebouncePending) {
@@ -4888,12 +4923,13 @@ export class CliProviderInstance implements ProviderInstance {
         // Edge-triggered: emit exactly once on entry, keyed on promptId + question text,
         // and reset the key when the prompt clears so a fresh prompt re-fires and a later
         // real completion still flows through the idle arm normally. We do NOT emit when
-        // the session is ALSO in a genuine approval state (newStatus === 'waiting_approval'):
+        // the session is in a genuine approval state (newStatus === 'waiting_approval'):
         // that arm already emits agent:waiting_approval. A question (waiting_choice) and a
         // real approval (waiting_approval) therefore NEVER both fire for the same tick —
         // the approval arm wins and this arm yields (owner requirement: the two are
-        // mutually exclusive).
-        const interactivePrompt = adapterStatus.activeInteractivePrompt ?? null;
+        // mutually exclusive). Note an AskUserQuestion picker no longer reaches this arm
+        // as waiting_approval: the isQuestionPicker classification above folds it to
+        // waiting_choice, so a picker ALWAYS lands here and a consent NEVER does.
         if (interactivePrompt && newStatus !== 'waiting_approval') {
             const firstQuestion = interactivePrompt.questions?.[0];
             const promptKey = `${interactivePrompt.promptId}::${firstQuestion?.question ?? ''}`;
@@ -5344,6 +5380,15 @@ export class CliProviderInstance implements ProviderInstance {
         if (!this.shouldUsePtyAutoApprove()) return;
         if (!this.isMeshWorkerSession()) return;
         if (adapterStatus?.status !== 'waiting_approval') return;
+        // ASKUSERQUESTION-NOT-APPROVAL (rc.19): a picker modal whose interactive prompt
+        // was captured is a QUESTION (waiting_choice) — already surfaced via
+        // agent:waiting_choice with its promptId. Auto-approve can never resolve it (no
+        // consent anchor), so its mask episode always stalls; nudging it as
+        // agent:waiting_approval would re-misroute the question into the mesh_approve
+        // inbox. Mirrors the isQuestionPicker classification in detectStatusTransition.
+        const nudgeModal = adapterStatus.activeModal;
+        const nudgeModalKind = nudgeModal && typeof nudgeModal.kind === 'string' ? nudgeModal.kind : null;
+        if (adapterStatus.activeInteractivePrompt && (!nudgeModal || nudgeModalKind === 'picker')) return;
         if (!this.autoApproveMaskStalled(now)) return;
         // AUTOAPPROVE-FLAP-RECUR (Fix C, redesigned): the mask-stall bound tripped.
         // If auto-approve is genuinely about to fire on its own, defer to that fire —

@@ -89,18 +89,20 @@ const PICKER_OPTION_ROW = /^\s*(?:[❯›>]\s*)?(?:\[[ xX]\]|[☐☒◻◼]\s*)?
  * option rows can otherwise be extracted as approval buttons and produce a
  * spurious approval modal.
  *
- * The picker signature is the claude TUI select footer ("Enter to select" +
- * "Esc to cancel") plus at least one numbered option row. A genuine approval
- * modal never renders that footer pair, so it is safe even though approval modals
- * also draw numbered rows. The freeform escape hatch ("Type something" / "Chat
- * about this") used to be REQUIRED here too, which broke the guard whenever the
- * hatch rows were absent or scrolled out of frame; it is now downgraded to an
- * optional supporting signal (mirrors detect-status).
+ * The picker signature is the claude TUI select hint ("Enter to select") plus at
+ * least one numbered option row. A genuine approval modal never renders that
+ * hint (its footer is "Esc to cancel · Tab to amend · ctrl+e to explain"), so
+ * the hint is safe even though approval modals also draw numbered rows. Older
+ * claude-cli builds paired the hint with "Esc to cancel" and this guard
+ * required BOTH; current builds render "Enter to select · ↑/↓ to navigate" with
+ * no Esc hint, which collapsed the pair requirement (rc.19 live defect) — the
+ * Esc hint is therefore no longer part of the signature. The freeform escape
+ * hatch ("Type something" / "Chat about this") likewise stays an optional
+ * supporting signal only (mirrors detect-status).
  */
 function isAskUserQuestionPickerSignature(text: string): boolean {
   if (!text) return false;
-  const hasSelectFooter = /Enter to select/i.test(text) && /Esc to cancel/i.test(text);
-  if (!hasSelectFooter) return false;
+  if (!/Enter to select/i.test(text)) return false;
   return PICKER_OPTION_ROW.test(text);
 }
 
