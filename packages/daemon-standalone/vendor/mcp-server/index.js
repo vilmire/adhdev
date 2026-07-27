@@ -6679,30 +6679,29 @@ async function meshSendTask(ctx, args) {
       }
       if (explicitTargetSession && !isIdleSessionRecord(explicitTargetSession) && !isTerminalSessionRecord(explicitTargetSession)) {
         const sessionStatus = typeof explicitTargetSession?.status === "string" ? explicitTargetSession.status : "unknown";
-        const { createSessionDelivery: createDelivery, resolveDeliveryDecision } = await import("@adhdev/daemon-core");
+        const { resolveDeliveryDecision } = await import("@adhdev/daemon-core");
         const policyResult = resolveDeliveryDecision(sessionStatus, { kind: "task" });
         if (policyResult.decision === "queued") {
-          const delivery = createDelivery({
-            meshId: ctx.mesh.id,
-            nodeId: args.node_id,
-            sessionId: args.session_id,
-            providerType: resolvedProviderType,
-            kind: "task",
-            message,
-            status: "queued"
+          const queuedTask = (0, import_daemon_core4.enqueueTask)(ctx.mesh.id, message, {
+            targetNodeId: args.node_id,
+            targetSessionId: args.session_id,
+            taskMode,
+            ...readonly ? { readonly: true } : {},
+            ...missionId ? { missionId } : {},
+            ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
           });
           return JSON.stringify({
             success: true,
             dispatched: false,
             decision: "queued_delivery",
-            deliveryId: delivery.id,
+            taskId: queuedTask.id,
             reason: policyResult.reason,
             nodeId: args.node_id,
             sessionId: args.session_id,
             sessionStatus,
             taskMode: taskMode || void 0,
             message: policyResult.message,
-            nextAction: `Use mesh_status to watch for session idle transition, or use mesh_enqueue_task for queue-based assignment. Check deliveryId '${delivery.id}' to track queued delivery.`
+            nextAction: `Task '${queuedTask.id}' is queued and pinned to session '${args.session_id}' \u2014 it auto-delivers the moment the session goes idle. Use mesh_status or mesh_task_history to track it; no manual resend needed.`
           });
         }
       }
