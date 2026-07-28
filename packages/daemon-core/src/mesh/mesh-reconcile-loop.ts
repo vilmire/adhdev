@@ -88,7 +88,7 @@ import {
 } from './mesh-completion-synthesis.js';
 import { sessionStatusFromNodes } from './mesh-active-work.js';
 import { drainMeshTurnOutbox } from './mesh-event-forwarding.js';
-import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reconstructActiveAttempts, isTerminalTurnStage, drainHeldTurnSuspensionsForMesh } from './mesh-turn-ledger.js';
+import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reconstructActiveAttempts, isTerminalTurnStage, drainHeldTurnSuspensionsForMesh, gateRedriveForHeldSuspension } from './mesh-turn-ledger.js';
 import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
@@ -1303,6 +1303,21 @@ async function recoverStrandedAssignedDispatches(
             //   and only re-drive after RECLAIM_UNKNOWN_GRACE_TICKS, matching the long path.
             if (verdict === 'GENERATING') {
                 deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
+                // HELD-SUSPENSION RESTART CONTRACT: a locally-ACTIVE session with an
+                // unresolved pre-consumed hold (e.g. a waiting_approval-parked picker,
+                // whose status reads active) proves the prompt WAS consumed — promote
+                // the consumed link from the suspension and apply the parked picker
+                // instead of leaving the attempt pre-consumed forever.
+                const gate = gateRedriveForHeldSuspension({ meshId, taskId: row.id, sessionLiveness: 'alive', nowMs });
+                if (gate.kind === 'recovered') {
+                    traceMeshEventDrop('suspension_consumed_recovered', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_started',
+                    }, `held suspension recovered → ${gate.stage} (verdict GENERATING)`);
+                }
             } else {
                 // STARTED-REDRIVE-NATIVE-SOURCE-BLINDSPOT. Everything below infers "the worker never
                 // consumed the task" from the ABSENCE of agent:generating_started. That inference is
@@ -1359,15 +1374,58 @@ async function recoverStrandedAssignedDispatches(
                     const streak = (deliveredUnconsumedUnknownStreak.get(shortStreakKey) ?? 0) + 1;
                     deliveredUnconsumedUnknownStreak.set(shortStreakKey, streak);
                     if (streak < RECLAIM_UNKNOWN_GRACE_TICKS) {
-                        traceMeshEventDrop('short_redrive_deferred_unknown_verdict', {
+                        // HELD-SUSPENSION RESTART CONTRACT: distinguish a deferral held
+                        // back by an unresolved suspension (positive evidence the prompt
+                        // was consumed; awaiting the surviving session's rebind) from a
+                        // plain UNKNOWN deferral — the bounded grace above remains the
+                        // authoritative dead-detection in both cases.
+                        const gate = gateRedriveForHeldSuspension({ meshId, taskId: row.id, sessionLiveness: 'unknown', sessionProvenDead: false, nowMs });
+                        traceMeshEventDrop(gate.kind === 'blocked' ? 'redrive_blocked_by_suspension' : 'short_redrive_deferred_unknown_verdict', {
                             taskId: row.id,
                             sessionId: row.assignedSessionId,
                             nodeId: row.assignedNodeId,
                             meshId,
                             event: 'agent:generating_started',
-                        }, `unknown ${streak}/${RECLAIM_UNKNOWN_GRACE_TICKS}`);
+                        }, gate.kind === 'blocked'
+                            ? `held ${gate.stages.join('/')} unresolved; unknown ${streak}/${RECLAIM_UNKNOWN_GRACE_TICKS}`
+                            : `unknown ${streak}/${RECLAIM_UNKNOWN_GRACE_TICKS}`);
                         continue;
                     }
+                }
+                // HELD-SUSPENSION RESTART CONTRACT (durable typed rule): an unresolved
+                // pre-consumed waiting_* hold scoped to THIS attempt/session/dispatchNonce
+                // is positive causal evidence the prompt reached the worker — stronger
+                // than the missing generating_started ACK this branch infers "never
+                // consumed" from. Reached when the session is IDLE_CONFIRMED (present,
+                // parked — e.g. at a picker rebound after a daemon restart) or UNKNOWN
+                // with the bounded grace exhausted (demonstrably dead):
+                //   - ALIVE → promote the consumed link from the suspension (audit
+                //     source held_suspension_recovery) and apply the parked picker
+                //     through the FSM; the SAME attempt continues, no redrive.
+                //   - PROVEN DEAD → drop the hold (session_dead) and let the normal
+                //     redrive below close this attempt and open a NEW one.
+                const suspensionGate = gateRedriveForHeldSuspension({
+                    meshId,
+                    taskId: row.id,
+                    sessionLiveness: verdict === 'UNKNOWN' ? 'unknown' : 'alive',
+                    sessionProvenDead: verdict === 'UNKNOWN', // the bounded UNKNOWN grace just exhausted above
+                    nowMs,
+                });
+                if (suspensionGate.kind === 'recovered' || suspensionGate.kind === 'blocked') {
+                    deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
+                    traceMeshEventDrop(suspensionGate.kind === 'recovered' ? 'suspension_consumed_recovered' : 'redrive_blocked_by_suspension', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_started',
+                    }, suspensionGate.kind === 'recovered'
+                        ? `consumed recovered from held suspension → ${suspensionGate.stage}; same attempt continues`
+                        : 'held suspension unresolved — redrive suppressed');
+                    continue;
+                }
+                if (suspensionGate.kind === 'released' && suspensionGate.dropped > 0) {
+                    LOG.info('MeshReconcile', `Dropped ${suspensionGate.dropped} held suspension(s) for task ${row.id} on mesh ${meshId}: worker session ${row.assignedSessionId ?? '?'} demonstrably dead — delivered_not_consumed_redrive proceeds to a new attempt`);
                 }
                 // TURN-LEDGER (Stage 5): the DURABLE redrive gate. A delivered-but-unconsumed
                 // attempt may re-drive only while its evidence says the prompt was never
@@ -1465,6 +1523,20 @@ async function recoverStrandedAssignedDispatches(
                 : 'IDLE_CONFIRMED'; // no session bound → nothing live to protect
             if (verdict === 'GENERATING') {
                 deliveredNoTurnUnknownStreak.delete(streakKey); // demonstrably alive → reset grace
+                // HELD-SUSPENSION RESTART CONTRACT: a locally-active session with an
+                // unresolved pre-consumed hold proves the prompt WAS consumed — promote
+                // the consumed link from the suspension and apply the parked picker
+                // (same rule as the short redrive gate below).
+                const gate = gateRedriveForHeldSuspension({ meshId, taskId: row.id, sessionLiveness: 'alive', nowMs });
+                if (gate.kind === 'recovered') {
+                    traceMeshEventDrop('suspension_consumed_recovered', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_completed',
+                    }, `held suspension recovered → ${gate.stage} (verdict GENERATING)`);
+                }
                 continue;  // worker still working
             }
             let reclaimReason: 'delivered_no_turn_deadline' | 'reclaim_after_unknown_grace';
@@ -1492,16 +1564,51 @@ async function recoverStrandedAssignedDispatches(
                 deliveredNoTurnUnknownStreak.set(streakKey, streak);
                 if (streak < RECLAIM_UNKNOWN_GRACE_TICKS) {
                     // Still within grace — hold this tick. Content-free trace (ids + streak only).
-                    traceMeshEventDrop('reclaim_deferred_unknown_verdict', {
+                    // HELD-SUSPENSION RESTART CONTRACT: distinguish a deferral held back
+                    // by an unresolved suspension (awaiting the surviving session's
+                    // rebind) from a plain UNKNOWN deferral.
+                    const gate = gateRedriveForHeldSuspension({ meshId, taskId: row.id, sessionLiveness: 'unknown', sessionProvenDead: false, nowMs });
+                    traceMeshEventDrop(gate.kind === 'blocked' ? 'redrive_blocked_by_suspension' : 'reclaim_deferred_unknown_verdict', {
                         taskId: row.id,
                         sessionId: row.assignedSessionId,
                         nodeId: row.assignedNodeId,
                         meshId,
                         event: 'agent:generating_completed',
-                    }, `unknown ${streak}/${RECLAIM_UNKNOWN_GRACE_TICKS}`);
+                    }, gate.kind === 'blocked'
+                        ? `held ${gate.stages.join('/')} unresolved; unknown ${streak}/${RECLAIM_UNKNOWN_GRACE_TICKS}`
+                        : `unknown ${streak}/${RECLAIM_UNKNOWN_GRACE_TICKS}`);
                     continue;
                 }
                 reclaimReason = 'reclaim_after_unknown_grace';
+            }
+            // HELD-SUSPENSION RESTART CONTRACT (durable typed rule): same gate as the
+            // short redrive path — a valid unresolved hold + live session recovers the
+            // consumed link and applies the parked picker (SAME attempt continues); a
+            // proven-dead session drops the hold (session_dead) so the reclaim below
+            // opens a NEW attempt. A recovered attempt skips the transcript poll and
+            // the reclaim entirely.
+            const suspensionGate = gateRedriveForHeldSuspension({
+                meshId,
+                taskId: row.id,
+                sessionLiveness: verdict === 'UNKNOWN' ? 'unknown' : 'alive',
+                sessionProvenDead: verdict === 'UNKNOWN', // the bounded UNKNOWN grace just exhausted above
+                nowMs,
+            });
+            if (suspensionGate.kind === 'recovered' || suspensionGate.kind === 'blocked') {
+                deliveredNoTurnUnknownStreak.delete(streakKey);
+                traceMeshEventDrop(suspensionGate.kind === 'recovered' ? 'suspension_consumed_recovered' : 'redrive_blocked_by_suspension', {
+                    taskId: row.id,
+                    sessionId: row.assignedSessionId,
+                    nodeId: row.assignedNodeId,
+                    meshId,
+                    event: 'agent:generating_completed',
+                }, suspensionGate.kind === 'recovered'
+                    ? `consumed recovered from held suspension → ${suspensionGate.stage}; same attempt continues`
+                    : 'held suspension unresolved — reclaim suppressed');
+                continue;
+            }
+            if (suspensionGate.kind === 'released' && suspensionGate.dropped > 0) {
+                LOG.info('MeshReconcile', `Dropped ${suspensionGate.dropped} held suspension(s) for task ${row.id} on mesh ${meshId}: worker session ${row.assignedSessionId ?? '?'} demonstrably dead — ${reclaimReason} proceeds to a new attempt`);
             }
             // TASK-PROMPT-REDRIVE-AFTER-COMPLETE (Fix A-i): before re-driving, poll the worker
             // transcript for terminal evidence — the SAME check PHASE 4 does for direct dispatches,

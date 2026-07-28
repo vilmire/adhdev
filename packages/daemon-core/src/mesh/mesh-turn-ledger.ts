@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { MeshRuntimeStore, type MeshTurnAttemptRow } from './mesh-runtime-store.js';
+import { MeshRuntimeStore, type MeshTurnAttemptRow, type MeshTurnHeldSuspensionRow } from './mesh-runtime-store.js';
 import { LOG } from '../logging/logger.js';
 import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
 
@@ -69,6 +69,19 @@ import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
  *    resolves held rows as dropped — a held picker never resurrects an attempt).
  *    A reordered `generating` echo that PREDATES an applied hold never regresses
  *    the suspension (event-time guard in recordTurnStage).
+ *  - HELD-SUSPENSION RESTART CONTRACT: an unresolved hold scoped to the CURRENT
+ *    attempt/session/dispatchNonce is durable causal evidence the prompt reached
+ *    (was consumed by) the authoritative worker session, even when the weaker
+ *    generating_started consumed ACK was lost to a crash. Across a daemon
+ *    restart it BLOCKS delivered-not-consumed redrive/reclaim
+ *    ({@link gateRedriveForHeldSuspension}): once the surviving session is
+ *    confirmed rebound, the gate synthesizes the consumed link (audit source
+ *    `held_suspension_recovery`) and atomically applies the hold through the
+ *    same FSM — same attempt, no reinjection, and a later real consumed ACK is
+ *    idempotent. A demonstrably dead session (the existing bounded liveness
+ *    path) drops the hold (`session_dead`) so the reclaim can open a NEW
+ *    attempt; stale/session-mismatch/nonce-mismatch/terminal holds never block
+ *    and never resurrect.
  *
  * ROLLOUT (no flag day): tasks dispatched BEFORE this stage have no attempt row.
  * For those, {@link resolveAttemptForTask} lazily opens a deterministic legacy
@@ -193,6 +206,18 @@ export interface TurnLedgerMetrics {
     suspensionsDropped: Record<string, number>;
     /** Reordered generating echoes suppressed because they predate an applied hold. */
     reorderedGeneratingSuppressed: number;
+    /**
+     * Redrive/reclaim decisions suppressed because an unresolved CURRENT
+     * attempt/session/epoch hold is durable evidence the prompt was consumed
+     * (the session's liveness was not yet confirmed after a restart).
+     */
+    redriveBlockedBySuspension: number;
+    /**
+     * Consumed evidence synthesized from a valid held suspension at restart
+     * (audit source `held_suspension_recovery`) once the surviving worker
+     * session was confirmed rebound — the hold then applied through the FSM.
+     */
+    suspensionConsumedRecovered: number;
 }
 
 const metrics: TurnLedgerMetrics = {
@@ -209,6 +234,8 @@ const metrics: TurnLedgerMetrics = {
     suspensionsApplied: 0,
     suspensionsDropped: {},
     reorderedGeneratingSuppressed: 0,
+    redriveBlockedBySuspension: 0,
+    suspensionConsumedRecovered: 0,
 };
 
 export function getTurnLedgerMetrics(nowMs: number = Date.now()): TurnLedgerMetrics & { outboxOldestPendingAgeMs: number | null; outboxByStatus: Record<string, number> } {
@@ -242,6 +269,8 @@ export function __resetTurnLedgerMetricsForTests(): void {
     metrics.suspensionsApplied = 0;
     metrics.suspensionsDropped = {};
     metrics.reorderedGeneratingSuppressed = 0;
+    metrics.redriveBlockedBySuspension = 0;
+    metrics.suspensionConsumedRecovered = 0;
     suspensionLogKeys.clear();
 }
 
@@ -689,7 +718,8 @@ export type HeldSuspensionDropReason =
     | 'stale_attempt'      // the attempt became non-current (reassignment)
     | 'attempt_missing'    // the attempt row vanished (retention/manual surgery)
     | 'finalizing'         // terminal evidence superseded the held suspension
-    | 'stage_advanced';    // the FSM refused the drain (stage moved past waiting_*)
+    | 'stage_advanced'     // the FSM refused the drain (stage moved past waiting_*)
+    | 'session_dead';      // the worker session is demonstrably dead — redrive opens a new attempt
 
 /**
  * Resolve every row still held for an attempt as dropped with a typed reason.
@@ -830,6 +860,141 @@ export function drainHeldTurnSuspensionsForMesh(
         LOG.warn('TurnLedger', `Held-suspension drain failed for mesh ${meshId} (rows stay held; retried on next boot/consumed): ${e?.message || e}`);
         return { applied: 0, dropped: 0, stillHeld: 0 };
     }
+}
+
+// ─── Held-suspension restart contract (redrive gate) ───────────────────────
+
+/**
+ * The outcome of {@link gateRedriveForHeldSuspension}:
+ *  - `none`      — no valid blocking hold; the caller's normal redrive rules apply.
+ *  - `blocked`   — a valid hold is unresolved and the session is not yet confirmed
+ *                  alive or dead: redrive/reclaim MUST NOT fire. The hold stays.
+ *  - `recovered` — the surviving session is confirmed alive: the consumed link was
+ *                  synthesized from the suspension (audit source
+ *                  `held_suspension_recovery`) and the hold applied through the FSM,
+ *                  atomically. The SAME attempt continues; no redrive, no reinjection.
+ *  - `released`  — the session is demonstrably dead: the hold was dropped
+ *                  (`session_dead`) so the caller's redrive/reclaim can open a NEW
+ *                  attempt. The old attempt is never resurrected.
+ */
+export type HeldSuspensionRedriveGate =
+    | { kind: 'none' }
+    | { kind: 'blocked'; attemptId: string; stages: string[] }
+    | { kind: 'recovered'; attemptId: string; stage: string }
+    | { kind: 'released'; attemptId: string; dropped: number };
+
+/**
+ * VALIDITY: a hold blocks (and can recover) redrive only when it is unresolved
+ * causal evidence for the CURRENT attempt of the task — same attemptId, the
+ * attempt's bound worker session, and the attempt's current dispatch nonce —
+ * and the attempt is still pre-consumed and nonterminal. Stale / session-
+ * mismatch / nonce-mismatch / terminal / already-consumed holds are inert:
+ * they never block and never resurrect.
+ */
+function heldSuspensionBlocksAttempt(hold: MeshTurnHeldSuspensionRow, attempt: MeshTurnAttemptRow): boolean {
+    if (hold.attemptId !== attempt.attemptId) return false;
+    if (attempt.terminalOutcome || isTerminalTurnStage(attempt.stage)) return false;
+    if (STAGE_RANK[attempt.stage as TurnStage] >= STAGE_RANK.consumed) return false;
+    // CURRENT-SESSION: the suspension must have been emitted BY the attempt's
+    // bound worker session (a different session's picker proves nothing here).
+    if (!hold.sessionId || !attempt.sessionId || !sessionIdsEquivalent(hold.sessionId, attempt.sessionId)) return false;
+    // CURRENT-EPOCH: the suspension must belong to the attempt's current nonce.
+    if (typeof hold.dispatchNonce !== 'number' || typeof attempt.dispatchNonce !== 'number'
+        || hold.dispatchNonce !== attempt.dispatchNonce) return false;
+    return true;
+}
+
+/**
+ * THE durable, typed restart/redrive rule. A current-attempt waiting_* hold is
+ * positive causal evidence the prompt reached the worker session — stronger
+ * than the ABSENCE of the generating_started consumed ACK the redrive paths
+ * infer "never consumed" from. The caller supplies the authoritative liveness
+ * verdict for the attempt's bound session:
+ *  - 'alive'                    → the session survived and is rebound: promote the
+ *                                 consumed link from the suspension (one transaction:
+ *                                 synthesized `consumed` evidence with audit source
+ *                                 `held_suspension_recovery` + monotonic stage advance
+ *                                 + the same drain a live consumed ACK runs). A later
+ *                                 real consumed ACK is insert-once idempotent.
+ *  - 'unknown' + !provenDead    → keep blocking (the session may still be
+ *                                 rebounding); the caller's bounded liveness grace
+ *                                 decides when `provenDead` becomes true.
+ *  - 'unknown' + provenDead     → the existing authoritative liveness path has
+ *                                 demonstrably failed: drop the hold (`session_dead`)
+ *                                 and let the redrive/reclaim open a new attempt.
+ * Never injects a prompt, never re-drives an event, never mutates a terminal
+ * attempt. Idempotent: a second call after recovery finds no `held` rows.
+ */
+export function gateRedriveForHeldSuspension(args: {
+    meshId: string;
+    taskId: string;
+    /** Authoritative liveness for the attempt's bound worker session. */
+    sessionLiveness: 'alive' | 'unknown';
+    /**
+     * True only when the caller's bounded dead-detection (e.g. the consecutive-
+     * UNKNOWN-tick grace) has exhausted — the existing demonstrably-dead
+     * determination. Only then may a hold be released for redrive.
+     */
+    sessionProvenDead?: boolean;
+    nowMs?: number;
+}): HeldSuspensionRedriveGate {
+    const store = MeshRuntimeStore.getInstance();
+    const nowMs = args.nowMs ?? Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const attempt = store.getCurrentTurnAttempt(args.meshId, args.taskId);
+    if (!attempt) return { kind: 'none' };
+    const holds = store.listHeldTurnSuspensionsForAttempt(attempt.attemptId, 'held')
+        .filter(h => heldSuspensionBlocksAttempt(h, attempt));
+    if (holds.length === 0) return { kind: 'none' };
+    if (args.sessionLiveness === 'alive') {
+        // Promote: the surviving session vouches for the suspension, so the
+        // prompt WAS consumed. Write the consumed link and apply the hold in
+        // ONE transaction — the same atomic shape as the live consumed commit.
+        let promoted = false;
+        store.transaction(() => {
+            if (STAGE_RANK[attempt.stage as TurnStage] < STAGE_RANK.consumed) {
+                store.insertTurnEvent({
+                    eventId: randomUUID(),
+                    meshId: args.meshId,
+                    attemptId: attempt.attemptId,
+                    taskId: args.taskId,
+                    kind: 'consumed',
+                    dedupeKey: '',
+                    payload: safeEvidenceJson({ source: 'held_suspension_recovery' }),
+                    occurredAtMs: holds[0].occurredAtMs ?? nowMs,
+                    recordedAt: nowIso,
+                });
+                store.advanceTurnAttemptStage(attempt.attemptId, 'consumed', allowedFromStages('consumed').join(','), {
+                    updatedAt: nowIso,
+                    consumedAt: nowIso,
+                });
+                promoted = true;
+            }
+            drainHeldSuspensionsForAttempt(store, attempt.attemptId, nowMs, nowIso);
+        });
+        const stage = store.getTurnAttempt(attempt.attemptId)?.stage ?? attempt.stage;
+        if (promoted) {
+            metrics.suspensionConsumedRecovered += 1;
+            logSuspensionOnce('info', `recovered:${attempt.attemptId}`,
+                `Recovered consumed evidence for task ${args.taskId} attempt ${attempt.attemptId} from held ${holds.map(h => h.stage).join('/')} suspension(s): surviving session confirmed rebound (audit source held_suspension_recovery) — the SAME attempt continues`);
+        }
+        return { kind: 'recovered', attemptId: attempt.attemptId, stage };
+    }
+    if (args.sessionProvenDead) {
+        // Demonstrably dead worker: release the block so the caller's redrive /
+        // reclaim can close this attempt and open a new one. The old hold can
+        // never apply afterwards (the attempt close drops anything left).
+        const dropped = dropHeldSuspensionsForAttempt(store, attempt.attemptId, 'session_dead', nowIso);
+        if (dropped > 0) {
+            logSuspensionOnce('info', `released:${attempt.attemptId}`,
+                `Released ${dropped} held suspension(s) for task ${args.taskId} attempt ${attempt.attemptId}: worker session demonstrably dead — redrive/reassign may proceed to a NEW attempt`);
+        }
+        return { kind: 'released', attemptId: attempt.attemptId, dropped };
+    }
+    metrics.redriveBlockedBySuspension += 1;
+    logSuspensionOnce('info', `blocked:${attempt.attemptId}`,
+        `Redrive blocked by unresolved held ${holds.map(h => h.stage).join('/')} suspension(s) for task ${args.taskId} attempt ${attempt.attemptId}: the prompt reached the worker (session liveness unconfirmed — awaiting rebind or the dead-detection grace)`);
+    return { kind: 'blocked', attemptId: attempt.attemptId, stages: holds.map(h => h.stage) };
 }
 
 // ─── Completion proposals (exactly-once terminal) ──────────────────────────

@@ -36,6 +36,7 @@ import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueu
 import { getLedgerDir, appendLedgerEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { createSessionDelivery, updateSessionDeliveryStatus } from '../../src/mesh/mesh-delivery-policy.js'
+import { recordTurnAck, recordTurnStage, openTurnAttempt, getTurnLedgerMetrics, __resetTurnLedgerMetricsForTests } from '../../src/mesh/mesh-turn-ledger.js'
 
 function cleanup(meshId: string) {
   try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }
@@ -3118,6 +3119,169 @@ describe('runMeshReconcileTick', () => {
       } finally {
         cleanup(meshId)
       }
+    })
+
+    // ── HELD-SUSPENSION RESTART CONTRACT (crash after a pre-consumed waiting_* hold) ──
+    // A current-attempt waiting_* hold is durable causal evidence the prompt reached
+    // the worker session, even when the weaker generating_started consumed ACK was
+    // lost to a crash. Across a daemon restart it must block
+    // delivered_not_consumed_redrive long enough to restore the surviving session on
+    // the SAME attempt (no reinjection, no reassign), and a demonstrably dead session
+    // must release the block so the reclaim opens a NEW attempt.
+    describe('HELD-SUSPENSION restart contract', () => {
+      // Drive the turn ledger into the exact crash window: open the dispatch attempt
+      // (as the real dispatch path does), mark it delivered, then hold a pre-consumed
+      // waiting_* edge (consumed never durable). Returns the attempt.
+      function holdPreConsumed(meshId: string, nodeId: string, taskId: string, sessionId: string, stage: 'waiting_choice' | 'waiting_approval' = 'waiting_choice') {
+        __resetTurnLedgerMetricsForTests()
+        const store = MeshRuntimeStore.getInstance()
+        const entry = store.findQueueEntryById(meshId, taskId)!
+        const { attempt } = openTurnAttempt({
+          meshId, taskId, dispatchNonce: entry.dispatchNonce ?? 0, nodeId, sessionId,
+        })
+        entry.attemptId = attempt.attemptId
+        store.updateQueueEntry(entry)
+        recordTurnAck({ meshId, taskId, kind: 'delivered', attemptId: attempt.attemptId, sessionId })
+        const held = recordTurnStage({ meshId, taskId, stage, attemptId: attempt.attemptId, sessionId, occurredAtMs: Date.now() })
+        expect(held?.deferred).toBe(true)
+        return attempt
+      }
+
+      it('surviving session after crash: no redrive/reassign, consumed recovered from the hold and applied exactly once on the SAME attempt', async () => {
+        const meshId = `mesh_phase25_held_restart_${Date.now()}`
+        const nodeId = 'node_w'
+        const sessionId = 'sess-held-picker'
+        try {
+          enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+          const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+          backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
+          createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+          const attempt = holdPreConsumed(meshId, nodeId, claimed.id, sessionId)
+          hostMesh(meshId, nodeId)
+          MeshRuntimeStore.resetForTests() // simulate the daemon restart — only durable state survives
+
+          // The worker session-host survived and rebound: the session is locally
+          // present (parked at the picker, reading idle → IDLE_CONFIRMED).
+          const { components, handleCliCommand } = makeIdleWorkerComponents(meshId, nodeId, sessionId, 'claude-cli')
+          await runMeshReconcileTick(components)
+
+          const store = MeshRuntimeStore.getInstance()
+          // No redrive, no reclaim, no duplicate prompt — the SAME row/attempt continues.
+          const row = getQueue(meshId).find(t => t.id === claimed.id)!
+          expect(row.status).toBe('assigned')
+          expect(row.assignedSessionId).toBe(sessionId)
+          expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+          expect(handleCliCommand).not.toHaveBeenCalled()
+          // Consumed was recovered from the suspension (attempt is the authority even
+          // though the delivery row still reads 'delivered'); the hold applied once.
+          const after = store.getCurrentTurnAttempt(meshId, claimed.id)!
+          expect(after.attemptId).toBe(attempt.attemptId)
+          expect(after.stage).toBe('waiting_choice')
+          expect(after.consumedAt).not.toBeNull()
+          expect(after.terminalOutcome).toBeNull()
+          expect(store.getHeldTurnSuspension(attempt.attemptId, 'waiting_choice')!.status).toBe('applied')
+          expect(getTurnLedgerMetrics().suspensionConsumedRecovered).toBe(1)
+          expect(getTurnLedgerMetrics().suspensionsApplied).toBe(1)
+
+          // A second tick is convergent: still no redrive, no duplicate apply.
+          await runMeshReconcileTick(components)
+          expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+          expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+          expect(getTurnLedgerMetrics().suspensionsApplied).toBe(1)
+          expect(handleCliCommand).not.toHaveBeenCalled()
+        } finally {
+          cleanup(meshId)
+        }
+      })
+
+      it('approval control: a pre-consumed waiting_approval hold recovers to waiting_approval on the SAME attempt (distinct from choice)', async () => {
+        const meshId = `mesh_phase25_held_restart_approval_${Date.now()}`
+        const nodeId = 'node_w'
+        const sessionId = 'sess-held-approval'
+        try {
+          enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+          const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+          backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
+          createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+          const attempt = holdPreConsumed(meshId, nodeId, claimed.id, sessionId, 'waiting_approval')
+          hostMesh(meshId, nodeId)
+          MeshRuntimeStore.resetForTests() // simulate the daemon restart
+
+          const { components } = makeIdleWorkerComponents(meshId, nodeId, sessionId, 'claude-cli')
+          await runMeshReconcileTick(components)
+
+          const store = MeshRuntimeStore.getInstance()
+          const row = getQueue(meshId).find(t => t.id === claimed.id)!
+          expect(row.status).toBe('assigned')
+          expect(row.assignedSessionId).toBe(sessionId)
+          expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+          const after = store.getCurrentTurnAttempt(meshId, claimed.id)!
+          expect(after.attemptId).toBe(attempt.attemptId)
+          expect(after.stage).toBe('waiting_approval')
+          expect(after.consumedAt).not.toBeNull()
+          expect(store.getHeldTurnSuspension(attempt.attemptId, 'waiting_approval')!.status).toBe('applied')
+          expect(getTurnLedgerMetrics().suspensionConsumedRecovered).toBe(1)
+        } finally {
+          cleanup(meshId)
+        }
+      })
+
+      it('dead worker session after crash: the hold blocks for the bounded UNKNOWN grace, then releases (session_dead) and the reclaim cleanly opens a NEW attempt', async () => {
+        const meshId = `mesh_phase25_held_dead_${Date.now()}`
+        const nodeId = 'node_w'
+        const deadSession = 'sess-dead-picker'
+        const freshSession = 'sess-fresh-worker'
+        try {
+          enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+          const claimed = claimNextTask(meshId, nodeId, deadSession, [])!
+          backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
+          createSessionDelivery({ meshId, nodeId, sessionId: deadSession, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+          const attempt = holdPreConsumed(meshId, nodeId, claimed.id, deadSession)
+          const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/worker', daemonId: 'test-machine' }] }
+          meshConfigMocks.listMeshes.mockReturnValue([mesh])
+          meshConfigMocks.getMesh.mockReturnValue(mesh)
+          MeshRuntimeStore.resetForTests() // restart — the worker session did NOT survive
+
+          // A fresh idle worker is available; the dead session never rebinds (UNKNOWN).
+          const { components, handleCliCommand } = makeIdleWorkerComponents(meshId, nodeId, freshSession, 'claude-cli')
+
+          // Ticks 1..grace-1: the unresolved hold BLOCKS the redrive (typed metric).
+          await runMeshReconcileTick(components)
+          await runMeshReconcileTick(components)
+          let row = getQueue(meshId).find(t => t.id === claimed.id)!
+          expect(row.status).toBe('assigned')
+          expect(row.assignedSessionId).toBe(deadSession)
+          expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+          expect(getTurnLedgerMetrics().redriveBlockedBySuspension).toBe(2)
+
+          // Tick 3 (grace exhausted → demonstrably dead): the hold is dropped
+          // (session_dead), the old attempt is cancelled by the reclaim, and PHASE 3
+          // re-dispatches the task onto the fresh worker as a NEW attempt.
+          await runMeshReconcileTick(components)
+          const store = MeshRuntimeStore.getInstance()
+          row = getQueue(meshId).find(t => t.id === claimed.id)!
+          expect(row.status).toBe('assigned')
+          expect(row.assignedSessionId).toBe(freshSession)
+          expect(handleCliCommand).toHaveBeenCalledWith('agent_command', expect.objectContaining({
+            targetSessionId: freshSession,
+            action: 'send_chat',
+          }))
+          const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
+          expect(reclaimed).toHaveLength(1)
+          expect((reclaimed[0].payload as any).reason).toBe('delivered_not_consumed_redrive')
+          expect(store.getTurnAttempt(attempt.attemptId)!.terminalOutcome).toBe('cancelled')
+          const hold = store.getHeldTurnSuspension(attempt.attemptId, 'waiting_choice')!
+          expect(hold.status).toBe('dropped')
+          expect(hold.resolution).toBe('session_dead')
+          expect(getTurnLedgerMetrics().suspensionsDropped.session_dead).toBe(1)
+          // The re-dispatch opened a NEW attempt; the dropped hold never leaked onto it.
+          const newAttempt = store.getCurrentTurnAttempt(meshId, claimed.id)!
+          expect(newAttempt.attemptId).not.toBe(attempt.attemptId)
+          expect(store.listHeldTurnSuspensionsForAttempt(newAttempt.attemptId, 'held')).toHaveLength(0)
+        } finally {
+          cleanup(meshId)
+        }
+      })
     })
 
     it('does NOT re-drive a delivered-but-unconsumed row still inside the 25s grace (no premature re-drive)', async () => {
