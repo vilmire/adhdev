@@ -33,8 +33,20 @@ describe('isVersionMismatch', () => {
         expect(isVersionMismatch(daemon('0.9.83-rc.1'), '0.9.82')).toBe(false)
     })
 
-    it('honors the explicit server-provided mismatch flag', () => {
-        expect(isVersionMismatch(daemon('0.9.82-rc.373', { versionMismatch: true }), '0.9.82')).toBe(true)
+    it('verifies direction even when the server mismatch flag is set', () => {
+        // Stale server flags advertised rc.18 to daemons already on rc.19 —
+        // the flag alone must never force a mismatch.
+        expect(isVersionMismatch(daemon('1.0.28-rc.19', { versionMismatch: true }), '1.0.28-rc.18')).toBe(false)
+        expect(isVersionMismatch(daemon('1.0.28-rc.19', { versionMismatch: true }), '1.0.28-rc.20')).toBe(true)
+        expect(isVersionMismatch(daemon('1.0.28-rc.19', { versionMismatch: true }), '1.0.28-rc.19')).toBe(false)
+        expect(isVersionMismatch(daemon('1.0.28', { versionMismatch: true }), '1.0.28-rc.20')).toBe(false)
+    })
+
+    it('fails closed when the server flag is set but the target is missing or unparseable', () => {
+        // Without a parseable target the direction can't be verified, so no
+        // update is advertised (documented fail-closed choice).
+        expect(isVersionMismatch(daemon('1.0.28-rc.19', { versionMismatch: true }), null)).toBe(false)
+        expect(isVersionMismatch(daemon('1.0.28-rc.19', { versionMismatch: true }), 'not-a-version')).toBe(false)
     })
 
     it('falls back to string inequality for unparseable versions', () => {
@@ -45,6 +57,13 @@ describe('isVersionMismatch', () => {
     it('returns false when either side is missing', () => {
         expect(isVersionMismatch(daemon(''), '0.9.82')).toBe(false)
         expect(isVersionMismatch(daemon('0.9.82'), null)).toBe(false)
+    })
+
+    it('drives the mobile machine gate by direction, not raw inequality', () => {
+        // DashboardMobileChatMode gates the mobile "Update" button on this
+        // helper (with the policy target / app version as target).
+        expect(isVersionMismatch(daemon('1.0.28-rc.19'), '1.0.28-rc.18')).toBe(false)
+        expect(isVersionMismatch(daemon('1.0.28-rc.18'), '1.0.28-rc.19')).toBe(true)
     })
 })
 

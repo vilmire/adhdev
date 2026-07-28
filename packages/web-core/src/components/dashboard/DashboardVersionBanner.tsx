@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import type { DaemonData } from '../../types'
 import { IconRefresh, IconX } from '../Icons'
 import { getMachineDisplayName } from '../../utils/daemon-utils'
-import { getDaemonUpdateChannel } from '../../utils/daemon-update-policy'
+import { buildDaemonUpgradeLabel } from '../../utils/daemon-update-policy'
 
 interface DashboardVersionBannerProps {
     daemons: DaemonData[]
@@ -47,10 +47,7 @@ export default function DashboardVersionBanner({
                     const state = upgradingDaemons[daemon.id]
                     const currentVersion = daemon.version || daemon.daemonVersion || 'unknown'
                     const isRequired = daemon.versionUpdateRequired === true
-                    const channel = getDaemonUpdateChannel(daemon)
-                    const updateLabel = channel === 'preview'
-                        ? 'Update to preview'
-                        : isRequired ? 'Update now' : 'Upgrade'
+                    const updateLabel = buildDaemonUpgradeLabel(daemon, { targetVersion, required: isRequired })
 
                     return (
                         <span

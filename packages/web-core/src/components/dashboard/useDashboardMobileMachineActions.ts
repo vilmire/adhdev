@@ -4,6 +4,7 @@ import type { DaemonData } from '../../types'
 import { useLaunchCli } from '../../context/LaunchCliContext'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
 import { browseMachineDirectories, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
+import { runDaemonUpgradeCommand } from '../../utils/daemon-upgrade-command'
 import type { ActiveConversation } from './types'
 import { getDashboardActiveTabHref, resolveDashboardSessionTargetFromEntry } from '../../utils/dashboard-route-paths'
 
@@ -106,27 +107,15 @@ export function useDashboardMobileMachineActions({
     }, [sendDaemonCommand])
 
     const handleMachineUpgrade = useCallback(async (machineId: string) => {
-        try {
-            setMachineActionState('loading')
-            setMachineActionMessage('Starting daemon upgrade…')
-            const res: any = await sendDaemonCommand(machineId, 'daemon_upgrade', {})
-            if (res?.result?.alreadyLatest) {
-                setMachineActionState('done')
-                setMachineActionMessage(`Already on v${res?.result?.version || 'latest'}.`)
-                return
-            }
-            if (res?.result?.upgraded || res?.result?.success) {
-                setMachineActionState('done')
-                setMachineActionMessage(`Upgrade to v${res?.result?.version || 'latest'} started. Daemon is restarting…`)
-                return
-            }
-            setMachineActionState('error')
-            setMachineActionMessage(res?.result?.error || 'Upgrade failed')
-        } catch (error) {
-            setMachineActionState('error')
-            setMachineActionMessage(error instanceof Error ? error.message : 'Upgrade failed')
-        }
-    }, [sendDaemonCommand])
+        setMachineActionState('loading')
+        setMachineActionMessage('Starting daemon upgrade…')
+        // Fail closed (no command sent) when the node's update policy is
+        // unavailable — see runDaemonUpgradeCommand.
+        const entry = ides.find(entry => entry.id === machineId || entry.daemonId === machineId)
+        const result = await runDaemonUpgradeCommand(sendDaemonCommand, machineId, entry)
+        setMachineActionState(result.state)
+        setMachineActionMessage(result.message)
+    }, [ides, sendDaemonCommand])
 
     const handleLaunchWorkspaceProvider = useCallback(async (
         machineId: string,

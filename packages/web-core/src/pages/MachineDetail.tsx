@@ -553,9 +553,15 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                     recentLaunches={recentLaunches}
                                     currentConversations={currentConversations}
                                     onUpgradeDaemon={async () => {
+                                        // Fail closed when the node's update
+                                        // policy has no resolvable channel.
+                                        const payload = buildDaemonUpgradePayload(machineEntry!)
+                                        if (!payload) return
                                         try {
-                                            await sendDaemonCommand(machineId!, 'daemon_upgrade', buildDaemonUpgradePayload(machineEntry!))
-                                        } catch {}
+                                            await sendDaemonCommand(machineId!, 'daemon_upgrade', payload)
+                                        } catch {
+                                            // Best-effort trigger; the daemon reports progress via status.
+                                        }
                                     }}
                                     onOpenRecent={handleOpenRecent}
                                     onOpenConversation={handleOpenConversation}

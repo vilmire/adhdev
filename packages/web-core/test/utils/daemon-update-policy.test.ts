@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DaemonData } from '../../src/types'
 import {
+  buildDaemonUpgradeLabel,
   buildDaemonUpgradePayload,
   getDaemonUpdateChannel,
   getDaemonUpdateTargetVersion,
@@ -64,13 +65,14 @@ describe('daemon update policy helpers', () => {
     })
   })
 
-  it('shows the preview update button when the daemon is behind the preview target', () => {
+  it('labels a behind-target daemon on its current channel as a version update, not a channel switch', () => {
     const daemon: DaemonData = {
       id: 'machine-3',
       type: 'adhdev-daemon',
       status: 'online',
       version: '0.9.82-rc.100',
       versionMismatch: true,
+      updateChannel: 'preview',
       updatePolicy: {
         channel: 'preview',
         npmTag: 'next',
@@ -82,7 +84,7 @@ describe('daemon update policy helpers', () => {
       visible: true,
       showButton: true,
       title: 'Version mismatch detected',
-      buttonLabel: 'Update to preview',
+      buttonLabel: 'Update to v0.9.82-rc.118',
       targetVersion: '0.9.82-rc.118',
       channel: 'preview',
     })
@@ -128,5 +130,78 @@ describe('daemon update policy helpers', () => {
       channel: 'preview',
       tone: 'info',
     })
+  })
+})
+
+describe('buildDaemonUpgradePayload fail-closed behavior', () => {
+  it('returns null when no channel is resolvable from the node policy fields', () => {
+    // An empty payload would make the daemon fall back to saved config /
+    // 'stable' — a silent downgrade + channel retarget. Never send it.
+    const daemon: DaemonData = {
+      id: 'machine-6',
+      type: 'adhdev-daemon',
+      status: 'online',
+      version: '1.0.28-rc.18',
+    }
+
+    expect(buildDaemonUpgradePayload(daemon)).toBeNull()
+    expect(buildDaemonUpgradePayload(null)).toBeNull()
+    expect(buildDaemonUpgradePayload(undefined)).toBeNull()
+  })
+
+  it('carries the explicit channel when the policy is present', () => {
+    const daemon: DaemonData = {
+      id: 'machine-7',
+      type: 'adhdev-daemon',
+      status: 'online',
+      version: '1.0.28-rc.18',
+      updatePolicy: { channel: 'preview', npmTag: 'next', targetVersion: '1.0.28-rc.20' },
+    }
+
+    expect(buildDaemonUpgradePayload(daemon)).toMatchObject({
+      channel: 'preview',
+      npmTag: 'next',
+      targetVersion: '1.0.28-rc.20',
+    })
+  })
+})
+
+describe('buildDaemonUpgradeLabel', () => {
+  const base: DaemonData = {
+    id: 'machine-8',
+    type: 'adhdev-daemon',
+    status: 'online',
+    version: '1.0.28-rc.18',
+  }
+
+  it('labels a version update when the node channel already equals the policy channel', () => {
+    const daemon: DaemonData = {
+      ...base,
+      updateChannel: 'preview',
+      updatePolicy: { channel: 'preview', npmTag: 'next', targetVersion: '1.0.28-rc.20' },
+    }
+
+    expect(buildDaemonUpgradeLabel(daemon, { targetVersion: '1.0.28-rc.20' })).toBe('Update to v1.0.28-rc.20')
+  })
+
+  it('labels a channel switch only when the node channel differs from the policy channel', () => {
+    const daemon: DaemonData = {
+      ...base,
+      updateChannel: 'stable',
+      updatePolicy: { channel: 'preview', npmTag: 'next', targetVersion: '1.0.28-rc.20' },
+    }
+
+    expect(buildDaemonUpgradeLabel(daemon, { targetVersion: '1.0.28-rc.20' })).toBe('Switch to preview')
+  })
+
+  it('falls back to the version-update label when the node channel is unknown', () => {
+    const daemon: DaemonData = {
+      ...base,
+      updatePolicy: { channel: 'preview', npmTag: 'next', targetVersion: '1.0.28-rc.20' },
+    }
+
+    expect(buildDaemonUpgradeLabel(daemon, { targetVersion: '1.0.28-rc.20' })).toBe('Update to v1.0.28-rc.20')
+    expect(buildDaemonUpgradeLabel(daemon, { required: true })).toBe('Update now')
+    expect(buildDaemonUpgradeLabel(daemon)).toBe('Upgrade')
   })
 })

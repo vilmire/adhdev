@@ -27,17 +27,6 @@ function parseSemver(version: string): [number, number, number] | null {
     return parseVersion(version)?.base ?? null;
 }
 
-function compareSemver(a: string, b: string): number {
-    const pa = parseSemver(a);
-    const pb = parseSemver(b);
-    if (!pa || !pb) return a.localeCompare(b);
-    for (let i = 0; i < 3; i += 1) {
-        if (pa[i] < pb[i]) return -1;
-        if (pa[i] > pb[i]) return 1;
-    }
-    return 0;
-}
-
 /**
  * Is the daemon behind the target version, in this product's versioning scheme?
  *
@@ -65,16 +54,24 @@ function isDaemonBehindTarget(daemonVersion: string, targetVersion: string): boo
 
 export function isVersionMismatch(daemon: DaemonData, appVersion: string | null): boolean {
     const daemonVersion = daemon.version || null;
-    if (daemon.versionMismatch === true) return true;
     if (!daemonVersion || !appVersion) return false;
+    if (daemon.versionMismatch === true && !parseVersion(appVersion)) {
+        // Fail closed: a server mismatch flag without a parseable target cannot
+        // be direction-checked, so don't advertise an update. Server flags have
+        // been observed stale (advertising an older rc to a newer daemon), so the
+        // flag alone never forces a mismatch — the direction check below decides.
+        return false;
+    }
     return isDaemonBehindTarget(daemonVersion, appVersion);
 }
 
 export function isVersionUpdateRequired(daemon: DaemonData, appVersion: string | null): boolean {
     if (daemon.versionUpdateRequired === true) return true;
     const daemonVersion = daemon.version || null;
-    if (!daemonVersion || !appVersion || daemonVersion === appVersion) return false;
-    if (compareSemver(daemonVersion, appVersion) >= 0) return false;
+    if (!daemonVersion || !appVersion) return false;
+    // Same rc-aware direction check as isVersionMismatch (a prerelease whose
+    // base equals the target is NOT behind), then require only major/minor gaps.
+    if (!isDaemonBehindTarget(daemonVersion, appVersion)) return false;
     const daemonParts = parseSemver(daemonVersion);
     const appParts = parseSemver(appVersion);
     if (!daemonParts || !appParts) return false;

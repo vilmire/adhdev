@@ -41,8 +41,15 @@ export function useDashboardVersionBanner({
         const daemon = ides.find((entry) => entry.id === daemonId)
         if (!daemon) return
         setUpgradingDaemons(prev => ({ ...prev, [daemonId]: 'upgrading' }))
+        const payload = buildDaemonUpgradePayload(daemon)
+        if (!payload) {
+            // No resolvable channel in the node's policy — fail closed rather
+            // than sending an empty payload that could retarget the channel.
+            setUpgradingDaemons(prev => ({ ...prev, [daemonId]: 'error' }))
+            return
+        }
         try {
-            const result = await sendDaemonCommand(daemonId, 'daemon_upgrade', buildDaemonUpgradePayload(daemon))
+            const result = await sendDaemonCommand(daemonId, 'daemon_upgrade', payload)
             if (result?.result?.upgraded || result?.result?.success) {
                 setUpgradingDaemons(prev => ({ ...prev, [daemonId]: 'done' }))
             } else {

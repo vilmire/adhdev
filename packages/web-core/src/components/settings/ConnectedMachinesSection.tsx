@@ -10,6 +10,8 @@ import { EmptyState } from '../ui/EmptyState'
 import { StatusBadge } from '../ui/StatusBadge'
 import { getMachineDisplayName } from '../../utils/daemon-utils'
 import { isVersionMismatch, isVersionUpdateRequired } from '../../utils/version-update'
+import { buildDaemonUpgradePayload, getDaemonUpdateTargetVersion } from '../../utils/daemon-update-policy'
+import { DAEMON_UPGRADE_POLICY_UNAVAILABLE_MESSAGE } from '../../utils/daemon-upgrade-command'
 
 declare const __APP_VERSION__: string
 
@@ -173,10 +175,18 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
 
     const handleUpgrade = async () => {
         if (!sendDaemonCommand) return
+        // Fail closed: never send an empty daemon_upgrade payload — the daemon
+        // would fall back to saved config / 'stable' and could switch channels.
+        const payload = buildDaemonUpgradePayload(ide)
+        if (!payload) {
+            setUpgradeState('error')
+            setUpgradeMsg(DAEMON_UPGRADE_POLICY_UNAVAILABLE_MESSAGE)
+            return
+        }
         setUpgradeState('upgrading')
         setUpgradeMsg(t('machine.connectedMachines.startingUpgrade'))
         try {
-            const result = unwrapUpgradeResult(await sendDaemonCommand(ide.id, 'daemon_upgrade', {}))
+            const result = unwrapUpgradeResult(await sendDaemonCommand(ide.id, 'daemon_upgrade', payload))
             if (result.alreadyLatest) {
                 setUpgradeState('done')
                 setUpgradeMsg(`Already on v${result.version || 'latest'}.`)
@@ -221,10 +231,13 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
         }
     }
 
-    // Compare daemon version with dashboard version — hide update if already latest
+    // Compare daemon version with the update target (server policy target,
+    // falling back to the dashboard version) — direction-aware, so a daemon
+    // ahead of the target hides the update.
     const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
-    const isOutdated = isVersionMismatch(ide, appVersion)
-    const requiresUpdate = isVersionUpdateRequired(ide, appVersion)
+    const updateTarget = getDaemonUpdateTargetVersion(ide, appVersion)
+    const isOutdated = isVersionMismatch(ide, updateTarget)
+    const requiresUpdate = isVersionUpdateRequired(ide, updateTarget)
 
     const totalInstances = connectedIdes.length + connectedClis.length + connectedAcps.length
 

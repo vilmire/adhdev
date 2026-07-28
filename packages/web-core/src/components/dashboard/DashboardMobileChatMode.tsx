@@ -29,6 +29,8 @@ import { useDashboardMobileChatEffects } from './useDashboardMobileChatEffects'
 import { useDashboardMobileMachineActions } from './useDashboardMobileMachineActions'
 import { useDashboardMobileNavigationController } from './useDashboardMobileNavigationController'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
+import { getDaemonUpdateTargetVersion } from '../../utils/daemon-update-policy'
+import { isVersionMismatch } from '../../utils/version-update'
 
 declare const __APP_VERSION__: string
 
@@ -228,8 +230,12 @@ export default function DashboardMobileChatMode({
         () => buildSelectedMachineRecentLaunches(selectedMachineEntry, ides),
         [ides, selectedMachineEntry],
     )
-    const selectedMachineVersion = selectedMachineEntry?.version || null
-    const selectedMachineNeedsUpgrade = !!selectedMachineEntry && !!selectedMachineVersion && !!appVersion && selectedMachineVersion !== appVersion
+    // Direction-aware gate (same helper as the version banner): only offer the
+    // upgrade when the machine is genuinely BEHIND the update target — a raw
+    // !== would show "Update" to a machine already on a NEWER build than the
+    // web app (e.g. daemon rc.19 vs app rc.18).
+    const selectedMachineNeedsUpgrade = !!selectedMachineEntry
+        && isVersionMismatch(selectedMachineEntry, getDaemonUpdateTargetVersion(selectedMachineEntry, appVersion))
     const selectedMachineProviders = useMemo(
         () => selectedMachineEntry?.availableProviders || [],
         [selectedMachineEntry],

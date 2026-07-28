@@ -67,12 +67,55 @@ export function getDaemonUpdateChannel(daemon: DaemonData): WebReleaseChannel | 
     return getDaemonUpdatePolicy(daemon).channel || null
 }
 
-export function buildDaemonUpgradePayload(daemon: DaemonData): Record<string, unknown> {
+/**
+ * Build the `daemon_upgrade` payload from the node's server-pushed update
+ * policy. Returns null when no channel is resolvable: sending an empty payload
+ * makes the daemon fall back to its saved config or 'stable', which can
+ * silently downgrade the node and retarget it to another channel. Callers must
+ * treat null as "do not send the command".
+ */
+export function buildDaemonUpgradePayload(daemon: DaemonData | null | undefined): Record<string, unknown> | null {
+    if (!daemon) return null
     const policy = getDaemonUpdatePolicy(daemon)
+    if (!policy.channel) return null
     return {
-        ...(policy.channel ? { channel: policy.channel } : {}),
+        channel: policy.channel,
         ...(policy.npmTag ? { npmTag: policy.npmTag } : {}),
         ...(policy.targetVersion ? { targetVersion: policy.targetVersion } : {}),
-        ...(Object.keys(policy).length > 0 ? { updatePolicy: policy } : {}),
+        updatePolicy: policy,
     }
+}
+
+/**
+ * The node's own current channel, as reported by the daemon itself
+ * (`updateChannel` is its saved config, `releaseChannel` its build channel).
+ * Distinct from `updatePolicy.channel`, which is the server-pushed TARGET
+ * channel — getDaemonUpdateChannel() merges the two and can't tell them apart.
+ */
+export function getDaemonCurrentChannel(daemon: DaemonData): WebReleaseChannel | null {
+    return normalizeChannel(daemon.updateChannel) || normalizeChannel(daemon.releaseChannel)
+}
+
+/**
+ * Label for the one-click upgrade action. The action targets the server-pushed
+ * policy channel: when the node's current channel already IS that channel this
+ * is a plain version update ('Update to v{target}'); only when the channels
+ * actually differ is it a channel switch ('Switch to preview' / 'Switch to
+ * stable'). When the node's channel is unknown we can't prove a switch, so we
+ * fall back to the version-update label.
+ */
+export function buildDaemonUpgradeLabel(
+    daemon: DaemonData,
+    opts: { targetVersion?: string | null; required?: boolean; fallback?: string } = {},
+): string {
+    const policyChannel = daemon.updatePolicy && typeof daemon.updatePolicy === 'object'
+        ? normalizeChannel((daemon.updatePolicy as WebVersionUpdatePolicy).channel)
+        : null
+    const currentChannel = getDaemonCurrentChannel(daemon)
+    if (policyChannel && currentChannel && policyChannel !== currentChannel) {
+        return `Switch to ${policyChannel}`
+    }
+    const targetVersion = normalizeVersion(opts.targetVersion)
+    if (targetVersion) return `Update to v${targetVersion}`
+    return opts.fallback || (opts.required ? 'Update now' : 'Upgrade')
 }
