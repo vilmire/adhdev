@@ -1564,6 +1564,43 @@ export function requeueTask(
 }
 
 /**
+ * RC.20 (target-session wedge): clear a STALE target pin (targetSessionId, and
+ * optionally targetNodeId) from a still-PENDING task so it becomes claimable by any
+ * compatible session — WITHOUT consuming the task's retry budget (requeueCount is
+ * untouched; the pin expiry is an un-wedging operation, not a retry). This is the
+ * documented bounded rule behind the TARGET_SESSION_PIN_TTL_MS expiry in the
+ * auto-launch scan: a pin that has gone unclaimed past the TTL is expired rather than
+ * leaving the task pending forever behind the target_session_constraint skip.
+ *
+ * Guarded to 'pending' rows only — an assigned/completed/cancelled row is never
+ * mutated (explicit operator cancellation stays terminal).
+ */
+export function expireTaskTargetPin(
+    meshId: string,
+    taskId: string,
+    opts?: { reason?: string; clearTargetNode?: boolean } & MeshQueueMutationOptions,
+): MeshWorkQueueEntry | null {
+    requireMeshHostQueueOwner(opts);
+    return withQueueLock(meshId, () => {
+        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+        if (!entry) return null;
+        if (entry.status !== 'pending') return null;
+        if (!entry.targetSessionId && !entry.targetNodeId) return null;
+        const clearedSession = entry.targetSessionId;
+        const clearedNode = opts?.clearTargetNode ? entry.targetNodeId : undefined;
+        delete entry.targetSessionId;
+        if (opts?.clearTargetNode) delete entry.targetNodeId;
+        entry.updatedAt = new Date().toISOString();
+        if (opts?.reason) entry.requeueReason = opts.reason;
+        MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        LOG.warn('MeshQueue', `Expired stale target pin on task ${taskId} (mesh ${meshId}): `
+            + `cleared${clearedSession ? ` targetSessionId=${clearedSession}` : ''}${clearedNode ? ` targetNodeId=${clearedNode}` : ''} `
+            + `(${opts?.reason ?? 'target_pin_expired'}) — the task is now claimable by any compatible session`);
+        return entry;
+    });
+}
+
+/**
  * Max times the assigned-stranded watchdog will reclaim a single task before giving
  * up and failing it. Bounds the reclaim→re-dispatch→strand cycle so a permanently
  * undeliverable target (e.g. a node whose transport is wedged) eventually fails and
