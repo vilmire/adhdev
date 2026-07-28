@@ -28,7 +28,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
   getMeshByRepo: meshConfigMocks.getMeshByRepo,
 }))
 
-import { runMeshReconcileTick, __resetReconcileInFlightSynthDebounceForTests, getMeshV2BackstopCounters, __resetMeshV2BackstopCountersForTests, __resetReclaimUnknownStreakForTests } from '../../src/mesh/mesh-reconcile-loop.js'
+import { runMeshReconcileTick, __resetReconcileInFlightSynthDebounceForTests, getMeshV2BackstopCounters, __resetMeshV2BackstopCountersForTests, __resetReclaimUnknownStreakForTests, restampReboundMeshWorkerAssignment } from '../../src/mesh/mesh-reconcile-loop.js'
 import { setLogLevel, getRecentLogs } from '../../src/logging/logger.js'
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
 import { reconcileDirectDispatchCompletionFromTranscript } from '../../src/mesh/mesh-events-stale.js'
@@ -36,7 +36,7 @@ import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueu
 import { getLedgerDir, appendLedgerEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { createSessionDelivery, updateSessionDeliveryStatus } from '../../src/mesh/mesh-delivery-policy.js'
-import { recordTurnAck, recordTurnStage, openTurnAttempt, getTurnLedgerMetrics, __resetTurnLedgerMetricsForTests } from '../../src/mesh/mesh-turn-ledger.js'
+import { recordTurnAck, recordTurnStage, openTurnAttempt, proposeTurnCompletion, getTurnLedgerMetrics, __resetTurnLedgerMetricsForTests } from '../../src/mesh/mesh-turn-ledger.js'
 
 function cleanup(meshId: string) {
   try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }
@@ -4535,5 +4535,136 @@ describe('APPROVAL-Q1-REALTIME: approval nudge is delivered to a busy coordinato
     } finally {
       cleanup(meshId)
     }
+  })
+})
+
+// RESTART-REBOUND ENVELOPE (post-restart completion wedge): after a daemon restart
+// the rebound worker instance holds NO mesh envelope (in-memory stamps lost) while
+// the durable authority — the assigned queue row + the current turn attempt —
+// survives. restampReboundMeshWorkerAssignment re-derives the envelope from those
+// durable rows so the SAME attempt's post-answer completion can route and commit.
+describe('restampReboundMeshWorkerAssignment (post-restart rebound envelope)', () => {
+  const meshId = 'mesh-restamp-test'
+  const nodeId = 'nodeA'
+
+  function makeReboundWorker(sessionId: string) {
+    // Post-restart rebound: settings carry NO mesh envelope.
+    const settings: Record<string, any> = { autoApprove: false }
+    const worker = {
+      category: 'cli',
+      attachMeshAssignment: (a: any) => {
+        if (a.meshId) settings.meshNodeFor = a.meshId
+        if (a.nodeId) { settings.meshNodeId = a.nodeId; settings.meshLastNodeId = a.nodeId }
+        if (a.taskId) settings.meshActiveTaskId = a.taskId
+        if (typeof a.dispatchNonce === 'number') settings.meshActiveDispatchNonce = a.dispatchNonce
+        if (a.attemptId) settings.meshActiveAttemptId = a.attemptId
+        if (a.coordinatorDaemonId) settings.meshCoordinatorDaemonId = a.coordinatorDaemonId
+        if (a.coordinatorSessionId) settings.meshCoordinatorSessionId = a.coordinatorSessionId
+      },
+      getState: () => ({ instanceId: sessionId, status: 'idle', settings }),
+    }
+    const components = {
+      instanceManager: {
+        getInstance: (id: string) => (id === sessionId ? worker : undefined),
+        attachMeshAssignmentToInstance: (id: string, a: any) => {
+          const inst = id === sessionId ? worker : undefined
+          if (!inst || typeof inst.attachMeshAssignment !== 'function') return { stamped: false, reason: 'instance_not_found' }
+          inst.attachMeshAssignment(a)
+          return { stamped: true }
+        },
+      },
+    } as any
+    return { worker, settings, components }
+  }
+
+  function openAttempt(taskId: string, nonce: number, sessionId: string) {
+    const { attempt } = openTurnAttempt({
+      meshId, taskId, dispatchNonce: nonce, nodeId, sessionId,
+      coordinatorDaemonId: 'daemon_mach_x', coordinatorSessionId: 'coordSess', nowMs: Date.now(),
+    })
+    return attempt
+  }
+
+  afterEach(() => { cleanup(meshId) })
+
+  it('re-stamps a rebound local worker from the durable row + current attempt (causal attempt/session/nonce authority preserved), idempotently', () => {
+    const store = MeshRuntimeStore.getInstance()
+    const taskId = 'task-restamp-1'
+    const attempt = openAttempt(taskId, 3, 'sessW')
+    const { settings, components } = makeReboundWorker('sessW')
+
+    const stamped = restampReboundMeshWorkerAssignment(components, store, meshId, {
+      id: taskId, assignedSessionId: 'sessW', assignedNodeId: nodeId, dispatchNonce: 3,
+    })
+    expect(stamped).toBe(true)
+    expect(settings.meshNodeFor).toBe(meshId)
+    expect(settings.meshNodeId).toBe(nodeId)
+    expect(settings.meshActiveTaskId).toBe(taskId)
+    // The stamp carries the attempt's OWN identity — never a re-derived guess.
+    expect(settings.meshActiveAttemptId).toBe(attempt.attemptId)
+    expect(settings.meshActiveDispatchNonce).toBe(3)
+    expect(settings.meshCoordinatorDaemonId).toBe('daemon_mach_x')
+    expect(settings.meshCoordinatorSessionId).toBe('coordSess')
+
+    // Idempotent: the next reconcile tick is a no-op.
+    expect(restampReboundMeshWorkerAssignment(components, store, meshId, {
+      id: taskId, assignedSessionId: 'sessW', assignedNodeId: nodeId, dispatchNonce: 3,
+    })).toBe(false)
+    expect(settings.meshActiveAttemptId).toBe(attempt.attemptId)
+  })
+
+  it('never re-arms a terminal attempt', () => {
+    const store = MeshRuntimeStore.getInstance()
+    const taskId = 'task-restamp-terminal'
+    const attempt = openAttempt(taskId, 1, 'sessW')
+    const committed = proposeTurnCompletion({ meshId, taskId, attemptId: attempt.attemptId, sessionId: 'sessW', outcome: 'completed', source: 'provider_event', nowMs: Date.now() })
+    expect(committed.committed).toBe(true)
+    const { settings, components } = makeReboundWorker('sessW')
+
+    expect(restampReboundMeshWorkerAssignment(components, store, meshId, {
+      id: taskId, assignedSessionId: 'sessW', assignedNodeId: nodeId, dispatchNonce: 1,
+    })).toBe(false)
+    expect(settings.meshActiveTaskId).toBeUndefined()
+    expect(settings.meshNodeFor).toBeUndefined()
+  })
+
+  it('never stamps a session the current attempt is not bound to', () => {
+    const store = MeshRuntimeStore.getInstance()
+    const taskId = 'task-restamp-mismatch'
+    openAttempt(taskId, 1, 'sessW') // attempt bound to sessW
+    const { settings, components } = makeReboundWorker('sessOTHER')
+
+    expect(restampReboundMeshWorkerAssignment(components, store, meshId, {
+      id: taskId, assignedSessionId: 'sessOTHER', assignedNodeId: nodeId, dispatchNonce: 1,
+    })).toBe(false)
+    expect(settings.meshActiveTaskId).toBeUndefined()
+  })
+
+  it('skips a session with no local instance (remote / gone) without throwing', () => {
+    const store = MeshRuntimeStore.getInstance()
+    const taskId = 'task-restamp-remote'
+    openAttempt(taskId, 1, 'sessRemote')
+    const components = {
+      instanceManager: {
+        getInstance: () => undefined,
+        attachMeshAssignmentToInstance: () => ({ stamped: false, reason: 'instance_not_found' }),
+      },
+    } as any
+    expect(restampReboundMeshWorkerAssignment(components, store, meshId, {
+      id: taskId, assignedSessionId: 'sessRemote', assignedNodeId: nodeId, dispatchNonce: 1,
+    })).toBe(false)
+  })
+
+  it('leaves an instance already stamped for another task alone (the live dispatch owns it)', () => {
+    const store = MeshRuntimeStore.getInstance()
+    const taskId = 'task-restamp-busy'
+    openAttempt(taskId, 1, 'sessW')
+    const { settings, components } = makeReboundWorker('sessW')
+    settings.meshActiveTaskId = 'task-other-live-dispatch'
+
+    expect(restampReboundMeshWorkerAssignment(components, store, meshId, {
+      id: taskId, assignedSessionId: 'sessW', assignedNodeId: nodeId, dispatchNonce: 1,
+    })).toBe(false)
+    expect(settings.meshActiveTaskId).toBe('task-other-live-dispatch')
   })
 })

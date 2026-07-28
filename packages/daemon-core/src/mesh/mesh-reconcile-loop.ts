@@ -1082,6 +1082,78 @@ function reconcileTerminalViaReducer(args: {
     return true;
 }
 
+// RESTART-REBOUND ENVELOPE (post-restart completion wedge): a mesh worker's
+// routing envelope (settings.meshNodeFor / meshActiveTaskId / meshActiveAttemptId /
+// meshActiveDispatchNonce) is IN-MEMORY on the worker instance — attachMeshAssignment
+// stamps it at dispatch, and restoreHostedSessions rebuilds the instance after a
+// daemon restart with none of it. The DURABLE authority survives the restart: the
+// assigned work-queue row (taskId / nodeId / bound session) and the current turn
+// attempt (attemptId / dispatchNonce / coordinator identity). Without the envelope
+// the rebound worker's post-answer completion forwards with no taskId/attemptId and
+// drops at the worker's own router (no_worker_envelope) — the task wedges
+// 'assigned' forever even though the answer/approval was accepted on the SAME
+// attempt, and every transcript backstop is gated on the lost mesh-worker markers.
+//
+// Re-derive the envelope from the durable rows and re-stamp the LOCAL live
+// instance. This NEVER injects a prompt, NEVER flips a queue row, and is
+// idempotent (an instance already stamped for this exact task is skipped).
+// Causal authority is preserved: the stamp carries the attempt's OWN
+// (attemptId, dispatchNonce, coordinator ids), and a terminal attempt or an
+// attempt bound to a DIFFERENT session is never re-armed. A session with no
+// local instance (remote worker / gone) is skipped — its own dispatch path
+// re-stamps on (re)delivery. Returns true when a stamp was applied.
+export function restampReboundMeshWorkerAssignment(
+    components: Pick<DaemonComponents, 'instanceManager'>,
+    store: MeshRuntimeStore,
+    meshId: string,
+    row: { id: string; assignedSessionId?: string | null; assignedNodeId?: string | null; dispatchNonce?: number | null },
+): boolean {
+    const sessionId = readNonEmptyString(row.assignedSessionId);
+    if (!sessionId) return false;
+    const inst = components.instanceManager?.getInstance?.(sessionId);
+    if (!inst || typeof (inst as { attachMeshAssignment?: unknown }).attachMeshAssignment !== 'function') return false;
+    let settings: Record<string, unknown> = {};
+    try {
+        settings = ((inst.getState?.()?.settings as Record<string, unknown>) || {});
+    } catch { return false; }
+    // Idempotent: already stamped for THIS task → nothing to re-derive. (A stamp
+    // for a DIFFERENT task is left alone too — the live dispatch owns it.)
+    if (readNonEmptyString(settings.meshActiveTaskId)) return false;
+    const attempt = (() => {
+        try { return store.getCurrentTurnAttempt(meshId, row.id); } catch { return null; }
+    })();
+    if (attempt) {
+        // Causal authority: never re-arm a terminal attempt, and never stamp a
+        // session the current attempt is not bound to (a stale queue row naming
+        // a session the ledger has since replaced).
+        if (attempt.terminalOutcome) return false;
+        const attemptSessionId = readNonEmptyString(attempt.sessionId);
+        if (attemptSessionId && !sessionIdsEquivalent(attemptSessionId, sessionId)) return false;
+    }
+    const nodeId = readNonEmptyString(row.assignedNodeId);
+    const coordinatorDaemonId = readNonEmptyString(attempt?.coordinatorDaemonId);
+    const coordinatorSessionId = readNonEmptyString(attempt?.coordinatorSessionId);
+    try {
+        const result = components.instanceManager?.attachMeshAssignmentToInstance?.(sessionId, {
+            meshId,
+            ...(nodeId ? { nodeId } : {}),
+            taskId: row.id,
+            ...(typeof attempt?.dispatchNonce === 'number'
+                ? { dispatchNonce: attempt.dispatchNonce }
+                : (typeof row.dispatchNonce === 'number' ? { dispatchNonce: row.dispatchNonce } : {})),
+            ...(attempt?.attemptId ? { attemptId: attempt.attemptId } : {}),
+            ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
+            ...(coordinatorSessionId ? { coordinatorSessionId } : {}),
+        });
+        if (result?.stamped) {
+            LOG.info('MeshReconcile', `Re-stamped rebound mesh worker ${sessionId} from the durable ledger: task ${row.id} on mesh ${meshId} `
+                + `(attempt=${attempt?.attemptId ?? 'n/a'} nonce=${attempt?.dispatchNonce ?? row.dispatchNonce ?? 'n/a'}) — in-memory envelope lost (daemon restart)`);
+            return true;
+        }
+    } catch { /* best-effort — the next tick retries */ }
+    return false;
+}
+
 async function recoverStrandedAssignedDispatches(
     components: DaemonComponents,
     mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
@@ -1108,6 +1180,10 @@ async function recoverStrandedAssignedDispatches(
         if (key.startsWith(meshKeyPrefix) && !assignedKeys.has(key)) assignedIdleFinalAssistantSince.delete(key);
     }
     for (const row of assigned) {
+        // RESTART-REBOUND ENVELOPE: re-derive a rebound LOCAL worker's lost
+        // in-memory mesh envelope from the durable row + current attempt BEFORE
+        // any of the age-gated paths below. Idempotent; never injects a prompt.
+        restampReboundMeshWorkerAssignment(components, store, meshId, row);
         const dispatchedAtMs = Date.parse(row.dispatchTimestamp ?? '');
         if (!Number.isFinite(dispatchedAtMs)) continue;              // no dispatch ts → can't age it
         const ageMs = nowMs - dispatchedAtMs;
@@ -1752,6 +1828,7 @@ export function reconcileZombieAssignedTasks(
     const assigned = getQueue(meshId, { status: ['assigned'] });
     if (!assigned.length) return;
     const nowMs = Date.now();
+    const store = MeshRuntimeStore.getInstance();
 
     // True when THIS daemon is authoritative for the row's assigned node — the only
     // case where "no local instance" positively means "session no longer exists".
@@ -1769,6 +1846,9 @@ export function reconcileZombieAssignedTasks(
     for (const row of assigned) {
         // Rows WITH a parseable dispatchTimestamp belong to PHASE 2.5 — never double-handle.
         if (Number.isFinite(Date.parse(row.dispatchTimestamp ?? ''))) continue;
+        // RESTART-REBOUND ENVELOPE: same re-derivation as PHASE 2.5 for legacy
+        // rows without a dispatchTimestamp (idempotent; never injects).
+        restampReboundMeshWorkerAssignment(components, store, meshId, row);
         const updatedMs = Date.parse(row.updatedAt ?? '');
         const createdMs = Date.parse(row.createdAt ?? '');
         const anchorMs = Number.isFinite(updatedMs) ? updatedMs : createdMs;

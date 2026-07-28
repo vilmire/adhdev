@@ -4605,6 +4605,34 @@ export class CliProviderInstance implements ProviderInstance {
                         modalButtons: modal?.buttons,
                     });
                 }
+            } else if (newStatus === 'waiting_choice') {
+                // SUSPENDED-TURN-IS-A-TURN (post-restart completion wedge): entering
+                // waiting_choice means the turn is PARKED on an AskUserQuestion picker
+                // mid-flight — the same busy phase the waiting_approval arm above treats
+                // a consent modal as. Arm the turn bookkeeping identically so the answer's
+                // resume (waiting_choice → generating → idle) completes through the normal
+                // completion path below. Without this arm a session that entered
+                // waiting_choice WITHOUT a prior idle→generating arm this boot — the
+                // post-daemon-restart rebound, where the FSM folds starting→waiting_choice
+                // on the still-parked picker — keeps generatingStartedAt===0, so the
+                // resume's generating→idle falls into the "startup-phase blip" suppression
+                // below and NO completion ever emits: the task wedges 'assigned' forever.
+                this.suppressIdleHistoryReplay = false;
+                // Flush pending generating_started if debounce still pending
+                if (this.generatingDebouncePending) {
+                    if (this.generatingDebounceTimer) { clearTimeout(this.generatingDebounceTimer); this.generatingDebounceTimer = null; }
+                    this.pushEvent({ event: 'agent:generating_started', ...this.generatingDebouncePending });
+                    this.generatingDebouncePending = null;
+                }
+                // Cancel any pending completed
+                if (this.completedDebounceTimer) { clearTimeout(this.completedDebounceTimer); this.completedDebounceTimer = null; }
+                this.completedDebouncePending = null;
+
+                if (!this.generatingStartedAt) this.generatingStartedAt = now;
+                // FALSE-IDLE continuity: waiting_choice is a busy phase (the agent is
+                // parked inside its turn), so bump the epoch exactly like the
+                // waiting_approval arm does.
+                this.busyEpoch++;
             } else if (newStatus === 'generating' && this.lastStatus === 'waiting_approval') {
                 // Approval resolved and the agent resumed work. Defense-in-depth:
                 // clear the approval emit fingerprint here too (not only on
@@ -5172,8 +5200,26 @@ export class CliProviderInstance implements ProviderInstance {
         // the coordinator as if it were the completion of another task.
         // We schedule after the emit so the originating coordinator still
         // observes the completion event with its routing marker intact.
+        //
+        // RESTART-REBOUND agent:ready guard (post-restart completion wedge):
+        // agent:ready is a queue-CLAIM signal, not task-terminal evidence — and
+        // it re-fires after a daemon restart (agentReadyEmitted is per-process),
+        // potentially on the SAME first-idle frame that just armed this task's
+        // debounced completion. Detaching here would strip meshActiveTaskId /
+        // meshActiveAttemptId / meshActiveDispatchNonce before the completion
+        // flush emits, dropping the completion envelope-less. So agent:ready
+        // may only detach when NO turn is in flight and NO completion is
+        // pending; generating_completed / agent:stopped stay unconditional —
+        // they ARE the terminal evidence. A genuine agent:ready with no active
+        // task is unaffected (meshActiveTaskId falsy → no detach either way).
         if (TERMINAL_MESH_EVENTS.has(event.event) && this.settings.meshActiveTaskId) {
-            try { this.detachMeshAssignment(); } catch { /* best-effort */ }
+            const readyWithTurnInFlight = event.event === 'agent:ready'
+                && (this.generatingStartedAt !== 0
+                    || this.completedDebouncePending !== null
+                    || this.generatingDebouncePending !== null);
+            if (!readyWithTurnInFlight) {
+                try { this.detachMeshAssignment(); } catch { /* best-effort */ }
+            }
         }
     }
 

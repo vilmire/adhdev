@@ -369,4 +369,79 @@ describe('held-suspension restart contract — gateRedriveForHeldSuspension', ()
         expect(getTurnLedgerMetrics().suspensionConsumedRecovered).toBe(1);
         expect(getTurnLedgerMetrics().suspensionsApplied).toBe(1);
     });
+
+    it('waiting_approval restart → approve: the SAME attempt completes exactly once (terminal reducer + outbox exactly-once)', () => {
+        const taskId = nextTaskId();
+        const t0 = 8_000_000;
+        const attempt = openDelivered(taskId, t0);
+        holdPreConsumed(taskId, attempt.attemptId, t0, 'waiting_approval');
+        let store = MeshRuntimeStore.getInstance();
+
+        simulateRestart();
+        store = MeshRuntimeStore.getInstance();
+        expect(drainHeldTurnSuspensionsForMesh(MESH)).toEqual({ applied: 0, dropped: 0, stillHeld: 1 });
+        expect(gateRedriveForHeldSuspension({ meshId: MESH, taskId, sessionLiveness: 'unknown', sessionProvenDead: false, nowMs: t0 + 30_000 }).kind).toBe('blocked');
+        const recovered = gateRedriveForHeldSuspension({ meshId: MESH, taskId, sessionLiveness: 'alive', nowMs: t0 + 31_000 });
+        expect(recovered).toMatchObject({ kind: 'recovered', attemptId: attempt.attemptId, stage: 'waiting_approval' });
+
+        // The user approves on the rebound session: the resume passes on the SAME
+        // attempt; the completion commits exactly once; the terminal outbox
+        // enqueues exactly once; a duplicate completion is inert; reinjection is
+        // refused throughout.
+        const resume = recordTurnStage({ meshId: MESH, taskId, stage: 'generating', attemptId: attempt.attemptId, sessionId: 'sessA', occurredAtMs: t0 + 33_000 });
+        expect(resume?.applied).toBe(true);
+        expect(resume?.attemptId).toBe(attempt.attemptId);
+        expect(assertPromptInjectionAllowed(store.getTurnAttempt(attempt.attemptId), 'test')).toBe(false);
+        const d1 = proposeTurnCompletion({ meshId: MESH, taskId, attemptId: attempt.attemptId, sessionId: 'sessA', outcome: 'completed', source: 'provider_event', nowMs: t0 + 34_000 });
+        const d2 = proposeTurnCompletion({ meshId: MESH, taskId, attemptId: attempt.attemptId, sessionId: 'sessA', outcome: 'completed', source: 'provider_event', nowMs: t0 + 34_001 });
+        expect(d1).toMatchObject({ committed: true, duplicate: false });
+        expect(d2).toMatchObject({ committed: true, duplicate: true });
+        expect(enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attempt.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed' } })).toBe(true);
+        expect(enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attempt.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed' } })).toBe(false);
+        expect(store.getTurnAttempt(attempt.attemptId)!.terminalOutcome).toBe('completed');
+        expect(getTurnLedgerMetrics().suspensionConsumedRecovered).toBe(1);
+        expect(getTurnLedgerMetrics().suspensionsApplied).toBe(1);
+    });
+
+    it('fresh replacement attempt after restart: the NEW attempt completes exactly once and a late completion for the OLD attempt is inert', () => {
+        const taskId = nextTaskId();
+        const t0 = 9_000_000;
+        const attemptA = openDelivered(taskId, t0);
+        holdPreConsumed(taskId, attemptA.attemptId, t0);
+        let store = MeshRuntimeStore.getInstance();
+
+        simulateRestart();
+        store = MeshRuntimeStore.getInstance();
+
+        // The original worker is demonstrably dead: the hold is dropped
+        // (session_dead), the reclaim closes attempt A, and the re-dispatch opens
+        // a NEW attempt B on a fresh replacement worker (new session, new nonce).
+        expect(gateRedriveForHeldSuspension({ meshId: MESH, taskId, sessionLiveness: 'unknown', sessionProvenDead: true, nowMs: t0 + 38_000 }).kind).toBe('released');
+        expect(closeAttemptForReassignment({ meshId: MESH, taskId, reason: 'delivered_not_consumed_redrive', nowMs: t0 + 38_100 }).committed).toBe(true);
+        const attemptB = openDelivered(taskId, t0 + 39_000, 2, 'sessB');
+        expect(attemptB.attemptId).not.toBe(attemptA.attemptId);
+
+        // The replacement worker consumes its prompt and runs the turn to
+        // completion: the reducer commits the NEW attempt exactly once and the
+        // terminal outbox enqueues exactly once.
+        const consumed = recordTurnAck({ meshId: MESH, taskId, kind: 'consumed', attemptId: attemptB.attemptId, sessionId: 'sessB', occurredAtMs: t0 + 39_500 });
+        expect(consumed?.applied).toBe(true);
+        const gen = recordTurnStage({ meshId: MESH, taskId, stage: 'generating', attemptId: attemptB.attemptId, sessionId: 'sessB', occurredAtMs: t0 + 40_000 });
+        expect(gen?.applied).toBe(true);
+        const done1 = proposeTurnCompletion({ meshId: MESH, taskId, attemptId: attemptB.attemptId, sessionId: 'sessB', outcome: 'completed', source: 'provider_event', nowMs: t0 + 41_000 });
+        const done2 = proposeTurnCompletion({ meshId: MESH, taskId, attemptId: attemptB.attemptId, sessionId: 'sessB', outcome: 'completed', source: 'provider_event', nowMs: t0 + 41_001 });
+        expect(done1).toMatchObject({ committed: true, duplicate: false });
+        expect(done2).toMatchObject({ committed: true, duplicate: true });
+        expect(enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attemptB.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed' } })).toBe(true);
+        expect(enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attemptB.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed' } })).toBe(false);
+        expect(store.getTurnAttempt(attemptB.attemptId)!.terminalOutcome).toBe('completed');
+
+        // A late completion echoing the DEAD attempt is stale and inert: it must
+        // not flip, duplicate, or resurrect anything.
+        const late = proposeTurnCompletion({ meshId: MESH, taskId, attemptId: attemptA.attemptId, sessionId: 'sessA', outcome: 'completed', source: 'provider_event', nowMs: t0 + 42_000 });
+        expect(late.committed).toBe(false);
+        expect(late.reason).toBe('stale_attempt');
+        expect(store.getTurnAttempt(attemptA.attemptId)!.terminalOutcome).toBe('cancelled');
+        expect(store.getTurnAttempt(attemptB.attemptId)!.terminalOutcome).toBe('completed');
+    });
 });
