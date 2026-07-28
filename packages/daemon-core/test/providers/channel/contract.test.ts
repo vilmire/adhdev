@@ -3,6 +3,7 @@ import {
   DEFAULT_PROVIDER_CHANNEL,
   KNOWN_DIGEST_ALGORITHMS,
   ProviderChannelError,
+  isPreviewReleaseChannel,
   partitionChannelEntries,
   resolveProviderChannel,
 } from '../../../src/providers/channel/contract.js';
@@ -35,6 +36,41 @@ describe('resolveProviderChannel', () => {
     expect(resolveProviderChannel(undefined, { ADHDEV_PROVIDER_CHANNEL: 'preview' })).toBe('preview');
     expect(resolveProviderChannel('stable', { ADHDEV_PROVIDER_CHANNEL: 'preview' })).toBe('stable');
     expect(resolveProviderChannel('garbage', { ADHDEV_PROVIDER_CHANNEL: 'preview' })).toBe('stable');
+  });
+
+  it('derives preview from a preview release channel only when no explicit provider channel is set', () => {
+    // rc.20 gap: preview daemon (updateChannel=preview) with no explicit
+    // providerChannel must activate the preview provider channel.
+    expect(resolveProviderChannel(undefined, {}, 'preview')).toBe('preview');
+    expect(resolveProviderChannel(null, {}, 'preview')).toBe('preview');
+    expect(resolveProviderChannel('', {}, 'next')).toBe('preview');
+    expect(resolveProviderChannel(undefined, {}, ' Preview ')).toBe('preview');
+  });
+
+  it('keeps stable byte-compatible: stable/absent/ambiguous release channels derive stable', () => {
+    expect(resolveProviderChannel(undefined, {}, 'stable')).toBe('stable');
+    expect(resolveProviderChannel(undefined, {}, 'latest')).toBe('stable');
+    expect(resolveProviderChannel(undefined, {}, undefined)).toBe('stable');
+    expect(resolveProviderChannel(undefined, {}, 'garbage')).toBe('stable');
+  });
+
+  it('explicit provider channel always wins over the release channel', () => {
+    expect(resolveProviderChannel('stable', {}, 'preview')).toBe('stable');
+    expect(resolveProviderChannel('preview', {}, 'stable')).toBe('preview');
+    // Ambiguous explicit values stay conservative even on a preview daemon.
+    expect(resolveProviderChannel('garbage', {}, 'preview')).toBe('stable');
+    // Env var is explicit too.
+    expect(resolveProviderChannel(undefined, { ADHDEV_PROVIDER_CHANNEL: 'stable' }, 'preview')).toBe('stable');
+    expect(resolveProviderChannel(undefined, { ADHDEV_PROVIDER_CHANNEL: 'preview' }, 'stable')).toBe('preview');
+  });
+
+  it('isPreviewReleaseChannel recognizes preview/next only', () => {
+    expect(isPreviewReleaseChannel('preview')).toBe(true);
+    expect(isPreviewReleaseChannel('next')).toBe(true);
+    expect(isPreviewReleaseChannel('stable')).toBe(false);
+    expect(isPreviewReleaseChannel('latest')).toBe(false);
+    expect(isPreviewReleaseChannel(undefined)).toBe(false);
+    expect(isPreviewReleaseChannel('')).toBe(false);
   });
 });
 

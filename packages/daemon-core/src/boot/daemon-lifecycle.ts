@@ -194,16 +194,39 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         registryUrl: appConfig.registryUrl,
         providerTarballUrl: appConfig.providerTarballUrl,
         channel: appConfig.providerChannel,
+        updateChannel: appConfig.updateChannel,
         allowUnverifiedTarball: appConfig.providerAllowUnverifiedTarball,
     });
 
-    // Boot-time auto-sync is intentionally disabled. The user picks which
-    // providers to install via the dashboard onboarding / Providers tab; the
-    // daemon ships empty and only contains what the user explicitly installs.
-    // Manual sync is still available via the install / check_provider_updates
-    // commands (and the REST endpoint at /api/v1/providers/updates).
+    // Boot-time auto-sync is intentionally limited to the bounded first-sync
+    // below (empty channel store + installed providers only). Beyond that,
+    // the user picks which providers to install via the dashboard onboarding
+    // / Providers tab; the daemon ships empty and only contains what the user
+    // explicitly installs. Manual sync is still available via the install /
+    // check_provider_updates commands (and the REST endpoint at
+    // /api/v1/providers/updates).
     providerLoader.loadAll();
     providerLoader.registerToDetector();
+
+    // 2.1 Verified-channel first sync (rc.20 preview activation gap). When
+    // the resolved provider channel has an EMPTY store but providers are
+    // installed (.upstream), run one bounded verified sync so channel
+    // switch/upgrade/setup/restart paths — which all converge on this boot —
+    // activate the channel without any manual step. Gated inside
+    // maybeFirstSyncVerifiedChannel: non-empty stores (last-known-good) and
+    // upstream-less installs never touch the network here, and no status
+    // path performs network calls. Fail-closed: errors keep the previous
+    // (possibly empty) store and retry on next boot.
+    void providerLoader.maybeFirstSyncVerifiedChannel()
+        .then((report) => {
+            if (!report) return;
+            if (report.status === 'error') {
+                LOG.warn('Init', `Verified channel first-sync failed (last-known-good preserved): ${report.errors.map((e) => e.code).join(', ') || 'unknown'}`);
+            } else if (report.activated.length > 0) {
+                LOG.info('Init', `Verified channel first-sync activated ${report.activated.length} providers (${providerLoader.channel})`);
+            }
+        })
+        .catch((e: any) => LOG.warn('Init', `Verified channel first-sync error: ${e?.message || e}`));
     // Register this loader as the default for loader-less provider-version reads.
     // The coordinator's own self/worktree node self-heal (mesh-node-identity.ts) reads
     // getCachedProviderVersions() with no loader in scope; without this the detection

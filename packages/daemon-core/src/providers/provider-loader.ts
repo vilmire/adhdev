@@ -224,10 +224,15 @@ export class ProviderLoader {
    */
   private static readonly UNVERIFIED_TARBALL_ENV_VAR = 'ADHDEV_PROVIDER_ALLOW_UNVERIFIED_TARBALL';
 
-  /** Resolved explicit provider channel (absent/ambiguous → 'stable'). */
+  /** Resolved provider channel (explicit config/env wins; otherwise derived from the daemon release channel; absent/ambiguous → 'stable'). */
   readonly channel: ProviderChannel;
   private readonly allowUnverifiedTarball: boolean;
   private readonly channelStore: ProviderChannelStore | null;
+  private readonly channelSyncIO?: {
+    fetchJson?: (url: string) => Promise<any>;
+    downloadFile?: (url: string, destPath: string) => Promise<void>;
+    extractTarball?: (tarPath: string, destDir: string) => Promise<void>;
+  };
 
   private probeStarts: string[] = [];
   private siblingLogged = false;
@@ -340,11 +345,20 @@ export class ProviderLoader {
     providerTarballUrl?: string;
     /**
      * Explicit provider artifact channel (config.providerChannel /
-     * ADHDEV_PROVIDER_CHANNEL). Absent or ambiguous → 'stable'. A stable
-     * runtime refuses sibling-checkout adoption and the unverified tarball
-     * fallback; verified channel activations are always loaded.
+     * ADHDEV_PROVIDER_CHANNEL). When neither is set, the channel is derived
+     * from `updateChannel` (preview daemon → preview provider channel);
+     * absent or ambiguous → 'stable'. A stable runtime refuses
+     * sibling-checkout adoption and the unverified tarball fallback;
+     * verified channel activations are always loaded.
      */
     channel?: string;
+    /**
+     * Daemon release/update channel (config.updateChannel). Only used to
+     * derive the provider channel when no explicit `channel` /
+     * ADHDEV_PROVIDER_CHANNEL is configured — an explicit provider channel
+     * always wins. Absent/ambiguous → 'stable'.
+     */
+    updateChannel?: string;
     /**
      * Development-only opt-in for the legacy unverified `main.tar.gz`
      * fallback (config.providerAllowUnverifiedTarball /
@@ -358,20 +372,33 @@ export class ProviderLoader {
      * store under `<configDir>/providers/.store`.
      */
     channelStore?: ProviderChannelStore | null;
+    /**
+     * Test seam: inject the verified channel sync transport I/O
+     * (metadata fetch / tarball download / extraction) instead of the
+     * default HTTPS + tar implementation. Never set in production.
+     */
+    channelSyncIO?: {
+      fetchJson?: (url: string) => Promise<any>;
+      downloadFile?: (url: string, destPath: string) => Promise<void>;
+      extractTarball?: (tarPath: string, destDir: string) => Promise<void>;
+    };
   }) {
     this.logFn = options?.logFn || LOG.forComponent('Provider').asLogFn();
     this.probeStarts = options?.probeStarts ?? [process.cwd(), __dirname];
     this.registryBaseUrl = resolveRegistryBaseUrl(options?.registryUrl);
     this.providerTarballUrl = resolveProviderTarballUrl(options?.providerTarballUrl);
     // Channel resolution MUST happen before detectDefaultUserDir() below:
-    // sibling-checkout adoption is gated on the resolved channel.
-    this.channel = resolveProviderChannel(options?.channel);
+    // sibling-checkout adoption is gated on the resolved channel. Explicit
+    // channel config/env always wins; otherwise the provider channel derives
+    // from the daemon release channel (preview daemon → preview providers).
+    this.channel = resolveProviderChannel(options?.channel, process.env, options?.updateChannel);
     this.allowUnverifiedTarball =
       options?.allowUnverifiedTarball === true ||
       process.env[ProviderLoader.UNVERIFIED_TARBALL_ENV_VAR] === '1';
     this.channelStore = options?.channelStore === null
       ? null
       : (options?.channelStore ?? new ProviderChannelStore(ProviderChannelStore.defaultRoot(), this.logFn));
+    this.channelSyncIO = options?.channelSyncIO;
 
     // Default directory for auto-downloads. Resolved via getConfigDir() so
     // ADHDEV_CONFIG_DIR (preview/stable instance isolation) is honored instead
@@ -729,6 +756,7 @@ export class ProviderLoader {
       registryBaseUrl: this.registryBaseUrl,
       providerTarballUrl: this.providerTarballUrl,
       logFn: this.logFn,
+      ...this.channelSyncIO,
     });
     const targetTypes = collectSyncTargetTypes(this.upstreamDir, this.channelStore, this.channel);
     const report = await runtime.sync({ channel: this.channel, targetTypes });
@@ -742,6 +770,41 @@ export class ProviderLoader {
       this.loadAll();
     }
     return report;
+  }
+
+ /**
+  * Number of valid active pointers on the resolved channel (0 = empty or
+  * disabled store). Corrupt pointer files are excluded by the store.
+  */
+  countVerifiedChannelPointers(): number {
+    if (!this.channelStore) return 0;
+    try {
+      return this.channelStore.listPointers(this.channel).pointers.size;
+    } catch {
+      return 0;
+    }
+  }
+
+ /**
+  * Bounded one-shot first sync for an empty verified channel store.
+  *
+  * Closes the rc.20 preview activation gap: a daemon whose provider channel
+  * newly derives to a channel with an EMPTY store (e.g. updateChannel=preview
+  * while providerChannel defaulted to stable) would otherwise sit at 0 active
+  * providers until a manual check_provider_updates. Runs at most one
+  * verified sync per call, only when the resolved channel has no pointers
+  * AND there are installed (.upstream) providers to sync. Fail-closed: any
+  * registry/transport failure activates nothing (last-known-good preserved)
+  * and is retried on the next boot or via check_provider_updates. Never
+  * invoked from any status path.
+  *
+  * Returns the sync report, or null when the first-sync gate did not apply.
+  */
+  async maybeFirstSyncVerifiedChannel(): Promise<ChannelSyncReport | null> {
+    if (!this.channelStore) return null;
+    if (this.countVerifiedChannelPointers() > 0) return null;
+    if (!this.hasUpstream()) return null;
+    return this.syncVerifiedChannel();
   }
 
  /**

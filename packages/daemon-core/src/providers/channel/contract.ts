@@ -5,8 +5,12 @@
  * channels landed in Stage 1A (adhdev-providers channel manifests) and
  * Stage 1B (packages/server registry channel reads):
  *
- * - A channel is ALWAYS explicit: 'stable' or 'preview'. Absent or ambiguous
- *   configuration resolves to 'stable'. Stable never falls through to preview.
+ * - An explicit provider channel (config / env) always wins. When none is
+ *   configured, the provider channel is DERIVED from the daemon release
+ *   channel (config.updateChannel): preview → preview, otherwise stable.
+ *   Absent or ambiguous configuration still resolves to 'stable'; stable
+ *   never falls through to preview without an explicit preview release
+ *   channel.
  * - Every channel entry carries a typed, versioned digest algorithm
  *   (`digestAlgorithm`) and a content digest (`bundleDigest`). The runtime
  *   verifies the downloaded artifact tree against that digest BEFORE
@@ -84,18 +88,43 @@ export class ProviderChannelError extends Error {
 }
 
 /**
+ * Release/update channel values that imply the preview provider channel when
+ * no explicit provider channel is configured. 'next' is the npm dist-tag
+ * alias for the preview release channel.
+ */
+export function isPreviewReleaseChannel(releaseChannel?: string | null): boolean {
+  const normalized = typeof releaseChannel === 'string' ? releaseChannel.trim().toLowerCase() : '';
+  return normalized === 'preview' || normalized === 'next';
+}
+
+/**
  * Resolve the effective provider channel.
  *
- * Priority: explicit config value → env var → default. Absent, empty or
- * unrecognized values resolve to 'stable' (never to preview): an ambiguous
- * runtime must behave like the most conservative channel.
+ * Precedence (explicit always wins):
+ *   1. Explicit config value (`config.providerChannel`): 'preview' → preview;
+ *      any other non-empty value → stable (ambiguous stays conservative).
+ *   2. `ADHDEV_PROVIDER_CHANNEL` env var, same rule.
+ *   3. Daemon release/update channel (`config.updateChannel`): a preview
+ *      daemon derives providerChannel=preview; stable (or absent) derives
+ *      stable. This is what activates the immutable preview provider channel
+ *      when a daemon is upgraded/switched to the preview release channel
+ *      without an explicit providerChannel setting.
+ *   4. Default: 'stable'.
+ *
+ * Existing stable installs are byte-compatible: with no explicit
+ * providerChannel and updateChannel=stable (the default), resolution still
+ * yields 'stable', and stable legacy NULL-digest rows stay non-activatable.
+ * Preview is only ever derived from an explicit preview release channel —
+ * never from ambiguous configuration.
  */
 export function resolveProviderChannel(
   configured?: string | null,
   env: NodeJS.ProcessEnv = process.env,
+  releaseChannel?: string | null,
 ): ProviderChannel {
   const raw = (configured && configured.trim()) || (env[PROVIDER_CHANNEL_ENV_VAR] ?? '').trim();
-  return raw === 'preview' ? 'preview' : 'stable';
+  if (raw) return raw === 'preview' ? 'preview' : 'stable';
+  return isPreviewReleaseChannel(releaseChannel) ? 'preview' : DEFAULT_PROVIDER_CHANNEL;
 }
 
 /**

@@ -32,6 +32,7 @@ import * as path from 'path';
 import { detectIDEs } from './detection/ide-detector.js';
 import { IDEInfo } from './detection/ide-detector.js';
 import { ProviderLoader } from './providers/provider-loader.js';
+import { loadConfig } from './config/config.js';
 import type { ProviderModule } from './providers/contracts.js';
 import { findMacAppProcessPids } from './launch/macos-app-process.js';
 
@@ -42,7 +43,14 @@ let _providerLoader: ProviderLoader | null = null;
 
 function getProviderLoader(): ProviderLoader {
     if (!_providerLoader) {
-        _providerLoader = new ProviderLoader({ logFn: () => {} }); // Suppress logs during launch
+        // Same channel contract as daemon boot: explicit providerChannel wins,
+        // otherwise derive from updateChannel (preview daemon → preview providers).
+        const appConfig = loadConfig();
+        _providerLoader = new ProviderLoader({
+            logFn: () => {}, // Suppress logs during launch
+            channel: appConfig.providerChannel,
+            updateChannel: appConfig.updateChannel,
+        });
         _providerLoader.loadAll();
         _providerLoader.registerToDetector(); // IDE provider → detector registry
     }

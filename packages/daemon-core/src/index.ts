@@ -517,6 +517,7 @@ export { forwardAgentStreamsToIdeInstance } from './agent-stream/forward.js';
 export { ProviderLoader } from './providers/provider-loader.js';
 export {
   resolveProviderChannel,
+  isPreviewReleaseChannel,
   partitionChannelEntries,
   ProviderChannelError,
   KNOWN_DIGEST_ALGORITHMS,
