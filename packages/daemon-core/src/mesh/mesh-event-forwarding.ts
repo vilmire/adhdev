@@ -1265,11 +1265,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     // attempt — never completion writes. Record the suspension idempotently so the reducer
     // (and the Stage 6 projection) sees waiting_approval / waiting_choice; a later
     // generating event resumes the SAME attempt (no new prompt, no new attempt).
+    // HELD SUSPENSIONS: when the edge races ahead of the consumed ACK (fast picker), the
+    // reducer defers it into a durable hold (deferred:true — expected, NOT an error) and
+    // applies it once consumed is durable; a genuine record failure is logged + traced,
+    // never silently swallowed.
     if ((args.event === 'agent:waiting_approval' || args.event === 'agent:waiting_choice') && eventSessionId) {
         const suspendedTaskId = readNonEmptyString(args.metadataEvent.taskId);
         if (suspendedTaskId) {
             try {
-                recordTurnStage({
+                const recorded = recordTurnStage({
                     meshId: args.meshId,
                     taskId: suspendedTaskId,
                     stage: args.event === 'agent:waiting_approval' ? 'waiting_approval' : 'waiting_choice',
@@ -1277,7 +1281,13 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     sessionId: eventSessionId,
                     occurredAtMs: eventTimestamp ?? undefined,
                 });
-            } catch { /* turn-ledger recording is best-effort */ }
+                if (recorded?.deferred) {
+                    traceMeshEventStage('turn_suspension_held', traceCtx, `${args.event} preceded the consumed ACK — held for post-consumed drain`);
+                }
+            } catch (e: any) {
+                LOG.warn('TurnLedger', `Failed to record ${args.event} suspension for task ${suspendedTaskId} (session ${eventSessionId}): ${e?.message || e}`);
+                traceMeshEventDrop('turn_suspension_record_error', traceCtx, e?.message ? String(e.message) : undefined);
+            }
         }
     }
 

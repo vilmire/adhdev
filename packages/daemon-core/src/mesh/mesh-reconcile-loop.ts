@@ -88,7 +88,7 @@ import {
 } from './mesh-completion-synthesis.js';
 import { sessionStatusFromNodes } from './mesh-active-work.js';
 import { drainMeshTurnOutbox } from './mesh-event-forwarding.js';
-import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reconstructActiveAttempts, isTerminalTurnStage } from './mesh-turn-ledger.js';
+import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reconstructActiveAttempts, isTerminalTurnStage, drainHeldTurnSuspensionsForMesh } from './mesh-turn-ledger.js';
 import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
@@ -2531,7 +2531,11 @@ export function setupMeshReconcileLoop(components: DaemonComponents): ReconcileL
     //      construction (no duplicate prompt injection);
     //   2. drain the durable turn outbox — any coordinator completion committed
     //      before the crash but not yet delivered is re-queued now (exactly-once via
-    //      the outbox id + pending-events fingerprint dedup).
+    //      the outbox id + pending-events fingerprint dedup);
+    //   3. drain held suspensions — a waiting_* edge held before a crash whose
+    //      consumed ACK is already durable is applied through the FSM now (rows
+    //      still pre-consumed stay held for the live ACK; terminal-attempt rows are
+    //      dropped). Never re-injects a prompt and never re-drives an event.
     setImmediate(() => {
         void (async () => {
             try {
@@ -2541,6 +2545,7 @@ export function setupMeshReconcileLoop(components: DaemonComponents): ReconcileL
                         LOG.info('TurnLedger', `Restart recovery: reconstructed ${recovered.length} active turn attempt(s) for mesh ${mesh.id} `
                             + `(${recovered.map(a => `${a.taskId.slice(0, 8)}@${a.stage}`).join(', ')})`);
                     }
+                    drainHeldTurnSuspensionsForMesh(mesh.id);
                 }
             } catch (e: any) {
                 LOG.warn('TurnLedger', `Restart attempt reconstruction failed (reconcile continues on row state): ${e?.message || e}`);

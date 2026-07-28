@@ -523,6 +523,37 @@ export class MeshRuntimeStore {
                 ON mesh_turn_outbox(status, next_attempt_at_ms);
             CREATE INDEX IF NOT EXISTS idx_mesh_turn_outbox_mesh
                 ON mesh_turn_outbox(mesh_id, status);
+
+            -- TURN-LEDGER (Stage 5): durable HELD SUSPENSIONS. A waiting_approval /
+            -- waiting_choice edge can legitimately arrive BEFORE the consumed ACK
+            -- (a fast picker fires ahead of the generating_started processing, whose
+            -- attempt-resolution preamble defers the consumed write). The causal FSM
+            -- rightly refuses accepted/delivered → waiting_*; instead of dropping the
+            -- edge, the reducer holds it here — attempt/session/epoch-scoped and
+            -- content-free — insert-once via hold_id (<attempt_id>:<stage>). The
+            -- consumed commit applies the hold through the SAME FSM in the same
+            -- transaction; the restart reconcile drain covers a crash between hold
+            -- and consumed; terminal commits resolve held rows as dropped so a held
+            -- picker can never resurrect a finished/reassigned attempt.
+            CREATE TABLE IF NOT EXISTS mesh_turn_held_suspensions (
+                hold_id TEXT PRIMARY KEY,
+                mesh_id TEXT NOT NULL,
+                attempt_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                session_id TEXT,
+                dispatch_nonce INTEGER,
+                occurred_at_ms INTEGER,
+                recorded_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'held',
+                resolution TEXT,
+                resolved_at TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_turn_held_suspensions_mesh
+                ON mesh_turn_held_suspensions(mesh_id, status);
+            CREATE INDEX IF NOT EXISTS idx_mesh_turn_held_suspensions_attempt
+                ON mesh_turn_held_suspensions(attempt_id, status);
         `);
         this.migrateMeshIsolationColumns();
     }
@@ -2822,6 +2853,79 @@ export class MeshRuntimeStore {
         for (const r of rows) out[r.status] = r.n;
         return out;
     }
+
+    // ── TURN-LEDGER (Stage 5): held suspensions (pre-consumed waiting_*) ─────
+
+    /**
+     * Hold a pre-consumed suspension edge. INSERT OR IGNORE on the hold id
+     * (`<attemptId>:<stage>`) makes duplicate/reordered suspension arrivals
+     * insert-once. Returns true when this call inserted (first hold).
+     */
+    insertHeldTurnSuspension(row: {
+        holdId: string; meshId: string; attemptId: string; taskId: string;
+        stage: string; sessionId?: string; dispatchNonce?: number | null;
+        occurredAtMs?: number | null; recordedAt: string;
+    }): boolean {
+        const res = this.db.prepare(`
+            INSERT OR IGNORE INTO mesh_turn_held_suspensions (
+                hold_id, mesh_id, attempt_id, task_id, stage, session_id, dispatch_nonce, occurred_at_ms, recorded_at, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'held')
+        `).run(
+            row.holdId, row.meshId, row.attemptId, row.taskId, row.stage,
+            row.sessionId ?? null, row.dispatchNonce ?? null, row.occurredAtMs ?? null, row.recordedAt,
+        );
+        this.maybeCheckpointWal();
+        return res.changes > 0;
+    }
+
+    /** The hold row for one (attempt, stage) pair, any status (held/applied/dropped). */
+    getHeldTurnSuspension(attemptId: string, stage: string): MeshTurnHeldSuspensionRow | null {
+        const row = this.db.prepare(
+            'SELECT * FROM mesh_turn_held_suspensions WHERE hold_id = ? LIMIT 1',
+        ).get(`${attemptId}:${stage}`) as Record<string, unknown> | undefined;
+        return row ? meshTurnHeldSuspensionFromRow(row) : null;
+    }
+
+    /** Hold rows for an attempt, oldest occurrence first (drain order). */
+    listHeldTurnSuspensionsForAttempt(attemptId: string, status?: string): MeshTurnHeldSuspensionRow[] {
+        const rows = (status
+            ? this.db.prepare(`
+                SELECT * FROM mesh_turn_held_suspensions
+                WHERE attempt_id = ? AND status = ?
+                ORDER BY occurred_at_ms ASC, hold_id ASC
+            `).all(attemptId, status)
+            : this.db.prepare(`
+                SELECT * FROM mesh_turn_held_suspensions
+                WHERE attempt_id = ?
+                ORDER BY occurred_at_ms ASC, hold_id ASC
+            `).all(attemptId)) as Array<Record<string, unknown>>;
+        return rows.map(meshTurnHeldSuspensionFromRow);
+    }
+
+    /** Hold rows for a mesh by status (the restart-reconcile drain set). */
+    listHeldTurnSuspensionsForMesh(meshId: string, status: string): MeshTurnHeldSuspensionRow[] {
+        const rows = this.db.prepare(`
+            SELECT * FROM mesh_turn_held_suspensions
+            WHERE mesh_id = ? AND status = ?
+            ORDER BY occurred_at_ms ASC, hold_id ASC
+        `).all(meshId, status) as Array<Record<string, unknown>>;
+        return rows.map(meshTurnHeldSuspensionFromRow);
+    }
+
+    /**
+     * Resolve a hold exactly once: the status='held' guard makes a concurrent
+     * drain/terminal resolution converge on a single winner. Returns true when
+     * this call flipped the row.
+     */
+    resolveHeldTurnSuspension(holdId: string, status: 'applied' | 'dropped', resolution: string, resolvedAt: string): boolean {
+        const res = this.db.prepare(`
+            UPDATE mesh_turn_held_suspensions
+            SET status = ?, resolution = ?, resolved_at = ?
+            WHERE hold_id = ? AND status = 'held'
+        `).run(status, resolution, resolvedAt, holdId);
+        this.maybeCheckpointWal();
+        return res.changes > 0;
+    }
 }
 
 /** Row shape returned by the mesh_turn_attempts accessors (camelCase, store-agnostic). */
@@ -2872,6 +2976,39 @@ function meshTurnAttemptFromRow(r: Record<string, unknown>): MeshTurnAttemptRow 
         terminalAt: r.terminal_at as string | null,
         createdAt: r.created_at as string,
         updatedAt: r.updated_at as string,
+    };
+}
+
+/** Row shape returned by the mesh_turn_held_suspensions accessors (camelCase, content-free). */
+export interface MeshTurnHeldSuspensionRow {
+    holdId: string;
+    meshId: string;
+    attemptId: string;
+    taskId: string;
+    stage: string;
+    sessionId: string | null;
+    dispatchNonce: number | null;
+    occurredAtMs: number | null;
+    recordedAt: string;
+    status: string;
+    resolution: string | null;
+    resolvedAt: string | null;
+}
+
+function meshTurnHeldSuspensionFromRow(r: Record<string, unknown>): MeshTurnHeldSuspensionRow {
+    return {
+        holdId: r.hold_id as string,
+        meshId: r.mesh_id as string,
+        attemptId: r.attempt_id as string,
+        taskId: r.task_id as string,
+        stage: r.stage as string,
+        sessionId: r.session_id as string | null,
+        dispatchNonce: r.dispatch_nonce as number | null,
+        occurredAtMs: r.occurred_at_ms as number | null,
+        recordedAt: r.recorded_at as string,
+        status: r.status as string,
+        resolution: r.resolution as string | null,
+        resolvedAt: r.resolved_at as string | null,
     };
 }
 

@@ -55,6 +55,20 @@ import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
  *    is presentation evidence and never by itself a completion write. `finalizing`
  *    means terminal evidence is being reconciled/committed; it is exposed for the
  *    Stage 6 projection.
+ *  - HELD SUSPENSIONS (ordering tolerance): a `waiting_approval`/`waiting_choice`
+ *    edge may legitimately arrive BEFORE the consumed ACK (a fast picker fires
+ *    ahead of the generating_started processing, whose attempt-resolution preamble
+ *    defers the consumed write). The FSM rightly refuses accepted/delivered →
+ *    waiting_*; instead of dropping the edge, the reducer persists a content-free
+ *    hold row (mesh_turn_held_suspensions, keyed `<attemptId>:<stage>`) and the
+ *    consumed commit applies it through the SAME FSM in the SAME transaction, so
+ *    the projection exposes the full causal chain (… → consumed → generating →
+ *    waiting_*) instead of skipping consumed. Holds are durable across restart
+ *    (the reconcile drain re-applies eligible rows), idempotent under duplicate
+ *    arrivals, and inert for stale/reassigned/terminal attempts (a terminal commit
+ *    resolves held rows as dropped — a held picker never resurrects an attempt).
+ *    A reordered `generating` echo that PREDATES an applied hold never regresses
+ *    the suspension (event-time guard in recordTurnStage).
  *
  * ROLLOUT (no flag day): tasks dispatched BEFORE this stage have no attempt row.
  * For those, {@link resolveAttemptForTask} lazily opens a deterministic legacy
@@ -171,6 +185,14 @@ export interface TurnLedgerMetrics {
     sameSessionStaleNonceCompatAccepted: number;
     /** Duplicate causal events swallowed by the idempotency keys. */
     duplicateTurnEvents: number;
+    /** Suspension edges (waiting_*) that arrived pre-consumed and were durably held. */
+    suspensionsHeld: number;
+    /** Held suspensions applied through the FSM once consumed became durable. */
+    suspensionsApplied: number;
+    /** Held suspensions dropped, keyed by typed reason (never an error by itself). */
+    suspensionsDropped: Record<string, number>;
+    /** Reordered generating echoes suppressed because they predate an applied hold. */
+    reorderedGeneratingSuppressed: number;
 }
 
 const metrics: TurnLedgerMetrics = {
@@ -183,6 +205,10 @@ const metrics: TurnLedgerMetrics = {
     transactionConflicts: 0,
     sameSessionStaleNonceCompatAccepted: 0,
     duplicateTurnEvents: 0,
+    suspensionsHeld: 0,
+    suspensionsApplied: 0,
+    suspensionsDropped: {},
+    reorderedGeneratingSuppressed: 0,
 };
 
 export function getTurnLedgerMetrics(nowMs: number = Date.now()): TurnLedgerMetrics & { outboxOldestPendingAgeMs: number | null; outboxByStatus: Record<string, number> } {
@@ -196,6 +222,7 @@ export function getTurnLedgerMetrics(nowMs: number = Date.now()): TurnLedgerMetr
     return {
         ...metrics,
         completionProposalsRejected: { ...metrics.completionProposalsRejected },
+        suspensionsDropped: { ...metrics.suspensionsDropped },
         outboxOldestPendingAgeMs,
         outboxByStatus,
     };
@@ -211,10 +238,35 @@ export function __resetTurnLedgerMetricsForTests(): void {
     metrics.transactionConflicts = 0;
     metrics.sameSessionStaleNonceCompatAccepted = 0;
     metrics.duplicateTurnEvents = 0;
+    metrics.suspensionsHeld = 0;
+    metrics.suspensionsApplied = 0;
+    metrics.suspensionsDropped = {};
+    metrics.reorderedGeneratingSuppressed = 0;
+    suspensionLogKeys.clear();
 }
 
 function noteRejectedProposal(reason: CompletionRejectionReason): void {
     metrics.completionProposalsRejected[reason] = (metrics.completionProposalsRejected[reason] ?? 0) + 1;
+}
+
+function noteDroppedSuspension(reason: HeldSuspensionDropReason): void {
+    metrics.suspensionsDropped[reason] = (metrics.suspensionsDropped[reason] ?? 0) + 1;
+}
+
+/**
+ * Bounded first-occurrence logging for suspension hold/apply/drop/reorder events.
+ * Expected defers are INFO (not errors); impossible causal rejections surface via
+ * the typed counters above and the first-occurrence WARN sites. The key set is
+ * capped so a pathological event storm cannot grow memory unboundedly — beyond the
+ * cap the counters remain the observability channel.
+ */
+const MAX_SUSPENSION_LOG_KEYS = 200;
+const suspensionLogKeys = new Set<string>();
+
+function logSuspensionOnce(level: 'info' | 'warn', key: string, message: string): void {
+    if (suspensionLogKeys.has(key)) return;
+    if (suspensionLogKeys.size < MAX_SUSPENSION_LOG_KEYS) suspensionLogKeys.add(key);
+    LOG[level]('TurnLedger', message);
 }
 
 function noteAckLatency(fromIso: string | null, nowMs: number): void {
@@ -379,6 +431,12 @@ export interface TurnAckResult {
     applied: boolean;
     /** true when the ACK named a non-current (old) attempt and was recorded-but-rejected. */
     staleAttempt: boolean;
+    /**
+     * true when a waiting_* suspension arrived pre-consumed and was durably HELD
+     * (mesh_turn_held_suspensions) for application once consumed lands — an expected
+     * ordering race, not an error.
+     */
+    deferred?: boolean;
 }
 
 /**
@@ -454,11 +512,22 @@ export function recordTurnAck(args: {
         // 'accepted' is the insert state; a re-arrival is pure idempotency.
         return { attemptId: attempt.attemptId, stage: attempt.stage, applied: false, staleAttempt: false };
     }
-    const stageAfter = store.advanceTurnAttemptStage(attempt.attemptId, args.kind, allowedFromStages(args.kind).join(','), {
-        updatedAt: nowIso,
-        deliveredAt: args.kind === 'delivered' ? nowIso : undefined,
-        consumedAt: args.kind === 'consumed' ? nowIso : undefined,
-    });
+    // HELD SUSPENSIONS: the consumed commit and the drain of any suspension held
+    // pre-consumed are ONE transaction — a crash between them cannot strand a held
+    // picker, and the projection can never skip the consumed link of the chain.
+    const stageAfter = args.kind === 'consumed'
+        ? store.transaction(() => {
+            const after = store.advanceTurnAttemptStage(attempt.attemptId, args.kind, allowedFromStages(args.kind).join(','), {
+                updatedAt: nowIso,
+                consumedAt: nowIso,
+            });
+            drainHeldSuspensionsForAttempt(store, attempt.attemptId, nowMs, nowIso);
+            return after;
+        })
+        : store.advanceTurnAttemptStage(attempt.attemptId, args.kind, allowedFromStages(args.kind).join(','), {
+            updatedAt: nowIso,
+            deliveredAt: args.kind === 'delivered' ? nowIso : undefined,
+        });
     const applied = stageAfter === args.kind && attempt.stage !== args.kind;
     if (applied) noteAckLatency(fromIso, nowMs);
     return { attemptId: attempt.attemptId, stage: stageAfter ?? attempt.stage, applied, staleAttempt: false };
@@ -527,9 +596,18 @@ export function recordTurnStage(args: {
             occurredAtMs: args.occurredAtMs ?? nowMs,
             recordedAt: nowIso,
         });
+        // A suspension naming a non-current attempt is inert by construction; resolve
+        // any rows still held for the old attempt so they can never apply later and
+        // never leak onto the new assignee.
+        if (SUSPENDED_STAGES.has(args.stage)) {
+            dropHeldSuspensionsForAttempt(store, attempt.attemptId, 'stale_attempt', nowIso);
+        }
         return { attemptId: attempt.attemptId, stage: attempt.stage, applied: false, staleAttempt: true };
     }
     if (isTerminalTurnStage(attempt.stage)) {
+        if (SUSPENDED_STAGES.has(args.stage)) {
+            dropHeldSuspensionsForAttempt(store, attempt.attemptId, 'attempt_terminal', nowIso);
+        }
         return { attemptId: attempt.attemptId, stage: attempt.stage, applied: false, staleAttempt: false };
     }
     // Nonterminal stages dedupe on (kind, stage-entry) — oscillation entries are
@@ -546,15 +624,212 @@ export function recordTurnStage(args: {
         recordedAt: nowIso,
     });
     if (!inserted) metrics.duplicateTurnEvents += 1;
+    // HELD SUSPENSIONS (reordered-generating guard): a generating echo that PREDATES
+    // a held-then-applied suspension is stale evidence (typically the generating_started
+    // whose paired consumed commit just drained the hold). It must NOT regress the
+    // parked picker back to generating. Genuine resumes carry a LATER occurrence time
+    // and pass; events without timestamps keep the legacy behavior.
+    if (args.stage === 'generating' && SUSPENDED_STAGES.has(attempt.stage) && typeof args.occurredAtMs === 'number') {
+        const appliedHold = store.getHeldTurnSuspension(attempt.attemptId, attempt.stage);
+        if (appliedHold && appliedHold.status === 'applied'
+            && typeof appliedHold.occurredAtMs === 'number'
+            && args.occurredAtMs < appliedHold.occurredAtMs) {
+            metrics.reorderedGeneratingSuppressed += 1;
+            logSuspensionOnce('info', `reordered:${attempt.attemptId}`,
+                `Suppressed reordered generating for task ${args.taskId} attempt ${attempt.attemptId}: event occurred ${args.occurredAtMs} < applied ${attempt.stage} suspension at ${appliedHold.occurredAtMs} — the suspension stage stands`);
+            return { attemptId: attempt.attemptId, stage: attempt.stage, applied: false, staleAttempt: false };
+        }
+    }
     const stageAfter = store.advanceTurnAttemptStage(attempt.attemptId, args.stage, allowedFromStages(args.stage).join(','), {
         updatedAt: nowIso,
     });
+    // HELD SUSPENSIONS (defer): a waiting_* edge rejected solely because the attempt
+    // is still pre-consumed (accepted/delivered) is the fast-picker ordering race —
+    // hold it durably instead of dropping it. The consumed commit (same transaction)
+    // or the restart reconcile drain applies it through the FSM.
+    if (
+        SUSPENDED_STAGES.has(args.stage)
+        && stageAfter !== null
+        && stageAfter !== args.stage
+        && STAGE_RANK[stageAfter as TurnStage] < STAGE_RANK.consumed
+    ) {
+        const held = store.insertHeldTurnSuspension({
+            holdId: `${attempt.attemptId}:${args.stage}`,
+            meshId: args.meshId,
+            attemptId: attempt.attemptId,
+            taskId: args.taskId,
+            stage: args.stage,
+            sessionId: args.sessionId,
+            dispatchNonce: attempt.dispatchNonce,
+            occurredAtMs: args.occurredAtMs ?? nowMs,
+            recordedAt: nowIso,
+        });
+        if (held) {
+            metrics.suspensionsHeld += 1;
+            logSuspensionOnce('info', `held:${attempt.attemptId}:${args.stage}`,
+                `Held ${args.stage} suspension for task ${args.taskId} attempt ${attempt.attemptId} (stage ${stageAfter} — consumed not yet durable); applying after the consumed ACK`);
+        } else {
+            metrics.duplicateTurnEvents += 1;
+        }
+        return { attemptId: attempt.attemptId, stage: stageAfter, applied: false, staleAttempt: false, deferred: true };
+    }
     return {
         attemptId: attempt.attemptId,
         stage: stageAfter ?? attempt.stage,
         applied: stageAfter === args.stage && attempt.stage !== args.stage,
         staleAttempt: false,
     };
+}
+
+// ─── Held suspensions (pre-consumed waiting_* ordering tolerance) ───────────
+
+/** Typed, content-free drop reasons for held suspensions (metrics keys). */
+export type HeldSuspensionDropReason =
+    | 'attempt_terminal'   // the attempt committed a terminal outcome while held
+    | 'stale_attempt'      // the attempt became non-current (reassignment)
+    | 'attempt_missing'    // the attempt row vanished (retention/manual surgery)
+    | 'finalizing'         // terminal evidence superseded the held suspension
+    | 'stage_advanced';    // the FSM refused the drain (stage moved past waiting_*)
+
+/**
+ * Resolve every row still held for an attempt as dropped with a typed reason.
+ * Exactly-once per row (the store's status guard), counted, first-occurrence
+ * logged. Never resurrects or mutates the attempt stage.
+ */
+function dropHeldSuspensionsForAttempt(
+    store: MeshRuntimeStore,
+    attemptId: string,
+    reason: HeldSuspensionDropReason,
+    nowIso: string,
+): number {
+    const held = store.listHeldTurnSuspensionsForAttempt(attemptId, 'held');
+    let dropped = 0;
+    for (const hold of held) {
+        if (store.resolveHeldTurnSuspension(hold.holdId, 'dropped', reason, nowIso)) {
+            noteDroppedSuspension(reason);
+            logSuspensionOnce('info', `dropped:${reason}:${attemptId}:${hold.stage}`,
+                `Dropped held ${hold.stage} suspension for task ${hold.taskId} attempt ${attemptId}: ${reason}`);
+            dropped += 1;
+        }
+    }
+    return dropped;
+}
+
+/**
+ * Drain the suspensions held for ONE attempt: rows whose attempt has reached
+ * ≥ consumed (nonterminal, non-finalizing) are applied through the SAME FSM
+ * whitelist as a live waiting_* event, oldest occurrence first; rows whose
+ * attempt went terminal/finalizing/missing are dropped with a typed reason.
+ * Ineligible (still pre-consumed) rows stay held for a later drain. Idempotent:
+ * the FSM advance and the resolve-held write are both guarded, so a duplicate
+ * drain is a no-op. Emits a `held_<stage>_applied` audit event per applied hold
+ * so the causal chain shows the deferred application.
+ */
+function drainHeldSuspensionsForAttempt(
+    store: MeshRuntimeStore,
+    attemptId: string,
+    nowMs: number,
+    nowIso: string,
+): { applied: number; dropped: number } {
+    const held = store.listHeldTurnSuspensionsForAttempt(attemptId, 'held');
+    if (held.length === 0) return { applied: 0, dropped: 0 };
+    let attempt = store.getTurnAttempt(attemptId);
+    let applied = 0;
+    let dropped = 0;
+    for (const hold of held) {
+        if (!attempt) {
+            if (store.resolveHeldTurnSuspension(hold.holdId, 'dropped', 'attempt_missing', nowIso)) {
+                noteDroppedSuspension('attempt_missing');
+                dropped += 1;
+            }
+            continue;
+        }
+        if (attempt.terminalOutcome || isTerminalTurnStage(attempt.stage)) {
+            if (store.resolveHeldTurnSuspension(hold.holdId, 'dropped', 'attempt_terminal', nowIso)) {
+                noteDroppedSuspension('attempt_terminal');
+                logSuspensionOnce('info', `dropped:attempt_terminal:${attemptId}:${hold.stage}`,
+                    `Dropped held ${hold.stage} suspension for task ${hold.taskId} attempt ${attemptId}: attempt terminal (${attempt.terminalOutcome ?? attempt.stage})`);
+                dropped += 1;
+            }
+            continue;
+        }
+        if (attempt.stage === 'finalizing') {
+            if (store.resolveHeldTurnSuspension(hold.holdId, 'dropped', 'finalizing', nowIso)) {
+                noteDroppedSuspension('finalizing');
+                dropped += 1;
+            }
+            continue;
+        }
+        if (STAGE_RANK[attempt.stage as TurnStage] < STAGE_RANK.consumed) {
+            continue; // consumed not durable yet — stay held
+        }
+        const stageAfter = store.advanceTurnAttemptStage(attemptId, hold.stage, allowedFromStages(hold.stage as TurnStage).join(','), {
+            updatedAt: nowIso,
+        });
+        if (stageAfter === hold.stage) {
+            if (store.resolveHeldTurnSuspension(hold.holdId, 'applied', 'applied', nowIso)) {
+                store.insertTurnEvent({
+                    eventId: randomUUID(),
+                    meshId: hold.meshId,
+                    attemptId,
+                    taskId: hold.taskId,
+                    kind: `held_${hold.stage}_applied`,
+                    dedupeKey: hold.holdId,
+                    occurredAtMs: hold.occurredAtMs ?? nowMs,
+                    recordedAt: nowIso,
+                });
+                metrics.suspensionsApplied += 1;
+                logSuspensionOnce('info', `applied:${attemptId}:${hold.stage}`,
+                    `Applied held ${hold.stage} suspension for task ${hold.taskId} attempt ${attemptId} after consumed became durable`);
+                applied += 1;
+            }
+            attempt = { ...attempt, stage: stageAfter };
+        } else {
+            // The stage moved past waiting_* under us — resolve safely, never force it.
+            const reason: HeldSuspensionDropReason = stageAfter === 'finalizing' ? 'finalizing' : 'stage_advanced';
+            if (store.resolveHeldTurnSuspension(hold.holdId, 'dropped', reason, nowIso)) {
+                noteDroppedSuspension(reason);
+                logSuspensionOnce('warn', `dropped:${reason}:${attemptId}:${hold.stage}`,
+                    `Held ${hold.stage} suspension for task ${hold.taskId} attempt ${attemptId} could not apply (stage now ${stageAfter ?? 'missing'}) — dropped:${reason}`);
+                dropped += 1;
+            }
+        }
+    }
+    return { applied, dropped };
+}
+
+/**
+ * Restart-reconcile drain: after a daemon restart, re-apply every held suspension
+ * whose attempt's consumed state is already durable (and drop rows whose attempt
+ * went terminal/missing while down). This NEVER re-injects a prompt and never
+ * re-drives an event — it only advances the attempt stage through the FSM, the
+ * same write a live waiting_* event would have made. Rows still pre-consumed stay
+ * held for the live consumed ACK.
+ */
+export function drainHeldTurnSuspensionsForMesh(
+    meshId: string,
+    nowMs: number = Date.now(),
+): { applied: number; dropped: number; stillHeld: number } {
+    try {
+        const store = MeshRuntimeStore.getInstance();
+        const nowIso = new Date(nowMs).toISOString();
+        const held = store.listHeldTurnSuspensionsForMesh(meshId, 'held');
+        let applied = 0;
+        let dropped = 0;
+        for (const attemptId of new Set(held.map(h => h.attemptId))) {
+            const res = drainHeldSuspensionsForAttempt(store, attemptId, nowMs, nowIso);
+            applied += res.applied;
+            dropped += res.dropped;
+        }
+        const stillHeld = store.listHeldTurnSuspensionsForMesh(meshId, 'held').length;
+        if (applied + dropped > 0 || held.length > 0) {
+            LOG.info('TurnLedger', `Held-suspension drain for mesh ${meshId}: applied=${applied} dropped=${dropped} stillHeld=${stillHeld}`);
+        }
+        return { applied, dropped, stillHeld };
+    } catch (e: any) {
+        LOG.warn('TurnLedger', `Held-suspension drain failed for mesh ${meshId} (rows stay held; retried on next boot/consumed): ${e?.message || e}`);
+        return { applied: 0, dropped: 0, stillHeld: 0 };
+    }
 }
 
 // ─── Completion proposals (exactly-once terminal) ──────────────────────────
@@ -664,6 +939,9 @@ export function proposeTurnCompletion(proposal: CompletionProposal): CompletionD
         return { committed: false, reason: 'epoch_mismatch', attemptId: attempt.attemptId };
     }
     if (attempt.terminalOutcome) {
+        // A terminal attempt must never hold a live suspension: resolve any rows
+        // still held (defensive — the commit path below already drops them).
+        dropHeldSuspensionsForAttempt(store, attempt.attemptId, 'attempt_terminal', nowIso);
         if (attempt.terminalOutcome === proposal.outcome) {
             // Idempotent replay of the SAME terminal — safe under at-least-once delivery.
             metrics.duplicateTurnEvents += 1;
@@ -692,6 +970,9 @@ export function proposeTurnCompletion(proposal: CompletionProposal): CompletionD
         return { committed: false, reason: 'already_terminal', attemptId: attempt.attemptId, existingOutcome: winner };
     }
     metrics.completionProposalsCommitted += 1;
+    // A held suspension must never resurrect a terminated attempt: resolve any rows
+    // still held in the same decision (they can no longer legitimately apply).
+    dropHeldSuspensionsForAttempt(store, attempt.attemptId, 'attempt_terminal', nowIso);
     LOG.info('TurnLedger', `Committed terminal ${proposal.outcome} for task ${proposal.taskId} attempt ${attempt.attemptId} (source=${proposal.source}, stage was ${attempt.stage})`);
     return { committed: true, attemptId: attempt.attemptId, outcome: proposal.outcome, duplicate: false };
 }
