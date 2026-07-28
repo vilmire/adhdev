@@ -4640,6 +4640,29 @@ describe('restampReboundMeshWorkerAssignment (post-restart rebound envelope)', (
     expect(settings.meshActiveTaskId).toBeUndefined()
   })
 
+  it('never re-arms a dispatchNonce-mismatched attempt (stale row mid-redrive fails closed)', () => {
+    const store = MeshRuntimeStore.getInstance()
+    const taskId = 'task-restamp-nonce-mismatch'
+    openAttempt(taskId, 5, 'sessW') // the ledger's current attempt is at nonce 5
+    const { settings, components } = makeReboundWorker('sessW')
+
+    // The queue row still carries the PRE-redrive nonce 4: the two durable
+    // authorities disagree, so stamping would arm a (task, attempt, nonce)
+    // triple neither side owns. Fail closed — a later tick converges the row.
+    expect(restampReboundMeshWorkerAssignment(components, store, meshId, {
+      id: taskId, assignedSessionId: 'sessW', assignedNodeId: nodeId, dispatchNonce: 4,
+    })).toBe(false)
+    expect(settings.meshActiveTaskId).toBeUndefined()
+    expect(settings.meshNodeFor).toBeUndefined()
+
+    // Once the row carries the attempt's own nonce, the stamp proceeds.
+    expect(restampReboundMeshWorkerAssignment(components, store, meshId, {
+      id: taskId, assignedSessionId: 'sessW', assignedNodeId: nodeId, dispatchNonce: 5,
+    })).toBe(true)
+    expect(settings.meshActiveTaskId).toBe(taskId)
+    expect(settings.meshActiveDispatchNonce).toBe(5)
+  })
+
   it('skips a session with no local instance (remote / gone) without throwing', () => {
     const store = MeshRuntimeStore.getInstance()
     const taskId = 'task-restamp-remote'

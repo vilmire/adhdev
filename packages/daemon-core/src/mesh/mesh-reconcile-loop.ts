@@ -1129,6 +1129,14 @@ export function restampReboundMeshWorkerAssignment(
         if (attempt.terminalOutcome) return false;
         const attemptSessionId = readNonEmptyString(attempt.sessionId);
         if (attemptSessionId && !sessionIdsEquivalent(attemptSessionId, sessionId)) return false;
+        // DISPATCHNONCE AUTHORITY (rc.20): a row whose dispatchNonce disagrees with
+        // the current attempt's is mid-redrive (reclaimed/re-dispatched) — stamping
+        // would arm a (taskId, attemptId, nonce) triple the two durable authorities
+        // do not agree on. Fail closed; the redrive/reconcile path converges the row
+        // and a later tick re-stamps once they match.
+        if (typeof row.dispatchNonce === 'number'
+            && typeof attempt.dispatchNonce === 'number'
+            && row.dispatchNonce !== attempt.dispatchNonce) return false;
     }
     const nodeId = readNonEmptyString(row.assignedNodeId);
     const coordinatorDaemonId = readNonEmptyString(attempt?.coordinatorDaemonId);

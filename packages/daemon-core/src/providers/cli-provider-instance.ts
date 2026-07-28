@@ -1356,6 +1356,26 @@ export class CliProviderInstance implements ProviderInstance {
             }
         } else if (event === 'interactive_prompt_response' && data) {
             try {
+                // STALE-PROMPT-ANSWER guard (rc.20 rebind option fidelity): an answer
+                // naming a promptId OTHER than the currently held prompt is rejected
+                // outright — it is NEVER resolved against (or defaulted into) the
+                // active prompt's options and NEVER forwarded to the TUI/transport.
+                // Post-restart the coordinator can still hold the pre-restart
+                // promptId; silently dropping it (the old log-only path) left the
+                // session parked, and resolving it anyway could bind an index to the
+                // wrong option row. Rejection here is fail-closed: the picker stays
+                // parked and the caller is told to re-answer against the active id.
+                const heldPromptId = typeof this.activeInteractivePrompt?.promptId === 'string'
+                    && this.activeInteractivePrompt.promptId
+                    ? this.activeInteractivePrompt.promptId
+                    : '';
+                const incomingPromptId = typeof (data as { promptId?: unknown })?.promptId === 'string'
+                    ? ((data as { promptId: string }).promptId).trim()
+                    : '';
+                if (heldPromptId && incomingPromptId && incomingPromptId !== heldPromptId) {
+                    LOG.warn('CLI', `[${this.type}] interactive_prompt_response REJECTED: stale promptId "${incomingPromptId}" does not match active prompt "${heldPromptId}" — answer not applied (no index/default fallback); re-answer against the active promptId`);
+                    return;
+                }
                 // mesh_answer_question (mission f1d25e11) sends a coordinator-friendly answer
                 // form (per-question select by label/index) that must be resolved against the
                 // AUTHORITATIVE active prompt held here. When the active prompt is present and

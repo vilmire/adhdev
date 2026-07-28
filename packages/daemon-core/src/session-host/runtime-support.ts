@@ -122,6 +122,14 @@ export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Prom
                 cliArgs: Array.isArray(record.meta?.cliArgs) ? (record.meta.cliArgs as string[]) : [],
                 providerSessionId: typeof record.meta?.providerSessionId === 'string' ? String(record.meta.providerSessionId) : undefined,
                 managedBy: typeof record.meta?.managedBy === 'string' ? String(record.meta.managedBy) : undefined,
+                // Session-level mesh membership (rc.20 rebound relay envelope) —
+                // surfaced so restoreHostedSessions can re-apply it to the rebuilt
+                // instance settings. Task-level markers stay out (see the descriptor).
+                meshNodeFor: typeof record.meta?.meshNodeFor === 'string' && record.meta.meshNodeFor.trim()
+                    ? String(record.meta.meshNodeFor).trim() : undefined,
+                meshNodeId: typeof record.meta?.meshNodeId === 'string' && record.meta.meshNodeId.trim()
+                    ? String(record.meta.meshNodeId).trim() : undefined,
+                launchedByCoordinator: record.meta?.launchedByCoordinator === true ? true : undefined,
             }));
     } finally {
         await client.close().catch(() => {});

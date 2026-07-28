@@ -262,3 +262,106 @@ describe('CliProviderInstance post-restart completion wedge (worker side)', () =
     expect(instance.settings.meshActiveTaskId).toBeUndefined()
   })
 })
+
+// RC.20 ANSWER/REBIND OPTION FIDELITY (worker side, onEvent boundary).
+//
+// After the rebound the TUI picker is re-captured under a CONTENT-STABLE
+// promptId (stableClaudeTuiPromptId), so the coordinator's answer — issued
+// against the pre-restart prompt — still matches. An answer naming any OTHER
+// (stale) promptId is rejected fail-closed: it is never resolved against the
+// active prompt's options, never forwarded to the adapter, and never defaulted
+// to an index — the picker stays parked for a correct re-answer.
+describe('CliProviderInstance interactive_prompt_response at the answer/rebind boundary (rc.20)', () => {
+  const REBOUND_PROMPT: InteractivePrompt = {
+    // Content-addressed id: identical before/after the restart for the same picker.
+    promptId: 'ask-user-tui-deadbeef',
+    origin: 'cli',
+    providerType: 'claude-cli',
+    createdAt: 1,
+    questions: [
+      {
+        questionId: 'q1',
+        question: 'Pick a track',
+        multiSelect: false,
+        options: [{ label: 'ALPHA' }, { label: 'BETA' }],
+      },
+    ],
+  }
+
+  function makeAnswerBoundaryInstance() {
+    const deliveries: any[] = []
+    const instance = Object.create(CliProviderInstance.prototype) as any
+    instance.type = 'claude-cli'
+    instance.activeInteractivePrompt = REBOUND_PROMPT
+    instance.events = []
+    instance.adapter = {
+      setInteractivePromptResponse: async (response: any) => { deliveries.push(response) },
+    }
+    return { instance, deliveries }
+  }
+
+  it('BETA stays BETA: an answer against the rebound (content-stable) promptId resolves and delivers BETA to the adapter', () => {
+    const { instance, deliveries } = makeAnswerBoundaryInstance()
+
+    instance.onEvent('interactive_prompt_response', {
+      promptId: 'ask-user-tui-deadbeef',
+      answers: [{ select: 'BETA' }],
+    })
+
+    expect(deliveries).toHaveLength(1)
+    expect(deliveries[0].promptId).toBe('ask-user-tui-deadbeef')
+    expect(deliveries[0].answers.q1.selectedLabels).toEqual(['BETA'])
+    // The held prompt is consumed by the accepted answer.
+    expect(instance.activeInteractivePrompt).toBeNull()
+  })
+
+  it('an index answer binds against the SAME option list the answerer saw (2 → BETA, never a default row)', () => {
+    const { instance, deliveries } = makeAnswerBoundaryInstance()
+
+    instance.onEvent('interactive_prompt_response', {
+      promptId: 'ask-user-tui-deadbeef',
+      answers: [{ select: 2 }],
+    })
+
+    expect(deliveries).toHaveLength(1)
+    expect(deliveries[0].answers.q1.selectedLabels).toEqual(['BETA'])
+  })
+
+  it('a STALE pre-restart promptId is rejected fail-closed: adapter never called, picker stays parked, nothing defaulted', () => {
+    const { instance, deliveries } = makeAnswerBoundaryInstance()
+
+    // The coordinator still carries the OLD (pre-restart, timestamp-minted) id.
+    instance.onEvent('interactive_prompt_response', {
+      promptId: 'ask-user-oldsession-1722100000000',
+      answers: [{ select: 2 }],
+    })
+
+    expect(deliveries).toHaveLength(0)
+    // The active prompt is NOT consumed and NOT re-pointed — a correct
+    // re-answer against the live promptId is still possible.
+    expect(instance.activeInteractivePrompt?.promptId).toBe('ask-user-tui-deadbeef')
+  })
+
+  it('freeform and multi-select answers keep flowing through the stable-id path', () => {
+    const { instance, deliveries } = makeAnswerBoundaryInstance()
+    instance.activeInteractivePrompt = {
+      ...REBOUND_PROMPT,
+      questions: [{
+        questionId: 'q1',
+        question: 'Pick tracks',
+        multiSelect: true,
+        allowFreeform: true,
+        options: [{ label: 'ALPHA' }, { label: 'BETA' }],
+      }],
+    }
+
+    instance.onEvent('interactive_prompt_response', {
+      promptId: 'ask-user-tui-deadbeef',
+      answers: [{ select: ['ALPHA', 'BETA'], freeform: 'note' }],
+    })
+
+    expect(deliveries).toHaveLength(1)
+    expect(deliveries[0].answers.q1.selectedLabels).toEqual(['ALPHA', 'BETA'])
+    expect(deliveries[0].answers.q1.freeformText).toBe('note')
+  })
+})

@@ -42,6 +42,7 @@ import {
     detectClaudeAskUserQuestionPromptFromTuiPages,
     detectClaudeTuiMultiSelect,
     readFocusedClaudeTuiQuestion,
+    stableClaudeTuiPromptId,
     type ClaudeInteractiveTuiPage,
     type InteractivePrompt,
     type InteractivePromptResponse,
@@ -1055,10 +1056,15 @@ export class SpecCliAdapter implements CliAdapter {
         if (!screenText.includes('Enter to select')) return;
         if (headers.length === 0) {
             const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([{ screenText }], {
-                promptId: `ask-user-${this.providerSessionId || 'claude'}-${Date.now()}`,
+                // REBIND OPTION FIDELITY (rc.20): provisional id — replaced with the
+                // content-addressed stable id below, so the SAME picker re-captured
+                // after a daemon restart keeps the SAME promptId and pre-restart
+                // answers still bind to the options they were issued against.
+                promptId: 'ask-user-tui-pending',
                 providerType: this.cliType,
             });
             if (!prompt) return;
+            prompt.promptId = stableClaudeTuiPromptId(prompt.questions);
             this.activeInteractivePrompt = prompt;
             this.interactivePromptTransport = 'tui';
             this.interactivePromptLostAt = null;
@@ -1189,10 +1195,14 @@ export class SpecCliAdapter implements CliAdapter {
         }
 
         const prompt = detectClaudeAskUserQuestionPromptFromTuiPages(pages, {
-            promptId: `ask-user-${this.providerSessionId || 'claude'}-${Date.now()}`,
+            // REBIND OPTION FIDELITY (rc.20): provisional id — replaced with the
+            // content-addressed stable id below (same rationale as the
+            // headerless capture in maybeCaptureClaudeTuiPrompt).
+            promptId: 'ask-user-tui-pending',
             providerType: this.cliType,
         });
         if (!prompt) return;
+        prompt.promptId = stableClaudeTuiPromptId(prompt.questions);
         this.activeInteractivePrompt = prompt;
         this.interactivePromptTransport = 'tui';
         this.interactivePromptLostAt = null;
