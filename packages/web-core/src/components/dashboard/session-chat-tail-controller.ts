@@ -434,7 +434,17 @@ function isTransientUnavailableEmptyTail(
   // Codex can briefly report an empty tail before its provider-native rollout
   // id is bound. Treat that as "not hydrated yet" instead of letting an empty
   // PTY/native-unavailable result erase visible fallback/live bubbles.
-  if (selected === 'native-history') return false
+  if (selected === 'native-history') {
+    // Defense in depth (zero-bubble fix): a daemon running the STICKY-NATIVE
+    // empty hold ships selected=native-history with ZERO messages and
+    // fallbackReason=native_history_transient_gap_held. Trusting `selected`
+    // here would apply an authoritative empty live snapshot and clobber the
+    // last real snapshot. That combination is by definition a transient gap,
+    // never a real clear — treat it as transient even though selected is
+    // native-history. A genuine native-history empty (no held-gap marker)
+    // still applies as before.
+    return fallbackReason === 'native_history_transient_gap_held'
+  }
   if (nativeSource === 'native-unavailable') return true
   return typeof fallbackReason === 'string' && fallbackReason.startsWith('native_history_')
 }
