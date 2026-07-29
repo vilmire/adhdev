@@ -61,4 +61,35 @@ describe('P2P relay failure classification', () => {
     expect(payload.targetDaemonId).toBe('daemon-remote');
     expect(payload.command).toBe('agent_command');
   });
+
+  it('keeps compatibility with the exact legacy 2000ms probe-race text', () => {
+    const classified = classifyP2pRelayFailure(
+      new Error('Peer daemon_abc not connected within 2000ms (probe gave up; background reconnect continues)'),
+    );
+    expect(classified).toEqual(expect.objectContaining({
+      code: 'p2p_not_connected',
+      transport: 'p2p',
+      recoverable: true,
+      retryRecommended: true,
+    }));
+  });
+
+  it('prefers structured P2P fields over failure prose', () => {
+    const classified = classifyP2pRelayFailure({
+      message: 'opaque relay rejection',
+      code: 'p2p_daemon_offline',
+      reason: 'daemon_mesh_target_offline',
+      transport: 'p2p',
+      recoverable: true,
+      retryRecommended: true,
+      meshCode: 'SIGNAL_TARGET_OFFLINE',
+    });
+    expect(classified).toEqual(expect.objectContaining({
+      code: 'p2p_daemon_offline',
+      reason: 'daemon_mesh_target_offline',
+      transport: 'p2p',
+      recoverable: true,
+      retryRecommended: true,
+    }));
+  });
 });

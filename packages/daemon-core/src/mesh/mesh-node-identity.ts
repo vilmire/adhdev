@@ -314,6 +314,9 @@ export function buildLivePeerGitConnection(connection: Record<string, unknown>, 
         state: 'connected',
         transport: transport && transport !== 'unknown' ? transport : 'direct',
         reported: true,
+        directPeerTruthSatisfied: true,
+        authority: 'live_peer',
+        cached: false,
         reason: 'Live peer git snapshot reported by the selected coordinator.',
         lastStateChangeAt: readStringValue(connection.lastStateChangeAt) ?? timestamp,
     };
@@ -1417,6 +1420,7 @@ export function buildMeshNodeDataFreshness(args: {
     const now = args.now ?? Date.now;
     const connection = readObjectRecord(status.connection);
     const connectionState = readStringValue(connection.state);
+    const directPeerTruthSatisfied = readBooleanValue(connection.directPeerTruthSatisfied);
     const git = readObjectRecord(status.git);
     const hasGit = readBooleanValue(git.isGitRepo) === true
         || !!readStringValue(git.branch, git.headCommit, git.head, git.upstream);
@@ -1461,12 +1465,15 @@ export function buildMeshNodeDataFreshness(args: {
     } else if (readBooleanValue(status.gitProbePending) === true) {
         dataSource = 'pending';
         reachable = connectionReachable;
+    } else if (hasGit) {
+        // Held git/session metadata remains useful for projection, but never
+        // satisfies live peer authority. Classify it as cached even when the direct
+        // probe failed so callers see both its age and the unreachable transport.
+        dataSource = 'cached';
+        reachable = directTruthUnavailable ? false : connectionReachable;
     } else if (directTruthUnavailable) {
         dataSource = 'unreachable';
         reachable = false;
-    } else if (hasGit) {
-        dataSource = 'cached';
-        reachable = connectionReachable;
     } else if (!daemonId) {
         dataSource = 'unconfigured';
         reachable = null;
@@ -1490,6 +1497,10 @@ export function buildMeshNodeDataFreshness(args: {
         dataSource,
         probeOk,
         reachable,
+        directPeerTruthSatisfied: isSelfNode || liveTruthProbed
+            ? true
+            : directPeerTruthSatisfied ?? false,
+        projection: dataSource === 'cached' ? 'cached' : 'live_or_absent',
         lastProbeAt: lastProbeAt ?? null,
         ageMs,
         staleness,

@@ -610,6 +610,11 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         finalizeMeshNodeStatus({ status: fallback, node, daemonId, isSelfNode: false, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
                         return fallback;
                     });
+                    const cachedProjectionNodeIds = nodeStatuses
+                        .filter((status: any) => status?.dataFreshness?.projection === 'cached'
+                            && status?.dataFreshness?.directPeerTruthSatisfied === false)
+                        .map((status: any) => readStringValue(status?.nodeId))
+                        .filter(Boolean);
 
                     // (B3) Resolve the coordinator daemon scope for the peek.
                     // mesh_status is a read-only status query — it must not consume
@@ -711,6 +716,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                     peerConfirmedCount: effectiveDirectTruth.peerConfirmedCount,
                                     unavailableNodeIds: effectiveDirectTruth.unavailableNodeIds,
                                     partialNodeFailures: effectiveDirectTruth.unavailableNodeIds,
+                                    cachedProjectionNodeIds,
                                 },
                             } : {}),
                             historicalEvidenceOnly: ['recoveryHints', 'ledger.summary', 'queue.summary', 'historicalSessions'],

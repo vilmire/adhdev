@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildMeshNodeProbeFreshness } from '../../src/commands/router'
+import {
+  buildMeshNodeDataFreshness,
+  buildMeshNodeProbeFreshness,
+} from '../../src/mesh/mesh-node-identity'
 
 // UNIFICATION GATE: the coordinator-facing mesh_status (mcp-server `meshStatus`)
 // no longer hand-reconstructs the dataFreshness INPUT inline — it routes every
@@ -25,6 +28,7 @@ describe('buildMeshNodeProbeFreshness', () => {
     })
     expect(f).toEqual({
       dataSource: 'self', probeOk: true, reachable: true,
+      directPeerTruthSatisfied: true, projection: 'live_or_absent',
       lastProbeAt: null, ageMs: null, staleness: 'fresh',
     })
   })
@@ -81,7 +85,44 @@ describe('buildMeshNodeProbeFreshness', () => {
       now,
     })
     expect(Object.keys(live).sort()).toEqual(
-      ['ageMs', 'dataSource', 'lastProbeAt', 'probeOk', 'reachable', 'staleness'],
+      [
+        'ageMs',
+        'dataSource',
+        'directPeerTruthSatisfied',
+        'lastProbeAt',
+        'probeOk',
+        'projection',
+        'reachable',
+        'staleness',
+      ],
     )
+  })
+
+  it('marks held metadata cached and aged when direct peer authority is unsatisfied', () => {
+    const checkedAt = new Date(FIXED_NOW - 360_000).toISOString()
+    const freshness = buildMeshNodeDataFreshness({
+      status: {
+        git: { isGitRepo: true, branch: 'main' },
+        connection: {
+          state: 'failed',
+          directPeerTruthSatisfied: false,
+          authority: 'cached_terminal_diagnostic',
+        },
+      },
+      node: { lastGit: { checkedAt } },
+      isSelfNode: false,
+      daemonId: 'daemon-remote',
+      liveTruthProbed: false,
+      directTruthUnavailable: true,
+      now,
+    })
+    expect(freshness).toEqual(expect.objectContaining({
+      dataSource: 'cached',
+      projection: 'cached',
+      directPeerTruthSatisfied: false,
+      reachable: false,
+      ageMs: 360_000,
+      staleness: 'stale',
+    }))
   })
 })

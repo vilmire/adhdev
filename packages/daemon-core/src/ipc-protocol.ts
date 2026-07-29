@@ -40,6 +40,15 @@ export interface IpcExtCommandResult {
         success: boolean;
         result?: unknown;
         error?: string;
+        code?: string;
+        meshCode?: string;
+        reason?: string;
+        transport?: 'p2p' | 'unknown';
+        recoverable?: boolean;
+        retryRecommended?: boolean;
+        connectionState?: string;
+        nextRetryAt?: string;
+        authEpoch?: number;
     };
 }
 
