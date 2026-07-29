@@ -1349,6 +1349,100 @@ describe('SessionChatTailController registry', () => {
     })
   })
 
+  it('keeps hydrated live bubbles visible through a transient empty native-held tail (selected=native-history + native_history_transient_gap_held)', () => {
+    // Defense in depth for the coordinator zero-bubble bug: a daemon running
+    // the STICKY-NATIVE empty hold ships an EMPTY tail with selected
+    // 'native-history' and fallbackReason 'native_history_transient_gap_held'.
+    // Trusting `selected` alone would apply an authoritative empty live
+    // snapshot and clobber the last real snapshot — this combination must be
+    // treated as transient even though selected is native-history.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'coordinator-session',
+      historySessionId: '07f6ed3e-0000-7000-8000-000000000000',
+      subscriptionKey: 'daemon:daemon-1:session:coordinator-session',
+      tailLimit: 60,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      key: 'daemon:daemon-1:session:coordinator-session',
+      sessionId: 'coordinator-session',
+      historySessionId: '07f6ed3e-0000-7000-8000-000000000000',
+      messages: [
+        { role: 'user', content: 'coordinator prompt', id: 'msg-1', timestamp: 1 } as any,
+        { role: 'assistant', content: 'coordinator answer', id: 'msg-2', timestamp: 2 } as any,
+      ],
+      status: 'idle',
+      messageSource: {
+        selected: 'native-history',
+        nativeSource: 'provider-native',
+      },
+    } as any))
+
+    expect(controller.getSnapshot().liveMessages).toHaveLength(2)
+
+    manager.publish(createUpdate({
+      key: 'daemon:daemon-1:session:coordinator-session',
+      sessionId: 'coordinator-session',
+      historySessionId: '07f6ed3e-0000-7000-8000-000000000000',
+      messages: [],
+      status: 'idle',
+      messageSource: {
+        selected: 'native-history',
+        fallbackReason: 'native_history_transient_gap_held',
+        nativeSource: 'provider-native',
+      },
+    } as any))
+
+    expect(controller.getSnapshot()).toMatchObject({
+      hasLiveSnapshot: true,
+      liveMessages: [
+        expect.objectContaining({ content: 'coordinator prompt' }),
+        expect.objectContaining({ content: 'coordinator answer' }),
+      ],
+    })
+  })
+
+  it('caps retained history at 500 rows while advancing historyOffset by the full fetched page size', async () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+
+    const page = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => ({
+      role: 'assistant',
+      content: `row-${from + index}`,
+      id: `row-${from + index}`,
+      timestamp: from + index,
+    }) as any)
+
+    controller.retain()
+    // Newest history page first (Load older walks backwards).
+    await controller.loadHistoryPage(async () => ({ messages: page(300, 599), hasMore: true }))
+    await controller.loadHistoryPage(async () => ({ messages: page(0, 299), hasMore: true }))
+
+    const snapshot = controller.getSnapshot()
+    // 600 merged rows capped to the newest 500; historyOffset still advances by
+    // the full fetched size (300 + 300) so the next page request stays aligned.
+    expect(snapshot.historyMessages).toHaveLength(500)
+    expect((snapshot.historyMessages[0] as any).content).toBe('row-100')
+    expect((snapshot.historyMessages[499] as any).content).toBe('row-599')
+    expect(snapshot.historyOffset).toBe(600)
+    expect(snapshot.hasMoreHistory).toBe(true)
+  })
+
   it('preserves explicit empty clear state even when a transient empty update follows', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()

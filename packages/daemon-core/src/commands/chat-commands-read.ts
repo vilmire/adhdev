@@ -770,6 +770,19 @@ function decideCliReadChatSource(args: {
     // genuine session switch or data loss (cursor's file is cumulative). A
     // workspace-heuristic (non-exact) read is never eligible, so a real session
     // switch still flips normally.
+    //
+    // HOLD ELIGIBILITY (zero-bubble fix): the hold may only pin a NON-EMPTY,
+    // safely-mapped native slice (the shrunk mid-write rewrite case above).
+    // Holding an EMPTY/unavailable observation restored a NativeLocked selection
+    // with zero rows and forced ptyStatusApprovalOnly — an "authoritative" empty
+    // native tail that suppressed the very PTY rows that could have rendered
+    // (the coordinator zero-bubble bug: messages=[] with selected=native-history,
+    // ptyMessageCount=6, ptyMessagesSuppressed=true). An empty/unavailable or
+    // unsafe observation therefore does NOT hold: the machine's own decision
+    // stands (NativeLocked → Recovering on a transient miss — the watermark
+    // survives and the next progressed read re-locks; → PtyOnly on unsafe
+    // mapping), PTY stays visible, and the normal PTY/live-workspace recovery
+    // below remains reachable.
     const priorSnapshot = CHAT_SOURCE_REGISTRY.snapshotRecord(sessionKey);
     const priorState = priorSnapshot?.state ?? CHAT_SOURCE_REGISTRY.getState(sessionKey);
     const eligibleForStickyHold = args.trustedExactNativeIdentity === true
@@ -777,18 +790,21 @@ function decideCliReadChatSource(args: {
 
     let decision = CHAT_SOURCE_REGISTRY.observe(sessionKey, observation);
 
-    if (eligibleForStickyHold && decision.selected === 'pty-parser') {
+    const heldNativeMessages: ChatMessage[] = observation.kind === 'native_present'
+        ? extractNativeMessagesFromResult(args.providerType, args.nativeHistoryResult)
+        : [];
+    const mayHoldNativeSlice = heldNativeMessages.length > 0 && args.safeMapping === true;
+
+    if (eligibleForStickyHold && decision.selected === 'pty-parser' && mayHoldNativeSlice) {
         // The machine flipped a native-committed, exact-identity session to PTY
-        // on this read. Treat it as a transient native gap: undo the observe and
-        // report native-history held. We surface whatever native rows this read
-        // DID map (empty on a true gap, a shrunk slice on a mid-write rewrite);
-        // the streaming/tail delivery layer already suppresses an empty tail from
-        // clobbering the last real tail, so holding native with a thin slice is
-        // strictly safer than emitting PTY under a native-authority session.
+        // on this read even though a non-empty, safely-mapped native slice was
+        // observed (a shrunk mid-write rewrite). Treat it as a transient native
+        // gap: undo the observe and report native-history held with the shrunk
+        // slice. The streaming/tail delivery layer already suppresses a thin
+        // tail from clobbering the last real tail, so holding native with the
+        // mapped rows is strictly safer than emitting PTY under a
+        // native-authority session.
         CHAT_SOURCE_REGISTRY.restoreRecord(sessionKey, priorSnapshot);
-        const heldNativeMessages: ChatMessage[] = observation.kind === 'native_present'
-            ? extractNativeMessagesFromResult(args.providerType, args.nativeHistoryResult)
-            : [];
         const messageSource = buildCliMessageSourceProvenance({
             selected: 'native-history',
             provider: args.providerType,
@@ -1229,6 +1245,63 @@ function isCurrentRuntimePtySafelyAttributed(args: {
     }
 
     return true;
+}
+
+/**
+ * LOAD-OLDER PTY FALLBACK (zero-bubble fix): when an exact (session-scoped)
+ * native-history read comes back empty or unsafe but the session's own PTY
+ * transcript has rows, serve those rows as the chat_history page instead of
+ * returning []. This is the "Load older" twin of the read_chat STICKY-NATIVE
+ * empty-hold fix: the same transient native gap that must not blank the live
+ * tail must also not make history paging unrecoverable.
+ *
+ * Safety is fail-closed, mirroring isCurrentRuntimePtySafelyAttributed: the
+ * adapter must be runtime-bound to the session being read (runtimeId match),
+ * must not be an inactive/recovery surface, and its working directory must
+ * match the session workspace (symlink-safe compare). Anything unproven
+ * returns null and the caller keeps the previous empty/native-unavailable
+ * response, so untrusted cross-session PTY content is never exposed.
+ *
+ * Paging contract matches the native path: exclude the rows the live tail
+ * already shows (excludeRecentCount), then walk older pages by offset/limit.
+ */
+function readSafeSessionPtyHistoryPage(args: {
+    h: CommandHelpers;
+    readArgs: any;
+    provider?: ProviderModule;
+    sessionWorkspace?: string;
+    excludeRecentCount: number;
+    offset: number;
+    limit: number;
+}): { messages: ChatMessage[]; hasMore: boolean } | null {
+    const adapter = getTargetedCliAdapter(args.h, args.readArgs, args.provider?.type);
+    if (!adapter || typeof adapter.getScriptParsedStatus !== 'function') return null;
+    const targetSessionId = effectiveReadSessionId(args.h, args.readArgs?.targetSessionId);
+    if (!targetSessionId) return null;
+    const runtimeMeta = typeof (adapter as any).getRuntimeMetadata === 'function'
+        ? (adapter as any).getRuntimeMetadata()
+        : null;
+    const runtimeId = typeof runtimeMeta?.runtimeId === 'string' ? runtimeMeta.runtimeId.trim() : '';
+    if (!runtimeId || runtimeId !== targetSessionId) return null;
+    const surfaceKind = typeof runtimeMeta?.surfaceKind === 'string' ? runtimeMeta.surfaceKind : '';
+    if (surfaceKind === 'inactive_record' || surfaceKind === 'recovery_snapshot') return null;
+    const sessionWorkspace = normalizeComparableWorkspace(args.sessionWorkspace);
+    const adapterWorkspace = normalizeComparableWorkspace(adapter.workingDir);
+    if (!sessionWorkspace || !adapterWorkspace || sessionWorkspace !== adapterWorkspace) return null;
+
+    let parsed: any = null;
+    try {
+        parsed = parseMaybeJson(adapter.getScriptParsedStatus());
+    } catch {
+        return null;
+    }
+    const ptyMessages = collapseAdjacentDuplicateChatMessages(
+        normalizeChatMessages(Array.isArray(parsed?.messages) ? parsed.messages as ChatMessage[] : []),
+    );
+    if (ptyMessages.length === 0) return null;
+    const end = Math.max(0, ptyMessages.length - args.excludeRecentCount - args.offset);
+    const start = Math.max(0, end - args.limit);
+    return { messages: ptyMessages.slice(start, end), hasMore: start > 0 };
 }
 
 function supportsCliNativeTranscript(providerType: string, provider?: ProviderModule): boolean {
@@ -1989,7 +2062,35 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 workspace,
                 nativeMessages: messages,
             });
-            if ((result as any).source === 'provider-native' && messages.length > 0 && !safeMapping) {
+            const nativeUnsafeMapping = (result as any).source === 'provider-native' && messages.length > 0 && !safeMapping;
+            // LOAD-OLDER PTY FALLBACK (zero-bubble fix): an exact session-scoped
+            // native read that is empty (the same transient gap that blanks the
+            // live tail) or unsafe must not leave "Load older" returning []
+            // forever when the session's own PTY transcript has safely
+            // attributable rows. Fail-closed inside readSafeSessionPtyHistoryPage
+            // (runtime identity + workspace checks), so untrusted cross-session
+            // PTY content is never exposed.
+            if ((nativeUnsafeMapping || messages.length === 0) && exactNativeHistoryScope) {
+                const ptyPage = readSafeSessionPtyHistoryPage({
+                    h,
+                    readArgs: args,
+                    provider,
+                    sessionWorkspace: workspace,
+                    excludeRecentCount,
+                    offset: offset || 0,
+                    limit: limit || 30,
+                });
+                if (ptyPage) {
+                    return {
+                        success: true,
+                        messages: ptyPage.messages,
+                        hasMore: ptyPage.hasMore,
+                        source: 'pty-parser',
+                        agent: agentStr,
+                    };
+                }
+            }
+            if (nativeUnsafeMapping) {
                 return {
                     success: true,
                     messages: [],
