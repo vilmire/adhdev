@@ -3817,6 +3817,10 @@ export class CliProviderInstance implements ProviderInstance {
             this.completedDebounceTimer = null;
             this.generatingStartedAt = 0;
             this.lastApprovalEventFingerprint = '';
+            // A completion was emitted for this turn — stamp it as satisfied for
+            // the startup-grace collapse synth (see
+            // markCurrentTurnStartupGraceCollapseSatisfied).
+            this.markCurrentTurnStartupGraceCollapseSatisfied();
             return;
         }
 
@@ -3874,6 +3878,34 @@ export class CliProviderInstance implements ProviderInstance {
         this.completedDebounceTimer = null;
         this.generatingStartedAt = 0;
         this.lastApprovalEventFingerprint = '';
+        // A completion was emitted for this turn — stamp it as satisfied for
+        // the startup-grace collapse synth (see
+        // markCurrentTurnStartupGraceCollapseSatisfied).
+        this.markCurrentTurnStartupGraceCollapseSatisfied();
+    }
+
+    /**
+     * COMPLETED-TURN GUARD for the startup-grace collapse synth (the standalone
+     * status generating-reflash). A genuine completion was just emitted for the
+     * current turn on the normal flush path, which also resets
+     * generatingStartedAt to 0. adapter.currentTurnTaskId PERSISTS past
+     * completion, so without this stamp the NEXT idle-stayed poll inside the
+     * 12s startup-grace window satisfies every fastCollapsed predicate in
+     * maybeSynthesizeStartupGraceCollapse (turn bound, nothing pending,
+     * generating "never armed" — the arm was consumed by the genuine
+     * completion) and re-synthesizes a back-to-back WEAK
+     * agent:generating_started + agent:generating_completed pair for an
+     * ALREADY-COMPLETED turn: one ~120-130ms surface generating blip. Stamping
+     * the turn closes the once-per-turn guard for it, while leaving the rescue
+     * intact for a turn that truly completed WITHOUT ever arming generating —
+     * that turn's currentTurnTaskId differs, so its synth still fires.
+     */
+    private markCurrentTurnStartupGraceCollapseSatisfied(): void {
+        const turnTaskId = typeof (this.adapter as any)?.currentTurnTaskId === 'string'
+            && (this.adapter as any).currentTurnTaskId.trim()
+            ? (this.adapter as any).currentTurnTaskId as string
+            : null;
+        if (turnTaskId) this.fastCollapseSynthesizedTaskId = turnTaskId;
     }
 
     /**
@@ -4489,7 +4521,11 @@ export class CliProviderInstance implements ProviderInstance {
      * never armed (generatingStartedAt===0 && !generatingDebouncePending) means the
      * whole idle→busy→idle never happened for this turn. The once-per-turn guard
      * (fastCollapseSynthesizedTaskId) keeps the re-polled idle-stayed caller from
-     * re-emitting every poll.
+     * re-emitting every poll — and is ALSO stamped by the genuine completion flush
+     * (markCurrentTurnStartupGraceCollapseSatisfied), so a turn that completed
+     * NORMALLY inside the grace window (generating armed, then consumed by the
+     * flush's generatingStartedAt=0 reset) is never misclassified as a
+     * never-armed collapse on the next idle-stayed poll.
      */
     private maybeSynthesizeStartupGraceCollapse(
         chatTitle: string,
@@ -4996,6 +5032,11 @@ export class CliProviderInstance implements ProviderInstance {
                                 finalAssistantEvidenceSource: shortEvidenceSource,
                             },
                         });
+                        // A genuine completion was emitted for this turn (and
+                        // generatingStartedAt was reset above) — stamp it as
+                        // satisfied for the startup-grace collapse synth so a
+                        // late idle-stayed poll cannot re-synthesize a weak pair.
+                        this.markCurrentTurnStartupGraceCollapseSatisfied();
                     }
                 } else {
                     // Debounce completed, then require the rich transcript path that read_chat
