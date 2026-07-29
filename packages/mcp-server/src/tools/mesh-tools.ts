@@ -5,7 +5,7 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 50 tools (== ALL_MESH_TOOLS, kept in sync with the coordinator-prompt TOOLS table
+ * 51 tools (== ALL_MESH_TOOLS, kept in sync with the coordinator-prompt TOOLS table
  * by the 6-6 consistency test in daemon-core coordinator-prompt.test.ts):
  *   mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
  *   mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
@@ -13,7 +13,7 @@
  *   mesh_fast_forward_node, mesh_restart_daemon, mesh_checkpoint, mesh_approve,
  *   mesh_plan_onboarding, mesh_create, mesh_add_node,
  *   mesh_answer_question, mesh_list_pending_approvals,
- *   mesh_clone_node, mesh_remove_node, mesh_refine_node, mesh_refine_batch,
+ *   mesh_clone_node, mesh_remove_node, mesh_cleanup_worktree_nodes, mesh_refine_node, mesh_refine_batch,
  *   mesh_refine_config, mesh_change_impact_config, mesh_init, mesh_reinit,
  *   mesh_write_mesh_json_config, mesh_refine_plan, mesh_cleanup_sessions,
  *   mesh_prune_stale_direct, mesh_task_history, mesh_ledger_query,
@@ -36,6 +36,7 @@ export {
     MESH_CHANGE_IMPACT_CONFIG_TOOL,
     MESH_CHECKPOINT_TOOL,
     MESH_CLEANUP_SESSIONS_TOOL,
+    MESH_CLEANUP_WORKTREE_NODES_TOOL,
     MESH_CREATE_TOOL,
     MESH_ADD_NODE_TOOL,
     MESH_CLONE_NODE_TOOL,
@@ -165,6 +166,7 @@ export {
 
 export {
     meshCheckpoint,
+    meshCleanupWorktreeNodes,
     meshCloneNode,
     meshFastForwardNode,
     meshGitStatus,

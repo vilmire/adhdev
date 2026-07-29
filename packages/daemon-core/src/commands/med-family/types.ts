@@ -28,7 +28,7 @@ export type ResolvedMeshForCommand = {
 
 /** Result of the router's local worktree-node cleanup. */
 export type CleanupLocalWorktreeNodeResult =
-    | { success: true; skipped?: boolean; removedPath?: string; repoRoot?: string; reason?: string; fallback?: string; forced?: boolean; convergence?: Record<string, unknown>; recovered?: boolean; residue?: boolean; residueWarning?: string; residueError?: string }
+    | { success: true; skipped?: boolean; removedPath?: string; repoRoot?: string; reason?: string; fallback?: string; forced?: boolean; convergence?: Record<string, unknown>; recovered?: boolean; residue?: boolean; residueWarning?: string; residueError?: string; branchRefDeleted?: boolean; branchRefReason?: string; branchRefForced?: boolean; branchRefWarning?: string }
     | { success: false; code: string; error: string; recoveryHint: string; convergence?: Record<string, unknown> };
 
 /**
@@ -117,6 +117,17 @@ export interface MedFamilyContext {
         nodeId: string;
         force?: boolean;
     }) => Promise<WorktreeRemovalPrecheckResult>;
+
+    /**
+     * Bound `DaemonCommandRouter.getWorktreeForceCleanupConvergence` — the
+     * merge/push convergence authority (externally recorded metadata, git
+     * merge-base containment, or patch-equivalence). Read-only.
+     */
+    getWorktreeForceCleanupConvergence: (args: {
+        repoRoot: string;
+        workspace: string;
+        node: any;
+    }) => Promise<{ allow: boolean; status?: string; source?: string; ref?: string; error?: string }>;
 
     /** Bound `DaemonCommandRouter.startMeshRefineJob` (async execute path). */
     startMeshRefineJob: (meshId: string, nodeId: string, args: any) => Promise<CommandRouterResult>;

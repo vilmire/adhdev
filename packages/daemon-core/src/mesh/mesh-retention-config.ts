@@ -14,10 +14,17 @@
 //      pruneMeshRuntimeRetention in mesh-runtime-store.ts).
 //   2. Per-mesh ledger rotation total-byte/count cap over CLOSED rotation
 //      files (wired into runDiskRetentionSweep in mesh-disk-retention.ts).
+//
+// Scope (Slice 2): converged local worktree-node auto-removal —
+//   3. Convergence grace before an eligible worktree node may be removed
+//      (wired into the two-tick retention pass in mesh-worktree-retention.ts).
+//   4. Durable execution lease so two retention passes can never remove the
+//      same node concurrently (same module).
 // ---------------------------------------------------------------------------
 
 import { readNonEmptyString } from './mesh-events-utils.js';
 
+const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MB = 1024 * 1024;
 
@@ -87,4 +94,51 @@ export function resolveLedgerRotationMaxFiles(): number {
         }
     }
     return DEFAULT_LEDGER_ROTATION_MAX_FILES;
+}
+
+// ─── (3) worktree-node convergence grace (Slice 2) ───────────────────────────
+// A converged local worktree node must be OBSERVED as fully eligible (every
+// exclusion check in mesh-worktree-retention.ts passing) on at least two
+// separate retention passes spanning at least this grace window before the
+// automatic reconcile phase may remove it. The grace clock starts at the first
+// recorded eligible pass, so the effective wait is ≥ grace regardless of tick
+// cadence. Default 48h: comfortably longer than any in-flight merge/review
+// workflow, so a node is only removed once its convergence is undeniably
+// settled. Clamp [1h, 30d]: below 1h the grace would not protect a slow
+// reviewer; above 30d retention is effectively disabled. An explicit 0
+// disables automatic worktree-node retention entirely (planning still runs in
+// dry-run form; nothing is ever executed).
+export const DEFAULT_WORKTREE_NODE_RETENTION_GRACE_MS = 48 * HOUR_MS;
+
+export function resolveWorktreeNodeRetentionGraceMs(): number {
+    const raw = readNonEmptyString(process.env.MESH_WORKTREE_NODE_RETENTION_GRACE_MS);
+    if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed)) {
+            if (parsed === 0) return 0; // disabled
+            if (parsed >= 1 * HOUR_MS && parsed <= 30 * DAY_MS) return parsed;
+        }
+    }
+    return DEFAULT_WORKTREE_NODE_RETENTION_GRACE_MS;
+}
+
+// ─── (4) worktree-node removal lease (Slice 2) ───────────────────────────────
+// Before executing a removal the retention pass persists a lease marker in the
+// durable state file; a second pass (or a second daemon sharing the config
+// root) that sees an unexpired lease owned by someone else skips the node with
+// reason 'lease_held'. A crashed remover's lease simply expires and the next
+// pass retries — removal itself is idempotent (already-missing worktree path /
+// already-removed membership are both success cases). Default 10min: far
+// longer than any single removal (git worktree remove + membership splice),
+// short enough that a crash does not strand the node for hours. Clamp
+// [1min, 1h].
+export const DEFAULT_WORKTREE_NODE_RETENTION_LEASE_MS = 10 * 60 * 1000;
+
+export function resolveWorktreeNodeRetentionLeaseMs(): number {
+    const raw = readNonEmptyString(process.env.MESH_WORKTREE_NODE_RETENTION_LEASE_MS);
+    if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed >= 60 * 1000 && parsed <= 60 * 60 * 1000) return parsed;
+    }
+    return DEFAULT_WORKTREE_NODE_RETENTION_LEASE_MS;
 }

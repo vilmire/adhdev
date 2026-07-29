@@ -51,6 +51,9 @@ var IPC_COMMAND_TIMEOUTS_MS = {
   // 120s leaves headroom and matches the relay-wrapped remote path.
   clone_mesh_node: 12e4,
   remove_mesh_node: 6e4,
+  // Retention plan/execute runs the same git probes as a remove dry-run plus
+  // queue/session/ledger reads; 60s matches the remove budget.
+  cleanup_worktree_nodes: 6e4,
   // A5: plan_mesh_refine_node is the SYNCHRONOUS refine dry-run — it runs several git
   // probes (status/merge-tree/submodule) inline before replying, which can approach the
   // 15s default on a slow (Windows) host. 45s defensively, matching git_status/diff.
@@ -429,6 +432,7 @@ var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_add_node",
   "mesh_clone_node",
   "mesh_remove_node",
+  "mesh_cleanup_worktree_nodes",
   "mesh_refine_node",
   "mesh_refine_batch",
   "mesh_refine_config",
@@ -1240,6 +1244,18 @@ var MESH_REMOVE_NODE_TOOL = {
     required: ["node_id"]
   }
 };
+var MESH_CLEANUP_WORKTREE_NODES_TOOL = {
+  name: "mesh_cleanup_worktree_nodes",
+  description: "Plan (dry-run, default) or execute safe removal of CONVERGED local worktree nodes (lifecycle retention). A node is eligible only when its feature branch is proven merged/pushed/converged AND every safety exclusion passes: no dirty/conflicted/stashed/submodule-drift state, no live session, no queue/direct-dispatch reference, no in-flight or blocked_review Refinery job, not the coordinator/base/cwd/evidence node. The automatic reconcile pass additionally requires two consecutive eligible ticks spanning a grace window (default 48h). Per-node reason codes are always returned; removal never uses force and branch refs are deleted only when proven fully merged.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Optional: restrict the plan/execute to a single node. When omitted, every node in the mesh is evaluated." },
+      dry_run: { type: "boolean", description: "Default true. true = read-only reason-coded plan (identical shape to the automatic pass); false = execute removal for every currently-eligible node (never forces; the non-destructive precheck re-runs immediately before each removal)." }
+    },
+    required: []
+  }
+};
 var MESH_CLEANUP_SESSIONS_TOOL = {
   name: "mesh_cleanup_sessions",
   description: "Manually clean up delegated session records for a mesh node without removing the node. Defaults should preserve reviewable history unless the caller chooses a mode explicitly.",
@@ -1641,6 +1657,7 @@ var ALL_MESH_TOOLS = [
   MESH_ADD_NODE_TOOL,
   MESH_CLONE_NODE_TOOL,
   MESH_REMOVE_NODE_TOOL,
+  MESH_CLEANUP_WORKTREE_NODES_TOOL,
   MESH_REFINE_NODE_TOOL,
   MESH_REFINE_BATCH_TOOL,
   MESH_REFINE_CONFIG_TOOL,
@@ -7546,6 +7563,44 @@ async function meshRemoveNode(ctx, args) {
   }
   return JSON.stringify({ ...result || {}, ...transportFallback ? { transportFallback } : {} }, null, 2);
 }
+async function meshCleanupWorktreeNodes(ctx, args) {
+  const dryRun = args?.dry_run !== false;
+  const wireArgs = {
+    meshId: ctx.mesh.id,
+    dryRun,
+    ...args?.node_id ? { nodeId: args.node_id } : {}
+  };
+  let result;
+  try {
+    if (args?.node_id) {
+      const node = await findNodeWithRefresh(ctx, args.node_id);
+      result = await commandForNode(ctx, node, "cleanup_worktree_nodes", wireArgs);
+    } else {
+      result = await ctx.transport.command("cleanup_worktree_nodes", wireArgs);
+    }
+  } catch (e) {
+    return JSON.stringify({
+      success: false,
+      code: isP2pTransportUnavailableError(e) ? "p2p_unavailable" : "mesh_cleanup_worktree_nodes_failed",
+      error: e?.message || String(e),
+      recoveryHint: "Inspect mesh_status and retry after resolving the reported failure; per-node reasons are never hidden in a successful plan."
+    }, null, 2);
+  }
+  if (!dryRun && result?.success && Array.isArray(result.entries)) {
+    let changed = false;
+    for (const entry of result.entries) {
+      if (entry?.execution?.success && entry.execution.removed) {
+        const idx = ctx.mesh.nodes.findIndex((n) => n.id === entry.nodeId);
+        if (idx >= 0) {
+          ctx.mesh.nodes.splice(idx, 1);
+          changed = true;
+        }
+      }
+    }
+    if (changed) ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+  }
+  return JSON.stringify(result ?? { success: false, error: "no response from daemon" }, null, 2);
+}
 
 // src/tools/mesh-tools-crud.ts
 async function meshPlanOnboarding(transport, args, defaultMeshId) {
@@ -9135,6 +9190,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_remove_node":
             text = await meshRemoveNode(meshCtx, a);
+            break;
+          case "mesh_cleanup_worktree_nodes":
+            text = await meshCleanupWorktreeNodes(meshCtx, a);
             break;
           case "mesh_refine_node":
             text = await meshRefineNode(meshCtx, a);

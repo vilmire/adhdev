@@ -532,6 +532,7 @@ export class DaemonCommandRouter {
             cleanupMeshSessions: this.cleanupMeshSessions.bind(this),
             cleanupLocalWorktreeNode: this.cleanupLocalWorktreeNode.bind(this),
             precheckLocalWorktreeRemovable: this.precheckLocalWorktreeRemovable.bind(this),
+            getWorktreeForceCleanupConvergence: this.getWorktreeForceCleanupConvergence.bind(this),
             startMeshRefineJob: this.startMeshRefineJob.bind(this),
             batchRefineMeshNodes: this.batchRefineMeshNodes.bind(this),
             startMeshRefineBatchJob: this.startMeshRefineBatchJob.bind(this),
@@ -597,7 +598,7 @@ export class DaemonCommandRouter {
         this.invalidateAggregateMeshStatus(meshId);
     }
 
-    private removeInlineMeshNode(meshId: string, mesh: any, nodeId: string): boolean {
+    removeInlineMeshNode(meshId: string, mesh: any, nodeId: string): boolean {
         if (!mesh || !Array.isArray(mesh.nodes)) return false;
         const idx = mesh.nodes.findIndex((entry: any) => meshNodeIdMatches(entry, nodeId));
         if (idx === -1) return false;

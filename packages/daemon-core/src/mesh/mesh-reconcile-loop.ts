@@ -79,6 +79,8 @@ import {
 import { pullRemoteNodeQueues, pullPendingEventsFromNode, reprobeWorkerStatus } from './mesh-remote-event-pull.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import { runDiskRetentionSweep, detectAndSignalOrphanWorktrees } from './mesh-disk-retention.js';
+import { runWorktreeNodeRetentionTick, type WorktreeRetentionDeps } from './mesh-worktree-retention.js';
+import { resolveWorktreeNodeRetentionGraceMs } from './mesh-retention-config.js';
 import {
     reconcileUnterminatedDirectDispatches,
     autoPruneStaleDirectDispatches,
@@ -2323,6 +2325,40 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                     await detectAndSignalOrphanWorktrees(mesh, nowMs);
                 } catch (e: any) {
                     LOG.warn('MeshReconcile', `Orphan worktree detection failed for mesh ${mesh.id}: ${e?.message || e}`);
+                }
+            }
+            // ── PHASE 6.5: converged local worktree-node retention (Slice 2) ──
+            // Auto-removal of local worktree clone nodes whose feature branch is
+            // PROVEN converged and that have passed the full exclusion precheck on
+            // two separate retention passes spanning the grace window (default 48h;
+            // 0 disables — see mesh-worktree-retention.ts). Same hourly cadence as
+            // the disk sweep: git probes are too heavy for the 4s tick. Runs BEFORE
+            // PHASE 2's early return so MCP-only daemons retain nodes too. Dry-run
+            // plan + per-node reason codes are content-free logged; a grace of 0
+            // disables execution entirely.
+            if (components.router && resolveWorktreeNodeRetentionGraceMs() > 0) {
+                const router = components.router;
+                const retentionDeps: WorktreeRetentionDeps = {
+                    precheckLocalWorktreeRemovable: args => router.precheckLocalWorktreeRemovable(args),
+                    cleanupLocalWorktreeNode: args => router.cleanupLocalWorktreeNode(args),
+                    getWorktreeForceCleanupConvergence: args => router.getWorktreeForceCleanupConvergence(args),
+                    cleanupMeshSessions: args => router.cleanupMeshSessions(args as Parameters<typeof router.cleanupMeshSessions>[0]),
+                    listSessions: async () => {
+                        try { return await router.deps.sessionHostControl?.listSessions() ?? []; } catch { return []; }
+                    },
+                    getCachedInlineMesh: meshId => router.getCachedInlineMesh(meshId),
+                    removeInlineMeshNode: (meshId, mesh, nodeId) => router.removeInlineMeshNode(meshId, mesh, nodeId),
+                    invalidateAggregateMeshStatus: meshId => router.invalidateAggregateMeshStatus(meshId),
+                };
+                const tickId = `reconcile-${nowMs}`;
+                for (const mesh of listMeshes()) {
+                    const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+                    if (!daemonHostsMesh(mesh, selfIds)) continue;
+                    try {
+                        await runWorktreeNodeRetentionTick(retentionDeps, { mesh, nowMs, tickId, execute: true, executeMode: 'auto' });
+                    } catch (e: any) {
+                        LOG.warn('MeshReconcile', `Worktree-node retention failed for mesh ${mesh.id}: ${e?.message || e}`);
+                    }
                 }
             }
         }

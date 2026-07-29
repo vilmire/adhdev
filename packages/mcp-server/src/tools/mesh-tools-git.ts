@@ -306,3 +306,52 @@ export async function meshRemoveNode(
     }
     return JSON.stringify({ ...(result || {}), ...(transportFallback ? { transportFallback } : {}) }, null, 2);
 }
+
+/**
+ * mesh_cleanup_worktree_nodes — manual plan/execute surface for lifecycle
+ * retention Slice 2 (safe automatic removal of converged local worktree
+ * nodes). Dry-run by default: the daemon returns the SAME reason-coded
+ * per-node plan the automatic reconcile pass builds (dry-run parity), with no
+ * per-node reasons hidden. dry_run:false executes currently-eligible nodes
+ * only — never forced, precheck re-run before each removal.
+ */
+export async function meshCleanupWorktreeNodes(
+    ctx: MeshContext,
+    args: { node_id?: string; dry_run?: boolean },
+): Promise<string> {
+    const dryRun = args?.dry_run !== false;
+    const wireArgs: Record<string, unknown> = {
+        meshId: ctx.mesh.id,
+        dryRun,
+        ...(args?.node_id ? { nodeId: args.node_id } : {}),
+    };
+    let result: any;
+    try {
+        if (args?.node_id) {
+            const node = await findNodeWithRefresh(ctx, args.node_id);
+            result = await commandForNode(ctx, node, 'cleanup_worktree_nodes', wireArgs);
+        } else {
+            result = await ctx.transport.command('cleanup_worktree_nodes', wireArgs);
+        }
+    } catch (e: any) {
+        return JSON.stringify({
+            success: false,
+            code: isP2pTransportUnavailableError(e) ? 'p2p_unavailable' : 'mesh_cleanup_worktree_nodes_failed',
+            error: e?.message || String(e),
+            recoveryHint: 'Inspect mesh_status and retry after resolving the reported failure; per-node reasons are never hidden in a successful plan.',
+        }, null, 2);
+    }
+    // Splice executed removals out of the in-memory mesh mirror (same pattern
+    // as mesh_remove_node) so follow-up tool calls see current membership.
+    if (!dryRun && result?.success && Array.isArray(result.entries)) {
+        let changed = false;
+        for (const entry of result.entries) {
+            if (entry?.execution?.success && entry.execution.removed) {
+                const idx = ctx.mesh.nodes.findIndex(n => n.id === entry.nodeId);
+                if (idx >= 0) { ctx.mesh.nodes.splice(idx, 1); changed = true; }
+            }
+        }
+        if (changed) ctx.mesh.updatedAt = new Date().toISOString();
+    }
+    return JSON.stringify(result ?? { success: false, error: 'no response from daemon' }, null, 2);
+}
