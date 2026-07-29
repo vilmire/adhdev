@@ -25,6 +25,12 @@ import {
   type StandaloneFontPreferences,
   type StandaloneBindHost,
 } from './standalone-preferences.js';
+import {
+  parseStandaloneCliArgs,
+  StandaloneCliArgsError,
+  PUBLIC_ANY_ADDRESSES,
+  STANDALONE_HELP_TEXT,
+} from './standalone-cli-args.js';
 
 import {
   LOG,
@@ -219,7 +225,9 @@ function clearStandalonePasswordConfig(filePath = getStandalonePasswordConfigPat
 }
 
 function shouldWarnForPublicUnauthenticatedHost(input: { host: string; hasTokenAuth: boolean; hasPasswordAuth: boolean }): boolean {
-  return input.host === '0.0.0.0' && !input.hasTokenAuth && !input.hasPasswordAuth;
+  // PUBLIC_ANY_ADDRESSES covers both any-addresses (0.0.0.0 and IPv6 ::) — an
+  // explicit --host :: opt-in must not dodge the unauthenticated-public warning.
+  return PUBLIC_ANY_ADDRESSES.has(input.host) && !input.hasTokenAuth && !input.hasPasswordAuth;
 }
 
 function parseCookies(cookieHeader: string | undefined): Record<string, string> {
@@ -2628,59 +2636,28 @@ async function main(): Promise<void> {
     const exitCode = await proxySessionHostList(showAll);
     process.exit(exitCode);
   }
-  const options: StandaloneOptions = {};
-  let hostExplicit = false;
-
-  // Parse simple args
-  for (let i = 0; i < args.length; i++) {
-    if ((args[i] === '--port' || args[i] === '-p') && args[i + 1]) {
-      options.port = parseInt(args[i + 1]);
-      i++;
+  // Canonical CLI contract (see standalone-cli-args.ts): --host/-H takes an
+  // explicit, validated address and the server binds exactly that. A missing
+  // or invalid value fails visibly here — the server never starts on a bind
+  // the operator did not ask for. Public binding stays an explicit opt-in
+  // (--host 0.0.0.0 / --host ::) with the unauthenticated-public warning.
+  let parsed: ReturnType<typeof parseStandaloneCliArgs>;
+  try {
+    parsed = parseStandaloneCliArgs(args);
+  } catch (error) {
+    if (error instanceof StandaloneCliArgsError) {
+      console.error(`\n✗ ${error.message}`);
+      console.error('  Run with --help to see usage.\n');
+      process.exit(1);
     }
-    if (args[i] === '--host' || args[i] === '-H') {
-      options.host = '0.0.0.0';
-      hostExplicit = true;
-    }
-    if (args[i] === '--public' && args[i + 1]) {
-      options.publicDir = args[i + 1];
-      i++;
-    }
-    if (args[i] === '--no-open') {
-      options.open = false;
-    }
-    if (args[i] === '--dev') {
-      (options as any).dev = true;
-    }
-    if (args[i] === '--token' && args[i + 1]) {
-      options.token = args[i + 1];
-      i++;
-    }
-    if (args[i] === '--help' || args[i] === '-h') {
-      console.log(`
-Usage: adhdev-standalone [options]
-       adhdev-standalone list [--all]
-       adhdev-standalone attach <sessionId> [--read-only|--takeover]
-
-Options:
-  --port, -p <port>   Port to run the standalone server on (default: 3847)
-  --host, -H          Allow external network connections (binds to 0.0.0.0)
-  --token <token>     Set an authentication token for the dashboard UI
-  --dev               Enable DevConsole to debug and test providers
-  --public <path>     Custom path to the web dashboard distribution
-  --no-open           Do not automatically open the browser on startup
-
-Environment:
-  ADHDEV_SESSION_HOST_NAME   Override session host namespace (default: adhdev-standalone)
-  --help, -h          Show this help message
-
-Runtime commands:
-  list, runtimes      Show hosted CLI runtimes
-  attach              Attach local terminal to a runtime
-  open                Open a local terminal window running adhmux for a runtime
-`);
-      process.exit(0);
-    }
+    throw error;
   }
+  if (parsed.showHelp) {
+    console.log(STANDALONE_HELP_TEXT);
+    process.exit(0);
+  }
+  const options: StandaloneOptions = parsed.options;
+  const hostExplicit = parsed.hostExplicit;
 
   // Try to find web-standalone build
   if (!hostExplicit) {
