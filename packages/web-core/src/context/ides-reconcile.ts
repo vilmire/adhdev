@@ -439,8 +439,24 @@ export function reconcileIdes(
             continue
         }
 
-        const incomingTs = ide.timestamp || now
-        const existingTs = existing._lastUpdate || existing.timestamp || 0
+        // Clock-domain rule: order remote updates by REMOTE timestamps, never by the
+        // browser-local `_lastUpdate`. `ide.timestamp` is the DAEMON's clock, while
+        // `existing._lastUpdate` is the BROWSER's Date.now() stamped at merge time —
+        // comparing across clock domains breaks when the device clock runs ahead of
+        // the daemon (e.g. a phone): `_lastUpdate` lands in the "future" of every
+        // daemon timestamp, so each fresh remote payload loses the comparison and a
+        // stale status (working/generating) pins forever even though the daemon now
+        // reports idle. `existing.timestamp` is safe to compare against because it
+        // always tracks the last merged REMOTE timestamp: both merge paths spread the
+        // incoming entry (carrying its timestamp) and
+        // `preserveReferenceWhenOnlyVolatileFieldsChanged` propagates `next.timestamp`
+        // onto the preserved existing reference. Only when either side lacks a remote
+        // timestamp do we fall back to the legacy local-clock comparison, so
+        // timestamp-less payload flows behave exactly as before.
+        const hasRemoteTs = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+        const compareRemoteClocks = hasRemoteTs(ide.timestamp) && hasRemoteTs(existing.timestamp)
+        const incomingTs = compareRemoteClocks ? (ide.timestamp as number) : (ide.timestamp || now)
+        const existingTs = compareRemoteClocks ? (existing.timestamp as number) : (existing._lastUpdate || existing.timestamp || 0)
         if (incomingTs >= existingTs) {
             const merged = buildMergedRichEntry(existing, ide, now, preserveMissingChildSessions)
             resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now))

@@ -105,14 +105,72 @@ export function countGeneratingConversations(conversations: { status?: string, c
     return count
 }
 
+/**
+ * Deterministic winner selection between two registered copies of the same
+ * session's inbox state. Mirrors the shape of the conversation-state dedupe
+ * contract (`dedupeChatIdes` in hooks/useDashboardConversations.ts: prefer
+ * richer evidence, order by remote-domain timestamp, stay stable) adapted to
+ * the inbox-state fields, which that richness score does not cover.
+ *
+ * Order of rules:
+ *  1. Newer `lastUpdated` (remote-domain daemon timestamp) wins — a stale
+ *     duplicate carrying `inboxBucket: 'working'` with an older/absent
+ *     `lastUpdated` can NEVER override a fresher `idle` copy, while a
+ *     genuinely fresher working copy still can.
+ *  2. Timestamp tie → richer evidence wins: the copy that actually carries
+ *     explicit inbox fields (e.g. an explicit `inboxBucket`) beats one that
+ *     would only contribute defaults.
+ *  3. Full tie → keep the FIRST registered copy (stable input order, no
+ *     reordering).
+ */
+function inboxStateEvidenceScore(source: InboxSurfaceStateSource): number {
+    let score = 0
+    if (source.unread !== undefined) score += 1
+    if (source.lastSeenAt !== undefined) score += 1
+    if (source.lastUpdated !== undefined) score += 1
+    if (source.inboxBucket !== undefined) score += 1
+    if (source.surfaceHidden !== undefined) score += 1
+    if (source.muted !== undefined) score += 1
+    if (source.completionMarker !== undefined) score += 1
+    if (source.seenCompletionMarker !== undefined) score += 1
+    return score
+}
+
+function shouldReplaceRegisteredInboxState(
+    existing: InboxSurfaceStateSource,
+    incoming: InboxSurfaceStateSource,
+): boolean {
+    const existingTs = existing.lastUpdated || 0
+    const incomingTs = incoming.lastUpdated || 0
+    if (incomingTs !== existingTs) return incomingTs > existingTs
+    const existingEvidence = inboxStateEvidenceScore(existing)
+    const incomingEvidence = inboxStateEvidenceScore(incoming)
+    if (incomingEvidence !== existingEvidence) return incomingEvidence > existingEvidence
+    return false
+}
+
+/**
+ * Pure projection over the already-reconciled `ides` array: maps sessionId →
+ * normalized inbox surface state for mobile surfaces. A sessionId can appear
+ * twice in `ides` (a stale duplicate entry plus the fresh one, or a top-level
+ * entry plus a `childSessions` child), so duplicate registrations are resolved
+ * deterministically — newer remote `lastUpdated` wins, timestamp ties break
+ * toward the copy with richer explicit evidence, and full ties keep the first
+ * registered copy (stable input order). This is dedupe only: no new status
+ * semantics, no mobile-only lifecycle authority.
+ */
 export function buildLiveSessionInboxStateMap(ides: DaemonData[]) {
     const stateBySessionId = new Map<string, LiveSessionInboxState>()
+    const sourceBySessionId = new Map<string, InboxSurfaceStateSource>()
 
     const register = (
         sessionId: string | undefined,
         source: InboxSurfaceStateSource,
     ) => {
         if (!sessionId) return
+        const existingSource = sourceBySessionId.get(sessionId)
+        if (existingSource && !shouldReplaceRegisteredInboxState(existingSource, source)) return
+        sourceBySessionId.set(sessionId, source)
         stateBySessionId.set(sessionId, {
             sessionId,
             ...normalizeInboxState(source),
