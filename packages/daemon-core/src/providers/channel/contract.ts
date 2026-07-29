@@ -56,6 +56,11 @@ export const BUNDLE_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 export type ProviderChannelErrorCode =
   /** Channel metadata (registry) could not be fetched or was malformed. */
   | 'CHANNEL_METADATA_UNAVAILABLE'
+  /** Registry response violates the channel contract: the requested preview
+   *  channel's top-level channel echo is missing or echoes a different
+   *  channel — the registry does not honor channel reads (e.g. a legacy
+   *  production registry). Fail closed; never treat its rows as preview. */
+  | 'CHANNEL_METADATA_MISMATCH'
   /** Entry has no verified identity (NULL digest / legacy-unverified row). */
   | 'ENTRY_NON_ACTIVATABLE'
   /** Entry digest is malformed (not sha256:<64 lowercase hex>). */

@@ -192,6 +192,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         sourceMode: providerSourceMode,
         userDir: appConfig.providerDir,
         registryUrl: appConfig.registryUrl,
+        serverUrl: appConfig.serverUrl,
         providerTarballUrl: appConfig.providerTarballUrl,
         channel: appConfig.providerChannel,
         updateChannel: appConfig.updateChannel,

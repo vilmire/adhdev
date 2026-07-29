@@ -9,10 +9,18 @@
  * Resolution priority (highest first):
  *   1. Explicit config field    — `config.registryUrl` / `config.providerTarballUrl`
  *   2. Environment variable      — `ADHDEV_REGISTRY_URL` / `ADHDEV_PROVIDER_TARBALL_URL`
- *   3. Vendor default            — existing URLs (unchanged for default users)
+ *   3. Derived from the daemon   — the registry base is derived from the
+ *      already-resolved daemon `config.serverUrl`
+ *      (`https://api-preview.adhf.dev` → `https://api-preview.adhf.dev/api/v1/registry`).
+ *      This is what keeps a preview daemon on the preview registry: the
+ *      channel query param alone is not enough when the base points at a
+ *      registry that ignores it (rc.21).
+ *   4. Vendor default            — existing URLs (unchanged for default users;
+ *      deriving from the default serverUrl yields the same literal).
  *
  * Default users get byte-identical behavior: the vendor defaults equal the
- * literals these functions replaced.
+ * literals these functions replaced, and the stable serverUrl derives the
+ * stable registry default exactly.
  */
 
 /** Vendor default registry base URL (no trailing slash). */
@@ -36,21 +44,54 @@ function stripTrailingSlashes(url: string): string {
     return url.replace(/\/+$/, '');
 }
 
+/** Registry API path appended to a daemon server URL exactly once. */
+const REGISTRY_API_PATH = '/api/v1/registry';
+
+/**
+ * Derive the registry base URL from the resolved daemon server URL
+ * (`config.serverUrl`). The server URL is normalized exactly once: trailing
+ * slashes are stripped, and `/api/v1/registry` is appended unless the value
+ * already ends with it (never a doubled path). Behavior is keyed on the
+ * server URL only — never on provider names or channel labels.
+ *
+ * Returns undefined for blank, unparseable, or non-http(s) values so the
+ * caller falls back to the vendor default.
+ */
+export function deriveRegistryBaseUrlFromServerUrl(serverUrl?: string | null): string | undefined {
+    const cleaned = cleanString(serverUrl);
+    if (!cleaned) return undefined;
+    const stripped = stripTrailingSlashes(cleaned);
+    let parsed: URL;
+    try {
+        parsed = new URL(stripped);
+    } catch {
+        return undefined;
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return undefined;
+    if (stripped.endsWith(REGISTRY_API_PATH)) return stripped;
+    return `${stripped}${REGISTRY_API_PATH}`;
+}
+
 /**
  * Resolve the provider registry base URL.
  *
  * @param configuredUrl explicit config value (config.registryUrl); highest priority.
  * @param env process env source (defaults to process.env; injectable for tests).
+ * @param serverUrl resolved daemon server URL (config.serverUrl); used to
+ *   derive the registry base when neither an explicit config value nor the
+ *   env var is set. Absent/invalid → vendor default (stable byte-compatible).
  * @returns the resolved base URL with any trailing slash stripped, so callers
  *   can safely append `/providers`, `/providers/<type>`, etc.
  */
 export function resolveRegistryBaseUrl(
     configuredUrl?: string | null,
     env: NodeJS.ProcessEnv = process.env,
+    serverUrl?: string | null,
 ): string {
     const resolved =
         cleanString(configuredUrl) ??
         cleanString(env[REGISTRY_URL_ENV_VAR]) ??
+        deriveRegistryBaseUrlFromServerUrl(serverUrl) ??
         DEFAULT_REGISTRY_BASE_URL;
     return stripTrailingSlashes(resolved);
 }

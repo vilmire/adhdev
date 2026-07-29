@@ -48,6 +48,8 @@ function getProviderLoader(): ProviderLoader {
         const appConfig = loadConfig();
         _providerLoader = new ProviderLoader({
             logFn: () => {}, // Suppress logs during launch
+            registryUrl: appConfig.registryUrl,
+            serverUrl: appConfig.serverUrl,
             channel: appConfig.providerChannel,
             updateChannel: appConfig.updateChannel,
         });

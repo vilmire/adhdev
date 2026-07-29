@@ -57,6 +57,64 @@ describe('resolveRegistryBaseUrl', () => {
   })
 })
 
+// rc.21 live M1 canary root cause: a preview daemon (serverUrl resolved to
+// https://api-preview.adhf.dev) with no registry override fell back to the
+// hardcoded PRODUCTION registry, which ignores ?channel=preview and returns
+// legacy digest-less rows (51 ENTRY_NON_ACTIVATABLE). The registry base must
+// derive from the already-resolved daemon serverUrl.
+describe('resolveRegistryBaseUrl serverUrl derivation (rc.21)', () => {
+  const PREVIEW_SERVER = 'https://api-preview.adhf.dev'
+  const PREVIEW_REGISTRY = 'https://api-preview.adhf.dev/api/v1/registry'
+
+  it('derives the registry base from the resolved serverUrl when no override is set', () => {
+    expect(resolveRegistryBaseUrl(undefined, emptyEnv, PREVIEW_SERVER)).toBe(PREVIEW_REGISTRY)
+  })
+
+  it('stable server derives the byte-identical stable default', () => {
+    expect(resolveRegistryBaseUrl(undefined, emptyEnv, 'https://api.adhf.dev')).toBe(
+      DEFAULT_REGISTRY_BASE_URL,
+    )
+  })
+
+  it('absent/blank serverUrl falls back to the vendor default (unchanged)', () => {
+    expect(resolveRegistryBaseUrl(undefined, emptyEnv)).toBe(DEFAULT_REGISTRY_BASE_URL)
+    expect(resolveRegistryBaseUrl(undefined, emptyEnv, null)).toBe(DEFAULT_REGISTRY_BASE_URL)
+    expect(resolveRegistryBaseUrl(undefined, emptyEnv, '   ')).toBe(DEFAULT_REGISTRY_BASE_URL)
+  })
+
+  it('explicit config and env overrides still beat serverUrl derivation', () => {
+    expect(resolveRegistryBaseUrl('https://config.example.com/v1', emptyEnv, PREVIEW_SERVER)).toBe(
+      'https://config.example.com/v1',
+    )
+    const env = envWith({ [REGISTRY_URL_ENV_VAR]: 'https://env.example.com/v1' })
+    expect(resolveRegistryBaseUrl(undefined, env, PREVIEW_SERVER)).toBe(
+      'https://env.example.com/v1',
+    )
+  })
+
+  it('derives from a custom server origin (self-host deployments)', () => {
+    expect(
+      resolveRegistryBaseUrl(undefined, emptyEnv, 'https://adhdev.internal.example:8443'),
+    ).toBe('https://adhdev.internal.example:8443/api/v1/registry')
+    expect(resolveRegistryBaseUrl(undefined, emptyEnv, 'http://127.0.0.1:3100')).toBe(
+      'http://127.0.0.1:3100/api/v1/registry',
+    )
+  })
+
+  it('normalizes trailing/path forms exactly once (never a double /api/v1/registry)', () => {
+    expect(resolveRegistryBaseUrl(undefined, emptyEnv, `${PREVIEW_SERVER}/`)).toBe(PREVIEW_REGISTRY)
+    expect(resolveRegistryBaseUrl(undefined, emptyEnv, PREVIEW_REGISTRY)).toBe(PREVIEW_REGISTRY)
+    expect(resolveRegistryBaseUrl(undefined, emptyEnv, `${PREVIEW_REGISTRY}/`)).toBe(PREVIEW_REGISTRY)
+  })
+
+  it('ignores an unparseable or non-http serverUrl and falls back to the vendor default', () => {
+    expect(resolveRegistryBaseUrl(undefined, emptyEnv, 'not a url')).toBe(DEFAULT_REGISTRY_BASE_URL)
+    expect(resolveRegistryBaseUrl(undefined, emptyEnv, 'ftp://api-preview.adhf.dev')).toBe(
+      DEFAULT_REGISTRY_BASE_URL,
+    )
+  })
+})
+
 describe('resolveProviderTarballUrl', () => {
   it('falls back to the vendor default when nothing is configured', () => {
     expect(resolveProviderTarballUrl(undefined, emptyEnv)).toBe(DEFAULT_PROVIDER_TARBALL_URL)

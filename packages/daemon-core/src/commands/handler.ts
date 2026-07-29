@@ -700,7 +700,8 @@ export class DaemonCommandHandler implements CommandHelpers {
         const https = require('https') as typeof import('https');
         const fs = require('fs') as typeof import('fs');
         const path = require('path') as typeof import('path');
-        const REGISTRY = resolveRegistryBaseUrl(loadConfig().registryUrl);
+        const cfg = loadConfig();
+        const REGISTRY = resolveRegistryBaseUrl(cfg.registryUrl, process.env, cfg.serverUrl);
 
         function fetchText(url: string, timeoutMs: number): Promise<string> {
             return new Promise((resolve, reject) => {
@@ -1156,7 +1157,8 @@ export class DaemonCommandHandler implements CommandHelpers {
         if (!installed.success) return installed;
 
         const https = require('https') as typeof import('https');
-        const REGISTRY = resolveRegistryBaseUrl(loadConfig().registryUrl);
+        const cfg = loadConfig();
+        const REGISTRY = resolveRegistryBaseUrl(cfg.registryUrl, process.env, cfg.serverUrl);
 
         function fetchJson(url: string): Promise<any> {
             return new Promise((resolve, reject) => {

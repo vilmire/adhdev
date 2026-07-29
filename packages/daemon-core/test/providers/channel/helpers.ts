@@ -90,8 +90,27 @@ export interface FakeMetadataSource {
   rows?: Array<Record<string, unknown>>;
   /** When set, the fetch throws this error (registry unavailable). */
   failure?: Error;
+  /**
+   * Top-level channel echo of the fake registry response.
+   *   - undefined (default): echo the channel parsed from the request URL
+   *     (a healthy channel-aware registry);
+   *   - null: omit the echo entirely (legacy registry without the channel
+   *     contract — the rc.21 prod payload shape);
+   *   - string: force that echo value (mismatched-channel registry).
+   */
+  channelEcho?: string | null;
   /** Records every requested URL (channel fallthrough assertions). */
   requestedUrls: string[];
+}
+
+/** Build the fake registry response body honoring the channelEcho contract. */
+export function fakeRegistryBody(metadata: FakeMetadataSource, url: string): Record<string, unknown> {
+  const body: Record<string, unknown> = { providers: metadata.rows ?? [] };
+  const echo = metadata.channelEcho === undefined
+    ? new URL(url).searchParams.get('channel')
+    : metadata.channelEcho;
+  if (typeof echo === 'string') body.channel = echo;
+  return body;
 }
 
 export function makeRuntime(options: {
@@ -109,7 +128,7 @@ export function makeRuntime(options: {
     fetchJson: async (url: string) => {
       metadata.requestedUrls.push(url);
       if (metadata.failure) throw metadata.failure;
-      return { providers: metadata.rows ?? [] };
+      return fakeRegistryBody(metadata, url);
     },
     downloadFile: async () => { /* transport bytes are irrelevant — extraction is faked below */ },
     extractTarball: async (_tarPath: string, destDir: string) => {

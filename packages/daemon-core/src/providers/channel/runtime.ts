@@ -7,6 +7,11 @@
  * Data flow (fail-closed, last-known-good preserving):
  *
  *   registry `GET {base}/providers?channel=<ch>&limit=100`
+ *     → preview responses must echo `channel: "preview"` at the top level —
+ *       a missing/mismatched echo means the registry ignores channel reads
+ *       (legacy prod payload) and is rejected with CHANNEL_METADATA_MISMATCH
+ *       before anything is touched (stable stays echo-optional for backward
+ *       compatibility with the pre-contract registry)
  *     → entries { type, version, category, bundleDigest, digestAlgorithm }
  *     → partition: NULL/legacy-unverified → typed skip; unknown algorithm →
  *       typed skip; malformed digest → typed skip
@@ -114,6 +119,24 @@ export class ProviderChannelRuntime {
         'CHANNEL_METADATA_UNAVAILABLE',
         `channel metadata for "${channel}" has an unexpected shape (missing providers array)`,
       );
+    }
+    // Fail-closed channel echo contract (rc.21): the preview registry echoes
+    // the requested channel at the top level. A response that omits the echo
+    // or echoes a different channel comes from a registry that does not honor
+    // channel reads (e.g. the legacy production registry, which ignores
+    // ?channel=preview and returns digest-less legacy rows). Refuse to treat
+    // such rows as preview — callers keep last-known-good. The stable channel
+    // intentionally does NOT require the echo: the stable registry predates
+    // the echo contract and its echo-less responses must stay accepted
+    // (backward compatibility).
+    if (channel === 'preview') {
+      const echo = typeof body.channel === 'string' ? body.channel.trim().toLowerCase() : '';
+      if (echo !== channel) {
+        throw new ProviderChannelError(
+          'CHANNEL_METADATA_MISMATCH',
+          `registry response for channel "preview" ${typeof body.channel === 'string' ? `echoes channel "${body.channel}"` : 'omits the top-level channel echo'} — the registry does not honor the channel contract (legacy/stable payload); refusing to treat its rows as preview, last-known-good preserved`,
+        );
+      }
     }
     const entries: ChannelEntry[] = [];
     for (const raw of body.providers) {

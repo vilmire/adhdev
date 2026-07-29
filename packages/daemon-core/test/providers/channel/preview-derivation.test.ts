@@ -27,6 +27,7 @@ import { ProviderChannelStore } from '../../../src/providers/channel/store.js';
 import {
   buildRepoTree,
   digestFor,
+  fakeRegistryBody,
   makeRegistryRow,
   makeTmp,
   type FakeMetadataSource,
@@ -191,7 +192,7 @@ describe('Verified channel first-sync (M1/Linux-like empty store)', () => {
           fetchCount += 1;
           metadata.requestedUrls.push(url);
           if (metadata.failure) throw metadata.failure;
-          return { providers: metadata.rows ?? [] };
+          return fakeRegistryBody(metadata, url);
         },
         downloadFile: async () => {},
         extractTarball: async (_tarPath: string, destDir: string) => {

@@ -335,9 +335,18 @@ export class ProviderLoader {
     probeStarts?: string[];
     /**
      * Explicit provider registry base URL override (config.registryUrl).
-     * Highest-priority resolver source, ahead of ADHDEV_REGISTRY_URL + default.
+     * Highest-priority resolver source, ahead of ADHDEV_REGISTRY_URL,
+     * serverUrl derivation, and the vendor default.
      */
     registryUrl?: string;
+    /**
+     * Resolved daemon server URL (config.serverUrl). When no explicit
+     * registryUrl / ADHDEV_REGISTRY_URL override is set, the registry base is
+     * derived from this origin (preview server → preview registry). Every
+     * construction path must pass it so boot, CLI, and command handlers share
+     * one registry authority.
+     */
+    serverUrl?: string;
     /**
      * Explicit provider tarball URL override (config.providerTarballUrl).
      * Highest-priority resolver source, ahead of ADHDEV_PROVIDER_TARBALL_URL + default.
@@ -385,7 +394,7 @@ export class ProviderLoader {
   }) {
     this.logFn = options?.logFn || LOG.forComponent('Provider').asLogFn();
     this.probeStarts = options?.probeStarts ?? [process.cwd(), __dirname];
-    this.registryBaseUrl = resolveRegistryBaseUrl(options?.registryUrl);
+    this.registryBaseUrl = resolveRegistryBaseUrl(options?.registryUrl, process.env, options?.serverUrl);
     this.providerTarballUrl = resolveProviderTarballUrl(options?.providerTarballUrl);
     // Channel resolution MUST happen before detectDefaultUserDir() below:
     // sibling-checkout adoption is gated on the resolved channel. Explicit
