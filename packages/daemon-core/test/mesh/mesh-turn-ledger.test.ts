@@ -541,3 +541,55 @@ describe('turn ledger — Stage 6 projection boundary', () => {
         expect(projectTurnAttempt(MESH, 'task-does-not-exist')).toBeNull();
     });
 });
+
+describe('turn ledger — session-binding guard (terminal-stale-approval-projection)', () => {
+    // A progress event is only evidence about an attempt when it comes from the session the
+    // attempt is BOUND to. A late waiting_approval from an OLD (pre-redrive) session — no
+    // attemptId on the event, so it resolves to the CURRENT attempt — must never pin that
+    // attempt to waiting_approval: the new session exposes no such modal (mesh_approve →
+    // "Not in approval state") yet every projection would read awaiting_approval.
+    it('a waiting_approval from a DIFFERENT session than the attempt binding is audit-only — the stage never moves', () => {
+        const taskId = nextTaskId();
+        const { attempt } = openTurnAttempt({ meshId: MESH, taskId, dispatchNonce: 2, sessionId: 'sessNEW', nowMs: 1_000 });
+        recordTurnAck({ meshId: MESH, taskId, kind: 'consumed', attemptId: attempt.attemptId, sessionId: 'sessNEW', nowMs: 1_010 });
+
+        const late = recordTurnStage({ meshId: MESH, taskId, stage: 'waiting_approval', sessionId: 'sessOLD', nowMs: 1_020 });
+        expect(late?.applied).toBe(false);
+        expect(late?.staleAttempt).toBe(true);
+        expect(MeshRuntimeStore.getInstance().getTurnAttempt(attempt.attemptId)!.stage).toBe('consumed');
+
+        // Control: the BOUND session's genuine approval still suspends the attempt.
+        const genuine = recordTurnStage({ meshId: MESH, taskId, stage: 'waiting_approval', sessionId: 'sessNEW', nowMs: 1_030 });
+        expect(genuine?.applied).toBe(true);
+        expect(MeshRuntimeStore.getInstance().getTurnAttempt(attempt.attemptId)!.stage).toBe('waiting_approval');
+    });
+
+    it('a mismatched-session suspension is never HELD either (pre-consumed fast-picker race)', () => {
+        const taskId = nextTaskId();
+        const { attempt } = openTurnAttempt({ meshId: MESH, taskId, dispatchNonce: 2, sessionId: 'sessNEW', nowMs: 1_000 });
+        recordTurnAck({ meshId: MESH, taskId, kind: 'delivered', attemptId: attempt.attemptId, sessionId: 'sessNEW', nowMs: 1_010 });
+
+        // Pre-consumed attempt + approval from the OLD session → must not create a held
+        // suspension that a later consumed ACK would drain into the new attempt.
+        const late = recordTurnStage({ meshId: MESH, taskId, stage: 'waiting_approval', sessionId: 'sessOLD', nowMs: 1_020 });
+        expect(late?.staleAttempt).toBe(true);
+        expect(late?.deferred).not.toBe(true);
+        expect(MeshRuntimeStore.getInstance().listHeldTurnSuspensionsForAttempt(attempt.attemptId, 'held')).toHaveLength(0);
+
+        // Control: the bound session's pre-consumed approval still holds + drains.
+        const held = recordTurnStage({ meshId: MESH, taskId, stage: 'waiting_approval', sessionId: 'sessNEW', nowMs: 1_030 });
+        expect(held?.deferred).toBe(true);
+        expect(MeshRuntimeStore.getInstance().listHeldTurnSuspensionsForAttempt(attempt.attemptId, 'held')).toHaveLength(1);
+        recordTurnAck({ meshId: MESH, taskId, kind: 'consumed', attemptId: attempt.attemptId, sessionId: 'sessNEW', nowMs: 1_040 });
+        expect(MeshRuntimeStore.getInstance().getTurnAttempt(attempt.attemptId)!.stage).toBe('waiting_approval');
+    });
+
+    it('a session-less event keeps legacy behavior (guard only fires when BOTH session ids are known)', () => {
+        const taskId = nextTaskId();
+        const { attempt } = openTurnAttempt({ meshId: MESH, taskId, dispatchNonce: 1, sessionId: 'sessA', nowMs: 1_000 });
+        recordTurnAck({ meshId: MESH, taskId, kind: 'consumed', attemptId: attempt.attemptId, sessionId: 'sessA', nowMs: 1_010 });
+        const noSession = recordTurnStage({ meshId: MESH, taskId, stage: 'waiting_approval', nowMs: 1_020 });
+        expect(noSession?.applied).toBe(true);
+        expect(MeshRuntimeStore.getInstance().getTurnAttempt(attempt.attemptId)!.stage).toBe('waiting_approval');
+    });
+});

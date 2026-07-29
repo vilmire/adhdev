@@ -5,6 +5,7 @@ import { deleteDirectDispatchesByTaskId } from './mesh-work-queue.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { resolveTurnAttemptRow, presentationFromAttemptRow } from './mesh-turn-presentation.js';
 import type { TurnStage } from './mesh-turn-ledger.js';
+import { isWeakCompletionEvidence } from './mesh-events-utils.js';
 
 export type MeshActiveWorkSource = 'queue' | 'direct';
 export type MeshActiveWorkStatus = 'pending' | 'assigned' | 'generating' | 'idle' | 'failed' | 'awaiting_approval' | 'awaiting_choice' | 'finalizing';
@@ -192,6 +193,27 @@ function isDirectDispatch(entry: MeshLedgerEntry): boolean {
     if (payload.source === 'direct') return true;
     const via = readString(payload.via);
     return Boolean(via && DIRECT_DISPATCH_VIA.has(via) && payload.source !== 'queue');
+}
+
+/**
+ * TERMINAL-STALE-APPROVAL (projection): true when a non-weak task_completed / task_failed
+ * ledger terminal names this task — terminal task authority under which a live-session
+ * sniff of awaiting_approval / awaiting_choice / generating can only be STALE (the turn
+ * is over; no current actionable modal exists — mesh_approve against it fails "Not in
+ * approval state"). Deliberately NOT authority: task_stalled (a stalled task can resume
+ * and genuinely block) and weak/false-idle completions (the worker may still be mid-turn).
+ * Used ONLY to veto the live-sniff overlay — the Stage-6 turn-reducer overlay, when an
+ * attempt exists, remains the status authority, and a genuinely-waiting task with NO
+ * terminal evidence keeps the APPROVAL-INBOX-BLINDSPOT (Fix A.2) promotion unchanged.
+ */
+function hasTerminalLedgerAuthorityForTask(ledgerEntries: MeshLedgerEntry[] | undefined, taskId: string): boolean {
+    for (const entry of ledgerEntries || []) {
+        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed') continue;
+        if (readString(entry.payload?.taskId) !== taskId) continue;
+        if (entry.kind === 'task_completed' && isWeakCompletionEvidence(entry.payload || {})) continue;
+        return true;
+    }
+    return false;
 }
 
 function directDispatchTaskId(entry: MeshLedgerEntry): string {
@@ -448,9 +470,19 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         const queueLive = task.status === 'assigned'
             ? sessionStatusFromNodes(opts.nodes, queueNodeId ?? undefined, queueSessionId ?? undefined)
             : {};
-        let queueStatus: MeshActiveWorkStatus = queueLive.status === 'awaiting_approval'
+        // TERMINAL-STALE-APPROVAL: terminal task authority (a non-weak task_completed /
+        // task_failed ledger terminal for this task) vetoes the live-sniff overlay — a
+        // sniff of approval/choice/generating against an already-terminal task is stale
+        // (no current actionable modal), and surfacing it would offer mesh_approve an
+        // entry it can only reject ("Not in approval state") and defer the reclaim the
+        // terminal already earned. Choice stays distinct: it is vetoed as its OWN status,
+        // never remapped to approval.
+        const queueTerminalAuthority = task.status === 'assigned'
+            && hasTerminalLedgerAuthorityForTask(opts.ledgerEntries, task.id);
+        let queueStatus: MeshActiveWorkStatus = !queueTerminalAuthority && (
+            queueLive.status === 'awaiting_approval'
             || queueLive.status === 'awaiting_choice'
-            || queueLive.status === 'generating'
+            || queueLive.status === 'generating')
             ? queueLive.status
             : task.status;
         // Stage 6: when the task has a turn attempt, the reducer projection is the
@@ -489,9 +521,15 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             // Stage 6: the reducer projection outranks the live point sample for
             // nonterminal direct dispatches (same authority as the queue path).
             const turnOverlay = isTerminal ? null : turnProjectionActiveWorkStatus(opts.meshId, dispatch.taskId);
+            // TERMINAL-STALE-APPROVAL: same live-sniff veto as the queue path — terminal
+            // ledger authority for this dispatch's task makes a sniffed approval/choice/
+            // generating stale by construction (no current actionable modal).
+            const directTerminalAuthority = !isTerminal
+                && hasTerminalLedgerAuthorityForTask(opts.ledgerEntries, dispatch.taskId);
+            const liveStatus = directTerminalAuthority ? undefined : live.status;
             const status: MeshActiveWorkStatus = isTerminal
                 ? (dbStatus === 'completed' ? 'idle' : 'failed')
-                : turnOverlay?.status || live.status || (dbStatus === 'acked' ? 'generating' : 'assigned');
+                : turnOverlay?.status || liveStatus || (dbStatus === 'acked' ? 'generating' : 'assigned');
             const { ledgerOnlyStaleReason, isFreshUnacknowledged } = classifyDirectDispatch({
                 status,
                 isTerminalRow: isTerminal,

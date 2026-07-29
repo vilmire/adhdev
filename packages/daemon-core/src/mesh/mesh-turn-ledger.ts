@@ -680,6 +680,31 @@ export function recordTurnStage(args: {
         }
         return { attemptId: attempt.attemptId, stage: attempt.stage, applied: false, staleAttempt: false };
     }
+    // SESSION-BINDING GUARD (terminal-stale-approval-projection): a progress event is only
+    // evidence about the attempt when it comes from the session the attempt is BOUND to.
+    // Without this, a late/reordered waiting_approval (or generating) from an OLD session —
+    // emitted before a redrive/reclaim rebound the task to a fresh session, arriving after —
+    // resolves to the CURRENT attempt (no attemptId on the event) and moves it to
+    // waiting_approval, pinning every projection surface on awaiting_approval for a session
+    // that exposes NO actionable modal (mesh_approve → "Not in approval state"). Mirror the
+    // completion path (proposeTurnCompletion already rejects a session mismatch): record the
+    // event audit-only and never mutate the stage. Only fires when BOTH session ids are
+    // known and differ — an unbound attempt or a session-less event keeps legacy behavior.
+    if (args.sessionId && attempt.sessionId && !sessionIdsEquivalent(args.sessionId, attempt.sessionId)) {
+        metrics.staleAttemptEvents += 1;
+        store.insertTurnEvent({
+            eventId: randomUUID(),
+            meshId: args.meshId,
+            attemptId: attempt.attemptId,
+            taskId: args.taskId,
+            kind: `stale_${args.stage}`,
+            dedupeKey: args.sessionId,
+            occurredAtMs: args.occurredAtMs ?? nowMs,
+            recordedAt: nowIso,
+        });
+        LOG.info('TurnLedger', `Ignored ${args.stage} for task ${args.taskId} attempt ${attempt.attemptId}: event session ${args.sessionId} ≠ attempt session ${attempt.sessionId} — no state change`);
+        return { attemptId: attempt.attemptId, stage: attempt.stage, applied: false, staleAttempt: true };
+    }
     // Nonterminal stages dedupe on (kind, stage-entry) — oscillation entries are
     // keyed by occurrence time so a genuine re-suspension is still logged once.
     const inserted = store.insertTurnEvent({

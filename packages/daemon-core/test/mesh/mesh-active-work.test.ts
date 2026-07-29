@@ -787,3 +787,116 @@ describe('buildMeshActiveWork — queue task live-status overlay (Fix A.2)', () 
         expect(result.activeWork.find(r => r.source === 'queue')?.status).toBe('pending');
     });
 });
+
+// TERMINAL-STALE-APPROVAL-PROJECTION (live incidents b1b412f8/4ef94751, d7050a53/59095107):
+// a stale live-session sniff of waiting_approval/generating must not promote an assigned
+// queue task (or a non-terminal direct dispatch) once TERMINAL AUTHORITY exists for the
+// task — the turn is over, no current actionable modal exists, and offering the record to
+// mesh_approve can only fail "Not in approval state" while deferring the reclaim the
+// terminal already earned. Weak completions and task_stalled are deliberately NOT
+// authority (the worker may still be mid-turn); choice stays distinct (vetoed as its OWN
+// status, never remapped to approval); the Fix A.2 promotion for a genuinely-waiting task
+// with NO terminal evidence is untouched.
+describe('buildMeshActiveWork — terminal-authority live-sniff veto', () => {
+    const queueTask = (overrides: Record<string, unknown> = {}) => ({
+        id: 'qtask-1',
+        meshId: 'mesh-1',
+        message: 'do the queued work',
+        status: 'assigned',
+        assignedNodeId: 'node-1',
+        assignedSessionId: 'session-1',
+        dispatchTimestamp: '2026-05-26T00:00:00.000Z',
+        createdAt: '2026-05-26T00:00:00.000Z',
+        ...overrides,
+    }) as any;
+    const approvalNodes = [{ id: 'node-1', sessions: [{ id: 'session-1', providerType: 'codex-cli', status: 'waiting_approval' }] }];
+
+    it('a non-weak task_completed vetoes a stale awaiting_approval live-sniff on the assigned queue task (not offered to mesh_approve)', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            queue: [queueTask()],
+            ledgerEntries: [completed({ payload: { taskId: 'qtask-1', finalSummary: 'full final PASS report' } })],
+            nodes: approvalNodes,
+        });
+        const rec = result.activeWork.find(r => r.source === 'queue');
+        // Terminal authority wins: the record keeps its DB status, NOT the stale sniff.
+        expect(rec?.status).toBe('assigned');
+        expect(collectPendingApprovals(result.activeWork)).toHaveLength(0);
+    });
+
+    it('a task_failed terminal likewise vetoes the stale approval/generating sniff', () => {
+        const failed: MeshLedgerEntry = { ...completed(), id: 'failed-1', kind: 'task_failed', payload: { taskId: 'qtask-1' } };
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            queue: [queueTask()],
+            ledgerEntries: [failed],
+            nodes: [{ id: 'node-1', sessions: [{ id: 'session-1', status: 'generating' }] }],
+        });
+        expect(result.activeWork.find(r => r.source === 'queue')?.status).toBe('assigned');
+    });
+
+    it('a WEAK (false-idle) completion is NOT authority — a genuinely-waiting worker still promotes (Fix A.2 preserved)', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            queue: [queueTask()],
+            ledgerEntries: [completed({ payload: { taskId: 'qtask-1', evidenceLevel: 'insufficient' } })],
+            nodes: approvalNodes,
+        });
+        expect(result.activeWork.find(r => r.source === 'queue')?.status).toBe('awaiting_approval');
+        expect(collectPendingApprovals(result.activeWork)).toHaveLength(1);
+    });
+
+    it('task_stalled is NOT authority — a post-stall live approval still promotes', () => {
+        const stalled: MeshLedgerEntry = { ...completed(), id: 'stalled-1', kind: 'task_stalled', payload: { taskId: 'qtask-1' } };
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            queue: [queueTask()],
+            ledgerEntries: [stalled],
+            nodes: approvalNodes,
+        });
+        expect(result.activeWork.find(r => r.source === 'queue')?.status).toBe('awaiting_approval');
+        expect(collectPendingApprovals(result.activeWork)).toHaveLength(1);
+    });
+
+    it('awaiting_choice stays DISTINCT: vetoed as its own status after terminal, never remapped to approval', () => {
+        const choiceNodes = [{ id: 'node-1', sessions: [{ id: 'session-1', status: 'waiting_choice' }] }];
+        const vetoed = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            queue: [queueTask()],
+            ledgerEntries: [completed({ payload: { taskId: 'qtask-1', finalSummary: 'done' } })],
+            nodes: choiceNodes,
+        });
+        expect(vetoed.activeWork.find(r => r.source === 'queue')?.status).toBe('assigned');
+        expect(collectPendingApprovals(vetoed.activeWork)).toHaveLength(0);
+
+        // Control: with NO terminal evidence the choice overlay still applies — as choice.
+        const genuine = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            queue: [queueTask()],
+            nodes: choiceNodes,
+        });
+        expect(genuine.activeWork.find(r => r.source === 'queue')?.status).toBe('awaiting_choice');
+        expect(collectPendingApprovals(genuine.activeWork)).toHaveLength(0);
+    });
+
+    it('vetoes a stale awaiting_approval sniff on a non-terminal DIRECT dispatch with terminal ledger authority', () => {
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            directDispatches: [{
+                taskId: 'dtask-1',
+                meshId: 'mesh-1',
+                nodeId: 'node-1',
+                sessionId: 'session-1',
+                status: 'acked',
+                message: 'do the direct work',
+                dispatchedAt: '2026-05-26T00:00:00.000Z',
+                updatedAt: '2026-05-26T00:00:10.000Z',
+            } as any],
+            ledgerEntries: [completed({ payload: { taskId: 'dtask-1', finalSummary: 'done' } })],
+            nodes: approvalNodes,
+        });
+        const rec = result.activeWork.find(r => r.taskId === 'dtask-1');
+        expect(rec?.status).toBe('generating'); // acked fallback — NOT the stale sniff
+        expect(collectPendingApprovals(result.activeWork)).toHaveLength(0);
+    });
+});

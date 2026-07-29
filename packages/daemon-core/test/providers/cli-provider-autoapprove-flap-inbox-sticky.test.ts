@@ -164,3 +164,66 @@ describe('AUTOAPPROVE-FLAP-INBOX-MISSING — sticky-approval overlay', () => {
     expect(s.status).toBe('generating')
   })
 })
+
+// TERMINAL-STALE-APPROVAL-PROJECTION (live incidents b1b412f8/4ef94751, d7050a53/59095107):
+// once a GENUINE completion for the current turn has been emitted, the cached sticky modal
+// is stale by construction — re-synthesizing waiting_approval from it re-pins every
+// projection surface with an approval the provider no longer exposes (mesh_approve →
+// "Not in approval state"). The overlay must disarm on the completion latch and re-arm
+// only when a NEW turn opens (busyEpoch advances past the emit).
+describe('TERMINAL-STALE-APPROVAL — post-completion sticky suppression', () => {
+  const genuineLatch = (epoch: number) => ({ taskId: 'task-1', at: 1500, evidenceLevel: 'sufficient', weak: false, emittedAtEpoch: epoch })
+
+  it('does NOT re-synthesize waiting_approval from the cached modal once a genuine completion was emitted for the current epoch', () => {
+    const inst = makeInstance()
+    inst.busyEpoch = 3
+
+    // Mid-turn concrete approval anchors the sticky.
+    inst.stabilizeFlappingApprovalStatus(APPROVAL(1), 1000)
+    // The turn's GENUINE completion is emitted at the same busy epoch.
+    inst.lastEmittedCompletion = genuineLatch(3)
+
+    // A stale non-approval frame inside the flap window must surface RAW — no overlay.
+    const s = inst.stabilizeFlappingApprovalStatus(BUSY(), 2000)
+    expect(s.status).toBe('generating')
+    expect(s.approvalStickyOverlay).toBeUndefined()
+    // The stale anchor is dropped, not just bypassed.
+    expect(inst.approvalStickyLastConcreteAt).toBe(0)
+    expect(inst.approvalStickyModal).toBeNull()
+  })
+
+  it('a NEW turn (busyEpoch advanced past the completion emit) re-enables the sticky overlay', () => {
+    const inst = makeInstance()
+    inst.busyEpoch = 3
+    inst.stabilizeFlappingApprovalStatus(APPROVAL(1), 1000)
+    inst.lastEmittedCompletion = genuineLatch(3)
+
+    // A fresh generating phase opened after the emit (new turn) — a new approval anchors.
+    inst.busyEpoch = 4
+    inst.stabilizeFlappingApprovalStatus(APPROVAL(2), 3000)
+    const s = inst.stabilizeFlappingApprovalStatus(BUSY(), 3500)
+    expect(s.status).toBe('waiting_approval')
+    expect(s.approvalStickyOverlay).toBe(true)
+  })
+
+  it('a WEAK (false-idle) completion does NOT disarm the overlay — the turn may genuinely still be in flight', () => {
+    const inst = makeInstance()
+    inst.busyEpoch = 3
+    inst.stabilizeFlappingApprovalStatus(APPROVAL(1), 1000)
+    inst.lastEmittedCompletion = { taskId: 'task-1', at: 1500, evidenceLevel: 'insufficient', weak: true, emittedAtEpoch: 3 }
+
+    const s = inst.stabilizeFlappingApprovalStatus(BUSY(), 2000)
+    expect(s.status).toBe('waiting_approval')
+    expect(s.approvalStickyOverlay).toBe(true)
+  })
+
+  it('a RAW current modal in the live frame still surfaces after a genuine completion (never masked)', () => {
+    const inst = makeInstance()
+    inst.busyEpoch = 3
+    inst.lastEmittedCompletion = genuineLatch(3)
+
+    const s = inst.stabilizeFlappingApprovalStatus(APPROVAL(9), 2000)
+    expect(s.status).toBe('waiting_approval')
+    expect(s.activeModal).toEqual(MODAL)
+  })
+})

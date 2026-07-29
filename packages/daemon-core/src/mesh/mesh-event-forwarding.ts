@@ -43,11 +43,13 @@ import {
     classifyNonceEcho,
     drainTurnOutbox,
     enqueueTerminalOutbox,
+    isTerminalTurnStage,
     proposeTurnCompletion,
     recordTurnAck,
     recordTurnStage,
     runSessionDestructiveAction,
 } from './mesh-turn-ledger.js';
+import { resolveTurnAttemptRow } from './mesh-turn-presentation.js';
 import {
     getMeshWithCache,
     tryAssignQueueTask,
@@ -1105,6 +1107,39 @@ function supersedeRedriveReclaimForLateCompletion(
     return true;
 }
 
+/**
+ * STALE-APPROVAL-AFTER-TERMINAL (terminal-stale-approval-projection): terminal authority
+ * for a task — the evidence after which a waiting_approval / waiting_choice naming that
+ * task can only be STALE. Any of:
+ *   1. the turn reducer's current attempt for the task is terminal (committed via
+ *      proposeTurnCompletion — genuine completions only);
+ *   2. the queue row itself is terminal (completed/failed/cancelled);
+ *   3. a non-weak task_completed / task_failed terminal ledger entry names the task
+ *      (findTerminalLedgerEvidenceForTask already excludes weak/false-idle completions).
+ * Deliberately NOT authority:
+ *   - a WEAK / false-idle completion (the worker may still be mid-turn — a following
+ *     approval can be genuine);
+ *   - task_stalled (a stalled task can resume and genuinely block on an approval);
+ *   - an autoLaunch 'completed' record (that marks the LAUNCH, not the task result).
+ * A genuine approval always PRECEDES the terminal — at that point none of this exists,
+ * so it is never touched by the guard.
+ */
+function hasTerminalAuthorityForTask(meshId: string, taskId: string): boolean {
+    try {
+        const row = resolveTurnAttemptRow({ meshId, taskId });
+        if (row && (row.terminalOutcome || isTerminalTurnStage(row.stage))) return true;
+    } catch { /* best-effort — fall through to the other authority signals */ }
+    try {
+        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+        if (entry && (entry.status === 'completed' || entry.status === 'failed' || entry.status === 'cancelled')) return true;
+    } catch { /* best-effort */ }
+    try {
+        const evidence = findTerminalLedgerEvidenceForTask({ meshId, taskId });
+        if (evidence && evidence.kind !== 'task_stalled') return true;
+    } catch { /* best-effort */ }
+    return false;
+}
+
 function injectMeshSystemMessage(components: DaemonComponents, args: {
     meshId: string;
     sourceInstanceId?: string;
@@ -1132,6 +1167,25 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         meshId: args.meshId,
         event: args.event,
     };
+
+    // STALE-APPROVAL-AFTER-TERMINAL: a waiting_approval / waiting_choice that arrives AFTER
+    // terminal authority already exists for its task is stale by construction — the turn is
+    // over, so no CURRENT actionable modal can exist for it (mesh_approve against such a
+    // projection fails 'Not in approval state': the provider exposes no matching modal).
+    // Suppress BEFORE any side effect on this path (the owned-session mirror update, the
+    // task_approval_needed / task_question_pending ledger append, the turn-stage write, the
+    // coordinator forward) — letting it through re-pins awaiting_approval/awaiting_choice on
+    // every projection surface and defers the reclaim/redrive the terminal already earned.
+    // Approval and choice stay DISTINCT here: each is dropped only as its own event kind;
+    // neither is ever mapped onto the other.
+    if ((args.event === 'agent:waiting_approval' || args.event === 'agent:waiting_choice') && eventSessionId) {
+        const approvalTaskId = readNonEmptyString(args.metadataEvent.taskId);
+        if (approvalTaskId && hasTerminalAuthorityForTask(args.meshId, approvalTaskId)) {
+            LOG.info('MeshEvents', `Suppressed ${args.event} for session ${eventSessionId} (mesh ${args.meshId}, task ${approvalTaskId}) — terminal authority already exists for the task; the approval/choice is stale (no current actionable modal)`);
+            traceMeshEventDrop('stale_approval_after_terminal', traceCtx);
+            return { success: true, forwarded: 0, suppressed: true, staleApprovalAfterTerminal: true };
+        }
+    }
 
     const sourceSession = args.sourceInstanceId
         ? components.instanceManager.getInstance(args.sourceInstanceId)

@@ -3874,6 +3874,21 @@ export class CliProviderInstance implements ProviderInstance {
      * window, and scoped to autonomous mesh sessions (a foreground/attended or non-mesh
      * session, where a human answers the prompt, is returned untouched).
      */
+    /**
+     * TERMINAL-STALE-APPROVAL (provider side): true once a GENUINE (non-weak) completion
+     * has been emitted for the CURRENT busy epoch — the turn is over and no new generating
+     * phase has opened since the emit (busyEpoch has not advanced past the latch). A stale
+     * cached/sticky modal frame must not re-synthesize waiting_approval for such an
+     * already-completed turn. A weak/false-idle emit does NOT count (the turn may
+     * genuinely still be in flight), and any new busy phase (busyEpoch advanced past the
+     * emit) re-enables approval surfacing for the new turn.
+     */
+    private hasEmittedGenuineCompletionForCurrentEpoch(): boolean {
+        const latch = this.lastEmittedCompletion;
+        if (!latch || latch.weak) return false;
+        return this.busyEpoch <= latch.emittedAtEpoch;
+    }
+
     private stabilizeFlappingApprovalStatus(adapterStatus: any, now = Date.now()): any {
         // Only autonomous auto-approving mesh sessions are subject to the delegated flap;
         // never overlay for attended/foreground/non-mesh sessions.
@@ -3896,6 +3911,19 @@ export class CliProviderInstance implements ProviderInstance {
                     : this.approvalStickyEntrySeq;
             }
             return adapterStatus;
+        }
+
+        // Non-approval frame. TERMINAL-STALE-APPROVAL: once a GENUINE completion for the
+        // current turn has been emitted (no new busy phase since), the turn is OVER — the
+        // cached sticky modal is stale by construction and must not re-pin waiting_approval
+        // onto getState / detectStatusTransition (the late agent:waiting_approval it would
+        // emit re-pins every coordinator projection with an approval no mesh_approve can
+        // resolve — "Not in approval state"). Drop the sticky anchor and report the raw
+        // status. A NEW current concrete modal still surfaces via the raw branch above.
+        if (this.approvalStickyLastConcreteAt > 0 && this.hasEmittedGenuineCompletionForCurrentEpoch()) {
+            this.approvalStickyLastConcreteAt = 0;
+            this.approvalStickyModal = null;
+            this.approvalStickyEntrySeq = 0;
         }
 
         // Non-approval frame. Overlay only if a concrete approval was dominant within the
