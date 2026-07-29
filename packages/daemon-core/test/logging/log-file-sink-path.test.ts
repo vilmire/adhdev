@@ -64,4 +64,21 @@ describe('daemon log file sink path', () => {
     const recent = logger.getRecentLogs(50, 'info')
     expect(recent.some((e) => e.message.includes('hello file sink persists'))).toBe(true)
   })
+
+  it('retains exactly three size-rotation generations while preserving .1 compatibility', async () => {
+    process.env.ADHDEV_CONFIG_DIR = tmpHome
+    const logger = await import('../../src/logging/logger')
+    const logPath = logger.getCurrentDaemonLogPath()
+    fs.writeFileSync(logPath, 'active', 'utf-8')
+    fs.writeFileSync(logPath.replace(/\.log$/, '.1.log'), 'generation-1', 'utf-8')
+    fs.writeFileSync(logPath.replace(/\.log$/, '.2.log'), 'generation-2', 'utf-8')
+    fs.writeFileSync(logPath.replace(/\.log$/, '.3.log'), 'generation-3', 'utf-8')
+
+    logger.rotateSizeGenerations(logPath)
+
+    expect(fs.readFileSync(logPath.replace(/\.log$/, '.1.log'), 'utf-8')).toBe('active')
+    expect(fs.readFileSync(logPath.replace(/\.log$/, '.2.log'), 'utf-8')).toBe('generation-1')
+    expect(fs.readFileSync(logPath.replace(/\.log$/, '.3.log'), 'utf-8')).toBe('generation-2')
+    expect(fs.existsSync(logPath.replace(/\.log$/, '.4.log'))).toBe(false)
+  })
 })

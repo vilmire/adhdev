@@ -13,7 +13,7 @@
  *  - No filter (no grep/sinceMs): byte-bounded tail of the active file — read the
  *    last `tailBytes` bytes only. Cheap, backward-compatible.
  *  - Filtered (grep and/or sinceMs given): FULL-FILE scan. The filter is applied
- *    across the ENTIRE file (plus the size-rotation `.1.log` backup) BEFORE the
+ *    across the ENTIRE file (plus all bounded size-rotation backups) BEFORE the
  *    byte cap, then the last `tailBytes` worth of MATCHING lines are returned.
  *    This is the fix for "matches hidden behind polling spam": when the recent
  *    tail window is saturated with high-frequency lines (e.g. coordinator polling
@@ -29,7 +29,11 @@
  */
 
 import * as fs from 'fs';
-import { getCurrentDaemonLogPath, getDaemonLogDir } from './logger.js';
+import {
+    getCurrentDaemonLogPath,
+    getDaemonLogDir,
+    MAX_SIZE_ROTATION_GENERATIONS,
+} from './logger.js';
 
 export const DEFAULT_TAIL_BYTES = 64 * 1024;
 export const MAX_TAIL_BYTES = 128 * 1024;
@@ -80,6 +84,13 @@ function resolveLogPath(date?: string | Date): string {
         if (!Number.isNaN(parsed.getTime())) return getCurrentDaemonLogPath(parsed);
     }
     return getCurrentDaemonLogPath();
+}
+
+function sizeRotationPaths(primaryPath: string): string[] {
+    return Array.from(
+        { length: MAX_SIZE_ROTATION_GENERATIONS },
+        (_, index) => primaryPath.replace(/\.log$/, `.${index + 1}.log`),
+    );
 }
 
 function clampTailBytes(tailBytes?: number): number {
@@ -227,23 +238,23 @@ function errorResult(error: string, logPath: string, platform: NodeJS.Platform):
  *
  * - No grep/sinceMs → byte-bounded tail of the active file (legacy behaviour).
  * - grep and/or sinceMs given → FULL-FILE scan: the filter is applied across the
- *   whole file (plus the `*.1.log` size-rotation backup) BEFORE the byte cap, so
+ *   whole file (plus the bounded size-rotation backups) BEFORE the byte cap, so
  *   matches that have scrolled out of the recent tail window (e.g. behind
  *   coordinator polling spam) are still returned. Only the last `tailBytes` worth
  *   of matching lines ship over P2P.
  *
- * Falls back to the size-rotation backup (`*.1.log`) when the primary file does
- * not exist.
+ * Falls back to the newest available size-rotation backup (`*.1.log` first)
+ * when the primary file does not exist.
  */
 export function readDaemonLogTail(args: ReadDaemonLogTailArgs = {}): DaemonLogTailResult {
     const platform = process.platform;
     const limitBytes = clampTailBytes(args.tailBytes);
     const primaryPath = resolveLogPath(args.date);
-    const backupPath = primaryPath.replace(/\.log$/, '.1.log');
+    const backupPaths = sizeRotationPaths(primaryPath);
     const primaryExists = fs.existsSync(primaryPath);
-    const backupExists = fs.existsSync(backupPath);
+    const existingBackupPaths = backupPaths.filter((backupPath) => fs.existsSync(backupPath));
 
-    if (!primaryExists && !backupExists) {
+    if (!primaryExists && existingBackupPaths.length === 0) {
         return errorResult(
             `No daemon log file at ${primaryPath} (dir: ${getDaemonLogDir()})`,
             primaryPath,
@@ -252,7 +263,7 @@ export function readDaemonLogTail(args: ReadDaemonLogTailArgs = {}): DaemonLogTa
     }
 
     // Reported log path: the active file when present, else the backup.
-    const logPath = primaryExists ? primaryPath : backupPath;
+    const logPath = primaryExists ? primaryPath : existingBackupPaths[0];
 
     const hasGrep = typeof args.grep === 'string' && args.grep.trim().length > 0;
     const hasSince = Number.isFinite(args.sinceMs);
@@ -287,7 +298,9 @@ export function readDaemonLogTail(args: ReadDaemonLogTailArgs = {}): DaemonLogTa
     let scannedBytes = 0;
     let allLines: string[] = [];
     try {
-        for (const p of [backupExists ? backupPath : null, primaryExists ? primaryPath : null]) {
+        // Oldest retained generation first, then the active file, preserving
+        // chronological order across the bounded rotation history.
+        for (const p of [...existingBackupPaths].reverse().concat(primaryExists ? [primaryPath] : [])) {
             if (!p) continue;
             const buf = fs.readFileSync(p);
             scannedBytes += buf.length;

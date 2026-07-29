@@ -51,6 +51,7 @@ const LOG_DIR = path.join(ADHDEV_HOME, 'logs');
 
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB per day
 const MAX_LOG_DAYS = 7; // 7-day retention
+export const MAX_SIZE_ROTATION_GENERATIONS = 3;
 
 try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch { }
 
@@ -95,14 +96,31 @@ function cleanOldLogs(): void {
     } catch { }
 }
 
-/** Roll to .1 file when size limit reached within same date */
+function sizeRotationPath(logFile: string, generation: number): string {
+    return logFile.replace(/\.log$/, `.${generation}.log`);
+}
+
+export function rotateSizeGenerations(
+    logFile: string,
+    maxGenerations = MAX_SIZE_ROTATION_GENERATIONS,
+): void {
+    if (maxGenerations < 1) return;
+    const oldest = sizeRotationPath(logFile, maxGenerations);
+    try { fs.unlinkSync(oldest); } catch { }
+    for (let generation = maxGenerations - 1; generation >= 1; generation--) {
+        const source = sizeRotationPath(logFile, generation);
+        const destination = sizeRotationPath(logFile, generation + 1);
+        try { fs.renameSync(source, destination); } catch { }
+    }
+    fs.renameSync(logFile, sizeRotationPath(logFile, 1));
+}
+
+/** Roll through a bounded .1-.3 history when the size limit is reached. */
 function rotateSizeIfNeeded(): void {
     try {
         const stat = fs.statSync(currentLogFile);
         if (stat.size > MAX_LOG_SIZE) {
-            const backup = currentLogFile.replace('.log', '.1.log');
-            try { fs.unlinkSync(backup); } catch { }
-            fs.renameSync(currentLogFile, backup);
+            rotateSizeGenerations(currentLogFile);
         }
     } catch { /* file doesn't exist yet */ }
 }

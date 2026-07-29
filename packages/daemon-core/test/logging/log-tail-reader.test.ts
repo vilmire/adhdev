@@ -8,6 +8,10 @@ import { readDaemonLogTail, DEFAULT_TAIL_BYTES, MAX_TAIL_BYTES } from '../../src
 const TEST_DATE = '1999-01-02'
 const testLogPath = getCurrentDaemonLogPath(new Date(`${TEST_DATE}T00:00:00.000Z`))
 const testBackupPath = testLogPath.replace(/\.log$/, '.1.log')
+const testOlderBackupPaths = [
+  testLogPath.replace(/\.log$/, '.2.log'),
+  testLogPath.replace(/\.log$/, '.3.log'),
+]
 
 function writeTestLog(content: string): void {
   fs.mkdirSync(getDaemonLogDir(), { recursive: true })
@@ -17,6 +21,9 @@ function writeTestLog(content: string): void {
 afterEach(() => {
   try { fs.unlinkSync(testLogPath) } catch { /* noop */ }
   try { fs.unlinkSync(testBackupPath) } catch { /* noop */ }
+  for (const backupPath of testOlderBackupPaths) {
+    try { fs.unlinkSync(backupPath) } catch { /* noop */ }
+  }
 })
 
 describe('readDaemonLogTail', () => {
@@ -142,6 +149,24 @@ describe('readDaemonLogTail', () => {
     expect(result.matchedLineCount).toBe(1)
   })
 
+  it('includes all bounded size-rotation generations in chronological order', () => {
+    fs.mkdirSync(getDaemonLogDir(), { recursive: true })
+    fs.writeFileSync(testOlderBackupPaths[1], '[12:00:00] ROTATED generation 3\n', 'utf-8')
+    fs.writeFileSync(testOlderBackupPaths[0], '[12:00:01] ROTATED generation 2\n', 'utf-8')
+    fs.writeFileSync(testBackupPath, '[12:00:02] ROTATED generation 1\n', 'utf-8')
+    writeTestLog('[12:00:03] ROTATED active\n')
+
+    const result = readDaemonLogTail({ date: TEST_DATE, grep: 'ROTATED' })
+
+    expect(result.success).toBe(true)
+    expect(result.lines).toEqual([
+      '[12:00:00] ROTATED generation 3',
+      '[12:00:01] ROTATED generation 2',
+      '[12:00:02] ROTATED generation 1',
+      '[12:00:03] ROTATED active',
+    ])
+  })
+
   it('no-filter mode keeps the legacy byte-bounded tail behaviour (fullScan=false)', () => {
     writeTestLog('[12:00:01] a\n[12:00:02] b\n')
     const result = readDaemonLogTail({ date: TEST_DATE })
@@ -198,6 +223,15 @@ describe('readDaemonLogTail', () => {
     expect(result.success).toBe(true)
     expect(result.logPath).toBe(testBackupPath)
     expect(result.lines).toEqual(['[12:00:00] from backup'])
+  })
+
+  it('falls back to the newest available older rotation when active and .1 are absent', () => {
+    fs.mkdirSync(getDaemonLogDir(), { recursive: true })
+    fs.writeFileSync(testOlderBackupPaths[0], '[12:00:00] from generation 2\n', 'utf-8')
+    const result = readDaemonLogTail({ date: TEST_DATE })
+    expect(result.success).toBe(true)
+    expect(result.logPath).toBe(testOlderBackupPaths[0])
+    expect(result.lines).toEqual(['[12:00:00] from generation 2'])
   })
 
   it('returns success=false with an error when no log file exists', () => {

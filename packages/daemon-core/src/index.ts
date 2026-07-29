@@ -432,6 +432,7 @@ export {
     getRecentLogs,
     getDaemonLogDir,
     getCurrentDaemonLogPath,
+    MAX_SIZE_ROTATION_GENERATIONS,
 } from './logging/logger.js';
 export type { ScopedLogger, LogLevel, LogEntry } from './logging/logger.js';
 export {
