@@ -52,6 +52,20 @@ export type CompletedDebouncePending = {
     // so a never-completing / killed background job can't pin the session in generating
     // forever. Cleared implicitly when the pending is reset on cancel/emit.
     backgroundTaskHoldSince?: number;
+    // EMPTY-FINAL-CONTENT (kimi native-source TOCTOU): the exact message array that
+    // completionFinalAssistantEvidence proved `present:true` from on the CLEAN
+    // finalization path (getCompletedFinalizationBlock returning null). The clean-path
+    // emit used to re-derive finalSummary via a SECOND, independent read
+    // (adapter.getScriptParsedStatus() + a fresh readExternalCompletionMessages() inside
+    // completionFinalSummary) taken moments later — for a native-source provider whose
+    // transcript/PTY buffer can legitimately shift between the two reads (file rewrite,
+    // terminal repaint scrolling the matched bubble out), the second read could yield an
+    // EMPTY or different result than the evidence that just proved the turn was done,
+    // producing a genuine agent:generating_completed with an empty assistant bubble.
+    // Caching the PROVING read here lets the emit extract its summary from the SAME
+    // snapshot that justified the completion, closing the gap. Undefined when the clean
+    // path resolved evidence from the PTY-parsed branch (no separate transcript to race).
+    resolvedFinalMessages?: unknown[];
 };
 
 export type CompletedFinalizationBlock = {

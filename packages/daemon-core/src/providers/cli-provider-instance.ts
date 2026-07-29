@@ -2279,6 +2279,17 @@ export class CliProviderInstance implements ProviderInstance {
         const finalAssistantEvidence = this.completionFinalAssistantEvidence(parsed?.messages, pending.turnStartedAt);
         const allowMissingAssistantTimeout = !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator);
         LOG.debug('CLI', `[${this.type}] finalAssistantEvidence: present=${finalAssistantEvidence.present} source=${finalAssistantEvidence.source} adapterOwnsMessagesElsewhere=${adapterOwnsMessagesElsewhere} parsedStatus=${parsedStatus}`);
+        // EMPTY-FINAL-CONTENT (TOCTOU fix): stash the EXACT message array that just proved
+        // the turn done, keyed to this poll. If this call ultimately falls through to a
+        // clean (block===null) verdict, the caller extracts finalSummary from THIS snapshot
+        // instead of taking a second, independent read that can legitimately race a
+        // native-source transcript rewrite or a PTY buffer repaint (see
+        // CompletedDebouncePending.resolvedFinalMessages).
+        if (finalAssistantEvidence.present && finalAssistantEvidence.source !== 'unavailable') {
+            pending.resolvedFinalMessages = Array.isArray(finalAssistantEvidence.messages) ? finalAssistantEvidence.messages : undefined;
+        } else {
+            pending.resolvedFinalMessages = undefined;
+        }
         if (!finalAssistantEvidence.present) {
             if (adapterOwnsMessagesElsewhere) {
                 if (finalAssistantEvidence.source === 'external-native') {
@@ -3738,12 +3749,35 @@ export class CliProviderInstance implements ProviderInstance {
             duration: pending.duration,
             timestamp: pending.timestamp,
             taskId: pending.taskId,
-            finalSummary: this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt),
+            finalSummary: this.cleanCompletionFinalSummary(pending),
         });
         this.completedDebouncePending = null;
         this.completedDebounceTimer = null;
         this.generatingStartedAt = 0;
         this.lastApprovalEventFingerprint = '';
+    }
+
+    /**
+     * EMPTY-FINAL-CONTENT (kimi native-source TOCTOU): finalSummary for the CLEAN
+     * finalization path (getCompletedFinalizationBlock returned null — the turn is already
+     * proven done). Prefer extracting the summary from pending.resolvedFinalMessages, the
+     * EXACT message snapshot completionFinalAssistantEvidence just proved `present:true`
+     * from, instead of taking a brand-new independent read
+     * (adapter.getScriptParsedStatus() / a fresh readExternalCompletionMessages() inside
+     * completionFinalSummary). A native-source provider's on-disk transcript can be
+     * rewritten/truncated between the two reads, and a PTY-buffer scrape can lose the
+     * matched bubble to a repaint/scroll — either race can turn a proven-present turn into
+     * an emitted completion with an empty assistant bubble. Falls back to the live
+     * (pre-fix) read when no snapshot was cached (e.g. a code path that reaches the clean
+     * emit without going through getCompletedFinalizationBlock first), so no other provider
+     * class's behavior changes.
+     */
+    private cleanCompletionFinalSummary(pending: CompletedDebouncePending): string | undefined {
+        if (Array.isArray(pending.resolvedFinalMessages)) {
+            const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages as any, pending.turnStartedAt);
+            if (fromSnapshot) return fromSnapshot;
+        }
+        return this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt);
     }
 
     /**
