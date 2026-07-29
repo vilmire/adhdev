@@ -32,11 +32,11 @@ import { runMeshReconcileTick, __resetReconcileInFlightSynthDebounceForTests, ge
 import { setLogLevel, getRecentLogs } from '../../src/logging/logger.js'
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
 import { reconcileDirectDispatchCompletionFromTranscript } from '../../src/mesh/mesh-events-stale.js'
-import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, claimNextTask, reclaimStrandedAssignedTask } from '../../src/mesh/mesh-work-queue.js'
+import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, claimNextTask, reclaimStrandedAssignedTask, cancelTask } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, appendLedgerEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { createSessionDelivery, updateSessionDeliveryStatus } from '../../src/mesh/mesh-delivery-policy.js'
-import { recordTurnAck, recordTurnStage, openTurnAttempt, proposeTurnCompletion, getTurnLedgerMetrics, __resetTurnLedgerMetricsForTests } from '../../src/mesh/mesh-turn-ledger.js'
+import { recordTurnAck, recordTurnStage, openTurnAttempt, proposeTurnCompletion, getTurnLedgerMetrics, __resetTurnLedgerMetricsForTests, evaluateRedrive } from '../../src/mesh/mesh-turn-ledger.js'
 
 function cleanup(meshId: string) {
   try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }
@@ -3493,6 +3493,247 @@ describe('runMeshReconcileTick', () => {
       }
     })
 
+    // ── RC.20 DELIVERED-NO-TURN NATIVE-SOURCE ACTIVITY GATE ─────────────────
+    // Live 2026-07-28 (canary task f3261319-b215-4c7b-9bb0-c0b32fe2a833): a kimi
+    // native-source worker (floor class, emitsPtyTurnEvents=false) was GENUINELY
+    // EXECUTING — producing probes — but never emitted agent:generating_started and
+    // read IDLE_CONFIRMED between tool calls, so the 15-min delivered-no-turn
+    // deadline classified it delivered_no_turn_deadline and RE-INJECTED the full
+    // instruction four times (attempt seq 1/3/5/7, dispatchNonce → 9) before the
+    // operator cancelled. The long path now consults the provider's own evidence:
+    // FRESH post-dispatch agent activity (narration/tool bubbles, incl. the tool
+    // activity emitted while spawning child probes) promotes the durable consumed
+    // link and suppresses the reclaim; a LIVE-turn attempt stage (waiting_choice /
+    // waiting_approval / generating / finalizing) holds outright; only a transcript
+    // gone QUIET past the stale window falls through to the bounded reclaim.
+    const RC20_NO_TURN_MS = 16 * 60_000 // past the 15-min DELIVERED_NO_TURN_DEADLINE
+    const RC20_KIMI_FLOOR_PROFILE = { class: 'native-source', timing: 'floor', emitsPtyTurnEvents: false } as const
+
+    // Build a delivered-no-turn row (16 min old, delivered-but-never-acked) on a
+    // native-source kimi session. `instance` decides the busy verdict: 'idle' →
+    // IDLE_CONFIRMED (the immediate delivered_no_turn_deadline branch — the exact
+    // live shape), 'absent' → UNKNOWN (remote/unobservable; the grace-streak branch).
+    // The claim-time transcript profile is stamped through claimNextTask's own option,
+    // mirroring what the real claim path writes for this provider class.
+    const makeRc20NoTurnCase = (
+      meshId: string,
+      nodeId: string,
+      sessionId: string,
+      buildMessages: (dispatchedAtMs: number) => any[],
+      opts?: { instance?: 'idle' | 'absent' },
+    ) => {
+      const dispatchAt = Date.now()
+      enqueueTask(meshId, 'orchestrate the canary probes', { targetNodeId: nodeId })
+      const claimed = claimNextTask(meshId, nodeId, sessionId, [], {
+        providerType: 'kimi',
+        assignedTranscriptProfile: RC20_KIMI_FLOOR_PROFILE as any,
+      })!
+      backdateDispatch(meshId, claimed.id, RC20_NO_TURN_MS)
+      // Confirmed delivery ('delivered') but never consumed ('acked') — the kimi
+      // worker's generating_started never exists, so the delivery sits delivered.
+      createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'orchestrate the canary probes', status: 'delivered' })
+
+      const kimiProvider = {
+        type: 'kimi',
+        category: 'cli',
+        transcriptAuthority: 'provider',
+        nativeHistory: { source: { kind: 'jsonl' } },
+        requiresFinalAssistantBeforeIdle: true,
+        tui: { transcriptPty: { scope: 'buffer' } },
+      }
+      const idleInstance = {
+        category: 'cli',
+        provider: kimiProvider,
+        getState: () => ({ instanceId: sessionId, status: 'idle', type: 'kimi', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
+      }
+      const withInstance = (opts?.instance ?? 'idle') === 'idle'
+      const readChat = vi.fn(async (cmd: string) => {
+        if (cmd !== 'read_chat') return { success: true }
+        // status 'idle' throughout: the activity gate must NOT depend on a
+        // generating status — this class reads idle mid-turn by construction.
+        return { success: true, status: 'idle', messages: buildMessages(dispatchAt - RC20_NO_TURN_MS) }
+      })
+      const components = {
+        instanceManager: {
+          getByCategory: (category: string) => (category === 'cli' && withInstance ? [idleInstance] : []),
+          getInstance: (id: string) => (withInstance && id === sessionId ? idleInstance : undefined),
+        },
+        commandHandler: { handle: readChat },
+      } as any
+      const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w' }] }
+      meshConfigMocks.listMeshes.mockReturnValue([mesh])
+      meshConfigMocks.getMesh.mockReturnValue(mesh)
+      return { claimed, components, readChat, dispatchAt }
+    }
+
+    it('RC.20 (the f3261319 defect): NEVER re-injects a genuinely-executing native-source worker at the delivered-no-turn deadline — four ticks, consumed promoted exactly once, nonce unchanged', async () => {
+      const meshId = `mesh_rc20_no_reinject_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-kimi-orchestrator'
+      __resetTurnLedgerMetricsForTests()
+      try {
+        // Mid-turn shape: the assistant narrated and fired a tool (spawning a child
+        // probe) AFTER dispatch, FRESH (seconds ago). The trailing tool bubble keeps
+        // the terminal-evidence polls out — the turn has NOT ended.
+        const { claimed, components } = makeRc20NoTurnCase(meshId, nodeId, sessionId, dispatchedAt => [
+          { role: 'user', content: 'orchestrate the canary probes', timestamp: dispatchedAt + 300 },
+          { role: 'assistant', content: 'Spawning the probe sessions…', timestamp: Date.now() - 60_000 },
+          { role: 'assistant', content: '', kind: 'tool', timestamp: Date.now() - 30_000 },
+        ])
+        const nonceBefore = getQueue(meshId).find(t => t.id === claimed.id)!.dispatchNonce
+
+        // Four ticks — the live incident re-injected on each of four passes.
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe(sessionId)
+        // No reclaim, no re-drive, no nonce bump (the incident drove it to 9).
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+        expect(row.dispatchNonce).toBe(nonceBefore)
+        // The consumed link was promoted from the provider's own activity evidence…
+        const attempt = MeshRuntimeStore.getInstance().getCurrentTurnAttempt(meshId, claimed.id)
+        expect(attempt?.stage).toBe('consumed')
+        // …making the attempt durably injection-ineligible…
+        const redrive = evaluateRedrive(meshId, claimed.id)
+        expect(redrive.allowed).toBe(false)
+        expect(!redrive.allowed && redrive.reason).toBe('already_consumed')
+        // …exactly once: the repeated per-tick consumed ACKs were swallowed by the
+        // idempotency key (no duplicate stage advance).
+        const metrics = getTurnLedgerMetrics()
+        expect(metrics.redriveBlockedByReason['native_source_activity']).toBe(4)
+        expect(metrics.duplicateTurnEvents).toBeGreaterThanOrEqual(3)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('RC.20: UNKNOWN (remote/unobservable) native-source worker with FRESH activity survives the grace streak — held, consumed, never reclaimed', async () => {
+      const meshId = `mesh_rc20_unknown_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-kimi-remote'
+      __resetTurnLedgerMetricsForTests()
+      try {
+        const { claimed, components } = makeRc20NoTurnCase(meshId, nodeId, sessionId, dispatchedAt => [
+          { role: 'user', content: 'orchestrate the canary probes', timestamp: dispatchedAt + 300 },
+          { role: 'assistant', content: 'Working through the probe plan…', timestamp: Date.now() - 45_000 },
+          { role: 'assistant', content: '', kind: 'tool', timestamp: Date.now() - 20_000 },
+        ], { instance: 'absent' })
+
+        // Past RECLAIM_UNKNOWN_GRACE_TICKS (3): without the activity gate the fourth
+        // tick would reclaim with reclaim_after_unknown_grace.
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+        expect(MeshRuntimeStore.getInstance().getCurrentTurnAttempt(meshId, claimed.id)?.stage).toBe('consumed')
+        expect(getTurnLedgerMetrics().redriveBlockedByReason['native_source_activity']).toBeGreaterThanOrEqual(1)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('RC.20: BOUNDED recovery — a native-source worker whose transcript went QUIET mid-turn (stale activity) is still reclaimed at the deadline', async () => {
+      const meshId = `mesh_rc20_stale_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-kimi-died'
+      __resetTurnLedgerMetricsForTests()
+      try {
+        // The worker started (post-dispatch assistant + trailing tool) but its LAST
+        // activity is ~14.5 min old — beyond the 10-min stale window. This is a truly
+        // dead mid-turn session: the bounded reclaim MUST still fire (no infinite hold).
+        const { claimed, components } = makeRc20NoTurnCase(meshId, nodeId, sessionId, dispatchedAt => [
+          { role: 'user', content: 'orchestrate the canary probes', timestamp: dispatchedAt + 300 },
+          { role: 'assistant', content: 'Starting the probes…', timestamp: dispatchedAt + 60_000 },
+          { role: 'assistant', content: '', kind: 'tool', timestamp: dispatchedAt + 90_000 },
+        ])
+
+        await runMeshReconcileTick(components)
+
+        // The reclaim fired with the delivered-no-turn classification (the row does not
+        // stay pending: the idle local session is re-dispatched the same tick — the
+        // reclaim ledger entry is the assertion, matching the pre-existing pattern).
+        const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
+        expect(reclaimed).toHaveLength(1)
+        expect((reclaimed[0].payload as any).reason).toBe('delivered_no_turn_deadline')
+        expect(getTurnLedgerMetrics().redriveBlockedByReason['native_source_activity'] ?? 0).toBe(0)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('RC.20: a durable waiting_choice attempt stage blocks the deadline reclaim (picker-parked worker is injection-ineligible)', async () => {
+      const meshId = `mesh_rc20_choice_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-kimi-picker'
+      __resetTurnLedgerMetricsForTests()
+      try {
+        // No agent bubbles at all — the transcript is quiet because the worker is
+        // PARKED at a choice picker, not because it never started. The durable
+        // attempt stage (waiting_choice) is the evidence that holds the reclaim.
+        const { claimed, components } = makeRc20NoTurnCase(meshId, nodeId, sessionId, dispatchedAt => [
+          { role: 'user', content: 'orchestrate the canary probes', timestamp: dispatchedAt + 300 },
+        ])
+        recordTurnAck({
+          meshId, taskId: claimed.id, kind: 'consumed', sessionId,
+          legacy: { dispatchNonce: getQueue(meshId).find(t => t.id === claimed.id)!.dispatchNonce ?? 1, nodeId, providerType: 'kimi' },
+        })
+        recordTurnStage({ meshId, taskId: claimed.id, stage: 'waiting_choice', sessionId })
+
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+        expect(getTurnLedgerMetrics().redriveBlockedByReason['active_attempt_stage']).toBeGreaterThanOrEqual(1)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('RC.20: explicit operator cancellation is TERMINAL — no reclaim, no reinjection, no consumed promotion afterwards', async () => {
+      const meshId = `mesh_rc20_cancel_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-kimi-cancelled'
+      __resetTurnLedgerMetricsForTests()
+      try {
+        const { claimed, components } = makeRc20NoTurnCase(meshId, nodeId, sessionId, dispatchedAt => [
+          { role: 'user', content: 'orchestrate the canary probes', timestamp: dispatchedAt + 300 },
+          { role: 'assistant', content: 'Mid-turn when cancelled…', timestamp: Date.now() - 30_000 },
+          { role: 'assistant', content: '', kind: 'tool', timestamp: Date.now() - 10_000 },
+        ])
+
+        const cancelled = cancelTask(meshId, claimed.id, { reason: 'operator_cancel' })
+        expect(cancelled?.status).toBe('cancelled')
+
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('cancelled')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+        // The cancel committed the task terminal; no gate fired, no consumed ACK
+        // promoted. (An attempt row is only created on real turn evidence — if one
+        // exists it must be terminal, and no new one may appear after cancel.)
+        const attempt = MeshRuntimeStore.getInstance().getCurrentTurnAttempt(meshId, claimed.id)
+        if (attempt) expect(attempt.terminalOutcome).toBe('cancelled')
+        const metrics = getTurnLedgerMetrics()
+        expect(metrics.redriveBlockedByReason).toEqual({})
+        expect(metrics.duplicateTurnEvents).toBe(0)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
     // ── TASK-PROMPT-REDRIVE-AFTER-COMPLETE (Fix A-i) ────────────────────────────
     // The long DELIVERED_NO_TURN_DEADLINE (15min) reclaim must NOT re-drive a task the worker
     // actually finished when its completion event never reached the coordinator ledger. Past
@@ -4638,6 +4879,29 @@ describe('restampReboundMeshWorkerAssignment (post-restart rebound envelope)', (
       id: taskId, assignedSessionId: 'sessOTHER', assignedNodeId: nodeId, dispatchNonce: 1,
     })).toBe(false)
     expect(settings.meshActiveTaskId).toBeUndefined()
+  })
+
+  it('never re-arms a dispatchNonce-mismatched attempt (stale row mid-redrive fails closed)', () => {
+    const store = MeshRuntimeStore.getInstance()
+    const taskId = 'task-restamp-nonce-mismatch'
+    openAttempt(taskId, 5, 'sessW') // the ledger's current attempt is at nonce 5
+    const { settings, components } = makeReboundWorker('sessW')
+
+    // The queue row still carries the PRE-redrive nonce 4: the two durable
+    // authorities disagree, so stamping would arm a (task, attempt, nonce)
+    // triple neither side owns. Fail closed — a later tick converges the row.
+    expect(restampReboundMeshWorkerAssignment(components, store, meshId, {
+      id: taskId, assignedSessionId: 'sessW', assignedNodeId: nodeId, dispatchNonce: 4,
+    })).toBe(false)
+    expect(settings.meshActiveTaskId).toBeUndefined()
+    expect(settings.meshNodeFor).toBeUndefined()
+
+    // Once the row carries the attempt's own nonce, the stamp proceeds.
+    expect(restampReboundMeshWorkerAssignment(components, store, meshId, {
+      id: taskId, assignedSessionId: 'sessW', assignedNodeId: nodeId, dispatchNonce: 5,
+    })).toBe(true)
+    expect(settings.meshActiveTaskId).toBe(taskId)
+    expect(settings.meshActiveDispatchNonce).toBe(5)
   })
 
   it('skips a session with no local instance (remote / gone) without throwing', () => {

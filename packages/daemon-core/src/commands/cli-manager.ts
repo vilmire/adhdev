@@ -242,6 +242,21 @@ export interface HostedCliRuntimeDescriptor {
      * (genuine post-restart-unknown), in which case the caller keeps the 0 fallback.
      */
     startedAtMs?: number;
+    /**
+     * Session-level MESH MEMBERSHIP persisted in the session-host record meta at
+     * launch/dispatch time (meshNodeFor / meshNodeId / launchedByCoordinator).
+     * restoreHostedSessions re-applies these to the rebuilt instance settings so a
+     * rebound LOCAL mesh worker keeps its relay/routing envelope across a daemon
+     * restart (rc.20): without them the worker's completion/choice events fail
+     * resolveWorkerDelegateRouting (no_worker_envelope), detach does a full clear
+     * (launchedByCoordinator falsy), and mesh_read_terminal / mesh_send_keys refuse
+     * the session as non-worker. TASK-level markers (meshActiveTaskId / attemptId /
+     * dispatchNonce) are deliberately NOT carried here — those are re-derived with
+     * terminal/stale/session/nonce guards by restampReboundMeshWorkerAssignment.
+     */
+    meshNodeFor?: string;
+    meshNodeId?: string;
+    launchedByCoordinator?: boolean;
 }
 
 type CliPresentationInstance = ProviderInstance & {
@@ -1409,6 +1424,31 @@ export class DaemonCliManager {
             if (coordinatorEntry?.meshId) {
                 restoredSettings.meshCoordinatorFor = coordinatorEntry.meshId;
             }
+            // RESTART-REBOUND RELAY ENVELOPE (rc.20): re-apply the session-level mesh
+            // membership the launch/dispatch path persisted into the session-host
+            // record meta. A rebuilt instance otherwise carries NONE of it (settings
+            // are in-memory), so a rebound LOCAL mesh worker failed
+            // resolveWorkerDelegateRouting (no_worker_envelope) on its very first
+            // post-restart event, mesh_read_terminal / mesh_send_keys refused it as
+            // non-worker, and the post-completion detach did a FULL clear
+            // (launchedByCoordinator falsy) — stripping the membership a launched
+            // member is supposed to KEEP. This restores membership ONLY; the
+            // task-level envelope (meshActiveTaskId / attemptId / dispatchNonce /
+            // coordinator ids) is re-derived separately with causal guards by
+            // restampReboundMeshWorkerAssignment, so no terminal/stale/
+            // session-mismatched attempt is ever resurrected here.
+            const recordMeshNodeFor = typeof record.meshNodeFor === 'string' && record.meshNodeFor.trim()
+                ? record.meshNodeFor.trim() : '';
+            const recordMeshNodeId = typeof record.meshNodeId === 'string' && record.meshNodeId.trim()
+                ? record.meshNodeId.trim() : '';
+            if (recordMeshNodeFor) restoredSettings.meshNodeFor = recordMeshNodeFor;
+            if (recordMeshNodeId) {
+                restoredSettings.meshNodeId = recordMeshNodeId;
+                // Keep the sticky last-node marker consistent with the active binding
+                // (attachMeshAssignment maintains the same pair at dispatch time).
+                restoredSettings.meshLastNodeId = recordMeshNodeId;
+            }
+            if (record.launchedByCoordinator === true) restoredSettings.launchedByCoordinator = true;
             try {
                 await this.registerCliInstance(
                     record.runtimeId,

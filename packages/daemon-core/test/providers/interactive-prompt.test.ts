@@ -8,6 +8,7 @@ import {
   normalizeInteractivePrompt,
   normalizeInteractivePromptResponse,
   resolveInteractivePromptResponse,
+  stableClaudeTuiPromptId,
 } from '../../src/providers/types/interactive-prompt.js';
 import type { InteractivePrompt } from '../../src/providers/types/interactive-prompt.js';
 
@@ -861,5 +862,106 @@ describe('resolveInteractivePromptResponse (mesh_answer_question)', () => {
       promptId: 'ask-1',
       answers: [{ questionId: 'scope', select: 9 }],
     })).toThrow(/out of range/);
+  });
+});
+
+// RC.20 REBIND OPTION FIDELITY: a parked AskUserQuestion picker is re-captured
+// from the rebound PTY screen after a daemon restart. The capture used to mint
+// a FRESH promptId per capture (ask-user-<psid>-<Date.now()>), so the
+// coordinator's pre-restart answer silently missed (log-only) and an index-based
+// retry could bind to a re-parsed option row whose order drifted — the live
+// "select BETA, echo ALPHA" defect. The promptId is now content-addressed: the
+// SAME screen re-parses to the SAME id, so the pre-restart answer binds to
+// exactly the options it was issued against; genuine content drift mints a
+// DIFFERENT id, so the stale answer is REJECTED upstream instead of mis-bound.
+describe('stableClaudeTuiPromptId (rc.20 rebind option fidelity)', () => {
+  const SCREEN = [
+    'Pick a track',
+    '────────────────────────────────────────────────',
+    '  1. ALPHA',
+    '  2. BETA',
+    '────────────────────────────────────────────────',
+    'Enter to select · ↑/↓ to navigate · Esc to cancel',
+  ].join('\n');
+
+  function captureTuiPrompt(screenText: string): InteractivePrompt {
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([{ screenText }], {
+      promptId: 'ask-user-tui-pending',
+      providerType: 'claude-cli',
+    });
+    if (!prompt) throw new Error('screen did not parse as a picker');
+    prompt.promptId = stableClaudeTuiPromptId(prompt.questions);
+    return prompt;
+  }
+
+  it('the SAME picker re-captured after a simulated restart keeps the SAME promptId, and BETA stays BETA (label AND index)', () => {
+    // Pre-restart capture (what the coordinator saw) and post-restart re-capture.
+    const before = captureTuiPrompt(SCREEN);
+    const after = captureTuiPrompt(SCREEN);
+    expect(after.promptId).toBe(before.promptId);
+    expect(after.promptId).toMatch(/^ask-user-tui-[0-9a-f]{8}$/);
+
+    // Label answer issued pre-restart against the pre-restart promptId resolves
+    // against the rebound prompt and binds to BETA — never a default row.
+    const byLabel = resolveInteractivePromptResponse(after, {
+      promptId: before.promptId,
+      answers: [{ select: 'BETA' }],
+    });
+    expect(byLabel.answers.q1.selectedLabels).toEqual(['BETA']);
+
+    // The 1-based INDEX the coordinator computed from the SAME option list also
+    // binds to BETA, and the TUI keystroke drives BETA's row (2), not row 1.
+    const byIndex = resolveInteractivePromptResponse(after, {
+      promptId: before.promptId,
+      answers: [{ select: 2 }],
+    });
+    expect(byIndex.answers.q1.selectedLabels).toEqual(['BETA']);
+    expect(buildClaudeInteractiveTuiAnswerSteps(after, byIndex)).toEqual(['2', '\r']);
+  });
+
+  it('drifted re-parsed content mints a DIFFERENT promptId, so the stale answer is rejected instead of mis-bound', () => {
+    const before = captureTuiPrompt(SCREEN);
+    // Post-restart the picker re-renders with the option rows swapped.
+    const drifted = captureTuiPrompt([
+      'Pick a track',
+      '────────────────────────────────────────────────',
+      '  1. BETA',
+      '  2. ALPHA',
+      '────────────────────────────────────────────────',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n'));
+    expect(drifted.promptId).not.toBe(before.promptId);
+
+    // An answer against the pre-drift promptId is refused — resolving index 2
+    // against the drifted list would have echoed ALPHA for a BETA intent.
+    expect(() => resolveInteractivePromptResponse(drifted, {
+      promptId: before.promptId,
+      answers: [{ select: 2 }],
+    })).toThrow(/does not match/);
+  });
+
+  it('the multi-select flag participates in identity (checkbox repair cannot alias a single-select prompt)', () => {
+    const single = captureTuiPrompt(SCREEN);
+    // Same question text and labels as SCREEN — ONLY the checkbox markers (the
+    // multi-select flag) differ, so the id change is attributable to the flag.
+    const multi = captureTuiPrompt([
+      'Pick a track',
+      '────────────────────────────────────────────────',
+      '  [ ] 1. ALPHA',
+      '  [ ] 2. BETA',
+      '────────────────────────────────────────────────',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n'));
+    expect(multi.questions[0].multiSelect).toBe(true);
+    expect(multi.promptId).not.toBe(single.promptId);
+
+    // Multi-select delivery is preserved through the stable id: both labels
+    // resolve and drive their own digit steps + Tab commit.
+    const resolved = resolveInteractivePromptResponse(multi, {
+      promptId: multi.promptId,
+      answers: [{ select: ['ALPHA', 'BETA'] }],
+    });
+    expect(resolved.answers.q1.selectedLabels).toEqual(['ALPHA', 'BETA']);
+    expect(buildClaudeInteractiveTuiAnswerSteps(multi, resolved)).toEqual(['1', '2', '\t', '\r']);
   });
 });

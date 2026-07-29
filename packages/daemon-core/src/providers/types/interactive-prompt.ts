@@ -194,6 +194,54 @@ export function resolveInteractivePromptResponse(
   return { promptId, answers };
 }
 
+/**
+ * REBIND OPTION FIDELITY (rc.20): content-addressed identity for a claude TUI
+ * picker prompt.
+ *
+ * The TUI capture path used to mint `ask-user-<providerSessionId>-<Date.now()>`
+ * on EVERY capture. Across a daemon restart the still-parked picker is
+ * re-captured from the rebound PTY screen, so the SAME question re-appeared
+ * under a FRESH promptId while the coordinator/dashboard still held the
+ * pre-restart one. The stale answer was then silently dropped (log-only), and
+ * any index-based answer against the new promptId resolved against the
+ * re-parsed option list — whose row order/content can drift from what the
+ * answerer saw — so "select 2 (BETA)" could bind to a different row (ALPHA).
+ *
+ * Deriving the promptId from the prompt CONTENT makes identity survive rebind:
+ * the same question re-captured after a restart yields the SAME promptId, so a
+ * pre-restart answer (label- or index-based) resolves against exactly the
+ * option list it was issued against. Genuine content drift (re-ordered /
+ * re-parsed options) yields a DIFFERENT promptId, so the stale answer is
+ * rejected outright instead of being silently mis-bound — no index/default
+ * fallback is ever taken.
+ *
+ * The fingerprint covers question text + multi-select flag + the option LABELS
+ * in order (descriptions/previews are display-only and can truncate in
+ * scrollback, so they must not destabilize identity). FNV-1a 32-bit: this file
+ * stays dependency-free; collisions are harmless beyond a same-session,
+ * same-content re-ask (which answers identically by construction).
+ */
+export function interactivePromptContentFingerprint(questions: InteractiveQuestion[]): string {
+    let hash = 0x811c9dc5;
+    const mix = (text: string) => {
+        for (let i = 0; i < text.length; i += 1) {
+            hash ^= text.charCodeAt(i);
+            hash = Math.imul(hash, 0x01000193) >>> 0;
+        }
+    };
+    for (const question of questions) {
+        mix(question.question);
+        mix(question.multiSelect ? '\u0001multi' : '\u0001single');
+        for (const option of question.options) { mix('\u0002'); mix(option.label); }
+        mix('\u0003');
+    }
+    return hash.toString(16).padStart(8, '0');
+}
+
+export function stableClaudeTuiPromptId(questions: InteractiveQuestion[]): string {
+    return `ask-user-tui-${interactivePromptContentFingerprint(questions)}`;
+}
+
 export function buildClaudeInteractiveToolResult(response: InteractivePromptResponse): string {
     return JSON.stringify({
     type: 'user',

@@ -107,6 +107,41 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
         const payload = isFriendlyArrayForm
             ? rawResponse
             : normalizeInteractivePromptResponse(rawResponse);
+        // STALE-PROMPT-ANSWER guard (rc.20 rebind option fidelity): when the session
+        // HOLDS a prompt, an answer naming a different promptId (e.g. the pre-restart
+        // id the coordinator still carries after a daemon rebind) must be rejected
+        // VISIBLY. Previously this returned success:true and the mismatch surfaced
+        // only as a daemon log line — the coordinator believed the question answered
+        // while the picker stayed parked (or a later index-based retry bound to the
+        // wrong option row). Fail closed with the active promptId so the caller can
+        // re-answer against it. No answer is applied and no default/index fallback
+        // is taken on this path.
+        const heldPrompt = (() => {
+            try {
+                const state = instance.getState?.() as {
+                    activeInteractivePrompt?: { promptId?: unknown } | null;
+                    activeChat?: { activeInteractivePrompt?: { promptId?: unknown } | null };
+                } | undefined;
+                return state?.activeChat?.activeInteractivePrompt ?? state?.activeInteractivePrompt ?? null;
+            } catch {
+                return null;
+            }
+        })();
+        const heldPromptId = typeof heldPrompt?.promptId === 'string' && heldPrompt.promptId.trim()
+            ? heldPrompt.promptId.trim()
+            : '';
+        const incomingPromptId = typeof (payload as { promptId?: unknown })?.promptId === 'string'
+            ? ((payload as { promptId: string }).promptId).trim()
+            : '';
+        if (heldPromptId && incomingPromptId && incomingPromptId !== heldPromptId) {
+            return {
+                success: false,
+                error: `Stale promptId "${incomingPromptId}" — the session's active question is "${heldPromptId}". The answer was NOT applied; re-answer with mesh_answer_question against the active promptId.`,
+                waitingChoice: true,
+                promptId: heldPromptId,
+                stalePromptId: incomingPromptId,
+            };
+        }
         ctx.deps.instanceManager.sendEvent(sessionId, 'interactive_prompt_response', payload);
         return { success: true };
     },

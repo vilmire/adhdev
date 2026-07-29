@@ -289,4 +289,63 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     expect(context.settings).toMatchObject({ autoApprove: true });
     expect(context.settings.meshCoordinatorFor).toBeUndefined();
   }, 15000);
+
+  it('RC20 REBOUND RELAY ENVELOPE: restores session-level mesh membership from the runtime record (never task-level markers)', async () => {
+    // A rebound LOCAL mesh worker must keep its relay/routing envelope across the
+    // daemon restart: meshNodeFor/meshNodeId/launchedByCoordinator were persisted
+    // into the session-host record meta at launch/dispatch time and are the
+    // DURABLE authority for session membership. Without the restore the worker's
+    // first post-restart event failed resolveWorkerDelegateRouting
+    // (no_worker_envelope) and the post-completion detach did a full clear.
+    // TASK-level markers (meshActiveTaskId/attemptId/nonce) stay OUT — they are
+    // re-derived with causal guards by restampReboundMeshWorkerAssignment.
+    const loader = setupLoader();
+    const addInstance = vi.fn();
+    const restored = await createManager(loader, {
+      getInstanceManager: () => ({ addInstance, removeInstance: vi.fn(), getInstance: () => null }),
+      getSessionRegistry: () => ({ register: vi.fn() }),
+    }).restoreHostedSessions([
+      {
+        runtimeId: 'mesh-worker-runtime-1',
+        cliType: 'sample-cli',
+        workspace: workingDir,
+        meshNodeFor: 'mesh-w',
+        meshNodeId: 'nodeA',
+        launchedByCoordinator: true,
+      },
+    ]);
+
+    expect(restored).toBe(1);
+    const context = addInstance.mock.calls[0][2] as any;
+    expect(context.settings).toMatchObject({
+      autoApprove: true,
+      meshNodeFor: 'mesh-w',
+      meshNodeId: 'nodeA',
+      meshLastNodeId: 'nodeA',
+      launchedByCoordinator: true,
+    });
+    // Membership is not the coordinator mark, and no task envelope is resurrected.
+    expect(context.settings.meshCoordinatorFor).toBeUndefined();
+    expect(context.settings.meshActiveTaskId).toBeUndefined();
+    expect(context.settings.meshActiveAttemptId).toBeUndefined();
+    expect(context.settings.meshActiveDispatchNonce).toBeUndefined();
+  }, 15000);
+
+  it('RC20 REBOUND RELAY ENVELOPE: does not invent mesh membership for a plain session', async () => {
+    const loader = setupLoader();
+    const addInstance = vi.fn();
+    const restored = await createManager(loader, {
+      getInstanceManager: () => ({ addInstance, removeInstance: vi.fn(), getInstance: () => null }),
+      getSessionRegistry: () => ({ register: vi.fn() }),
+    }).restoreHostedSessions([
+      { runtimeId: 'plain-runtime-2', cliType: 'sample-cli', workspace: workingDir },
+    ]);
+
+    expect(restored).toBe(1);
+    const context = addInstance.mock.calls[0][2] as any;
+    expect(context.settings.meshNodeFor).toBeUndefined();
+    expect(context.settings.meshNodeId).toBeUndefined();
+    expect(context.settings.meshLastNodeId).toBeUndefined();
+    expect(context.settings.launchedByCoordinator).toBeUndefined();
+  }, 15000);
 });
