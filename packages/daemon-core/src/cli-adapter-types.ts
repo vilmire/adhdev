@@ -52,22 +52,36 @@ export interface CliAdapterStatus {
      */
     fsmReadySeen?: boolean;
     /**
-     * claude-cli only: true when the session's native-history transcript shows
-     * ≥1 unresolved `run_in_background` bash job (a Bash tool_use whose
-     * completion tool_result has not yet appeared). NEW passthrough signal —
+     * Tracked providers (claude-cli, kimi) only: true when the session's
+     * native-history transcript shows causally-owned background tool work that
+     * must hold completion — ≥1 unresolved `run_in_background` invocation
+     * (claude: Bash tool_use with no matching tool_result; kimi: background
+     * tool.call cell with no terminal task.* notification / TaskStop result),
+     * or (kimi) a resolved background cell whose result the provider has not
+     * yet consumed into a final assistant response. NEW passthrough signal —
      * it rides ALONGSIDE `status` and is NOT forced through the 5-value FSM
      * normalization (like `activeModal`/`providerSessionId`). The completion
-     * gate uses it to HOLD a false idle→completed transition while a background
-     * job is still running: the parent turn can return to a ready prompt (idle)
-     * while its background bash keeps running, which otherwise fired a false
-     * agent:generating_completed. Absent/undefined for every non-claude-cli
-     * provider and whenever the transcript can't be read or shows nothing.
+     * gate uses it to HOLD a false idle→completed transition: the provider can
+     * end its model turn with progress prose (idle) while its background cell
+     * keeps running, which otherwise fired a false agent:generating_completed
+     * and prematurely completed the delegated mesh queue task. Absent/undefined
+     * whenever the transcript can't be read or shows nothing outstanding.
      */
     backgroundTaskActive?: boolean;
-    /** Count of unresolved background bash jobs (only when backgroundTaskActive). */
+    /** Count of unresolved (still-running) background invocations (only when backgroundTaskActive). */
     backgroundTaskCount?: number;
-    /** tool_use ids of the unresolved background bash jobs (diagnostics). */
+    /** Ids of the unresolved background invocations (tool_use ids / kimi task_ids; diagnostics). */
     backgroundTaskIds?: string[];
+    /**
+     * Whether this provider's background-tool lifecycle is authoritatively
+     * tracked from its native transcript. 'tracked' = claude-cli / kimi (the
+     * detector understands the record shape); 'unknown' = every other provider
+     * (PTY-only FSM adapters, ACP providers — no transcript tool-lifecycle
+     * authority exists). 'unknown' is an EXPLICIT contract: the completion
+     * path is not gated on background work for these providers, which is
+     * documented here rather than silently treated as "no background work".
+     */
+    backgroundTaskSupport?: 'tracked' | 'unknown';
 }
 
 export interface AcpAdapterHandle {

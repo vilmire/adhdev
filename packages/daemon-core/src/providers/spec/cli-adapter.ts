@@ -254,25 +254,33 @@ export class SpecCliAdapter implements CliAdapter {
         const providerSessionId = this.extractProviderSessionIdFromScreen();
         if (providerSessionId) this.providerSessionId = providerSessionId;
         const status = this.getStatus();
-        // Background-task passthrough: read the claude-cli native-history
-        // transcript at poll time for an unresolved run_in_background bash. This
-        // is a NEW signal that rides alongside `status` (it is NOT run through
-        // the 5-value FSM normalization). Absent for every non-claude-cli
-        // provider (detector short-circuits on agentType). Read at each poll —
-        // the JSONL trails the live idle transition, so it must be observed
-        // BEFORE completion fires, which SUB-B's hold + settle window give us.
+        // Background-task passthrough: read the native-history transcript at
+        // poll time for causally-owned background tool work (claude-cli
+        // run_in_background bash; kimi run_in_background tool.call cells whose
+        // launch result returns immediately with `status: running`). This is a
+        // NEW signal that rides alongside `status` (it is NOT run through the
+        // 5-value FSM normalization). Providers whose transcript the detector
+        // cannot authoritatively read report backgroundTaskSupport:'unknown'
+        // (an explicit UNKNOWN — never a silent "no background work") and are
+        // not gated. Read at each poll — the JSONL trails the live idle
+        // transition, so it must be observed BEFORE completion fires, which
+        // SUB-B's hold + settle window give us.
         const bg = this.detectBackgroundTask();
         return {
             ...status,
             messages: this.readClaudeScreenAssistantMessages(),
             ...(this.providerSessionId ? { providerSessionId: this.providerSessionId } : {}),
+            backgroundTaskSupport: bg.support ?? 'unknown',
             ...(bg.active ? { backgroundTaskActive: true, backgroundTaskCount: bg.count, backgroundTaskIds: bg.ids } : {}),
         };
     }
 
-    private detectBackgroundTask(): { active: boolean; count: number; ids: string[] } {
-        if (this.cliType !== 'claude-cli') return { active: false, count: 0, ids: [] };
-        if (!this.spec.native_history?.source) return { active: false, count: 0, ids: [] };
+    private detectBackgroundTask(): { active: boolean; count: number; ids: string[]; support?: 'tracked' | 'unknown' } {
+        if (!this.spec.native_history?.source) {
+            // No transcript source: only the detector can say whether this
+            // provider is tracked at all (claude-cli/kimi) or unknown.
+            return { active: false, count: 0, ids: [], support: this.cliType === 'claude-cli' || this.cliType === 'kimi' ? 'tracked' : 'unknown' };
+        }
         try {
             return detectBackgroundTaskActive(this.spec.native_history, {
                 agentType: this.cliType,
@@ -282,7 +290,7 @@ export class SpecCliAdapter implements CliAdapter {
                 workspace: this.workingDir,
             });
         } catch {
-            return { active: false, count: 0, ids: [] };
+            return { active: false, count: 0, ids: [], support: 'unknown' };
         }
     }
 

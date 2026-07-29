@@ -3482,16 +3482,22 @@ export class CliProviderInstance implements ProviderInstance {
             return;
         }
 
-        // (FALSE-IDLE-BACKGROUND-CMD) FOURTH hold condition: claude-cli's idle/generating
-        // judgment is PTY-screen-derived and has no awareness of its own run_in_background
-        // bash jobs. When a background bash is launched and the parent turn returns to a
-        // ready prompt, the parent turn is genuinely idle → the point-sample above reads
-        // 'idle' → a false agent:generating_completed would fire while the background job
-        // is still running. The durable signal is the native-history transcript: a
-        // background bash tool_use with NO matching tool_result is an unresolved job.
-        // getScriptParsedStatus() reads that transcript at poll time and surfaces
-        // backgroundTaskActive. When set, HOLD (re-arm) instead of emitting — the flag
-        // clears once the tool_result lands, at which point a later flush proceeds normally.
+        // (FALSE-IDLE-BACKGROUND-CMD) FOURTH hold condition: the idle/generating
+        // judgment is PTY-screen/turn-derived and has no awareness of the provider's
+        // own run_in_background tool work. When a background invocation is launched
+        // and the turn returns to idle with progress prose, the point-sample above
+        // reads 'idle' → a false agent:generating_completed would fire while the
+        // background cell is still running (or, kimi, before the provider consumed
+        // the cell's terminal result into a final assistant response) — prematurely
+        // completing the delegated mesh queue task. The durable signal is the
+        // native-history transcript (claude-cli: background bash tool_use with NO
+        // matching tool_result; kimi: background tool.call cell with no terminal
+        // task.* notification/TaskStop result, or such a result with no consuming
+        // assistant text after it). getScriptParsedStatus() reads that transcript
+        // at poll time and surfaces backgroundTaskActive. When set, HOLD (re-arm)
+        // instead of emitting — the flag clears once the background work resolves
+        // (and is consumed), at which point a later flush proceeds normally and
+        // completes exactly once.
         //
         // ★Bounded against a permanent wedge: the signal is a MISSING tool_result in an
         // append-only file, so a killed/crashed/never-finishing background job would leave
