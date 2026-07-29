@@ -556,6 +556,19 @@ export const MESH_REMOVE_NODE_TOOL = {
     },
 };
 
+export const MESH_CLEANUP_WORKTREE_NODES_TOOL = {
+    name: 'mesh_cleanup_worktree_nodes',
+    description: 'Plan (dry-run, default) or execute safe removal of CONVERGED local worktree nodes (lifecycle retention). A node is eligible only when its feature branch is proven merged/pushed/converged AND every safety exclusion passes: no dirty/conflicted/stashed/submodule-drift state, no live session, no queue/direct-dispatch reference, no in-flight or blocked_review Refinery job, not the coordinator/base/cwd/evidence node. The automatic reconcile pass additionally requires two consecutive eligible ticks spanning a grace window (default 48h). Per-node reason codes are always returned; removal never uses force and branch refs are deleted only when proven fully merged.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Optional: restrict the plan/execute to a single node. When omitted, every node in the mesh is evaluated.' },
+            dry_run: { type: 'boolean', description: 'Default true. true = read-only reason-coded plan (identical shape to the automatic pass); false = execute removal for every currently-eligible node (never forces; the non-destructive precheck re-runs immediately before each removal).' },
+        },
+        required: [],
+    },
+};
+
 export const MESH_CLEANUP_SESSIONS_TOOL = {
     name: 'mesh_cleanup_sessions',
     description: 'Manually clean up delegated session records for a mesh node without removing the node. Defaults should preserve reviewable history unless the caller chooses a mode explicitly.',
@@ -1016,6 +1029,7 @@ export const ALL_MESH_TOOLS = [
     MESH_ADD_NODE_TOOL,
     MESH_CLONE_NODE_TOOL,
     MESH_REMOVE_NODE_TOOL,
+    MESH_CLEANUP_WORKTREE_NODES_TOOL,
     MESH_REFINE_NODE_TOOL,
     MESH_REFINE_BATCH_TOOL,
     MESH_REFINE_CONFIG_TOOL,

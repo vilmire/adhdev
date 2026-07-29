@@ -42,7 +42,7 @@ import {
   meshReadDebug, meshReadTerminal, meshSendKeys,
   meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon, meshCheckpoint, meshApprove, meshAnswerQuestion, meshListPendingApprovals,
   meshPlanOnboarding, meshCreate, meshAddNode,
-  meshCloneNode, meshRemoveNode, meshRefineNode,
+  meshCloneNode, meshRemoveNode, meshCleanupWorktreeNodes, meshRefineNode,
   meshRefineConfig, meshInit, meshReinit, meshRefinePlan, meshRefineBatch,
   meshChangeImpactConfig,
   meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshLedgerQuery, meshRecordNote, meshForgetNote, meshReconcileLedger, meshRequeueHeldEvents, meshMissionUpsert,
@@ -227,6 +227,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_add_node': text = await meshAddNode(meshCtx.transport, { ...a, inline_mesh: meshCtx.mesh } as any, meshCtx.mesh.id); break;
           case 'mesh_clone_node': text = await meshCloneNode(meshCtx, a as any); break;
           case 'mesh_remove_node': text = await meshRemoveNode(meshCtx, a as any); break;
+          case 'mesh_cleanup_worktree_nodes': text = await meshCleanupWorktreeNodes(meshCtx, a as any); break;
           case 'mesh_refine_node': text = await meshRefineNode(meshCtx, a as any); break;
           case 'mesh_refine_batch': text = await meshRefineBatch(meshCtx, a as any); break;
           case 'mesh_refine_config': text = await meshRefineConfig(meshCtx, a as any); break;

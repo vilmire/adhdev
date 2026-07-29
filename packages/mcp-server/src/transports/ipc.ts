@@ -32,6 +32,9 @@ const IPC_COMMAND_TIMEOUTS_MS: Record<string, number> = {
   // 120s leaves headroom and matches the relay-wrapped remote path.
   clone_mesh_node: 120_000,
   remove_mesh_node: 60_000,
+  // Retention plan/execute runs the same git probes as a remove dry-run plus
+  // queue/session/ledger reads; 60s matches the remove budget.
+  cleanup_worktree_nodes: 60_000,
   // A5: plan_mesh_refine_node is the SYNCHRONOUS refine dry-run — it runs several git
   // probes (status/merge-tree/submodule) inline before replying, which can approach the
   // 15s default on a slow (Windows) host. 45s defensively, matching git_status/diff.

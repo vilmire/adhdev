@@ -2,12 +2,15 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import * as url from 'url'
-import { test } from 'node:test'
+import { test, type TestContext } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { createRequire } from 'module'
+import { resetProcessInstanceContextForTests } from '@adhdev/daemon-core'
 
 const require = createRequire(path.join(process.cwd(), 'test/session-host-stop.test.ts'))
 const childProcessModule = require('child_process') as typeof import('child_process')
+
+const INSTANCE_ENV_KEYS = ['ADHDEV_SESSION_HOST_NAME', 'ADHDEV_CONFIG_DIR', 'HOME', 'USERPROFILE'] as const
 
 function makeTempHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-standalone-session-host-'))
@@ -20,24 +23,54 @@ async function importSessionHostModule() {
   return ((loaded as { default?: unknown }).default ?? loaded) as typeof import('../src/session-host.js')
 }
 
-test('stopSessionHost only targets the current namespace pid file and does not sweep unrelated session-host processes', async (t) => {
-  const homeDir = makeTempHome()
-  const previousName = process.env.ADHDEV_SESSION_HOST_NAME
-  const previousHome = process.env.HOME
-  const previousUserProfile = process.env.USERPROFILE
+type InstanceEnvSnapshot = Array<readonly [(typeof INSTANCE_ENV_KEYS)[number], string | undefined]>
+
+function snapshotInstanceEnv(): InstanceEnvSnapshot {
+  return INSTANCE_ENV_KEYS.map((key) => [key, process.env[key]] as const)
+}
+
+function restoreInstanceEnv(snapshot: InstanceEnvSnapshot): void {
+  for (const [key, value] of snapshot) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+}
+
+/**
+ * Pin the process instance context to a throwaway home/config dir and reset the
+ * module-level getProcessInstanceContext() cache in @adhdev/daemon-core before
+ * AND after the test. The cache is keyed on (ADHDEV_CONFIG_DIR, homedir, role)
+ * and lives in the shared daemon-core module instance, so without an explicit
+ * reset one subtest's temp home leaks into the next — and a hostile inherited
+ * ADHDEV_CONFIG_DIR/HOME (e.g. from a parent adhdev process) silently redirects
+ * the pid-file path outside the test's temp home.
+ */
+function pinTempInstance(t: TestContext, homeDir: string): void {
+  const snapshot = snapshotInstanceEnv()
   process.env.ADHDEV_SESSION_HOST_NAME = 'adhdev-standalone-test'
+  process.env.ADHDEV_CONFIG_DIR = path.join(homeDir, '.adhdev')
   process.env.HOME = homeDir
   process.env.USERPROFILE = homeDir
+  resetProcessInstanceContextForTests()
 
   t.after(() => {
-    if (previousName === undefined) delete process.env.ADHDEV_SESSION_HOST_NAME
-    else process.env.ADHDEV_SESSION_HOST_NAME = previousName
-    if (previousHome === undefined) delete process.env.HOME
-    else process.env.HOME = previousHome
-    if (previousUserProfile === undefined) delete process.env.USERPROFILE
-    else process.env.USERPROFILE = previousUserProfile
+    restoreInstanceEnv(snapshot)
+    resetProcessInstanceContextForTests()
     fs.rmSync(homeDir, { recursive: true, force: true })
   })
+}
+
+function writePidFile(homeDir: string, pid: number): string {
+  const configDir = path.join(homeDir, '.adhdev')
+  fs.mkdirSync(configDir, { recursive: true })
+  const pidFile = path.join(configDir, 'adhdev-standalone-test-session-host.pid')
+  fs.writeFileSync(pidFile, `${pid}\n`, 'utf8')
+  return pidFile
+}
+
+test('stopSessionHost only targets the current namespace pid file and does not sweep unrelated session-host processes', async (t) => {
+  const homeDir = makeTempHome()
+  pinTempInstance(t, homeDir)
 
   const { stopSessionHost } = await importSessionHostModule()
   const execCalls: Array<[string, string[]]> = []
@@ -59,28 +92,8 @@ test('stopSessionHost only targets the current namespace pid file and does not s
 
 test('stopSessionHost still stops the pid-file-owned process for the current namespace', async (t) => {
   const homeDir = makeTempHome()
-  const adhdevDir = path.join(homeDir, '.adhdev')
-  fs.mkdirSync(adhdevDir, { recursive: true })
-
-  const previousName = process.env.ADHDEV_SESSION_HOST_NAME
-  const previousHome = process.env.HOME
-  const previousUserProfile = process.env.USERPROFILE
-  process.env.ADHDEV_SESSION_HOST_NAME = 'adhdev-standalone-test'
-  process.env.HOME = homeDir
-  process.env.USERPROFILE = homeDir
-
-  t.after(() => {
-    if (previousName === undefined) delete process.env.ADHDEV_SESSION_HOST_NAME
-    else process.env.ADHDEV_SESSION_HOST_NAME = previousName
-    if (previousHome === undefined) delete process.env.HOME
-    else process.env.HOME = previousHome
-    if (previousUserProfile === undefined) delete process.env.USERPROFILE
-    else process.env.USERPROFILE = previousUserProfile
-    fs.rmSync(homeDir, { recursive: true, force: true })
-  })
-
-  const pidFile = path.join(adhdevDir, 'adhdev-standalone-test-session-host.pid')
-  fs.writeFileSync(pidFile, '5151\n', 'utf8')
+  pinTempInstance(t, homeDir)
+  const pidFile = writePidFile(homeDir, 5151)
 
   const { stopSessionHost } = await importSessionHostModule()
   const killCalls: Array<[number, NodeJS.Signals | number | undefined]> = []
@@ -89,6 +102,91 @@ test('stopSessionHost still stops the pid-file-owned process for the current nam
     killCalls.push([pid, signal])
     return true
   }) as typeof process.kill)
+
+  assert.equal(stopSessionHost(), true)
+  assert.deepEqual(killCalls, [[5151, 'SIGTERM']])
+  assert.equal(fs.existsSync(pidFile), false)
+})
+
+test('stopSessionHost pid-file stop is repeatable back-to-back in the same process', async (t) => {
+  const homeDir = makeTempHome()
+  pinTempInstance(t, homeDir)
+  const pidFile = writePidFile(homeDir, 6161)
+
+  const { stopSessionHost } = await importSessionHostModule()
+  const killCalls: Array<[number, NodeJS.Signals | number | undefined]> = []
+
+  t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
+    killCalls.push([pid, signal])
+    return true
+  }) as typeof process.kill)
+
+  assert.equal(stopSessionHost(), true)
+  assert.deepEqual(killCalls, [[6161, 'SIGTERM']])
+  assert.equal(fs.existsSync(pidFile), false)
+})
+
+test('stopSessionHost with no pid file still returns false after a pid-file scenario ran first', async (t) => {
+  const homeDir = makeTempHome()
+  pinTempInstance(t, homeDir)
+
+  const { stopSessionHost } = await importSessionHostModule()
+  const killCalls: Array<[number, NodeJS.Signals | number | undefined]> = []
+
+  t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
+    killCalls.push([pid, signal])
+    return true
+  }) as typeof process.kill)
+
+  assert.equal(stopSessionHost(), false)
+  assert.deepEqual(killCalls, [])
+})
+
+test('stopSessionHost ignores a hostile inherited config dir/home even after it was cached first', async (t) => {
+  // Phase 1: resolve and cache the process instance context under a hostile
+  // inherited ADHDEV_CONFIG_DIR/HOME — exactly what a parent adhdev process
+  // exports into the environment. The decoy pid file proves which config dir
+  // the cached context actually resolves.
+  const hostileHome = makeTempHome()
+  const hostilePidFile = writePidFile(hostileHome, 4242)
+
+  const snapshot = snapshotInstanceEnv()
+  process.env.ADHDEV_SESSION_HOST_NAME = 'adhdev-standalone-test'
+  process.env.ADHDEV_CONFIG_DIR = path.join(hostileHome, '.adhdev')
+  process.env.HOME = hostileHome
+  process.env.USERPROFILE = hostileHome
+  resetProcessInstanceContextForTests()
+
+  t.after(() => {
+    restoreInstanceEnv(snapshot)
+    resetProcessInstanceContextForTests()
+    fs.rmSync(hostileHome, { recursive: true, force: true })
+  })
+
+  const { stopSessionHost } = await importSessionHostModule()
+  const killCalls: Array<[number, NodeJS.Signals | number | undefined]> = []
+  t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
+    killCalls.push([pid, signal])
+    return true
+  }) as typeof process.kill)
+
+  assert.equal(stopSessionHost(), true)
+  assert.deepEqual(killCalls, [[4242, 'SIGTERM']])
+  assert.equal(fs.existsSync(hostilePidFile), false)
+
+  // Phase 2: pin an isolated temp instance (the same reset every test performs)
+  // and prove the previously cached hostile context does not leak into it.
+  const homeDir = makeTempHome()
+  process.env.ADHDEV_CONFIG_DIR = path.join(homeDir, '.adhdev')
+  process.env.HOME = homeDir
+  process.env.USERPROFILE = homeDir
+  resetProcessInstanceContextForTests()
+  t.after(() => {
+    fs.rmSync(homeDir, { recursive: true, force: true })
+  })
+
+  const pidFile = writePidFile(homeDir, 5151)
+  killCalls.length = 0
 
   assert.equal(stopSessionHost(), true)
   assert.deepEqual(killCalls, [[5151, 'SIGTERM']])
