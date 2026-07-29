@@ -598,6 +598,13 @@ export class CliProviderInstance implements ProviderInstance {
             this.adapter.setInApprovalResumeGraceProbe(() => this.inApprovalResumeGrace());
         }
 
+ // FLOOR-CLASS-TRANSCRIPT-DEFER-CAP: let the engine's bounded transcript-finish
+ // defer-cap escape consult THIS instance's native-transcript final-assistant
+ // judgment (the same read the completion gate uses).
+        if (typeof this.adapter.setNativeFinalAssistantProbe === 'function') {
+            this.adapter.setNativeFinalAssistantProbe(() => this.hasFreshNativeFinalAssistantForCurrentTurn());
+        }
+
  // PTY spawn
         await this.adapter.spawn();
         await this.enforceFreshSessionLaunchIfNeeded();
@@ -1688,6 +1695,43 @@ export class CliProviderInstance implements ProviderInstance {
             if (typeof ts === 'number' && ts < turnStartedAt) return false;
         }
         return true;
+    }
+
+    /**
+     * FLOOR-CLASS-TRANSCRIPT-DEFER-CAP: the engine's bounded defer-cap escape
+     * probe (registered via adapter.setNativeFinalAssistantProbe). True only when
+     * BOTH hold:
+     *  (a) this provider's transcript authority profile class is native-source —
+     *      its authoritative history is an on-disk transcript (JSONL) that keeps
+     *      the final assistant even after it scrolls outside the PTY
+     *      live-frame-tail. Class goes through resolveTranscriptAuthorityProfile
+     *      ONLY, never the raw flags.
+     *  (b) that native transcript holds a final assistant message causally
+     *      attributable to the CURRENT turn — completionHasFinalAssistantMessage
+     *      anchored on the engine's currentTurnStartedAt, so a PRIOR turn's final
+     *      assistant never satisfies the escape.
+     * Deliberately does NOT reuse completionFinalAssistantEvidence: its
+     * hasAdapterPendingResponse() upper bound is always true while the engine
+     * still holds the turn open, which would deadlock the very escape this probe
+     * exists to release. Best-effort: any read error ⇒ false (fail closed — the
+     * defer cap simply never escapes and the mesh rescue nets own the session).
+     */
+    private hasFreshNativeFinalAssistantForCurrentTurn(): boolean {
+        try {
+            if (resolveTranscriptAuthorityProfile(this.provider).class !== 'native-source') return false;
+            // Same read probeNativeTranscriptSignals performs — one
+            // readExternalCompletionMessages() per call, resolving this session's
+            // OWN native-source conversation (providerSessionId / persisted pin /
+            // floor claim).
+            const messages = this.readExternalCompletionMessages();
+            if (!messages) return false;
+            const turnStartedAt = typeof (this.adapter as any)?.currentTurnStartedAt === 'number'
+                ? (this.adapter as any).currentTurnStartedAt as number
+                : undefined;
+            return this.completionHasFinalAssistantMessage(messages, turnStartedAt);
+        } catch {
+            return false; // best-effort: fail closed
+        }
     }
 
     private recordPendingTranscriptProbe(pending: CompletedDebouncePending): ExternalTranscriptProbe | null {

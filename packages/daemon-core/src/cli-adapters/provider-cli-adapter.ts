@@ -178,6 +178,11 @@ export class ProviderCliAdapter implements CliAdapter {
     // FALSE-IDLE (Fix 2): probe the owning instance for the post-approval resume grace.
     // Null until the instance registers it; the engine treats absence as "not in grace".
     private inApprovalResumeGraceProbe: (() => boolean) | null = null;
+    // FLOOR-CLASS-TRANSCRIPT-DEFER-CAP: probe the owning instance for proof that the
+    // authoritative native transcript already holds a FRESH current-turn final
+    // assistant. Null until the instance registers it; the engine treats absence as
+    // "cannot prove" and the transcript-finish defer cap fails closed.
+    private nativeFinalAssistantProbe: (() => boolean) | null = null;
 
     // ─── State machine engine ─────────────────────────
     readonly engine: CliStateEngine;
@@ -540,6 +545,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 onApplyParsedSession: (session) => { this.applyParsedSessionMetadata(session); },
                 onTurnCompleted: () => { this.responseBuffer = ''; },
                 isInApprovalResumeGrace: () => this.inApprovalResumeGraceProbe?.() === true,
+                hasFreshNativeFinalAssistantForCurrentTurn: () => this.nativeFinalAssistantProbe?.() === true,
             } satisfies CliStateEngineCallbacks,
             resolvedConfig.timeouts,
         );
@@ -617,6 +623,15 @@ export class ProviderCliAdapter implements CliAdapter {
     // without the engine needing any mesh/auto-approve awareness of its own.
     setInApprovalResumeGraceProbe(probe: () => boolean): void {
         this.inApprovalResumeGraceProbe = probe;
+    }
+
+    // FLOOR-CLASS-TRANSCRIPT-DEFER-CAP: the instance registers its native-transcript
+    // final-assistant judgment (same read its own completion gate uses) so the
+    // engine's bounded defer-cap escape can finish a floor-class turn whose PTY
+    // parse lost the final assistant, without the engine needing any native-history
+    // awareness of its own.
+    setNativeFinalAssistantProbe(probe: () => boolean): void {
+        this.nativeFinalAssistantProbe = probe;
     }
 
     setOnPtyData(callback: (data: string) => void): void {

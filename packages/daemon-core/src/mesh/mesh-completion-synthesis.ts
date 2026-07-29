@@ -196,13 +196,56 @@ export async function reconcileUnterminatedDirectDispatches(
         // Only act on a session that has actually settled to idle. A generating /
         // waiting_approval session is mid-turn — synthesizing a completion now would
         // be wrong. (idle is the only status the MCP poll path reconciles too.)
+        //
+        // FLOOR-COMPLETION-NON-IDLE-ESCAPE (bounded): a floor-class worker whose
+        // engine wedged in `generating` (the cli-state-engine transcript-finish
+        // defer bug — final assistant scrolled outside the PTY live-frame-tail
+        // while the native transcript holds it; fixed engine-side by the
+        // defer-cap escape) reads non-idle FOREVER, so the idle gate below never
+        // rescues it even past the acked death deadline. As the mesh-side rescue
+        // net, allow the death-deadline synth to fire off a NON-IDLE read — but
+        // only under strictly stronger evidence than the idle path, because this
+        // escape has no idle re-probe to catch a resumed worker (see below).
+        // Every condition must hold; any miss fails closed to the old `continue`.
+        let nonIdleEscapeSinceAckMs: number | null = null;
         const nowMs = Date.now();
         if (readChatPayloadStatus(payload) !== 'idle') {
-            // Not idle → the worker is genuinely mid-turn (a clear live signal). Keep the
-            // live-confirmed flag set (above) but RESET the fast-track idle streak: a turn that
-            // resumed generating proves the prior idle was a mid-turn blip, not a settled turn-end.
-            setHoldState(synthKey, mesh.id, { liveConfirmedSinceAck: true, consecutiveReadFailures: 0 });
-            continue;
+            if (isAcked && readChatPayloadStatus(payload) === 'generating') {
+                // Only an ACKed (consumed) attempt qualifies — a never-acked
+                // dispatch keeps the old `continue` (no in-flight turn to rescue).
+                // Only `generating` qualifies — waiting_approval / waiting_choice /
+                // anything else is a genuinely BLOCKED worker that must not be
+                // completed.
+                const escapeAckedAtMs = Date.parse(readNonEmptyString(dispatch.updatedAt));
+                const escapeSinceAckMs = Number.isFinite(escapeAckedAtMs) ? nowMs - escapeAckedAtMs : Number.POSITIVE_INFINITY;
+                if (escapeSinceAckMs >= resolveAckedDeathDeadlineMs()) {
+                    // Past the death deadline: fall through to the synth-commit
+                    // path with backstopKind = 'ackedHoldDeathDeadlineFired'. The
+                    // remaining escape evidence (final assistant present, no
+                    // trailing tool activity, strict post-dispatch causality) is
+                    // enforced by the shared guards below; the idle-only live
+                    // re-probe is skipped (a wedged session re-probes `generating`
+                    // forever — the death deadline + causal transcript proof
+                    // replaces it).
+                    //
+                    // STALE-IDENTITY note: the read_chat payload carries NO attempt
+                    // identity (no taskId / attemptId / dispatchNonce — only
+                    // messages/status/providerSessionId/transcriptAuthority/
+                    // coverage), and the direct-dispatch record carries none either
+                    // (those fields live on the queue entry, not this row), so
+                    // there is no attempt/nonce field to guard on here. Stale-
+                    // attempt protection rests on sessionId-targeted reads plus the
+                    // strict post-dispatch transcript causality enforced below.
+                    nonIdleEscapeSinceAckMs = escapeSinceAckMs;
+                }
+            }
+            if (nonIdleEscapeSinceAckMs === null) {
+                // Not idle → the worker is genuinely mid-turn (a clear live signal). Keep the
+                // live-confirmed flag set (above) but RESET the fast-track idle streak: a turn that
+                // resumed generating proves the prior idle was a mid-turn blip, not a settled turn-end.
+                setHoldState(synthKey, mesh.id, { liveConfirmedSinceAck: true, consecutiveReadFailures: 0 });
+                continue;
+            }
         }
 
         // R4f GENERATING-BOUNDARY (acked-hold): a dispatch whose worker was OBSERVED to start
@@ -262,9 +305,11 @@ export async function reconcileUnterminatedDirectDispatches(
             // ACKED-HOLD-IDLE-OVERTRUST fast-track. Maintain the continuous idle-with-final-assistant
             // streak. The streak starts (or continues) only while a final visible assistant message is
             // present; a tick with idle-but-no-assistant breaks it (the answer is not yet rendered).
+            // Skipped entirely for the non-idle escape: a `generating` read must NOT start or extend
+            // an IDLE streak (the escape's promotion is the death deadline below, never the fast-track).
             const holdState = getHoldState(synthKey, mesh.id);
             let fastTrackReady = false;
-            if (evidence.finalSummary) {
+            if (nonIdleEscapeSinceAckMs === null && evidence.finalSummary) {
                 const idleSinceMs = holdState?.transcriptIdleSinceMs ?? nowMs;
                 if (holdState && holdState.transcriptIdleSinceMs === undefined) {
                     setHoldState(synthKey, mesh.id, { ...holdState, transcriptIdleSinceMs: idleSinceMs });
@@ -289,7 +334,13 @@ export async function reconcileUnterminatedDirectDispatches(
             }
             if (!fastTrackReady) {
                 backstopKind = 'ackedHoldDeathDeadlineFired';
-                LOG.warn('MeshReconcile', `Acked-hold death deadline reached: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) still idle ${Math.round(sinceAckMs / 1000)}s after the ack (deadline ${Math.round(deathDeadlineMs / 1000)}s) — synthesizing the missing completion as a notification-loss net (a real emit, if it ever lands, no-ops idempotently).`);
+                // The non-idle escape deliberately does NOT WARN here — its remaining
+                // evidence guards (final summary, strict causality) run below and may
+                // still veto; the definitive escape WARN is emitted at synth-commit
+                // time once every guard has passed.
+                if (nonIdleEscapeSinceAckMs === null) {
+                    LOG.warn('MeshReconcile', `Acked-hold death deadline reached: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) still idle ${Math.round(sinceAckMs / 1000)}s after the ack (deadline ${Math.round(deathDeadlineMs / 1000)}s) — synthesizing the missing completion as a notification-loss net (a real emit, if it ever lands, no-ops idempotently).`);
+                }
             }
         }
 
@@ -327,7 +378,22 @@ export async function reconcileUnterminatedDirectDispatches(
         // over-blocked while the provable-stale case is still caught.
         const dispatchedAtMs = Date.parse(readNonEmptyString(dispatch.dispatchedAt));
         const transcriptAtMs = Date.parse(evidence.transcriptMessageAt ?? '');
-        if (Number.isFinite(dispatchedAtMs) && Number.isFinite(transcriptAtMs) && transcriptAtMs < dispatchedAtMs) {
+        if (nonIdleEscapeSinceAckMs !== null) {
+            // NON-IDLE-ESCAPE causality — STRICTLY stronger than the idle path
+            // below: the escape has no idle re-probe to catch a resumed worker,
+            // so the final assistant must be PROVABLY at/after this task's own
+            // dispatch. A message provably BEFORE dispatch fails closed (prior
+            // task's summary), and an UNPARSEABLE timestamp on either side fails
+            // closed too — the idle path's timeless-provider leniency does not
+            // extend to a non-idle synth.
+            if (!Number.isFinite(dispatchedAtMs) || !Number.isFinite(transcriptAtMs) || transcriptAtMs < dispatchedAtMs) {
+                LOG.info('MeshReconcile', `Non-idle-escape stale-summary guard: refusing transcript synth for task ${taskId} on node ${nodeId} (mesh ${mesh.id}) — final assistant message (${evidence.transcriptMessageAt ?? 'unparseable'}) is not provably at/after this task's dispatch (${dispatch.dispatchedAt})`);
+                traceMeshEventDrop('reconcile_non_idle_escape_stale_summary', {
+                    taskId, sessionId, nodeId, meshId: mesh.id, event: 'agent:generating_completed',
+                }, `transcriptAt=${evidence.transcriptMessageAt} dispatchedAt=${dispatch.dispatchedAt}`);
+                continue;
+            }
+        } else if (Number.isFinite(dispatchedAtMs) && Number.isFinite(transcriptAtMs) && transcriptAtMs < dispatchedAtMs) {
             LOG.info('MeshReconcile', `Stale-summary guard: skipping transcript reconcile for task ${taskId} on node ${nodeId} (mesh ${mesh.id}) — final assistant message (${evidence.transcriptMessageAt}) predates this task's dispatch (${dispatch.dispatchedAt}); it is a prior task's summary`);
             traceMeshEventDrop('reconcile_stale_summary_before_dispatch', {
                 taskId, sessionId, nodeId, meshId: mesh.id, event: 'agent:generating_completed',
@@ -343,11 +409,25 @@ export async function reconcileUnterminatedDirectDispatches(
         // notification-miss. Under the R4f acked-hold this matters mainly for the never-acked path
         // and the post-death-deadline acked synth (the indefinite hold already deferred a live acked
         // turn); it stays as a final live-state guard at synth-commit time.
-        const reprobeStatus = await reprobeWorkerStatus(components, { isLocalNode, nodeDaemonId, readArgs });
+        // Skipped for the non-idle escape: a floor-class-wedged session re-probes
+        // `generating` FOREVER, so the re-probe would nullify the escape — the
+        // death deadline + the strict causal transcript proof above replace it.
+        const reprobeStatus = nonIdleEscapeSinceAckMs !== null
+            ? null
+            : await reprobeWorkerStatus(components, { isLocalNode, nodeDaemonId, readArgs });
         if (reprobeStatus && reprobeStatus !== 'idle') {
             deleteHoldState(synthKey, mesh.id);
             LOG.info('MeshReconcile', `Live re-probe defer: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) read '${reprobeStatus}' at synth-commit time — worker resumed generating; deferring synth to a later tick`);
             continue;
+        }
+
+        // FLOOR-COMPLETION-NON-IDLE-ESCAPE: every guard has now passed (acked +
+        // past the death deadline + `generating` read + final assistant present +
+        // no trailing tool activity + strict post-dispatch causality, and the
+        // idle-only re-probe was deliberately skipped) — the bounded non-idle
+        // escape is genuinely firing. WARN in the established backstop style.
+        if (nonIdleEscapeSinceAckMs !== null) {
+            LOG.warn('MeshReconcile', `Acked-hold death deadline NON-IDLE escape: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) still reads 'generating' ${Math.round(nonIdleEscapeSinceAckMs / 1000)}s after the ack with a causally-proven final assistant (transcriptAt=${evidence.transcriptMessageAt ?? 'n/a'}) — the floor-class PTY wedge rescue net; synthesizing the missing completion (a real emit, if it ever lands, no-ops idempotently).`);
         }
 
         const providerSessionId = readNonEmptyString(payload.providerSessionId);

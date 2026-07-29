@@ -509,3 +509,233 @@ describe('MID-TURN-CAUSAL-ADMISSION: transcript-synth completion ingresses', () 
     }
   })
 })
+
+// FLOOR-COMPLETION-NON-IDLE-ESCAPE (bounded PHASE-4 non-idle rescue net).
+//
+// A floor-class worker (codex-cli / kimi / cursor / opencode) whose CLI state engine
+// wedged in `generating` — final assistant scrolled outside the PTY live-frame-tail
+// while the native transcript holds it (the cli-state-engine transcript-finish defer
+// bug) — reads non-idle FOREVER, so PHASE 4's idle gate never rescues it even past
+// the acked death deadline. The escape under test lets the death-deadline synth fire
+// off a `generating` read, but ONLY under strictly stronger evidence than the idle
+// path (acked dispatch + past the death deadline + generating specifically + final
+// assistant present + no trailing tool activity + PROVABLE post-dispatch causality;
+// unparseable timestamps fail closed here, unlike the idle path).
+describe('FLOOR-COMPLETION-NON-IDLE-ESCAPE: PHASE 4 bounded non-idle death-deadline escape', () => {
+  // ── Core: the wedged floor-class worker shape — acked, past the death deadline,
+  //    reads 'generating' forever, but the transcript holds a causally-proven final
+  //    assistant. The synth commits through the death-deadline backstop (bounded
+  //    fail-open: it overrides even live-turn-pending evidence). ──
+  it('synthesizes for an acked dispatch past the death deadline that reads generating with a post-dispatch final assistant', async () => {
+    const meshId = `mesh_nonidle_escape_${Date.now()}`
+    process.env.MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS = '0'
+    try {
+      const taskId = `task-${randomUUID().slice(0, 8)}`
+      const dispatchAtMs = Date.now() - 5 * 60_000
+      seedDispatch(meshId, taskId, { ageMs: 5 * 60_000 })
+      updateDirectDispatchStatus(meshId, SESSION_ID, 'acked', taskId)
+
+      const readChat = vi.fn(async (cmd: string) => {
+        if (cmd !== 'read_chat') return { success: true }
+        return {
+          success: true,
+          status: 'generating', // the floor-class PTY wedge — never settles to idle
+          providerSessionId: 'kimi-history-nonidle-1',
+          messages: [
+            { role: 'user', content: 'do the task', timestamp: dispatchAtMs + 500 },
+            { role: 'assistant', content: 'Done — the answer landed in the native transcript only.', timestamp: dispatchAtMs + 60_000 },
+          ],
+        }
+      })
+      // Live-pending TRUE: the wedged engine still holds the turn open — the
+      // death-deadline boundedBackstop must override the live-pending veto, same as
+      // the idle death-deadline path.
+      const components = makePhase4Components({ isLivePending: () => true, readChat })
+
+      await reconcileUnterminatedDirectDispatches(components, phase4Mesh(meshId), [], 'daemon-local')
+      expect(terminalLedgerEntries(meshId)).toHaveLength(1)
+      expect(completionsQueued(meshId)).toHaveLength(1)
+      expect(completionsQueued(meshId)[0].coordinatorMessage).toContain('Done — the answer landed in the native transcript only.')
+
+      // Idempotent — a second tick does not double-synthesize.
+      await reconcileUnterminatedDirectDispatches(components, phase4Mesh(meshId), [], 'daemon-local')
+      expect(terminalLedgerEntries(meshId)).toHaveLength(1)
+      expect(completionsQueued(meshId)).toHaveLength(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // ── Guard: the final assistant must be causally attributable to THIS task's
+  //    dispatch — a provably pre-dispatch summary is a prior task's output. ──
+  it('refuses the non-idle escape when the final assistant predates dispatchedAt', async () => {
+    const meshId = `mesh_nonidle_stale_${Date.now()}`
+    process.env.MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS = '0'
+    try {
+      const taskId = `task-${randomUUID().slice(0, 8)}`
+      const dispatchAtMs = Date.now() - 5 * 60_000
+      seedDispatch(meshId, taskId, { ageMs: 5 * 60_000 })
+      updateDirectDispatchStatus(meshId, SESSION_ID, 'acked', taskId)
+
+      const readChat = vi.fn(async (cmd: string) => {
+        if (cmd !== 'read_chat') return { success: true }
+        return {
+          success: true,
+          status: 'generating',
+          providerSessionId: 'kimi-history-nonidle-2',
+          // Reused-session shape: the latest user-facing assistant bubble is the
+          // PRIOR task's summary (this task's prompt is not in the tail yet), so
+          // the strict causality guard — not the trailing-user selector — is what
+          // must refuse the synth.
+          messages: [
+            { role: 'user', content: 'prior task', timestamp: dispatchAtMs - 120_000 },
+            { role: 'assistant', content: 'Prior task answer — not this task.', timestamp: dispatchAtMs - 60_000 },
+          ],
+        }
+      })
+      const components = makePhase4Components({ isLivePending: () => false, readChat })
+
+      await reconcileUnterminatedDirectDispatches(components, phase4Mesh(meshId), [], 'daemon-local')
+      expect(terminalLedgerEntries(meshId)).toHaveLength(0)
+      expect(completionsQueued(meshId)).toHaveLength(0)
+      expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // ── Guard (strict causality): unlike the idle path, an UNPARSEABLE timestamp
+  //    fails closed — the escape has no idle re-probe to catch a resumed worker. ──
+  it('refuses the non-idle escape when the final assistant timestamp is unparseable', async () => {
+    const meshId = `mesh_nonidle_nots_${Date.now()}`
+    process.env.MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS = '0'
+    try {
+      const taskId = `task-${randomUUID().slice(0, 8)}`
+      seedDispatch(meshId, taskId, { ageMs: 5 * 60_000 })
+      updateDirectDispatchStatus(meshId, SESSION_ID, 'acked', taskId)
+
+      const readChat = vi.fn(async (cmd: string) => {
+        if (cmd !== 'read_chat') return { success: true }
+        return {
+          success: true,
+          status: 'generating',
+          providerSessionId: 'kimi-history-nonidle-3',
+          messages: [
+            { role: 'user', content: 'do the task' },
+            { role: 'assistant', content: 'Done — but carries no usable timestamp.' },
+          ],
+        }
+      })
+      const components = makePhase4Components({ isLivePending: () => false, readChat })
+
+      await reconcileUnterminatedDirectDispatches(components, phase4Mesh(meshId), [], 'daemon-local')
+      expect(terminalLedgerEntries(meshId)).toHaveLength(0)
+      expect(completionsQueued(meshId)).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // ── Guard (rc.16 trailing-tool veto): interim narration followed by tool
+  //    activity is not a turn end, even past the death deadline. ──
+  it('refuses the non-idle escape when trailing tool activity follows the final-looking bubble', async () => {
+    const meshId = `mesh_nonidle_tools_${Date.now()}`
+    process.env.MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS = '0'
+    try {
+      const taskId = `task-${randomUUID().slice(0, 8)}`
+      const dispatchAtMs = Date.now() - 5 * 60_000
+      seedDispatch(meshId, taskId, { ageMs: 5 * 60_000 })
+      updateDirectDispatchStatus(meshId, SESSION_ID, 'acked', taskId)
+
+      const readChat = vi.fn(async (cmd: string) => {
+        if (cmd !== 'read_chat') return { success: true }
+        return {
+          success: true,
+          status: 'generating',
+          providerSessionId: 'kimi-history-nonidle-4',
+          messages: [
+            { role: 'user', content: 'do the task', timestamp: dispatchAtMs + 500 },
+            { role: 'assistant', content: 'Let me check the logs first.', timestamp: dispatchAtMs + 60_000 },
+            { role: 'assistant', kind: 'tool', content: 'Read daemon.log', timestamp: dispatchAtMs + 65_000 },
+          ],
+        }
+      })
+      const components = makePhase4Components({ isLivePending: () => false, readChat })
+
+      await reconcileUnterminatedDirectDispatches(components, phase4Mesh(meshId), [], 'daemon-local')
+      expect(terminalLedgerEntries(meshId)).toHaveLength(0)
+      expect(completionsQueued(meshId)).toHaveLength(0)
+      expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // ── Guard: only `generating` qualifies — a waiting_approval worker is genuinely
+  //    BLOCKED and must never be completed by the escape. ──
+  it('refuses the non-idle escape for a waiting_approval read', async () => {
+    const meshId = `mesh_nonidle_wa_${Date.now()}`
+    process.env.MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS = '0'
+    try {
+      const taskId = `task-${randomUUID().slice(0, 8)}`
+      const dispatchAtMs = Date.now() - 5 * 60_000
+      seedDispatch(meshId, taskId, { ageMs: 5 * 60_000 })
+      updateDirectDispatchStatus(meshId, SESSION_ID, 'acked', taskId)
+
+      const readChat = vi.fn(async (cmd: string) => {
+        if (cmd !== 'read_chat') return { success: true }
+        return {
+          success: true,
+          status: 'waiting_approval',
+          providerSessionId: 'kimi-history-nonidle-5',
+          messages: [
+            { role: 'user', content: 'do the task', timestamp: dispatchAtMs + 500 },
+            { role: 'assistant', content: 'Done — but the worker is parked on an approval.', timestamp: dispatchAtMs + 60_000 },
+          ],
+        }
+      })
+      const components = makePhase4Components({ isLivePending: () => false, readChat })
+
+      await reconcileUnterminatedDirectDispatches(components, phase4Mesh(meshId), [], 'daemon-local')
+      expect(terminalLedgerEntries(meshId)).toHaveLength(0)
+      expect(completionsQueued(meshId)).toHaveLength(0)
+      expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // ── Guard: a NEVER-ACKED dispatch keeps the old `continue` — no in-flight turn
+  //    to rescue, so a non-idle read never synthesizes regardless of evidence. ──
+  it('refuses the non-idle escape for a never-acked dispatch', async () => {
+    const meshId = `mesh_nonidle_neveracked_${Date.now()}`
+    process.env.MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS = '0'
+    try {
+      const taskId = `task-${randomUUID().slice(0, 8)}`
+      const dispatchAtMs = Date.now() - 5 * 60_000
+      seedDispatch(meshId, taskId, { ageMs: 5 * 60_000 })
+      // Deliberately NOT acked — status stays 'dispatched'.
+
+      const readChat = vi.fn(async (cmd: string) => {
+        if (cmd !== 'read_chat') return { success: true }
+        return {
+          success: true,
+          status: 'generating',
+          providerSessionId: 'kimi-history-nonidle-6',
+          messages: [
+            { role: 'user', content: 'do the task', timestamp: dispatchAtMs + 500 },
+            { role: 'assistant', content: 'Done — but the attempt was never acked.', timestamp: dispatchAtMs + 60_000 },
+          ],
+        }
+      })
+      const components = makePhase4Components({ isLivePending: () => false, readChat })
+
+      await reconcileUnterminatedDirectDispatches(components, phase4Mesh(meshId), [], 'daemon-local')
+      expect(terminalLedgerEntries(meshId)).toHaveLength(0)
+      expect(completionsQueued(meshId)).toHaveLength(0)
+      expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+})

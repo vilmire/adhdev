@@ -1946,10 +1946,13 @@ describe('runMeshReconcileTick', () => {
       }
     })
 
-    it('R4f acked-hold: a worker mid-turn (read reports generating) is never synthesized — clear live signal holds', async () => {
+    it('R4f acked-hold: a worker mid-turn (read reports generating) with NO causally-proven post-dispatch final assistant is never synthesized — clear live signal holds', async () => {
       const meshId = `mesh_reconcile_r4f_generating_hold_${Date.now()}`
-      // Even with the death-deadline forced to 0, a read that reports `generating` is a clear live
-      // signal → never synthesized (the deadline only releases a persistently-IDLE zombie).
+      // Even with the death-deadline forced to 0, a `generating` read whose transcript does
+      // NOT prove a post-dispatch final assistant is a clear live signal → never synthesized.
+      // (The bounded non-idle escape — FLOOR-COMPLETION-NON-IDLE-ESCAPE — requires the
+      // transcript's final assistant to be PROVABLY at/after this task's dispatch; this
+      // worker's only bubble predates it, so the strict causality guard fails closed.)
       process.env.MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS = '0'
       try {
         const sessionId = 'sess-genhold'
@@ -1964,7 +1967,9 @@ describe('runMeshReconcileTick', () => {
           if (cmd !== 'read_chat') return { success: true }
           return {
             success: true, status: 'generating', providerSessionId: 'claude-history-genhold',
-            messages: [{ role: 'assistant', content: 'still working…', timestamp: 1_700_000_000_000 - 5_000 }],
+            // Mid-turn narration that PREDATES this task's dispatch (dispatch is at
+            // base−300s) — no causal proof of a current-attempt final assistant.
+            messages: [{ role: 'assistant', content: 'still working…', timestamp: 1_700_000_000_000 - 400_000 }],
           }
         })
         const components = {

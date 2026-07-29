@@ -77,6 +77,20 @@ export interface CliStateEngineCallbacks {
      * keeps the pre-fix behavior.
      */
     isInApprovalResumeGrace?(): boolean;
+    /**
+     * FLOOR-CLASS-TRANSCRIPT-DEFER-CAP: true only when the provider's
+     * AUTHORITATIVE native transcript (e.g. the JSONL the PTY live-frame-tail
+     * may have scrolled past) already holds a final assistant message causally
+     * attributable to the CURRENT turn. Consulted exclusively at the
+     * transcript-finish defer cap — the bounded escape that lets a floor-class
+     * session finish when the PTY parse permanently lacks the current-turn
+     * final assistant. The engine cannot read native transcripts itself (no
+     * native-history awareness); the owning instance answers via the SAME read
+     * its own completion gate uses. Optional, exactly like
+     * isInApprovalResumeGrace: absent ⇒ the turn cannot be proven finished
+     * natively ⇒ the cap fails closed (no forced idle, no unbounded re-arm).
+     */
+    hasFreshNativeFinalAssistantForCurrentTurn?(): boolean;
 }
 
 interface IdleFinishCandidate {
@@ -124,6 +138,25 @@ const IDLE_CONFIRMATION_GRACE_MS = 2_000;
 // and stays silent this long, we stop suppressing and let the normal idle-finish run,
 // so a genuinely-finished turn can never be held past this bound (no infinite defer).
 const APPROVAL_RESUME_IDLE_DEFER_CAP_MS = 18_000;
+
+// FLOOR-CLASS-TRANSCRIPT-DEFER-CAP: hard upper bound on how long a floor-class
+// provider (timing === 'floor': codex-cli / kimi / cursor / opencode) may keep
+// deferring finishResponse because the PTY parse lacks a current-turn final
+// standard assistant. Verified live: a codex-cli session whose final answer
+// scrolled outside the live-frame-tail deferred FOREVER — every idle-timeout /
+// finishResponse evaluation routed into rescheduleTranscriptFinishCheck, which
+// re-armed the idle timeout with no bound, wedging the session in `generating`
+// for 70m+ while the authoritative native transcript (JSONL) already held the
+// final assistant. The defer chain is therefore bounded BOTH ways, consistent
+// in spirit with MAX_FINISH_RETRIES / APPROVAL_RESUME_IDLE_DEFER_CAP_MS: at most
+// MAX_TRANSCRIPT_FINISH_DEFERS consecutive defers AND at most
+// TRANSCRIPT_FINISH_DEFER_CAP_MS elapsed since the first defer of the current
+// response epoch. At/over the cap the finish is allowed only when the native
+// transcript independently proves the current turn finished (see
+// deferOrEscalateTranscriptFinish); otherwise the chain fails CLOSED — no
+// finish, no further re-arm — and the mesh rescue nets own the wedged session.
+const MAX_TRANSCRIPT_FINISH_DEFERS = 3;
+const TRANSCRIPT_FINISH_DEFER_CAP_MS = 30_000;
 
 // FALSE-IDLE (screen-quiet gate): the generating→idle transition (both the
 // candidate-confirmed finish AND the idleFinish timeout finish) requires the
@@ -254,6 +287,18 @@ export class CliStateEngine {
     private approvalResumeDeferSince = 0;
     private approvalResumeDeferEpoch = -1;
 
+    // FLOOR-CLASS-TRANSCRIPT-DEFER-CAP: per-epoch bookkeeping for the bounded
+    // floor-class transcript finish deferral. Anchored on responseEpoch exactly
+    // like the approval-resume defer above: a newer attempt/turn bumps the epoch
+    // (onTurnStarted), so a stale defer chain can never leak its counters into a
+    // newer attempt — the next defer evaluation simply starts a fresh clock.
+    // transcriptFinishDeferSince is the wall-clock of the FIRST defer of the
+    // epoch; transcriptFinishDeferCount is how many defers have been armed within
+    // it. Both bounds (count AND elapsed) must hold for another defer to arm.
+    private transcriptFinishDeferEpoch = -1;
+    private transcriptFinishDeferSince = 0;
+    private transcriptFinishDeferCount = 0;
+
     // ── Idle confirmation grace ──────────────────────
     /**
      * `finishResponse` produces the `generating → idle` transition that
@@ -321,6 +366,9 @@ export class CliStateEngine {
     onTurnStarted(turnScope: TurnParseScope): void {
         this.isWaitingForResponse = true;
         this.finishRetryCount = 0;
+        // New turn = new response epoch (bumped below) — the floor-class defer
+        // cap bookkeeping is epoch-anchored, so clear it explicitly here too.
+        this.clearTranscriptFinishDefer();
         this.clearIdleFinishCandidate('send_message');
         this.currentTurnScope = turnScope;
         // ARCH-REFACTOR R1: bind this turn's mesh taskId. A task-less (ad-hoc dashboard)
@@ -512,6 +560,7 @@ export class CliStateEngine {
         this.submitRetryUsed = false;
         this.submitRetryPromptSnippet = '';
         this.finishRetryCount = 0;
+        this.clearTranscriptFinishDefer();
         this.currentTurnScope = null;
         this.activeModal = null;
         this.recordTrace('stale_idle_response_cleared', { reason });
@@ -546,6 +595,7 @@ export class CliStateEngine {
         this.submitRetryUsed = false;
         this.submitRetryPromptSnippet = '';
         this.finishRetryCount = 0;
+        this.clearTranscriptFinishDefer();
         this.currentTurnScope = null;
         this.activeModal = null;
         this.setStatus('idle', reason);
@@ -583,6 +633,7 @@ export class CliStateEngine {
         this.pendingScriptStatusSince = 0;
         this.approvalResumeDeferSince = 0;
         this.approvalResumeDeferEpoch = -1;
+        this.clearTranscriptFinishDefer();
         this.clearApprovalResolutionMemory();
     }
 
@@ -621,6 +672,7 @@ export class CliStateEngine {
         this.submitRetryUsed = false;
         this.submitRetryPromptSnippet = '';
         this.finishRetryCount = 0;
+        this.clearTranscriptFinishDefer();
         this.currentTurnScope = null;
         this.activeModal = null;
         this.setStatus('idle', reason);
@@ -1123,6 +1175,7 @@ export class CliStateEngine {
         this.submitRetryUsed = false;
         this.submitRetryPromptSnippet = '';
         this.finishRetryCount = 0;
+        this.clearTranscriptFinishDefer();
         this.currentTurnScope = null;
         this.activeModal = null;
         this.providerErrorMessage = typeof session.errorMessage === 'string' && session.errorMessage.trim()
@@ -1269,8 +1322,7 @@ export class CliStateEngine {
                     return;
                 }
                 const parsed = this.runParseSession(this.transport.getSnapshot());
-                if (this.shouldDeferFinishForTranscript(parsed)) {
-                    this.rescheduleTranscriptFinishCheck('transcript_idle_timeout_not_final');
+                if (this.deferOrEscalateTranscriptFinish(parsed, 'transcript_idle_timeout_not_final') !== 'proceed') {
                     return;
                 }
                 this.clearIdleFinishCandidate('idle_timeout_finish');
@@ -1339,13 +1391,123 @@ export class CliStateEngine {
         this.approvalResumeDeferEpoch = -1;
     }
 
+    private clearTranscriptFinishDefer(): void {
+        this.transcriptFinishDeferEpoch = -1;
+        this.transcriptFinishDeferSince = 0;
+        this.transcriptFinishDeferCount = 0;
+    }
+
+    /**
+     * FLOOR-CLASS-TRANSCRIPT-DEFER-CAP: the single decision point for the
+     * floor-class transcript finish deferral, shared by BOTH former call sites
+     * (the idle-timeout path in applyIdle and the top of finishResponse).
+     *
+     * Previously each site did `if (shouldDeferFinishForTranscript(parsed)) {
+     * rescheduleTranscriptFinishCheck(reason); return; }` — an UNBOUNDED loop:
+     * whenever the final answer scrolled outside the live-frame-tail the PTY
+     * parse permanently lacks a current-turn final assistant, so the defer
+     * re-armed the idle timeout forever and the session wedged in `generating`
+     * (verified live: 70m+ on codex-cli, 48m on kimi) even though the
+     * authoritative native transcript already held the final assistant. Every
+     * downstream rescue gate (instance stall reconciliation, mesh PHASE-4)
+     * requires an `idle` read, so the wedge was terminal.
+     *
+     * Decision:
+     *  - 'proceed'  — no defer needed (parse shows the final assistant), OR the
+     *    defer cap tripped and the bounded escape's guards ALL hold. The caller
+     *    continues to finish exactly as today.
+     *  - 'deferred' — still under both bounds (count < MAX_TRANSCRIPT_FINISH_DEFERS
+     *    AND elapsed < TRANSCRIPT_FINISH_DEFER_CAP_MS); the idle timeout was
+     *    re-armed once more via rescheduleTranscriptFinishCheck.
+     *  - 'blocked'  — the cap tripped but an escape guard failed. FAIL CLOSED:
+     *    no finish AND no further re-arm (that re-arm IS the unbounded loop
+     *    being killed). The wedged session is then owned by the rescue nets
+     *    (mesh PHASE-4's bounded non-idle escape; any fresh PTY output re-enters
+     *    evaluateSettled through the normal output paths anyway).
+     *
+     * Bounded-escape guards (ALL must hold — the escape force-finishes a turn
+     * the PTY cannot prove finished, so it needs strictly stronger evidence
+     * than the ordinary idle-finish):
+     *  (a) currentStatus === 'generating' AND isWaitingForResponse AND no
+     *      actionable approval — NEVER force-idle waiting_choice /
+     *      waiting_approval / cancelled / any non-generating state;
+     *  (b) screen/interaction evidence is quiet on a FRESH live snapshot —
+     *      hasScreenBeenQuietForIdle(now) AND !hasRecentInteractiveActivity —
+     *      a worker still painting output is mid-turn, not wedged;
+     *  (c) the authoritative native transcript proves a FRESH current-turn
+     *      final assistant via the hasFreshNativeFinalAssistantForCurrentTurn
+     *      callback (absent/false/throwing ⇒ cannot prove ⇒ fail closed).
+     * Exactly-once is guaranteed downstream: finishResponse runs
+     * resetActiveTurnState() before scheduleIdleFinish, so subsequent
+     * evaluations no-op — no second completion path is added here.
+     */
+    private deferOrEscalateTranscriptFinish(parsed: any, reason: string): 'deferred' | 'proceed' | 'blocked' {
+        if (!this.shouldDeferFinishForTranscript(parsed)) {
+            return 'proceed';
+        }
+        const now = Date.now();
+        if (this.transcriptFinishDeferEpoch !== this.responseEpoch || this.transcriptFinishDeferSince === 0) {
+            // First defer for this response epoch — start the cap clock. Same
+            // anchoring discipline as the approval-resume defer: the clock is
+            // cleared only by turn teardown / a new turn (clearTranscriptFinishDefer),
+            // NOT by a cap trip below, so a tripped cap STAYS tripped for the
+            // rest of this epoch (no arm/clear cycle can restart the bound).
+            this.transcriptFinishDeferEpoch = this.responseEpoch;
+            this.transcriptFinishDeferSince = now;
+            this.transcriptFinishDeferCount = 0;
+        }
+        const elapsedMs = now - this.transcriptFinishDeferSince;
+        if (this.transcriptFinishDeferCount < MAX_TRANSCRIPT_FINISH_DEFERS && elapsedMs < TRANSCRIPT_FINISH_DEFER_CAP_MS) {
+            this.transcriptFinishDeferCount += 1;
+            this.rescheduleTranscriptFinishCheck(reason);
+            return 'deferred';
+        }
+
+        // ── Cap tripped: the bounded escape ──────────────────────────────────
+        // (a) Never force-idle a non-generating / approval-blocked state.
+        if (this.currentStatus !== 'generating' || !this.isWaitingForResponse || this.hasActionableApproval()) {
+            this.recordTrace('transcript_finish_defer_cap_fail_closed', {
+                reason, guard: 'status', status: this.currentStatus,
+                isWaitingForResponse: this.isWaitingForResponse,
+                count: this.transcriptFinishDeferCount, elapsedMs,
+            });
+            return 'blocked';
+        }
+        // (b) Screen/interaction quiet on a fresh live snapshot — recent output
+        // or repaints mean the turn is genuinely still running.
+        const snap = this.transport.getSnapshot();
+        if (!this.hasScreenBeenQuietForIdle(now) || this.hasRecentInteractiveActivity(snap, now)) {
+            this.recordTrace('transcript_finish_defer_cap_fail_closed', {
+                reason, guard: 'screen_active',
+                count: this.transcriptFinishDeferCount, elapsedMs,
+            });
+            return 'blocked';
+        }
+        // (c) Native-transcript proof of a fresh current-turn final assistant.
+        // Optional callback: absent ⇒ cannot prove ⇒ fail closed.
+        let nativeProven = false;
+        if (typeof this.callbacks.hasFreshNativeFinalAssistantForCurrentTurn === 'function') {
+            try { nativeProven = this.callbacks.hasFreshNativeFinalAssistantForCurrentTurn() === true; } catch { nativeProven = false; }
+        }
+        if (!nativeProven) {
+            this.recordTrace('transcript_finish_defer_cap_fail_closed', {
+                reason, guard: 'native_proof',
+                count: this.transcriptFinishDeferCount, elapsedMs,
+            });
+            return 'blocked';
+        }
+        this.recordTrace('transcript_finish_defer_cap_escape', {
+            reason, count: this.transcriptFinishDeferCount, elapsedMs,
+        });
+        return 'proceed';
+    }
+
     finishResponse(): void {
         if (this.submitPendingUntil > Date.now()) return;
         if (this.responseSettleIgnoreUntil > Date.now()) return;
         const snap = this.transport.getSnapshot();
         const parsedBeforeFinish = this.runParseSession(snap);
-        if (this.shouldDeferFinishForTranscript(parsedBeforeFinish)) {
-            this.rescheduleTranscriptFinishCheck('transcript_finish_not_final');
+        if (this.deferOrEscalateTranscriptFinish(parsedBeforeFinish, 'transcript_finish_not_final') !== 'proceed') {
             return;
         }
         this.clearIdleFinishCandidate('finish_response_enter');
