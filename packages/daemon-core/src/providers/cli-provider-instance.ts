@@ -1762,9 +1762,21 @@ export class CliProviderInstance implements ProviderInstance {
         return env && typeof env === 'object' ? env as Record<string, string> : undefined;
     }
 
-    private readExternalCompletionMessages(): unknown[] | null {
+    private readExternalCompletionMessages(opts?: { allowManifestNativeSource?: boolean }): unknown[] | null {
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
-        if (!adapterOwnsMessagesElsewhere) return null;
+        // KIMI-RC30-COMPLETION-SUMMARY-NATIVE-SNAPSHOT: production kimi routes
+        // through ProviderCliAdapter (provider dir ships provider.v1.json, no
+        // spec.json), which does NOT set chatMessagesOwnedExternally — only
+        // SpecCliAdapter does. The manifest's declarative nativeHistory survives
+        // ProviderLoader resolve (rc.29), so for callers that explicitly opt in
+        // (completion SUMMARY selection only) the manifest's canonical
+        // native-source declaration is an equivalent authority signal for whether
+        // an on-disk transcript exists to read. The completion evidence/gate
+        // probe (completionFinalAssistantEvidence) does NOT opt in — its
+        // block/hold semantics are byte-identical to before.
+        const manifestNativeSource = opts?.allowManifestNativeSource === true
+            && isNativeSourceCanonicalHistory(this.provider?.nativeHistory);
+        if (!adapterOwnsMessagesElsewhere && !manifestNativeSource) return null;
         // authority-ok: native READ resolution, not a completion/stall/redrive verdict.
         // This gate only decides whether an on-disk native transcript EXISTS to read for
         // this session; the completion decision is made by callers over the returned
@@ -2101,6 +2113,19 @@ export class CliProviderInstance implements ProviderInstance {
         // at/after turnStartedAt yields '' in that race instead of the stale tail; the weak/empty
         // summary is later upgraded by the mesh reconcile loop once the real bubble is written.
         const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
+        // KIMI-RC30-COMPLETION-SUMMARY-NATIVE-SNAPSHOT: the completion summary is a
+        // PROVENANCE decision, not a gate verdict — when the provider's manifest
+        // declares canonical native-source history (production kimi via
+        // ProviderCliAdapter, which never sets chatMessagesOwnedExternally), the
+        // on-disk transcript is just as authoritative for the finalSummary as it
+        // already is for mesh_read_chat. Prefer its fresh in-turn final assistant
+        // over the parsed PTY snapshot (kimi's transcriptPty scrape renders
+        // Todo/progress bullets as assistant text — the rc.30 stale summary).
+        // Turn-scoping below fails closed: a native tail that predates the turn
+        // yields '' and the parsed fallback applies unchanged, and a non-native
+        // provider skips the transcript read entirely (no new I/O).
+        const manifestNativeSource = !adapterOwnsMessagesElsewhere
+            && isNativeSourceCanonicalHistory(this.provider?.nativeHistory);
         // FALSE-IDLE Defect 1b: turn-scope the PARSED screen fallback too. Without this a stale
         // mid-turn assistant (predating turnStartedAt) that the turn-boundary gate already
         // rejected as evidence could still leak into the finalSummary via this parsed fallback
@@ -2113,8 +2138,10 @@ export class CliProviderInstance implements ProviderInstance {
                 : []) as any,
             turnStartedAt,
         );
-        if (adapterOwnsMessagesElsewhere) {
-            const externalMessages = this.readExternalCompletionMessages();
+        if (adapterOwnsMessagesElsewhere || manifestNativeSource) {
+            const externalMessages = this.readExternalCompletionMessages(
+                manifestNativeSource ? { allowManifestNativeSource: true } : undefined,
+            );
             // Turn-scope the external transcript: never return a bubble produced before this
             // turn started. With no boundary known (turnStartedAt falsy) behaviour is unchanged.
             const externalSummary = externalMessages
@@ -3808,7 +3835,14 @@ export class CliProviderInstance implements ProviderInstance {
                 // real answer (lastCompletionSummary). Fall back to the cache so the notification
                 // carries the summary that mesh_read_chat.summary already shows — consistent with
                 // completionDiagnostic.finalAssistantPresent being credited from the same cache.
-                finalSummary: (this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt)
+                // KIMI-RC30-COMPLETION-SUMMARY-NATIVE-SNAPSHOT: when the gate's evidence
+                // probe already proved the turn done from an external-native read, its
+                // exact snapshot (pending.resolvedFinalMessages) is the authoritative
+                // final-message snapshot — reuse it instead of paying a second live
+                // read that can race a wire.jsonl rewrite (the EMPTY-FINAL-CONTENT
+                // TOCTOU class, now closed for the forced path too).
+                finalSummary: (this.snapshotExternalNativeCompletionSummary(pending)
+                    || this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt)
                     || this.cachedInTurnCompletionSummaryContent(pending.turnStartedAt)
                     || (blockReason.startsWith('parsed_status:') ? '' : undefined)),
                 completionDiagnostic,
@@ -3929,6 +3963,28 @@ export class CliProviderInstance implements ProviderInstance {
             if (fromSnapshot) return fromSnapshot;
         }
         return this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt);
+    }
+
+    /**
+     * KIMI-RC30-COMPLETION-SUMMARY-NATIVE-SNAPSHOT: finalSummary seed for the
+     * FORCED finalization-timeout emit. When the gate's last evidence probe proved
+     * the turn's final assistant from an external-NATIVE read
+     * (pending.resolvedFinalEvidenceSource === 'external-native'), the exact
+     * snapshot it cached on pending.resolvedFinalMessages is the authoritative
+     * final-message snapshot — extract from it rather than paying a second,
+     * independent live read that can race a wire.jsonl rewrite between the probe
+     * and the emit (same TOCTOU class cleanCompletionFinalSummary closed for the
+     * clean path). A 'parsed' snapshot is deliberately NOT reused here: for a
+     * native-source provider the parsed PTY scrape can be a stale Todo/progress
+     * bullet (rc.30), so the native-preferring completionFinalSummary below must
+     * get its say first. Turn-scoped by extractFinalSummaryFromMessagesAfter, so
+     * a pre-turn bubble can never leak out of the snapshot either (fail closed).
+     */
+    private snapshotExternalNativeCompletionSummary(pending: CompletedDebouncePending): string | undefined {
+        if (pending.resolvedFinalEvidenceSource !== 'external-native') return undefined;
+        if (!Array.isArray(pending.resolvedFinalMessages)) return undefined;
+        const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages as any, pending.turnStartedAt);
+        return fromSnapshot || undefined;
     }
 
     /**
