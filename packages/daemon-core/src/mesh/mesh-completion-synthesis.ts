@@ -598,33 +598,71 @@ export async function pollAssignedTaskInTurnProgress(
     mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
     row: { id: string; assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string; dispatchTimestamp?: string },
 ): Promise<boolean> {
+    return (await pollAssignedTaskActivity(components, mesh, row)).inTurnProgress;
+}
+
+export interface AssignedTaskActivity {
+    /** "Did the worker START this task's turn" — any post-dispatch agent bubble. */
+    inTurnProgress: boolean;
+    /**
+     * Timestamp (ms) of the NEWEST post-dispatch agent bubble, when one exists.
+     * Callers use this to distinguish a worker whose transcript is still GROWING
+     * (fresh activity → hold a redrive/reclaim) from one that went quiet mid-turn
+     * (stale activity → bounded recovery may proceed). Existence alone is not
+     * enough: a post-dispatch bubble remains visible forever after the worker dies,
+     * so a boolean-only check would suppress the reclaim indefinitely.
+     */
+    lastAgentActivityMs: number | null;
+}
+
+/**
+ * RC.20 (queue/redrive): activity-timestamped sibling of
+ * pollAssignedTaskInTurnProgress. Same evidence bar (any post-dispatch AGENT-side
+ * bubble proves the prompt was consumed — this covers a native-source worker's own
+ * narration/tool bubbles, including the tool activity an orchestrator emits while
+ * spawning its child probes), but also reports the newest bubble's timestamp so the
+ * reconcile loop can apply a bounded freshness rule instead of holding forever.
+ *
+ * Conservative in the same direction: an unreadable transcript, a missing dispatch
+ * boundary, or a tail with nothing post-dispatch yields inTurnProgress=false /
+ * lastAgentActivityMs=null, so the caller falls through to its normal decision.
+ */
+export async function pollAssignedTaskActivity(
+    components: DaemonComponents,
+    mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
+    row: { id: string; assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string; dispatchTimestamp?: string },
+): Promise<AssignedTaskActivity> {
+    const NONE: AssignedTaskActivity = { inTurnProgress: false, lastAgentActivityMs: null };
     const sessionId = readNonEmptyString(row.assignedSessionId);
     const nodeId = readNonEmptyString(row.assignedNodeId);
-    if (!sessionId || !nodeId) return false; // no worker to read
+    if (!sessionId || !nodeId) return NONE; // no worker to read
 
     // A dispatch boundary is REQUIRED: without it a reused session's prior-task tail would read as
     // progress on THIS task and suppress the re-drive forever.
     const dispatchedAtMs = Date.parse(readNonEmptyString(row.dispatchTimestamp));
-    if (!Number.isFinite(dispatchedAtMs)) return false;
+    if (!Number.isFinite(dispatchedAtMs)) return NONE;
 
     // TURN-LEDGER (Stage 5): the transcript read is evidence collection — strictly
     // ordered against any destructive stop/teardown queued for the same session, so
     // teardown can never destroy the evidence source mid-read (the 6ms race).
     const payload = await runSessionEvidenceCollection(sessionId, () => fetchAssignedTaskChatTail(components, mesh, row));
-    if (!payload) return false;
+    if (!payload) return NONE;
 
     const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
     // Any AGENT-side bubble dated at/after dispatch proves the prompt landed and the turn is under
     // way. User bubbles are excluded: the injected task prompt itself is a post-dispatch user
     // message, and counting it would suppress the re-drive for the very row this watchdog exists
     // to rescue (delivered, echoed into the transcript, but never actually worked).
-    return messages.some(msg => {
-        if (!msg) return false;
-        if (msg.role === 'user' || msg.role === 'system') return false;
+    let lastAgentActivityMs: number | null = null;
+    for (const msg of messages) {
+        if (!msg) continue;
+        if (msg.role === 'user' || msg.role === 'system') continue;
         const ts = readChatMessageTimestampMs(msg);
-        if (typeof ts !== 'number' || !Number.isFinite(ts)) return false;
-        return ts >= dispatchedAtMs;
-    });
+        if (typeof ts !== 'number' || !Number.isFinite(ts)) continue;
+        if (ts < dispatchedAtMs) continue;
+        if (lastAgentActivityMs === null || ts > lastAgentActivityMs) lastAgentActivityMs = ts;
+    }
+    return { inTurnProgress: lastAgentActivityMs !== null, lastAgentActivityMs };
 }
 
 export async function pollAssignedTaskTerminalEvidence(

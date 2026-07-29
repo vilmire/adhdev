@@ -218,6 +218,20 @@ export interface TurnLedgerMetrics {
      * session was confirmed rebound — the hold then applied through the FSM.
      */
     suspensionConsumedRecovered: number;
+    /**
+     * RC.20: redrive/reclaim decisions suppressed because DURABLE or PROVIDER-
+     * NATIVE evidence proves the attempt already consumed the prompt, keyed by
+     * typed reason (e.g. `active_attempt_stage`, `native_source_activity`).
+     * Content-free: reasons and counts only.
+     */
+    redriveBlockedByReason: Record<string, number>;
+    /**
+     * RC.20: queue target pins (targetSessionId/targetNodeId) cleared so a
+     * pinned-pending task could become claimable again, keyed by typed reason
+     * (e.g. `dead_target_session_absent`, `dead_target_node_absent`,
+     * `target_session_pin_expired_unclaimed`). Content-free.
+     */
+    targetPinClearedByReason: Record<string, number>;
 }
 
 const metrics: TurnLedgerMetrics = {
@@ -236,6 +250,8 @@ const metrics: TurnLedgerMetrics = {
     reorderedGeneratingSuppressed: 0,
     redriveBlockedBySuspension: 0,
     suspensionConsumedRecovered: 0,
+    redriveBlockedByReason: {},
+    targetPinClearedByReason: {},
 };
 
 export function getTurnLedgerMetrics(nowMs: number = Date.now()): TurnLedgerMetrics & { outboxOldestPendingAgeMs: number | null; outboxByStatus: Record<string, number> } {
@@ -250,6 +266,8 @@ export function getTurnLedgerMetrics(nowMs: number = Date.now()): TurnLedgerMetr
         ...metrics,
         completionProposalsRejected: { ...metrics.completionProposalsRejected },
         suspensionsDropped: { ...metrics.suspensionsDropped },
+        redriveBlockedByReason: { ...metrics.redriveBlockedByReason },
+        targetPinClearedByReason: { ...metrics.targetPinClearedByReason },
         outboxOldestPendingAgeMs,
         outboxByStatus,
     };
@@ -271,6 +289,8 @@ export function __resetTurnLedgerMetricsForTests(): void {
     metrics.reorderedGeneratingSuppressed = 0;
     metrics.redriveBlockedBySuspension = 0;
     metrics.suspensionConsumedRecovered = 0;
+    metrics.redriveBlockedByReason = {};
+    metrics.targetPinClearedByReason = {};
     suspensionLogKeys.clear();
 }
 
@@ -280,6 +300,27 @@ function noteRejectedProposal(reason: CompletionRejectionReason): void {
 
 function noteDroppedSuspension(reason: HeldSuspensionDropReason): void {
     metrics.suspensionsDropped[reason] = (metrics.suspensionsDropped[reason] ?? 0) + 1;
+}
+
+/**
+ * RC.20 (content-free): count a redrive/reclaim suppressed by positive consumed
+ * evidence. `reason` is a fixed vocabulary — never ids, prompts, or transcript text:
+ *   - `active_attempt_stage`     — the durable attempt sits at generating /
+ *                                  waiting_approval / waiting_choice / finalizing.
+ *   - `native_source_activity`   — an emitsPtyTurnEvents=false worker's transcript
+ *                                  shows FRESH post-dispatch agent activity.
+ */
+export function noteRedriveBlocked(reason: 'active_attempt_stage' | 'native_source_activity'): void {
+    metrics.redriveBlockedByReason[reason] = (metrics.redriveBlockedByReason[reason] ?? 0) + 1;
+}
+
+/**
+ * RC.20 (content-free): count a queue target pin cleared so the task became
+ * claimable again. `reason` is the typed clear reason (dead_target_node_absent /
+ * dead_target_session_absent / target_session_pin_expired_unclaimed).
+ */
+export function noteTargetPinCleared(reason: string): void {
+    metrics.targetPinClearedByReason[reason] = (metrics.targetPinClearedByReason[reason] ?? 0) + 1;
 }
 
 /**

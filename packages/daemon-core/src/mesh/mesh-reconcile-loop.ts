@@ -84,11 +84,12 @@ import {
     autoPruneStaleDirectDispatches,
     pollAssignedTaskTerminalEvidence,
     pollAssignedTaskInTurnProgress,
+    pollAssignedTaskActivity,
     type AssignedTaskTerminalEvidence,
 } from './mesh-completion-synthesis.js';
 import { sessionStatusFromNodes } from './mesh-active-work.js';
 import { drainMeshTurnOutbox } from './mesh-event-forwarding.js';
-import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reconstructActiveAttempts, isTerminalTurnStage, drainHeldTurnSuspensionsForMesh, gateRedriveForHeldSuspension } from './mesh-turn-ledger.js';
+import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reconstructActiveAttempts, isTerminalTurnStage, drainHeldTurnSuspensionsForMesh, gateRedriveForHeldSuspension, recordTurnAck, noteRedriveBlocked } from './mesh-turn-ledger.js';
 import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
@@ -699,6 +700,21 @@ const ASSIGNED_STRANDED_DEADLINE_MS = 5 * 60_000;
 // the non-generating + no-terminal-ledger guards below so a worker still mid-turn is never
 // reclaimed out from under itself.
 const DELIVERED_NO_TURN_DEADLINE_MS = 15 * 60_000;
+
+// RC.20 (queue/redrive): freshness window for the native-source activity gate at the
+// delivered-no-turn deadline. A provider whose turn start is NOT a PTY event
+// (transcriptAuthority=provider + floor/hold completion timing — kimi and kin,
+// emitsPtyTurnEvents=false) never emits agent:generating_started and reads IDLE_CONFIRMED
+// between tool calls, so the deadline used to reclaim a GENUINELY-EXECUTING worker and
+// re-inject the full prompt (live 2026-07-28: canary task f3261319 re-injected 4×,
+// dispatchNonce → 9, before operator cancellation). The deadline now holds the row while
+// the worker transcript shows FRESH post-dispatch agent activity (its own narration/tool
+// bubbles, including the tool activity emitted while spawning child probes) — activity
+// no older than this window. A worker that went QUIET mid-turn (last activity older than
+// the window) is treated as dead and the bounded reclaim proceeds: the hold can never
+// extend indefinitely without fresh evidence (no infinite lease extension). Sized well
+// above normal native-source tool-call/model-thinking gaps and the reconcile cadence.
+const NATIVE_SOURCE_ACTIVITY_STALE_MS = 10 * 60_000;
 
 // DELIVERED-NOT-CONSUMED (remote autoLaunch delivered≠consumed gap): how long a row may sit
 // 'assigned' with a CONFIRMED delivery ('delivered') that was never CONSUMED ('acked' — the
@@ -1429,6 +1445,29 @@ async function recoverStrandedAssignedDispatches(
                 if (redriveProfile?.emitsPtyTurnEvents === false
                     && await pollAssignedTaskInTurnProgress(components, { id: meshId, nodes: mesh.nodes }, row)) {
                     deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
+                    // RC.20: the post-dispatch agent activity that proves the turn started IS
+                    // consumption evidence — promote the consumed link durably (idempotent;
+                    // audit source native_source_activity) so the attempt is injection-ineligible
+                    // even across a daemon restart, not merely deferred this tick.
+                    try {
+                        recordTurnAck({
+                            meshId,
+                            taskId: row.id,
+                            kind: 'consumed',
+                            sessionId: row.assignedSessionId,
+                            legacy: {
+                                ...(typeof row.dispatchNonce === 'number' ? { dispatchNonce: row.dispatchNonce } : {}),
+                                ...(row.assignedNodeId ? { nodeId: row.assignedNodeId } : {}),
+                                ...(row.assignedProviderType ? { providerType: row.assignedProviderType } : {}),
+                            },
+                            evidence: {
+                                source: 'native_source_activity',
+                                profileClass: redriveProfile.class,
+                                profileTiming: redriveProfile.timing,
+                            },
+                        });
+                    } catch { /* best-effort durable consumed link — the defer below still applies */ }
+                    noteRedriveBlocked('native_source_activity');
                     traceMeshEventDrop('short_redrive_deferred_native_source_progress', {
                         taskId: row.id,
                         sessionId: row.assignedSessionId,
@@ -1763,6 +1802,101 @@ async function recoverStrandedAssignedDispatches(
                     event: 'agent:generating_completed',
                 }, `${reclaimReason} → transcript ${terminalEvidence.outcome}${propagated ? ' propagated' : ''}`);
                 continue;
+            }
+            // RC.20 ACTIVE-ATTEMPT GATE: a nonterminal attempt whose durable stage is a
+            // LIVE-turn stage (generating / waiting_approval / waiting_choice / finalizing)
+            // is positive causal evidence the prompt was consumed and the turn is owned —
+            // reclaiming here would tear a live worker off its turn and re-inject the same
+            // prompt. This covers the waiting_choice/approval states whose session status
+            // can read IDLE_CONFIRMED locally (a floor-class worker parked at a picker), which
+            // the verdict above cannot see. A bare 'consumed' stage does NOT hold by itself:
+            // the worker may have died right after consuming — the transcript-freshness gate
+            // below (or, for PTY-event providers, the GENERATING verdict / UNKNOWN grace) is
+            // the bounded arbiter for that case, so recovery stays fail-closed and bounded.
+            const currentAttempt = (() => {
+                try { return store.getCurrentTurnAttempt(meshId, row.id); } catch { return null; }
+            })();
+            const attemptStage = readNonEmptyString(currentAttempt?.stage);
+            if (currentAttempt && !currentAttempt.terminalOutcome
+                && (attemptStage === 'generating' || attemptStage === 'waiting_approval'
+                    || attemptStage === 'waiting_choice' || attemptStage === 'finalizing')) {
+                deliveredNoTurnUnknownStreak.delete(streakKey);
+                noteRedriveBlocked('active_attempt_stage');
+                traceMeshEventDrop('redrive_blocked_active_attempt', {
+                    taskId: row.id,
+                    sessionId: row.assignedSessionId,
+                    nodeId: row.assignedNodeId,
+                    meshId,
+                    event: 'agent:generating_completed',
+                }, `attempt stage ${attemptStage} — live turn, ${reclaimReason} suppressed`);
+                continue;
+            }
+            // RC.20 NATIVE-SOURCE ACTIVITY GATE (the f3261319 defect): mirror of the short
+            // path's STARTED-REDRIVE-NATIVE-SOURCE-BLINDSPOT gate, now for the 15-min
+            // delivered-no-turn deadline. A worker whose profile never emits PTY turn events
+            // (emitsPtyTurnEvents=false — kimi native-source floor and kin) produces its
+            // turn evidence in the native transcript only: it reads IDLE_CONFIRMED between
+            // tool calls and never flips the delivery to 'acked', so the deadline used to
+            // classify it delivered_no_turn_deadline and RE-INJECT the full prompt while it
+            // was genuinely executing (4 reinjections observed live before cancellation).
+            // Fresh post-dispatch agent activity (narration / tool bubbles, including the
+            // tool activity emitted while spawning child probes) is credible consumption
+            // evidence: PROMOTE the attempt's consumed link durably (idempotent; audit source
+            // native_source_activity) so the attempt becomes injection-ineligible across
+            // restarts, and hold the row. STALE activity (transcript quiet beyond
+            // NATIVE_SOURCE_ACTIVITY_STALE_MS) means the worker went silent mid-turn → fall
+            // through to the bounded reclaim below; no infinite hold.
+            const noTurnProfile = row.assignedSessionId
+                ? resolveAssignedTranscriptProfile(components, row)
+                : undefined;
+            if (noTurnProfile?.emitsPtyTurnEvents === false) {
+                const activity = await pollAssignedTaskActivity(components, { id: meshId, nodes: mesh.nodes }, row);
+                if (activity.inTurnProgress && activity.lastAgentActivityMs !== null
+                    && nowMs - activity.lastAgentActivityMs <= NATIVE_SOURCE_ACTIVITY_STALE_MS) {
+                    deliveredNoTurnUnknownStreak.delete(streakKey);
+                    // Durable, exactly-once: the consumed ACK is insert-once idempotent, so
+                    // repeated ticks while the worker keeps working record no duplicate stage
+                    // advance; once consumed, isPromptInjectionAllowed refuses any reinjection.
+                    try {
+                        recordTurnAck({
+                            meshId,
+                            taskId: row.id,
+                            kind: 'consumed',
+                            sessionId: row.assignedSessionId,
+                            legacy: {
+                                ...(typeof row.dispatchNonce === 'number' ? { dispatchNonce: row.dispatchNonce } : {}),
+                                ...(row.assignedNodeId ? { nodeId: row.assignedNodeId } : {}),
+                                ...(row.assignedProviderType ? { providerType: row.assignedProviderType } : {}),
+                            },
+                            evidence: {
+                                source: 'native_source_activity',
+                                profileClass: noTurnProfile.class,
+                                profileTiming: noTurnProfile.timing,
+                            },
+                        });
+                    } catch { /* best-effort durable consumed link — the hold above still applies */ }
+                    noteRedriveBlocked('native_source_activity');
+                    traceMeshEventDrop('redrive_blocked_native_source_activity', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_completed',
+                    }, `${noTurnProfile.class}_fresh_activity — consumed promoted, ${reclaimReason} suppressed`);
+                    continue;
+                }
+                if (activity.inTurnProgress) {
+                    // Post-dispatch activity exists but is STALE — the worker went quiet
+                    // mid-turn. Content-free observation only; the bounded reclaim below
+                    // proceeds (bounded recovery for a truly dead session).
+                    traceMeshEventStage('native_source_activity_stale', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_completed',
+                    }, `${noTurnProfile.class} quiet >${Math.round(NATIVE_SOURCE_ACTIVITY_STALE_MS / 1000)}s → ${reclaimReason} proceeds`);
+                }
             }
             const reclaimedLost = reclaimStrandedAssignedTask(meshId, row.id, {
                 reason: reclaimReason,

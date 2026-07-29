@@ -6,7 +6,7 @@ import { getMesh } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
-import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask, expireTaskTargetPin } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
@@ -28,7 +28,7 @@ import { isWorktreeBootstrapStaleRunning, shouldDeferDispatchForBootstrap } from
 import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
 import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { isModelCompatibleWithProvider } from './model-provider-compat.js';
-import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertPromptInjectionAllowed } from './mesh-turn-ledger.js';
+import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertPromptInjectionAllowed, noteTargetPinCleared } from './mesh-turn-ledger.js';
 
 /**
  * CANON: the single canonical coordinator-daemon id this daemon stamps onto every
@@ -1184,6 +1184,29 @@ function isTargetNodeTransientlyUnresolved(mesh: any, task: MeshWorkQueueEntry):
 // scales), so a real reconnect wins the race and the self-heal only fires on a target
 // that is genuinely gone.
 const DEAD_TARGET_GRACE_MS = 60_000;
+
+// RC.20 TARGET-PIN TTL (the mesh_queue_requeue wedge): a task hard-pinned with
+// target_session_id is delivered when that LIVE, compatible session claims it (the
+// tier-1 claim gate matches the pin; the idle→claim drain drives it in seconds). But a
+// pin whose target can never claim — a session on a REMOTE node this daemon cannot
+// observe (the dead-target verdict stays UNKNOWN there by design), a session that is not
+// an idle-claim participant for this mesh, or one that stays busy indefinitely — left
+// the task 'pending' FOREVER behind the target_session_constraint skip (observed live
+// 2026-07-28 on a cancel/reassignment control). Bounded rule: a pin that has gone
+// UNCLAIMED for this TTL (anchored at the task's requeuedAt/createdAt, so per-tick
+// updatedAt bumps cannot reset it) is EXPIRED — the target pin is cleared without
+// consuming the retry budget and the task becomes claimable by any compatible session.
+// Sized far above every legitimate claim window (DEAD_TARGET_GRACE_MS 60s,
+// AUTO_LAUNCH_AWAIT_CLAIM_MS 90s, remote agent:ready pull lag, and the 5-min dead-target
+// grace used by the live-busy contract) so a genuinely-live claim always wins the race;
+// only a pin that demonstrably never delivers expires.
+const TARGET_SESSION_PIN_TTL_MS = 15 * 60_000;
+
+/** Age of the task's target pin in ms (anchored at the last requeue, else creation). */
+function targetPinAgeMs(task: MeshWorkQueueEntry, nowMs: number = Date.now()): number | null {
+    const anchorMs = Date.parse(task.requeuedAt || task.createdAt || '');
+    return Number.isFinite(anchorMs) ? nowMs - anchorMs : null;
+}
 
 interface DeadTargetVerdict {
     /** The pinned target is confirmed dead and past the grace window → safe to unpin. */
@@ -2348,11 +2371,36 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     clearTargetNode: deadTarget.nodeDead,
                 });
                 if (requeued) {
+                    noteTargetPinCleared(deadTarget.reason);
                     LOG.warn('MeshQueue', `DEAD-TARGET-SELFHEAL: task ${task.id} (mesh ${meshId}) was pinned to a dead target (${deadTarget.reason}); requeued${deadTarget.nodeDead ? ' and unpinned node' : ''} (requeueCount=${requeued.requeueCount ?? '?'}, status=${requeued.status}).`);
                 }
                 // Keep the skip for THIS tick (the requeue already flipped the row to
                 // pending/failed); a later tick assigns/launches the now-unpinned task.
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_dead_requeued' });
+                continue;
+            }
+            // RC.20 TARGET-PIN TTL: the pin is NOT provably dead (live session, or a
+            // remote/unobservable one the dead-target verdict must not guess about) — yet
+            // it has gone UNCLAIMED past the bounded TTL, so it will never deliver through
+            // the claim path. Expire the pin (no retry-budget cost) so the task becomes
+            // claimable by any compatible session, instead of wedging 'pending' forever.
+            // A live compatible session claims within seconds, so reaching the TTL is
+            // positive evidence the pin is stale, not a race with a healthy claim.
+            const pinAgeMs = targetPinAgeMs(task);
+            if (pinAgeMs !== null && pinAgeMs >= TARGET_SESSION_PIN_TTL_MS) {
+                const expired = expireTaskTargetPin(meshId, task.id, { reason: 'target_session_pin_expired_unclaimed' });
+                if (expired) {
+                    noteTargetPinCleared('target_session_pin_expired_unclaimed');
+                    traceMeshEventDrop('target_session_pin_expired', {
+                        taskId: task.id,
+                        sessionId: readNonEmptyString(task.targetSessionId),
+                        nodeId: readNonEmptyString(task.targetNodeId),
+                        meshId,
+                        event: 'agent:ready',
+                    }, `unclaimed ${Math.round(pinAgeMs / 1000)}s ≥ ttl ${Math.round(TARGET_SESSION_PIN_TTL_MS / 1000)}s → pin cleared, claimable`);
+                    LOG.warn('MeshQueue', `TARGET-PIN-TTL: task ${task.id} (mesh ${meshId}) stayed pinned-but-unclaimed for ${Math.round(pinAgeMs / 1000)}s (ttl ${Math.round(TARGET_SESSION_PIN_TTL_MS / 1000)}s); expired the stale target pin so a compatible session can claim it.`);
+                }
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_pin_expired' });
                 continue;
             }
             markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_constraint' });
