@@ -37,6 +37,8 @@ interface Props {
     newMeshWorkspace: string
     onNewMeshWorkspaceChange: (v: string) => void
     createPickerWorkspaces: Array<{ id?: string; path: string; label?: string | null }>
+    createOnboardingPlan: any
+    createPlanLoading: boolean
 
     onSelectMesh: (id: string) => void
     onCreate: () => void
@@ -63,6 +65,8 @@ export function MeshListView({
     newMeshWorkspace,
     onNewMeshWorkspaceChange,
     createPickerWorkspaces,
+    createOnboardingPlan,
+    createPlanLoading,
     onSelectMesh,
     onCreate,
     onCancelCreate,
@@ -102,6 +106,19 @@ export function MeshListView({
                                     : daemons.map(d => <option key={d.id} value={d.id}>{daemonLabel(d)}</option>)}
                             </select>
                         </FormField>
+                    )}
+
+                    {features.createDaemonPicker && (createPlanLoading || createOnboardingPlan) && (
+                        <AlertBanner
+                            variant={createOnboardingPlan?.success === false ? 'error' : 'info'}
+                            className="mb-4"
+                        >
+                            {createPlanLoading
+                                ? 'Inspecting Git repository (read-only)…'
+                                : createOnboardingPlan?.success
+                                    ? `${createOnboardingPlan.plan?.summary || 'Git repository detected.'} No changes will be made until you click Create.`
+                                    : `${createOnboardingPlan?.code || 'onboarding_blocked'}: ${createOnboardingPlan?.error || 'Git discovery failed'} ${createOnboardingPlan?.action || ''}`}
+                        </AlertBanner>
                     )}
 
                     {features.createDaemonPicker && (
@@ -146,7 +163,7 @@ export function MeshListView({
 
                     <div className="flex gap-2 mt-3">
                         <button className="btn btn-primary btn-sm" onClick={onCreate}
-                            disabled={!createName.trim() || (!createRepoRemoteUrl.trim() && !createRepoIdentity.trim()) || (features.createDaemonPicker && (!newMeshDaemonId || !newMeshWorkspace))}>
+                            disabled={createPlanLoading || createOnboardingPlan?.success === false || (createOnboardingPlan?.success === true && createOnboardingPlan?.plan?.kind !== 'create_mesh_and_onboard') || !createName.trim() || (!createRepoRemoteUrl.trim() && !createRepoIdentity.trim()) || (features.createDaemonPicker && (!newMeshDaemonId || !newMeshWorkspace))}>
                             {t('repoMesh.list.create')}
                         </button>
                         <button className="btn btn-secondary btn-sm" onClick={onCancelCreate}>{t('repoMesh.list.cancel')}</button>

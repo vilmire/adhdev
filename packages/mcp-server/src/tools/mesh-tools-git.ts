@@ -231,6 +231,24 @@ export async function meshCloneNode(
 ): Promise<string> {
     const sourceNode = await findNodeWithRefresh(ctx, args.source_node_id);
 
+    const planned = unwrapCommandPayload(await commandForNode(ctx, sourceNode, 'plan_mesh_onboarding', {
+        workspace: sourceNode.workspace,
+        meshId: ctx.mesh.id,
+        inlineMesh: ctx.mesh,
+        operation: 'clone_worktree',
+        branch: args.branch,
+    }));
+    if (!planned?.success) {
+        return JSON.stringify({
+            success: false,
+            dry_run: true,
+            code: planned?.code || 'onboarding_blocked',
+            error: planned?.error || 'Worktree clone preflight failed',
+            action: planned?.action,
+            raw: planned,
+        }, null, 2);
+    }
+
     const result = await commandForNode(ctx, sourceNode, 'clone_mesh_node', {
         meshId: ctx.mesh.id,
         sourceNodeId: args.source_node_id,

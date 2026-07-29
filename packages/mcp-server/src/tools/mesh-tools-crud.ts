@@ -18,6 +18,42 @@ import type { CommandTransport } from '../transports/mode.js';
 import { unwrapCommandPayload } from './mesh-session-helpers.js';
 
 /**
+ * Read-only Git-aware onboarding discovery/plan. This is intentionally callable
+ * before a mesh exists and in mesh mode; it never chains into a write command.
+ */
+export async function meshPlanOnboarding(
+    transport: CommandTransport,
+    args: {
+        workspace: string;
+        mesh_id?: string;
+        operation?: 'auto' | 'add_existing' | 'clone_worktree' | 'create_mesh';
+        branch?: string;
+    },
+    defaultMeshId?: string,
+): Promise<string> {
+    const workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';
+    if (!workspace) {
+        return JSON.stringify({
+            success: false,
+            dryRun: true,
+            code: 'workspace_required',
+            error: 'workspace required',
+            action: 'Pass an absolute path on the daemon that owns the checkout.',
+        }, null, 2);
+    }
+    const meshId = typeof args?.mesh_id === 'string' && args.mesh_id.trim()
+        ? args.mesh_id.trim()
+        : (typeof defaultMeshId === 'string' ? defaultMeshId.trim() : '');
+    const result = await transport.command('plan_mesh_onboarding', {
+        workspace,
+        ...(meshId ? { meshId } : {}),
+        ...(args?.operation ? { operation: args.operation } : {}),
+        ...(typeof args?.branch === 'string' && args.branch.trim() ? { branch: args.branch.trim() } : {}),
+    });
+    return JSON.stringify(unwrapCommandPayload(result), null, 2);
+}
+
+/**
  * mesh_create — create a new mesh for a Git repository.
  *
  * Mirrors `adhdev mesh create <name>` plus its `--add-current` convenience: after
@@ -42,14 +78,40 @@ export async function meshCreate(
         return JSON.stringify({ success: false, error: 'name required' }, null, 2);
     }
 
-    const repoRemoteUrl = typeof args?.repo_remote_url === 'string' ? args.repo_remote_url.trim() : '';
-    const repoIdentity = typeof args?.repo_identity === 'string' ? args.repo_identity.trim() : '';
-    const defaultBranch = typeof args?.default_branch === 'string' ? args.default_branch.trim() : '';
+    let repoRemoteUrl = typeof args?.repo_remote_url === 'string' ? args.repo_remote_url.trim() : '';
+    let repoIdentity = typeof args?.repo_identity === 'string' ? args.repo_identity.trim() : '';
+    let defaultBranch = typeof args?.default_branch === 'string' ? args.default_branch.trim() : '';
+    let discovery: any;
     if (!repoRemoteUrl && !repoIdentity) {
-        return JSON.stringify({
-            success: false,
-            error: 'Either repo_remote_url or repo_identity is required. Pass the repo\'s git remote URL (e.g. git@github.com:user/repo.git) or an explicit identity (e.g. github.com/user/repo).',
-        }, null, 2);
+        const workspace = typeof args?.workspace === 'string' && args.workspace.trim() ? args.workspace.trim() : undefined;
+        const planned = unwrapCommandPayload(await transport.command('plan_mesh_onboarding', {
+            ...(workspace ? { workspace } : {}),
+            operation: 'auto',
+        }));
+        if (!planned?.success) {
+            return JSON.stringify({
+                success: false,
+                dry_run: true,
+                code: planned?.code || 'onboarding_blocked',
+                error: planned?.error || 'Could not infer repository identity from the workspace.',
+                action: planned?.action,
+                raw: planned,
+            }, null, 2);
+        }
+        if (planned?.plan?.kind !== 'create_mesh_and_onboard') {
+            return JSON.stringify({
+                success: false,
+                dry_run: true,
+                code: 'compatible_mesh_exists',
+                error: planned?.plan?.summary || 'A compatible mesh already exists.',
+                action: 'Use mesh_add_node with the compatible mesh instead of creating a duplicate mesh.',
+                raw: planned,
+            }, null, 2);
+        }
+        discovery = planned.discovery;
+        repoRemoteUrl = discovery?.origin?.urls?.[0] || discovery?.upstream?.urls?.[0] || '';
+        repoIdentity = discovery?.repoIdentity || '';
+        defaultBranch ||= discovery?.defaultBranch || '';
     }
 
     const createResult = await transport.command('create_mesh', {
@@ -83,7 +145,9 @@ export async function meshCreate(
         const workspace = typeof args?.workspace === 'string' && args.workspace.trim() ? args.workspace.trim() : '';
         const addResult = await transport.command('add_mesh_node', {
             meshId: mesh.id,
-            ...(workspace ? { workspace } : {}),
+            ...(workspace || discovery?.repoRoot ? { workspace: discovery?.repoRoot || workspace } : {}),
+            ...(discovery?.repoRoot ? { repoRoot: discovery.repoRoot } : {}),
+            ...(discovery?.isLinkedWorktree === true ? { isLocalWorktree: true } : {}),
             inlineMesh: mesh,
         });
         const addPayload = unwrapCommandPayload(addResult);
@@ -135,12 +199,37 @@ export async function meshAddNode(
             ? args.provider_priority.split(',').map(v => v.trim()).filter(Boolean)
             : []);
 
-    const addResult = await transport.command('add_mesh_node', {
+    // Every MCP add consumes the same read-only daemon planner first. This keeps
+    // identity/worktree/duplicate safety aligned with CLI and dashboard while
+    // preserving add_mesh_node as the separate explicit write.
+    const planResult = await transport.command('plan_mesh_onboarding', {
         meshId,
         workspace,
+        operation: 'add_existing',
+        ...(args?.inline_mesh ? { inlineMesh: args.inline_mesh } : {}),
+    });
+    const planPayload = unwrapCommandPayload(planResult);
+    if (!planPayload?.success) {
+        return JSON.stringify({
+            success: false,
+            dry_run: true,
+            code: planPayload?.code || 'onboarding_blocked',
+            error: planPayload?.error || 'Repo Mesh onboarding preflight failed',
+            action: planPayload?.action,
+            raw: planPayload ?? planResult,
+        }, null, 2);
+    }
+    const discoveredWorkspace = typeof planPayload?.discovery?.repoRoot === 'string'
+        ? planPayload.discovery.repoRoot
+        : workspace;
+
+    const addResult = await transport.command('add_mesh_node', {
+        meshId,
+        workspace: discoveredWorkspace,
+        repoRoot: discoveredWorkspace,
         ...(args?.read_only === true ? { readOnly: true } : {}),
         ...(providerPriority.length ? { providerPriority } : {}),
-        ...(args?.is_worktree === true ? { isLocalWorktree: true } : {}),
+        ...(args?.is_worktree === true || planPayload?.discovery?.isLinkedWorktree === true ? { isLocalWorktree: true } : {}),
         ...(args?.inline_mesh ? { inlineMesh: args.inline_mesh } : {}),
     });
     const addPayload = unwrapCommandPayload(addResult);

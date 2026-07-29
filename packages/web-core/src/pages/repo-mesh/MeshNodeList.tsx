@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 
 import { Section } from '../../components/ui/Section'
 import { EmptyState } from '../../components/ui/EmptyState'
+import { AlertBanner } from '../../components/ui/AlertBanner'
 import { FormField, Input } from '../../components/ui/FormField'
 import { IconX, IconFolder } from '../../components/Icons'
 import ProviderPriorityEditor from '../../components/provider-priority/ProviderPriorityEditor'
@@ -123,6 +124,8 @@ interface Props {
     onNodeCustomPathChange: (v: boolean) => void
     nodePickerWorkspaces: Array<{ id?: string; path: string; label?: string | null }>
     nodePickerProviders: AvailableCliProviderOption[]
+    nodeOnboardingPlan: any
+    nodePlanLoading: boolean
     attachableDaemons: RepoMeshDaemonEntry[]
 
     onAddNode: () => void
@@ -162,6 +165,8 @@ export function MeshNodeList({
     onNodeCustomPathChange,
     nodePickerWorkspaces,
     nodePickerProviders,
+    nodeOnboardingPlan,
+    nodePlanLoading,
     attachableDaemons,
     onAddNode,
     onRemoveNode,
@@ -309,6 +314,19 @@ export function MeshNodeList({
                         </FormField>
                     )}
 
+                    {(nodePlanLoading || nodeOnboardingPlan) && (
+                        <AlertBanner
+                            variant={nodeOnboardingPlan?.success === false ? 'error' : 'info'}
+                            className="mb-4"
+                        >
+                            {nodePlanLoading
+                                ? 'Inspecting Git repository (read-only)…'
+                                : nodeOnboardingPlan?.success
+                                    ? `${nodeOnboardingPlan.plan?.summary || 'Compatible Git workspace detected.'} Adding remains an explicit action.`
+                                    : `${nodeOnboardingPlan?.code || 'onboarding_blocked'}: ${nodeOnboardingPlan?.error || 'Git discovery failed'} ${nodeOnboardingPlan?.action || ''}`}
+                        </AlertBanner>
+                    )}
+
                     <FormField label={t('repoMesh.nodeList.preferredTools')} hint={t('repoMesh.nodeList.preferredToolsHint')}>
                         <ProviderPriorityEditor
                             value={nodeProviderPriority}
@@ -318,7 +336,7 @@ export function MeshNodeList({
                     </FormField>
 
                     <div className="flex gap-2 mt-3">
-                        <button onClick={onAddNode} disabled={!nodeWorkspace.trim() || (features.addNodeDaemonPicker && !nodeDaemonId)} className="btn btn-primary btn-sm">{t('repoMesh.nodeList.add')}</button>
+                        <button onClick={onAddNode} disabled={nodePlanLoading || nodeOnboardingPlan?.success === false || !nodeWorkspace.trim() || (features.addNodeDaemonPicker && !nodeDaemonId)} className="btn btn-primary btn-sm">{t('repoMesh.nodeList.add')}</button>
                         <button onClick={() => { onCancelAddNode(); onNodeDaemonIdChange(''); onNodeCustomPathChange(false) }} className="btn btn-secondary btn-sm">{t('repoMesh.nodeList.cancel')}</button>
                     </div>
                 </div>

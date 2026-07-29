@@ -221,9 +221,9 @@ export type { SavedProviderSessionEntry } from './config/saved-sessions.js';
 
 // ── Mesh Config ──
 export {
-  listMeshes, getMesh, getMeshByRepo, createMesh, updateMesh, deleteMesh,
+  listMeshes, listMeshesReadOnly, getMesh, getMeshByRepo, createMesh, updateMesh, deleteMesh,
   addNode, removeNode, updateNode, normalizeRepoIdentity,
-  listMagiKindPanels, getMagiKindPanel, setMagiKindPanel, removeMagiKindPanel, normalizeMagiSlots,
+  listMagiKindPanels, listMagiKindPanelsReadOnly, getMagiKindPanel, setMagiKindPanel, removeMagiKindPanel, normalizeMagiSlots,
 } from './config/mesh-config.js';
 export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './config/mesh-config.js';
 // MAGI panel / common-output / synthesis types (re-exported from the mesh-shared
@@ -262,6 +262,16 @@ export type { MeshTaskStats, MeshMissionStats } from './mesh/mesh-task-stats.js'
 export { deriveMeshReviewInboxItems } from './mesh/mesh-review-inbox.js';
 export type { MeshReviewInboxItem, MeshReviewInboxDerivation, MeshReviewInboxEvidence, MeshReviewInboxDiffSummary, MeshReviewInboxDiffFile, MeshReviewInboxReason, MeshReviewInboxConvergence } from './mesh/mesh-review-inbox.js';
 export type { CoordinatorPromptContext } from './mesh/coordinator-prompt.js';
+export { planMeshOnboarding } from './mesh/mesh-onboarding-plan.js';
+export type {
+  MeshOnboardingDiscovery,
+  MeshOnboardingErrorCode,
+  MeshOnboardingOperation,
+  MeshOnboardingPlanFailure,
+  MeshOnboardingPlanResult,
+  MeshOnboardingPlanSuccess,
+  PlanMeshOnboardingOptions,
+} from './mesh/mesh-onboarding-plan.js';
 export { loadMeshCoordinatorRegistry, registerMeshCoordinator, unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace } from './mesh/coordinator-registry.js';
 export type { CoordinatorRegistryEntry } from './mesh/coordinator-registry.js';
 export {

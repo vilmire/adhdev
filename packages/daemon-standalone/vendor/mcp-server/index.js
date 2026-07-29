@@ -424,6 +424,7 @@ var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_approve",
   "mesh_answer_question",
   "mesh_list_pending_approvals",
+  "mesh_plan_onboarding",
   "mesh_create",
   "mesh_add_node",
   "mesh_clone_node",
@@ -1158,23 +1159,41 @@ var MESH_LIST_PENDING_APPROVALS_TOOL = {
 };
 var MESH_CREATE_TOOL = {
   name: "mesh_create",
-  description: "Bootstrap a brand-new mesh for a Git repository \u2014 the first step for an MCP-only agent that has no mesh yet. Mirrors `adhdev mesh create <name>`. A mesh groups one repo's workspaces/nodes so the coordinator can delegate work across them. You MUST supply the repo identity: pass repo_remote_url (the git remote URL, e.g. git@github.com:user/repo.git or https://github.com/user/repo.git \u2014 the identity is derived from it) OR repo_identity (an explicit normalized identity like github.com/user/repo). At least one is required; there is no auto-detection here (the CLI auto-detects from the current dir, but the MCP server may run elsewhere). Set add_current:true to also register a node in the same call (uses workspace if given, else the daemon's current working directory) \u2014 handy when the daemon runs in the repo you want as the base node. BOOT-GATE / WHEN CALLABLE: this tool is reachable in STANDARD mode (adhdev mcp, no --repo-mesh) \u2014 the bootstrap context where no mesh exists \u2014 and also in mesh mode (where it creates a SEPARATE additional mesh). It is NOT reachable before any mesh exists via mesh mode, because `adhdev mcp --repo-mesh <id>` refuses to start without an existing meshId. So the intended flow is: run standard-mode MCP \u2192 mesh_create \u2192 mesh_add_node \u2192 then relaunch as `adhdev mcp --repo-mesh <returned mesh_id>`. Returns mesh_id (and node_id when add_current is used); use mesh_id for the follow-up mesh_add_node call and to launch mesh mode.",
+  description: "Bootstrap a brand-new mesh for a Git repository \u2014 the first step for an MCP-only agent that has no mesh yet. Mirrors `adhdev mesh create <name>`. A mesh groups one repo's workspaces/nodes so the coordinator can delegate work across them. Pass workspace to auto-detect Git identity/branch/worktree metadata through the read-only planner, or explicitly pass repo_remote_url / repo_identity for backward compatibility. This is a persistent write: call mesh_plan_onboarding first and obtain explicit user approval before invoking it. Set add_current:true to also register a node in the same call (uses workspace if given, else the daemon's current working directory). BOOT-GATE / WHEN CALLABLE: this tool is reachable in STANDARD mode (adhdev mcp, no --repo-mesh) \u2014 the bootstrap context where no mesh exists \u2014 and also in mesh mode (where it creates a SEPARATE additional mesh). It is NOT reachable before any mesh exists via mesh mode, because `adhdev mcp --repo-mesh <id>` refuses to start without an existing meshId. So the intended flow is: run standard-mode MCP \u2192 mesh_create \u2192 mesh_add_node \u2192 then relaunch as `adhdev mcp --repo-mesh <returned mesh_id>`. Returns mesh_id (and node_id when add_current is used); use mesh_id for the follow-up mesh_add_node call and to launch mesh mode.",
   inputSchema: {
     type: "object",
     properties: {
       name: { type: "string", description: 'Human-readable mesh name (e.g. "adhdev-main"). Trimmed, max 100 chars.' },
-      repo_remote_url: { type: "string", description: "Git remote URL of the repo (e.g. git@github.com:user/repo.git). The repo identity is normalized from this. Provide this OR repo_identity." },
-      repo_identity: { type: "string", description: "Explicit normalized repo identity (e.g. github.com/user/repo). Provide this OR repo_remote_url. Wins over repo_remote_url when both are given." },
+      repo_remote_url: { type: "string", description: "Optional explicit Git remote URL. When omitted with repo_identity, identity is read-only auto-detected from workspace." },
+      repo_identity: { type: "string", description: "Optional explicit normalized repo identity. Wins over repo_remote_url; when both are omitted, workspace is auto-detected." },
       default_branch: { type: "string", description: 'Default branch for the repo (e.g. "main"). Optional; used as the merge/convergence target.' },
       add_current: { type: "boolean", description: "Also register a node in this same call (parity with CLI --add-current). Uses `workspace` if provided, otherwise the daemon's current working directory." },
-      workspace: { type: "string", description: "Absolute workspace path to register when add_current:true. Ignored unless add_current is true. Defaults to the daemon's cwd." }
+      workspace: { type: "string", description: "Absolute workspace path used for Git auto-detection and, when add_current:true, node registration. Defaults to the daemon cwd." }
     },
     required: ["name"]
   }
 };
+var MESH_PLAN_ONBOARDING_TOOL = {
+  name: "mesh_plan_onboarding",
+  description: "Read-only Git-aware Repo Mesh discovery and dry-run planning for a workspace path. Detects the Git root, normalized remotes/repo identity, current/default branch, main checkout vs linked worktree/common-dir metadata, dirty/conflict state, and existing mesh/node membership. Returns a typed create+onboarding, add-existing-workspace, or clone-new-worktree plan with suggested .adhdev configs. It never fetches, writes config, creates a mesh/node/branch/worktree, or otherwise mutates state. Use this before mesh_create, mesh_add_node, or mesh_clone_node; execute write steps only after explicit user approval.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      workspace: { type: "string", description: "Absolute path on the daemon that owns the Git checkout." },
+      mesh_id: { type: "string", description: "Optional existing mesh to validate against. In mesh mode defaults to the active mesh." },
+      operation: {
+        type: "string",
+        enum: ["auto", "add_existing", "clone_worktree", "create_mesh"],
+        description: "Planning intent. auto chooses create+onboard when no compatible mesh exists, otherwise add existing. clone_worktree requires branch and a clean source."
+      },
+      branch: { type: "string", description: "New branch name when operation=clone_worktree." }
+    },
+    required: ["workspace"]
+  }
+};
 var MESH_ADD_NODE_TOOL = {
   name: "mesh_add_node",
-  description: "Register a workspace as a node in an EXISTING mesh \u2014 the second bootstrap step after mesh_create (or to add more nodes later). Mirrors `adhdev mesh add-node <mesh_id>` with --workspace / --read-only / --provider-priority. A node is a repo checkout on a daemon that the coordinator can launch agents on and delegate tasks to. mesh_id is REQUIRED in standard mode (pass the id returned by mesh_create); in mesh mode it defaults to the active mesh. workspace is the absolute path to the repo checkout ON THE DAEMON that owns it \u2014 the local base node is added by the daemon that created the mesh. NOTE: this registers an EXISTING directory as a node (including marking one as a worktree via is_worktree). To CREATE a fresh git worktree + branch for isolated parallel work, use mesh_clone_node instead \u2014 that runs the actual `git worktree add`. Returns node_id + workspace so you can immediately target the node with mesh_launch_session / mesh_send_task / mesh_enqueue_task.",
+  description: "Register a workspace as a node in an EXISTING mesh \u2014 the second bootstrap step after mesh_create (or to add more nodes later). Mirrors `adhdev mesh add-node <mesh_id>` with --workspace / --read-only / --provider-priority. A node is a repo checkout on a daemon that the coordinator can launch agents on and delegate tasks to. mesh_id is REQUIRED in standard mode (pass the id returned by mesh_create); in mesh mode it defaults to the active mesh. workspace is the absolute path to the repo checkout ON THE DAEMON that owns it \u2014 the local base node is added by the daemon that created the mesh. This is a persistent mesh write: call mesh_plan_onboarding first and obtain explicit user approval. The implementation re-runs that preflight before writing. NOTE: this registers an EXISTING directory as a node (including auto-detected linked worktrees). To CREATE a fresh git worktree + branch for isolated parallel work, use mesh_clone_node instead \u2014 that runs the actual `git worktree add`. Returns node_id + workspace so you can immediately target the node with mesh_launch_session / mesh_send_task / mesh_enqueue_task.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1193,7 +1212,7 @@ var MESH_ADD_NODE_TOOL = {
 };
 var MESH_CLONE_NODE_TOOL = {
   name: "mesh_clone_node",
-  description: "Create a new worktree-based node from an existing node for isolated parallel work. Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously.",
+  description: "Create a new worktree-based node from an existing node for isolated parallel work. Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously. This writes a branch, worktree and mesh node: call mesh_plan_onboarding with operation=clone_worktree and obtain explicit user approval first; the implementation re-runs the clean/source preflight.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1617,6 +1636,7 @@ var ALL_MESH_TOOLS = [
   MESH_APPROVE_TOOL,
   MESH_ANSWER_QUESTION_TOOL,
   MESH_LIST_PENDING_APPROVALS_TOOL,
+  MESH_PLAN_ONBOARDING_TOOL,
   MESH_CREATE_TOOL,
   MESH_ADD_NODE_TOOL,
   MESH_CLONE_NODE_TOOL,
@@ -7459,6 +7479,23 @@ async function meshCheckpoint(ctx, args) {
 }
 async function meshCloneNode(ctx, args) {
   const sourceNode = await findNodeWithRefresh(ctx, args.source_node_id);
+  const planned = unwrapCommandPayload(await commandForNode(ctx, sourceNode, "plan_mesh_onboarding", {
+    workspace: sourceNode.workspace,
+    meshId: ctx.mesh.id,
+    inlineMesh: ctx.mesh,
+    operation: "clone_worktree",
+    branch: args.branch
+  }));
+  if (!planned?.success) {
+    return JSON.stringify({
+      success: false,
+      dry_run: true,
+      code: planned?.code || "onboarding_blocked",
+      error: planned?.error || "Worktree clone preflight failed",
+      action: planned?.action,
+      raw: planned
+    }, null, 2);
+  }
   const result = await commandForNode(ctx, sourceNode, "clone_mesh_node", {
     meshId: ctx.mesh.id,
     sourceNodeId: args.source_node_id,
@@ -7511,19 +7548,65 @@ async function meshRemoveNode(ctx, args) {
 }
 
 // src/tools/mesh-tools-crud.ts
+async function meshPlanOnboarding(transport, args, defaultMeshId) {
+  const workspace = typeof args?.workspace === "string" ? args.workspace.trim() : "";
+  if (!workspace) {
+    return JSON.stringify({
+      success: false,
+      dryRun: true,
+      code: "workspace_required",
+      error: "workspace required",
+      action: "Pass an absolute path on the daemon that owns the checkout."
+    }, null, 2);
+  }
+  const meshId = typeof args?.mesh_id === "string" && args.mesh_id.trim() ? args.mesh_id.trim() : typeof defaultMeshId === "string" ? defaultMeshId.trim() : "";
+  const result = await transport.command("plan_mesh_onboarding", {
+    workspace,
+    ...meshId ? { meshId } : {},
+    ...args?.operation ? { operation: args.operation } : {},
+    ...typeof args?.branch === "string" && args.branch.trim() ? { branch: args.branch.trim() } : {}
+  });
+  return JSON.stringify(unwrapCommandPayload(result), null, 2);
+}
 async function meshCreate(transport, args) {
   const name = typeof args?.name === "string" ? args.name.trim() : "";
   if (!name) {
     return JSON.stringify({ success: false, error: "name required" }, null, 2);
   }
-  const repoRemoteUrl = typeof args?.repo_remote_url === "string" ? args.repo_remote_url.trim() : "";
-  const repoIdentity = typeof args?.repo_identity === "string" ? args.repo_identity.trim() : "";
-  const defaultBranch = typeof args?.default_branch === "string" ? args.default_branch.trim() : "";
+  let repoRemoteUrl = typeof args?.repo_remote_url === "string" ? args.repo_remote_url.trim() : "";
+  let repoIdentity = typeof args?.repo_identity === "string" ? args.repo_identity.trim() : "";
+  let defaultBranch = typeof args?.default_branch === "string" ? args.default_branch.trim() : "";
+  let discovery;
   if (!repoRemoteUrl && !repoIdentity) {
-    return JSON.stringify({
-      success: false,
-      error: "Either repo_remote_url or repo_identity is required. Pass the repo's git remote URL (e.g. git@github.com:user/repo.git) or an explicit identity (e.g. github.com/user/repo)."
-    }, null, 2);
+    const workspace = typeof args?.workspace === "string" && args.workspace.trim() ? args.workspace.trim() : void 0;
+    const planned = unwrapCommandPayload(await transport.command("plan_mesh_onboarding", {
+      ...workspace ? { workspace } : {},
+      operation: "auto"
+    }));
+    if (!planned?.success) {
+      return JSON.stringify({
+        success: false,
+        dry_run: true,
+        code: planned?.code || "onboarding_blocked",
+        error: planned?.error || "Could not infer repository identity from the workspace.",
+        action: planned?.action,
+        raw: planned
+      }, null, 2);
+    }
+    if (planned?.plan?.kind !== "create_mesh_and_onboard") {
+      return JSON.stringify({
+        success: false,
+        dry_run: true,
+        code: "compatible_mesh_exists",
+        error: planned?.plan?.summary || "A compatible mesh already exists.",
+        action: "Use mesh_add_node with the compatible mesh instead of creating a duplicate mesh.",
+        raw: planned
+      }, null, 2);
+    }
+    discovery = planned.discovery;
+    repoRemoteUrl = discovery?.origin?.urls?.[0] || discovery?.upstream?.urls?.[0] || "";
+    repoIdentity = discovery?.repoIdentity || "";
+    defaultBranch ||= discovery?.defaultBranch || "";
   }
   const createResult = await transport.command("create_mesh", {
     name,
@@ -7553,7 +7636,9 @@ async function meshCreate(transport, args) {
     const workspace = typeof args?.workspace === "string" && args.workspace.trim() ? args.workspace.trim() : "";
     const addResult = await transport.command("add_mesh_node", {
       meshId: mesh.id,
-      ...workspace ? { workspace } : {},
+      ...workspace || discovery?.repoRoot ? { workspace: discovery?.repoRoot || workspace } : {},
+      ...discovery?.repoRoot ? { repoRoot: discovery.repoRoot } : {},
+      ...discovery?.isLinkedWorktree === true ? { isLocalWorktree: true } : {},
       inlineMesh: mesh
     });
     const addPayload = unwrapCommandPayload(addResult);
@@ -7576,12 +7661,31 @@ async function meshAddNode(transport, args, defaultMeshId) {
     return JSON.stringify({ success: false, error: "workspace required (absolute path to the repo checkout on the target daemon)." }, null, 2);
   }
   const providerPriority = Array.isArray(args?.provider_priority) ? args.provider_priority.map((v) => typeof v === "string" ? v.trim() : "").filter(Boolean) : typeof args?.provider_priority === "string" ? args.provider_priority.split(",").map((v) => v.trim()).filter(Boolean) : [];
-  const addResult = await transport.command("add_mesh_node", {
+  const planResult = await transport.command("plan_mesh_onboarding", {
     meshId,
     workspace,
+    operation: "add_existing",
+    ...args?.inline_mesh ? { inlineMesh: args.inline_mesh } : {}
+  });
+  const planPayload = unwrapCommandPayload(planResult);
+  if (!planPayload?.success) {
+    return JSON.stringify({
+      success: false,
+      dry_run: true,
+      code: planPayload?.code || "onboarding_blocked",
+      error: planPayload?.error || "Repo Mesh onboarding preflight failed",
+      action: planPayload?.action,
+      raw: planPayload ?? planResult
+    }, null, 2);
+  }
+  const discoveredWorkspace = typeof planPayload?.discovery?.repoRoot === "string" ? planPayload.discovery.repoRoot : workspace;
+  const addResult = await transport.command("add_mesh_node", {
+    meshId,
+    workspace: discoveredWorkspace,
+    repoRoot: discoveredWorkspace,
     ...args?.read_only === true ? { readOnly: true } : {},
     ...providerPriority.length ? { providerPriority } : {},
-    ...args?.is_worktree === true ? { isLocalWorktree: true } : {},
+    ...args?.is_worktree === true || planPayload?.discovery?.isLinkedWorktree === true ? { isLocalWorktree: true } : {},
     ...args?.inline_mesh ? { inlineMesh: args.inline_mesh } : {}
   });
   const addPayload = unwrapCommandPayload(addResult);
@@ -9017,11 +9121,14 @@ async function startMcpServer(opts) {
           case "mesh_list_pending_approvals":
             text = await meshListPendingApprovals(meshCtx, a);
             break;
+          case "mesh_plan_onboarding":
+            text = await meshPlanOnboarding(meshCtx.transport, a, meshCtx.mesh.id);
+            break;
           case "mesh_create":
             text = await meshCreate(meshCtx.transport, a);
             break;
           case "mesh_add_node":
-            text = await meshAddNode(meshCtx.transport, a, meshCtx.mesh.id);
+            text = await meshAddNode(meshCtx.transport, { ...a, inline_mesh: meshCtx.mesh }, meshCtx.mesh.id);
             break;
           case "mesh_clone_node":
             text = await meshCloneNode(meshCtx, a);
@@ -9163,6 +9270,7 @@ async function startMcpServer(opts) {
     // Mesh bootstrap: create a mesh + register its first node from an MCP-only agent.
     // Exposed in standard mode precisely because this is the no-mesh-yet context —
     // mesh mode refuses to boot without an existing meshId (see the mesh-mode block above).
+    MESH_PLAN_ONBOARDING_TOOL,
     MESH_CREATE_TOOL,
     MESH_ADD_NODE_TOOL,
     ...isLocal ? [SCREENSHOT_TOOL] : []
@@ -9256,6 +9364,10 @@ async function startMcpServer(opts) {
         }
         case "mesh_create": {
           const text = await meshCreate(transport, a);
+          return { content: [{ type: "text", text }] };
+        }
+        case "mesh_plan_onboarding": {
+          const text = await meshPlanOnboarding(transport, a);
           return { content: [{ type: "text", text }] };
         }
         case "mesh_add_node": {
