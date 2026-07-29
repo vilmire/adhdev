@@ -95,7 +95,7 @@ export default function RepoMesh() {
         createRepoRemoteUrl, setCreateRepoRemoteUrl,
         newMeshDaemonId, setNewMeshDaemonId,
         newMeshWorkspace, setNewMeshWorkspace,
-        createPickerWorkspaces,
+        createPickerWorkspaces, createOnboardingPlan, createPlanLoading,
         loadMeshes, handleCreate, handleDelete, cancelCreate,
     } = useMeshList({
         daemons,
@@ -162,7 +162,7 @@ export default function RepoMesh() {
         nodeProviderPriority, setNodeProviderPriority,
         nodeDaemonId, setNodeDaemonId,
         nodeCustomPath, setNodeCustomPath,
-        nodePickerWorkspaces, nodePickerProviders,
+        nodePickerWorkspaces, nodePickerProviders, nodeOnboardingPlan, nodePlanLoading,
         coordinatorCliType, setCoordinatorCliType,
         launchingCoordinator, launchResult,
         savingPolicy,
@@ -588,6 +588,8 @@ export default function RepoMesh() {
                 newMeshWorkspace={newMeshWorkspace}
                 onNewMeshWorkspaceChange={setNewMeshWorkspace}
                 createPickerWorkspaces={createPickerWorkspaces}
+                createOnboardingPlan={createOnboardingPlan}
+                createPlanLoading={createPlanLoading}
                 onSelectMesh={setSelectedMeshId}
                 onCreate={handleCreate}
                 onCancelCreate={cancelCreate}
@@ -655,6 +657,8 @@ export default function RepoMesh() {
             onNodeCustomPathChange={setNodeCustomPath}
             nodePickerWorkspaces={nodePickerWorkspaces}
             nodePickerProviders={nodePickerProviders}
+            nodeOnboardingPlan={nodeOnboardingPlan}
+            nodePlanLoading={nodePlanLoading}
             attachableDaemons={attachableDaemons}
             onAddNode={handleAddNode}
             onRemoveNode={handleRemoveNode}

@@ -24,6 +24,28 @@ the cloud superproject under `docs/guides/REPO_MESH_GUIDE.md` (operations) and
 `docs/guides/REPO_MESH_DEV.md` (developer internals). This file documents only the
 OSS code surface those guides build on.
 
+## Git-aware onboarding contract
+
+Run the read-only planner before creating a mesh, adding an existing checkout, or
+cloning a worktree:
+
+```bash
+adhdev mesh plan /absolute/path/to/repo
+adhdev mesh plan /absolute/path/to/repo --mesh mesh_... --operation clone_worktree --branch feat/task
+```
+
+The same daemon command (`plan_mesh_onboarding`) backs the CLI, the
+`mesh_plan_onboarding` MCP tool, and dashboard create/add previews. It detects the
+canonical Git root and repo identity, branch/default branch, common-dir and
+main-vs-linked-worktree metadata, dirty/conflict state, and existing mesh/node
+membership. It returns typed failures for unsafe or ambiguous cases.
+
+Planning never fetches, writes config, creates mesh records/nodes, or creates a
+branch/worktree. Its returned `create_mesh`, `add_mesh_node`,
+`clone_mesh_node`, and config-write steps remain separate explicit operations
+that require operator approval. `mesh_init`/`mesh_reinit` likewise remain dry-run
+unless their write flag is explicitly enabled.
+
 ## Code structure
 
 ### `daemon-core/src/mesh/`
@@ -53,6 +75,7 @@ OSS code surface those guides build on.
 | `refine-config.ts` | Parses `.adhdev/refine.{json,yaml}` — validation command plans, submodule auto-publish opt-in, bootstrap sourcing. |
 | `worktree-bootstrap-config.ts` | Parses/evaluates worktree bootstrap config + staleness (sha256 of `staleInputs`). |
 | `mesh-task-stats.ts` | Aggregate task statistics for status/summary views. |
+| `mesh-onboarding-plan.ts` | Read-only Git/repository/worktree discovery, membership matching, typed safety failures, and create/add/clone onboarding plans shared by all product surfaces. |
 | `mesh-visualization.ts` | Graph/visualization shaping for the dashboard. |
 | `preview-freshness.ts` | Tracks preview-deploy freshness relative to node commits. |
 | `p2p-relay-failure.ts` | Classifies P2P relay failures for delegated dispatch. |

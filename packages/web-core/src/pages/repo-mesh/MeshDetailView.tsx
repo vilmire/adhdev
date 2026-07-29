@@ -112,6 +112,8 @@ interface Props {
     onNodeCustomPathChange: (v: boolean) => void
     nodePickerWorkspaces: Array<{ id?: string; path: string; label?: string | null }>
     nodePickerProviders: AvailableCliProviderOption[]
+    nodeOnboardingPlan: any
+    nodePlanLoading: boolean
     attachableDaemons: RepoMeshDaemonEntry[]
     onAddNode: () => void
     onRemoveNode: (nodeId: string) => void
@@ -209,6 +211,8 @@ export function MeshDetailView({
     onNodeCustomPathChange,
     nodePickerWorkspaces,
     nodePickerProviders,
+    nodeOnboardingPlan,
+    nodePlanLoading,
     attachableDaemons,
     onAddNode,
     onRemoveNode,
@@ -350,6 +354,8 @@ export function MeshDetailView({
                 onNodeCustomPathChange={onNodeCustomPathChange}
                 nodePickerWorkspaces={nodePickerWorkspaces}
                 nodePickerProviders={nodePickerProviders}
+                nodeOnboardingPlan={nodeOnboardingPlan}
+                nodePlanLoading={nodePlanLoading}
                 attachableDaemons={attachableDaemons}
                 onAddNode={onAddNode}
                 onRemoveNode={onRemoveNode}

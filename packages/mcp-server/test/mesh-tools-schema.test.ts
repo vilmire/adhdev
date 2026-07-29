@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT } from '@adhdev/daemon-core';
-import { ALL_MESH_TOOLS, MESH_ADD_NODE_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_CREATE_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL, MESH_REQUEUE_HELD_EVENTS_TOOL, MESH_STATUS_TOOL, MESH_VIEW_QUEUE_TOOL } from '../src/tools/mesh-tools.js';
+import { ALL_MESH_TOOLS, MESH_ADD_NODE_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_CREATE_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_PLAN_ONBOARDING_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL, MESH_REQUEUE_HELD_EVENTS_TOOL, MESH_STATUS_TOOL, MESH_VIEW_QUEUE_TOOL } from '../src/tools/mesh-tools.js';
 
 test('ALL_MESH_TOOLS is exactly the canonical mesh tool registry (6-6 consistency)', () => {
   const published = ALL_MESH_TOOLS.map(tool => tool.name).sort();
@@ -93,6 +93,20 @@ test('mesh_create / mesh_add_node bootstrap tools are published for MCP-only mes
   assert.equal((MESH_ADD_NODE_TOOL.inputSchema.properties as any).mesh_id.type, 'string');
   assert.equal((MESH_ADD_NODE_TOOL.inputSchema.properties as any).read_only.type, 'boolean');
   assert.equal((MESH_ADD_NODE_TOOL.inputSchema.properties as any).provider_priority.type, 'array');
+});
+
+test('mesh_plan_onboarding is a read-only Git-aware preflight shared by bootstrap tools', () => {
+  assert.equal(MESH_PLAN_ONBOARDING_TOOL.name, 'mesh_plan_onboarding');
+  assert.equal(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_plan_onboarding'), true);
+  assert.equal(CANONICAL_MESH_TOOL_NAMES.includes('mesh_plan_onboarding' as any), true);
+  assert.deepEqual(MESH_PLAN_ONBOARDING_TOOL.inputSchema.required, ['workspace']);
+  assert.deepEqual((MESH_PLAN_ONBOARDING_TOOL.inputSchema.properties as any).operation.enum, [
+    'auto',
+    'add_existing',
+    'clone_worktree',
+    'create_mesh',
+  ]);
+  assert.match(MESH_PLAN_ONBOARDING_TOOL.description, /never fetches, writes config, creates/i);
 });
 
 test('mesh session cleanup tools expose explicit manual cleanup and remove-node policy override', () => {

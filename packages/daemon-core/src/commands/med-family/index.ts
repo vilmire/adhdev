@@ -20,6 +20,7 @@ import { meshHostPairingHandlers } from './mesh-host-pairing.js';
 import { meshQueueHandlers } from './mesh-queue.js';
 import { fastForwardHandlers } from './fast-forward.js';
 import { meshRestartHandlers } from './mesh-restart.js';
+import { meshOnboardingHandlers } from './mesh-onboarding.js';
 import type { MedFamilyRegistry } from './types.js';
 
 export type { MedFamilyContext, MedFamilyHandler, MedFamilyRegistry } from './types.js';
@@ -33,5 +34,6 @@ export const medFamilyRegistry: MedFamilyRegistry = new Map(
         ...meshQueueHandlers,
         ...fastForwardHandlers,
         ...meshRestartHandlers,
+        ...meshOnboardingHandlers,
     }),
 );

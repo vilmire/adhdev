@@ -2,7 +2,7 @@
  * useMeshNodeActions — node CRUD, policy, provider priority, system prompts,
  * coordinator prompt, and coordinator launch state/actions.
  */
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import {
     normalizeAvailableCliProviders,
     normalizeProviderPriority,
@@ -65,6 +65,8 @@ export function useMeshNodeActions({
     // Cloud add-node extras
     const [nodeDaemonId, setNodeDaemonId] = useState('')
     const [nodeCustomPath, setNodeCustomPath] = useState(false)
+    const [nodeOnboardingPlan, setNodeOnboardingPlan] = useState<any>(null)
+    const [nodePlanLoading, setNodePlanLoading] = useState(false)
 
     // Coordinator (cloud) — coordinatorDaemonId is owned by RepoMesh.tsx, passed via activeDaemonId
     const [coordinatorCliType, setCoordinatorCliType] = useState('')
@@ -93,6 +95,43 @@ export function useMeshNodeActions({
         [selectedNodeDaemon],
     )
 
+    // Probe the workspace on the daemon that owns it. Pass the selected mesh as
+    // read-only inline inventory so a not-yet-attached remote daemon can still
+    // validate repository identity against the host's mesh.
+    useEffect(() => {
+        if (!showAddNode || !selectedMeshId || !nodeWorkspace.trim()) {
+            setNodeOnboardingPlan(null)
+            return
+        }
+        const planDaemonId = features.addNodeDaemonPicker ? nodeDaemonId : ((selectedMesh as any)?.__sourceDaemonId || primaryDaemonId)
+        if (!planDaemonId) return
+        let cancelled = false
+        setNodePlanLoading(true)
+        void sendCommand(planDaemonId, 'plan_mesh_onboarding', {
+            workspace: nodeWorkspace.trim(),
+            meshId: selectedMeshId,
+            inlineMesh: selectedMesh,
+            operation: 'add_existing',
+        }).then(raw => {
+            if (!cancelled) setNodeOnboardingPlan(unwrapResult(raw))
+        }).catch(error => {
+            if (!cancelled) setNodeOnboardingPlan({ success: false, error: error?.message || 'Git discovery failed' })
+        }).finally(() => {
+            if (!cancelled) setNodePlanLoading(false)
+        })
+        return () => { cancelled = true }
+    }, [
+        showAddNode,
+        selectedMeshId,
+        selectedMesh,
+        nodeWorkspace,
+        nodeDaemonId,
+        primaryDaemonId,
+        features.addNodeDaemonPicker,
+        sendCommand,
+        unwrapResult,
+    ])
+
     // ─── Actions ──────────────────────────────────────────────────
 
     async function handleAddNode() {
@@ -101,7 +140,24 @@ export function useMeshNodeActions({
         const ws = nodeWorkspace.trim()
         if (!ws) return
         try {
-            const payload: any = { meshId: selectedMeshId, workspace: ws }
+            const planDaemonId = features.addNodeDaemonPicker ? nodeDaemonId : targetDaemonId
+            const planRaw = await sendCommand(planDaemonId, 'plan_mesh_onboarding', {
+                workspace: ws,
+                meshId: selectedMeshId,
+                inlineMesh: selectedMesh,
+                operation: 'add_existing',
+            })
+            const plan = unwrapResult(planRaw)
+            setNodeOnboardingPlan(plan)
+            if (plan?.success === false) {
+                throw new Error(`${plan.code || 'onboarding_blocked'}: ${plan.error}${plan.action ? ` ${plan.action}` : ''}`)
+            }
+            const payload: any = {
+                meshId: selectedMeshId,
+                workspace: plan?.discovery?.repoRoot || ws,
+                repoRoot: plan?.discovery?.repoRoot,
+                isLocalWorktree: plan?.discovery?.isLinkedWorktree === true,
+            }
             // Persist the full chosen order (dedup only), same rationale as the
             // per-node save path — don't strip providers not detected right now.
             if (features.addNodeDaemonPicker && nodeDaemonId) {
@@ -305,6 +361,8 @@ export function useMeshNodeActions({
         setNodeCustomPath,
         nodePickerWorkspaces,
         nodePickerProviders,
+        nodeOnboardingPlan,
+        nodePlanLoading,
         // coordinator
         coordinatorCliType,
         setCoordinatorCliType,

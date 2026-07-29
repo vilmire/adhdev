@@ -47,7 +47,7 @@ import {
     validateChangeImpactConfig,
     type ChangeImpactConfig,
 } from '../git/change-impact-config.js';
-import { listMagiKindPanels } from '../config/mesh-config.js';
+import { listMagiKindPanelsReadOnly } from '../config/mesh-config.js';
 import type { MagiKindPanelMap } from '@adhdev/mesh-shared';
 import type { CLIInfo } from '../detection/cli-detector.js';
 
@@ -283,7 +283,7 @@ export function runMeshInit(
     const bootstrapLoaded = loadMeshWorktreeBootstrapConfig(mesh, workspace);
     let magiKindPanels: MagiKindPanelMap = {};
     try {
-        magiKindPanels = listMagiKindPanels();
+        magiKindPanels = listMagiKindPanelsReadOnly();
     } catch {
         // Machine-local config unreadable — echo an empty binding rather than failing init.
         magiKindPanels = {};

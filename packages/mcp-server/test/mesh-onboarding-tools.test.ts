@@ -9,6 +9,11 @@ import {
   MESH_MAGI_KIND_PANEL_SET_TOOL,
   MESH_MAGI_KIND_PANEL_LIST_TOOL,
 } from '../src/tools/mesh-tools.js';
+import {
+  meshAddNode,
+  meshCreate,
+  meshPlanOnboarding,
+} from '../src/tools/mesh-tools-crud.js';
 
 test('mesh_init schema documents all three .adhdev/* config families + current-config echo', () => {
   assert.equal(MESH_INIT_TOOL.name, 'mesh_init');
@@ -61,4 +66,67 @@ test('mesh_magi_kind_panel_list is a read-only sibling', () => {
   assert.equal(MESH_MAGI_KIND_PANEL_LIST_TOOL.name, 'mesh_magi_kind_panel_list');
   assert.equal(ALL_MESH_TOOLS.some(t => t.name === 'mesh_magi_kind_panel_list'), true);
   assert.equal(MESH_MAGI_KIND_PANEL_LIST_TOOL.inputSchema.properties.task_kind.type, 'string');
+});
+
+test('mesh_plan_onboarding forwards only a read-only planning command', async () => {
+  const calls: Array<{ type: string; args: any }> = [];
+  const transport = {
+    command: async (type: string, args: any) => {
+      calls.push({ type, args });
+      return { success: true, dryRun: true, plan: { kind: 'create_mesh_and_onboard' } };
+    },
+  } as any;
+
+  const result = JSON.parse(await meshPlanOnboarding(transport, {
+    workspace: '/repo',
+    operation: 'auto',
+  }));
+  assert.equal(result.dryRun, true);
+  assert.deepEqual(calls, [{
+    type: 'plan_mesh_onboarding',
+    args: { workspace: '/repo', operation: 'auto' },
+  }]);
+});
+
+test('mesh_create auto-detection refuses to create when a compatible mesh exists', async () => {
+  const calls: Array<{ type: string; args: any }> = [];
+  const transport = {
+    command: async (type: string, args: any) => {
+      calls.push({ type, args });
+      return {
+        success: true,
+        dryRun: true,
+        plan: { kind: 'add_existing_workspace', summary: 'Use existing mesh.' },
+      };
+    },
+  } as any;
+
+  const result = JSON.parse(await meshCreate(transport, { name: 'duplicate', workspace: '/repo' }));
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'compatible_mesh_exists');
+  assert.deepEqual(calls.map(call => call.type), ['plan_mesh_onboarding']);
+});
+
+test('mesh_add_node fails closed before the write when onboarding preflight fails', async () => {
+  const calls: Array<{ type: string; args: any }> = [];
+  const transport = {
+    command: async (type: string, args: any) => {
+      calls.push({ type, args });
+      return {
+        success: false,
+        dryRun: true,
+        code: 'unrelated_repo_identity',
+        error: 'Repository does not match.',
+        action: 'Choose the matching mesh.',
+      };
+    },
+  } as any;
+
+  const result = JSON.parse(await meshAddNode(transport, {
+    mesh_id: 'mesh_a',
+    workspace: '/repo',
+  }));
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'unrelated_repo_identity');
+  assert.deepEqual(calls.map(call => call.type), ['plan_mesh_onboarding']);
 });

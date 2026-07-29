@@ -67,6 +67,8 @@ export function useMeshList({
     // Cloud create extras
     const [newMeshDaemonId, setNewMeshDaemonId] = useState('')
     const [newMeshWorkspace, setNewMeshWorkspace] = useState('')
+    const [createOnboardingPlan, setCreateOnboardingPlan] = useState<any>(null)
+    const [createPlanLoading, setCreatePlanLoading] = useState(false)
 
     const selectedCreateDaemon = useMemo(
         () => daemons.find(d => d.id === newMeshDaemonId),
@@ -91,6 +93,36 @@ export function useMeshList({
         if (!missingMetadata) return
         void Promise.resolve(loadDaemonMetadata(newMeshDaemonId, { minFreshMs: 30_000 })).catch(() => {})
     }, [features.createDaemonPicker, loadDaemonMetadata, newMeshDaemonId, selectedCreateDaemon])
+
+    // Git-aware dry-run preview for the selected workspace. The owning daemon
+    // performs all discovery; the browser never tries to infer repository truth.
+    useEffect(() => {
+        if (!showCreate || !newMeshDaemonId || !newMeshWorkspace) {
+            setCreateOnboardingPlan(null)
+            return
+        }
+        let cancelled = false
+        setCreatePlanLoading(true)
+        void sendCommand(newMeshDaemonId, 'plan_mesh_onboarding', {
+            workspace: newMeshWorkspace,
+            operation: 'auto',
+            meshInventory: meshes,
+        }).then(raw => {
+            if (cancelled) return
+            const result = unwrapResult(raw)
+            setCreateOnboardingPlan(result)
+            if (result?.success) {
+                setCreateRepoIdentity(current => current || result.discovery?.repoIdentity || '')
+                setCreateRepoRemoteUrl(current => current || result.discovery?.origin?.urls?.[0] || result.discovery?.upstream?.urls?.[0] || '')
+                setCreateName(current => current || `${String(result.discovery?.repoIdentity || result.discovery?.repoRoot || '').split(/[\\/]/).filter(Boolean).pop() || 'repo'}-mesh`)
+            }
+        }).catch(error => {
+            if (!cancelled) setCreateOnboardingPlan({ success: false, error: error?.message || 'Git discovery failed' })
+        }).finally(() => {
+            if (!cancelled) setCreatePlanLoading(false)
+        })
+        return () => { cancelled = true }
+    }, [showCreate, newMeshDaemonId, newMeshWorkspace, meshes, sendCommand, unwrapResult])
 
     // Stable identity for the daemon set so loadMeshes' useCallback (and the
     // effect that depends on it) is not re-created on every parent re-render just
@@ -158,9 +190,23 @@ export function useMeshList({
         const identity = createRepoIdentity.trim()
         if (!remoteUrl && !identity) return
         try {
+            const planRaw = await sendCommand(targetDaemonId, 'plan_mesh_onboarding', {
+                workspace: newMeshWorkspace || undefined,
+                operation: 'auto',
+                meshInventory: meshes,
+            })
+            const plan = unwrapResult(planRaw)
+            setCreateOnboardingPlan(plan)
+            if (plan?.success === false) {
+                throw new Error(`${plan.code || 'onboarding_blocked'}: ${plan.error}${plan.action ? ` ${plan.action}` : ''}`)
+            }
+            if (plan?.plan?.kind !== 'create_mesh_and_onboard') {
+                throw new Error(plan?.plan?.summary || 'A compatible mesh already exists; add this workspace to it instead of creating a duplicate mesh.')
+            }
             const payload: any = { name: createName.trim() }
-            if (remoteUrl) payload.repoRemoteUrl = remoteUrl
-            if (identity) payload.repoIdentity = identity
+            if (remoteUrl || plan?.discovery?.origin?.urls?.[0]) payload.repoRemoteUrl = remoteUrl || plan.discovery.origin.urls[0]
+            if (identity || plan?.discovery?.repoIdentity) payload.repoIdentity = identity || plan.discovery.repoIdentity
+            if (plan?.discovery?.defaultBranch) payload.defaultBranch = plan.discovery.defaultBranch
             const raw = await sendCommand(targetDaemonId, 'create_mesh', payload)
             const result = unwrapResult(raw)
             if (result?.success === false) throw new Error(result.error || 'Create failed')
@@ -170,7 +216,9 @@ export function useMeshList({
                     meshId,
                     daemonId: targetDaemonId,
                     machineId: selectedCreateDaemon?.machineId,
-                    workspace: newMeshWorkspace,
+                    workspace: plan?.discovery?.repoRoot || newMeshWorkspace,
+                    repoRoot: plan?.discovery?.repoRoot,
+                    isLocalWorktree: plan?.discovery?.isLinkedWorktree === true,
                     role: 'host',
                     providerPriority: defaultProviderPriorityFromInventory(createPickerProviders),
                 })
@@ -232,6 +280,8 @@ export function useMeshList({
         setNewMeshWorkspace,
         createPickerWorkspaces,
         createPickerProviders,
+        createOnboardingPlan,
+        createPlanLoading,
         // actions
         loadMeshes,
         handleCreate,

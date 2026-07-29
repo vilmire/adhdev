@@ -34,7 +34,7 @@ function getMeshConfigPath(): string {
     return join(getConfigDir(), 'meshes.json');
 }
 
-function loadMeshConfig(): LocalMeshConfig {
+function loadMeshConfig(options: { persistMigrations?: boolean } = {}): LocalMeshConfig {
     const path = getMeshConfigPath();
     if (!existsSync(path)) return { meshes: [] };
     try {
@@ -46,7 +46,7 @@ function loadMeshConfig(): LocalMeshConfig {
         // dead field is gone from disk even on a pure-read path (mesh_status /
         // mesh_list_nodes) that never otherwise mutates the config. Best-effort:
         // a write failure (e.g. read-only fs) must not break reads, so swallow.
-        if (migrated) {
+        if (migrated && options.persistMigrations !== false) {
             try {
                 saveMeshConfig(config);
             } catch {
@@ -179,24 +179,42 @@ function saveMeshConfig(config: LocalMeshConfig): void {
  *      "https://github.com/user/repo.git" → "github.com/user/repo"
  */
 export function normalizeRepoIdentity(remoteUrl: string): string {
-    let identity = remoteUrl.trim();
+    let identity = remoteUrl.trim().replace(/[?#].*$/, '').replace(/\/+$/, '');
+    if (!identity) return '';
 
-    // HTTPS format first (takes priority over SSH fallback)
-    if (identity.startsWith('http://') || identity.startsWith('https://')) {
+    // URL formats: https://host/owner/repo.git, ssh://git@host/owner/repo.git,
+    // git://host/owner/repo.git. Credentials and transport are deliberately not
+    // part of repository identity.
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(identity)) {
         try {
             const url = new URL(identity);
-            const path = url.pathname.replace(/^\//, '').replace(/\.git$/, '');
-            return `${url.hostname}/${path}`;
+            const path = decodeURIComponent(url.pathname)
+                .replace(/^\/+|\/+$/g, '')
+                .replace(/\.git$/i, '');
+            if (url.hostname && path) return `${url.hostname.toLowerCase()}/${path}`;
         } catch {
             // fall through
         }
     }
 
-    // SSH format: git@host:owner/repo.git or ssh://git@host/owner/repo.git
-    const sshMatch = identity.match(/^(?:ssh:\/\/)?[\w.-]+@([\w.-]+)[:/]([\w.\-/]+?)(?:\.git)?$/);
-    if (sshMatch) return `${sshMatch[1]}/${sshMatch[2]}`;
+    // SCP-like SSH format: git@host:owner/repo.git (also accepts host:path).
+    const scpMatch = identity.match(/^(?:[^@/:]+@)?(\[[^\]]+\]|[^/:]+):(.+)$/);
+    if (scpMatch) {
+        const host = scpMatch[1].replace(/^\[|\]$/g, '').toLowerCase();
+        const repoPath = scpMatch[2].replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
+        if (host && repoPath) return `${host}/${repoPath}`;
+    }
 
-    return identity;
+    // Already-normalized host/path input. This also makes explicit identities
+    // converge with remote-derived identities instead of preserving ".git".
+    const slash = identity.indexOf('/');
+    if (slash > 0) {
+        const host = identity.slice(0, slash).toLowerCase();
+        const repoPath = identity.slice(slash + 1).replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
+        if (host && repoPath) return `${host}/${repoPath}`;
+    }
+
+    return identity.replace(/\.git$/i, '');
 }
 
 // ─── CRUD Operations ────────────────────────────
@@ -211,12 +229,18 @@ export function listMeshes(): LocalMeshEntry[] {
     return loadMeshConfig().meshes;
 }
 
+/** Read-only inventory snapshot for discovery/planning surfaces. */
+export function listMeshesReadOnly(): LocalMeshEntry[] {
+    return loadMeshConfig({ persistMigrations: false }).meshes;
+}
+
 export function getMesh(meshId: string): LocalMeshEntry | undefined {
     return loadMeshConfig().meshes.find(m => m.id === meshId);
 }
 
 export function getMeshByRepo(repoIdentity: string): LocalMeshEntry | undefined {
-    return loadMeshConfig().meshes.find(m => m.repoIdentity === repoIdentity);
+    const normalized = normalizeRepoIdentity(repoIdentity);
+    return loadMeshConfig().meshes.find(m => normalizeRepoIdentity(m.repoIdentity) === normalized);
 }
 
 export interface CreateMeshOptions {
@@ -236,7 +260,7 @@ export function createMesh(opts: CreateMeshOptions): LocalMeshEntry {
         throw new Error('Maximum 20 meshes allowed');
     }
 
-    const repoIdentity = opts.repoIdentity || (opts.repoRemoteUrl ? normalizeRepoIdentity(opts.repoRemoteUrl) : '');
+    const repoIdentity = normalizeRepoIdentity(opts.repoIdentity || opts.repoRemoteUrl || '');
     if (!repoIdentity) throw new Error('Either repoRemoteUrl or repoIdentity is required');
 
     const now = new Date().toISOString();
@@ -784,6 +808,11 @@ export function normalizeMagiSlots(slots: unknown): MagiSlot[] {
 /** All configured kind-panels (machine-local), keyed by task_kind. Empty when none. */
 export function listMagiKindPanels(): MagiKindPanelMap {
     return loadMeshConfig().magiKindPanels ?? {};
+}
+
+/** Read-only counterpart used by dry-run onboarding; never persists migrations. */
+export function listMagiKindPanelsReadOnly(): MagiKindPanelMap {
+    return loadMeshConfig({ persistMigrations: false }).magiKindPanels ?? {};
 }
 
 /** The slot list for one task_kind, or undefined when the kind is not configured. */
