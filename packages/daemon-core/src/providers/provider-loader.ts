@@ -1701,7 +1701,16 @@ export class ProviderLoader {
               (resolved.scripts as any).listNativeHistory = lister;
               scriptsMarker.listSessions = 'listNativeHistory';
             }
+            // Spread the declarative block FIRST so source/override_path/
+            // reader/contractVersion survive, then override only the runtime
+            // fields. The previous shape dropped `source`, and
+            // ProviderCliAdapter.detectBackgroundTask requires it — so a
+            // loader-resolved declarative provider (production kimi) always
+            // reported background detection inactive even though the detector
+            // unit tests (which pass the manifest shape directly) passed
+            // (rc.29 production-shape gap).
             (resolved as any).nativeHistory = {
+              ...nh,
               format,
               watchPath: undefined,
               scripts: scriptsMarker,

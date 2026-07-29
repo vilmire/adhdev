@@ -140,6 +140,19 @@ export function appendBoundedText(current: string, chunk: string, maxChars: numb
     return current.slice(-keepFromCurrent) + chunk;
 }
 
+// One-time (per process + cliType) content-free warning that a provider whose
+// manifest declares native-source history was resolved WITHOUT a `source` —
+// background-task detection is then silently inactive at the adapter
+// boundary. detectBackgroundTask runs on every status poll, so the dedupe
+// lives at module scope (survives adapter re-creation; no per-poll spam).
+const missingBackgroundSourceWarned = new Set<string>();
+
+function warnMissingBackgroundSourceOnce(cliType: string): void {
+    if (missingBackgroundSourceWarned.has(cliType)) return;
+    missingBackgroundSourceWarned.add(cliType);
+    LOG.warn('CLI', `[${cliType}] background-task tracking declared but nativeHistory.source missing after provider resolve; background detection inactive`);
+}
+
 // Force-send (mesh coordinator dispatch / reconcile redelivery) writes raw
 // keystrokes straight into the PTY, bypassing the normal echo-wait submit
 // pipeline.
@@ -1410,7 +1423,18 @@ export class ProviderCliAdapter implements CliAdapter {
     private detectBackgroundTask(): { active: boolean; count: number; ids: string[]; support?: 'tracked' | 'unknown' } {
         const nativeHistory = (this.provider as { nativeHistory?: NativeHistoryConfig } | null | undefined)?.nativeHistory;
         if (!nativeHistory?.source) {
-            return { active: false, count: 0, ids: [], support: this.cliType === 'claude-cli' || this.cliType === 'kimi' ? 'tracked' : 'unknown' };
+            const tracked = this.cliType === 'claude-cli' || this.cliType === 'kimi';
+            if (tracked && nativeHistory) {
+                // The manifest declares native-source history (background
+                // tracking expected) but the resolved provider carries no
+                // `source` — the detector cannot run and background detection
+                // is silently inactive (rc.29 loader rewrite dropped it).
+                // Warn once per process+cliType, content-free (no transcript
+                // paths / no transcript content): this runs on every status
+                // poll, so per-call logging would spam.
+                warnMissingBackgroundSourceOnce(this.cliType);
+            }
+            return { active: false, count: 0, ids: [], support: tracked ? 'tracked' : 'unknown' };
         }
         try {
             return detectBackgroundTaskActive(nativeHistory, {

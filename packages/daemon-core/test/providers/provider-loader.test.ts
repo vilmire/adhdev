@@ -997,6 +997,67 @@ describe('ProviderLoader v1-manifest inline nativeHistory.source wiring', () => 
     const resolved = loader.resolve('bare-nh-fixture');
     expect(typeof (resolved?.scripts as any)?.readNativeHistory).not.toBe('function');
   });
+
+  // Regression (rc.29 production-shape gap): the legacy resolve path used to
+  // REWRITE resolved.nativeHistory to {format, watchPath, scripts, mode},
+  // dropping the declarative `source` (and contractVersion). Unit tests that
+  // passed the manifest shape straight to the detector kept passing, but a
+  // loader-resolved provider (production kimi) always reported background
+  // detection inactive. Resolving the shipped kimi manifest shape through the
+  // ProviderLoader must preserve source.kind=jsonl alongside the runtime
+  // format/scripts/mode fields.
+  it('preserves the declarative nativeHistory.source when resolving the shipped kimi manifest shape', () => {
+    writeV1Provider(userDir, 'cli', 'kimi', {
+      type: 'kimi',
+      name: 'Kimi',
+      displayName: 'Kimi',
+      category: 'cli',
+      spawn: { command: 'kimi' },
+      transcriptAuthority: 'provider',
+      // Mirrors adhdev-providers/cli/kimi/provider.v1.json (shipped shape).
+      nativeHistory: {
+        mode: 'native-source',
+        contractVersion: '2.0',
+        source: {
+          kind: 'jsonl',
+          path: '~/.kimi-code/sessions/*/session_*/agents/main',
+          file_pattern: 'wire.jsonl',
+          session_id_from: 'dir_uuid',
+          workspace_from_sidecar: {
+            rel_path: '../../state.json',
+            workspace_path: '$.workDir',
+          },
+          records: [
+            {
+              where: '$.type == "turn.prompt"',
+              message_map: { role: 'user', content: '$.input', timestamp_ms: '$.time' },
+            },
+            {
+              where: '$.type == "context.append_loop_event" && $.event.type == "content.part" && $.event.part.type == "text"',
+              message_map: { role: 'assistant', content: '$.event.part.text', timestamp_ms: '$.time' },
+            },
+          ],
+        },
+      },
+    });
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    const resolved = loader.resolve('kimi');
+    const nh = (resolved as any)?.nativeHistory;
+    // Declarative fields survive…
+    expect(nh?.source?.kind).toBe('jsonl');
+    expect(nh?.source?.file_pattern).toBe('wire.jsonl');
+    expect(nh?.source?.session_id_from).toBe('dir_uuid');
+    expect(nh?.contractVersion).toBe('2.0');
+    // …and the runtime wiring is unchanged.
+    expect(nh?.mode).toBe('native-source');
+    expect(nh?.format).toBe('spec-jsonl');
+    expect(nh?.scripts?.readSession).toBe('readNativeHistory');
+    expect(nh?.scripts?.listSessions).toBe('listNativeHistory');
+    expect(typeof (resolved?.scripts as any)?.readNativeHistory).toBe('function');
+  });
 });
 
 describe('ProviderLoader upstream fetch cooldown vs empty upstream', () => {
