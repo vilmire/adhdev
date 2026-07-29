@@ -4,6 +4,7 @@ import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { getConfigDir } from '../config/config.js';
 import { getLedgerDir } from './mesh-ledger.js';
+import { resolveSessionDeliveryRetentionMs } from './mesh-retention-config.js';
 import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
@@ -1951,6 +1952,29 @@ export class MeshRuntimeStore {
         });
     }
 
+    /**
+     * Retention prune for TERMINAL-OUTCOME mesh_session_delivery rows (lifecycle
+     * retention Slice 1). Only the absorbing/final statuses are deleted —
+     * 'completed' (top progress rank), 'failed', 'expired', 'cancelled'. The
+     * live/nonterminal rows (queued/delivering/delivered/acked) are NEVER
+     * pruned here: they carry the retry/recovery semantics
+     * (taskHasConfirmedDelivery / taskDeliveryConsumed / consumeSessionDelivery /
+     * the delivered≠consumed re-drive), and expireStaleSessionDeliveries is the
+     * only path that retires a live row (into 'expired', which this prune then
+     * collects after the window). Age is measured from updated_at (when the row
+     * reached its outcome). Timestamps are ISO-8601 TEXT, so the lexicographic
+     * `<` cutoff is a correct time comparison; a row exactly AT the cutoff is
+     * kept (strict `<`). Returns rows deleted.
+     */
+    pruneTerminalSessionDeliveries(olderThanMs: number): number {
+        const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
+        return this.db.prepare(
+            `DELETE FROM mesh_session_delivery
+             WHERE status IN ('completed', 'failed', 'expired', 'cancelled')
+               AND updated_at < ?`
+        ).run(cutoffIso).changes;
+    }
+
     // ── G2: Event Ledger ────────────────────────────────────────────────────
 
     appendLedgerEntry(entry: {
@@ -3029,6 +3053,11 @@ function meshTurnHeldSuspensionFromRow(r: Record<string, unknown>): MeshTurnHeld
 //   - Terminal queue rows 30 days: mesh_task_history / completion-dedup lookups are
 //     recent-task scoped; live dependsOn anchors are exempted inside
 //     pruneTerminalQueueEntries.
+//   - Terminal session-delivery rows 14 days (lifecycle retention Slice 1):
+//     completed/failed/expired/cancelled rows only — live/nonterminal rows
+//     (queued/delivering/delivered/acked) carry the retry/recovery semantics and
+//     are never pruned. Window is env-tunable (resolveSessionDeliveryRetentionMs,
+//     clamped [1d, 90d]); the resolver is read at sweep time.
 // No VACUUM here by design: reclaiming file pages is not worth stalling the daemon's
 // single writer; freed pages are reused by future inserts.
 export const MESH_EVENT_LEDGER_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;   // 30 days
@@ -3037,23 +3066,27 @@ export const MESH_TERMINAL_QUEUE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 
 
 /**
  * Periodic retention sweep for the mesh-runtime.db tables that previously had no
- * lifecycle GC (event ledger, tool-call log, terminal queue rows). Runs on the SAME
- * cadence as the pending-events retention prune (the hourly mesh-event maintenance
- * sweep in mesh-event-forwarding.ts). Best-effort and idempotent: a store failure
- * degrades to a no-op with one warn; an empty table costs three cheap DELETEs.
+ * lifecycle GC (event ledger, tool-call log, terminal queue rows, terminal
+ * session-delivery rows). Runs on the SAME cadence as the pending-events retention
+ * prune (the hourly mesh-event maintenance sweep in mesh-event-forwarding.ts).
+ * Best-effort and idempotent: a store failure degrades to a no-op with one warn;
+ * re-running with nothing to prune is a set of cheap no-op DELETEs.
+ * The returned counts are the content-free sweep metrics (row counts only, never
+ * message/payload content).
  */
-export function pruneMeshRuntimeRetention(): { ledger: number; toolCalls: number; terminalQueue: number } {
+export function pruneMeshRuntimeRetention(): { ledger: number; toolCalls: number; terminalQueue: number; sessionDelivery: number } {
     try {
         const store = MeshRuntimeStore.getInstance();
         const ledger = store.pruneEventLedger(MESH_EVENT_LEDGER_RETENTION_MS);
         const toolCalls = store.pruneToolCallLog(MESH_TOOL_CALL_LOG_RETENTION_MS);
         const terminalQueue = store.pruneTerminalQueueEntries(MESH_TERMINAL_QUEUE_RETENTION_MS);
-        if (ledger + toolCalls + terminalQueue > 0) {
-            LOG.info('MeshRuntimeStore', `Retention prune removed ${ledger} ledger / ${toolCalls} tool-call / ${terminalQueue} terminal-queue row(s)`);
+        const sessionDelivery = store.pruneTerminalSessionDeliveries(resolveSessionDeliveryRetentionMs());
+        if (ledger + toolCalls + terminalQueue + sessionDelivery > 0) {
+            LOG.info('MeshRuntimeStore', `Retention prune removed ${ledger} ledger / ${toolCalls} tool-call / ${terminalQueue} terminal-queue / ${sessionDelivery} terminal-session-delivery row(s)`);
         }
-        return { ledger, toolCalls, terminalQueue };
+        return { ledger, toolCalls, terminalQueue, sessionDelivery };
     } catch (e: any) {
         LOG.warn('MeshRuntimeStore', `Runtime retention prune failed: ${e?.message || e}`);
-        return { ledger: 0, toolCalls: 0, terminalQueue: 0 };
+        return { ledger: 0, toolCalls: 0, terminalQueue: 0, sessionDelivery: 0 };
     }
 }

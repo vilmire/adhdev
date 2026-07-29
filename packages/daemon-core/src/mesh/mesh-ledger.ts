@@ -13,10 +13,11 @@
  * Safety:  mode 0o600, atomic append via appendFileSync
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, renameSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { getConfigDir } from '../config/config.js';
+import { resolveLedgerRotationMaxBytes, resolveLedgerRotationMaxFiles } from './mesh-retention-config.js';
 import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { EventEmitter } from 'events';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -487,12 +488,23 @@ interface LedgerArchivedCounts {
     recoveryAttempted: number;
     totalArchived: number;
     lastArchivedAt: string;
+    /**
+     * Closed rotation files whose terminal counts were already folded into this
+     * rollup by the rotation-cap eviction (lifecycle retention Slice 1). Makes
+     * the fold+unlink crash/restart idempotent: a file listed here is unlinked
+     * without re-folding. Absent in rollups written before the cap existed.
+     */
+    evictedRotations?: string[];
 }
 
 function readArchivedCounts(meshId: string): LedgerArchivedCounts {
     const path = getArchivedCountsPath(meshId);
     if (!existsSync(path)) return { taskCompleted: 0, taskFailed: 0, taskStalled: 0, recoveryAttempted: 0, totalArchived: 0, lastArchivedAt: '' };
     try { return JSON.parse(readFileSync(path, 'utf-8')) as LedgerArchivedCounts; } catch { return { taskCompleted: 0, taskFailed: 0, taskStalled: 0, recoveryAttempted: 0, totalArchived: 0, lastArchivedAt: '' }; }
+}
+
+function writeArchivedCounts(meshId: string, counts: LedgerArchivedCounts): void {
+    writeFileSync(getArchivedCountsPath(meshId), JSON.stringify(counts), { encoding: 'utf-8', mode: 0o600 });
 }
 
 function updateArchivedCounts(meshId: string, archived: MeshLedgerEntry[]): void {
@@ -505,7 +517,7 @@ function updateArchivedCounts(meshId: string, archived: MeshLedgerEntry[]): void
     }
     counts.totalArchived += archived.length;
     counts.lastArchivedAt = new Date().toISOString();
-    try { writeFileSync(getArchivedCountsPath(meshId), JSON.stringify(counts), { encoding: 'utf-8', mode: 0o600 }); } catch { /* best-effort */ }
+    try { writeArchivedCounts(meshId, counts); } catch { /* best-effort */ }
 }
 
 // ─── Worker Result Footer ───────────────────────
@@ -1516,4 +1528,252 @@ function rotateLedgerFile(meshId: string, currentPath: string): void {
         // Rotation failed — the next append will just grow the file
         process.stderr.write(`[adhdev-mesh] Ledger rotation failed for mesh ${meshId}: ${e?.message || e}. File will continue to grow.\n`);
     }
+}
+
+// ─── Closed-rotation retention cap (lifecycle retention Slice 1) ─────────────
+// The rotation scheme above bounds the ACTIVE file's growth by renaming it into
+// numbered slots, but the closed rotation files themselves (<mesh>.<n>.jsonl,
+// plus the archive rotations <mesh>.archive.<n>.jsonl from compactLedger) had NO
+// lifetime — they accumulated on disk forever. This cap evicts the OLDEST closed
+// rotation files once a mesh's closed-rotation totals exceed the configured
+// byte/count bounds (resolveLedgerRotationMaxBytes / ...MaxFiles, hourly via
+// runDiskRetentionSweep).
+//
+// Hard guarantees:
+//   - NEVER touches the active ledger (<mesh>.jsonl), the current archive append
+//     target (<mesh>.archive.jsonl), the archived-counts rollup, the runtime DB
+//     (mesh-runtime.db*), history/provider transcripts, or any file outside the
+//     closed-rotation name patterns.
+//   - Before unlinking an ACTIVE-family rotation, its terminal aggregate counts
+//     (task_completed/failed/stalled, recovery_attempted) are folded into the
+//     existing archived-counts rollup so summary totals survive the eviction.
+//     Archive-family rotations are NOT re-folded — compactLedger already folded
+//     their entries when archiving (re-folding would double-count).
+//   - Crash/restart idempotent: the fold is recorded in the rollup
+//     (evictedRotations) BEFORE the unlink, so a crash between the two is
+//     completed (unlink only, no re-fold) on the next sweep.
+
+/** Why a closed rotation file was selected for eviction. */
+export type LedgerRotationEvictionReason = 'rotation_cap_count' | 'rotation_cap_bytes';
+
+export interface LedgerRotationFileStat {
+    /** Basename, e.g. `mesh.3.jsonl` or `mesh.archive.2.jsonl`. */
+    name: string;
+    sizeBytes: number;
+    mtimeMs: number;
+}
+
+export interface LedgerRotationEvictionPlanEntry {
+    name: string;
+    reason: LedgerRotationEvictionReason;
+    sizeBytes: number;
+}
+
+export interface LedgerRotationCapResult {
+    meshId: string;
+    dryRun: boolean;
+    /** Files the cap would evict (dry-run) or attempted to evict (apply). */
+    planned: LedgerRotationEvictionPlanEntry[];
+    /** Files actually folded + unlinked (empty on dry-run). */
+    applied: LedgerRotationEvictionPlanEntry[];
+    evictedBytes: number;
+}
+
+export interface LedgerRotationCapSweepResult {
+    /** Meshes with at least one closed rotation file that were evaluated. */
+    meshes: number;
+    evicted: number;
+    evictedBytes: number;
+    byReason: Record<LedgerRotationEvictionReason, number>;
+}
+
+/**
+ * PURE. Plan which closed rotation files to evict under the per-mesh byte/count
+ * caps. Evicts OLDEST first, ordered by mtime (NOT rotation index — when all
+ * slots are full the rotation scheme overwrites the highest slot, so the index
+ * is not a reliable age order), ties broken by name for determinism. A file
+ * evicted for the count cap also counts against the byte total. `maxFiles <= 0`
+ * disables the count cap, `maxBytes <= 0` disables the byte cap. No fs access,
+ * no clock read.
+ */
+export function planLedgerRotationEvictions(
+    files: LedgerRotationFileStat[],
+    limits: { maxFiles: number; maxBytes: number },
+): LedgerRotationEvictionPlanEntry[] {
+    const sorted = [...files].sort((a, b) => a.mtimeMs - b.mtimeMs || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const out: LedgerRotationEvictionPlanEntry[] = [];
+    let remaining = sorted.length;
+    let remainingBytes = sorted.reduce((sum, f) => sum + f.sizeBytes, 0);
+    let i = 0;
+    const evict = (reason: LedgerRotationEvictionReason) => {
+        out.push({ name: sorted[i].name, reason, sizeBytes: sorted[i].sizeBytes });
+        remaining--;
+        remainingBytes -= sorted[i].sizeBytes;
+        i++;
+    };
+    if (limits.maxFiles > 0) {
+        while (remaining > limits.maxFiles && i < sorted.length) evict('rotation_cap_count');
+    }
+    if (limits.maxBytes > 0) {
+        while (remainingBytes > limits.maxBytes && i < sorted.length) evict('rotation_cap_bytes');
+    }
+    return out;
+}
+
+/** Classify a basename as a CLOSED rotation of `safe` mesh, or null. */
+function closedRotationKind(safe: string, name: string): 'active' | 'archive' | null {
+    const archivePrefix = `${safe}.archive.`;
+    if (name.startsWith(archivePrefix) && /^\d+\.jsonl$/.test(name.slice(archivePrefix.length))) return 'archive';
+    const activePrefix = `${safe}.`;
+    if (name.startsWith(activePrefix) && /^\d+\.jsonl$/.test(name.slice(activePrefix.length))) return 'active';
+    return null;
+}
+
+/** Parse the entries of a rotation file, skipping corrupt lines (evict anyway). */
+function readRotationEntriesTolerant(filePath: string): Array<Pick<MeshLedgerEntry, 'kind'>> {
+    let text: string;
+    try {
+        text = readFileSync(filePath, 'utf-8');
+    } catch {
+        return [];
+    }
+    const out: Array<Pick<MeshLedgerEntry, 'kind'>> = [];
+    for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed && typeof parsed === 'object' && typeof parsed.kind === 'string') {
+                out.push(parsed as Pick<MeshLedgerEntry, 'kind'>);
+            }
+        } catch { /* corrupt line — skip; the file is still evicted */ }
+    }
+    return out;
+}
+
+/**
+ * Fold + unlink ONE closed rotation file, crash-idempotently. The fold is
+ * written to the rollup (with the file name recorded in evictedRotations)
+ * BEFORE the unlink, so a crash in between leaves a recorded-but-present file
+ * that the next sweep unlinks WITHOUT re-folding.
+ */
+function evictClosedRotationFile(safe: string, dir: string, entry: LedgerRotationEvictionPlanEntry): void {
+    const filePath = join(dir, entry.name);
+    const counts = readArchivedCounts(safe);
+    const alreadyFolded = new Set(counts.evictedRotations ?? []);
+    if (alreadyFolded.has(entry.name)) {
+        // Crash window: fold already recorded, unlink was interrupted — finish it.
+        if (existsSync(filePath)) unlinkSync(filePath);
+        return;
+    }
+    if (closedRotationKind(safe, entry.name) === 'active' && existsSync(filePath)) {
+        // Fold terminal aggregate counts into the rollup BEFORE the unlink so the
+        // historical totals survive the eviction. Archive-family rotations were
+        // already folded by compactLedger — never re-fold those.
+        const entries = readRotationEntriesTolerant(filePath);
+        for (const e of entries) {
+            if (e.kind === 'task_completed') counts.taskCompleted++;
+            else if (e.kind === 'task_failed') counts.taskFailed++;
+            else if (e.kind === 'task_stalled') counts.taskStalled++;
+            else if (e.kind === 'recovery_attempted') counts.recoveryAttempted++;
+        }
+        counts.totalArchived += entries.length;
+    }
+    counts.evictedRotations = [...alreadyFolded, entry.name];
+    counts.lastArchivedAt = new Date().toISOString();
+    writeArchivedCounts(safe, counts);
+    if (existsSync(filePath)) unlinkSync(filePath);
+}
+
+/**
+ * Enforce the per-mesh closed-rotation byte/count caps for ONE mesh. With
+ * `dryRun: true` this is the pure planning seam: it lists + plans and returns
+ * the eviction plan WITHOUT folding counts or unlinking anything. Per-file
+ * failures (fold/unlink) are logged and skipped so one bad file never blocks
+ * the rest — the next sweep retries it. Defaults come from the env resolvers.
+ */
+export function enforceLedgerRotationCap(
+    meshId: string,
+    opts?: { maxFiles?: number; maxBytes?: number; dryRun?: boolean },
+): LedgerRotationCapResult {
+    const maxFiles = opts?.maxFiles ?? resolveLedgerRotationMaxFiles();
+    const maxBytes = opts?.maxBytes ?? resolveLedgerRotationMaxBytes();
+    const dryRun = opts?.dryRun === true;
+    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const dir = getLedgerDir();
+    const stats: LedgerRotationFileStat[] = [];
+    let names: string[] = [];
+    try {
+        names = readdirSync(dir);
+    } catch {
+        names = [];
+    }
+    for (const name of names) {
+        if (!closedRotationKind(safe, name)) continue;
+        try {
+            const st = statSync(join(dir, name));
+            if (st.isFile()) stats.push({ name, sizeBytes: st.size, mtimeMs: st.mtimeMs });
+        } catch { /* vanished between readdir and stat — skip */ }
+    }
+    const planned = planLedgerRotationEvictions(stats, { maxFiles, maxBytes });
+    if (dryRun) {
+        return { meshId, dryRun: true, planned, applied: [], evictedBytes: 0 };
+    }
+    const applied: LedgerRotationEvictionPlanEntry[] = [];
+    let evictedBytes = 0;
+    for (const entry of planned) {
+        try {
+            evictClosedRotationFile(safe, dir, entry);
+            applied.push(entry);
+            evictedBytes += entry.sizeBytes;
+        } catch (e: any) {
+            // Partial-failure isolation: log and continue with the remaining
+            // evictions; the failed file is retried on the next sweep.
+            process.stderr.write(`[adhdev-mesh] Ledger rotation eviction failed for ${entry.name}: ${e?.message || e}\n`);
+        }
+    }
+    return { meshId, dryRun: false, planned, applied, evictedBytes };
+}
+
+/**
+ * Enforce the closed-rotation caps for EVERY mesh with rotation files in the
+ * ledger dir (meshes are enumerated from on-disk file names, so this needs no
+ * mesh config and covers meshes this daemon no longer hosts). One mesh's
+ * failure never blocks the others. Returns the content-free sweep metrics
+ * (counts/bytes/reason codes only — never entry content).
+ */
+export function enforceAllLedgerRotationCaps(opts?: { dryRun?: boolean }): LedgerRotationCapSweepResult {
+    const result: LedgerRotationCapSweepResult = {
+        meshes: 0,
+        evicted: 0,
+        evictedBytes: 0,
+        byReason: { rotation_cap_count: 0, rotation_cap_bytes: 0 },
+    };
+    const dir = getLedgerDir();
+    let names: string[] = [];
+    try {
+        names = readdirSync(dir);
+    } catch {
+        return result;
+    }
+    const meshes = new Set<string>();
+    for (const name of names) {
+        const m = name.match(/^(.*)\.archive\.\d+\.jsonl$/) ?? name.match(/^(.*)\.\d+\.jsonl$/);
+        if (m && m[1]) meshes.add(m[1]);
+    }
+    for (const safe of meshes) {
+        let r: LedgerRotationCapResult;
+        try {
+            r = enforceLedgerRotationCap(safe, opts);
+        } catch (e: any) {
+            process.stderr.write(`[adhdev-mesh] Ledger rotation cap failed for mesh ${safe}: ${e?.message || e}\n`);
+            continue;
+        }
+        result.meshes++;
+        const counted = r.dryRun ? r.planned : r.applied;
+        result.evicted += counted.length;
+        result.evictedBytes += counted.reduce((sum, p) => sum + p.sizeBytes, 0);
+        for (const p of counted) result.byReason[p.reason]++;
+    }
+    return result;
 }

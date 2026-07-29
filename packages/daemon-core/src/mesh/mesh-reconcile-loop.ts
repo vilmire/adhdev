@@ -2296,6 +2296,8 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     //   • JSONL ledger files older than 30d (legacy after the SQLite ledger)
     //   • terminated session-host runtime files older than 14d (live never touched)
     //   • mesh-runtime.db.bak-* backups older than 7d
+    //   • closed ledger rotation files past the per-mesh byte/count caps (oldest
+    //     first, terminal counts folded into the archived-counts rollup first)
     //   • orphan worktree DETECTION → cleanup_candidate ledger signal (NEVER deleted).
     // Runs BEFORE PHASE 2's early return so it fires whether or not a live CLI
     // coordinator exists on this daemon. Isolated in try/catch so it can never kill the

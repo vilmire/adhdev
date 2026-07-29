@@ -13,8 +13,13 @@
 //      TERMINATED (dead) runtimes older than 14 days (live runtimes never touched).
 //   3. DB backups              ~/.adhdev/mesh-ledger/mesh-runtime.db.bak-* older
 //      than 7 days.
+//   4. closed ledger rotations <mesh>.<n>.jsonl / <mesh>.archive.<n>.jsonl past
+//      the per-mesh byte/count caps (lifecycle retention Slice 1 — see
+//      enforceAllLedgerRotationCaps in mesh-ledger.ts; folds terminal counts
+//      into the archived-counts rollup before unlink, never touches the active
+//      ledger/current archive/runtime DB).
 // Plus DETECTION-ONLY orphan-worktree signalling (see mesh-reconcile-loop.ts):
-//   4. a worktree present on disk with no matching live mesh node is reported as a
+//   5. a worktree present on disk with no matching live mesh node is reported as a
 //      cleanup_candidate ledger entry — NEVER auto-deleted (that stays manual /
 //      coordinator-driven).
 //
@@ -33,7 +38,7 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { getConfigDir } from '../config/config.js';
-import { getLedgerDir, appendLedgerEntry, readLedgerEntries } from './mesh-ledger.js';
+import { getLedgerDir, appendLedgerEntry, readLedgerEntries, enforceAllLedgerRotationCaps } from './mesh-ledger.js';
 import { isSessionHostLiveRuntime } from '../session-host/runtime-surface.js';
 import type { SessionHostSurfaceRecordLike } from '../session-host/runtime-surface.js';
 import { listWorktrees } from '../git/git-worktree.js';
@@ -277,18 +282,39 @@ export function pruneExpiredSessionHostRuntimes(now: number = Date.now()): numbe
 
 /**
  * Run the file-deleting retention passes (JSONL ledger, DB backups, session-host
- * runtimes) once. Each pass is isolated so one failing pass never blocks the others.
- * Orphan-worktree DETECTION is driven separately in the reconcile loop (it needs the
- * live mesh config + git worktree list and emits a ledger signal rather than deleting).
+ * runtimes, closed-rotation caps) once. Each pass is isolated so one failing
+ * pass never blocks the others. Orphan-worktree DETECTION is driven separately
+ * in the reconcile loop (it needs the live mesh config + git worktree list and
+ * emits a ledger signal rather than deleting).
+ * The closed-rotation pass (lifecycle retention Slice 1) evicts only the oldest
+ * CLOSED rotation files past the per-mesh byte/count caps; it never touches the
+ * active ledger, current archive, archived-counts rollup, or the runtime DB.
+ * The returned counts are the content-free sweep metrics.
  */
-export function runDiskRetentionSweep(now: number = Date.now()): { ledgerJsonl: number; dbBackups: number; sessionHostRuntimes: number } {
+export function runDiskRetentionSweep(now: number = Date.now()): {
+    ledgerJsonl: number;
+    dbBackups: number;
+    sessionHostRuntimes: number;
+    rotationEvicted: number;
+    rotationEvictedBytes: number;
+} {
     let ledgerJsonl = 0;
     let dbBackups = 0;
     let sessionHostRuntimes = 0;
+    let rotationEvicted = 0;
+    let rotationEvictedBytes = 0;
     try { ledgerJsonl = pruneExpiredLedgerJsonl(now); } catch (e: any) { LOG.warn('DiskRetention', `Ledger JSONL prune failed: ${e?.message || e}`); }
     try { dbBackups = pruneExpiredDbBackups(now); } catch (e: any) { LOG.warn('DiskRetention', `DB backup prune failed: ${e?.message || e}`); }
     try { sessionHostRuntimes = pruneExpiredSessionHostRuntimes(now); } catch (e: any) { LOG.warn('DiskRetention', `Session-host runtime prune failed: ${e?.message || e}`); }
-    return { ledgerJsonl, dbBackups, sessionHostRuntimes };
+    try {
+        const rotation = enforceAllLedgerRotationCaps();
+        rotationEvicted = rotation.evicted;
+        rotationEvictedBytes = rotation.evictedBytes;
+        if (rotation.evicted > 0) {
+            LOG.info('DiskRetention', `Ledger rotation cap evicted ${rotation.evicted} closed rotation file(s) across ${rotation.meshes} mesh(es), ${rotation.evictedBytes} byte(s) freed (rotation_cap_count=${rotation.byReason.rotation_cap_count}, rotation_cap_bytes=${rotation.byReason.rotation_cap_bytes})`);
+        }
+    } catch (e: any) { LOG.warn('DiskRetention', `Ledger rotation cap sweep failed: ${e?.message || e}`); }
+    return { ledgerJsonl, dbBackups, sessionHostRuntimes, rotationEvicted, rotationEvictedBytes };
 }
 
 // ─── Orphan worktree detection (detection-only, emits cleanup_candidate) ──────
