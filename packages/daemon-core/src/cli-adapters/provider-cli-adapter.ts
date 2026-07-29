@@ -83,6 +83,8 @@ import {
     resolveCliSpawnPlan,
     respondToCliTerminalQueries,
 } from './provider-cli-runtime.js';
+import { detectBackgroundTaskActive } from '../providers/spec/background-task-detector.js';
+import type { NativeHistoryConfig } from '../providers/spec/types.js';
 
 export {
     normalizeCliProviderForRuntime,
@@ -1303,6 +1305,22 @@ export class ProviderCliAdapter implements CliAdapter {
     getScriptParsedStatus(): any {
         const screenText = this.readTerminalScreenText();
         const parseScreenText = this.getParseScreenText(screenText);
+        // Background-task passthrough (rc.28 parity with SpecCliAdapter): read
+        // the provider's native-history transcript at poll time for causally-owned
+        // background tool work (run_in_background). Computed on EVERY call —
+        // BEFORE the parsedStatusCache fast path — because the transcript is an
+        // append-only file that changes independently of every PTY/buffer cache
+        // key below: a cached parse result must never carry a stale
+        // backgroundTaskActive verdict (neither a stale `true` that wedges the
+        // completion hold, nor a stale absence that lets the clean-completion
+        // gate emit while a background cell still runs). The bg fields are
+        // therefore overlaid on the return value only and are NOT stored in
+        // parsedStatusCache.result.
+        const bg = this.detectBackgroundTask();
+        const backgroundTaskFields = {
+            backgroundTaskSupport: bg.support ?? 'unknown',
+            ...(bg.active ? { backgroundTaskActive: true, backgroundTaskCount: bg.count, backgroundTaskIds: bg.ids } : {}),
+        };
         const cached = this.parsedStatusCache;
         const accumulatedRawBufferKey = this.getAccumulatedRawBufferCacheKey();
         if (
@@ -1318,7 +1336,7 @@ export class ProviderCliAdapter implements CliAdapter {
             && cached.activeModal === this.engine.activeModal
             && cached.cliName === this.cliName
         ) {
-            return cached.result;
+            return { ...cached.result, ...backgroundTaskFields };
         }
 
         const parsed = this.runParseSession();
@@ -1365,7 +1383,46 @@ export class ProviderCliAdapter implements CliAdapter {
             cliName: this.cliName,
             result,
         };
-        return result;
+        return { ...result, ...backgroundTaskFields };
+    }
+
+    /**
+     * Background-task detection for legacy (provider.v1.json / scripts) CLI
+     * providers — same contract and fail-open semantics as
+     * SpecCliAdapter.detectBackgroundTask: the provider's append-only
+     * native-history transcript is the durable authority for background tool
+     * invocations that outlive the model turn (kimi run_in_background tool.call
+     * cells; claude-cli run_in_background bash). Live kimi sessions route
+     * through THIS adapter (provider dir ships provider.v1.json, no spec.json),
+     * so without this passthrough getScriptParsedStatus never surfaced
+     * backgroundTaskActive and the clean-completion gate emitted
+     * agent:generating_completed while a background cell was still running
+     * (rc.28 live regression, task bash-xczir9ao).
+     *
+     * `nativeHistory` is a top-level v1 manifest field not surfaced on the
+     * CliProviderModule type (see isPurePtyTranscriptProvider); read it via the
+     * same structural shape. Providers without a transcript source report an
+     * explicit support verdict ('tracked' for the providers the detector can
+     * authoritatively read, 'unknown' otherwise) — never a silent "no
+     * background work". Any detector throw fails open to support:'unknown'
+     * (not gated), exactly like the spec path.
+     */
+    private detectBackgroundTask(): { active: boolean; count: number; ids: string[]; support?: 'tracked' | 'unknown' } {
+        const nativeHistory = (this.provider as { nativeHistory?: NativeHistoryConfig } | null | undefined)?.nativeHistory;
+        if (!nativeHistory?.source) {
+            return { active: false, count: 0, ids: [], support: this.cliType === 'claude-cli' || this.cliType === 'kimi' ? 'tracked' : 'unknown' };
+        }
+        try {
+            return detectBackgroundTaskActive(nativeHistory, {
+                agentType: this.cliType,
+                providerSessionId: this.providerSessionId || undefined,
+                sessionStartedAtMs: this.spawnAt,
+                envOverrides: this.extraEnv,
+                workspace: this.workingDir,
+            });
+        } catch {
+            return { active: false, count: 0, ids: [], support: 'unknown' };
+        }
     }
 
     async invokeScript(scriptName: string, args?: Record<string, any>): Promise<any> {

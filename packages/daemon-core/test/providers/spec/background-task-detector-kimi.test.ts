@@ -18,7 +18,10 @@
  *              source_id="bash-…">` in a turn.steer / context.append_message,
  *              or a TaskStop/TaskOutput tool.result with `task_id:` + a
  *              terminal `status:` (killed/completed/failed/…);
- *   - consume: an assistant content.part text AFTER the resolution (a new
+ *   - consume: a FINAL-ANSWER-CLASS assistant content.part text AFTER the
+ *              resolution — with the step protocol present (step.end loop
+ *              events), only text whose step closed with finishReason !==
+ *              'tool_use' counts; progress prose mid-turn does not (a new
  *              turn.prompt supersedes the turn instead).
  *
  * Ownership is scoped to the current turn (launches after the last
@@ -469,5 +472,121 @@ describe('detectBackgroundTaskActive — kimi on-disk durability', () => {
         });
         expect(r.active).toBe(false);
         expect(r.support).toBe('tracked');
+    });
+});
+
+// ── step-protocol final-answer-class consumption (rc.28 live gap) ────────────
+//
+// Literal live rows from the bash-xczir9ao session (rc.28 canary, kimi K3):
+// after the terminal notification the provider emitted progress prose —
+// "Terminal notification received. Consuming the task output now." — inside a
+// step that closed with finishReason 'tool_use' (it continued with the
+// output-file Read), and only ~19s later produced the genuine final report in
+// a step that closed 'end_turn'. The legacy ANY-assistant-text consumption
+// rule released the hold at the prose; only FINAL-ANSWER-CLASS text may.
+
+function steppedText(text: string, turnId: string, step: number, stepUuid: string) {
+    return {
+        type: 'context.append_loop_event',
+        event: { type: 'content.part', uuid: `part-${stepUuid}`, turnId, step, stepUuid, part: { type: 'text', text } },
+        time: 0,
+    };
+}
+
+function stepEnd(turnId: string, step: number, stepUuid: string, finishReason: string) {
+    return {
+        type: 'context.append_loop_event',
+        event: {
+            type: 'step.end', uuid: stepUuid, turnId, step,
+            usage: { inputOther: 469, output: 143, inputCacheRead: 41216, inputCacheCreation: 0 },
+            finishReason,
+        },
+        time: 0,
+    };
+}
+
+const PROGRESS_PROSE = 'Terminal notification received. Consuming the task output now.';
+const HOLDING_PROSE = 'Background task `bash-xczir9ao` (pid 29411) is running with a 45s timer. Holding for its automatic terminal notification before producing the final report.';
+const FINAL_REPORT = 'RC.28 background-completion canary — final report: bash-xczir9ao completed, final token KIMI-RC28-BACKGROUND-TERMINAL-988853.';
+
+describe('detectKimiFromRecords — final-answer-class consumption (step protocol)', () => {
+    // Literal live launch sequence: launch step (tool_use), then the holding
+    // prose step (end_turn) — the turn ends while the cell is still running.
+    const launchSeq = [
+        prompt('RC.28 background terminal canary (45s)'),
+        bgCall('tool_1', '1'),
+        launchResult('tool_1', 'bash-xczir9ao'),
+        stepEnd('1', 1, 's1', 'tool_use'),
+        steppedText(HOLDING_PROSE, '1', 2, 's2'),
+        stepEnd('1', 2, 's2', 'end_turn'),
+    ];
+    // Literal live consumption-attempt sequence: notification, then progress
+    // prose whose step CONTINUES with the output-file Read (tool_use finish).
+    const notificationAndProse = [
+        notificationSteer('bash-xczir9ao', 'task.completed'),
+        steppedText(PROGRESS_PROSE, '2', 1, 's3'),
+        fgCall('tool_read', '2'),
+        fgResult('tool_read', 'KIMI-RC28-BACKGROUND-START\nKIMI-RC28-BACKGROUND-TERMINAL-988853'),
+        stepEnd('2', 1, 's3', 'tool_use'),
+    ];
+
+    it('HOLDS through post-notification progress prose in a tool_use step (the live rc.28 gap)', () => {
+        const r = detectKimiFromRecords([...launchSeq, ...notificationAndProse]);
+        expect(r.active).toBe(true);
+        expect(r.count).toBe(0);
+        expect(r.pendingConsumption).toBe(true);
+    });
+
+    it('RELEASES on the genuine final report after the terminal (end_turn step)', () => {
+        const r = detectKimiFromRecords([
+            ...launchSeq,
+            ...notificationAndProse,
+            steppedText(FINAL_REPORT, '2', 2, 's4'),
+            stepEnd('2', 2, 's4', 'end_turn'),
+        ]);
+        expect(r.active).toBe(false);
+        expect(r.pendingConsumption).toBeUndefined();
+    });
+
+    it('HOLDS while the final-answer step is still in flight (text written, step.end not landed)', () => {
+        const r = detectKimiFromRecords([
+            ...launchSeq,
+            notificationSteer('bash-xczir9ao', 'task.completed'),
+            steppedText(FINAL_REPORT, '2', 1, 's3'),
+        ]);
+        expect(r.active).toBe(true);
+        expect(r.pendingConsumption).toBe(true);
+    });
+
+    it('wording is irrelevant: an end_turn text releases even when it is terse', () => {
+        const r = detectKimiFromRecords([
+            ...launchSeq,
+            notificationSteer('bash-xczir9ao', 'task.completed'),
+            steppedText('The background task finished; nothing more to do.', '2', 1, 's3'),
+            stepEnd('2', 1, 's3', 'end_turn'),
+        ]);
+        expect(r.active).toBe(false);
+    });
+
+    it('a new turn.prompt supersedes the unconsumed resolution with the step protocol present', () => {
+        const r = detectKimiFromRecords([
+            ...launchSeq,
+            ...notificationAndProse,
+            prompt('next task'),
+            steppedText('Next task done.', '3', 1, 's5'),
+            stepEnd('3', 1, 's5', 'end_turn'),
+        ]);
+        expect(r.active).toBe(false);
+    });
+
+    it('legacy transcripts without the step protocol keep the any-assistant-text rule', () => {
+        const r = detectKimiFromRecords([
+            prompt(),
+            bgCall('tool_1'),
+            launchResult('tool_1', 'bash-aaa1'),
+            notificationSteer('bash-aaa1', 'task.completed'),
+            assistantText('Deploy finished: 42 checks green, url live.'),
+        ]);
+        expect(r.active).toBe(false);
     });
 });

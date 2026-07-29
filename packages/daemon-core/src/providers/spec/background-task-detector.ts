@@ -27,8 +27,15 @@
  *   record, or (b) a TaskStop/TaskOutput `tool.result` carrying
  *   `task_id: <id>` with a terminal `status:` (killed/completed/failed/…).
  *   Even once resolved, the hold persists until the provider CONSUMES the
- *   resolution into an assistant `content.part` text (or a new `turn.prompt`
- *   supersedes the turn) — a bare tool-exit is not a final answer.
+ *   resolution into a final-answer-class assistant `content.part` text (or a
+ *   new `turn.prompt` supersedes the turn) — a bare tool-exit is not a final
+ *   answer, and neither is progress prose mid-turn: when the wire carries the
+ *   step protocol (`step.end` loop events with a `finishReason`), only text
+ *   whose step closed with a finishReason OTHER THAN `tool_use` (live-verified:
+ *   `end_turn`) counts as consumption. A text whose step continues into more
+ *   tool work — e.g. the literal live row "Terminal notification received.
+ *   Consuming the task output now." (step ended `tool_use`, followed by the
+ *   output-file Read) — is progress prose and must NOT clear the hold.
  *
  * Ownership scoping (per task/turn, not per process): only launches recorded
  * AFTER the last user prompt in the scanned tail are causally owned by the
@@ -223,6 +230,17 @@ function detectClaudeFromRecords(records: unknown[]): BackgroundTaskDetection {
  *   … and finally the provider consuming it …
  *   { type:'context.append_loop_event',
  *     event:{ type:'content.part', part:{ type:'text', text:'<final answer>' } } }
+ *   { type:'context.append_loop_event',
+ *     event:{ type:'step.end', turnId, step, finishReason:'end_turn' } }
+ *
+ * Consumption is FINAL-ANSWER-CLASS evidence, not any assistant text: with the
+ * step protocol present, a `content.part` text only counts when its step closed
+ * with `finishReason !== 'tool_use'` (a `tool_use` finish means the turn
+ * continues with more tool work — progress prose like "Terminal notification
+ * received…"). A text whose `step.end` has not landed yet is not yet
+ * consumption evidence either (fail-safe: the hold persists, time-bounded by
+ * BACKGROUND_TASK_HOLD_MAX_MS). Transcripts with NO step protocol at all keep
+ * the legacy any-assistant-text rule.
  *
  * Ownership is scoped to the current turn: only launches AFTER the last
  * `turn.prompt` count, so a detached background process from an earlier turn
@@ -235,7 +253,12 @@ export function detectKimiFromRecords(records: unknown[]): BackgroundTaskDetecti
     /** toolCallId → record index for a run_in_background call whose LAUNCH result hasn't landed. */
     const pendingLaunchByCallId = new Map<string, number>();
     let lastPromptIdx = -1;
-    let lastAssistantTextIdx = -1;
+    /** Assistant text parts with their step identity. Final-answer-class is
+     *  judged AFTER the scan: a part's own `step.end` (carrying the
+     *  finishReason) lands LATER in the tail than the text itself. */
+    const textParts: { idx: number; stepKey: string | null }[] = [];
+    /** step key → finishReason, from `step.end` loop events (kimi step protocol). */
+    const stepFinishReason = new Map<string, string>();
 
     for (let i = 0; i < records.length; i++) {
         const rec = records[i];
@@ -261,8 +284,12 @@ export function detectKimiFromRecords(records: unknown[]): BackgroundTaskDetecti
                     ? (event.part as Record<string, unknown>)
                     : null;
                 if (part && String(part.type ?? '') === 'text' && String(part.text ?? '').trim().length > 0) {
-                    lastAssistantTextIdx = i;
+                    textParts.push({ idx: i, stepKey: kimiStepKey(event) });
                 }
+            } else if (eventType === 'step.end') {
+                const stepKey = kimiStepKey(event);
+                const finishReason = String(event.finishReason ?? '').trim();
+                if (stepKey && finishReason) stepFinishReason.set(stepKey, finishReason);
             } else if (eventType === 'tool.call') {
                 const args = event.args && typeof event.args === 'object'
                     ? (event.args as Record<string, unknown>)
@@ -331,6 +358,30 @@ export function detectKimiFromRecords(records: unknown[]): BackgroundTaskDetecti
     // causally owned by the current turn.
     const inScope = [...launches.entries()].filter(([, v]) => v.callIdx > lastPromptIdx);
     const unresolved = inScope.filter(([, v]) => v.resolvedIdx < 0).map(([id]) => id);
+    // Consumption boundary: the last FINAL-ANSWER-CLASS assistant text. When
+    // the transcript carries the kimi step protocol (any step.end with a
+    // finishReason), a text part counts only when its step closed with a
+    // finishReason other than 'tool_use' — a 'tool_use' finish means the model
+    // turn continued with more tool work, so the text was progress prose (the
+    // literal live post-notification row "Terminal notification received.
+    // Consuming the task output now." ended its step with tool_use and was
+    // followed by the output-file Read; treating it as consumption released the
+    // hold ~19s before the genuine final report). A text whose step.end has
+    // not landed yet (step still in flight) is not consumption evidence either
+    // — fail-safe towards holding, bounded by BACKGROUND_TASK_HOLD_MAX_MS.
+    // Transcripts with no step protocol at all keep the legacy rule: any
+    // assistant text counts.
+    const hasStepProtocol = stepFinishReason.size > 0;
+    let lastAssistantTextIdx = -1;
+    for (const part of textParts) {
+        if (!hasStepProtocol) {
+            lastAssistantTextIdx = part.idx;
+            continue;
+        }
+        if (!part.stepKey) continue;
+        const finish = stepFinishReason.get(part.stepKey);
+        if (finish && finish !== 'tool_use') lastAssistantTextIdx = part.idx;
+    }
     const consumedBoundary = Math.max(lastPromptIdx, lastAssistantTextIdx);
     const pendingConsumption = inScope.some(([, v]) => v.resolvedIdx >= 0 && v.resolvedIdx > consumedBoundary);
 
@@ -358,6 +409,24 @@ const KIMI_TERMINAL_TASK_STATUSES = new Set([
 function markKimiResolved(launches: Map<string, { callIdx: number; resolvedIdx: number }>, taskId: string, idx: number): void {
     const entry = launches.get(taskId);
     if (entry && entry.resolvedIdx < 0) entry.resolvedIdx = idx;
+}
+
+/**
+ * Step identity shared by `content.part` / `tool.call` / `step.end` loop
+ * events. The `turnId:step` pair is present on all three and is preferred —
+ * the step's uuid travels under DIFFERENT field names per event kind
+ * (`stepUuid` on content.part/tool.call, `uuid` on step.begin/step.end), so
+ * the pair is the only uniform join key. Falls back to `stepUuid` for
+ * transcripts that carry it without a numeric step.
+ */
+function kimiStepKey(event: Record<string, unknown>): string | null {
+    const turnId = String(event.turnId ?? '').trim();
+    const step = event.step;
+    if (turnId && (typeof step === 'number' || (typeof step === 'string' && step.trim() !== ''))) {
+        return `${turnId}:${typeof step === 'string' ? step.trim() : step}`;
+    }
+    const stepUuid = String(event.stepUuid ?? '').trim();
+    return stepUuid || null;
 }
 
 /** Extract the tool.result output as flat text (string or JSON-encoded object). */
