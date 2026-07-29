@@ -1020,6 +1020,7 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_refine_config\` | Refinery config helper (read-only) — unified entry for schema/validate/suggest via a required \`mode\` |
 | \`mesh_change_impact_config\` | Change Impact config helper — unified entry for schema/validate/suggest via a required \`mode\` |
 | \`mesh_remove_node\` | Remove a node (cleans up worktree if applicable) |
+| \`mesh_cleanup_worktree_nodes\` | Plan (dry-run default) or execute safe removal of CONVERGED local worktree nodes (lifecycle retention) - per-node reason codes always shown; never forces |
 | \`mesh_cleanup_sessions\` | Manually clean up delegated session records for a node |
 | \`mesh_prune_stale_direct\` | Prune orphaned staleDirect dispatch records (dry-run by default); live/pending work and audit history preserved |
 | \`mesh_init\` | Guided onboarding for a fresh repo: dry-run scan → suggest \`.adhdev/*\` configs (refine/bootstrap/change-impact) + providerPriority + current-config echo; gated write on approval |

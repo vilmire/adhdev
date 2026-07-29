@@ -44,6 +44,7 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_add_node',
     'mesh_clone_node',
     'mesh_remove_node',
+    'mesh_cleanup_worktree_nodes',
     'mesh_refine_node',
     'mesh_refine_batch',
     'mesh_refine_config',

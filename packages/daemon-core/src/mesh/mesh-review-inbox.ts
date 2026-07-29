@@ -225,7 +225,7 @@ function resolveNodeEvidence(nodeId: string, ledgerEntries: MeshLedgerEntry[]): 
 }
 
 /** Latest refine terminal result for a node that classified it blocked_review. */
-function hasBlockedReviewRefineResult(nodeId: string, ledgerEntries: MeshLedgerEntry[]): boolean {
+export function hasBlockedReviewRefineResult(nodeId: string, ledgerEntries: MeshLedgerEntry[]): boolean {
     for (let i = ledgerEntries.length - 1; i >= 0; i--) {
         const entry = ledgerEntries[i];
         if (!daemonIdsEquivalent(entry.nodeId, nodeId) || !isTerminalLedgerKind(entry.kind)) continue;
