@@ -1221,6 +1221,48 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /**
+     * Provider-agnostic live-state observation for the mesh completion gate.
+     * `observedAt` is the PTY snapshot clock, not the time this accessor ran:
+     * after restart/rebind an old waiting_* frame must remain recognizably
+     * older than a newly-written authoritative transcript final.
+     */
+    getLiveTurnPendingEvidence(): {
+        pending: boolean;
+        kind?: 'adapter' | 'modal' | 'transcript_tool';
+        observedAt?: number;
+    } {
+        const adapterPending = this.hasAdapterPendingResponse();
+        const modalParked = this.isModalParked();
+        if (adapterPending || modalParked) {
+            let observedAt: number | undefined;
+            try {
+                const raw = this.adapter.getStatus({ allowParse: false }) as any;
+                if (typeof raw?.lastOutputAt === 'number' && Number.isFinite(raw.lastOutputAt)) {
+                    observedAt = raw.lastOutputAt;
+                }
+            } catch { /* no snapshot clock => the gate keeps the live veto */ }
+            return {
+                pending: true,
+                kind: modalParked ? 'modal' : 'adapter',
+                ...(observedAt !== undefined ? { observedAt } : {}),
+            };
+        }
+        try {
+            const probe = this.probeNativeTranscriptSignals();
+            if (probe?.snapshot?.available === true
+                && Array.isArray(probe.messages)
+                && hasTrailingToolActivityAfterFinalAssistant(probe.messages as ChatMessage[])) {
+                return {
+                    pending: true,
+                    kind: 'transcript_tool',
+                    observedAt: probe.snapshot.sampledAt,
+                };
+            }
+        } catch { /* fail open — a probe error must never fabricate pending evidence */ }
+        return { pending: false };
+    }
+
+    /**
      * MID-TURN-LIVE-STATE-GATE (broader false-idle RCA, mid-turn follow-up): a live,
      * synchronous re-check of whether this session's CURRENT turn genuinely still has
      * unresolved work. Public wrapper so the coordinator (mesh-event-forwarding) can
@@ -1254,14 +1296,7 @@ export class CliProviderInstance implements ProviderInstance {
      * can never wedge a session as "pending" forever.
      */
     hasLiveTurnPendingEvidence(): boolean {
-        if (this.hasAdapterPendingResponse() || this.isModalParked()) return true;
-        try {
-            const probe = this.probeNativeTranscriptSignals();
-            if (probe?.snapshot?.available === true && Array.isArray(probe.messages)) {
-                if (hasTrailingToolActivityAfterFinalAssistant(probe.messages as ChatMessage[])) return true;
-            }
-        } catch { /* fail open — a probe error must never fabricate pending evidence */ }
-        return false;
+        return this.getLiveTurnPendingEvidence().pending;
     }
 
     /**
@@ -2287,8 +2322,12 @@ export class CliProviderInstance implements ProviderInstance {
         // CompletedDebouncePending.resolvedFinalMessages).
         if (finalAssistantEvidence.present && finalAssistantEvidence.source !== 'unavailable') {
             pending.resolvedFinalMessages = Array.isArray(finalAssistantEvidence.messages) ? finalAssistantEvidence.messages : undefined;
+            pending.resolvedFinalEvidenceSource = finalAssistantEvidence.source;
+            pending.resolvedFinalEvidenceObservedAt = Date.now();
         } else {
             pending.resolvedFinalMessages = undefined;
+            pending.resolvedFinalEvidenceSource = undefined;
+            pending.resolvedFinalEvidenceObservedAt = undefined;
         }
         if (!finalAssistantEvidence.present) {
             if (adapterOwnsMessagesElsewhere) {
@@ -3744,12 +3783,42 @@ export class CliProviderInstance implements ProviderInstance {
             duration: pending.duration,
             busyEpoch: this.busyEpoch,
         });
+        const finalSummary = this.cleanCompletionFinalSummary(pending);
+        const transcriptProfile = resolveTranscriptAuthorityProfile(this.provider);
+        const finalContentLength = typeof finalSummary === 'string' ? finalSummary.trim().length : 0;
         this.emitGeneratingCompleted({
             chatTitle: pending.chatTitle,
             duration: pending.duration,
             timestamp: pending.timestamp,
             taskId: pending.taskId,
-            finalSummary: this.cleanCompletionFinalSummary(pending),
+            finalSummary,
+            evidenceLevel: 'transcript',
+            completionDiagnostic: {
+                source: 'clean_final_assistant',
+                cleanPath: true,
+                evidenceWeak: false,
+                finalAssistantPresent: true,
+                finalAssistantEvidenceSource: pending.resolvedFinalEvidenceSource ?? 'parsed',
+                finalAssistantContentLength: finalContentLength,
+                transcriptEvidence: {
+                    version: 1,
+                    kind: 'final_assistant',
+                    cleanPath: true,
+                    weak: false,
+                    authorityClass: transcriptProfile.class,
+                    timing: transcriptProfile.timing,
+                    providerOwnsTranscript: transcriptProfile.providerOwnsTranscript,
+                    observedAt: pending.resolvedFinalEvidenceObservedAt ?? Date.now(),
+                    turnStartedAt: pending.turnStartedAt ?? null,
+                    finalContentLength,
+                    taskId: pending.taskId ?? null,
+                    attemptId: typeof this.settings.meshActiveAttemptId === 'string'
+                        ? this.settings.meshActiveAttemptId : null,
+                    dispatchNonce: typeof this.settings.meshActiveDispatchNonce === 'number'
+                        ? this.settings.meshActiveDispatchNonce : null,
+                    sessionId: this.instanceId,
+                },
+            },
         });
         this.completedDebouncePending = null;
         this.completedDebounceTimer = null;

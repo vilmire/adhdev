@@ -108,8 +108,12 @@ describe('CliProviderInstance — CANON-C completion-gate decouple', () => {
     expect(events[0].event).toBe('agent:generating_completed')
     // Enriched summary survives — the transcript path is the source of truth for the summary.
     expect(events[0].finalSummary).toBe('Refactored auth; 3 files changed; tests pass.')
-    // A genuine completion carries no missing-final-assistant weakness marker.
-    expect(events[0].completionDiagnostic).toBeUndefined()
+    // A genuine completion carries the clean, strong transcript contract and
+    // no missing-final-assistant weakness marker.
+    expect(events[0].completionDiagnostic.blockReason).toBeUndefined()
+    expect(events[0].completionDiagnostic.finalAssistantPresent).toBe(true)
+    expect(events[0].completionDiagnostic.cleanPath).toBe(true)
+    expect(events[0].completionDiagnostic.evidenceWeak).toBe(false)
   })
 
   it('does NOT decouple for a NON-mesh session: the transcript-evidence gate still holds (allowTimeout disarmed)', () => {

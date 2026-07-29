@@ -58,4 +58,34 @@ describe('buildRelayMetadataEvent taskId preservation (remote relay path)', () =
     expect(md.taskId).toBe('')
     expect(md.taskId).toBeFalsy()
   })
+
+  it('preserves the causal identity and transcript evidence contract across a remote relay', () => {
+    const transcriptEvidence = {
+      version: 1,
+      kind: 'final_assistant',
+      cleanPath: true,
+      weak: false,
+    }
+    const md = buildRelayMetadataEvent({
+      event: 'agent:generating_completed',
+      taskId: 'task-1',
+      attemptId: 'attempt-1',
+      dispatchNonce: 9,
+      evidenceLevel: 'transcript',
+      completionDiagnostic: {
+        finalAssistantPresent: true,
+        transcriptEvidence,
+      },
+    })
+    expect(md).toMatchObject({
+      taskId: 'task-1',
+      attemptId: 'attempt-1',
+      dispatchNonce: 9,
+      evidenceLevel: 'transcript',
+      completionDiagnostic: {
+        finalAssistantPresent: true,
+        transcriptEvidence,
+      },
+    })
+  })
 })

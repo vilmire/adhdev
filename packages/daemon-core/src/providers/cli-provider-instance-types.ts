@@ -66,6 +66,9 @@ export type CompletedDebouncePending = {
     // snapshot that justified the completion, closing the gap. Undefined when the clean
     // path resolved evidence from the PTY-parsed branch (no separate transcript to race).
     resolvedFinalMessages?: unknown[];
+    /** Authority source and observation clock for the exact snapshot above. */
+    resolvedFinalEvidenceSource?: 'parsed' | 'external-native';
+    resolvedFinalEvidenceObservedAt?: number;
 };
 
 export type CompletedFinalizationBlock = {

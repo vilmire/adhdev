@@ -2847,8 +2847,11 @@ export class MeshRuntimeStore {
         this.maybeCheckpointWal();
     }
 
-    countTurnOutboxByStatus(): Record<string, number> {
-        const rows = this.db.prepare('SELECT status, COUNT(*) AS n FROM mesh_turn_outbox GROUP BY status').all() as Array<{ status: string; n: number }>;
+    countTurnOutboxByStatus(meshId?: string): Record<string, number> {
+        const rows = (meshId
+            ? this.db.prepare('SELECT status, COUNT(*) AS n FROM mesh_turn_outbox WHERE mesh_id = ? GROUP BY status').all(meshId)
+            : this.db.prepare('SELECT status, COUNT(*) AS n FROM mesh_turn_outbox GROUP BY status').all()
+        ) as Array<{ status: string; n: number }>;
         const out: Record<string, number> = {};
         for (const r of rows) out[r.status] = r.n;
         return out;

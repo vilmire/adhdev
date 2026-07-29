@@ -59,6 +59,12 @@ import {
     sessionHasActiveAssignment,
     AUTO_LAUNCH_AWAIT_CLAIM_MS,
 } from './mesh-queue-assignment.js';
+import {
+    authoritativeEvidenceOutranksLivePending,
+    completionEligibleForLiveStateRetry,
+    evaluateAuthoritativeTranscriptCompletion,
+    type LiveTurnPendingEvidence,
+} from './mesh-completion-live-gate.js';
 
 // ---------------------------------------------------------------------------
 // BOOTSTRAP-MSG: worktreeHasQueuedTask predicate (exported for unit testing)
@@ -114,6 +120,173 @@ const REMOTE_IDLE_SESSION_TTL_MS = 5 * 60 * 1000; // 5 minutes
 // ---------------------------------------------------------------------------
 const meshByWorkspaceCache = new Map<string, { mesh: any; cachedAt: number }>();
 const MESH_WORKSPACE_CACHE_TTL_MS = 5_000;
+
+// MID-TURN-LIVE-STATE-GATE defense-in-depth. The hold deliberately contains no
+// task message, final summary, transcript, or modal content: only the dispatch
+// identity needed to re-evaluate the live-state disagreement. The provider's
+// transcript remains the content authority.
+const MID_TURN_COMPLETION_HOLD_RETRY_MS = 250;
+const MID_TURN_COMPLETION_HOLD_TTL_MS = 5_000;
+
+type HeldLiveStateCompletion = {
+    components: DaemonComponents;
+    meshId: string;
+    sourceInstanceId?: string;
+    nodeId?: string;
+    nodeLabel: string;
+    sessionId: string;
+    taskId: string;
+    attemptId: string;
+    dispatchNonce: number;
+    providerType?: string;
+    eventTimestamp: number;
+    expiresAt: number;
+    nextCheckAt: number;
+};
+
+const heldLiveStateCompletions = new Map<string, HeldLiveStateCompletion>();
+let heldLiveStateCompletionTimer: NodeJS.Timeout | null = null;
+
+function heldCompletionKey(meshId: string, taskId: string, attemptId: string, sessionId: string, nonce: number): string {
+    return `${meshId}\u001f${taskId}\u001f${attemptId}\u001f${sessionId}\u001f${nonce}`;
+}
+
+function readLivePendingEvidence(instance: any): LiveTurnPendingEvidence {
+    try {
+        if (typeof instance?.getLiveTurnPendingEvidence === 'function') {
+            const evidence = instance.getLiveTurnPendingEvidence();
+            if (evidence && typeof evidence === 'object') {
+                return {
+                    pending: evidence.pending === true,
+                    ...(evidence.kind === 'adapter' || evidence.kind === 'modal' || evidence.kind === 'transcript_tool'
+                        ? { kind: evidence.kind } : {}),
+                    ...(typeof evidence.observedAt === 'number' && Number.isFinite(evidence.observedAt)
+                        ? { observedAt: evidence.observedAt } : {}),
+                };
+            }
+        }
+        if (typeof instance?.hasLiveTurnPendingEvidence === 'function') {
+            return { pending: instance.hasLiveTurnPendingEvidence() === true };
+        }
+    } catch { /* fail open — diagnostics must not wedge completion */ }
+    return { pending: false };
+}
+
+function scheduleHeldLiveStateCompletionDrain(): void {
+    if (heldLiveStateCompletionTimer || heldLiveStateCompletions.size === 0) return;
+    heldLiveStateCompletionTimer = setTimeout(() => {
+        heldLiveStateCompletionTimer = null;
+        drainHeldLiveStateCompletions();
+    }, MID_TURN_COMPLETION_HOLD_RETRY_MS);
+    heldLiveStateCompletionTimer.unref?.();
+}
+
+function drainHeldLiveStateCompletions(nowMs: number = Date.now()): void {
+    for (const [key, held] of heldLiveStateCompletions) {
+        if (nowMs < held.nextCheckAt) continue;
+        if (nowMs >= held.expiresAt) {
+            heldLiveStateCompletions.delete(key);
+            continue;
+        }
+        const attempt = MeshRuntimeStore.getInstance().getCurrentTurnAttempt(held.meshId, held.taskId);
+        const identityStillCurrent = !!attempt
+            && !attempt.terminalOutcome
+            && attempt.attemptId === held.attemptId
+            && sessionIdsEquivalent(attempt.sessionId, held.sessionId)
+            && attempt.dispatchNonce === held.dispatchNonce;
+        if (!identityStillCurrent) {
+            heldLiveStateCompletions.delete(key);
+            continue;
+        }
+        const liveInstance = held.components.instanceManager?.getInstance?.(held.sessionId);
+        if (!liveInstance) {
+            heldLiveStateCompletions.delete(key);
+            continue;
+        }
+        const live = readLivePendingEvidence(liveInstance);
+        if (live.pending) {
+            held.nextCheckAt = nowMs + MID_TURN_COMPLETION_HOLD_RETRY_MS;
+            continue;
+        }
+        // Delete BEFORE delivery. A duplicate provider event or re-entrant retry
+        // sees no armed hold, and the turn reducer/outbox remain the final exactly-
+        // once authority.
+        heldLiveStateCompletions.delete(key);
+        injectMeshSystemMessage(held.components, {
+            meshId: held.meshId,
+            sourceInstanceId: held.sourceInstanceId,
+            nodeId: held.nodeId,
+            nodeLabel: held.nodeLabel,
+            event: 'agent:generating_completed',
+            metadataEvent: {
+                event: 'agent:generating_completed',
+                instanceId: held.sessionId,
+                targetSessionId: held.sessionId,
+                taskId: held.taskId,
+                attemptId: held.attemptId,
+                dispatchNonce: held.dispatchNonce,
+                timestamp: held.eventTimestamp,
+                ...(held.providerType ? { providerType: held.providerType } : {}),
+                completionDiagnostic: {
+                    source: 'mid_turn_live_state_retry',
+                    contentFreeRetry: true,
+                },
+            },
+        });
+    }
+    scheduleHeldLiveStateCompletionDrain();
+}
+
+function holdCompletionForLiveStateRetry(
+    components: DaemonComponents,
+    args: {
+        meshId: string;
+        sourceInstanceId?: string;
+        nodeId?: string;
+        nodeLabel: string;
+        metadataEvent: Record<string, unknown>;
+    },
+    eventSessionId: string,
+    nowMs: number,
+): boolean {
+    const taskId = readNonEmptyString(args.metadataEvent.taskId);
+    const attemptId = readNonEmptyString(args.metadataEvent.attemptId);
+    const dispatchNonce = typeof args.metadataEvent.dispatchNonce === 'number'
+        ? args.metadataEvent.dispatchNonce : NaN;
+    const eventTimestamp = typeof args.metadataEvent.timestamp === 'number'
+        ? args.metadataEvent.timestamp : NaN;
+    if (!taskId || !attemptId || !Number.isFinite(dispatchNonce) || !Number.isFinite(eventTimestamp)) return false;
+    const key = heldCompletionKey(args.meshId, taskId, attemptId, eventSessionId, dispatchNonce);
+    if (!heldLiveStateCompletions.has(key)) {
+        heldLiveStateCompletions.set(key, {
+            components,
+            meshId: args.meshId,
+            sourceInstanceId: args.sourceInstanceId,
+            nodeId: args.nodeId,
+            nodeLabel: args.nodeLabel,
+            sessionId: eventSessionId,
+            taskId,
+            attemptId,
+            dispatchNonce,
+            providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+            eventTimestamp,
+            expiresAt: nowMs + MID_TURN_COMPLETION_HOLD_TTL_MS,
+            nextCheckAt: nowMs + MID_TURN_COMPLETION_HOLD_RETRY_MS,
+        });
+    }
+    scheduleHeldLiveStateCompletionDrain();
+    return true;
+}
+
+export function __drainHeldLiveStateCompletionsForTests(nowMs: number = Date.now()): void {
+    drainHeldLiveStateCompletions(nowMs);
+}
+
+export function __resetHeldLiveStateCompletionsForTests(): void {
+    if (heldLiveStateCompletionTimer) clearTimeout(heldLiveStateCompletionTimer);
+    heldLiveStateCompletionTimer = null;
+    heldLiveStateCompletions.clear();
+}
 
 function getCachedMeshByWorkspace(workspace: string): any {
     const now = Date.now();
@@ -659,43 +832,65 @@ function evaluateMeshEventSuppression(
         }
     }
     if (args.event === 'agent:generating_completed' && eventSessionId) {
-        // MID-TURN-LIVE-STATE-GATE (broader false-idle RCA, mid-turn follow-up): before trusting
-        // ANY incoming completion, independently re-verify a resolvable LOCAL live instance's
-        // CURRENT turn state — not just the event's self-reported diagnostic — via the exact same
-        // discriminators the instance's OWN emission gate (getCompletedFinalizationBlock) uses
-        // (adapter pending-response: isWaitingForResponse / currentTurnScope / isProcessing() /
-        // a non-empty partial response; or a live approval/choice modal). A screen-redraw parse
-        // artifact, a decoupled-immediate emit, or a TOCTOU between emit and receipt can let a
-        // genuinely mid-turn session's completion reach here; this is a stateless, synchronous
-        // safety net for that race.
+        // MID-TURN-LIVE-STATE-GATE: live pending evidence remains a completion veto unless the
+        // incoming event carries the provider's versioned CLEAN transcript proof, that proof is
+        // fresh and non-empty, and (task, attempt, session, dispatchNonce) exactly match the
+        // current reducer attempt. Even authoritative transcript evidence only outranks a
+        // modal/screen observation whose PTY clock or reducer suspension edge proves it stale;
+        // a fresh approval/choice, adapter response, or trailing transcript tool remains
+        // nonterminal.
         //
-        // Scope: ONLY when components.instanceManager.getInstance(sessionId) resolves a live
-        // instance exposing hasLiveTurnPendingEvidence() — i.e. a co-located worker/coordinator or
-        // single-daemon (standalone) topology. A REMOTE session (no live instance on this daemon)
-        // is untouched by this gate — absence of a resolvable instance is NOT treated as pending
-        // evidence, so a remote/unknown session is never fail-closed here; its existing async
-        // reconcile-loop protections (evaluateEarlyIdleTranscriptArm, transcript trailing-tool-
-        // activity checks) remain the operative safety net, unchanged.
+        // A vetoed event whose strong transcript envelope already passed every freshness/content/
+        // causal check receives one content-free in-memory hold keyed by the same identity. A
+        // summary alone can never arm it. For at most 5s it re-checks the LOCAL live state; once
+        // that state clears it re-enters this normal pipeline
+        // exactly once. The hold stores no summary/transcript/modal content, expires boundedly,
+        // and is dropped on terminal, cancellation, reassignment, missing session, or identity
+        // mismatch. The turn reducer plus terminal outbox remain the exactly-once authorities.
         //
-        // Bounded / never wedges: this SUPPRESSES only the ONE premature event and persists no new
-        // hold state — it relies on the adapter's OWN bounded finalization retry (which already
-        // owns re-emitting once genuinely idle, COMPLETED_FINALIZATION_MAX_WAIT_MS) plus the
-        // existing reconcile-loop completion nets (PHASE 4 transcript synth, assigned-stranded
-        // deadline, acked-hold death backstop) as fail-open backstops if the adapter's re-emit is
-        // itself ever lost. A later genuine completion (pending evidence cleared) is NOT touched by
-        // this gate and is processed normally.
+        // Remote/unknown sessions are outside this synchronous gate, as before; absence of a local
+        // instance never fabricates pending evidence and never arms a hold.
         const liveInstance = components.instanceManager?.getInstance?.(eventSessionId) as
-            { hasLiveTurnPendingEvidence?: () => boolean } | undefined;
-        if (typeof liveInstance?.hasLiveTurnPendingEvidence === 'function') {
-            let midTurnPending = false;
-            try { midTurnPending = liveInstance.hasLiveTurnPendingEvidence() === true; } catch { /* fail open — never block on a diagnostic throw */ }
-            if (midTurnPending) {
-                LOG.info('MeshEvents', `Suppressed agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}): live adapter re-check shows the turn is still pending (mid-tool / streaming / modal) — treating as a premature/redraw-race emit; the adapter's own finalization retry or the reconcile loop's transcript evidence will surface the real completion`);
-                traceMeshEventDrop('mid_turn_live_state_pending', traceCtx);
-                return {
-                    kind: 'suppress',
-                    result: { success: true, forwarded: 0, suppressed: true, midTurnLiveStatePending: true },
-                };
+            {
+                getLiveTurnPendingEvidence?: () => LiveTurnPendingEvidence;
+                hasLiveTurnPendingEvidence?: () => boolean;
+            } | undefined;
+        if (typeof liveInstance?.getLiveTurnPendingEvidence === 'function'
+            || typeof liveInstance?.hasLiveTurnPendingEvidence === 'function') {
+            const live = readLivePendingEvidence(liveInstance);
+            if (live.pending) {
+                const taskId = readNonEmptyString(args.metadataEvent.taskId);
+                const attempt = taskId
+                    ? MeshRuntimeStore.getInstance().getCurrentTurnAttempt(args.meshId, taskId)
+                    : null;
+                const authority = evaluateAuthoritativeTranscriptCompletion({
+                    metadataEvent: args.metadataEvent,
+                    eventSessionId,
+                    attempt,
+                });
+                if (authoritativeEvidenceOutranksLivePending(authority, live)) {
+                    LOG.info('MeshEvents', `Accepted agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}): fresh clean-path transcript evidence for the current attempt is newer than the stale ${live.kind ?? 'live'} snapshot`);
+                } else {
+                    const retryEligible = completionEligibleForLiveStateRetry({
+                        metadataEvent: args.metadataEvent,
+                        eventSessionId,
+                        attempt,
+                    });
+                    const heldForRetry = retryEligible
+                        && holdCompletionForLiveStateRetry(components, args, eventSessionId, Date.now());
+                    LOG.info('MeshEvents', `Suppressed agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}): current live evidence remains pending (${live.kind ?? 'unknown'}); transcript authority=${authority.authoritative ? 'fresh_but_not_newer' : authority.reason}${heldForRetry ? ' — bounded content-free retry armed' : ''}`);
+                    traceMeshEventDrop('mid_turn_live_state_pending', traceCtx, heldForRetry ? 'retry_held' : undefined);
+                    return {
+                        kind: 'suppress',
+                        result: {
+                            success: true,
+                            forwarded: 0,
+                            suppressed: true,
+                            midTurnLiveStatePending: true,
+                            ...(heldForRetry ? { completionRetryHeld: true } : {}),
+                        },
+                    };
+                }
             }
         }
         // NO-DISPATCH-NATIVE-COMPLETION-GATE (rc.16 follow-up): a session that was launched
@@ -2171,6 +2366,12 @@ export function buildRelayMetadataEvent(payload: Record<string, unknown>): Recor
         // keeps event.taskId/meshActiveTaskId for free; this mirrors it for the remote relay.
         // Same taskId/meshActiveTaskId ordering the local unroutable trace uses.
         taskId: readNonEmptyString(payload.taskId) || readNonEmptyString(payload.meshActiveTaskId),
+        attemptId: readNonEmptyString(payload.attemptId) || readNonEmptyString(payload.meshActiveAttemptId),
+        ...(typeof payload.dispatchNonce === 'number'
+            ? { dispatchNonce: payload.dispatchNonce }
+            : (typeof payload.meshActiveDispatchNonce === 'number'
+                ? { dispatchNonce: payload.meshActiveDispatchNonce }
+                : {})),
         targetSessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.instanceId),
         providerType: readNonEmptyString(payload.providerType),
         providerSessionId: readNonEmptyString(payload.providerSessionId),
@@ -2197,6 +2398,7 @@ export function buildRelayMetadataEvent(payload: Record<string, unknown>): Recor
         providerName: readNonEmptyString(payload.providerName),
         ...(payload.sessionSettings && typeof payload.sessionSettings === 'object' && !Array.isArray(payload.sessionSettings) ? { sessionSettings: payload.sessionSettings } : {}),
         finalSummary: readNonEmptyString(payload.finalSummary) || readNonEmptyString(payload.summary),
+        evidenceLevel: readNonEmptyString(payload.evidenceLevel),
         // T2: carry the worker's status-snapshot last-message preview across the machine
         // boundary so a summary-less completion still surfaces the assistant reply in the
         // coordinator's inbox mirror. resolveMeshSurfacedSessionPreview reads these

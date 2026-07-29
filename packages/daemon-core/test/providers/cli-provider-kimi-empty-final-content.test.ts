@@ -199,7 +199,12 @@ describe('CliProviderInstance — kimi end-to-end clean completion (flushComplet
     instance.lastApprovalEventFingerprint = ''
     instance.autoApproveBusy = false
     instance.completedDebounceTimer = null
-    instance.settings = { meshNodeFor: 'mesh-1', meshActiveTaskId: 'task-1' }
+    instance.settings = {
+      meshNodeFor: 'mesh-1',
+      meshActiveTaskId: 'task-1',
+      meshActiveAttemptId: 'attempt-1',
+      meshActiveDispatchNonce: 7,
+    }
     instance.shouldAutoApprove = () => false
     instance.completionTraceOn = () => false
     instance.isMeshWorkerSession = () => true
@@ -221,6 +226,7 @@ describe('CliProviderInstance — kimi end-to-end clean completion (flushComplet
       timestamp: TURN_START + 335_000,
       firstObservedAt: TURN_START,
       previousStatus: 'generating',
+      taskId: 'task-1',
       turnStartedAt: TURN_START,
       busyEpochAtArm: 1,
       lastOutputAtArm: TURN_START + 334_900,
@@ -285,6 +291,26 @@ describe('CliProviderInstance — kimi end-to-end clean completion (flushComplet
     expect(completions).toHaveLength(1)
     expect(completions[0].finalSummary).toBe(FINAL_ANSWER)
     expect(completions[0].finalSummary).not.toBe('')
+    expect(completions[0].evidenceLevel).toBe('transcript')
+    expect(completions[0].completionDiagnostic).toMatchObject({
+      cleanPath: true,
+      evidenceWeak: false,
+      finalAssistantPresent: true,
+      finalAssistantEvidenceSource: 'external-native',
+      transcriptEvidence: {
+        version: 1,
+        kind: 'final_assistant',
+        cleanPath: true,
+        weak: false,
+        authorityClass: 'native-source',
+        timing: 'floor',
+        finalContentLength: FINAL_ANSWER.length,
+        taskId: 'task-1',
+        attemptId: 'attempt-1',
+        dispatchNonce: 7,
+        sessionId: 'sess-kimi',
+      },
+    })
     expect(instance.completedDebouncePending).toBeNull()
   })
 

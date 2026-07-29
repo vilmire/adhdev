@@ -4,19 +4,16 @@ import * as path from 'path'
 import { randomUUID } from 'crypto'
 import { tmpdir } from 'os'
 
-// MID-TURN-LIVE-STATE-GATE (broader false-idle RCA follow-up): an incoming agent:generating_completed
-// for a session with a resolvable LOCAL live instance is independently re-verified against that
-// instance's CURRENT turn state (hasLiveTurnPendingEvidence(), the public wrapper over the same
-// discriminators the instance's own getCompletedFinalizationBlock uses: adapter pending-response —
-// isWaitingForResponse / currentTurnScope / isProcessing() / a non-empty partial response — OR a live
-// approval/choice modal). A screen-redraw parse artifact, a decoupled-immediate emit, or a TOCTOU
-// between emit and coordinator receipt can let a genuinely mid-turn session's completion reach the
-// coordinator; this gate suppresses that ONE event rather than recording a false completion.
+// MID-TURN-LIVE-STATE-GATE: an incoming agent:generating_completed for a resolvable LOCAL session
+// is re-verified against current adapter/modal state. Versioned, fresh, non-empty clean-transcript
+// proof for the exact current dispatch may outrank a causally older modal snapshot (including an old
+// modal repainted during restart/rebind); weak or genuinely newer pending state remains a veto.
 //
 // This is a NEW, additive gate ordered BEFORE the existing autoLaunch causal gate (a01d8917) and the
 // terminal/dedup logic: mid-turn live-state gate -> autoLaunch causal gate -> terminal/dedup.
-// It never wedges: it persists no hold state and simply no-ops when no live instance resolves
-// (remote/unknown sessions), leaving their existing async reconcile-loop protections untouched.
+// A strongly proven completion vetoed only by live state receives one bounded, content-free causal
+// retry hold. It expires or drops on identity/terminal changes; remote/unknown sessions remain
+// outside the gate.
 
 const testTmpDir = path.join(tmpdir(), `adhdev-midturn-gate-test-${randomUUID().slice(0, 8)}`)
 const testConfigDir = path.join(testTmpDir, '.adhdev')
@@ -49,9 +46,26 @@ vi.mock('../../src/detection/cli-detector.js', () => ({ detectCLI: detectCliMock
 vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({ fastForwardMeshNode: fastForwardMocks.fastForwardMeshNode }))
 
 import { setupMeshEventForwarding } from '../../src/mesh/mesh-events.js'
-import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
+import {
+  __drainHeldLiveStateCompletionsForTests,
+  __resetHeldLiveStateCompletionsForTests,
+} from '../../src/mesh/mesh-event-forwarding.js'
+import {
+  __clearMeshQueueForTests,
+  __resetMeshRuntimeStoreForTests,
+  claimNextTask,
+  enqueueTask,
+  getQueue,
+} from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import {
+  openTurnAttempt,
+  proposeTurnCompletion,
+  recordTurnAck,
+  recordTurnStage,
+} from '../../src/mesh/mesh-turn-ledger.js'
+import { buildMeshActiveWork, collectPendingApprovals } from '../../src/mesh/mesh-active-work.js'
 
 const NODE_ID = 'node_local_1'
 const SESSION_ID = 'live-session-1'
@@ -62,6 +76,7 @@ function cleanupMeshFiles(meshId: string) {
   const ledgerPath = path.join(getLedgerDir(), `${meshId}.jsonl`)
   const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
   __clearMeshQueueForTests(meshId)
+  __resetHeldLiveStateCompletionsForTests()
   __resetMeshRuntimeStoreForTests()
   meshConfigMocks.getMesh.mockReset()
   meshConfigMocks.listMeshes.mockReset()
@@ -119,6 +134,102 @@ function completedEvent(overrides: Record<string, unknown> = {}) {
     timestamp: Date.now(),
     ...overrides,
   }
+}
+
+function seedAssignedAttempt(meshId: string, opts: {
+  withDependent?: boolean
+  nowMs?: number
+  suspendedStage?: 'waiting_approval' | 'waiting_choice'
+  providerType?: string
+  suspendedAtOffsetMs?: number
+} = {}) {
+  const nowMs = opts.nowMs ?? Date.now()
+  const providerType = opts.providerType ?? 'generic-floor-provider'
+  const task = enqueueTask(meshId, 'primary task', { taskMode: 'code_change' })
+  const dependent = opts.withDependent
+    ? enqueueTask(meshId, 'dependent task', { taskMode: 'code_change', dependsOn: [task.id] })
+    : null
+  const claimed = claimNextTask(meshId, NODE_ID, SESSION_ID, [], { providerType })!
+  const nonce = claimed.dispatchNonce ?? 1
+  const { attempt } = openTurnAttempt({
+    meshId,
+    taskId: task.id,
+    dispatchNonce: nonce,
+    nodeId: NODE_ID,
+    sessionId: SESSION_ID,
+    providerType,
+    nowMs: nowMs - 10_000,
+  })
+  const row = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, task.id)!
+  row.attemptId = attempt.attemptId
+  row.dispatchNonce = nonce
+  MeshRuntimeStore.getInstance().updateQueueEntry(row)
+  recordTurnAck({
+    meshId,
+    taskId: task.id,
+    kind: 'delivered',
+    attemptId: attempt.attemptId,
+    sessionId: SESSION_ID,
+    nowMs: nowMs - 9_000,
+  })
+  recordTurnAck({
+    meshId,
+    taskId: task.id,
+    kind: 'consumed',
+    attemptId: attempt.attemptId,
+    sessionId: SESSION_ID,
+    nowMs: nowMs - 8_000,
+  })
+  recordTurnStage({
+    meshId,
+    taskId: task.id,
+    stage: opts.suspendedStage ?? 'waiting_approval',
+    attemptId: attempt.attemptId,
+    sessionId: SESSION_ID,
+    nowMs: nowMs + (opts.suspendedAtOffsetMs ?? -7_000),
+  })
+  return { task, dependent, attempt, nonce, nowMs, providerType }
+}
+
+function authoritativeEvent(seed: ReturnType<typeof seedAssignedAttempt>, overrides: Record<string, unknown> = {}) {
+  const observedAt = seed.nowMs - 5_000
+  return completedEvent({
+    providerType: seed.providerType,
+    taskId: seed.task.id,
+    attemptId: seed.attempt.attemptId,
+    dispatchNonce: seed.nonce,
+    timestamp: observedAt,
+    finalSummary: 'Strong transcript final',
+    evidenceLevel: 'transcript',
+    completionDiagnostic: {
+      source: 'clean_final_assistant',
+      cleanPath: true,
+      evidenceWeak: false,
+      finalAssistantPresent: true,
+      finalAssistantEvidenceSource: 'external-native',
+      transcriptEvidence: {
+        version: 1,
+        kind: 'final_assistant',
+        cleanPath: true,
+        weak: false,
+        authorityClass: 'native-source',
+        timing: 'floor',
+        observedAt,
+        turnStartedAt: seed.nowMs - 9_000,
+        finalContentLength: 23,
+        taskId: seed.task.id,
+        attemptId: seed.attempt.attemptId,
+        dispatchNonce: seed.nonce,
+        sessionId: SESSION_ID,
+      },
+    },
+    ...overrides,
+  })
+}
+
+function totalTurnOutboxRows(meshId: string): number {
+  return Object.values(MeshRuntimeStore.getInstance().countTurnOutboxByStatus(meshId))
+    .reduce((sum, count) => sum + count, 0)
 }
 
 describe('MID-TURN-LIVE-STATE-GATE — suppresses a premature completion while the adapter proves the turn is still active', () => {
@@ -273,6 +384,179 @@ describe('MID-TURN-LIVE-STATE-GATE — ordering vs. the autoLaunch causal gate (
 
       expect(getQueue(meshId).find(t => t.id === task.id)?.status).toBe('pending')
       expect(readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')).toHaveLength(0)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+})
+
+describe('MID-TURN-LIVE-STATE-GATE — authoritative completion and bounded retry', () => {
+  it.each(['codex-cli', 'generic-floor-provider'])(
+  'lets %s native-source/floor clean completion beat the stale restart/rebind approval snapshot and complete exactly once',
+  (providerType) => {
+    const meshId = `mesh_midturn_authority_${providerType}_${Date.now()}`
+    try {
+      mockMesh(meshId)
+      const seed = seedAssignedAttempt(meshId, { withDependent: true, providerType })
+      const { components, emit, setMeshFor, source } = makeLocalComponents(true)
+      source.getLiveTurnPendingEvidence = vi.fn(() => ({
+        pending: true,
+        kind: 'modal',
+        // Mirrors the stale PTY frames observed on sessions fba0b9d9 and
+        // dcf89b89 after restart/rebind: older than the native final.
+        observedAt: seed.nowMs - 7_000,
+      }))
+      setMeshFor(meshId)
+      setupMeshEventForwarding(components)
+
+      const event = authoritativeEvent(seed)
+      emit(event)
+      emit(event)
+
+      expect(getQueue(meshId).find(t => t.id === seed.task.id)?.status).toBe('completed')
+      expect(MeshRuntimeStore.getInstance().getTurnAttempt(seed.attempt.attemptId)).toMatchObject({
+        terminalOutcome: 'completed',
+        stage: 'completed',
+      })
+      expect(readLedgerEntries(meshId).filter(e =>
+        e.kind === 'task_completed' && e.payload?.taskId === seed.task.id)).toHaveLength(1)
+      expect(totalTurnOutboxRows(meshId)).toBe(1)
+      const active = buildMeshActiveWork({
+        meshId,
+        queue: getQueue(meshId),
+        ledgerEntries: readLedgerEntries(meshId),
+        nodes: [{
+          id: NODE_ID,
+          sessions: [{ id: SESSION_ID, providerType, status: 'waiting_approval' }],
+        }],
+      }).activeWork
+      expect(active.some(work => work.taskId === seed.task.id && work.status === 'awaiting_approval')).toBe(false)
+      expect(collectPendingApprovals(active).some(approval => approval.taskId === seed.task.id)).toBe(false)
+      expect(claimNextTask(meshId, NODE_ID, 'dependent-session')?.id).toBe(seed.dependent?.id)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it.each(['waiting_approval', 'waiting_choice'] as const)(
+  'keeps a genuinely newer %s nonterminal and does not complete from summary alone',
+  (suspendedStage) => {
+    const meshId = `mesh_midturn_genuine_modal_${suspendedStage}_${Date.now()}`
+    try {
+      mockMesh(meshId)
+      const seed = seedAssignedAttempt(meshId, { suspendedStage, suspendedAtOffsetMs: -4_000 })
+      const { components, emit, setMeshFor, source } = makeLocalComponents(true)
+      source.getLiveTurnPendingEvidence = vi.fn(() => ({
+        pending: true,
+        kind: 'modal',
+        observedAt: seed.nowMs - 4_000,
+      }))
+      setMeshFor(meshId)
+      setupMeshEventForwarding(components)
+
+      emit(authoritativeEvent(seed))
+      emit(completedEvent({
+        taskId: seed.task.id,
+        attemptId: seed.attempt.attemptId,
+        dispatchNonce: seed.nonce,
+        timestamp: seed.nowMs - 3_000,
+        finalSummary: 'summary without clean transcript contract',
+      }))
+
+      expect(getQueue(meshId).find(t => t.id === seed.task.id)?.status).toBe('assigned')
+      expect(MeshRuntimeStore.getInstance().getTurnAttempt(seed.attempt.attemptId)?.stage).toBe(suspendedStage)
+      expect(readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')).toHaveLength(0)
+      expect(totalTurnOutboxRows(meshId)).toBe(0)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('self-heals one transient wrong live-screen veto; duplicate event/retry stays exactly once', () => {
+    const meshId = `mesh_midturn_retry_${Date.now()}`
+    try {
+      mockMesh(meshId)
+      const seed = seedAssignedAttempt(meshId, { suspendedAtOffsetMs: -500 })
+      let pending = true
+      const { components, emit, setMeshFor, source } = makeLocalComponents(() => pending)
+      source.getLiveTurnPendingEvidence = vi.fn(() => ({
+        pending,
+        ...(pending ? { kind: 'modal', observedAt: seed.nowMs - 500 } : {}),
+      }))
+      setMeshFor(meshId)
+      setupMeshEventForwarding(components)
+      const event = authoritativeEvent(seed, {
+        timestamp: seed.nowMs - 1_000,
+        finalSummary: 'held strong final',
+        completionDiagnostic: {
+          ...(authoritativeEvent(seed).completionDiagnostic as any),
+          transcriptEvidence: {
+            ...(authoritativeEvent(seed).completionDiagnostic as any).transcriptEvidence,
+            observedAt: seed.nowMs - 1_000,
+          },
+        },
+      })
+
+      emit(event)
+      emit(event)
+      expect(getQueue(meshId).find(t => t.id === seed.task.id)?.status).toBe('assigned')
+
+      pending = false
+      __drainHeldLiveStateCompletionsForTests(seed.nowMs + 300)
+      __drainHeldLiveStateCompletionsForTests(seed.nowMs + 600)
+      emit(event)
+
+      expect(getQueue(meshId).find(t => t.id === seed.task.id)?.status).toBe('completed')
+      expect(readLedgerEntries(meshId).filter(e =>
+        e.kind === 'task_completed' && e.payload?.taskId === seed.task.id)).toHaveLength(1)
+      expect(totalTurnOutboxRows(meshId)).toBe(1)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it.each(['cancellation', 'reassignment'] as const)(
+  'drops a held retry after %s and never resurrects the attempt',
+  (proposalSource) => {
+    const meshId = `mesh_midturn_retry_drop_${proposalSource}_${Date.now()}`
+    try {
+      mockMesh(meshId)
+      const seed = seedAssignedAttempt(meshId, { suspendedAtOffsetMs: -500 })
+      let pending = true
+      const { components, emit, setMeshFor, source } = makeLocalComponents(() => pending)
+      source.getLiveTurnPendingEvidence = vi.fn(() => ({
+        pending,
+        ...(pending ? { kind: 'modal', observedAt: seed.nowMs - 500 } : {}),
+      }))
+      setMeshFor(meshId)
+      setupMeshEventForwarding(components)
+      emit(authoritativeEvent(seed, {
+        timestamp: seed.nowMs - 1_000,
+        finalSummary: 'held completion',
+        completionDiagnostic: {
+          ...(authoritativeEvent(seed).completionDiagnostic as any),
+          transcriptEvidence: {
+            ...(authoritativeEvent(seed).completionDiagnostic as any).transcriptEvidence,
+            observedAt: seed.nowMs - 1_000,
+          },
+        },
+      }))
+      expect(proposeTurnCompletion({
+        meshId,
+        taskId: seed.task.id,
+        attemptId: seed.attempt.attemptId,
+        sessionId: SESSION_ID,
+        outcome: 'cancelled',
+        source: proposalSource,
+        nowMs: seed.nowMs,
+      }).committed).toBe(true)
+
+      pending = false
+      __drainHeldLiveStateCompletionsForTests(seed.nowMs + 300)
+
+      expect(MeshRuntimeStore.getInstance().getTurnAttempt(seed.attempt.attemptId)?.terminalOutcome).toBe('cancelled')
+      expect(readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')).toHaveLength(0)
+      expect(totalTurnOutboxRows(meshId)).toBe(0)
     } finally {
       cleanupMeshFiles(meshId)
     }
