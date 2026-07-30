@@ -3307,6 +3307,12 @@ function buildMeshForwardPayloadFromPendingEvent(event) {
     interactionId: readString(metadataEvent.interactionId),
     status: readString(metadataEvent.status),
     targetDaemonId: readString(metadataEvent.targetDaemonId),
+    // RC32: carry the coordinator DAEMON anchor across the remote-pull relay (the
+    // pending event stores it top-level, not inside metadataEvent). The receive-side
+    // whitelist (daemon-core buildRelayMetadataEvent) reads it back so a sessionless
+    // refine terminal event re-queues targeted at THIS coordinator instead of
+    // self-fallback-stamping the relaying worker daemon.
+    targetCoordinatorDaemonId: readString(event?.targetCoordinatorDaemonId),
     startedAt: readString(metadataEvent.startedAt),
     completedAt: readString(metadataEvent.completedAt),
     retryOfJobId: readString(metadataEvent.retryOfJobId),
@@ -7881,11 +7887,13 @@ async function meshRefinePlan(ctx, args) {
 }
 async function meshRefineNode(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
+  const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
   const result = await commandForNode(ctx, node, "refine_mesh_node", {
     meshId: ctx.mesh.id,
     nodeId: args.node_id,
     ...args.execute !== void 0 ? { execute: args.execute } : {},
     ...args.dry_run !== void 0 ? { dryRun: args.dry_run } : {},
+    ...coordinatorDaemonId ? { coordinatorDaemonId } : {},
     inlineMesh: ctx.mesh
   });
   if (result?.success && result.async !== true && result.removeResult?.removed !== false) {
@@ -7900,11 +7908,13 @@ async function meshRefineNode(ctx, args) {
 async function meshRefineBatch(ctx, args = {}) {
   await refreshMeshFromDaemon(ctx);
   const nodeIds = Array.isArray(args.node_ids) ? args.node_ids.filter((v) => typeof v === "string" && v.trim().length > 0).map((v) => v.trim()) : void 0;
+  const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
   const result = await ctx.transport.command("batch_refine_mesh_nodes", {
     meshId: ctx.mesh.id,
     ...nodeIds ? { nodeIds } : {},
     ...args.execute !== void 0 ? { execute: args.execute } : {},
     ...args.dry_run !== void 0 ? { dryRun: args.dry_run } : {},
+    ...coordinatorDaemonId ? { coordinatorDaemonId } : {},
     inlineMesh: ctx.mesh
   });
   const payload = unwrapCommandPayload(result) ?? result;

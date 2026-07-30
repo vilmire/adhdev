@@ -6,6 +6,7 @@ import {
     commandForNode,
     findNodeWithRefresh,
     refreshMeshFromDaemon,
+    resolveCoordinatorDaemonId,
     resolveRefineConfigNode,
     unwrapCommandPayload,
 } from './mesh-tools-internal.js';
@@ -223,11 +224,22 @@ export async function meshRefineNode(
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
+    // Return-address stamp (RC32): refine is ASYNC — the accepted/completed/failed
+    // events are emitted on the EXECUTING daemon (this node's daemon, remote for a
+    // remote worktree) and recovered by THIS coordinator's drain. commandForNode
+    // relays a remote node straight to its daemon (transport.meshCommand), bypassing
+    // the coordinator daemon's own refine_mesh_node forward-stamp, so the stamp must
+    // ride in these args — mirroring the med-family dispatch return-address contract
+    // (meshContext.coordinatorDaemonId → resolveCoordinatorDaemonId). Without it the
+    // executing daemon falls back to its OWN statusInstanceId, scoping the terminal
+    // event to an inbox this coordinator never drains (event trims to held).
+    const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
     const result = await commandForNode(ctx, node, 'refine_mesh_node', {
         meshId: ctx.mesh.id,
         nodeId: args.node_id,
         ...(args.execute !== undefined ? { execute: args.execute } : {}),
         ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}),
+        ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
         inlineMesh: ctx.mesh,
     });
     if (result?.success && result.async !== true && result.removeResult?.removed !== false) {
@@ -255,11 +267,18 @@ export async function meshRefineBatch(
     // and worktrees. Drive it through the local control-plane transport (the same
     // daemon that hosts these worktree nodes), passing inlineMesh so inline-cache-only
     // clone nodes resolve.
+    //
+    // Return-address stamp (RC32): same contract as meshRefineNode — the async batch
+    // terminal event must be scoped to THIS coordinator's daemon id so its drain
+    // recovers it; absent, the executing daemon self-fallback stamps its own id and
+    // the event is excluded from the coordinator's drain (trims to held).
+    const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
     const result = await ctx.transport.command('batch_refine_mesh_nodes', {
         meshId: ctx.mesh.id,
         ...(nodeIds ? { nodeIds } : {}),
         ...(args.execute !== undefined ? { execute: args.execute } : {}),
         ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}),
+        ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
         inlineMesh: ctx.mesh,
     });
 

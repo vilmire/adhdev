@@ -1385,9 +1385,18 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     const sourceSession = args.sourceInstanceId
         ? components.instanceManager.getInstance(args.sourceInstanceId)
         : undefined;
+    // Daemon-level routing anchor. Prefer the LIVE worker session's stamp; fall back to a
+    // relayed targetCoordinatorDaemonId carried in metadataEvent (RC32 — mirrored by
+    // buildRelayMetadataEvent from the forward payload). A sessionless producer — e.g. an
+    // async refine job's accepted/completed/failed emitted on a remote executing daemon —
+    // has no local sourceSession, so without the relayed fallback the queued event would
+    // mint under THIS daemon's self-fallback id and the originating coordinator's drain
+    // would exclude it (event trims to held). This does not weaken v2 targeting or the
+    // cross-machine guards: it only re-scopes the event to the coordinator the producer
+    // was already addressed to, and the live-session stamp still wins when present.
     const workerCoordinatorDaemonId = readNonEmptyString(
         (sourceSession?.getState()?.settings as Record<string, unknown>)?.meshCoordinatorDaemonId,
-    );
+    ) || readNonEmptyString(args.metadataEvent.targetCoordinatorDaemonId);
     // Session-level routing anchor (multi-coordinator). Prefer the LIVE worker session's
     // stamp; fall back to a relayed value carried in metadataEvent.meshCoordinatorSessionId
     // (a remote worker's completion arrives via handleMeshForwardEvent with no local
@@ -2382,6 +2391,13 @@ export function buildRelayMetadataEvent(payload: Record<string, unknown>): Recor
         // is also accepted as a fallback. injectMeshSystemMessage re-derives the routing
         // anchors from this. Absent → daemon-level fallback (version-skew safe).
         meshCoordinatorSessionId: readNonEmptyString(payload.meshCoordinatorSessionId) || readNonEmptyString(payload.targetCoordinatorSessionId),
+        // RC32: preserve the originating coordinator DAEMON anchor across the machine
+        // boundary — the daemon-level analogue of meshCoordinatorSessionId above. A
+        // sessionless producer (async refine terminal relayed via handleMeshForwardEvent)
+        // carries no session stamp; without this mirror the receive-side fallback in
+        // injectMeshSystemMessage has nothing to read and the re-queued event
+        // self-fallbacks to THIS daemon's id, stranding it from the real coordinator.
+        targetCoordinatorDaemonId: readNonEmptyString(payload.targetCoordinatorDaemonId),
         // Carry the session identity fields the worker provider event emits so the
         // coordinator's mirror (updateMeshOwnedSession) gets a real workspace/title/
         // settings. Without these the remote-relay hop reconstructs metadataEvent with

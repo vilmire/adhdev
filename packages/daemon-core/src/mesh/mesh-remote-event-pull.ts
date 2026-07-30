@@ -300,6 +300,13 @@ export function buildForwardPayloadFromPending(event: any): Record<string, unkno
         ...(readNonEmptyString(event?.targetCoordinatorSessionId)
             ? { targetCoordinatorSessionId: readNonEmptyString(event.targetCoordinatorSessionId) }
             : {}),
+        // RC32: same explicit passthrough for the coordinator DAEMON anchor. A sessionless
+        // refine terminal event carries no meshCoordinatorSessionId, so this top-level
+        // field is the only carrier the receive-side relay whitelist
+        // (buildRelayMetadataEvent) can recover the return address from.
+        ...(readNonEmptyString(event?.targetCoordinatorDaemonId)
+            ? { targetCoordinatorDaemonId: readNonEmptyString(event.targetCoordinatorDaemonId) }
+            : {}),
         ...metadata,
         // NOTIF-MISS (FIX 3): surface the dispatch task id at the TOP LEVEL so the relay's
         // received-stage trace (and buildRelayMetadataEvent) recovers it regardless of which

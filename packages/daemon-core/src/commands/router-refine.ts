@@ -239,6 +239,13 @@ export function queueRefineJobEvent(self: DaemonCommandRouter, event: 'refine:ac
                     startedAt: handle.startedAt,
                     completedAt: handle.completedAt,
                     retryOfJobId: handle.retryOfJobId,
+                    // RC32: carry the return address through the forward payload too (it
+                    // already rode the queued eventPayload below). Sessionless refine has
+                    // no live worker session, so injectMeshSystemMessage can only recover
+                    // the coordinator anchor from this relayed field — without it the
+                    // re-queued event self-fallbacks to THIS (the executing/worker)
+                    // daemon and the real coordinator's drain excludes it.
+                    ...(handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {}),
                     ...(slimResult ? { result: slimResult } : {}),
                 },
             );
@@ -2174,6 +2181,10 @@ export function queueRefineBatchJobEvent(self: DaemonCommandRouter,
                     status: handle.status,
                     startedAt: handle.startedAt,
                     completedAt: handle.completedAt,
+                    // RC32: same return-address passthrough as queueRefineJobEvent —
+                    // the sessionless batch job's terminal event must stay targeted
+                    // at the originating coordinator, not self-fallback to this daemon.
+                    ...(handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {}),
                     ...(result ? { result } : {}),
                 },
             );

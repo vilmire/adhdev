@@ -2204,6 +2204,12 @@ export function buildMeshForwardPayloadFromPendingEvent(event: any): Record<stri
         interactionId: readString(metadataEvent.interactionId),
         status: readString(metadataEvent.status),
         targetDaemonId: readString(metadataEvent.targetDaemonId),
+        // RC32: carry the coordinator DAEMON anchor across the remote-pull relay (the
+        // pending event stores it top-level, not inside metadataEvent). The receive-side
+        // whitelist (daemon-core buildRelayMetadataEvent) reads it back so a sessionless
+        // refine terminal event re-queues targeted at THIS coordinator instead of
+        // self-fallback-stamping the relaying worker daemon.
+        targetCoordinatorDaemonId: readString(event?.targetCoordinatorDaemonId),
         startedAt: readString(metadataEvent.startedAt),
         completedAt: readString(metadataEvent.completedAt),
         retryOfJobId: readString(metadataEvent.retryOfJobId),
