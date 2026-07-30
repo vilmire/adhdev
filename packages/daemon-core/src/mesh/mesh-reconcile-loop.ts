@@ -45,7 +45,7 @@ import { loadConfig } from '../config/config.js';
 import { listMeshes, getMesh } from '../config/mesh-config.js';
 import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
 import { LOG, getLogLevel } from '../logging/logger.js';
-import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, buildPendingEventFingerprint, queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, buildPendingEventFingerprint, requeueDrainedPendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -417,6 +417,15 @@ function recordHeldTerminalEventsToLedger(
     drainDaemonIds: string[],
     reason: string,
     heldForCoordinatorCount: number,
+    /**
+     * Fingerprints already routed through the strict-route hold this tick. Those events
+     * are NOT held for the reason being audited here — strict-route owns their lifecycle
+     * (it re-queues them and ledgers `strict_route_expired` past the TTL), so auditing
+     * them again under `modal_parked`/`generating_no_idle_coordinator` would attribute
+     * the hold to the wrong cause. Before the hold became durable this was masked: the
+     * re-queue silently wrote nothing, so the peek below found no row to double-audit.
+     */
+    strictRoutedFingerprints?: ReadonlySet<string>,
 ): void {
     let pending: readonly PendingMeshCoordinatorEvent[];
     try {
@@ -425,6 +434,7 @@ function recordHeldTerminalEventsToLedger(
         return; // best-effort audit — never let a peek failure break the tick
     }
     for (const event of pending) {
+        if (strictRoutedFingerprints?.has(buildPendingEventFingerprint(event))) continue;
         // Only audit terminal/force-inject events (completion / approval / stop / refine·
         // bootstrap). Silent lifecycle events (agent:ready / generating_started) carry no
         // worker output to preserve and re-drain harmlessly, so they need no audit trail.
@@ -2488,6 +2498,9 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                     meshCoordinators.map(c => readNonEmptyString(c.sessionId)).filter(Boolean),
                 );
                 let orphanEscaped = 0;
+                // Events routed to strict-route this tick — excluded from the modal_parked
+                // audit below, which is not the reason they are held.
+                const strictRoutedFingerprints = new Set<string>();
                 const hasPendingForOrphanPeek = !store
                     || (() => { try { return store.pendingEventCount(meshId) > 0; } catch { return true; } })();
                 if (hasPendingForOrphanPeek) {
@@ -2526,11 +2539,19 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                         for (const pending of drained) {
                             if (isOrphan(pending)) {
                                 holdOrExpireStrictUnmatchedEvent(pending, readNonEmptyString(pending.targetCoordinatorSessionId), meshId);
+                                // Strict-route now owns this event's hold lifecycle (and its own
+                                // ledger audit), so exclude it from the modal_parked audit below —
+                                // it is not held because a sibling sits on a modal.
+                                strictRoutedFingerprints.add(buildPendingEventFingerprint(pending));
                                 orphanEscaped++;
                             } else {
                                 // Still-live (modal-parked) target — re-queue unchanged so it is held
                                 // for the next modal-resolved tick, exactly like the blanket hold would.
-                                try { queuePendingMeshCoordinatorEvent(pending); } catch { /* best-effort re-queue */ }
+                                // STRICT-ROUTE-HOLD-DURABILITY: these rows were just drained, so the
+                                // normal persist path is a silent no-op here for the same reason as the
+                                // strict hold (UNIQUE fingerprint + INSERT OR IGNORE). Use the durable
+                                // undrain so a modal-parked hold also survives a restart.
+                                try { requeueDrainedPendingMeshCoordinatorEvent(pending); } catch { /* best-effort re-queue */ }
                             }
                         }
                     }
@@ -2558,6 +2579,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                         drainDaemonIds.length > 0 ? drainDaemonIds : (localDaemonId ? [localDaemonId] : []),
                         'modal_parked',
                         modalParkedCoordinators.length,
+                        strictRoutedFingerprints,
                     );
                 }
             } else if (generatingCoordinators.length > 0) {
@@ -2657,9 +2679,19 @@ const STRICT_SESSION_MATCH_TTL_MS = 60_000;
 // Re-queue (hold) a strict-routed event whose coordinator session is not live, or — once it
 // has aged past STRICT_SESSION_MATCH_TTL_MS — ledger-expire it (recoverable) and drop it.
 // We deliberately do NOT broadcast an aged-out event to sibling coordinators: that is the
-// very misroute strict routing exists to prevent. The drain already marked the row drained=1,
-// so re-queuing re-persists a fresh undrained copy (dedup keys on drained=0 only); queuedAt is
-// preserved so the TTL measures the event's true age across re-queues.
+// very misroute strict routing exists to prevent.
+//
+// STRICT-ROUTE-HOLD-DURABILITY (rc.33): the hold MUST go through
+// requeueDrainedPendingMeshCoordinatorEvent, not queuePendingMeshCoordinatorEvent. The drain
+// already marked this row drained=1, and the normal persist path cannot re-queue a drained
+// row: the UNIQUE (mesh_id, fingerprint) index carries no `drained` qualifier, so
+// INSERT OR IGNORE silently discarded the "fresh undrained copy" while the drained=0 dedup
+// probe reported no duplicate — the hold looked successful but wrote nothing durable. It only
+// appeared to work because the in-memory loop re-read the event, so a restart inside the 60s
+// TTL lost the completion for good (task ec6c901a: one row, drained=1, zero JSONL lines →
+// 911s later the delivered-no-turn deadline reclaimed and re-dispatched it). Flipping the
+// existing row back to drained=0 makes the hold survive a restart. queuedAt is preserved so
+// the TTL still measures the event's true age across holds.
 function holdOrExpireStrictUnmatchedEvent(
     pending: PendingMeshCoordinatorEvent,
     wantSession: string,
@@ -2668,17 +2700,19 @@ function holdOrExpireStrictUnmatchedEvent(
     const queuedAt = typeof pending.queuedAt === 'number' ? pending.queuedAt : Date.now();
     if (Date.now() - queuedAt <= STRICT_SESSION_MATCH_TTL_MS) {
         try {
-            queuePendingMeshCoordinatorEvent(pending); // preserves queuedAt → true age retained
-            LOG.info('MeshReconcile', `Strict route hold: coordinator session ${wantSession} not live on mesh ${meshId} — re-queued (${pending.event})`);
+            const requeued = requeueDrainedPendingMeshCoordinatorEvent(pending); // preserves queuedAt → true age retained
+            LOG.info('MeshReconcile', `Strict route hold: coordinator session ${wantSession} not live on mesh ${meshId} — re-queued (${pending.event})${requeued ? '' : ' [WARN: not durably re-queued]'}`);
             // EVTTRACE: event held (re-queued) — its originating coordinator session is not
             // currently deliverable. Held, not dropped; surfaces later or expires past TTL.
+            // `durable` names whether the hold actually survives a restart: a false here is the
+            // exact silent-loss signature this fix removes, so it must be visible in the trace.
             traceMeshEventDrop('strict_route_hold', {
                 taskId: pending.metadataEvent?.taskId,
                 sessionId: pending.metadataEvent?.targetSessionId ?? wantSession,
                 nodeId: pending.nodeId,
                 meshId,
                 event: pending.event,
-            }, `coordinatorSession=${wantSession} not live`);
+            }, `coordinatorSession=${wantSession} not live durable=${requeued}`);
         } catch (e: any) {
             LOG.warn('MeshReconcile', `Strict route re-queue failed for ${pending.event} on mesh ${meshId}: ${e?.message || e}`);
         }

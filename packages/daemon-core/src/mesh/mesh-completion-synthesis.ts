@@ -19,7 +19,7 @@ import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { traceMeshEventDrop } from './mesh-event-trace.js';
+import { traceMeshEventDrop, traceMeshEventStage } from './mesh-event-trace.js';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { daemonIdListIncludes } from './mesh-reconcile-identity.js';
 import { getActiveDirectDispatches, getQueue } from './mesh-work-queue.js';
@@ -778,20 +778,45 @@ export async function pollAssignedTaskTerminalEvidence(
 ): Promise<AssignedTaskTerminalEvidence | null> {
     const sessionId = readNonEmptyString(row.assignedSessionId);
     const nodeId = readNonEmptyString(row.assignedNodeId);
-    if (!sessionId || !nodeId) return null; // no worker to read
+
+    // POLL-TRACE (observability, not a behaviour change): this poll is the last net before a
+    // 15-min delivered-no-turn reclaim re-injects a prompt into a possibly-finished worker, and
+    // every one of its guards used to `return null` SILENTLY. When it declined, the deadline
+    // reclaim showed no reason at all, which is precisely what blocked diagnosis of the rc.33
+    // strict-route loss. Each exit now names itself. Verdicts are traced at drop level (the
+    // poll declined) and the accept is traced at stage level, so a reclaim can always be paired
+    // with the reason the transcript net did not catch it first.
+    const traceCtx = {
+        taskId: row.id,
+        ...(sessionId ? { sessionId } : {}),
+        ...(nodeId ? { nodeId } : {}),
+        meshId: mesh.id,
+        event: 'agent:generating_completed',
+    };
+    const declined = (reason: string, detail?: string): null => {
+        traceMeshEventDrop(`poll_terminal_evidence_${reason}`, traceCtx, detail);
+        return null;
+    };
+
+    if (!sessionId || !nodeId) {
+        // No worker to read — trace without session/node (they are the missing part).
+        return declined('no_assigned_worker', `sessionId=${sessionId ?? 'none'} nodeId=${nodeId ?? 'none'}`);
+    }
 
     const providerType = readNonEmptyString(row.assignedProviderType);
     // TURN-LEDGER (Stage 5): strictly ordered evidence collection (see above).
     const payload = await runSessionEvidenceCollection(sessionId, () => fetchAssignedTaskChatTail(components, mesh, row));
-    if (!payload) return null;
+    if (!payload) return declined('chat_tail_unreadable', 'worker transcript read returned no payload (offline/unreachable?)');
 
     // Only a settled-idle session is a turn-end; a generating/waiting session is mid-turn and
     // must NEVER be short-circuited to completed.
-    if (readChatPayloadStatus(payload) !== 'idle') return null;
+    const payloadStatus = readChatPayloadStatus(payload);
+    if (payloadStatus !== 'idle') return declined('session_not_idle', `status=${payloadStatus ?? 'unknown'} — mid-turn, not a turn-end`);
 
     const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
     const evidence = extractFinalAssistantSummaryEvidence(messages);
-    if (!evidence.finalSummary) return null; // idle but no assistant result yet → not a turn-end
+    // idle but no assistant result yet → not a turn-end
+    if (!evidence.finalSummary) return declined('no_final_assistant_summary', `idle with ${messages.length} message(s) but no assistant result`);
 
     // EARLY-IDLE-COMPLETION-FALSE-POSITIVE (poll defense-in-depth): a momentary idle read
     // (startup-grace, or the sliver between an assistant preamble and the tool it fires) can
@@ -802,7 +827,9 @@ export async function pollAssignedTaskTerminalEvidence(
     // — refuse the completion (fall through to the caller's reclaim/grace path). A genuinely
     // finished pure-PTY worker ends on its final assistant with no trailing tool activity, so
     // the kimi rescue is preserved.
-    if (hasTrailingToolActivityAfterFinalAssistant(messages)) return null;
+    if (hasTrailingToolActivityAfterFinalAssistant(messages)) {
+        return declined('trailing_tool_activity', 'tool/terminal bubble trails the final assistant — worker is mid-turn');
+    }
 
     // Stale-summary guard (same bar as PHASE 4): a reused session's transcript tail may hold a
     // PRIOR task's summary. Require the final assistant message to be dated at/after THIS task's
@@ -811,7 +838,13 @@ export async function pollAssignedTaskTerminalEvidence(
     const dispatchedAtMs = Date.parse(readNonEmptyString(row.dispatchTimestamp));
     const transcriptAtMs = Date.parse(evidence.transcriptMessageAt ?? '');
     if (!(Number.isFinite(dispatchedAtMs) && Number.isFinite(transcriptAtMs) && transcriptAtMs >= dispatchedAtMs)) {
-        return null;
+        // Separate the two causes: an unparseable timestamp is a data problem, while a summary
+        // predating dispatch is a genuinely stale tail. They need different follow-up.
+        const unusable = !Number.isFinite(dispatchedAtMs) || !Number.isFinite(transcriptAtMs);
+        return declined(
+            unusable ? 'timestamp_unusable' : 'summary_predates_dispatch',
+            `dispatchTimestamp=${row.dispatchTimestamp ?? 'none'} transcriptMessageAt=${evidence.transcriptMessageAt ?? 'none'}`,
+        );
     }
 
     // TX-FSM Stage 2 (EARLY-IDLE preamble guard): the final assistant bubble
@@ -821,7 +854,10 @@ export async function pollAssignedTaskTerminalEvidence(
     // genuine turn end completes one window later.
     if (typeof opts?.minFinalAssistantAgeMs === 'number' && opts.minFinalAssistantAgeMs > 0
         && Date.now() - transcriptAtMs < opts.minFinalAssistantAgeMs) {
-        return null;
+        return declined(
+            'final_assistant_not_settled',
+            `age=${Date.now() - transcriptAtMs}ms < minFinalAssistantAgeMs=${opts.minFinalAssistantAgeMs} — treated as in-flight narration`,
+        );
     }
 
     // Idle + a final assistant message dated after dispatch = the worker finished this turn. We
@@ -832,6 +868,10 @@ export async function pollAssignedTaskTerminalEvidence(
     // WATCHDOG-FINALSUMMARY-LOST: carry the read evidence back to the caller so it can propagate a
     // finalSummary-bearing completion (not just flip the row). providerSessionId is best-effort from
     // the read payload — absent → daemon-level routing (unchanged from the reconcile paths).
+    // POLL-TRACE: the accept side, so a poll that PREVENTED a wrong re-drive is as visible as one
+    // that declined (the whole point is being able to tell those two apart after the fact).
+    traceMeshEventStage('poll_terminal_evidence_completed', traceCtx,
+        `idle with final assistant after dispatch — task is completed, re-drive prevented`);
     return {
         outcome: 'completed',
         finalSummary: evidence.finalSummary,

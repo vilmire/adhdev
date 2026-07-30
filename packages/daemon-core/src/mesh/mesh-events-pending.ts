@@ -1103,6 +1103,61 @@ function persistPendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEvent):
     }
 }
 
+/**
+ * STRICT-ROUTE-HOLD-DURABILITY: durably re-queue an event that was already DRAINED,
+ * so a hold survives a process restart.
+ *
+ * This is NOT queuePendingMeshCoordinatorEvent. The normal persist path cannot
+ * re-queue a drained event at all: the UNIQUE (mesh_id, fingerprint) index has no
+ * `drained` qualifier, so INSERT OR IGNORE silently discards the "fresh undrained
+ * copy" while hasPendingEventFingerprint (which filters `drained = 0`) reports no
+ * duplicate — the caller is told the re-queue worked when nothing was written. Any
+ * copy that did land would then be filtered by the v2 eventId drained-baseline.
+ *
+ * Instead we flip the EXISTING row back to drained=0 in place. That single move
+ * clears all three suppressors at once (unique index untouched, row becomes visible
+ * to the drained=0 drain query, and its eventId leaves drainedEventIdsForMesh), and
+ * — unlike the old in-memory-only hold — it is durable across a restart.
+ *
+ * `queuedAt` is preserved, so STRICT_SESSION_MATCH_TTL_MS keeps measuring the event's
+ * true age: a held event still expires on schedule and can never become immortal.
+ *
+ * Returns true when the event was durably returned to the queue.
+ */
+export function requeueDrainedPendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEvent): boolean {
+    const fingerprint = buildPendingEventFingerprint(event);
+    if (!fingerprint.trim()) return false;
+
+    let requeued = false;
+    try {
+        requeued = MeshRuntimeStore.getInstance().requeueDrainedPendingEventByFingerprint(event.meshId, fingerprint);
+    } catch (e: any) {
+        LOG.warn('MeshEvents', `SQLite re-queue of held ${event.event} failed for mesh ${event.meshId}: ${e?.message || e}`);
+    }
+
+    // Restore the JSONL mirror too: the drain consumed its line, and the JSONL copy is
+    // the only store when SQLite is unavailable (better-sqlite3 missing / degraded).
+    // Guarded against re-appending a line the file already holds so repeated holds of
+    // the same event cannot grow the file without bound.
+    try {
+        const path = getPendingEventsPath(event.meshId, event.targetCoordinatorDaemonId);
+        const alreadyOnDisk = readPendingMeshCoordinatorEventsFromDisk(event.meshId, event.targetCoordinatorDaemonId)
+            .some(pending => buildPendingEventFingerprint(pending) === fingerprint);
+        if (!alreadyOnDisk) {
+            trimPendingEventsIfNeeded(path);
+            appendFileSync(path, JSON.stringify(event) + '\n', 'utf-8');
+            requeued = true;
+        }
+    } catch (e: any) {
+        if (!requeued) {
+            LOG.warn('MeshEvents', `Failed to durably re-queue held ${event.event} for mesh ${event.meshId}: ${e?.message || e}`);
+            return false;
+        }
+        LOG.warn('MeshEvents', `JSONL re-queue append failed for mesh ${event.meshId}; SQLite holds the event: ${e?.message || e}`);
+    }
+    return requeued;
+}
+
 // Atomically rename the file before reading so concurrent drains can't both consume
 // the same events. renameSync is atomic on POSIX (same filesystem); only one caller
 // wins the rename — the other gets ENOENT and returns null, preventing duplicate delivery.

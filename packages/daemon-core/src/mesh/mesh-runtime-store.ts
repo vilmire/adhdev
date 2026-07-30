@@ -2534,6 +2534,50 @@ export class MeshRuntimeStore {
     }
 
     /**
+     * STRICT-ROUTE-HOLD-DURABILITY: return an ALREADY-DRAINED row to the queue
+     * (drained=1 → drained=0), in place, by fingerprint.
+     *
+     * Why this exists (the rc.33 defect): a strict-routed completion whose originating
+     * coordinator session is not currently live is "held" by re-queuing it. That
+     * re-queue used to call the normal insert path, which CANNOT work for a held
+     * event — three independent suppressors reject it:
+     *
+     *   1. `idx_mesh_pending_events_fingerprint` is UNIQUE on (mesh_id, fingerprint)
+     *      with NO `drained` qualifier, and insertPendingEvent uses INSERT OR IGNORE.
+     *      The just-drained row still occupies that fingerprint, so the "fresh
+     *      undrained copy" is silently ignored — changes = 0, no row added.
+     *   2. hasPendingCoordinatorEventDuplicate → hasPendingEventFingerprint queries
+     *      `drained = 0`, so it does NOT see the drained original and reports no
+     *      duplicate — the caller believes the re-queue succeeded.
+     *   3. Even if a copy did land, the v2 eventId is already in
+     *      drainedEventIdsForMesh(), so routeV2EventsForDrainer would skip it as
+     *      already-delivered on the next drain.
+     *
+     * The pre-restart hold only ever worked because the in-memory reconcile loop
+     * re-read the event; nothing durable was written. A restart inside the 60s TTL
+     * therefore lost the completion permanently (observed: task ec6c901a — exactly
+     * one row, drained=1, and zero lines in the JSONL mirror).
+     *
+     * Flipping the EXISTING row back to drained=0 is the only correct move: it keeps
+     * the unique fingerprint (no duplicate row can ever be created), removes the
+     * eventId from the drained-baseline so the v2 idempotency filter stops swallowing
+     * it, and makes the hold survive a process restart. queued_at is deliberately
+     * PRESERVED so the strict TTL keeps measuring the event's true age across holds
+     * and cannot be refreshed into an immortal row.
+     *
+     * Returns true when a drained row was found and returned to the queue.
+     */
+    requeueDrainedPendingEventByFingerprint(meshId: string, fingerprint: string): boolean {
+        if (!fingerprint) return false;
+        const changes = this.db.prepare(
+            `UPDATE mesh_pending_events SET drained = 0, drained_at = NULL
+             WHERE mesh_id = ? AND fingerprint = ? AND drained = 1`
+        ).run(meshId, fingerprint).changes;
+        if (changes > 0) this.maybeCheckpointWal();
+        return changes > 0;
+    }
+
+    /**
      * Hard-delete pending-event rows by id (including the dedup fingerprint history).
      * Used to expire an unresolved-delegate outbox entry that has exhausted its retry
      * budget — fully removing it frees the fingerprint so a genuinely new completion
