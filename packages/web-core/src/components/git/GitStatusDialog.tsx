@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { GitDiffSummary, GitFileChange } from '@adhdev/daemon-core'
 import { useTransport } from '../../context/TransportContext'
@@ -153,16 +153,31 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
 
     const hasConflicts = Boolean(status?.hasConflicts)
 
+    // Escape dismisses one level at a time: an open inline confirmation overlay
+    // first, the dialog itself otherwise.
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return
+            if (pendingAction) cancelAction()
+            else onClose()
+        }
+        window.addEventListener('keydown', onKeyDown)
+        return () => window.removeEventListener('keydown', onKeyDown)
+    }, [pendingAction, cancelAction, onClose])
+
     const totalChanged = status
         ? status.staged + status.modified + status.untracked + status.deleted + status.renamed
         : null
 
     return (
         <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+            className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/60 px-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))] pt-[calc(16px+env(safe-area-inset-top,0px))]"
             onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
         >
-            <div className="relative flex h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-xl">
+            {/* dvh + safe-area cap: in the iOS installed PWA (viewport-fit=cover)
+                a vh-sized fixed-height dialog can slide under the status bar /
+                home indicator and make the header close control untappable. */}
+            <div className="relative flex h-[80dvh] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-xl">
                 {/* Header */}
                 <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3">
                     <span aria-hidden="true" className="text-sm">⑂</span>
@@ -192,8 +207,9 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                         ↺
                     </button>
                     <button
+                        type="button"
                         onClick={onClose}
-                        className="rounded p-1 text-text-secondary hover:text-text-primary"
+                        className="-m-1.5 flex h-11 w-11 shrink-0 items-center justify-center rounded text-text-secondary hover:text-text-primary"
                         aria-label="Close"
                     >
                         <IconX className="h-4 w-4" />

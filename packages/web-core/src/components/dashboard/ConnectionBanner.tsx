@@ -116,9 +116,12 @@ export default function ConnectionBanner({
         accent: 'var(--accent-primary-light)',
     };
 
-    const overlayClassName = 'fixed left-1/2 top-4 z-[var(--z-toast)] flex items-center justify-center pointer-events-none';
+    // Mobile top offset stays below the fullscreen-modal header band
+    // (safe-area + 64px) so the banner can never cover a modal's close control
+    // (z-toast intentionally stacks above z-modal; position keeps the hit path
+    // clear). Desktop (sm+) keeps the compact +16px offset.
+    const overlayClassName = 'fixed left-1/2 top-[calc(env(safe-area-inset-top,0px)+64px)] sm:top-[calc(env(safe-area-inset-top,0px)+16px)] z-[var(--z-toast)] flex items-center justify-center pointer-events-none';
     const overlayStyle = {
-        top: 'calc(env(safe-area-inset-top, 0px) + 16px)',
         transform: 'translateX(-50%)',
     } as const;
 

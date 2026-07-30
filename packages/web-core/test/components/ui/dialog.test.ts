@@ -61,4 +61,22 @@ describe('Dialog', () => {
         expect(html).toContain('aria-label="Close dialog"')
         expect(html).toContain('aria-label="Settings"')
     })
+
+    it('keeps the surface clear of the iOS PWA safe-area insets (RC32)', () => {
+        const html = renderToStaticMarkup(h(Dialog, { open: true, onClose: () => {} }, 'x'))
+        // Overlay padding accounts for the status bar / home indicator.
+        expect(html).toContain('pt-[calc(16px+env(safe-area-inset-top,0px))]')
+        expect(html).toContain('pb-[calc(16px+env(safe-area-inset-bottom,0px))]')
+        // The surface max-height is capped inside the dynamic viewport + insets.
+        expect(html).toContain('max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-2rem)]')
+    })
+
+    it('gives the close button a >=44px tap target while preserving the 32px visual scale (RC32)', () => {
+        const html = renderToStaticMarkup(h(Dialog, { open: true, onClose: () => {} }, 'x'))
+        // Outer button owns the 44px hit area; inner span owns the 32px chrome;
+        // the negative margin keeps the header layout footprint unchanged.
+        expect(html).toContain('h-11 w-11')
+        expect(html).toContain('h-8 w-8')
+        expect(html).toContain('-m-1.5')
+    })
 })

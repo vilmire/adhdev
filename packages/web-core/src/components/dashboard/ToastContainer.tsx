@@ -36,7 +36,12 @@ const TYPE_TONE: Record<string, { accent: string; chipBg: string; chipText: stri
 export default function ToastContainer({ toasts, onDismiss, onClickToast }: ToastContainerProps) {
     const { t } = useTranslation();
     return (
-        <div className="fixed right-4 z-[var(--z-toast)] flex flex-col gap-2 pointer-events-none" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 16px)' }}>
+        // Mobile top offset stays below the fullscreen-modal header band
+        // (safe-area + 64px) so an interactive toast can never cover a modal's
+        // close control (z-toast intentionally stacks above z-modal for
+        // visibility; position — not stacking — must keep the hit path clear).
+        // Desktop (sm+) keeps the compact +16px offset.
+        <div className="fixed right-4 top-[calc(env(safe-area-inset-top,0px)+64px)] z-[var(--z-toast)] flex flex-col gap-2 pointer-events-none sm:top-[calc(env(safe-area-inset-top,0px)+16px)]">
             {toasts.map(toast => {
                 const tone = TYPE_TONE[toast.type] || TYPE_TONE.info
                 return (

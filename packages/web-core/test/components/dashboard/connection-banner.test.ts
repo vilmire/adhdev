@@ -41,7 +41,7 @@ describe('ConnectionBanner', () => {
     expect(html).toContain('Reconnecting')
     expect(html).not.toContain('Reconnecting to server')
     expect(html).not.toContain('Reconnect now')
-    expect(html).toContain('fixed left-1/2 top-4 z-[var(--z-toast)]')
+    expect(html).toContain('fixed left-1/2 top-[calc(env(safe-area-inset-top,0px)+64px)] sm:top-[calc(env(safe-area-inset-top,0px)+16px)] z-[var(--z-toast)]')
     expect(html).toContain('translateX(-50%)')
   })
 
@@ -102,6 +102,6 @@ describe('ConnectionBanner', () => {
     })
 
     expect(html).toContain('Connected')
-    expect(html).toContain('fixed left-1/2 top-4 z-[var(--z-toast)]')
+    expect(html).toContain('fixed left-1/2 top-[calc(env(safe-area-inset-top,0px)+64px)] sm:top-[calc(env(safe-area-inset-top,0px)+16px)] z-[var(--z-toast)]')
   })
 })

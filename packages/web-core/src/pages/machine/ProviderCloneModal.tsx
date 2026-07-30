@@ -70,15 +70,24 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
 
 
     return (
-        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-sm px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4" onClick={onClose}>
+        <div className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-sm px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4" onClick={onClose}>
             <div
                 className="w-full max-w-[480px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] rounded-[24px] sm:rounded-2xl bg-bg-primary border border-border-subtle shadow-2xl flex flex-col overflow-hidden"
                 onClick={e => e.stopPropagation()}
             >
-                {/* Header */}
-                <div className="px-5 py-4 border-b border-border-subtle">
-                    <h2 className="text-[15px] font-semibold text-text-primary">{t('machine.providerClone.title')}</h2>
-                    <p className="text-[11px] text-text-muted mt-0.5">{t('machine.providerClone.subtitle')}</p>
+                {/* Header — with a usable >=44px close target (previously the
+                    only dismissal paths were the footer Cancel and backdrop). */}
+                <div className="px-5 py-4 border-b border-border-subtle flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <h2 className="text-[15px] font-semibold text-text-primary">{t('machine.providerClone.title')}</h2>
+                        <p className="text-[11px] text-text-muted mt-0.5">{t('machine.providerClone.subtitle')}</p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        aria-label="Close"
+                        className="-m-2 flex h-11 w-11 shrink-0 items-center justify-center text-text-muted hover:text-text-primary text-lg leading-none"
+                    >×</button>
                 </div>
 
                 {/* Body */}

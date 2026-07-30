@@ -109,7 +109,12 @@ export default function Dialog({
     const tree = (
         <div
             className={cn(
-                'fixed inset-0 flex items-center justify-center bg-black/60 p-4',
+                // Safe-area-aware overlay padding: in the iOS installed PWA
+                // (viewport-fit=cover) the fixed overlay extends under the
+                // status bar / home indicator, so the centered surface must be
+                // padded in from those edges to keep the header close control
+                // out of the system UI band.
+                'fixed inset-0 flex items-center justify-center bg-black/60 px-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))] pt-[calc(16px+env(safe-area-inset-top,0px))]',
                 className,
             )}
             style={{ zIndex: 'var(--z-modal-backdrop)' }}
@@ -120,7 +125,7 @@ export default function Dialog({
                 aria-modal="true"
                 aria-label={title == null ? ariaLabel : undefined}
                 className={cn(
-                    'relative flex max-h-[calc(100dvh-2rem)] w-full flex-col overflow-hidden',
+                    'relative flex max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-2rem)] w-full flex-col overflow-hidden',
                     'rounded-xl border border-border-default bg-surface-primary shadow-2xl',
                     SIZE_CLASS[size],
                     contentClassName,
@@ -138,13 +143,19 @@ export default function Dialog({
                             )}
                         </div>
                         {showClose && (
+                            // >=44px tap target (Apple HIG) with the visual scale
+                            // preserved: the outer button owns the hit area, the
+                            // inner span owns the 32px visual chrome; -m-1.5 keeps
+                            // the header layout footprint unchanged.
                             <button
                                 type="button"
                                 onClick={onClose}
-                                className="btn btn-ghost btn-sm h-8 w-8 shrink-0 p-0"
+                                className="-m-1.5 inline-flex h-11 w-11 shrink-0 items-center justify-center"
                                 aria-label="Close dialog"
                             >
-                                <IconX size={16} />
+                                <span className="btn btn-ghost btn-sm inline-flex h-8 w-8 items-center justify-center p-0">
+                                    <IconX size={16} />
+                                </span>
                             </button>
                         )}
                     </div>

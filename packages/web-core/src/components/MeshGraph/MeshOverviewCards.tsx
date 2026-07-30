@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { describeQueueTaskMessage } from '../../utils/queue-task-label'
+import { installTopModalEscapeHandler } from '../../utils/modal-escape'
 import type {
     MeshMissionStatus,
     MeshMissionSummary,
@@ -330,7 +331,7 @@ export default function MeshOverviewCards({
             </div>
 
             {detail && (
-                <DetailModal
+                <MeshOverviewDetailModal
                     meshTheme={meshTheme}
                     detail={detail}
                     onClose={closeDetail}
@@ -476,20 +477,19 @@ function detailTitle(detail: DetailSelection, t: (key: string) => string): { kic
     }
 }
 
-function DetailModal({ meshTheme, detail, onClose, daemonId, meshId, sendDaemonCommand, resolveNodeLabel }: {
+// Exported (named) so the safe-area / close-path regression tests can render the
+// modal directly without driving the whole overview card grid.
+export function MeshOverviewDetailModal({ meshTheme, detail, onClose, daemonId, meshId, sendDaemonCommand, resolveNodeLabel }: {
     meshTheme: MeshGraphTheme
     detail: DetailSelection
     onClose: () => void
     resolveNodeLabel: (nodeId: string | undefined | null) => string
 } & MeshCommandSeam) {
     const { t } = useTranslation('common')
-    useEffect(() => {
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') onClose()
-        }
-        window.addEventListener('keydown', onKeyDown)
-        return () => window.removeEventListener('keydown', onKeyDown)
-    }, [onClose])
+    // This modal stacks ABOVE DashboardMeshGraphDialog, which has its own
+    // window-level Escape listener. The capture-phase handler guarantees one
+    // Escape closes only this level (no double-close of the parent dialog).
+    useEffect(() => installTopModalEscapeHandler(window, onClose), [onClose])
 
     const dk = meshTheme.isDark
     const { kicker, title } = detailTitle(detail, t)
@@ -509,18 +509,29 @@ function DetailModal({ meshTheme, detail, onClose, daemonId, meshId, sendDaemonC
                 className={`flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden border ${shellClass} md:h-auto md:max-h-[88dvh] md:max-w-[min(640px,calc(100vw-32px))] md:rounded-2xl`}
                 onClick={event => event.stopPropagation()}
             >
-                <div className={`sticky top-0 z-10 flex shrink-0 items-start justify-between gap-3 border-b px-4 py-3 ${dk ? 'border-white/8' : 'border-slate-200'}`}>
+                {/* Safe-area-aware sticky header: in the iOS installed PWA
+                    (viewport-fit=cover) the fullscreen 100dvh shell extends under
+                    the status bar, so the header must pad below
+                    env(safe-area-inset-top) or the close control lands inside the
+                    system clock/battery area and becomes untappable. */}
+                <div className={`sticky top-0 z-10 flex shrink-0 items-start justify-between gap-3 border-b px-4 pb-3 pt-[calc(12px+env(safe-area-inset-top,0px))] ${dk ? 'border-white/8' : 'border-slate-200'}`}>
                     <div className="min-w-0">
                         <div className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>{kicker}</div>
                         <div className={`mt-0.5 break-all text-sm font-semibold ${meshTheme.textPrimary}`}>{title}</div>
                     </div>
+                    {/* >=44px tap target (Apple HIG) while preserving the 32px
+                        visual scale: the outer button carries the hit area, the
+                        inner span carries the visible chrome; -m-1.5 keeps the
+                        header layout footprint unchanged. */}
                     <button
                         type="button"
                         onClick={onClose}
                         aria-label={t('mesh.overview.closeDetail')}
-                        className={dk ? 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white' : 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900'}
+                        className="-m-1.5 inline-flex h-11 w-11 shrink-0 items-center justify-center"
                     >
-                        ✕
+                        <span className={dk ? 'inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white' : 'inline-flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900'}>
+                            ✕
+                        </span>
                     </button>
                 </div>
                 <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">

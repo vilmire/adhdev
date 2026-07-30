@@ -114,7 +114,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
     }
 
     return (
-        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-sm px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4" onClick={onClose}>
+        <div className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-sm px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4" onClick={onClose}>
             <div
                 className="w-full max-w-[560px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[85vh] overflow-hidden rounded-[24px] sm:rounded-2xl bg-bg-primary border border-border-subtle shadow-2xl flex flex-col"
                 onClick={e => e.stopPropagation()}
@@ -128,7 +128,14 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                             <p className="text-[11px] text-text-muted mt-0.5">{t('machine.providerFix.footerHint')}</p>
                         </div>
                     </div>
-                    <button onClick={onClose} className="text-text-muted hover:text-text-primary text-lg leading-none">×</button>
+                    {/* >=44px tap target (Apple HIG); -m-2 keeps the visual
+                        position of the old icon-only × unchanged. */}
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        aria-label="Close"
+                        className="-m-2 flex h-11 w-11 shrink-0 items-center justify-center text-text-muted hover:text-text-primary text-lg leading-none"
+                    >×</button>
                 </div>
 
                 {/* Body */}

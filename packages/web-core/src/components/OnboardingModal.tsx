@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { IconX } from './Icons'
 
 interface OnboardingModalProps {
@@ -63,6 +63,16 @@ export default function OnboardingModal({ onClose, standalone = false }: Onboard
   const current = steps[step]
   const isLast = step === steps.length - 1
 
+  // Escape closes the modal — required alternate dismissal path on desktop and
+  // hardware-keyboard mobile sessions.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
   return (
     <div
       className="onboarding-overlay"
@@ -70,6 +80,9 @@ export default function OnboardingModal({ onClose, standalone = false }: Onboard
         position: 'fixed', inset: 0, zIndex: 'var(--z-modal)',
         background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
+        // Keep the surface clear of the iOS PWA status bar / home indicator
+        // (viewport-fit=cover extends the fixed overlay under the system UI).
+        padding: 'calc(16px + env(safe-area-inset-top, 0px)) 16px calc(16px + env(safe-area-inset-bottom, 0px))',
         animation: 'fadeIn 0.3s ease-out',
       }}
       onClick={(e) => { e.stopPropagation() }}
@@ -80,15 +93,22 @@ export default function OnboardingModal({ onClose, standalone = false }: Onboard
           border: '1px solid var(--border-subtle, #333)',
           borderRadius: '1.25rem',
           width: 'min(440px, 92vw)',
+          // Cap the height inside the safe area and scroll long content instead
+          // of pushing the close control / actions off-screen on small phones.
+          maxHeight: 'calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 32px)',
+          overflowY: 'auto',
           padding: '2.5rem 2rem 2rem',
           position: 'relative',
           animation: 'slideUp 0.3s ease-out',
         }}
       >
-        {/* Close */}
+        {/* Close — >=44px tap target (Apple HIG); the -6px margin keeps the
+            visual position identical to the old 20px icon-only button. */}
         <button
           onClick={onClose}
+          aria-label="Close onboarding"
           className="absolute top-3 right-4 bg-transparent border-none text-text-muted hover:text-text-primary transition-colors cursor-pointer"
+          style={{ minWidth: 44, minHeight: 44, margin: -6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         ><IconX size={20} /></button>
 
         {/* Step indicator */}

@@ -1,6 +1,7 @@
 /**
  * LaunchPickModal — Workspace selection dialog for CLI/ACP launch.
  */
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { MachineData } from './types'
 import type { LaunchPickState } from './useMachineActions'
@@ -16,14 +17,27 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
     const { t } = useTranslation('common')
     const { runLaunchCliCore, setLaunchPick } = actions
 
+    // Accessible dismissal: Escape closes the picker (same as Cancel / backdrop).
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setLaunchPick(null)
+        }
+        window.addEventListener('keydown', onKeyDown)
+        return () => window.removeEventListener('keydown', onKeyDown)
+    }, [setLaunchPick])
+
     return (
         <div
             className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto bg-black/55 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
             role="dialog"
             aria-modal="true"
             aria-labelledby="launch-pick-title"
+            onClick={() => setLaunchPick(null)}
         >
-            <div className="w-full max-w-md max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] rounded-[24px] sm:rounded-xl border border-border-subtle bg-bg-secondary shadow-xl p-4 sm:p-5 overflow-y-auto">
+            <div
+                className="w-full max-w-md max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] rounded-[24px] sm:rounded-xl border border-border-subtle bg-bg-secondary shadow-xl p-4 sm:p-5 overflow-y-auto"
+                onClick={(event) => event.stopPropagation()}
+            >
                 <h2 id="launch-pick-title" className="text-sm font-semibold text-text-primary m-0 mb-1">
                     Where should this run?
                 </h2>

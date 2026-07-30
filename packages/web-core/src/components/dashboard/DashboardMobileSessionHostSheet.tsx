@@ -427,9 +427,12 @@ export default function DashboardMobileSessionHostSheet({
     }
 
     return (
-        <div className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center bg-black/55 backdrop-blur-[2px] md:items-center md:p-4" onClick={onClose}>
+        // pt-[env(safe-area-inset-top)] keeps the bottom sheet's top edge below
+        // the iOS installed-PWA status bar (viewport-fit=cover); dvh keeps the
+        // sheet sized against the dynamic viewport instead of the static vh.
+        <div className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center bg-black/55 backdrop-blur-[2px] pt-[env(safe-area-inset-top,0px)] md:items-center md:p-4" onClick={onClose}>
             <div
-                className="w-full max-h-[88vh] overflow-hidden rounded-t-[28px] border border-border-subtle bg-bg-primary shadow-[0_-20px_60px_rgba(0,0,0,0.35)] md:max-w-3xl md:rounded-[28px] md:shadow-[0_20px_60px_rgba(0,0,0,0.35)]"
+                className="w-full max-h-[88dvh] overflow-hidden rounded-t-[28px] border border-border-subtle bg-bg-primary shadow-[0_-20px_60px_rgba(0,0,0,0.35)] md:max-w-3xl md:rounded-[28px] md:shadow-[0_20px_60px_rgba(0,0,0,0.35)]"
                 onClick={(event) => event.stopPropagation()}
             >
                 <div className="mx-auto mt-3 h-1.5 w-12 rounded-full bg-border-subtle" />
@@ -485,7 +488,7 @@ export default function DashboardMobileSessionHostSheet({
                     </div>
                 )}
 
-                <div className="flex max-h-[calc(88vh-122px)] flex-col gap-3 overflow-y-auto px-5 pb-[calc(18px+env(safe-area-inset-bottom,0px))]">
+                <div className="flex max-h-[calc(88dvh-122px)] flex-col gap-3 overflow-y-auto px-5 pb-[calc(18px+env(safe-area-inset-bottom,0px))]">
                     {error && !diagnostics && (
                         <div className="rounded-2xl border border-amber-500/[0.22] bg-amber-500/[0.08] px-4 py-3 text-[12px] text-amber-100">
                             <div className="flex items-start gap-2">
