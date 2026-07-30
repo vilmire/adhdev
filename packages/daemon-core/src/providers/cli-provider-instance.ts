@@ -954,6 +954,12 @@ export class CliProviderInstance implements ProviderInstance {
             summaryMetadata: surface.summaryMetadata as any,
             errorMessage: this.errorMessage,
             errorReason: this.errorReason,
+            // Restart idle-gate (mesh-restart collectBlockingSessions): a queued
+            // outbound coordinator message is restart-blocking, so the count must
+            // reach the daemon-wide state collection.
+            pendingOutboundCount: typeof adapterStatus.pendingOutboundCount === 'number'
+                ? adapterStatus.pendingOutboundCount
+                : undefined,
         };
     }
 

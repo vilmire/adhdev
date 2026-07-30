@@ -15,6 +15,7 @@ import { DaemonCommandHandler } from './handler.js';
 import { lowFamilyRegistry } from './low-family/index.js';
 import { medFamilyRegistry } from './med-family/index.js';
 import { launchIde } from './med-family/ide.js';
+import { rearmPersistedDeferredRestarts } from './med-family/mesh-restart.js';
 import type { MedFamilyContext } from './med-family/index.js';
 import { highFamilyRegistry } from './high-family/index.js';
 import type { HighFamilyContext } from './high-family/index.js';
@@ -901,6 +902,15 @@ export class DaemonCommandRouter {
 
     async resumePendingRefineJobsOnStartup(): Promise<void> {
         return resumePendingRefineJobsOnStartup(this);
+    }
+
+    /**
+     * Boot path for restart_daemon_node whenIdle schedules: re-arm every
+     * persisted, unexpired record this daemon owns (and audit/drop the expired
+     * ones) so a scheduled restart survives the daemon restart itself.
+     */
+    resumeDeferredRestartsOnStartup(): void {
+        rearmPersistedDeferredRestarts(this.deps);
     }
 
     private async batchRefineMeshNodes(meshId: string, requestedNodeIds: string[] | undefined, args: any): Promise<CommandRouterResult> {

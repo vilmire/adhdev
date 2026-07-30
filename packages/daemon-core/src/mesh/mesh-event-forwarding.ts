@@ -1154,7 +1154,7 @@ function scheduleTurnOutboxDrain(): void {
  * loses the belt-and-suspenders stop; the ack was already rejected, so the coordinator
  * never treats the stale run as the authoritative execution).
  */
-function stopStaleMeshWorker(
+export function stopStaleMeshWorker(
     components: DaemonComponents,
     args: { meshId: string; sessionId: string; nodeId?: string; providerType?: string; daemonId?: string },
 ): void {

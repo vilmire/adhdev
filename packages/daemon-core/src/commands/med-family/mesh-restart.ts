@@ -32,10 +32,15 @@
  *   persistence/restore path). Audit-logged.
  *
  * - whenIdle: instead of refusing, schedule the restart and run it
- *   automatically once all blocking sessions go idle (the safest path — the
+ *   automatically once all blocking sessions go idle AND no session has
+ *   pending outbound coordinator messages queued (the safest path — the
  *   pendingOutboundQueue is empty at that point). The schedule expires after
- *   timeoutMs (default 30 min). cancelWhenIdle cancels it; every response
- *   carries the current schedule under `deferredRestart` for visibility.
+ *   timeoutMs (default 30 min) and is PERSISTED (state.json, keyed by
+ *   mesh/node ownership) so it survives a daemon restart: boot re-arms every
+ *   unexpired record and audits/drops the expired ones. cancelWhenIdle
+ *   cancels exactly the schedule for the passed mesh/node (never a sibling
+ *   mesh/node's); every response carries the current schedule under
+ *   `deferredRestart` for visibility.
  *
  * - killSessionHost: also stop the session-host process, destroying EVERY
  *   hosted CLI session (no idle-gate — SessionHostServer.stop kills all PTYs).
@@ -46,7 +51,13 @@ import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { daemonLifecycleHandlers } from '../low-family/daemon-lifecycle.js';
 import { LOG } from '../../logging/logger.js';
 import { resolveSessionTurnPresentation, isRestartBlockingPresentation } from '../../mesh/mesh-turn-presentation.js';
-import type { CommandRouterResult } from '../router.js';
+import {
+    clearDeferredRestartSchedule,
+    deferredRestartScheduleKey,
+    loadDeferredRestartSchedules,
+    recordDeferredRestartSchedule,
+} from '../../config/state-store.js';
+import type { CommandRouterDeps, CommandRouterResult } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 
 // Session states that must block a restart: an in-flight turn or a pending
@@ -63,14 +74,26 @@ type BlockingSession = {
     status: string;
     /** True when this session is the calling mesh's own coordinator session. */
     selfCoordinator: boolean;
+    /**
+     * True when the session has queued outbound coordinator messages
+     * (pendingOutboundQueue). Restart-blocking on its own — a restart would
+     * permanently lose those messages — and never waived by selfOnly.
+     */
+    pendingOutbound: boolean;
 };
 
-function collectBlockingSessions(ctx: MedFamilyContext, meshId: string): BlockingSession[] {
+function collectBlockingSessions(deps: CommandRouterDeps, meshId: string): BlockingSession[] {
     const blocking: BlockingSession[] = [];
-    const states = ctx.deps.instanceManager.collectAllStates();
+    const states = deps.instanceManager.collectAllStates();
     const consider = (state: any) => {
         const status = String(state?.status || '');
         const instanceId = typeof state?.instanceId === 'string' ? state.instanceId : null;
+        // OUTBOUND-QUEUE SAFETY: a session with queued outbound coordinator
+        // messages blocks the restart even when its turn state reads idle —
+        // the queue is in-memory only, so a restart now would silently drop
+        // those messages. The deferred (whenIdle) poll re-checks this every
+        // tick, so the restart fires only once the queue has drained.
+        const pendingOutbound = typeof state?.pendingOutboundCount === 'number' && state.pendingOutboundCount > 0;
         // TURN-PRESENTATION (Stage 6): for mesh-owned work (a session with a turn
         // attempt), block on the AUTHORITATIVE nonterminal turn state — including
         // finalizing / waiting_approval / waiting_choice — not on a transient
@@ -82,7 +105,7 @@ function collectBlockingSessions(ctx: MedFamilyContext, meshId: string): Blockin
             legacyStatus: status,
             surface: 'restart_gate',
         });
-        if (!isRestartBlockingPresentation(turn, RESTART_BLOCKING_STATES.has(status))) return;
+        if (!pendingOutbound && !isRestartBlockingPresentation(turn, RESTART_BLOCKING_STATES.has(status))) return;
         blocking.push({
             instanceId,
             status: turn.authority === 'turn_reducer' ? turn.status : status,
@@ -90,6 +113,7 @@ function collectBlockingSessions(ctx: MedFamilyContext, meshId: string): Blockin
             // re-stamped on restore (cli-manager.restoreHostedSessions). Ad-hoc
             // coordinator sessions have no marker and are NOT waived by selfOnly.
             selfCoordinator: !!meshId && state?.settings?.meshCoordinatorFor === meshId,
+            pendingOutbound,
         });
     };
     for (const state of states) {
@@ -114,27 +138,43 @@ type PendingDeferredRestart = {
     timer: NodeJS.Timeout;
 };
 
-// One scheduled restart per daemon process. The record lives on the OWNING
-// daemon (the command is forwarded there before scheduling), which is also the
-// process whose session states the poll inspects.
-let pendingDeferredRestart: PendingDeferredRestart | null = null;
+// Scheduled restarts on THIS (owning) daemon, keyed by mesh/node ownership.
+// The command is forwarded to the owning daemon before scheduling, which is
+// also the process whose session states the poll inspects. Keying keeps a
+// second mesh/node schedule from clobbering (or a cancel from cross-
+// cancelling) the first; every entry is mirrored to state.json so a daemon
+// restart does not silently drop the schedule.
+const pendingDeferredRestarts = new Map<string, PendingDeferredRestart>();
 
-function deferredRestartInfo(): Record<string, unknown> | null {
-    if (!pendingDeferredRestart) return null;
+function deferredRestartInfo(key: string): Record<string, unknown> | null {
+    const record = pendingDeferredRestarts.get(key);
+    if (!record) return null;
     return {
-        meshId: pendingDeferredRestart.meshId,
-        nodeId: pendingDeferredRestart.nodeId,
-        mode: pendingDeferredRestart.mode,
-        killSessionHost: pendingDeferredRestart.killSessionHost,
-        scheduledAt: new Date(pendingDeferredRestart.scheduledAt).toISOString(),
-        expiresAt: new Date(pendingDeferredRestart.expiresAt).toISOString(),
-        runCondition: 'executes automatically once no session is generating / waiting_approval / starting',
+        meshId: record.meshId,
+        nodeId: record.nodeId,
+        mode: record.mode,
+        killSessionHost: record.killSessionHost,
+        scheduledAt: new Date(record.scheduledAt).toISOString(),
+        expiresAt: new Date(record.expiresAt).toISOString(),
+        runCondition: 'executes automatically once no session is generating / waiting_approval / starting and no outbound coordinator message is queued',
     };
 }
 
-function clearPendingDeferredRestart(): void {
-    if (pendingDeferredRestart) clearInterval(pendingDeferredRestart.timer);
-    pendingDeferredRestart = null;
+/** Stop and forget exactly one schedule (timer + in-memory record + persisted record). */
+function clearPendingDeferredRestart(key: string): void {
+    const record = pendingDeferredRestarts.get(key);
+    if (!record) return;
+    clearInterval(record.timer);
+    pendingDeferredRestarts.delete(key);
+    try {
+        clearDeferredRestartSchedule(record.meshId, record.nodeId);
+    } catch { /* persistence cleanup is best-effort — the in-memory record is already gone */ }
+}
+
+/** Test hook: drop all in-memory schedules (timers included) without touching persisted state. */
+export function __clearDeferredRestartsForTests(): void {
+    for (const record of pendingDeferredRestarts.values()) clearInterval(record.timer);
+    pendingDeferredRestarts.clear();
 }
 
 function normalizeRestartMode(value: unknown): RestartMode {
@@ -157,12 +197,12 @@ function restartWarnings(args: { killSessionHost: boolean; forced: boolean }): s
     return warnings;
 }
 
-async function executeRestart(ctx: MedFamilyContext, args: any, opts: { forced: boolean }): Promise<CommandRouterResult> {
+async function executeRestart(deps: CommandRouterDeps, args: any, opts: { forced: boolean }): Promise<CommandRouterResult> {
     const mode = normalizeRestartMode(args?.mode);
     const killSessionHost = args?.killSessionHost === true;
     const result = mode === 'restart'
-        ? await daemonLifecycleHandlers.daemon_restart({ deps: ctx.deps }, { killSessionHost })
-        : await daemonLifecycleHandlers.daemon_upgrade({ deps: ctx.deps }, args);
+        ? await daemonLifecycleHandlers.daemon_restart({ deps }, { killSessionHost })
+        : await daemonLifecycleHandlers.daemon_upgrade({ deps }, args);
     const restarting = (result as any)?.restarting === true;
     return {
         ...result,
@@ -177,8 +217,11 @@ async function executeRestart(ctx: MedFamilyContext, args: any, opts: { forced: 
     } as CommandRouterResult;
 }
 
-function scheduleDeferredRestart(ctx: MedFamilyContext, args: any, meshId: string, nodeId: string): CommandRouterResult {
-    clearPendingDeferredRestart();
+function scheduleDeferredRestart(deps: CommandRouterDeps, args: any, meshId: string, nodeId: string): CommandRouterResult {
+    const key = deferredRestartScheduleKey(meshId, nodeId);
+    // Re-scheduling the same mesh/node replaces exactly that record; a
+    // different mesh/node's schedule is untouched.
+    clearPendingDeferredRestart(key);
     const requestedTimeout = typeof args?.timeoutMs === 'number' && Number.isFinite(args.timeoutMs)
         ? args.timeoutMs
         : DEFERRED_RESTART_DEFAULT_TIMEOUT_MS;
@@ -190,35 +233,47 @@ function scheduleDeferredRestart(ctx: MedFamilyContext, args: any, meshId: strin
         killSessionHost: args?.killSessionHost === true,
         scheduledAt: Date.now(),
         expiresAt: Date.now() + timeoutMs,
-        timer: setInterval(() => { void deferredRestartTick(ctx); }, DEFERRED_RESTART_POLL_MS),
+        timer: setInterval(() => { void deferredRestartTick(deps, key); }, DEFERRED_RESTART_POLL_MS),
     };
     record.timer.unref?.();
-    pendingDeferredRestart = record;
+    pendingDeferredRestarts.set(key, record);
+    try {
+        recordDeferredRestartSchedule({
+            meshId: record.meshId,
+            nodeId: record.nodeId,
+            mode: record.mode,
+            killSessionHost: record.killSessionHost,
+            scheduledAt: record.scheduledAt,
+            expiresAt: record.expiresAt,
+        });
+    } catch (e: any) {
+        LOG.warn('MeshRestart', `Failed to persist deferred restart for node ${nodeId} — it will NOT survive a daemon restart: ${e?.message || String(e)}`);
+    }
     LOG.info('MeshRestart', `Deferred restart scheduled for node ${nodeId} (mode=${record.mode}, expires in ${Math.round(timeoutMs / 60000)}min)`);
     return {
         success: true,
         restarted: false,
         scheduled: true,
         code: 'restart_scheduled_when_idle',
-        reason: 'Restart scheduled — it will execute automatically as soon as no session on this daemon is generating / waiting_approval / starting. Running at an idle point also avoids pendingOutboundQueue loss, making this the safest restart path.',
-        deferredRestart: deferredRestartInfo(),
+        reason: 'Restart scheduled — it will execute automatically as soon as no session on this daemon is generating / waiting_approval / starting and no outbound coordinator message is queued. Running at an idle point also avoids pendingOutboundQueue loss, making this the safest restart path. The schedule is persisted and re-armed on daemon boot.',
+        deferredRestart: deferredRestartInfo(key),
     } as CommandRouterResult;
 }
 
-async function deferredRestartTick(ctx: MedFamilyContext): Promise<void> {
-    const record = pendingDeferredRestart;
+async function deferredRestartTick(deps: CommandRouterDeps, key: string): Promise<void> {
+    const record = pendingDeferredRestarts.get(key);
     if (!record) return;
     if (Date.now() >= record.expiresAt) {
         LOG.warn('MeshRestart', `Deferred restart for node ${record.nodeId} expired without reaching an idle point; dropping the schedule`);
-        clearPendingDeferredRestart();
+        clearPendingDeferredRestart(key);
         return;
     }
-    const blocking = collectBlockingSessions(ctx, record.meshId);
+    const blocking = collectBlockingSessions(deps, record.meshId);
     if (blocking.length > 0) return;
     LOG.info('MeshRestart', `Deferred restart for node ${record.nodeId} executing — daemon is idle`);
-    clearPendingDeferredRestart();
+    clearPendingDeferredRestart(key);
     try {
-        await executeRestart(ctx, {
+        await executeRestart(deps, {
             meshId: record.meshId,
             nodeId: record.nodeId,
             mode: record.mode,
@@ -226,6 +281,45 @@ async function deferredRestartTick(ctx: MedFamilyContext): Promise<void> {
         }, { forced: false });
     } catch (e: any) {
         LOG.error('MeshRestart', `Deferred restart execution failed: ${e?.message || String(e)}`);
+    }
+}
+
+/**
+ * Boot path: re-arm every persisted, unexpired deferred-restart schedule this
+ * daemon owns (the whenIdle schedule used to live only in memory, so a daemon
+ * restart silently dropped it). Expired records are audit-logged and dropped
+ * from disk. Idempotent: an already-armed key is left alone.
+ */
+export function rearmPersistedDeferredRestarts(deps: CommandRouterDeps): void {
+    let persisted: ReturnType<typeof loadDeferredRestartSchedules>;
+    try {
+        persisted = loadDeferredRestartSchedules();
+    } catch (e: any) {
+        LOG.warn('MeshRestart', `Failed to load persisted deferred restarts: ${e?.message || String(e)}`);
+        return;
+    }
+    const now = Date.now();
+    for (const [key, record] of Object.entries(persisted)) {
+        if (pendingDeferredRestarts.has(key)) continue;
+        if (now >= record.expiresAt) {
+            LOG.warn('MeshRestart', `Persisted deferred restart for node ${record.nodeId} (mesh ${record.meshId}) expired while the daemon was down (scheduled ${new Date(record.scheduledAt).toISOString()}, expired ${new Date(record.expiresAt).toISOString()}); dropping it without executing`);
+            try {
+                clearDeferredRestartSchedule(record.meshId, record.nodeId);
+            } catch { /* best-effort cleanup */ }
+            continue;
+        }
+        const rearmed: PendingDeferredRestart = {
+            meshId: record.meshId,
+            nodeId: record.nodeId,
+            mode: record.mode === 'restart' ? 'restart' : 'upgrade',
+            killSessionHost: record.killSessionHost === true,
+            scheduledAt: record.scheduledAt,
+            expiresAt: record.expiresAt,
+            timer: setInterval(() => { void deferredRestartTick(deps, key); }, DEFERRED_RESTART_POLL_MS),
+        };
+        rearmed.timer.unref?.();
+        pendingDeferredRestarts.set(key, rearmed);
+        LOG.info('MeshRestart', `Re-armed persisted deferred restart for node ${record.nodeId} (mode=${rearmed.mode}, expires ${new Date(record.expiresAt).toISOString()})`);
     }
 }
 
@@ -258,51 +352,60 @@ export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
             return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
         }
 
-        // Deferred-schedule management on the owning daemon.
+        // Deferred-schedule management on the owning daemon. Cancellation and
+        // status are scoped to the passed mesh/node key: a second mesh/node's
+        // schedule is never cross-cancelled, and `cancelled` truthfully
+        // reports whether THIS key had a live schedule.
+        const scheduleKey = deferredRestartScheduleKey(meshId, nodeId);
         if (args?.cancelWhenIdle === true) {
-            const had = pendingDeferredRestart !== null;
-            clearPendingDeferredRestart();
+            const had = pendingDeferredRestarts.has(scheduleKey);
+            clearPendingDeferredRestart(scheduleKey);
             return { success: true, restarted: false, cancelled: had, deferredRestart: null } as CommandRouterResult;
         }
         if (args?.whenIdleStatus === true) {
-            return { success: true, restarted: false, deferredRestart: deferredRestartInfo() } as CommandRouterResult;
+            return { success: true, restarted: false, deferredRestart: deferredRestartInfo(scheduleKey) } as CommandRouterResult;
         }
 
         // Idle-gate: refuse if any session on THIS daemon is mid-turn / awaiting
-        // approval / starting — unless an explicit opt-in waives it.
-        const blocking = collectBlockingSessions(ctx, meshId);
+        // approval / starting / holding queued outbound coordinator messages —
+        // unless an explicit opt-in waives it.
+        const blocking = collectBlockingSessions(ctx.deps, meshId);
         if (blocking.length > 0) {
             if (args?.force === true) {
                 // Bypass the gate entirely. Audit-logged: this kills in-flight
                 // turns and drops the unpersisted pendingOutboundQueue.
                 LOG.warn('MeshRestart', `force restart over ${blocking.length} blocking session(s): ${blocking.map((b) => `${b.instanceId || '?'}(${b.status})`).join(', ')} — pendingOutboundQueue will be lost`);
-                return executeRestart(ctx, args, { forced: true });
+                return executeRestart(ctx.deps, args, { forced: true });
             }
-            const foreignBlocking = blocking.filter((b) => !b.selfCoordinator);
+            // selfOnly waives ONLY the calling mesh's own coordinator sessions —
+            // and never a pendingOutbound block: a queued outbound coordinator
+            // message would be permanently lost by the restart, so that gate is
+            // not waivable (use whenIdle and let the queue drain).
+            const foreignBlocking = blocking.filter((b) => !b.selfCoordinator || b.pendingOutbound);
             if (args?.selfOnly === true && foreignBlocking.length === 0) {
                 // Only the calling mesh's own coordinator session is blocking —
                 // the structural self-deadlock case. Waive exactly those.
                 LOG.info('MeshRestart', `selfOnly restart: waiving ${blocking.length} self-coordinator session(s) for mesh ${meshId}`);
-                return executeRestart(ctx, args, { forced: false });
+                return executeRestart(ctx.deps, args, { forced: false });
             }
             if (args?.whenIdle === true) {
-                return scheduleDeferredRestart(ctx, args, meshId, nodeId);
+                return scheduleDeferredRestart(ctx.deps, args, meshId, nodeId);
             }
             return {
                 success: false,
                 restarted: false,
                 code: 'blocking_sessions',
-                reason: 'Daemon has an active session (generating / waiting_approval / starting); restart refused to avoid interrupting in-flight work. Retry when the node is idle.',
+                reason: 'Daemon has an active session (generating / waiting_approval / starting) or queued outbound coordinator messages; restart refused to avoid interrupting in-flight work or losing queued messages. Retry when the node is idle.',
                 blockingSessions: blocking,
                 options: {
-                    selfOnly: 'waive only this mesh\'s own coordinator session (settings.meshCoordinatorFor === meshId)',
+                    selfOnly: 'waive only this mesh\'s own coordinator session (settings.meshCoordinatorFor === meshId) — never waives queued outbound messages',
                     force: 'bypass the idle-gate entirely — kills in-flight turns and loses the unpersisted pendingOutboundQueue',
                     whenIdle: 'schedule the restart to run automatically once the daemon goes idle (safest)',
                 },
-                deferredRestart: deferredRestartInfo(),
+                deferredRestart: deferredRestartInfo(scheduleKey),
             } as CommandRouterResult;
         }
 
-        return executeRestart(ctx, args, { forced: false });
+        return executeRestart(ctx.deps, args, { forced: false });
     },
 };

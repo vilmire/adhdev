@@ -90,7 +90,7 @@ import {
     type AssignedTaskTerminalEvidence,
 } from './mesh-completion-synthesis.js';
 import { sessionStatusFromNodes } from './mesh-active-work.js';
-import { drainMeshTurnOutbox } from './mesh-event-forwarding.js';
+import { drainMeshTurnOutbox, stopStaleMeshWorker } from './mesh-event-forwarding.js';
 import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reconstructActiveAttempts, isTerminalTurnStage, drainHeldTurnSuspensionsForMesh, gateRedriveForHeldSuspension, recordTurnAck, noteRedriveBlocked } from './mesh-turn-ledger.js';
 import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 
@@ -1571,6 +1571,25 @@ async function recoverStrandedAssignedDispatches(
                         event: 'agent:generating_started',
                     }, !redriveEval || redriveEval.allowed ? 'n/a' : redriveEval.reason);
                 } else {
+                // NATIVE-SOURCE-REDRIVE-OLD-WORKER (RC32): the nonce bump inside
+                // reclaimStrandedAssignedTask only neutralizes the old worker LAZILY —
+                // the stale-nonce ack guard fires when the worker echoes the old nonce on
+                // agent:generating_started. A NATIVE-SOURCE worker (emitsPtyTurnEvents=false)
+                // never emits that event, so without an explicit stop the OLD worker stays
+                // able to execute the reclaimed prompt after the redispatch (the
+                // delivered_not_consumed double-execution defect). Close it through the
+                // established stale-worker stop mechanism BEFORE the reclaim hands the row
+                // back for redispatch. Exactly-once completion is preserved: the reclaim
+                // still bumps dispatchNonce and closes the current attempt, so any late
+                // event from the old worker is rejected as stale regardless of the stop.
+                if (redriveProfile?.emitsPtyTurnEvents === false && row.assignedSessionId) {
+                    stopStaleMeshWorker(components, {
+                        meshId,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        providerType: row.assignedProviderType,
+                    });
+                }
                 try {
                     markAttemptRedriven({ meshId, taskId: row.id, leaseDurationMs: ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS, nowMs });
                 } catch { /* best-effort durable lease */ }

@@ -38,6 +38,7 @@ describe('state-store', () => {
       sessionNotificationDismissals: {},
       sessionNotificationUnreadOverrides: {},
       sessionProviderSessionPins: {},
+      deferredRestartSchedules: {},
     });
   });
 
@@ -61,6 +62,7 @@ describe('state-store', () => {
       sessionNotificationDismissals: {},
       sessionNotificationUnreadOverrides: {},
       sessionProviderSessionPins: {},
+      deferredRestartSchedules: {},
     });
   });
 
@@ -79,6 +81,7 @@ describe('state-store', () => {
       sessionNotificationDismissals: {},
       sessionNotificationUnreadOverrides: {},
       sessionProviderSessionPins: {},
+      deferredRestartSchedules: {},
     });
 
     const raw = JSON.parse(readFileSync(join(configDir, 'state.json'), 'utf-8'));
@@ -90,6 +93,7 @@ describe('state-store', () => {
       sessionNotificationDismissals: {},
       sessionNotificationUnreadOverrides: {},
       sessionProviderSessionPins: {},
+      deferredRestartSchedules: {},
     });
   });
 
@@ -155,6 +159,7 @@ describe('state-store', () => {
       sessionNotificationDismissals: {},
       sessionNotificationUnreadOverrides: {},
       sessionProviderSessionPins: {},
+      deferredRestartSchedules: {},
     });
   });
 
@@ -171,6 +176,7 @@ describe('state-store', () => {
       sessionNotificationDismissals: {},
       sessionNotificationUnreadOverrides: {},
       sessionProviderSessionPins: {},
+      deferredRestartSchedules: {},
     });
   });
 

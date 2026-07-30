@@ -113,6 +113,13 @@ export interface CliProviderState extends ProviderStateBase {
     category: 'cli';
  /** terminal = PTY stream, chat = parsed conversation */
     mode: 'terminal' | 'chat';
+    /**
+     * Queued outbound coordinator messages not yet written to the PTY
+     * (ProviderCliAdapter pendingOutboundQueue). The daemon-restart idle-gate
+     * treats a non-zero count as restart-blocking so a restart never silently
+     * drops a queued message.
+     */
+    pendingOutboundCount?: number;
 }
 
 /** ACP provider state */

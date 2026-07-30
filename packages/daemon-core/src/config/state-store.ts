@@ -13,6 +13,30 @@ import { getConfigDir } from './config.js';
 import type { RecentActivityEntry } from './recent-activity.js';
 import type { SavedProviderSessionEntry } from './saved-sessions.js';
 
+/**
+ * Durable record of a restart_daemon_node whenIdle schedule. Persisted so the
+ * schedule survives a daemon restart: on boot the owning daemon re-arms every
+ * unexpired record (and audits/drops the expired ones) instead of silently
+ * losing the scheduled restart. Keyed by mesh/node ownership
+ * ({@link deferredRestartScheduleKey}) so independent schedules never clobber
+ * or cross-cancel each other.
+ */
+export interface DeferredRestartScheduleRecord {
+    meshId: string;
+    nodeId: string;
+    mode: 'upgrade' | 'restart';
+    killSessionHost: boolean;
+    /** Epoch ms when the restart was scheduled. */
+    scheduledAt: number;
+    /** Epoch ms after which the schedule is dropped without executing. */
+    expiresAt: number;
+}
+
+/** Ownership key for a deferred-restart schedule record. */
+export function deferredRestartScheduleKey(meshId: string, nodeId: string): string {
+    return `${meshId}::${nodeId}`;
+}
+
 export interface DaemonState {
     /** Unified recent activity across IDE / CLI / ACP launch flows */
     recentActivity: RecentActivityEntry[];
@@ -37,6 +61,12 @@ export interface DaemonState {
      * pin (chat-commands-read lastBoundProviderSessionIdByMeshSession).
      */
     sessionProviderSessionPins: Record<string, string>;
+    /**
+     * Durable restart_daemon_node whenIdle schedules owned by THIS daemon,
+     * keyed by deferredRestartScheduleKey(meshId, nodeId). Re-armed on boot;
+     * expired records are audited and dropped.
+     */
+    deferredRestartSchedules: Record<string, DeferredRestartScheduleRecord>;
 }
 
 const DEFAULT_STATE: DaemonState = {
@@ -47,6 +77,7 @@ const DEFAULT_STATE: DaemonState = {
     sessionNotificationDismissals: {},
     sessionNotificationUnreadOverrides: {},
     sessionProviderSessionPins: {},
+    deferredRestartSchedules: {},
 };
 
 function isPlainObject(value: unknown): value is Record<string, any> {
@@ -93,6 +124,17 @@ function normalizeState(raw: unknown): DaemonState {
         Object.entries(isPlainObject(parsed.sessionProviderSessionPins) ? parsed.sessionProviderSessionPins : {})
             .filter(([key, value]) => typeof key === 'string' && key.length > 0 && typeof value === 'string' && value.length > 0)
     );
+    const deferredRestartSchedules = Object.fromEntries(
+        Object.entries(isPlainObject(parsed.deferredRestartSchedules) ? parsed.deferredRestartSchedules : {})
+            .filter(([, value]) => {
+                if (!isPlainObject(value)) return false;
+                if (typeof value.meshId !== 'string' || typeof value.nodeId !== 'string') return false;
+                if (value.mode !== 'upgrade' && value.mode !== 'restart') return false;
+                if (typeof value.killSessionHost !== 'boolean') return false;
+                if (typeof value.scheduledAt !== 'number' || !Number.isFinite(value.scheduledAt)) return false;
+                return typeof value.expiresAt === 'number' && Number.isFinite(value.expiresAt);
+            })
+    );
 
     return {
         recentActivity,
@@ -102,6 +144,7 @@ function normalizeState(raw: unknown): DaemonState {
         sessionNotificationDismissals,
         sessionNotificationUnreadOverrides,
         sessionProviderSessionPins,
+        deferredRestartSchedules,
     };
 }
 
@@ -175,4 +218,47 @@ export function clearPersistedProviderSessionPins(): void {
     const state = loadState();
     if (Object.keys(state.sessionProviderSessionPins).length === 0) return;
     saveState({ ...state, sessionProviderSessionPins: {} });
+}
+
+/**
+ * Load all persisted deferred-restart schedules owned by this daemon, keyed by
+ * deferredRestartScheduleKey(meshId, nodeId). Empty object when none recorded
+ * or the state file is unreadable.
+ */
+export function loadDeferredRestartSchedules(): Record<string, DeferredRestartScheduleRecord> {
+    return { ...loadState().deferredRestartSchedules };
+}
+
+/**
+ * Persist one deferred-restart schedule under its mesh/node ownership key.
+ * Load-mutate-save against the on-disk state so it survives a daemon restart;
+ * a no-op when an identical record is already stored.
+ */
+export function recordDeferredRestartSchedule(record: DeferredRestartScheduleRecord): void {
+    const key = deferredRestartScheduleKey(record.meshId, record.nodeId);
+    const state = loadState();
+    const existing = state.deferredRestartSchedules[key];
+    if (existing
+        && existing.mode === record.mode
+        && existing.killSessionHost === record.killSessionHost
+        && existing.scheduledAt === record.scheduledAt
+        && existing.expiresAt === record.expiresAt) return;
+    saveState({
+        ...state,
+        deferredRestartSchedules: { ...state.deferredRestartSchedules, [key]: record },
+    });
+}
+
+/**
+ * Drop the persisted deferred-restart schedule for one mesh/node ownership key
+ * (executed, cancelled, or expired). Scoped to exactly that key — a second
+ * mesh/node schedule is never cross-cleared.
+ */
+export function clearDeferredRestartSchedule(meshId: string, nodeId: string): void {
+    const key = deferredRestartScheduleKey(meshId, nodeId);
+    const state = loadState();
+    if (!(key in state.deferredRestartSchedules)) return;
+    const next = { ...state.deferredRestartSchedules };
+    delete next[key];
+    saveState({ ...state, deferredRestartSchedules: next });
 }

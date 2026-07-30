@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { existsSync, mkdtempSync, rmSync } from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
 
 /**
  * Regression tests for the restart_daemon_node extension:
@@ -10,7 +13,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * Plus backward-compat: a bare call behaves exactly like the pre-extension v1.
  *
  * The low-family lifecycle handlers are mocked so no real npm/spawn/exit runs.
+ * config.js getConfigDir is pointed at a per-run temp dir: whenIdle schedules
+ * now PERSIST to state.json, and the test must never touch the real one.
  */
+
+let configDir = ''
+
+vi.mock('../../src/config/config.js', () => ({
+  getConfigDir: () => configDir,
+}))
 
 const { daemonUpgrade, daemonRestart } = vi.hoisted(() => ({
   daemonUpgrade: vi.fn(async () => ({ success: true, upgraded: false, alreadyLatest: true }) as any),
@@ -61,6 +72,7 @@ const foreignWorkerSession = {
 const call = (ctx: any, args: any) => meshRestartHandlers.restart_daemon_node(ctx, args) as Promise<any>
 
 beforeEach(() => {
+  configDir = mkdtempSync(join(tmpdir(), 'adhdev-mesh-restart-test-'))
   daemonUpgrade.mockClear()
   daemonRestart.mockClear()
 })
@@ -69,6 +81,8 @@ afterEach(async () => {
   // Drop any schedule left over from a test so module state never leaks.
   await call(makeCtx([]), baseArgs({ cancelWhenIdle: true }))
   vi.useRealTimers()
+  if (configDir && existsSync(configDir)) rmSync(configDir, { recursive: true, force: true })
+  configDir = ''
 })
 
 describe('restart_daemon_node — backward compatibility', () => {

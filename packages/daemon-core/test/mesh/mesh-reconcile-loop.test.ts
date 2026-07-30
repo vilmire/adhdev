@@ -3470,6 +3470,71 @@ describe('runMeshReconcileTick', () => {
       }
     })
 
+    // RC32: the reclaim's nonce bump only neutralizes the old worker LAZILY (the stale-nonce
+    // guard fires on agent:generating_started — an event a native-source worker never emits).
+    // The redrive must therefore stop the OLD worker explicitly before redispatch, or it stays
+    // able to execute the reclaimed prompt (double execution).
+    it('NATIVE-SOURCE redrive stops the OLD worker before redispatch (old worker cannot execute after the reclaim)', async () => {
+      const meshId = `mesh_phase25_native_stop_old_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-kimi-stale'
+      try {
+        const { claimed, components } = makeNativeSourceRedriveCase(meshId, nodeId, sessionId, dispatchedAt => [
+          { role: 'assistant', content: 'Previous task done.', timestamp: dispatchedAt - 120_000 },
+          { role: 'user', content: 'investigate the failure', timestamp: dispatchedAt + 300 },
+        ])
+        // Give the old worker a local adapter so the stale-worker stop takes the local
+        // stop_cli path (production shape for a co-hosted worker).
+        const handleCliCommand = vi.fn(async () => ({ success: true }))
+        components.cliManager = { adapters: new Map([[sessionId, { cliType: 'kimi' }]]), handleCliCommand }
+
+        await runMeshReconcileTick(components)
+        // The stop is ordered through the per-session destructive-action chain — let it flush.
+        await new Promise(resolve => setImmediate(resolve))
+        await new Promise(resolve => setImmediate(resolve))
+
+        expect(handleCliCommand).toHaveBeenCalledWith('stop_cli', expect.objectContaining({
+          targetSessionId: sessionId,
+          mode: 'hard',
+          reason: 'stale_mesh_dispatch_reclaimed',
+        }))
+        const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
+        expect(reclaimed).toHaveLength(1)
+        expect((reclaimed[0].payload as any).reason).toBe('delivered_not_consumed_redrive')
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('PTY-event provider (claude-cli) redrive does NOT proactively stop the old worker (lazy nonce-guard path preserved)', async () => {
+      const meshId = `mesh_phase25_pty_no_stop_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-claude-idle'
+      try {
+        const { claimed, components } = makeNativeSourceRedriveCase(
+          meshId, nodeId, sessionId,
+          dispatchedAt => [
+            { role: 'user', content: 'investigate the failure', timestamp: dispatchedAt + 300 },
+          ],
+          { type: 'claude-cli', category: 'cli' },
+        )
+        const handleCliCommand = vi.fn(async () => ({ success: true }))
+        components.cliManager = { adapters: new Map([[sessionId, { cliType: 'claude-cli' }]]), handleCliCommand }
+
+        await runMeshReconcileTick(components)
+        await new Promise(resolve => setImmediate(resolve))
+        await new Promise(resolve => setImmediate(resolve))
+
+        // The re-drive fired, but a PTY-event worker is covered by the stale-nonce ack guard —
+        // no proactive stop (it would race a legitimate same-session re-dispatch).
+        const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
+        expect(reclaimed).toHaveLength(1)
+        expect(handleCliCommand.mock.calls.some(call => call[0] === 'stop_cli')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
     it('PTY-event provider (claude-cli) is UNAFFECTED: an idle delivered-but-unconsumed row is re-driven immediately even with post-dispatch transcript activity', async () => {
       const meshId = `mesh_phase25_pty_unaffected_${Date.now()}`
       const nodeId = 'node_w'

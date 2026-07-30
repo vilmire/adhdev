@@ -472,6 +472,10 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // 12. Resume any refine jobs that were interrupted by a previous daemon restart.
     setImmediate(() => void router.resumePendingRefineJobsOnStartup());
 
+    // 13. Re-arm any persisted restart_daemon_node whenIdle schedules that were
+    // pending when this daemon last exited (expired ones are audited + dropped).
+    setImmediate(() => router.resumeDeferredRestartsOnStartup());
+
     return components;
 }
 
