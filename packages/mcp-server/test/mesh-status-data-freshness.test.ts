@@ -62,8 +62,19 @@ test('compact mesh_status stamps dataFreshness on every node — including quiet
   // minimal stub. The bug was that minimalCompactNode dropped dataFreshness, so
   // exactly these nodes read as null on the coordinator. Assert the stub keeps it.
   assert.equal(self.folded, true, 'quiet self node is folded to the minimal stub');
+  // A self node is direct-peer-truth by construction (isSelfNode short-circuits the
+  // probe), and only a 'cached' dataSource projects as 'cached' — self projects
+  // live_or_absent. Both fields are part of the freshness contract, so the stub must
+  // carry them through verbatim rather than dropping them.
   assert.deepEqual(self.dataFreshness, {
-    dataSource: 'self', probeOk: true, reachable: true, lastProbeAt: null, ageMs: null, staleness: 'fresh',
+    dataSource: 'self',
+    probeOk: true,
+    reachable: true,
+    directPeerTruthSatisfied: true,
+    projection: 'live_or_absent',
+    lastProbeAt: null,
+    ageMs: null,
+    staleness: 'fresh',
   });
 
   assert.equal(live.folded, true, 'quiet live node is folded to the minimal stub');

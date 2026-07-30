@@ -44,6 +44,11 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   transport.meshCommand = async (daemonId, command, args = {}) => {
     // MESH-LAUNCH-DUP-GUARD probes live status before launch; no existing mesh session here.
     if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
+    // meshCloneNode runs the Git-aware onboarding planner as a clone preflight and
+    // aborts unless it reports success. It is a preflight, not part of the routing
+    // contract under test, so answer it ahead of the recorder to keep the asserted
+    // calls[] indices anchored on the clone/remove commands.
+    if (command === 'plan_mesh_onboarding') return { success: true, plan: { operation: 'clone_worktree' } };
     calls.push({ daemonId, command, args });
     if (command === 'clone_mesh_node') {
       // Real cloud/daemon relay responses are nested several times:
@@ -390,6 +395,9 @@ test('mesh_clone_node keeps cloned worktrees visible after list/status refresh b
     return { success: true, mesh: structuredClone(localDaemonMesh) };
   };
   transport.meshCommand = async (_daemonId, command) => {
+    // Clone preflight: the Git-aware onboarding planner must report success before
+    // meshCloneNode proceeds to the clone_mesh_node call this test asserts on.
+    if (command === 'plan_mesh_onboarding') return { success: true, plan: { operation: 'clone_worktree' } };
     if (command !== 'clone_mesh_node') {
       throw new Error(`unexpected mesh command: ${command}`);
     }
@@ -3022,6 +3030,9 @@ test('mesh_clone_node upserts clone returned through payload-wrapped live relay 
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
+    // Clone preflight (Git-aware onboarding planner) runs before clone_mesh_node;
+    // answer it ahead of the recorder so the asserted calls[] stay on the clone path.
+    if (command === 'plan_mesh_onboarding') return { success: true, plan: { operation: 'clone_worktree' } };
     calls.push({ daemonId, command, args });
     if (command === 'clone_mesh_node') {
       daemonMeshNodes = [staleSourceNode, cloneNode];
