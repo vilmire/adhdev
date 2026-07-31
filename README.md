@@ -211,7 +211,7 @@ ADHDev talks to coding agents through four provider categories — `ide` (CDP), 
 
 **IDE extensions** (CDP webview): Claude Code (VS Code), Codex, Cline, Roo Code.
 
-**ACP agents** (stdio, Agent Client Protocol): 35 built-in adapters, including Gemini CLI, Qwen Code, Goose, GitHub Copilot, Cursor (ACP), Claude Agent, Codex CLI, Kimi CLI, Cline, Kilo, Junie, OpenHands, and more.
+**ACP agents** (stdio, Agent Client Protocol): 32 built-in adapters, including Gemini CLI, Qwen Code, Goose, GitHub Copilot, Cursor (ACP), Claude Agent, Codex CLI, Kimi CLI, Cline, Kilo, Junie, OpenHands, and more.
 
 > **Built-in ≠ verified.** ADHDev ships a broad inventory; presence in the catalog means the integration exists, not that every one has been validated end-to-end. Support levels vary. See the live policy:
 >
