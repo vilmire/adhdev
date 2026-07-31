@@ -375,6 +375,15 @@ export type {
   P2pRelayFailurePayload,
 } from './mesh/p2p-relay-failure.js';
 
+// ── Mesh Duplicate-Dispatch Refusal (DUP-CLAIM-REBIND) ──
+export {
+  DuplicateMeshDispatchError,
+  DUPLICATE_MESH_DISPATCH_CODE,
+  encodeDuplicateMeshDispatchCode,
+  classifyDuplicateMeshDispatch,
+} from './mesh/mesh-duplicate-dispatch.js';
+export type { DuplicateMeshDispatchInfo } from './mesh/mesh-duplicate-dispatch.js';
+
 // ── State Store ──
 export { loadState, saveState, resetState } from './config/state-store.js';
 export type { DaemonState } from './config/state-store.js';

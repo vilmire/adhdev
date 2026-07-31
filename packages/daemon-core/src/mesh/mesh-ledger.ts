@@ -45,6 +45,12 @@ export type MeshLedgerKind =
     // payload carries the full InteractivePrompt (promptId + questions + options).
     | 'task_question_pending'
     | 'p2p_dispatch_failed'
+    // DUP-CLAIM-REBIND: a dispatch was refused because the node is ALREADY working this
+    // exact task on another live session, so the turn attempt was re-pointed at that
+    // holder instead of being cancelled (which used to discard the holder's real
+    // completion as session_mismatch). Not a failure — the work is in flight.
+    // payload: { taskId, deliveryId, transport, attemptedSessionId, holderSessionId, attemptId?, rebound }
+    | 'dispatch_duplicate_rebound'
     | 'session_launched'
     | 'session_auto_launch'
     | 'session_stopped'
@@ -141,6 +147,7 @@ const TASK_LIFECYCLE_LEDGER_KINDS: ReadonlySet<MeshLedgerKind> = new Set<MeshLed
     'task_approval_needed',
     'task_question_pending',
     'p2p_dispatch_failed',
+    'dispatch_duplicate_rebound',
 ]);
 
 /** Resolve the taskId for a ledger entry, preferring the base field and falling

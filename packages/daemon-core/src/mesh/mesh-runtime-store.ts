@@ -2786,6 +2786,24 @@ export class MeshRuntimeStore {
         this.maybeCheckpointWal();
     }
 
+    /**
+     * DUP-CLAIM-REBIND: point a still-open attempt at the session that is ACTUALLY
+     * working it. Used when a node refuses a duplicate dispatch and names the live
+     * holder — the attempt was opened against the session we tried to dispatch to,
+     * but the work is running on the holder, so the binding (not the attempt) is what
+     * is wrong. Conditional on `terminal_outcome IS NULL` so a settled attempt is
+     * never rewritten; returns whether the rebind landed.
+     */
+    rebindTurnAttemptSession(attemptId: string, sessionId: string, updatedAt: string): boolean {
+        const res = this.db.prepare(`
+            UPDATE mesh_turn_attempts
+            SET session_id = ?, updated_at = ?
+            WHERE attempt_id = ? AND terminal_outcome IS NULL
+        `).run(sessionId, updatedAt, attemptId);
+        this.maybeCheckpointWal();
+        return res.changes > 0;
+    }
+
     // ── TURN-LEDGER (Stage 5): idempotency-keyed causal events ───────────────
 
     /**

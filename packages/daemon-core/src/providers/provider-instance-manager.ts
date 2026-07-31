@@ -322,8 +322,14 @@ export class ProviderInstanceManager {
      *  marker in state.settings). Returns `{ stamped: true }` when the stamp was
      *  applied, or `{ stamped: false, reason }` when it was refused — the instance
      *  was missing / has no attach method, or the DOUBLE-DISPATCH idempotence guard
-     *  fired (the same task is already running on another live session here). */
-    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): { stamped: boolean; reason?: string } {
+     *  fired (the same task is already running on another live session here).
+     *
+     *  DUP-CLAIM-REBIND: when the guard fires, the id of the live session that already
+     *  holds the task is returned as `holderSessionId`. The coordinator needs it to
+     *  REBIND its turn-ledger attempt onto the real worker instead of cancelling the
+     *  attempt — the guard already resolved that instance, so surfacing it here keeps
+     *  the caller from having to parse it back out of an error string. */
+    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): { stamped: boolean; reason?: string; holderSessionId?: string } {
         const inst = this.instances.get(instanceId);
         if (!inst || typeof inst.attachMeshAssignment !== 'function') {
             LOG.warn('MeshDispatch', `attachMeshAssignment skipped: instance ${instanceId} ${inst ? 'has no attach method' : 'not found'}`);
@@ -340,7 +346,7 @@ export class ProviderInstanceManager {
             const conflict = this.findLiveWorkingTaskHolder(assignment.meshId, assignment.taskId, instanceId);
             if (conflict) {
                 LOG.warn('MeshDispatch', `attachMeshAssignment refused: task ${assignment.taskId} (mesh ${assignment.meshId}) is already being worked by live session ${conflict} — skipping duplicate stamp on ${instanceId}`);
-                return { stamped: false, reason: 'task_already_stamped_on_live_instance' };
+                return { stamped: false, reason: 'task_already_stamped_on_live_instance', holderSessionId: conflict };
             }
         }
         inst.attachMeshAssignment(assignment);

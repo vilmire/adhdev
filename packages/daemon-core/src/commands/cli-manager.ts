@@ -20,6 +20,7 @@ import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.
 import { appendRecentActivity } from '../config/recent-activity.js';
 import { shortHash } from '../system/hash.js';
 import { unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace } from '../mesh/coordinator-registry.js';
+import { DuplicateMeshDispatchError } from '../mesh/mesh-duplicate-dispatch.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
 import { buildLegacyModelModeSummaryMetadata, normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
 import { CliProviderInstance } from '../providers/cli-provider-instance.js';
@@ -1823,7 +1824,7 @@ export class DaemonCliManager {
                     const meshContext = (args as any)?.meshContext;
                     if (meshContext && typeof meshContext === 'object' && typeof meshContext.meshId === 'string' && meshContext.meshId) {
                         const targetInstanceId = key;
-                        let stampResult: { stamped: boolean; reason?: string } | undefined;
+                        let stampResult: { stamped: boolean; reason?: string; holderSessionId?: string } | undefined;
                         try {
                             stampResult = this.deps.getInstanceManager()?.attachMeshAssignmentToInstance(targetInstanceId, {
                                 meshId: meshContext.meshId,
@@ -1845,7 +1846,18 @@ export class DaemonCliManager {
                         // Sending the prompt anyway would double-execute the task — fail closed so the
                         // coordinator does not duplicate the work onto a second session.
                         if (stampResult && stampResult.stamped === false && stampResult.reason === 'task_already_stamped_on_live_instance') {
-                            throw new Error(`Refusing duplicate mesh dispatch: task ${meshContext.taskId} is already being worked by a live session on this daemon`);
+                            // DUP-CLAIM-REBIND: this refusal is an APPLICATION-LEVEL answer, not a
+                            // transport failure — the work IS running here, on the session named
+                            // below. Throw the typed error so the coordinator can rebind its turn
+                            // ledger onto the real holder instead of cancelling the attempt (which
+                            // made the holder's genuine completion get rejected as session_mismatch
+                            // and lost a finished task). The guard already resolved the holder, so
+                            // it rides along as a field — never something the caller has to parse
+                            // back out of this message.
+                            throw new DuplicateMeshDispatchError(
+                                `Refusing duplicate mesh dispatch: task ${meshContext.taskId} is already being worked by a live session on this daemon`,
+                                { holderSessionId: stampResult.holderSessionId },
+                            );
                         }
                         // COORDINATOR-SILENT-IDLE (opt-in): the coordinator's mesh policy is
                         // 'auto_silent_on_dispatch', so arm a ONE-SHOT transient mute on THIS

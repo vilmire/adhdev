@@ -1260,6 +1260,73 @@ export function closeAttemptForReassignment(args: {
     });
 }
 
+export type AttemptRebindResult =
+    | { rebound: true; attemptId: string; fromSessionId?: string; toSessionId: string }
+    | { rebound: false; reason: 'no_attempt' | 'attempt_terminal' | 'same_session' | 'no_holder' | 'store_rejected'; attemptId?: string };
+
+/**
+ * DUP-CLAIM-REBIND: re-point the CURRENT attempt at the session that is genuinely
+ * working the task.
+ *
+ * The narrow situation this exists for: a task gets claimed twice on one node (an
+ * auto fast-forward deferred the first claim, so the re-fire claimed a task the
+ * original session had meanwhile started). The node correctly REFUSES the second
+ * dispatch and names the live holder. The attempt, however, was opened against the
+ * session we dispatched to — a session that is not running anything. Cancelling the
+ * attempt there (the old behavior) made the real holder's completion arrive against a
+ * dead attempt and get rejected as `session_mismatch`: the work finished but the
+ * ledger lost it.
+ *
+ * The fix is to correct the BINDING, not to relax the causality checks. The attempt
+ * stays open, keeps its id/seq/nonce/stage, and simply names the right worker — so the
+ * holder's completion satisfies `session_mismatch` legitimately rather than by
+ * exemption. Only ever call this with a holder the worker daemon reported as live and
+ * still working THIS (meshId, taskId); rebinding onto a stale session would accept a
+ * completion the mismatch check is meant to reject.
+ */
+export function rebindAttemptToLiveHolder(args: {
+    meshId: string;
+    taskId: string;
+    holderSessionId?: string;
+    nowMs?: number;
+}): AttemptRebindResult {
+    const holder = typeof args.holderSessionId === 'string' ? args.holderSessionId.trim() : '';
+    if (!holder) return { rebound: false, reason: 'no_holder' };
+
+    const store = MeshRuntimeStore.getInstance();
+    const attempt = store.getCurrentTurnAttempt(args.meshId, args.taskId);
+    if (!attempt) return { rebound: false, reason: 'no_attempt' };
+    if (attempt.terminalOutcome) return { rebound: false, reason: 'attempt_terminal', attemptId: attempt.attemptId };
+    // Already bound to the holder (any equivalent id form) — nothing to correct.
+    if (attempt.sessionId && sessionIdsEquivalent(attempt.sessionId, holder)) {
+        return { rebound: false, reason: 'same_session', attemptId: attempt.attemptId };
+    }
+
+    const nowMs = args.nowMs ?? Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const ok = store.rebindTurnAttemptSession(attempt.attemptId, holder, nowIso);
+    if (!ok) return { rebound: false, reason: 'store_rejected', attemptId: attempt.attemptId };
+
+    // Audit trail: the rebind is a causal event on the attempt, so a later reader can
+    // see why this attempt's session changed without a reassignment.
+    try {
+        store.insertTurnEvent({
+            eventId: randomUUID(),
+            meshId: args.meshId,
+            attemptId: attempt.attemptId,
+            taskId: args.taskId,
+            kind: 'session_rebound',
+            dedupeKey: holder,
+            payload: safeEvidenceJson({ fromSessionId: attempt.sessionId ?? null, toSessionId: holder, reason: 'duplicate_dispatch_refused' }),
+            occurredAtMs: nowMs,
+            recordedAt: nowIso,
+        });
+    } catch { /* audit event is best-effort — the rebind itself already committed */ }
+
+    LOG.info('TurnLedger', `Rebound attempt ${attempt.attemptId} (task ${args.taskId}) from session ${attempt.sessionId ?? 'none'} to live holder ${holder} after a duplicate-dispatch refusal`);
+    return { rebound: true, attemptId: attempt.attemptId, fromSessionId: attempt.sessionId ?? undefined, toSessionId: holder };
+}
+
 // ─── Redrive rules (durable lease) ─────────────────────────────────────────
 
 /** Max same-attempt prompt re-drives. One re-drive per attempt, ever. */

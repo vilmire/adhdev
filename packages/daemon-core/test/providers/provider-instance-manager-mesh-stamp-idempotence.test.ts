@@ -51,7 +51,10 @@ describe('DOUBLE-DISPATCH Layer (b) — attachMeshAssignmentToInstance stamp ide
 
     const result = mgr.attachMeshAssignmentToInstance('B', { meshId: MESH_ID, taskId: TASK_ID })
 
-    expect(result).toEqual({ stamped: false, reason: 'task_already_stamped_on_live_instance' })
+    // DUP-CLAIM-REBIND: the refusal also names the live holder, so the coordinator can
+    // rebind its turn-ledger attempt onto the session that is really doing the work
+    // instead of cancelling the attempt (which lost the holder's real completion).
+    expect(result).toEqual({ stamped: false, reason: 'task_already_stamped_on_live_instance', holderSessionId: 'A' })
     expect(target.settings.meshActiveTaskId).toBeUndefined() // B never got the duplicate stamp
   })
 

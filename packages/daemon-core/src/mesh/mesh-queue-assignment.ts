@@ -28,7 +28,8 @@ import { isWorktreeBootstrapStaleRunning, shouldDeferDispatchForBootstrap } from
 import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
 import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { isModelCompatibleWithProvider } from './model-provider-compat.js';
-import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertPromptInjectionAllowed, noteTargetPinCleared } from './mesh-turn-ledger.js';
+import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertPromptInjectionAllowed, noteTargetPinCleared, rebindAttemptToLiveHolder } from './mesh-turn-ledger.js';
+import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 
 /**
  * CANON: the single canonical coordinator-daemon id this daemon stamps onto every
@@ -504,6 +505,60 @@ function deliverTaskToSession(
         }
     }).catch((e: any) => {
         if (timer) clearTimeout(timer);
+        // DUP-CLAIM-REBIND: not every rejection is a dispatch FAILURE. When the node
+        // refuses because it is ALREADY working this exact task on another live session,
+        // that is an application-level answer — the work is running, it is simply running
+        // somewhere other than the session this attempt was opened against. (The race: an
+        // auto fast-forward defers a claim, and the re-fired claim pulls a task the original
+        // session has meanwhile started.) The old code treated this identically to a
+        // transport failure: it cancelled the attempt, which left the ledger bound to a
+        // session doing nothing, so the real holder's completion was later rejected as
+        // session_mismatch and a FINISHED task was recorded as lost.
+        //
+        // Correct the binding instead. Keep the task assigned (it is genuinely in flight),
+        // leave the attempt open, and re-point it at the live holder the worker named — the
+        // holder's completion then satisfies the session_mismatch check on the merits. The
+        // duplicate-dispatch guard itself is untouched: refusing the second injection is
+        // exactly right, and this changes only how the coordinator books that refusal.
+        //
+        // Strictly gated: `classifyDuplicateMeshDispatch` matches only the typed error /
+        // structured wire code (never the message text), and the rebind is skipped unless a
+        // holder session was actually named. Anything else falls through to the failure path
+        // below unchanged — a blanket rebind on arbitrary errors would let a STALE session's
+        // completion be accepted, which is precisely what session_mismatch must keep out.
+        const duplicate = classifyDuplicateMeshDispatch(e);
+        if (duplicate?.holderSessionId) {
+            const rebind = rebindAttemptToLiveHolder({
+                meshId: ctx.meshId,
+                taskId: ctx.task.id,
+                holderSessionId: duplicate.holderSessionId,
+            });
+            if (rebind.rebound || rebind.reason === 'same_session') {
+                LOG.info('MeshQueue', `Duplicate dispatch of task ${ctx.task.id} refused by node ${ctx.nodeId}: it is already being worked by live session ${duplicate.holderSessionId}. Task stays assigned; turn attempt ${rebind.attemptId ?? 'n/a'} ${rebind.rebound ? 'rebound to that session' : 'was already bound to it'}.`);
+                updateSessionDeliveryStatus(delivery.id, 'delivered');
+                try {
+                    appendLedgerEntry(ctx.meshId, {
+                        kind: 'dispatch_duplicate_rebound',
+                        nodeId: ctx.nodeId,
+                        sessionId: duplicate.holderSessionId,
+                        payload: {
+                            taskId: ctx.task.id,
+                            deliveryId: delivery.id,
+                            transport: ctx.transport,
+                            attemptedSessionId: ctx.sessionId,
+                            holderSessionId: duplicate.holderSessionId,
+                            ...(rebind.attemptId ? { attemptId: rebind.attemptId } : {}),
+                            rebound: rebind.rebound,
+                        },
+                    });
+                } catch { /* ledger write is best-effort */ }
+                return;
+            }
+            // The refusal was genuine but the attempt could not be rebound (already
+            // terminal, or no attempt row). Fall through: the task returns to pending and
+            // a later tick re-dispatches it — the pre-fix behavior, which is safe here.
+            LOG.warn('MeshQueue', `Duplicate dispatch of task ${ctx.task.id} refused by node ${ctx.nodeId} (holder ${duplicate.holderSessionId}), but the turn attempt could not be rebound (${rebind.reason}) — falling back to the requeue path.`);
+        }
         // A dispatch failure (transport reject OR hang timeout) is most often transient —
         // a busy/refusing adapter, or a relay that never acked — not a permanent task
         // failure. Marking the task terminal here would permanently kill tasks a later
