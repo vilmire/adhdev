@@ -111,8 +111,13 @@ describe('CliProviderInstance — SETTLE-VALLEY inter-approval idle hold', () =>
     expect(events).toHaveLength(1)
     expect(events[0].event).toBe('agent:generating_completed')
     expect(events[0].finalSummary).toBe('Verified both fixes; tests pass; 2 files changed.')
-    // Genuine: no missing-final-assistant weakness marker.
-    expect(events[0].completionDiagnostic).toBeUndefined()
+    // Genuine: no missing-final-assistant weakness marker. Transcript-authoritative
+    // completions now carry a diagnostic describing the evidence they were judged on,
+    // so "genuine" is asserted on that evidence rather than on the diagnostic's absence.
+    expect(events[0].completionDiagnostic).toMatchObject({
+      evidenceWeak: false,
+      finalAssistantPresent: true,
+    })
     expect((instance as any).completedDebouncePending).toBeNull()
   })
 

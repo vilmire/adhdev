@@ -135,7 +135,11 @@ describe('ProviderCliAdapter queue-until-ready (FIX B)', () => {
         adapter.runDetectStatus = vi.fn(() => 'generating');
         adapter.resolveStartupState = vi.fn();
 
-        await expect(adapter.sendMessage('first big task message')).resolves.toBeUndefined();
+        // Delivery-ack separation: sendMessage resolves with the ACK describing what
+        // happened to the prompt. A not-ready adapter buffers it, so the ack is 'queued'
+        // (a delivered ack would mean it reached the PTY, which is exactly what must not
+        // happen here). Same contract the send-guard suite asserts.
+        await expect(adapter.sendMessage('first big task message')).resolves.toEqual({ status: 'queued' });
 
         // Buffered, not dropped, not thrown — and nothing written to the PTY yet.
         expect(adapter.pendingOutboundQueue.map((m: any) => m.content)).toEqual(['first big task message']);
