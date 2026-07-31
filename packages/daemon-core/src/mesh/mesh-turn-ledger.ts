@@ -1327,6 +1327,61 @@ export function rebindAttemptToLiveHolder(args: {
     return { rebound: true, attemptId: attempt.attemptId, fromSessionId: attempt.sessionId ?? undefined, toSessionId: holder };
 }
 
+/**
+ * DUP-CLAIM-REBIND (rc.35): resolve the session a watchdog must READ for a task —
+ * the CURRENT attempt's session first, the queue row's claim-time stamp as fallback.
+ *
+ * WHY THE TWO DISAGREE (and why the row must NOT be rewritten to match): the queue
+ * row's `assignedSessionId` is written ONCE, at claim time, and records the fact
+ * "this is the session we dispatched to". That remains historically true even after
+ * the node refuses the dispatch, so it is the right value to keep for audit. The
+ * ATTEMPT, by contrast, records "this is the session genuinely working the task" —
+ * which {@link rebindAttemptToLiveHolder} corrects when a duplicate-dispatch refusal
+ * names the real holder. Only the attempt is re-pointed; the row is deliberately
+ * left alone (writing both would introduce a partial-failure state where the attempt
+ * is rebound and the row is not, which is strictly worse than one authority).
+ *
+ * The defect this closes: after a rebind, the poll/redrive watchdogs kept reading the
+ * ROW's session — a session that is idle and running nothing — so they read "idle
+ * with 0 messages", concluded the delivery was lost, cancelled the attempt
+ * (`source=reassignment`) and re-injected the prompt into a task the real holder was
+ * still working (live task f5edc912: rebind at 01:19:26, redrive at 01:20:01, the
+ * holder's genuine completion at 01:21:09). Reading the attempt first points those
+ * watchdogs at the worker that is actually generating, so the redrive never arms.
+ *
+ * FAIL-SAFE: the row wins whenever the attempt cannot speak for the current binding —
+ * no attempt (legacy/pre-Stage-5 rows), a TERMINAL attempt (settled; its session is
+ * history, and the row is what the next dispatch will re-derive from), or an attempt
+ * with no session bound. Callers on the overwhelmingly common never-rebound path are
+ * byte-identical to the previous behaviour, because there the attempt's session and
+ * the row's stamp are the same value.
+ */
+export function resolveTaskEvidenceSessionId(
+    meshId: string,
+    taskId: string,
+    rowAssignedSessionId?: string | null,
+): string | undefined {
+    const nonEmpty = (v: unknown): string | undefined => {
+        const s = typeof v === 'string' ? v.trim() : '';
+        return s ? s : undefined;
+    };
+    const rowSessionId = nonEmpty(rowAssignedSessionId);
+    try {
+        const attempt = MeshRuntimeStore.getInstance().getCurrentTurnAttempt(meshId, taskId);
+        // Fail-safe: only a LIVE attempt with a bound session may override the row.
+        if (!attempt || attempt.terminalOutcome) return rowSessionId;
+        const attemptSessionId = nonEmpty(attempt.sessionId);
+        if (!attemptSessionId) return rowSessionId;
+        if (rowSessionId && !sessionIdsEquivalent(attemptSessionId, rowSessionId)) {
+            LOG.info('TurnLedger', `Evidence read for task ${taskId} follows the ATTEMPT session ${attemptSessionId} (attempt ${attempt.attemptId}), not the claim-time row stamp ${rowSessionId} — the attempt was rebound to the live holder`);
+        }
+        return attemptSessionId;
+    } catch {
+        // Store unavailable — the row stamp is the conservative pre-rc.35 behaviour.
+        return rowSessionId;
+    }
+}
+
 // ─── Redrive rules (durable lease) ─────────────────────────────────────────
 
 /** Max same-attempt prompt re-drives. One re-drive per attempt, ever. */

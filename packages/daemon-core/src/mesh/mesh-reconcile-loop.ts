@@ -91,7 +91,7 @@ import {
 } from './mesh-completion-synthesis.js';
 import { sessionStatusFromNodes } from './mesh-active-work.js';
 import { drainMeshTurnOutbox, stopStaleMeshWorker } from './mesh-event-forwarding.js';
-import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reconstructActiveAttempts, isTerminalTurnStage, drainHeldTurnSuspensionsForMesh, gateRedriveForHeldSuspension, recordTurnAck, noteRedriveBlocked } from './mesh-turn-ledger.js';
+import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reconstructActiveAttempts, isTerminalTurnStage, drainHeldTurnSuspensionsForMesh, gateRedriveForHeldSuspension, recordTurnAck, noteRedriveBlocked, resolveTaskEvidenceSessionId } from './mesh-turn-ledger.js';
 import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
@@ -1403,8 +1403,20 @@ async function recoverStrandedAssignedDispatches(
                 }
             }
             const shortStreakKey = `${meshId}::${row.id}`;
-            const verdict = row.assignedSessionId
-                ? resolveSessionBusyVerdict(components, row.assignedSessionId)
+            // DUP-CLAIM-REBIND (rc.35): every liveness/evidence read below must follow the
+            // ATTEMPT's session, not the claim-time row stamp. After a duplicate-dispatch
+            // refusal rebinds the attempt to the real holder, the row still names the
+            // REFUSED session — which is idle and running nothing — so this verdict read
+            // IDLE_CONFIRMED and the redrive fired against a task the holder was actively
+            // working (live task f5edc912). Reading the rebound holder yields GENERATING and
+            // the redrive correctly stands down. Falls back to the row whenever no live
+            // attempt binding exists, so the never-rebound path is unchanged.
+            const evidenceSessionId = resolveTaskEvidenceSessionId(meshId, row.id, row.assignedSessionId);
+            const evidenceRow = evidenceSessionId && evidenceSessionId !== row.assignedSessionId
+                ? { ...row, assignedSessionId: evidenceSessionId }
+                : row;
+            const verdict = evidenceSessionId
+                ? resolveSessionBusyVerdict(components, evidenceSessionId)
                 : 'IDLE_CONFIRMED'; // no session bound → nothing live generating to protect
             // GENERATING → demonstrably alive: never re-drive, reset the grace.
             // IDLE_CONFIRMED → positive LOCAL evidence the session is present-and-idle: re-drive now.
@@ -1451,11 +1463,11 @@ async function recoverStrandedAssignedDispatches(
                 // row stamp FIRST so a REMOTE worker of this class is finally covered too (the
                 // original fix was local-only). Reliable-PTY-event providers never enter this
                 // branch, so their behaviour is untouched.
-                const redriveProfile = row.assignedSessionId
-                    ? resolveAssignedTranscriptProfile(components, row)
+                const redriveProfile = evidenceSessionId
+                    ? resolveAssignedTranscriptProfile(components, evidenceRow)
                     : undefined;
                 if (redriveProfile?.emitsPtyTurnEvents === false
-                    && await pollAssignedTaskInTurnProgress(components, { id: meshId, nodes: mesh.nodes }, row)) {
+                    && await pollAssignedTaskInTurnProgress(components, { id: meshId, nodes: mesh.nodes }, evidenceRow)) {
                     deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
                     // RC.20: the post-dispatch agent activity that proves the turn started IS
                     // consumption evidence — promote the consumed link durably (idempotent;
@@ -1466,7 +1478,8 @@ async function recoverStrandedAssignedDispatches(
                             meshId,
                             taskId: row.id,
                             kind: 'consumed',
-                            sessionId: row.assignedSessionId,
+                            // Attempt-bound session (rc.35): see the long path below.
+                            sessionId: evidenceSessionId,
                             legacy: {
                                 ...(typeof row.dispatchNonce === 'number' ? { dispatchNonce: row.dispatchNonce } : {}),
                                 ...(row.assignedNodeId ? { nodeId: row.assignedNodeId } : {}),
@@ -1491,7 +1504,7 @@ async function recoverStrandedAssignedDispatches(
                 }
                 if (verdict === 'IDLE_CONFIRMED') {
                     deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
-                } else if (assignedRowLiveStatusIsAwaitingApproval(mesh, row.assignedNodeId, row.assignedSessionId)) {
+                } else if (assignedRowLiveStatusIsAwaitingApproval(mesh, row.assignedNodeId, evidenceSessionId)) {
                     // APPROVAL-INBOX-BLINDSPOT (Fix A.3): the UNKNOWN (remote) worker is live and
                     // sitting at an approval modal — it is legitimately paused awaiting the
                     // coordinator's mesh_approve, NOT a lost delivery. HOLD without advancing the
@@ -1592,10 +1605,13 @@ async function recoverStrandedAssignedDispatches(
                 // back for redispatch. Exactly-once completion is preserved: the reclaim
                 // still bumps dispatchNonce and closes the current attempt, so any late
                 // event from the old worker is rejected as stale regardless of the stop.
-                if (redriveProfile?.emitsPtyTurnEvents === false && row.assignedSessionId) {
+                if (redriveProfile?.emitsPtyTurnEvents === false && evidenceSessionId) {
+                    // rc.35: stop the session the ATTEMPT is bound to. That is the worker
+                    // that would otherwise go on to execute the reclaimed prompt; the
+                    // claim-time row stamp may name a session that never accepted it.
                     stopStaleMeshWorker(components, {
                         meshId,
-                        sessionId: row.assignedSessionId,
+                        sessionId: evidenceSessionId,
                         nodeId: row.assignedNodeId,
                         providerType: row.assignedProviderType,
                     });
@@ -1672,8 +1688,16 @@ async function recoverStrandedAssignedDispatches(
             // re-dispatch/requeue is unblocked.
             if (nowMs - dispatchedAtMs < DELIVERED_NO_TURN_DEADLINE_MS) continue;   // still within turn budget
             const streakKey = `${meshId}::${row.id}`;
-            const verdict = row.assignedSessionId
-                ? resolveSessionBusyVerdict(components, row.assignedSessionId)
+            // DUP-CLAIM-REBIND (rc.35): attempt-first, row-fallback — see the short-redrive
+            // gate above. This is the LONG (delivered-no-turn deadline) path, the one that
+            // actually issued the observed `cancelled (source=reassignment)` against a
+            // rebound task, so it must follow the same effective binding.
+            const evidenceSessionId = resolveTaskEvidenceSessionId(meshId, row.id, row.assignedSessionId);
+            const evidenceRow = evidenceSessionId && evidenceSessionId !== row.assignedSessionId
+                ? { ...row, assignedSessionId: evidenceSessionId }
+                : row;
+            const verdict = evidenceSessionId
+                ? resolveSessionBusyVerdict(components, evidenceSessionId)
                 : 'IDLE_CONFIRMED'; // no session bound → nothing live to protect
             if (verdict === 'GENERATING') {
                 deliveredNoTurnUnknownStreak.delete(streakKey); // demonstrably alive → reset grace
@@ -1697,7 +1721,7 @@ async function recoverStrandedAssignedDispatches(
             if (verdict === 'IDLE_CONFIRMED') {
                 deliveredNoTurnUnknownStreak.delete(streakKey);
                 reclaimReason = 'delivered_no_turn_deadline';
-            } else if (assignedRowLiveStatusIsAwaitingApproval(mesh, row.assignedNodeId, row.assignedSessionId)) {
+            } else if (assignedRowLiveStatusIsAwaitingApproval(mesh, row.assignedNodeId, evidenceSessionId)) {
                 // APPROVAL-INBOX-BLINDSPOT (Fix A.3): the UNKNOWN (remote) worker is live and
                 // sitting at an approval modal — legitimately paused awaiting the coordinator's
                 // mesh_approve, NOT a delivered-but-lost completion. HOLD without advancing the
@@ -1776,7 +1800,7 @@ async function recoverStrandedAssignedDispatches(
             // summary / stale summary / unreadable → null → fall through to the reclaim below), so
             // this can only PREVENT a wrong re-drive, never invent a completion. Runs only at the
             // deadline (rare), so the extra read is not a hot-path cost.
-            const terminalEvidence = await pollAssignedTaskTerminalEvidence(components, mesh, row);
+            const terminalEvidence = await pollAssignedTaskTerminalEvidence(components, mesh, evidenceRow);
             if (terminalEvidence) {
                 deliveredNoTurnUnknownStreak.delete(streakKey);
                 // TURN-LEDGER (Stage 5): transcript terminal evidence is a CompletionProposal
@@ -1802,7 +1826,7 @@ async function recoverStrandedAssignedDispatches(
                 // delivered-no-turn deadline) — boundedBackstop preserves the genuine-final
                 // fail-open semantics against the live-pending veto.
                 const propagation = propagateWatchdogTranscriptCompletion(
-                    components, meshId, row, terminalEvidence, 'redrive_deadline_transcript_evidence',
+                    components, meshId, evidenceRow, terminalEvidence, 'redrive_deadline_transcript_evidence',
                     { boundedBackstop: true },
                 );
                 const propagated = propagation === 'propagated';
@@ -1877,11 +1901,11 @@ async function recoverStrandedAssignedDispatches(
             // restarts, and hold the row. STALE activity (transcript quiet beyond
             // NATIVE_SOURCE_ACTIVITY_STALE_MS) means the worker went silent mid-turn → fall
             // through to the bounded reclaim below; no infinite hold.
-            const noTurnProfile = row.assignedSessionId
-                ? resolveAssignedTranscriptProfile(components, row)
+            const noTurnProfile = evidenceSessionId
+                ? resolveAssignedTranscriptProfile(components, evidenceRow)
                 : undefined;
             if (noTurnProfile?.emitsPtyTurnEvents === false) {
-                const activity = await pollAssignedTaskActivity(components, { id: meshId, nodes: mesh.nodes }, row);
+                const activity = await pollAssignedTaskActivity(components, { id: meshId, nodes: mesh.nodes }, evidenceRow);
                 if (activity.inTurnProgress && activity.lastAgentActivityMs !== null
                     && nowMs - activity.lastAgentActivityMs <= NATIVE_SOURCE_ACTIVITY_STALE_MS) {
                     deliveredNoTurnUnknownStreak.delete(streakKey);
@@ -1893,7 +1917,9 @@ async function recoverStrandedAssignedDispatches(
                             meshId,
                             taskId: row.id,
                             kind: 'consumed',
-                            sessionId: row.assignedSessionId,
+                            // Attempt-bound session (rc.35): a consumed ACK naming the
+                            // rebound-away row session would fail the reducer's causality check.
+                            sessionId: evidenceSessionId,
                             legacy: {
                                 ...(typeof row.dispatchNonce === 'number' ? { dispatchNonce: row.dispatchNonce } : {}),
                                 ...(row.assignedNodeId ? { nodeId: row.assignedNodeId } : {}),

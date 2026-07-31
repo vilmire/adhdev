@@ -27,7 +27,7 @@ import { readLedgerEntries } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
 import { reconcileDirectDispatchCompletionFromTranscript, resolveLiveTurnPendingEvidence } from './mesh-events-stale.js';
 import { extractFinalAssistantSummaryEvidence, hasTrailingToolActivityAfterFinalAssistant, readChatMessageTimestampMs } from '../providers/chat-message-normalization.js';
-import { runSessionEvidenceCollection } from './mesh-turn-ledger.js';
+import { runSessionEvidenceCollection, resolveTaskEvidenceSessionId } from './mesh-turn-ledger.js';
 import type { ChatMessage } from '../types.js';
 import {
     getMeshV2BackstopCounters,
@@ -713,9 +713,16 @@ export async function pollAssignedTaskActivity(
     row: { id: string; assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string; dispatchTimestamp?: string },
 ): Promise<AssignedTaskActivity> {
     const NONE: AssignedTaskActivity = { inTurnProgress: false, lastAgentActivityMs: null };
-    const sessionId = readNonEmptyString(row.assignedSessionId);
+    // DUP-CLAIM-REBIND (rc.35): attempt-first, row-fallback — same reasoning as
+    // pollAssignedTaskTerminalEvidence. This poll is the redrive's in-turn-progress
+    // gate, so reading the refused (idle) session instead of the rebound holder is
+    // precisely what let the redrive arm against a worker that was still generating.
+    const sessionId = resolveTaskEvidenceSessionId(mesh.id, row.id, row.assignedSessionId);
     const nodeId = readNonEmptyString(row.assignedNodeId);
     if (!sessionId || !nodeId) return NONE; // no worker to read
+    const evidenceRow = sessionId !== row.assignedSessionId
+        ? { ...row, assignedSessionId: sessionId }
+        : row;
 
     // A dispatch boundary is REQUIRED: without it a reused session's prior-task tail would read as
     // progress on THIS task and suppress the re-drive forever.
@@ -725,7 +732,7 @@ export async function pollAssignedTaskActivity(
     // TURN-LEDGER (Stage 5): the transcript read is evidence collection — strictly
     // ordered against any destructive stop/teardown queued for the same session, so
     // teardown can never destroy the evidence source mid-read (the 6ms race).
-    const payload = await runSessionEvidenceCollection(sessionId, () => fetchAssignedTaskChatTail(components, mesh, row));
+    const payload = await runSessionEvidenceCollection(sessionId, () => fetchAssignedTaskChatTail(components, mesh, evidenceRow));
     if (!payload) return NONE;
 
     const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
@@ -776,8 +783,19 @@ export async function pollAssignedTaskTerminalEvidence(
         minFinalAssistantAgeMs?: number;
     },
 ): Promise<AssignedTaskTerminalEvidence | null> {
-    const sessionId = readNonEmptyString(row.assignedSessionId);
+    // DUP-CLAIM-REBIND (rc.35): read the session the ATTEMPT names, not the claim-time
+    // row stamp. After a duplicate-dispatch refusal rebinds the attempt to the real
+    // holder, the row still names the refused session — polling THAT session reads
+    // "idle with 0 messages" and the caller re-drives a task the holder is still
+    // working. resolveTaskEvidenceSessionId falls back to the row whenever the attempt
+    // cannot speak for the binding, so the never-rebound path is unchanged.
+    const sessionId = resolveTaskEvidenceSessionId(mesh.id, row.id, row.assignedSessionId);
     const nodeId = readNonEmptyString(row.assignedNodeId);
+    // The tail fetch re-derives the session from the row it is handed, so hand it the
+    // effective (attempt-first) binding rather than the raw row.
+    const evidenceRow = sessionId && sessionId !== row.assignedSessionId
+        ? { ...row, assignedSessionId: sessionId }
+        : row;
 
     // POLL-TRACE (observability, not a behaviour change): this poll is the last net before a
     // 15-min delivered-no-turn reclaim re-injects a prompt into a possibly-finished worker, and
@@ -805,7 +823,7 @@ export async function pollAssignedTaskTerminalEvidence(
 
     const providerType = readNonEmptyString(row.assignedProviderType);
     // TURN-LEDGER (Stage 5): strictly ordered evidence collection (see above).
-    const payload = await runSessionEvidenceCollection(sessionId, () => fetchAssignedTaskChatTail(components, mesh, row));
+    const payload = await runSessionEvidenceCollection(sessionId, () => fetchAssignedTaskChatTail(components, mesh, evidenceRow));
     if (!payload) return declined('chat_tail_unreadable', 'worker transcript read returned no payload (offline/unreachable?)');
 
     // Only a settled-idle session is a turn-end; a generating/waiting session is mid-turn and
