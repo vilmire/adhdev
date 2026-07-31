@@ -526,7 +526,8 @@
             "empty": "승인 결정을 기다리는 세션이 없습니다.",
             "sessionFallback": "세션 {{id}}",
             "approve": "승인",
-            "reject": "거절"
+            "reject": "거절",
+            "waitingFor": "{{duration}} 대기 중"
         },
         "chat": {
             "loading": "불러오는 중…",
@@ -3171,5 +3172,12 @@
         "showDetails": "▸ 프로바이더별 상세 보기 ({{count}})",
         "soundEffectsLabel": "사운드 효과",
         "soundEffectsDesc": "에이전트가 완료하거나 승인이 필요할 때 사운드 재생"
+    },
+    "approvals": {
+        "pageTitle": "승인",
+        "pageSubtitle": "결정을 기다리는 세션입니다.",
+        "pending": "대기 중",
+        "loading": "승인 목록을 불러오는 중…",
+        "emptyHint": "연결된 머신의 승인 요청이 여기에 자동으로 표시됩니다."
     }
 }

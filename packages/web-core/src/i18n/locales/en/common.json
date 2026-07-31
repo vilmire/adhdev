@@ -526,7 +526,8 @@
             "empty": "No sessions are awaiting an approval decision.",
             "sessionFallback": "session {{id}}",
             "approve": "Approve",
-            "reject": "Reject"
+            "reject": "Reject",
+            "waitingFor": "Waiting for {{duration}}"
         },
         "chat": {
             "loading": "Loading…",
@@ -3171,5 +3172,12 @@
         "showDetails": "▸ Show per-provider details ({{count}})",
         "soundEffectsLabel": "Sound Effects",
         "soundEffectsDesc": "Play a sound when agent completes or needs approval"
+    },
+    "approvals": {
+        "pageTitle": "Approvals",
+        "pageSubtitle": "Sessions waiting on your decision.",
+        "pending": "Pending",
+        "loading": "Loading approvals…",
+        "emptyHint": "Approvals from any connected machine will appear here automatically."
     }
 }

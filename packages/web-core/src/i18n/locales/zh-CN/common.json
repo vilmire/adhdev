@@ -526,7 +526,8 @@
             "empty": "没有会话在等待审批决定。",
             "sessionFallback": "会话 {{id}}",
             "approve": "批准",
-            "reject": "拒绝"
+            "reject": "拒绝",
+            "waitingFor": "已等待 {{duration}}"
         },
         "chat": {
             "loading": "正在加载…",
@@ -3174,5 +3175,12 @@
         "showDetails": "▸ 显示各提供方详情 ({{count}})",
         "soundEffectsLabel": "音效",
         "soundEffectsDesc": "代理完成或需要审批时播放声音"
+    },
+    "approvals": {
+        "pageTitle": "审批",
+        "pageSubtitle": "等待你决定的会话。",
+        "pending": "待处理",
+        "loading": "正在加载审批…",
+        "emptyHint": "任何已连接机器的审批请求都会自动显示在这里。"
     }
 }

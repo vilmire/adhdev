@@ -526,7 +526,8 @@
             "empty": "承認の判断を待っているセッションはありません。",
             "sessionFallback": "セッション {{id}}",
             "approve": "承認",
-            "reject": "却下"
+            "reject": "却下",
+            "waitingFor": "{{duration}} 待機中"
         },
         "chat": {
             "loading": "読み込んでいます…",
@@ -3174,5 +3175,12 @@
         "showDetails": "▸ プロバイダーごとの詳細を表示 ({{count}})",
         "soundEffectsLabel": "効果音",
         "soundEffectsDesc": "エージェントが完了または承認を必要とするときに音を鳴らす"
+    },
+    "approvals": {
+        "pageTitle": "承認",
+        "pageSubtitle": "判断を待っているセッションです。",
+        "pending": "待機中",
+        "loading": "承認を読み込み中…",
+        "emptyHint": "接続中のマシンからの承認リクエストがここに自動で表示されます。"
     }
 }

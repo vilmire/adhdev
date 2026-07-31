@@ -526,7 +526,8 @@
             "empty": "Ninguna sesión está esperando una decisión de aprobación.",
             "sessionFallback": "sesión {{id}}",
             "approve": "Aprobar",
-            "reject": "Rechazar"
+            "reject": "Rechazar",
+            "waitingFor": "Esperando {{duration}}"
         },
         "chat": {
             "loading": "Cargando…",
@@ -3174,5 +3175,12 @@
         "showDetails": "▸ Mostrar detalles por proveedor ({{count}})",
         "soundEffectsLabel": "Efectos de sonido",
         "soundEffectsDesc": "Reproducir un sonido cuando el agente completa o necesita aprobación"
+    },
+    "approvals": {
+        "pageTitle": "Aprobaciones",
+        "pageSubtitle": "Sesiones que esperan tu decisión.",
+        "pending": "Pendientes",
+        "loading": "Cargando aprobaciones…",
+        "emptyHint": "Las solicitudes de aprobación de cualquier máquina conectada aparecerán aquí automáticamente."
     }
 }
