@@ -1544,7 +1544,7 @@ var MESH_MAGI_COLLECT_TOOL = {
 };
 var MESH_MAGI_KIND_PANEL_SET_TOOL = {
   name: "mesh_magi_kind_panel_set",
-  description: "Bind a task_kind to its MAGI kind-panel slot list (machine-local ~/.adhdev/meshes.json `magiKindPanels`). This binding is what a `mesh_magi_review({ task_kind })` resolves to \u2014 it is the SOLE panel-resolution path (there is no named-panel or inline-members alternative). IMPORTANT \u2014 WHOLESALE REPLACEMENT: a task_kind has exactly one binding, so the `slots` you pass become the COMPLETE new slot set and any prior slots for that kind are dropped (not merged). Because it silently replaces the current binding, get EXPLICIT user approval before writing and present the current-vs-new slot lists (the dry-run returns `currentSlots`). Defaults to dry-run (write=false). Machine-local scope (NOT a repo-committed file).",
+  description: "Bind a task_kind to its MAGI kind-panel slot list for THIS mesh (machine-local ~/.adhdev/meshes.json \u2192 `meshes[].magiKindPanels`). This binding is what a `mesh_magi_review({ task_kind })` resolves to \u2014 it is the SOLE panel-resolution path (there is no named-panel or inline-members alternative). SCOPE: PER MESH, stored machine-locally (NOT a repo-committed file). The write targets the calling coordinator's mesh only; another mesh on the same machine keeps its own independent binding for the same task_kind. IMPORTANT \u2014 WHOLESALE REPLACEMENT: a task_kind has exactly one binding per mesh, so the `slots` you pass become the COMPLETE new slot set and any prior slots for that kind are dropped (not merged). Because it silently replaces the current binding, get EXPLICIT user approval before writing and present the current-vs-new slot lists (the dry-run returns `currentSlots`). Defaults to dry-run (write=false). A slot's `nodeId`, when given, MUST name a node of this mesh \u2014 a foreign or unknown node id is rejected (invalid_magi_kind_panel).",
   inputSchema: {
     type: "object",
     properties: {
@@ -1556,7 +1556,7 @@ var MESH_MAGI_KIND_PANEL_SET_TOOL = {
           type: "object",
           properties: {
             provider: { type: "string", description: "REQUIRED \u2014 provider type, e.g. claude-cli / codex-cli / gemini-cli / hermes-cli." },
-            nodeId: { type: "string", description: "Optional \u2014 pin to a specific mesh node id." },
+            nodeId: { type: "string", description: "Optional \u2014 pin to a specific node OF THIS MESH (validated against the mesh node list; a node id from another mesh is rejected). Omit to let the fan-out pick any node offering the provider." },
             model: { type: "string", description: "Optional \u2014 pin a specific model for this slot." },
             capabilityTags: { type: "array", items: { type: "string" }, description: "Optional routing tags (ANDed with the provider tag) when nodeId is absent." },
             n: { type: "number", description: "Optional per-slot replica count (default 1)." }
@@ -1571,7 +1571,7 @@ var MESH_MAGI_KIND_PANEL_SET_TOOL = {
 };
 var MESH_MAGI_KIND_PANEL_LIST_TOOL = {
   name: "mesh_magi_kind_panel_list",
-  description: "List the configured MAGI kind\u2192panel slot bindings (machine-local). Read-only. Use to confirm what a `task_kind` resolves to before mesh_magi_review, and to diff current-vs-new before an overwrite via mesh_magi_kind_panel_set.",
+  description: "List the MAGI kind\u2192panel slot bindings configured for THIS mesh (machine-local, per mesh). Read-only. The response `scope` names the mesh the bindings belong to \u2014 panels are per mesh, so another mesh on this machine has its own independent set. Use to confirm what a `task_kind` resolves to before mesh_magi_review, and to diff current-vs-new before an overwrite via mesh_magi_kind_panel_set.",
   inputSchema: {
     type: "object",
     properties: {
@@ -5618,31 +5618,42 @@ function replicaCompletionIsWeak(meshId, taskId) {
   }
   return false;
 }
+function magiPanelScope(meshId, meshName) {
+  return {
+    kind: "mesh",
+    storage: "machine_local",
+    meshId,
+    ...meshName ? { meshName } : {},
+    note: "Kind-panels are per mesh, stored machine-locally (not repo-committed). Another mesh on this machine has its own independent bindings."
+  };
+}
 async function meshMagiKindPanelSet(ctx, args) {
   const kind = readString(args.task_kind) || readString(args.kind);
   if (!kind) return JSON.stringify({ success: false, error: "task_kind required" });
   const write = args.write === true;
+  const meshId = ctx.mesh.id;
+  const scope = magiPanelScope(meshId, ctx.mesh.name);
   try {
-    const current = (0, import_daemon_core4.getMagiKindPanel)(kind) ?? [];
+    const current = (0, import_daemon_core4.getMagiKindPanel)(kind, meshId) ?? [];
     if (!write) {
-      const preview = (0, import_daemon_core4.normalizeMagiSlots)(args.slots);
+      const preview = (0, import_daemon_core4.normalizeMagiSlots)(args.slots, ctx.mesh.nodes.map((n) => n.id));
       return JSON.stringify({
         success: true,
         dryRun: true,
         taskKind: kind,
-        scope: "machine_local",
+        scope,
         replacement: true,
         currentSlots: current,
         slots: preview,
-        note: "Dry-run only \u2014 no file written. This is a WHOLESALE replacement of the kind's slot list (machine-local ~/.adhdev/meshes.json); the currentSlots would be fully replaced. Re-run with write=true after explicit user approval."
+        note: `Dry-run only \u2014 no file written. This is a WHOLESALE replacement of the kind's slot list for mesh '${meshId}' (machine-local ~/.adhdev/meshes.json); the currentSlots would be fully replaced. Other meshes on this machine are unaffected. Re-run with write=true after explicit user approval.`
       }, null, 2);
     }
-    const slots = (0, import_daemon_core4.setMagiKindPanel)(kind, args.slots);
+    const slots = (0, import_daemon_core4.setMagiKindPanel)(kind, args.slots, meshId);
     return JSON.stringify({
       success: true,
       written: true,
       taskKind: kind,
-      scope: "machine_local",
+      scope,
       replacement: true,
       previousSlots: current,
       slots,
@@ -5651,25 +5662,28 @@ async function meshMagiKindPanelSet(ctx, args) {
   } catch (e) {
     const message = e?.message || String(e);
     const code = message.includes("invalid_magi_kind_panel") ? "invalid_magi_kind_panel" : void 0;
-    return JSON.stringify({ success: false, ...code ? { code } : {}, error: message });
+    return JSON.stringify({ success: false, ...code ? { code } : {}, scope, error: message });
   }
 }
 async function meshMagiKindPanelList(ctx, args = {}) {
   const only = readString(args.task_kind) || readString(args.kind);
-  const all = (0, import_daemon_core4.listMagiKindPanels)();
+  const meshId = ctx.mesh.id;
+  const scope = magiPanelScope(meshId, ctx.mesh.name);
+  const all = (0, import_daemon_core4.listMagiKindPanels)(meshId);
   if (only) {
-    const slots = (0, import_daemon_core4.getMagiKindPanel)(only);
+    const slots = (0, import_daemon_core4.getMagiKindPanel)(only, meshId);
     if (slots === void 0) {
       return JSON.stringify({
         success: false,
         code: "magi_kind_not_configured",
-        error: `task_kind '${only}' has no configured kind-panel binding`,
+        error: `task_kind '${only}' has no configured kind-panel binding in mesh '${meshId}'`,
+        scope,
         configuredKinds: Object.keys(all)
       }, null, 2);
     }
-    return JSON.stringify({ success: true, scope: "machine_local", taskKind: only, slots }, null, 2);
+    return JSON.stringify({ success: true, scope, taskKind: only, slots }, null, 2);
   }
-  return JSON.stringify({ success: true, scope: "machine_local", kindPanels: all, configuredKinds: Object.keys(all) }, null, 2);
+  return JSON.stringify({ success: true, scope, kindPanels: all, configuredKinds: Object.keys(all) }, null, 2);
 }
 async function meshMagiReview(ctx, args) {
   const question = readString(args.question);
@@ -5690,14 +5704,15 @@ async function meshMagiReview(ctx, args) {
   const referenceSubmoduleKey = resolveMagiReferenceSubmoduleKey(ctx);
   const taskKind = normalizeMagiTaskKind(explicitTaskKind);
   const panelName = `(kind:${taskKind})`;
-  const slots = (0, import_daemon_core4.getMagiKindPanel)(taskKind);
+  const slots = (0, import_daemon_core4.getMagiKindPanel)(taskKind, ctx.mesh.id);
   if (!slots || slots.length === 0) {
     return JSON.stringify({
       success: false,
       code: "magi_kind_not_configured",
-      error: `No panel slots are configured for this task_kind in mesh settings. Add at least one (machine + provider + model) slot in settings \u2014 task_kind '${taskKind}' has no configured kind-panel.`,
+      error: `No panel slots are configured for this task_kind in mesh '${ctx.mesh.id}' settings. Add at least one (machine + provider + model) slot in settings \u2014 task_kind '${taskKind}' has no configured kind-panel.`,
       taskKind,
-      configuredKinds: Object.keys((0, import_daemon_core4.listMagiKindPanels)()),
+      meshId: ctx.mesh.id,
+      configuredKinds: Object.keys((0, import_daemon_core4.listMagiKindPanels)(ctx.mesh.id)),
       hint: "Configure this kind in mesh settings (MagiKindPanelEditor), or set it with mesh_magi_kind_panel_set, then retry."
     }, null, 2);
   }
@@ -5710,8 +5725,25 @@ async function meshMagiReview(ctx, args) {
       code: "invalid_magi_kind_panel",
       error: `configured kind-panel for '${taskKind}' is invalid: ${e?.message || String(e)}`,
       taskKind,
+      meshId: ctx.mesh.id,
       hint: "Re-save the kind-panel slots in mesh settings \u2014 each slot needs a provider; nodeId / model are optional."
     }, null, 2);
+  }
+  const meshNodeIds = new Set(ctx.mesh.nodes.map((n) => n.id));
+  const danglingSlots = planSlots.filter((s) => s.nodeId && !meshNodeIds.has(s.nodeId));
+  if (danglingSlots.length) {
+    planSlots = planSlots.filter((s) => !s.nodeId || meshNodeIds.has(s.nodeId));
+    if (planSlots.length === 0) {
+      return JSON.stringify({
+        success: false,
+        code: "magi_kind_panel_all_slots_dangling",
+        error: `Every slot in kind-panel '${panelName}' is pinned to a node that is not in mesh '${ctx.mesh.id}' (${danglingSlots.map((s) => s.nodeId).join(", ")}).`,
+        taskKind,
+        meshId: ctx.mesh.id,
+        danglingSlots,
+        hint: "Re-bind this kind to nodes of THIS mesh with mesh_magi_kind_panel_set (or in mesh settings). Check mesh_status for the current node list."
+      }, null, 2);
+    }
   }
   const includeStale = (args.include_stale ?? args.includeStale) === true;
   const plan = buildMagiFanoutPlan(planSlots, ctx.mesh.nodes, { n: args.n, referenceCommit, referenceSubmoduleKey, includeStale });
@@ -5729,6 +5761,10 @@ async function meshMagiReview(ctx, args) {
       unavailableSlots: plan.unavailableSlots,
       ...droppedByHealth ? { unhealthySlots: plan.unhealthySlots } : {},
       ...droppedByStale ? { staleSlots: plan.staleSlots } : {},
+      // Surface slots dropped for naming a node outside this mesh, so an
+      // under-quorum panel caused by a stale pin is diagnosable rather than
+      // looking like a mis-sized panel.
+      ...danglingSlots.length ? { danglingSlots } : {},
       hint
     }, null, 2);
   }
