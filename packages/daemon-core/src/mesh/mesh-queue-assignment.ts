@@ -28,6 +28,7 @@ import { isWorktreeBootstrapStaleRunning, shouldDeferDispatchForBootstrap } from
 import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
 import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { isModelCompatibleWithProvider } from './model-provider-compat.js';
+import { decideSlotForModel, SLOT_MODEL_ABSENT_SKIP_REASON, SLOT_MODEL_BUSY_SKIP_REASON } from './slot-model-enforcement.js';
 import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertPromptInjectionAllowed, noteTargetPinCleared, rebindAttemptToLiveHolder } from './mesh-turn-ledger.js';
 import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 
@@ -1175,6 +1176,12 @@ const ACTIONABLE_SKIP_REASON_PREFIXES = [
     'provider_priority_unusable',
     'provider_unusable',
     'dirty_workspace',
+    // SLOT MODEL GUARD (absent): no slot on the node declares the task's model.
+    // Permanent — no amount of waiting produces a slot, so the coordinator must
+    // re-drive (adjust difficulty, target another node, ask the owner). Its
+    // busy counterpart SLOT_MODEL_BUSY_SKIP_REASON is deliberately NOT listed:
+    // that one clears on its own when the slot goes idle.
+    SLOT_MODEL_ABSENT_SKIP_REASON,
 ];
 
 // FALSE-BLOCKER-CLONE-QUEUE: the TRANSIENT counterpart of 'target_node_id_unmatched'. A
@@ -1392,6 +1399,10 @@ function actionableSkipGuidance(reason: string): { summary: string; nextAction: 
     if (reason === 'dirty_workspace') return {
         summary: "the node's workspace is dirty, so auto-launch is blocked to avoid clobbering uncommitted changes",
         nextAction: "Clean or commit the node's working tree (or fast-forward it); the task will then auto-assign.",
+    };
+    if (reason === SLOT_MODEL_ABSENT_SKIP_REASON) return {
+        summary: "no capability slot on the node declares the model this task resolved to (its difficulty→brain preset picked a model the node was never configured to run)",
+        nextAction: "Re-enqueue with a difficulty/model the node's slots declare, target a node that declares this model, or add a slot for it. The task is NOT run on a substitute model — an undeclared model is never launched.",
     };
     return {
         summary: `it cannot be dispatched (${reason})`,
@@ -1906,6 +1917,28 @@ function activeProviderAssignedCount(meshId: string, nodeId: string, providerTyp
         .filter(task => daemonIdsEquivalent(task.assignedNodeId, nodeId) && task.assignedProviderType === providerType).length;
 }
 
+/**
+ * Does `slot` currently have capacity for one more task on this node?
+ *
+ * SLOT MODEL GUARD support. Capacity is tracked per (node, provider) — the caps
+ * of same-provider slots are summed by resolveProviderMaxParallel — so a slot's
+ * availability is that provider's remaining headroom on this node. A provider
+ * with no declared cap is uncapped and always available.
+ *
+ * This mirrors the pre-launch cap check already applied below for the selected
+ * provider; the authoritative enforcement remains the atomic claim transaction.
+ * Being approximate here is safe in the right direction: if this says "available"
+ * and the claim then refuses, the task simply stays queued and retries — the
+ * same place it would have waited anyway.
+ */
+function slotHasCapacity(meshId: string, nodeId: string, node: any, slot: NodeCapabilitySlot): boolean {
+    const providerType = typeof slot.provider === 'string' ? slot.provider.trim() : '';
+    if (!providerType) return false;
+    const cap = resolveProviderMaxParallel(resolveNodeCapabilitySlots(node), providerType);
+    if (cap === undefined) return true;             // no declared cap → uncapped
+    return activeProviderAssignedCount(meshId, nodeId, providerType) < cap;
+}
+
 export function sessionHasActiveAssignment(meshId: string, sessionId: string): boolean {
     if (getQueue(meshId, { status: ['assigned'] as any }).some(task => sessionIdsEquivalent(task.assignedSessionId, sessionId))) {
         return true;
@@ -2203,7 +2236,7 @@ async function resolveUsableProvider(
     node: any,
     requiredTags?: string[],
     task?: FitnessTask,
-): Promise<{ providerType?: string; model?: string; thinkingLevel?: string; reason?: string }> {
+): Promise<{ providerType?: string; model?: string; thinkingLevel?: string; slot?: NodeCapabilitySlot; reason?: string }> {
     const providerLoader = components.providerLoader;
     if (!providerLoader) return { reason: 'provider_loader_unavailable' };
 
@@ -2253,11 +2286,46 @@ async function resolveUsableProvider(
                 providerType: normalizedType,
                 ...(slot.model ? { model: slot.model } : {}),
                 ...(slot.thinkingLevel ? { thinkingLevel: slot.thinkingLevel } : {}),
+                // The slot that won selection. Returned so the caller can enforce
+                // "the launch model must be one this slot declares" — a preset
+                // model must not widen what the operator configured. See
+                // slot-model-enforcement.ts.
+                slot,
             };
         }
         failed.push(`${requestedType}: not detected`);
     }
     return { reason: `provider_priority_unusable: ${failed.join('; ') || nodeId}` };
+}
+
+/**
+ * Test hook: the SLOT MODEL GUARD decision the assignment path would reach for a
+ * task on a node, using the same live capacity computation as production.
+ * Mirrors the production call site so a test can assert run/wait/notify without
+ * spawning a session.
+ */
+export function __decideSlotForModelForTests(
+    meshId: string,
+    nodeId: string,
+    node: any,
+    task: { model?: string; difficulty?: string; requiredTags?: string[] },
+): ReturnType<typeof decideSlotForModel> {
+    const best = bestSlotForTask(node, task as FitnessTask);
+    const requestedModel = (typeof task.model === 'string' && task.model.trim())
+        ? task.model.trim()
+        : best?.slot?.model;
+    return decideSlotForModel({
+        requestedModel,
+        slots: resolveNodeCapabilitySlots(node).map(slot => ({
+            slot,
+            available: slotHasCapacity(meshId, nodeId, node, slot),
+        })),
+    });
+}
+
+/** Test hook: is a skip reason one that pages the coordinator? */
+export function __isActionableSkipReasonForTests(reason: string): boolean {
+    return isActionableSkipReason(reason);
 }
 
 // Canonical mesh node-id normalization. A node may arrive from the local config
@@ -2684,10 +2752,46 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     continue;
                 }
                 // Slot-derived model/thinking: an explicit task.model/thinkingLevel
-                // (resolved from the enqueue-time brain) still wins; the matched
-                // slot fills only what the task left blank (ORCHESTRATION_NODE_SLOTS.md).
-                const rawEffectiveModel = (typeof task.model === 'string' && task.model.trim()) ? task.model.trim() : resolved.model;
+                // (resolved from the enqueue-time brain) is preferred; the matched
+                // slot fills what the task left blank (ORCHESTRATION_NODE_SLOTS.md).
+                const requestedModel = (typeof task.model === 'string' && task.model.trim()) ? task.model.trim() : resolved.model;
                 const effectiveThinkingLevel = (typeof task.thinkingLevel === 'string' && task.thinkingLevel.trim()) ? task.thinkingLevel.trim() : resolved.thinkingLevel;
+
+                // SLOT MODEL GUARD: the requested model must be one this node's slots
+                // declare. The difficulty→brain presets stamp a model at enqueue time
+                // (difficult → 'opus'), so without this a task launched with
+                // `--model opus` on a node whose only slot is claude-cli/sonnet — a
+                // model the operator never configured there.
+                //
+                // Three outcomes, and 'busy' must stay distinct from 'absent':
+                //   run    → a declaring slot has capacity; launch with ITS model
+                //   wait   → a declaring slot exists but is at maxParallel. Skip with a
+                //            NON-actionable reason so the task stays queued and claims
+                //            the slot when it frees. This is the queue working, not a
+                //            failure, so the coordinator is not paged.
+                //   notify → no slot declares the model. Waiting can never help, so skip
+                //            with an ACTIONABLE reason, which pages the coordinator to
+                //            re-drive the task another way.
+                // Substituting a different model is deliberately not an option: silently
+                // running a model the user did not choose breaks the same invariant.
+                const slotDecision = decideSlotForModel({
+                    requestedModel,
+                    slots: resolveNodeCapabilitySlots(node).map(slot => ({
+                        slot,
+                        available: slotHasCapacity(meshId, nodeId, node, slot),
+                    })),
+                });
+                if (slotDecision.outcome === 'wait') {
+                    LOG.info('MeshQueue', `SLOT MODEL GUARD: model '${requestedModel}' is declared on node ${nodeId} but every matching slot is at its maxParallel cap (task ${task.id}); leaving the task queued until a slot goes idle`);
+                    markSkip(nodeId, slotDecision.reason, { providerType: resolved.providerType });
+                    continue;
+                }
+                if (slotDecision.outcome === 'notify') {
+                    LOG.warn('MeshQueue', `SLOT MODEL GUARD: no slot on node ${nodeId} declares model '${requestedModel}' (declared: ${slotDecision.declaredModels.join(', ') || 'none'}) for task ${task.id}; not launching — surfacing to the coordinator to re-drive`);
+                    markSkip(nodeId, slotDecision.reason, { providerType: resolved.providerType });
+                    continue;
+                }
+                const rawEffectiveModel = slotDecision.model;
 
                 // CODEX-400 GUARD: the difficulty→brain presets (and MAGI slots) carry
                 // provider-agnostic Anthropic model aliases (opus/sonnet/haiku). Now that
