@@ -5,6 +5,7 @@ import AppPage from '../../components/ui/AppPage'
 import { Section } from '../../components/ui/Section'
 import { AlertBanner } from '../../components/ui/AlertBanner'
 import { FormField } from '../../components/ui/FormField'
+import { SettingsTabs, type SettingsTab } from '../../components/ui/SettingsTabs'
 import { IconMesh } from '../../components/Icons'
 // The task_kind → panel binding editor (MagiKindPanelEditor) is the sole MAGI panel
 // surface — the named-panel CRUD (MagiPanelManager) was removed.
@@ -275,6 +276,17 @@ export function MeshDetailView({
         >
             {error && <AlertBanner variant="error" onDismiss={onDismissError} className="mb-4">{error}</AlertBanner>}
 
+            {(() => {
+            // Section order below follows the setup flow: add nodes first, then decide how
+            // work is scheduled across them, then configure MAGI review panels, then
+            // runtime telemetry (missions). Brain presets (difficulty → model/thinking)
+            // are absorbed into per-node capability slots (ORCHESTRATION_NODE_SLOTS.md):
+            // each node slot declares the difficulty range it handles plus its
+            // provider/model/thinking, so the mesh-wide difficulty→brain mapping is no
+            // longer a separate surface — edit per-node in "Nodes & Providers".
+
+            const nodesTabContent = (
+            <>
             {/* ── Cloud: Mesh host (read-only) ── */}
             {features.meshHostDaemonSection && (
                 <MeshHostDaemonSection
@@ -320,14 +332,6 @@ export function MeshDetailView({
                 </div>
             </Section>
 
-            {/* Section order follows the setup flow: add nodes first, then decide how
-                work is scheduled across them, then configure MAGI review panels, then
-                runtime telemetry (missions). Brain presets (difficulty → model/thinking)
-                are absorbed into per-node capability slots (ORCHESTRATION_NODE_SLOTS.md):
-                each node slot declares the difficulty range it handles plus its
-                provider/model/thinking, so the mesh-wide difficulty→brain mapping is no
-                longer a separate surface — edit per-node in "Nodes & Providers" below. */}
-
             {/* ── Nodes & Providers ── */}
             <MeshNodeList
                 nodes={nodes}
@@ -368,7 +372,11 @@ export function MeshDetailView({
                 onAddNode={onAddNode}
                 onRemoveNode={onRemoveNode}
             />
+            </>
+            )
 
+            const schedulingTabContent = (
+            <>
             {/* ── Scheduling ── */}
             <Section title={t('repoMesh.detail.schedulingTitle')} description={t('repoMesh.detail.schedulingDescription')}>
                 {/* Mesh-level "Max parallel tasks" is hidden: the real concurrency
@@ -463,15 +471,11 @@ export function MeshDetailView({
                 savingPolicy={savingPolicy}
                 sendCommand={sendCommand}
             />
+            </>
+            )
 
-            {/* ── Missions (runtime telemetry) ── */}
-            <MeshMissionsSection
-                status={displayedMeshStatus}
-                daemonId={activeDaemonId}
-                meshId={selectedMesh.id}
-                sendCommand={sendCommand}
-            />
-
+            const promptsTabContent = (
+            <>
             {/* ── Coordinator prompt (advanced) ──
                  Two axes live here:
                   • Per-mesh: stored in this mesh's coordinator config (systemPromptOverride /
@@ -532,6 +536,18 @@ export function MeshDetailView({
                     </div>
                 </Section>
             )}
+            </>
+            )
+
+            const advancedTabContent = (
+            <>
+            {/* ── Missions (runtime telemetry) ── */}
+            <MeshMissionsSection
+                status={displayedMeshStatus}
+                daemonId={activeDaemonId}
+                meshId={selectedMesh.id}
+                sendCommand={sendCommand}
+            />
 
             {/* ── Safety & Git (advanced) ── */}
             <Section title={t('repoMesh.detail.safetyTitle')} collapsible defaultOpen={false}
@@ -606,29 +622,47 @@ export function MeshDetailView({
                 </div>
                 {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">{t('repoMesh.detail.saving')}</div>}
             </Section>
+            </>
+            )
 
-            {/* ── Integrations: Standalone Hermes MCP config ── */}
-            {features.hermesMcpConfig && (
-                <RepoMeshHermesMcpConfig meshId={selectedMesh.id} availableCliAgents={availableCliAgents} />
-            )}
+            const tabs: SettingsTab[] = [
+                { key: 'nodes', label: t('repoMesh.detail.tabNodes'), content: nodesTabContent },
+                { key: 'scheduling', label: t('repoMesh.detail.tabScheduling'), content: schedulingTabContent },
+                { key: 'prompts', label: t('repoMesh.detail.tabPrompts'), content: (
+                    <>
+                        {promptsTabContent}
+                        {/* ── Integrations: Standalone Hermes MCP config ── */}
+                        {features.hermesMcpConfig && (
+                            <RepoMeshHermesMcpConfig meshId={selectedMesh.id} availableCliAgents={availableCliAgents} />
+                        )}
+                        {/* ── Integrations: Cloud MCP hint ── */}
+                        {features.meshHostDaemonSection && (
+                            <AlertBanner variant="info" className="mt-4">
+                                <strong>MCP Mode:</strong>{' '}
+                                <code className="bg-bg-secondary px-1 rounded text-xs">adhdev mcp --repo-mesh {selectedMesh.id}</code>
+                                {' · The mesh MCP server can be used directly from your CLI agent.'}
+                            </AlertBanner>
+                        )}
+                    </>
+                ) },
+                { key: 'advanced', label: t('repoMesh.detail.tabAdvanced'), content: advancedTabContent },
+            ]
 
-            {/* ── Integrations: Cloud MCP hint ── */}
-            {features.meshHostDaemonSection && (
-                <AlertBanner variant="info" className="mt-4">
-                    <strong>MCP Mode:</strong>{' '}
-                    <code className="bg-bg-secondary px-1 rounded text-xs">adhdev mcp --repo-mesh {selectedMesh.id}</code>
-                    {' · The mesh MCP server can be used directly from your CLI agent.'}
-                </AlertBanner>
-            )}
+            return (
+                <>
+                    <SettingsTabs tabs={tabs} ariaLabel={t('repoMesh.detail.tabsAriaLabel')} className="flex flex-col gap-4" />
 
-            {/* ── Observability dialog (launched from the Observability section) ── */}
-            {graphDialogOpen && canLaunchGraphDialog && (
-                <DashboardMeshGraphDialog
-                    activeConv={buildMeshGraphLaunchConversation({ meshId: selectedMesh.id, daemonId: activeDaemonId, meshName: selectedMesh.name })}
-                    sendDaemonCommand={sendCommand}
-                    onClose={() => setGraphDialogOpen(false)}
-                />
-            )}
+                    {/* ── Observability dialog (launched from the Observability section) ── */}
+                    {graphDialogOpen && canLaunchGraphDialog && (
+                        <DashboardMeshGraphDialog
+                            activeConv={buildMeshGraphLaunchConversation({ meshId: selectedMesh.id, daemonId: activeDaemonId, meshName: selectedMesh.name })}
+                            sendDaemonCommand={sendCommand}
+                            onClose={() => setGraphDialogOpen(false)}
+                        />
+                    )}
+                </>
+            )
+            })()}
         </AppPage>
     )
 }
