@@ -1176,6 +1176,50 @@ export class SpecCliAdapter implements CliAdapter {
         return screenText;
     }
 
+    /**
+     * Is `reread` a re-render of the SAME picker page as `landed`?
+     *
+     * Guards the return-pass screenText swap in captureClaudeTuiPrompt, which
+     * replaces a page's entire raw screen and therefore must never be handed a
+     * frame belonging to a different question.
+     *
+     * WHAT WE COMPARE — the question line, via the same parser the capture
+     * itself uses (readFocusedClaudeTuiQuestion). Rationale:
+     *  - The question text is the one field that is per-page, always rendered
+     *    (it is the parse anchor — a page without it yields no question at all),
+     *    and stable across the redraw we are waiting on. The redraw races the
+     *    option-row GLYPH COLUMN, not the question line.
+     *  - The header is NOT usable on its own: on the headered variant every page
+     *    renders the identical nav line, and `page.header` is assigned by index
+     *    from that shared line rather than read from the page body — so it is
+     *    equal across pages by construction and would accept any frame.
+     *  - The option-label set is rejected as the primary key: it is drawn in the
+     *    very region that is mid-redraw, and rows can be clipped or scrolled out
+     *    of the captured frame (the same truncation that forced the headerless
+     *    parser to stop requiring the freeform escape hatch). Comparing it would
+     *    reject legitimate repairs — exactly the frames this pass exists to fix.
+     *
+     * STRICTNESS — deliberately asymmetric, because the two error directions are
+     * not equally costly. Wrongly ALLOWING a swap corrupts a question into a
+     * duplicate of another (the reported user-visible defect). Wrongly BLOCKING
+     * one merely leaves the forward-pass capture in place — at worst a
+     * multi-select page stays flagged single-select, which the live status-tick
+     * upgrade (maybeUpgradeClaudeTuiMultiSelect) then repairs anyway. So this
+     * blocks only on POSITIVE EVIDENCE of a different page: if either side fails
+     * to parse we return true and defer to the pre-existing glyph gate, keeping
+     * behaviour identical to before for every frame whose identity we cannot
+     * read. Comparison is whitespace-normalised so a reflow or trailing-pad
+     * difference does not read as a different question.
+     */
+    private claudeTuiPagesLookLikeSameQuestion(landed: ClaudeInteractiveTuiPage, reread: string): boolean {
+        const landedQuestion = readFocusedClaudeTuiQuestion(landed.screenText);
+        const rereadQuestion = readFocusedClaudeTuiQuestion(reread);
+        // Unparseable on either side → no evidence of a mismatch; fail open.
+        if (!landedQuestion || !rereadQuestion) return true;
+        const normalize = (text: string): string => text.replace(/\s+/g, ' ').trim();
+        return normalize(landedQuestion.question) === normalize(rereadQuestion.question);
+    }
+
     private async captureClaudeTuiPrompt(firstScreen: string, headers: string[]): Promise<void> {
         const pages: ClaudeInteractiveTuiPage[] = [{ screenText: firstScreen, header: headers[0] }];
         // Forward pass: Tab to each page 2..N and snapshot once its glyph column
@@ -1197,7 +1241,18 @@ export class SpecCliAdapter implements CliAdapter {
             const landed = pages[index - 1];
             if (landed
                 && !detectClaudeTuiMultiSelect(landed.screenText)
-                && detectClaudeTuiMultiSelect(reread)) {
+                && detectClaudeTuiMultiSelect(reread)
+                // PAGE IDENTITY GUARD: the swap below replaces this page's WHOLE
+                // raw screen, so it is only sound if `reread` is the same page we
+                // captured going forward. The glyph signal alone cannot tell us
+                // that: if the Shift-Tab keypress was swallowed (or the picker had
+                // not moved yet when the frame settled) the re-read is still the
+                // NEXT page, and we would overwrite this question with that one's
+                // text + options + checkboxes. Because `header` is carried
+                // separately (by nav-line index) it stays correct, producing the
+                // observed symptom — question N-1 rendered with its own header but
+                // question N's title, body and checkboxes.
+                && this.claudeTuiPagesLookLikeSameQuestion(landed, reread)) {
                 landed.screenText = reread;
             }
         }
