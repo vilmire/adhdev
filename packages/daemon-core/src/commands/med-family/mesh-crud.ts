@@ -567,19 +567,40 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
     },
 
     // ─── MAGI kind → panel bindings (MAGI-KIND-PANEL, machine-local config) ───
-    // Per-task_kind slot lists in ~/.adhdev/meshes.json `magiKindPanels` — the SOLE
-    // MAGI panel-resolution surface (the former named-panel magi_panel_* handlers were
-    // removed). Owner-only gating: intentionally NOT listed in
+    // Per-task_kind slot lists stored PER MESH in ~/.adhdev/meshes.json
+    // (`meshes[].magiKindPanels`) — the SOLE MAGI panel-resolution surface (the former
+    // named-panel magi_panel_* handlers were removed). `meshId` is optional on all three
+    // so existing callers keep working: it resolves to the sole mesh on a single-mesh
+    // machine, and is REQUIRED (loud error, never a silent pick) when several meshes
+    // exist. Owner-only gating: intentionally NOT listed in
     // canPeerUsePrivilegedShareCommand (daemon-cloud data-channel-router), so a peer
     // holding ANY share permission hits its `default → false` branch — identical
     // owner-only gating to create_mesh / update_mesh / list_meshes. A trusted peer (no
     // permission = the owner) passes the top `!permission → true` guard. set/remove are
     // WRITE commands; list is read-only. normalizeMagiSlots (inside setMagiKindPanel)
-    // surfaces invalid_magi_kind_panel: … messages verbatim for the editor.
-    magi_kind_panel_list: async (_ctx: MedFamilyContext, _args: any) => {
+    // surfaces invalid_magi_kind_panel: … messages verbatim for the editor, including
+    // a nodeId that is not a member of the target mesh.
+    magi_kind_panel_list: async (_ctx: MedFamilyContext, args: any) => {
+        const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { listMagiKindPanels } = await import('../../config/mesh-config.js');
-            return { success: true, kindPanels: listMagiKindPanels() };
+            const { listMagiKindPanels, resolveMagiPanelMeshId } = await import('../../config/mesh-config.js');
+            // Report WHICH mesh the panels were read from. The old flat
+            // scope: 'machine_local' hid that these are per-mesh bindings and was the
+            // reason the scope read as global.
+            const meshId = requestedMeshId || resolveMagiPanelMeshId();
+            return {
+                success: true,
+                kindPanels: listMagiKindPanels(requestedMeshId || undefined),
+                scope: {
+                    kind: 'mesh',
+                    storage: 'machine_local',
+                    meshId: meshId ?? null,
+                    resolvedFrom: requestedMeshId ? 'explicit' : (meshId ? 'sole_mesh' : 'ambiguous'),
+                    ...(requestedMeshId || meshId ? {} : {
+                        note: 'Several meshes are configured and no meshId was given, so no panels could be read. Pass meshId.',
+                    }),
+                },
+            };
         } catch (e: any) {
             return { success: false, error: e.message };
         }
@@ -588,13 +609,16 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
     magi_kind_panel_set: async (_ctx: MedFamilyContext, args: any) => {
         const kind = typeof args?.kind === 'string' ? args.kind.trim() : '';
         if (!kind) return { success: false, error: 'invalid_magi_kind_panel: task_kind is required' };
+        const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { setMagiKindPanel } = await import('../../config/mesh-config.js');
+            const { setMagiKindPanel, resolveMagiPanelMeshId } = await import('../../config/mesh-config.js');
             // normalizeMagiTaskKindKey + normalizeMagiSlots (inside setMagiKindPanel)
-            // validate the kind and each slot (provider required; model/nodeId optional;
-            // replica counts clamped). Structured errors flow back as `error`.
-            const slots = setMagiKindPanel(kind, args?.slots);
-            return { success: true, kind, slots };
+            // validate the kind and each slot (provider required; model optional;
+            // replica counts clamped; nodeId must belong to the target mesh).
+            // Structured errors flow back as `error`.
+            const slots = setMagiKindPanel(kind, args?.slots, requestedMeshId || undefined);
+            const meshId = requestedMeshId || resolveMagiPanelMeshId();
+            return { success: true, kind, slots, meshId: meshId ?? null };
         } catch (e: any) {
             return { success: false, error: e.message };
         }
@@ -603,10 +627,12 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
     magi_kind_panel_remove: async (_ctx: MedFamilyContext, args: any) => {
         const kind = typeof args?.kind === 'string' ? args.kind.trim() : '';
         if (!kind) return { success: false, error: 'invalid_magi_kind_panel: task_kind is required' };
+        const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { removeMagiKindPanel } = await import('../../config/mesh-config.js');
-            const removed = removeMagiKindPanel(kind);
-            return { success: true, removed };
+            const { removeMagiKindPanel, resolveMagiPanelMeshId } = await import('../../config/mesh-config.js');
+            const removed = removeMagiKindPanel(kind, requestedMeshId || undefined);
+            const meshId = requestedMeshId || resolveMagiPanelMeshId();
+            return { success: true, removed, meshId: meshId ?? null };
         } catch (e: any) {
             return { success: false, error: e.message };
         }

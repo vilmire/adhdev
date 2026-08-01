@@ -283,7 +283,10 @@ export function runMeshInit(
     const bootstrapLoaded = loadMeshWorktreeBootstrapConfig(mesh, workspace);
     let magiKindPanels: MagiKindPanelMap = {};
     try {
-        magiKindPanels = listMagiKindPanelsReadOnly();
+        // Scoped to the mesh being onboarded — panels live per mesh, so echoing the
+        // whole machine's bindings would show another mesh's node pins as if they
+        // were this one's.
+        magiKindPanels = listMagiKindPanelsReadOnly(typeof mesh?.id === 'string' ? mesh.id : undefined);
     } catch {
         // Machine-local config unreadable — echo an empty binding rather than failing init.
         magiKindPanels = {};

@@ -148,11 +148,13 @@ export interface CoordinatorPromptContext {
      */
     operatingNotes?: CoordinatorOperatingNote[];
     /**
-     * Machine-local MAGI kind-panel bindings (`~/.adhdev/meshes.json`
-     * `magiKindPanels`), read live at launch. Omitted / empty / all-empty →
-     * no "## Configured MAGI panels" section, so a mesh with no MAGI configured
-     * renders identically to before. Threaded in the same systematic way as the
-     * brain presets: read machine-local config at launch, render a pure section.
+     * THIS mesh's MAGI kind-panel bindings (`~/.adhdev/meshes.json` →
+     * `meshes[].magiKindPanels`), read live at launch and scoped by meshId — a
+     * coordinator must never be shown another mesh's panels, whose slots name that
+     * mesh's nodes. Omitted / empty / all-empty → no "## Configured MAGI panels"
+     * section, so a mesh with no MAGI configured renders identically to before.
+     * Threaded in the same systematic way as the brain presets: read machine-local
+     * config at launch, render a pure section.
      */
     magiKindPanels?: MagiKindPanelMap;
 }

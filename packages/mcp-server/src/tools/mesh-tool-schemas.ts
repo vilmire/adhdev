@@ -911,7 +911,7 @@ export const MESH_MAGI_COLLECT_TOOL = {
 
 export const MESH_MAGI_KIND_PANEL_SET_TOOL = {
     name: 'mesh_magi_kind_panel_set',
-    description: 'Bind a task_kind to its MAGI kind-panel slot list (machine-local ~/.adhdev/meshes.json `magiKindPanels`). This binding is what a `mesh_magi_review({ task_kind })` resolves to — it is the SOLE panel-resolution path (there is no named-panel or inline-members alternative). IMPORTANT — WHOLESALE REPLACEMENT: a task_kind has exactly one binding, so the `slots` you pass become the COMPLETE new slot set and any prior slots for that kind are dropped (not merged). Because it silently replaces the current binding, get EXPLICIT user approval before writing and present the current-vs-new slot lists (the dry-run returns `currentSlots`). Defaults to dry-run (write=false). Machine-local scope (NOT a repo-committed file).',
+    description: 'Bind a task_kind to its MAGI kind-panel slot list for THIS mesh (machine-local ~/.adhdev/meshes.json → `meshes[].magiKindPanels`). This binding is what a `mesh_magi_review({ task_kind })` resolves to — it is the SOLE panel-resolution path (there is no named-panel or inline-members alternative). SCOPE: PER MESH, stored machine-locally (NOT a repo-committed file). The write targets the calling coordinator\'s mesh only; another mesh on the same machine keeps its own independent binding for the same task_kind. IMPORTANT — WHOLESALE REPLACEMENT: a task_kind has exactly one binding per mesh, so the `slots` you pass become the COMPLETE new slot set and any prior slots for that kind are dropped (not merged). Because it silently replaces the current binding, get EXPLICIT user approval before writing and present the current-vs-new slot lists (the dry-run returns `currentSlots`). Defaults to dry-run (write=false). A slot\'s `nodeId`, when given, MUST name a node of this mesh — a foreign or unknown node id is rejected (invalid_magi_kind_panel).',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -923,7 +923,7 @@ export const MESH_MAGI_KIND_PANEL_SET_TOOL = {
                     type: 'object',
                     properties: {
                         provider: { type: 'string', description: 'REQUIRED — provider type, e.g. claude-cli / codex-cli / gemini-cli / hermes-cli.' },
-                        nodeId: { type: 'string', description: 'Optional — pin to a specific mesh node id.' },
+                        nodeId: { type: 'string', description: 'Optional — pin to a specific node OF THIS MESH (validated against the mesh node list; a node id from another mesh is rejected). Omit to let the fan-out pick any node offering the provider.' },
                         model: { type: 'string', description: 'Optional — pin a specific model for this slot.' },
                         capabilityTags: { type: 'array', items: { type: 'string' }, description: 'Optional routing tags (ANDed with the provider tag) when nodeId is absent.' },
                         n: { type: 'number', description: 'Optional per-slot replica count (default 1).' },
@@ -939,7 +939,7 @@ export const MESH_MAGI_KIND_PANEL_SET_TOOL = {
 
 export const MESH_MAGI_KIND_PANEL_LIST_TOOL = {
     name: 'mesh_magi_kind_panel_list',
-    description: 'List the configured MAGI kind→panel slot bindings (machine-local). Read-only. Use to confirm what a `task_kind` resolves to before mesh_magi_review, and to diff current-vs-new before an overwrite via mesh_magi_kind_panel_set.',
+    description: 'List the MAGI kind→panel slot bindings configured for THIS mesh (machine-local, per mesh). Read-only. The response `scope` names the mesh the bindings belong to — panels are per mesh, so another mesh on this machine has its own independent set. Use to confirm what a `task_kind` resolves to before mesh_magi_review, and to diff current-vs-new before an overwrite via mesh_magi_kind_panel_set.',
     inputSchema: {
         type: 'object' as const,
         properties: {

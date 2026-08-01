@@ -55,8 +55,11 @@ export interface MagiSlot {
 }
 
 /**
- * Per-task_kind panel binding, stored machine-local in `~/.adhdev/meshes.json`
- * under the top-level `magiKindPanels` map. A kind absent from the map has NO
+ * Per-task_kind panel binding for ONE mesh, stored machine-local in
+ * `~/.adhdev/meshes.json` under that mesh's entry (`meshes[].magiKindPanels`). The
+ * scope is per mesh: two meshes on the same machine hold independent bindings for
+ * the same task_kind. (It formerly sat at the config root keyed by task_kind alone,
+ * which let one mesh's write clobber another's.) A kind absent from the map has NO
  * configured panel → `mesh_magi_review({task_kind})` errors with
  * `magi_kind_not_configured` rather than synthesizing one. `freeform` MAY be bound
  * like any other kind (a direct kind→slots binding).

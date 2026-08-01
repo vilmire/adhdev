@@ -83,7 +83,58 @@ function migrateLoadedMeshConfig(config: LocalMeshConfig): boolean {
             if (migrateProviderRolesToSlots(node?.policy)) changed = true;
         }
     }
+    if (foldLegacyTopLevelMagiKindPanels(config)) changed = true;
     return changed;
+}
+
+/**
+ * MAGI-KIND-PANEL scope migration: fold a legacy config-root `magiKindPanels`
+ * map into its owning mesh entry, in place, then delete the root key.
+ *
+ * The root map was keyed by task_kind ALONE, so on a machine with two meshes a
+ * write in one mesh silently overwrote the other's binding for the same kind and
+ * the survivor pointed at foreign node IDs. Panels are now stored per mesh
+ * (`meshes[].magiKindPanels`), which is what the docs already described.
+ *
+ * Fold rules:
+ *   - exactly one mesh → adopt the map (a mesh-scoped binding already present
+ *     wins; the legacy map only fills kinds the mesh has not bound itself)
+ *   - several meshes  → DROP it and log. There is no field recording which mesh
+ *     wrote it, and guessing would re-create the very cross-mesh mis-binding
+ *     this migration removes. The ambiguity is itself the evidence the global
+ *     key was wrong.
+ *   - no meshes       → drop (nothing could own it)
+ *
+ * The root key is removed in every branch: keeping a dual read path alive would
+ * preserve the cross-mesh overwrite it exists to eliminate.
+ *
+ * Returns true when the config was mutated (caller may persist eagerly).
+ */
+function foldLegacyTopLevelMagiKindPanels(config: LocalMeshConfig): boolean {
+    const legacy = (config as { magiKindPanels?: MagiKindPanelMap }).magiKindPanels;
+    if (!legacy || typeof legacy !== 'object' || Array.isArray(legacy)) {
+        // Strip a structurally invalid root key too, so it cannot linger.
+        if ('magiKindPanels' in config) {
+            delete (config as { magiKindPanels?: MagiKindPanelMap }).magiKindPanels;
+            return true;
+        }
+        return false;
+    }
+    delete (config as { magiKindPanels?: MagiKindPanelMap }).magiKindPanels;
+
+    const kinds = Object.keys(legacy);
+    if (config.meshes.length === 1 && kinds.length > 0) {
+        const mesh = config.meshes[0];
+        const merged: MagiKindPanelMap = { ...legacy, ...(mesh.magiKindPanels ?? {}) };
+        mesh.magiKindPanels = merged;
+    } else if (kinds.length > 0) {
+        console.warn(
+            `[mesh-config] Dropped legacy top-level magiKindPanels (kinds: ${kinds.join(', ')}) — `
+            + `${config.meshes.length} meshes are configured, so the owning mesh cannot be determined. `
+            + `Re-bind the panels per mesh with mesh_magi_kind_panel_set({ meshId, task_kind, slots }).`,
+        );
+    }
+    return true;
 }
 
 /**
@@ -639,6 +690,9 @@ export function removeNode(meshId: string, nodeId: string): boolean {
     if (idx === -1) return false;
 
     mesh.nodes.splice(idx, 1);
+    // Panels are mesh-scoped, so a departing node's slots are now prunable — leaving
+    // them would keep a binding pointing at a node the mesh no longer has.
+    pruneMagiKindPanelsForRemovedNode(mesh, nodeId);
     mesh.updatedAt = new Date().toISOString();
     saveMeshConfig(config);
     return true;
@@ -751,10 +805,17 @@ function normalizeReplicaCount(value: unknown): number | undefined {
 
 // ─── MAGI kind → panel bindings (MAGI-KIND-PANEL) ─────────
 //
-// Per-task_kind slot lists (machine-local, meshes.json `magiKindPanels`). A bare
-// `mesh_magi_review({task_kind})` resolves its panel exclusively from here — an
-// unconfigured kind is a hard error, never a synthesized fallback. Mirrors the named
-// panel accessors above (normalize / list / get / set / remove).
+// Per-task_kind slot lists, scoped PER MESH (meshes.json → `meshes[].magiKindPanels`,
+// machine-local storage). A bare `mesh_magi_review({task_kind})` resolves its panel
+// exclusively from the calling coordinator's mesh — an unconfigured kind is a hard
+// error, never a synthesized fallback. Mirrors the named panel accessors above
+// (normalize / list / get / set / remove).
+//
+// Every accessor takes an OPTIONAL trailing `meshId`: omitted, it resolves to the sole
+// mesh (see resolveMagiPanelMeshId), which keeps every pre-scope call site working on
+// the single-mesh machines that are the norm. With several meshes there is no safe
+// default — reads come back empty and writes throw — because guessing is exactly what
+// the old config-root map did, silently overwriting another mesh's binding.
 
 /** The task kinds a kind-panel can be bound to. Unlike a named panel's defaultKind,
  * 'freeform' IS a valid kind-panel key (this is a direct kind→slots binding). */
@@ -774,8 +835,15 @@ function normalizeMagiTaskKindKey(raw: unknown): MagiTaskKind {
  * required per slot, trims strings, drops empties, clamps replica counts, and carries
  * an optional per-slot `model`. Throws on structurally invalid input (empty list / no
  * provider) so the write returns a clear error. Returns the normalized slot array.
+ *
+ * `knownNodeIds`, when supplied, additionally rejects a slot pinned to a node that is
+ * not a member of the owning mesh. Panels are mesh-scoped, so at write time there IS a
+ * node list to check against — before the scope fix a `nodeId` was an opaque string
+ * that could (and did) name another mesh's node. Omit it on read-back paths, where a
+ * stored slot must stay readable even if its node was removed out from under it.
  */
-export function normalizeMagiSlots(slots: unknown): MagiSlot[] {
+export function normalizeMagiSlots(slots: unknown, knownNodeIds?: Iterable<string>): MagiSlot[] {
+    const allowed = knownNodeIds ? new Set(knownNodeIds) : undefined;
     if (!Array.isArray(slots) || slots.length === 0) {
         throw new Error('invalid_magi_kind_panel: slots must be a non-empty array');
     }
@@ -792,6 +860,13 @@ export function normalizeMagiSlots(slots: unknown): MagiSlot[] {
             throw new Error(`invalid_magi_kind_panel: slot[${idx}].provider is required`);
         }
         const nodeId = typeof s.nodeId === 'string' && s.nodeId.trim() ? s.nodeId.trim() : undefined;
+        if (nodeId && allowed && !allowed.has(nodeId)) {
+            throw new Error(
+                `invalid_magi_kind_panel: slot[${idx}].nodeId '${nodeId}' is not a node of this mesh `
+                + `(known: ${[...allowed].join(', ') || '(none)'}). Pin a node from this mesh, or omit `
+                + `nodeId to let the fan-out pick any node offering the provider.`,
+            );
+        }
         const model = typeof s.model === 'string' && s.model.trim() ? s.model.trim() : undefined;
         const capabilityTags = normalizeCapabilityTags(s.capabilityTags);
         const n = normalizeReplicaCount(s.n);
@@ -805,48 +880,122 @@ export function normalizeMagiSlots(slots: unknown): MagiSlot[] {
     });
 }
 
-/** All configured kind-panels (machine-local), keyed by task_kind. Empty when none. */
-export function listMagiKindPanels(): MagiKindPanelMap {
-    return loadMeshConfig().magiKindPanels ?? {};
+/**
+ * Resolve which mesh a panel operation applies to when the caller did not name one.
+ *
+ * Panels are per mesh, but every existing call site predates that and passes no
+ * meshId. On the overwhelmingly common single-mesh machine the answer is
+ * unambiguous, so those callers keep working untouched. With several meshes there
+ * is no safe default — returning undefined makes the read empty and the write a
+ * loud `magi_kind_panel_mesh_ambiguous` error, rather than silently picking a mesh
+ * and re-creating the cross-mesh overwrite this scoping fixes.
+ *
+ * Pass `config` to resolve against an already-loaded config (avoids a second read).
+ */
+export function resolveMagiPanelMeshId(config?: LocalMeshConfig): string | undefined {
+    const meshes = (config ?? loadMeshConfig({ persistMigrations: false })).meshes;
+    return meshes.length === 1 ? meshes[0].id : undefined;
 }
 
-/** Read-only counterpart used by dry-run onboarding; never persists migrations. */
-export function listMagiKindPanelsReadOnly(): MagiKindPanelMap {
-    return loadMeshConfig({ persistMigrations: false }).magiKindPanels ?? {};
-}
-
-/** The slot list for one task_kind, or undefined when the kind is not configured. */
-export function getMagiKindPanel(kind: string): MagiSlot[] | undefined {
-    let key: MagiTaskKind;
-    try { key = normalizeMagiTaskKindKey(kind); } catch { return undefined; }
-    return loadMeshConfig().magiKindPanels?.[key];
+/** Locate a mesh entry by id, or the sole mesh when no id was given. */
+function resolveMagiPanelMesh(config: LocalMeshConfig, meshId?: string): LocalMeshEntry | undefined {
+    const id = meshId?.trim() || resolveMagiPanelMeshId(config);
+    if (!id) return undefined;
+    return config.meshes.find(m => m.id === id);
 }
 
 /**
- * Upsert the slot list for one task_kind. Unlike named panels this ALWAYS overwrites
- * (a kind has exactly one binding) — the editor pushes the full desired slot set.
+ * All kind-panels configured for one mesh, keyed by task_kind. Empty when the mesh
+ * has none, is unknown, or when no meshId was given and the machine hosts several
+ * meshes (ambiguous — see resolveMagiPanelMeshId).
+ */
+export function listMagiKindPanels(meshId?: string): MagiKindPanelMap {
+    const config = loadMeshConfig();
+    return resolveMagiPanelMesh(config, meshId)?.magiKindPanels ?? {};
+}
+
+/** Read-only counterpart used by dry-run onboarding; never persists migrations. */
+export function listMagiKindPanelsReadOnly(meshId?: string): MagiKindPanelMap {
+    const config = loadMeshConfig({ persistMigrations: false });
+    return resolveMagiPanelMesh(config, meshId)?.magiKindPanels ?? {};
+}
+
+/** The slot list for one task_kind in one mesh, or undefined when not configured. */
+export function getMagiKindPanel(kind: string, meshId?: string): MagiSlot[] | undefined {
+    let key: MagiTaskKind;
+    try { key = normalizeMagiTaskKindKey(kind); } catch { return undefined; }
+    const config = loadMeshConfig();
+    return resolveMagiPanelMesh(config, meshId)?.magiKindPanels?.[key];
+}
+
+/**
+ * Upsert the slot list for one task_kind WITHIN one mesh. Unlike named panels this
+ * ALWAYS overwrites (a kind has exactly one binding per mesh) — the editor pushes the
+ * full desired slot set. Each slot's optional `nodeId` is validated against that mesh's
+ * node list, so a slot can no longer point at a node the mesh does not have.
  * Returns the normalized, persisted slots.
  */
-export function setMagiKindPanel(kind: string, slots: unknown): MagiSlot[] {
+export function setMagiKindPanel(kind: string, slots: unknown, meshId?: string): MagiSlot[] {
     const key = normalizeMagiTaskKindKey(kind);
-    const normalized = normalizeMagiSlots(slots);
     const stored = loadMeshConfig();
-    const map = stored.magiKindPanels ?? {};
+    const mesh = resolveMagiPanelMesh(stored, meshId);
+    if (!mesh) {
+        throw new Error(
+            meshId?.trim()
+                ? `invalid_magi_kind_panel: mesh '${meshId.trim()}' not found`
+                : `magi_kind_panel_mesh_ambiguous: this machine hosts ${stored.meshes.length} meshes, `
+                  + `so a MAGI kind-panel write must name its mesh explicitly (meshId). Panels are per mesh.`,
+        );
+    }
+    const normalized = normalizeMagiSlots(slots, mesh.nodes.map(n => n.id));
+    const map = mesh.magiKindPanels ?? {};
     map[key] = normalized;
-    stored.magiKindPanels = map;
+    mesh.magiKindPanels = map;
+    mesh.updatedAt = new Date().toISOString();
     saveMeshConfig(stored);
     return normalized;
 }
 
-/** Remove the binding for one task_kind. Returns true when a binding was removed. */
-export function removeMagiKindPanel(kind: string): boolean {
+/** Remove one task_kind's binding from one mesh. True when a binding was removed. */
+export function removeMagiKindPanel(kind: string, meshId?: string): boolean {
     let key: MagiTaskKind;
     try { key = normalizeMagiTaskKindKey(kind); } catch { return false; }
     const stored = loadMeshConfig();
-    if (!stored.magiKindPanels || !stored.magiKindPanels[key]) return false;
-    delete stored.magiKindPanels[key];
+    const mesh = resolveMagiPanelMesh(stored, meshId);
+    if (!mesh?.magiKindPanels?.[key]) return false;
+    delete mesh.magiKindPanels[key];
+    if (Object.keys(mesh.magiKindPanels).length === 0) delete mesh.magiKindPanels;
+    mesh.updatedAt = new Date().toISOString();
     saveMeshConfig(stored);
     return true;
+}
+
+/**
+ * Drop every kind-panel slot pinned to `nodeId`, in place, and remove any kind left
+ * with no slots. Called when a node leaves the mesh so a binding cannot keep naming a
+ * node that no longer exists — the dangling-reference cleanup that only became
+ * possible once panels were mesh-scoped and had a node list to be checked against.
+ *
+ * An emptied kind is deleted rather than stored as `[]`: an empty slot list is not a
+ * legal binding, and mesh_magi_review reports the kind unconfigured (a clear
+ * "configure this" error) instead of a silently under-quorum panel.
+ *
+ * Returns true when anything was pruned (caller persists).
+ */
+function pruneMagiKindPanelsForRemovedNode(mesh: LocalMeshEntry, nodeId: string): boolean {
+    const panels = mesh.magiKindPanels;
+    if (!panels) return false;
+    let changed = false;
+    for (const [kind, slots] of Object.entries(panels) as Array<[MagiTaskKind, MagiSlot[] | undefined]>) {
+        if (!Array.isArray(slots)) continue;
+        const kept = slots.filter(slot => slot.nodeId !== nodeId);
+        if (kept.length === slots.length) continue;
+        changed = true;
+        if (kept.length === 0) delete panels[kind];
+        else panels[kind] = kept;
+    }
+    if (changed && Object.keys(panels).length === 0) delete mesh.magiKindPanels;
+    return changed;
 }
 
 // ─── Brain routing: per-difficulty brain presets (machine-local) ───

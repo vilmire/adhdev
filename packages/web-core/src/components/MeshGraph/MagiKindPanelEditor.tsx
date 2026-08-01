@@ -2,7 +2,10 @@
  * MAGI kind → panel binding editor — CRUD UI for the per-task_kind panel bindings.
  *
  * Each MAGI `task_kind` (rca / design / claim_audit / freeform) can be bound to a
- * list of slots, where each slot = (machine nodeId + provider [+ model]). A bare
+ * list of slots, where each slot = (machine nodeId + provider [+ model]). Bindings
+ * are PER MESH (stored machine-locally under that mesh's meshes.json entry), so
+ * every command carries the edited mesh's id — editing mesh A never touches mesh B's
+ * binding for the same kind. A bare
  * `mesh_magi_review({task_kind})` resolves the panel from THESE bindings — there is
  * NO hardcoded preset auto-synthesis fallback. An UNCONFIGURED kind is a hard error
  * (`magi_kind_not_configured`), never a silent synthetic panel, so every kind the
@@ -182,12 +185,18 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
 
     const unwrap = (raw: any) => (raw && typeof raw === 'object' && 'result' in raw ? raw.result : raw)
 
+    // Kind-panels are stored PER MESH, so every call names the mesh being edited.
+    // Without it the daemon falls back to "the sole mesh", which is only correct on a
+    // single-mesh machine — on a two-mesh machine an unscoped write used to clobber
+    // the other mesh's binding for the same kind.
+    const meshId = status?.meshId
+
     const loadKindPanels = useCallback(async () => {
         if (!daemonId || !sendDaemonCommand) return
         setLoading(true)
         setError(null)
         try {
-            const raw = await sendDaemonCommand(daemonId, 'magi_kind_panel_list', {})
+            const raw = await sendDaemonCommand(daemonId, 'magi_kind_panel_list', { ...(meshId ? { meshId } : {}) })
             const result = unwrap(raw)
             if (result?.success === false) throw new Error(result.error || t('meshGraph.magiKind.errorLoad'))
             setKindPanels((result?.kindPanels && typeof result.kindPanels === 'object') ? result.kindPanels : {})
@@ -198,7 +207,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
         } finally {
             setLoading(false)
         }
-    }, [daemonId, sendDaemonCommand, t])
+    }, [daemonId, sendDaemonCommand, meshId, t])
 
     useEffect(() => { void loadKindPanels() }, [loadKindPanels])
 
@@ -241,7 +250,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
         setSavingKind(kind)
         setError(null)
         try {
-            const raw = await sendDaemonCommand(daemonId, 'magi_kind_panel_set', { kind, slots: built.slots })
+            const raw = await sendDaemonCommand(daemonId, 'magi_kind_panel_set', { kind, slots: built.slots, ...(meshId ? { meshId } : {}) })
             const result = unwrap(raw)
             if (result?.success === false) throw new Error(result.error || t('meshGraph.magiKind.errorSave'))
             await loadKindPanels()
@@ -250,7 +259,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
         } finally {
             setSavingKind(null)
         }
-    }, [daemonId, sendDaemonCommand, slotsForKind, loadKindPanels, t])
+    }, [daemonId, sendDaemonCommand, slotsForKind, loadKindPanels, meshId, t])
 
     const handleRemove = useCallback(async (kind: MagiTaskKind) => {
         if (!daemonId || !sendDaemonCommand) return
@@ -258,7 +267,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
         setSavingKind(kind)
         setError(null)
         try {
-            const raw = await sendDaemonCommand(daemonId, 'magi_kind_panel_remove', { kind })
+            const raw = await sendDaemonCommand(daemonId, 'magi_kind_panel_remove', { kind, ...(meshId ? { meshId } : {}) })
             const result = unwrap(raw)
             if (result?.success === false) throw new Error(result.error || t('meshGraph.magiKind.errorRemove'))
             await loadKindPanels()
@@ -267,9 +276,9 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
         } finally {
             setSavingKind(null)
         }
-    }, [daemonId, sendDaemonCommand, loadKindPanels, t])
+    }, [daemonId, sendDaemonCommand, loadKindPanels, meshId, t])
 
-    const inputClass = `w-full rounded-lg border px-2.5 py-1.5 text-xs ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40 text-slate-100 placeholder:text-slate-500' : 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400'}`
+    const inputClass =`w-full rounded-lg border px-2.5 py-1.5 text-xs ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40 text-slate-100 placeholder:text-slate-500' : 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400'}`
     // Use the app design-system buttons so MAGI matches the rest of the mesh UI
     // (the old ad-hoc bg-sky-500 primary was the lone off-theme blue button).
     const btnPrimary = 'btn btn-primary btn-sm'

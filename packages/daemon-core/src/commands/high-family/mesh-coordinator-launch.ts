@@ -154,16 +154,18 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         } catch { return undefined; }
                     };
 
-                    // MAGI panels: load the machine-local kind-panel bindings so the
+                    // MAGI panels: load THIS mesh's kind-panel bindings so the
                     // coordinator prompt auto-lists which cross-verification panels
                     // (rca / design / claim_audit / freeform) are configured. Same
                     // systematic pattern as the brain presets — read machine-local
-                    // config at launch. Best-effort: a read failure or empty map just
-                    // omits the "## Configured MAGI panels" section.
-                    const loadMagiKindPanelsBestEffort = async () => {
+                    // config at launch. Scoped by meshId: a coordinator for mesh A must
+                    // never be told about mesh B's panels (their slots name mesh B's
+                    // nodes). Best-effort: a read failure or empty map just omits the
+                    // "## Configured MAGI panels" section.
+                    const loadMagiKindPanelsBestEffort = async (forMeshId: string) => {
                         try {
                             const { listMagiKindPanels } = await import('../../config/mesh-config.js');
-                            return listMagiKindPanels();
+                            return listMagiKindPanels(forMeshId);
                         } catch { return undefined; }
                     };
 
@@ -293,7 +295,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         // Build coordinator prompt first — fail closed on errors.
                         let cliCmdSystemPrompt = '';
                         try {
-                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id), magiKindPanels: await loadMagiKindPanelsBestEffort() });
+                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id), magiKindPanels: await loadMagiKindPanelsBestEffort(meshId) });
                         } catch (error: any) {
                             const message = error?.message || String(error);
                             LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
@@ -531,7 +533,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // broken mesh state is visible instead of silently launching with weaker rules.
                     let systemPrompt = '';
                     try {
-                        systemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id), magiKindPanels: await loadMagiKindPanelsBestEffort() });
+                        systemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id), magiKindPanels: await loadMagiKindPanelsBestEffort(meshId) });
                     } catch (error: any) {
                         const message = error?.message || String(error);
                         LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);

@@ -1347,17 +1347,35 @@ function replicaCompletionIsWeak(meshId: string, taskId: string): boolean {
 // ─── Handlers ───────────────────────────────────
 
 /**
- * Set the MAGI kind→panel slot binding for one task_kind (machine-local
- * ~/.adhdev/meshes.json `magiKindPanels`). This is the MCP surface for the daemon
- * `magi_kind_panel_set` command, which was not exposed to the coordinator before.
+ * The scope descriptor every kind-panel response carries. Panels are stored PER MESH
+ * (machine-local `~/.adhdev/meshes.json` → `meshes[].magiKindPanels`), so a bare
+ * `scope: 'machine_local'` string — what these handlers used to return — understated
+ * it and read as one global binding per task_kind. Naming the resolved mesh makes the
+ * scope unambiguous at the call site.
+ */
+function magiPanelScope(meshId: string, meshName?: string) {
+    return {
+        kind: 'mesh' as const,
+        storage: 'machine_local' as const,
+        meshId,
+        ...(meshName ? { meshName } : {}),
+        note: 'Kind-panels are per mesh, stored machine-locally (not repo-committed). Another mesh on this machine has its own independent bindings.',
+    };
+}
+
+/**
+ * Set the MAGI kind→panel slot binding for one task_kind, scoped to THIS coordinator's
+ * mesh (machine-local `~/.adhdev/meshes.json` → `meshes[].magiKindPanels`). MCP surface
+ * for the daemon `magi_kind_panel_set` command.
  *
  * IMPORTANT — kind-slot write is a WHOLESALE REPLACEMENT of the slot list for that
- * kind (a task_kind has exactly one binding; setMagiKindPanel always overwrites). So
- * this is NOT an additive upsert — the passed `slots` become the complete new set and
- * any prior slots for the kind are dropped. It therefore requires explicit user
- * approval before a write (present the current-vs-new slot lists first). Mirrors the
- * mesh_magi_panel_set write/dry-run precedent: defaults to dry-run (write=false).
- * Machine-local config — labeled distinct from the repo-committed .adhdev/* files.
+ * kind (a task_kind has exactly one binding per mesh; setMagiKindPanel always
+ * overwrites). So this is NOT an additive upsert — the passed `slots` become the
+ * complete new set and any prior slots for the kind are dropped. It therefore requires
+ * explicit user approval before a write (present the current-vs-new slot lists first).
+ * Mirrors the mesh_magi_panel_set write/dry-run precedent: defaults to dry-run
+ * (write=false). A slot's optional `nodeId` must name a node of this mesh — a foreign
+ * node id is rejected rather than silently stored.
  */
 export async function meshMagiKindPanelSet(
     ctx: MeshContext,
@@ -1366,31 +1384,34 @@ export async function meshMagiKindPanelSet(
     const kind = readString(args.task_kind) || readString(args.kind);
     if (!kind) return JSON.stringify({ success: false, error: 'task_kind required' });
     const write = args.write === true;
+    const meshId = ctx.mesh.id;
+    const scope = magiPanelScope(meshId, ctx.mesh.name);
     try {
         // The current binding for this kind, so the coordinator can diff current-vs-new
         // before an overwrite (the write drops any slot not in the new list).
-        const current: MagiSlot[] = getMagiKindPanel(kind) ?? [];
+        const current: MagiSlot[] = getMagiKindPanel(kind, meshId) ?? [];
         if (!write) {
-            // Dry-run: normalize + validate WITHOUT persisting (same normalizer as the
-            // persisted write path, so preview and write agree on validation).
-            const preview = normalizeMagiSlots(args.slots);
+            // Dry-run: normalize + validate WITHOUT persisting (same normalizer AND the
+            // same mesh node list as the persisted write path, so a preview that passes
+            // cannot fail at write time on an unknown nodeId).
+            const preview = normalizeMagiSlots(args.slots, ctx.mesh.nodes.map(n => n.id));
             return JSON.stringify({
                 success: true,
                 dryRun: true,
                 taskKind: kind,
-                scope: 'machine_local',
+                scope,
                 replacement: true,
                 currentSlots: current,
                 slots: preview,
-                note: 'Dry-run only — no file written. This is a WHOLESALE replacement of the kind\'s slot list (machine-local ~/.adhdev/meshes.json); the currentSlots would be fully replaced. Re-run with write=true after explicit user approval.',
+                note: `Dry-run only — no file written. This is a WHOLESALE replacement of the kind's slot list for mesh '${meshId}' (machine-local ~/.adhdev/meshes.json); the currentSlots would be fully replaced. Other meshes on this machine are unaffected. Re-run with write=true after explicit user approval.`,
             }, null, 2);
         }
-        const slots = setMagiKindPanel(kind, args.slots);
+        const slots = setMagiKindPanel(kind, args.slots, meshId);
         return JSON.stringify({
             success: true,
             written: true,
             taskKind: kind,
-            scope: 'machine_local',
+            scope,
             replacement: true,
             previousSlots: current,
             slots,
@@ -1399,34 +1420,38 @@ export async function meshMagiKindPanelSet(
     } catch (e: any) {
         const message = e?.message || String(e);
         const code = message.includes('invalid_magi_kind_panel') ? 'invalid_magi_kind_panel' : undefined;
-        return JSON.stringify({ success: false, ...(code ? { code } : {}), error: message });
+        return JSON.stringify({ success: false, ...(code ? { code } : {}), scope, error: message });
     }
 }
 
 /**
- * List the configured MAGI kind→panel slot bindings (machine-local). Read-only —
- * the sibling of mesh_magi_panel_list for kind-slot bindings. Use to confirm what a
- * `task_kind` resolves to before mesh_magi_review, and to diff before an overwrite.
+ * List the kind→panel slot bindings configured for THIS coordinator's mesh. Read-only.
+ * Use to confirm what a `task_kind` resolves to before mesh_magi_review, and to diff
+ * before an overwrite. The response names the mesh the bindings belong to — panels are
+ * per mesh, so "configured" is only ever meaningful relative to one.
  */
 export async function meshMagiKindPanelList(
     ctx: MeshContext,
     args: { task_kind?: string; kind?: string } = {},
 ): Promise<string> {
     const only = readString(args.task_kind) || readString(args.kind);
-    const all = listMagiKindPanels();
+    const meshId = ctx.mesh.id;
+    const scope = magiPanelScope(meshId, ctx.mesh.name);
+    const all = listMagiKindPanels(meshId);
     if (only) {
-        const slots = getMagiKindPanel(only);
+        const slots = getMagiKindPanel(only, meshId);
         if (slots === undefined) {
             return JSON.stringify({
                 success: false,
                 code: 'magi_kind_not_configured',
-                error: `task_kind '${only}' has no configured kind-panel binding`,
+                error: `task_kind '${only}' has no configured kind-panel binding in mesh '${meshId}'`,
+                scope,
                 configuredKinds: Object.keys(all),
             }, null, 2);
         }
-        return JSON.stringify({ success: true, scope: 'machine_local', taskKind: only, slots }, null, 2);
+        return JSON.stringify({ success: true, scope, taskKind: only, slots }, null, 2);
     }
-    return JSON.stringify({ success: true, scope: 'machine_local', kindPanels: all, configuredKinds: Object.keys(all) }, null, 2);
+    return JSON.stringify({ success: true, scope, kindPanels: all, configuredKinds: Object.keys(all) }, null, 2);
 }
 
 
@@ -1497,19 +1522,24 @@ export async function meshMagiReview(
     // task_kind itself (validated above); there is no panel-level defaultKind to fill in.
     const taskKind = normalizeMagiTaskKind(explicitTaskKind);
     const panelName = `(kind:${taskKind})`;
-    const slots = getMagiKindPanel(taskKind);
+    // Panels are per mesh — resolve against THIS coordinator's mesh so a binding never
+    // leaks in from another mesh on the same machine (whose slots name its own nodes).
+    const slots = getMagiKindPanel(taskKind, ctx.mesh.id);
     if (!slots || slots.length === 0) {
         return JSON.stringify({
             success: false,
             code: 'magi_kind_not_configured',
-            error: `No panel slots are configured for this task_kind in mesh settings. Add at least one (machine + provider + model) slot in settings — task_kind '${taskKind}' has no configured kind-panel.`,
+            error: `No panel slots are configured for this task_kind in mesh '${ctx.mesh.id}' settings. Add at least one (machine + provider + model) slot in settings — task_kind '${taskKind}' has no configured kind-panel.`,
             taskKind,
-            configuredKinds: Object.keys(listMagiKindPanels()),
+            meshId: ctx.mesh.id,
+            configuredKinds: Object.keys(listMagiKindPanels(ctx.mesh.id)),
             hint: 'Configure this kind in mesh settings (MagiKindPanelEditor), or set it with mesh_magi_kind_panel_set, then retry.',
         }, null, 2);
     }
     // Slots are already normalized at write time (setMagiKindPanel → normalizeMagiSlots),
     // but re-normalize here so a bad stored slot surfaces a clear error before dispatch.
+    // Deliberately WITHOUT the mesh node list: a slot whose node has since left the mesh
+    // must not hard-fail the whole review — it is skipped below with a reason instead.
     let planSlots: MagiSlot[];
     try {
         planSlots = normalizeMagiSlots(slots);
@@ -1519,8 +1549,31 @@ export async function meshMagiReview(
             code: 'invalid_magi_kind_panel',
             error: `configured kind-panel for '${taskKind}' is invalid: ${e?.message || String(e)}`,
             taskKind,
+            meshId: ctx.mesh.id,
             hint: 'Re-save the kind-panel slots in mesh settings — each slot needs a provider; nodeId / model are optional.',
         }, null, 2);
+    }
+
+    // Drop slots pinned to a node this mesh no longer has (removed between the write
+    // and now, or carried over from a legacy global binding written by another mesh).
+    // Skipped WITH a reason rather than dispatched — a dangling pin would otherwise
+    // park a replica in 'pending' forever. The ≥2-target floor below is enforced AFTER
+    // this exclusion, so the panel still never silently degrades to N=1.
+    const meshNodeIds = new Set(ctx.mesh.nodes.map(n => n.id));
+    const danglingSlots = planSlots.filter(s => s.nodeId && !meshNodeIds.has(s.nodeId));
+    if (danglingSlots.length) {
+        planSlots = planSlots.filter(s => !s.nodeId || meshNodeIds.has(s.nodeId));
+        if (planSlots.length === 0) {
+            return JSON.stringify({
+                success: false,
+                code: 'magi_kind_panel_all_slots_dangling',
+                error: `Every slot in kind-panel '${panelName}' is pinned to a node that is not in mesh '${ctx.mesh.id}' (${danglingSlots.map(s => s.nodeId).join(', ')}).`,
+                taskKind,
+                meshId: ctx.mesh.id,
+                danglingSlots,
+                hint: 'Re-bind this kind to nodes of THIS mesh with mesh_magi_kind_panel_set (or in mesh settings). Check mesh_status for the current node list.',
+            }, null, 2);
+        }
     }
 
     // 2. Plan the fan-out. Git-stale slots (node HEAD differs from the coordinator's
@@ -1560,6 +1613,10 @@ export async function meshMagiReview(
             unavailableSlots: plan.unavailableSlots,
             ...(droppedByHealth ? { unhealthySlots: plan.unhealthySlots } : {}),
             ...(droppedByStale ? { staleSlots: plan.staleSlots } : {}),
+            // Surface slots dropped for naming a node outside this mesh, so an
+            // under-quorum panel caused by a stale pin is diagnosable rather than
+            // looking like a mis-sized panel.
+            ...(danglingSlots.length ? { danglingSlots } : {}),
             hint,
         }, null, 2);
     }

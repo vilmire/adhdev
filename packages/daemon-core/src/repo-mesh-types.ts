@@ -1101,17 +1101,8 @@ export interface RepoMeshCoordinatorConfig {
 export interface LocalMeshConfig {
     meshes: LocalMeshEntry[];
     /**
-     * MAGI-KIND-PANEL: per-task_kind panel bindings (machine-local), the SOLE MAGI
-     * panel-resolution surface (the former named-panel `magiPanels` map was removed).
-     * Keyed by task_kind (rca / design / claim_audit / freeform); each maps to ≥1
-     * `(node × provider × model?)` slot. A `mesh_magi_review` resolves its panel from
-     * here — an unconfigured kind is a hard error, never a synthesized fallback.
-     * Optional; absent on pre-feature configs.
-     */
-    magiKindPanels?: MagiKindPanelMap;
-    /**
-     * BRAIN-ROUTING: per-task-difficulty brain presets (machine-local), sibling of
-     * magiKindPanels. Keyed by difficulty (easy / medium / difficult / freeform);
+     * BRAIN-ROUTING: per-task-difficulty brain presets (machine-local).
+     * Keyed by difficulty (easy / medium / difficult / freeform);
      * each maps to a BrainSlot (provider? / model? / thinkingLevel?). The coordinator
      * classifies a task's difficulty at enqueue; the matching preset fills in the
      * task's model / thinking level (an explicit task value wins). Optional; a mesh
@@ -1130,6 +1121,22 @@ export interface LocalMeshEntry {
     coordinator: RepoMeshCoordinatorConfig;
     meshHost?: RepoMeshHostMetadata;
     nodes: LocalMeshNodeEntry[];
+    /**
+     * MAGI-KIND-PANEL: per-task_kind panel bindings for THIS mesh, the SOLE MAGI
+     * panel-resolution surface (the former named-panel `magiPanels` map was removed).
+     * Keyed by task_kind (rca / design / claim_audit / freeform); each maps to ≥1
+     * `(node × provider × model?)` slot, whose optional `nodeId` must name a node of
+     * this mesh. A `mesh_magi_review` resolves its panel from here — an unconfigured
+     * kind is a hard error, never a synthesized fallback.
+     *
+     * Scope: PER MESH, stored machine-locally (~/.adhdev/meshes.json), NOT in the
+     * repo-committed .adhdev/mesh.json — node identity and provider availability are
+     * machine facts. It previously lived at config root keyed by task_kind alone,
+     * which let a write in one mesh overwrite another's binding for the same kind;
+     * a legacy root map is folded in on load (see foldLegacyTopLevelMagiKindPanels).
+     * Optional; absent when this mesh has bound no kinds.
+     */
+    magiKindPanels?: MagiKindPanelMap;
     createdAt: string;
     updatedAt: string;
 }
