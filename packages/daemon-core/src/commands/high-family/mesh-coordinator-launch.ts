@@ -32,6 +32,58 @@ import {
 } from '../router.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 
+/**
+ * HOST-PIN-WRITER — idempotent launch-time backfill of the mesh host pin.
+ *
+ * The dashboard states that launching the host coordinator establishes the host, and
+ * for a mesh that predates the create-time pin this is the moment the host becomes
+ * unambiguous: a coordinator is running on a specific node. Backfilling here is what
+ * makes the existing UI copy true for those meshes.
+ *
+ * Deliberately narrow — it fills a MISSING pin only. An already-pinned mesh is never
+ * touched (no `force`), so a launch can never re-home a mesh: `setMeshHostPin` returns
+ * 'host_already_pinned' / 'already_pinned_same' and writes nothing. The pin is the
+ * coordinator NODE's daemon, never `resolveMeshHostStatus`'s synthesized value — that
+ * value is the evaluating daemon's guess about itself (HOST-SELF-SYNTHESIS-GUARD), and
+ * persisting a guess is precisely what would make an arbitrary peer permanently host.
+ *
+ * Best-effort: the coordinator has already launched successfully, so a config-write
+ * failure must never turn a successful launch into a reported failure.
+ */
+async function backfillMeshHostPinAfterLaunch(opts: {
+    meshId: string;
+    mesh: any;
+    coordinatorNode: any;
+    localDaemonId?: string;
+}): Promise<void> {
+    try {
+        const existingPin = typeof opts.mesh?.meshHost?.hostDaemonId === 'string'
+            ? opts.mesh.meshHost.hostDaemonId.trim()
+            : '';
+        if (existingPin) return;
+        // An inline (cloud-supplied) mesh is not backed by this daemon's meshes.json —
+        // there is no local record to pin, and getMesh below would miss it.
+        const { getMesh, setMeshHostPin } = await import('../../config/mesh-config.js');
+        if (!getMesh(opts.meshId)) return;
+        const nodeDaemonId = typeof opts.coordinatorNode?.daemonId === 'string' && opts.coordinatorNode.daemonId.trim()
+            ? opts.coordinatorNode.daemonId.trim()
+            : typeof opts.coordinatorNode?.daemon_id === 'string' && opts.coordinatorNode.daemon_id.trim()
+                ? opts.coordinatorNode.daemon_id.trim()
+                : (opts.localDaemonId || '');
+        const nodeId = String(normalizeMeshNodeId(opts.coordinatorNode) || '');
+        if (!nodeDaemonId && !nodeId) return;
+        const result = setMeshHostPin(opts.meshId, {
+            ...(nodeDaemonId ? { hostDaemonId: nodeDaemonId } : {}),
+            ...(nodeId ? { hostNodeId: nodeId } : {}),
+        });
+        if (result?.applied) {
+            LOG.info('MeshCoordinator', `Pinned mesh ${opts.meshId} host to ${result.hostDaemonId || nodeDaemonId} (node ${result.hostNodeId || nodeId}) after coordinator launch`);
+        }
+    } catch (error: any) {
+        LOG.warn('MeshCoordinator', `Host pin backfill skipped for mesh ${opts.meshId}: ${error?.message || String(error)}`);
+    }
+}
+
 export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = {
     launch_mesh_coordinator: async (ctx: HighFamilyContext, args: any) => {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
@@ -506,6 +558,13 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             });
                         } catch { /* best-effort */ }
 
+                        await backfillMeshHostPinAfterLaunch({
+                            meshId,
+                            mesh,
+                            coordinatorNode,
+                            localDaemonId: ctx.deps.statusInstanceId,
+                        });
+
                         return {
                             success: true,
                             meshId,
@@ -738,6 +797,13 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             payload: { workspace },
                         });
                     } catch { /* ledger append is best-effort */ }
+
+                    await backfillMeshHostPinAfterLaunch({
+                        meshId,
+                        mesh,
+                        coordinatorNode,
+                        localDaemonId: ctx.deps.statusInstanceId,
+                    });
 
                     return {
                         success: true,

@@ -240,7 +240,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         return { success: true, mesh: meshRecord.mesh, sourceOfTruth };
     },
 
-    create_mesh: async (_ctx: MedFamilyContext, args: any) => {
+    create_mesh: async (ctx: MedFamilyContext, args: any) => {
         const name = typeof args?.name === 'string' ? args.name.trim() : '';
         const repoIdentity = typeof args?.repoIdentity === 'string' ? args.repoIdentity.trim() : '';
         const repoRemoteUrl = typeof args?.repoRemoteUrl === 'string' ? args.repoRemoteUrl.trim() : undefined;
@@ -251,8 +251,84 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             const meshHost = args?.meshHost && typeof args.meshHost === 'object' && !Array.isArray(args.meshHost)
                 ? args.meshHost
                 : undefined;
-            const mesh = createMesh({ name, repoIdentity, repoRemoteUrl, defaultBranch, policy: args?.policy, meshHost });
+            // HOST-PIN-WRITER: a mesh is created BY the daemon that hosts it, so pin the
+            // host at creation — the one moment it is knowable without guessing. Without
+            // this a mesh is born with role-only host metadata, and every peer then
+            // synthesizes ITSELF as host on read (the answer depending on which daemon was
+            // asked). An explicit meshHost arg still wins; a caller may also pass
+            // hostDaemonId to name a different creating daemon (cloud-relayed create).
+            const requestedHostDaemonId = typeof args?.hostDaemonId === 'string' && args.hostDaemonId.trim()
+                ? args.hostDaemonId.trim()
+                : (ctx.deps.statusInstanceId || '');
+            const mesh = createMesh({
+                name,
+                repoIdentity,
+                repoRemoteUrl,
+                defaultBranch,
+                policy: args?.policy,
+                meshHost,
+                ...(requestedHostDaemonId ? { hostDaemonId: requestedHostDaemonId } : {}),
+            });
             return { success: true, mesh };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
+    // HOST-PIN-WRITER — establish this mesh's host daemon as a DELIBERATE operator act.
+    //
+    // The dashboard's first-setup flow lets the operator pick which connected daemon
+    // becomes the host; this is the command that actually persists that choice. It is a
+    // separate surface from coordinator launch on purpose: the pin is effectively
+    // permanent ("Fixed when the mesh is created — it cannot be reassigned here"), so it
+    // must not be an incidental side effect of a button whose stated job is launching a
+    // session. A mis-click must not permanently re-home a mesh.
+    //
+    // Reassignment to a DIFFERENT daemon is refused unless the caller passes
+    // force:true — the mutator returns code 'host_already_pinned' and changes nothing.
+    // Re-pinning the same daemon is a no-op, so retries/races are safe.
+    set_mesh_host: async (ctx: MedFamilyContext, args: any) => {
+        const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+        const hostDaemonId = typeof args?.hostDaemonId === 'string' ? args.hostDaemonId.trim() : '';
+        const hostNodeId = typeof args?.hostNodeId === 'string' ? args.hostNodeId.trim() : '';
+        if (!meshId) return { success: false, error: 'meshId required' };
+        if (!hostDaemonId && !hostNodeId) return { success: false, error: 'hostDaemonId or hostNodeId required' };
+        try {
+            const { setMeshHostPin, getMesh } = await import('../../config/mesh-config.js');
+            const result = setMeshHostPin(meshId, {
+                ...(hostDaemonId ? { hostDaemonId } : {}),
+                ...(hostNodeId ? { hostNodeId } : {}),
+                force: args?.force === true,
+            });
+            if (!result) return { success: false, error: 'Mesh not found' };
+            if (!result.applied && result.reason !== 'already_pinned_same') {
+                return {
+                    success: false,
+                    code: result.reason,
+                    error: result.reason === 'host_already_pinned'
+                        ? `Mesh host is already pinned to ${result.hostDaemonId}. Pass force:true to reassign it.`
+                        : result.reason === 'not_host_role'
+                            ? 'This daemon joined the mesh as a member; its host lives on the daemon it paired with.'
+                            : 'hostDaemonId or hostNodeId required',
+                    meshId,
+                    meshHost: resolveMeshHostStatus(result.mesh),
+                };
+            }
+            // Keep the live views coherent: the inline cache is what mesh_status /
+            // get_mesh serve once any command has warmed it, and the aggregate status
+            // snapshot is keyed on (meshId, queueRevision) — neither of which the pin
+            // write touches, so both would keep serving the pre-pin host.
+            const fresh = getMesh(meshId) || result.mesh;
+            if (ctx.getCachedInlineMesh(meshId)) ctx.inlineMeshCache.set(meshId, fresh);
+            ctx.invalidateAggregateMeshStatus(meshId);
+            return {
+                success: true,
+                code: result.reason,
+                meshId,
+                applied: result.applied,
+                meshHost: resolveMeshHostStatus(fresh),
+                mesh: fresh,
+            };
         } catch (e: any) {
             return { success: false, error: e.message };
         }

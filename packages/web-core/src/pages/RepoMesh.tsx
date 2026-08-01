@@ -202,6 +202,7 @@ export default function RepoMesh() {
         handleUpdateNodeCapabilities,
         handleSaveCoordinatorPrompt, handleSaveNodeSystemPrompt,
         handleLaunchCoordinator,
+        settingMeshHost, handleSetMeshHost,
     } = useMeshNodeActions({
         selectedMesh,
         selectedMeshId,
@@ -694,6 +695,8 @@ export default function RepoMesh() {
             hostRebindDaemonId={hostRebindDaemonId}
             onHostRebindDaemonIdChange={id => setHostRebindDaemonId(id)}
             onLaunchCoordinator={handleLaunchCoordinator}
+            settingMeshHost={settingMeshHost}
+            onSetMeshHost={handleSetMeshHost}
             activeDaemon={activeDaemon}
             activeDaemonId={resolvedActiveDaemonId}
             meshQueue={meshQueue}

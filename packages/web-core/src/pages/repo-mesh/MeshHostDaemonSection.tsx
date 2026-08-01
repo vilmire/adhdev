@@ -37,19 +37,31 @@ interface Props {
     hostRebindDaemonId: string
     onHostRebindDaemonIdChange: (id: string) => void
     onLaunchCoordinator: () => void
+    /** True while the first-setup host pin is being persisted. */
+    settingMeshHost?: boolean
+    /**
+     * Persist the operator's first-setup host choice (HOST-PIN-WRITER, set_mesh_host).
+     * Absent on hosts (e.g. older embedders) that have not wired the action yet — the
+     * section then falls back to launch-only, whose backfill also establishes the pin.
+     */
+    onSetMeshHost?: (hostDaemonId: string) => void
 }
 
 /**
  * Mesh host display.
  *
- * The mesh host is a FIXED 1:1 pin decided daemon-side when the mesh is created —
- * it is never re-selected from the dashboard. This section therefore renders a
- * read-only host badge (never a daemon picker) once a host is pinned. The only
- * interactive paths are:
+ * The mesh host is a 1:1 pin owned daemon-side. It is established ONCE — normally at
+ * mesh creation, where the creating daemon is recorded as host — and is not reassigned
+ * from this section afterwards. Once a host is pinned this renders a read-only badge,
+ * never a daemon picker. The interactive paths are:
  *   • host offline → a temporary command-routing RE-BIND (route commands through a
  *     connected daemon until the host reconnects; this does NOT change the host).
- *   • no host pinned yet (first-time setup) → a single "Launch Host Coordinator"
- *     action whose launch establishes the host daemon-side.
+ *   • no host pinned yet (a mesh created before hosts were pinned at creation) → the
+ *     operator picks a connected daemon and confirms with an explicit "Set as host"
+ *     action, which persists the pin via set_mesh_host. Establishing the host is a
+ *     deliberate act, not a side effect of launching: the pin is effectively permanent,
+ *     so a mis-click on a launch button must not re-home the mesh. Launching the
+ *     coordinator also backfills a MISSING pin, but never overwrites an existing one.
  */
 export function MeshHostDaemonSection({
     daemons,
@@ -67,6 +79,8 @@ export function MeshHostDaemonSection({
     hostRebindDaemonId,
     onHostRebindDaemonIdChange,
     onLaunchCoordinator,
+    settingMeshHost,
+    onSetMeshHost,
 }: Props) {
     const { t } = useTranslation('common')
     const cliProviderField = (
@@ -142,13 +156,20 @@ export function MeshHostDaemonSection({
     }
 
     // ── First-time setup: no host pinned yet ──
-    // The host is established by launching the coordinator on a connected daemon —
-    // that launch pins it daemon-side. When an authoritative host signal already named
-    // a daemon (coordinatorDaemonId set via the pin / role:'host' seed), we just show it
-    // as the host-to-be. Otherwise (HOST-MISSEED-FIRSTSETUP) there is NO auto-seed to an
-    // arbitrary connected peer — the operator explicitly picks the host from a select,
-    // so the header never flashes a wrong remote node on cold entry.
+    // Reached by meshes created before the host was pinned at creation time. The
+    // operator picks a connected daemon and confirms it with an explicit "Set as host"
+    // action (set_mesh_host) — that is what persists the pin. When an authoritative host
+    // signal already named a daemon (coordinatorDaemonId set via the pin / role:'host'
+    // seed) we show it as the host-to-be and offer the same confirm. Otherwise
+    // (HOST-MISSEED-FIRSTSETUP) there is NO auto-seed to an arbitrary connected peer, so
+    // the header never flashes a wrong remote node on cold entry.
     const setupDaemon = daemons.find(d => d.id === coordinatorDaemonId)
+    const setHostButton = onSetMeshHost && coordinatorDaemonId ? (
+        <button className="btn btn-primary btn-sm" onClick={() => onSetMeshHost(coordinatorDaemonId)}
+            disabled={!!settingMeshHost}>
+            {settingMeshHost ? t('repoMesh.host.settingHost') : t('repoMesh.host.setHostAction')}
+        </button>
+    ) : null
     return (
         <Section title={t('repoMesh.host.title')} description={t('repoMesh.host.descriptionUnset')}>
             <AlertBanner variant="info" className="mb-4">
@@ -162,8 +183,8 @@ export function MeshHostDaemonSection({
                         // seed named a specific daemon. Show it as the host-to-be.
                         <div className="mb-3 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-muted">
                             {isHostNodeAttached
-                                ? <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>{selectedHostNode?.workspace ? <> · setup node <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span></> : null}. Launching sets this daemon as the mesh host.</>
-                                : <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>. Attach one of its workspaces as a node first, then launch to set the host.</>}
+                                ? <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>{selectedHostNode?.workspace ? <> · setup node <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span></> : null}. {t('repoMesh.host.confirmSetsHost')}</>
+                                : <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>. {t('repoMesh.host.attachNodeThenSetHost')}</>}
                         </div>
                     ) : (
                         // No authoritative host signal yet. We deliberately do NOT auto-seed
@@ -180,9 +201,17 @@ export function MeshHostDaemonSection({
                             </select>
                         </FormField>
                     )}
+                    {/* Establishing the host is its own confirmed action — the pin is
+                        effectively permanent, so it must not ride along on a launch click. */}
+                    {setHostButton && (
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                            {setHostButton}
+                            <span className="text-[12px] text-text-muted">{t('repoMesh.host.setHostActionHint')}</span>
+                        </div>
+                    )}
                     <div className="grid gap-3 sm:grid-cols-[180px_auto] items-end mt-3">
                         {cliProviderField}
-                        <button className="btn btn-primary btn-sm" onClick={onLaunchCoordinator}
+                        <button className={`btn btn-sm ${setHostButton ? 'btn-secondary' : 'btn-primary'}`} onClick={onLaunchCoordinator}
                             disabled={!coordinatorDaemonId || !isHostNodeAttached || launchingCoordinator}
                             title={!coordinatorDaemonId ? t('repoMesh.host.pickHostFirst') : !isHostNodeAttached ? t('repoMesh.host.attachNodeFirst') : undefined}>
                             {launchingCoordinator ? t('repoMesh.host.launching') : t('repoMesh.host.launchHostSetsHost')}

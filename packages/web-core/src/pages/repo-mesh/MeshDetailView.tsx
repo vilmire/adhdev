@@ -80,6 +80,10 @@ interface Props {
     hostRebindDaemonId: string
     onHostRebindDaemonIdChange: (id: string) => void
     onLaunchCoordinator: () => void
+    /** True while the explicit first-setup host pin is being persisted. */
+    settingMeshHost?: boolean
+    /** Persist the operator's first-setup host choice (HOST-PIN-WRITER). */
+    onSetMeshHost?: (hostDaemonId: string) => void
 
     // Node list
     activeDaemon: RepoMeshDaemonEntry | undefined
@@ -183,6 +187,8 @@ export function MeshDetailView({
     hostRebindDaemonId,
     onHostRebindDaemonIdChange,
     onLaunchCoordinator,
+    settingMeshHost,
+    onSetMeshHost,
     activeDaemon,
     activeDaemonId,
     meshQueue,
@@ -287,6 +293,8 @@ export function MeshDetailView({
                     hostRebindDaemonId={hostRebindDaemonId}
                     onHostRebindDaemonIdChange={id => { onHostRebindDaemonIdChange(id); onRefreshGraph() }}
                     onLaunchCoordinator={onLaunchCoordinator}
+                    settingMeshHost={settingMeshHost}
+                    onSetMeshHost={onSetMeshHost}
                 />
             )}
 

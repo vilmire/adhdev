@@ -24,7 +24,7 @@ import type {
     MeshReportedMemberState,
 } from '../repo-mesh-types.js';
 import type { MagiKindPanelMap, MagiSlot, MagiTaskKind, DifficultyBrainMap, NodeCapabilitySlot } from '@adhdev/mesh-shared';
-import { normalizeDifficultyBrainMap, DEFAULT_DIFFICULTY_BRAINS, normalizeNodeCapabilitySlots, deriveSlotsFromLegacy } from '@adhdev/mesh-shared';
+import { normalizeDifficultyBrainMap, DEFAULT_DIFFICULTY_BRAINS, normalizeNodeCapabilitySlots, deriveSlotsFromLegacy, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 
@@ -332,6 +332,17 @@ export interface CreateMeshOptions {
     policy?: Partial<RepoMeshPolicy>;
     coordinator?: RepoMeshCoordinatorConfig;
     meshHost?: RepoMeshHostMetadata;
+    /**
+     * HOST-PIN-WRITER: the daemon creating this mesh, recorded as its host pin.
+     *
+     * A mesh is created BY the daemon that will host it, so the host is known at
+     * creation — the one moment it is knowable without guessing. Persisting it here is
+     * what stops meshes being born pin-less (the root of this defect class): with no pin,
+     * every peer synthesizes itself as host on read and the answer depends on which
+     * daemon was asked. Omitted (legacy/unknown callers) still yields a valid role-only
+     * host mesh, exactly as before.
+     */
+    hostDaemonId?: string;
 }
 
 export function createMesh(opts: CreateMeshOptions): LocalMeshEntry {
@@ -353,7 +364,12 @@ export function createMesh(opts: CreateMeshOptions): LocalMeshEntry {
         defaultBranch: opts.defaultBranch,
         policy: mergeMeshPolicy(undefined, opts.policy),
         coordinator: opts.coordinator || {},
-        meshHost: opts.meshHost || createDefaultMeshHostMetadata(),
+        meshHost: opts.meshHost || (() => {
+            const base = createDefaultMeshHostMetadata();
+            const creatingDaemonId = typeof opts.hostDaemonId === 'string' ? opts.hostDaemonId.trim() : '';
+            // The creating daemon IS the host — pin it now (see CreateMeshOptions.hostDaemonId).
+            return creatingDaemonId ? { ...base, hostDaemonId: creatingDaemonId } : base;
+        })(),
         nodes: [],
         createdAt: now,
         updatedAt: now,
@@ -603,6 +619,151 @@ export function applyMeshHostJoinRequest(
     return { accepted: true, mesh, meshHost: mesh.meshHost, node, tokenId: validation.tokenId };
 }
 
+export type SetMeshHostPinReason =
+    | 'pinned'
+    | 'already_pinned_same'
+    | 'host_already_pinned'
+    | 'not_host_role'
+    | 'invalid_host_daemon_id';
+
+export interface SetMeshHostPinResult {
+    mesh: LocalMeshEntry;
+    meshHost: RepoMeshHostMetadata;
+    /** True only when this call actually wrote the pin. */
+    applied: boolean;
+    reason: SetMeshHostPinReason;
+    /** The pin in force after the call (existing one when the write was refused). */
+    hostDaemonId?: string;
+    hostNodeId?: string;
+}
+
+/**
+ * HOST-PIN-WRITER — establish THIS mesh's host daemon (`role:'host'` side).
+ *
+ * The mirror of `markMeshHostPairingJoined`, which records the daemon we JOINED as a
+ * `role:'member'`. Nothing previously wrote the host direction, so a mesh created here
+ * carried role-only host metadata and never gained a `hostDaemonId` — every peer then
+ * synthesized itself as host on read, which is the defect HOST-SELF-SYNTHESIS-GUARD
+ * surfaced by refusing to answer.
+ *
+ * The host pin is a 1:1, effectively permanent assignment (the dashboard states it
+ * "cannot be reassigned here"), so this mutator is deliberately conservative:
+ *   • no pin yet            → write it (`applied:true`, reason 'pinned')
+ *   • same daemon re-pinned → NO-OP, `updatedAt` untouched ('already_pinned_same')
+ *   • different daemon      → REFUSED unless `force` ('host_already_pinned')
+ *   • `role:'member'` mesh  → REFUSED ('not_host_role') — a member must never claim
+ *     local coordinator/queue ownership; its host lives on the daemon it paired with.
+ *
+ * Identity comparison goes through `daemonIdsEquivalent`, never a raw `!==`. The
+ * persisted pin is often a config-form id (`mach_…`) while callers pass the runtime
+ * form (`daemon_mach_…`); a raw compare would read the same machine as a reassignment
+ * and refuse it — the recurring canon-identity defect class.
+ *
+ * The host NODE is flagged `role:'host'` alongside the pin. That keeps
+ * `resolveMeshHostStatus`'s node-declaration path (which outranks self-synthesis and
+ * works for readers that only ever see the node list) consistent with the pin, and
+ * exactly one node carries the flag after a forced re-home.
+ */
+export function setMeshHostPin(
+    meshId: string,
+    opts: { hostDaemonId?: string; hostNodeId?: string; hostAddress?: string; force?: boolean; now?: string },
+): SetMeshHostPinResult | undefined {
+    const config = loadMeshConfig();
+    const mesh = config.meshes.find(m => m.id === meshId);
+    if (!mesh) return undefined;
+
+    const hostDaemonId = typeof opts.hostDaemonId === 'string' ? opts.hostDaemonId.trim() : '';
+    const hostNodeId = typeof opts.hostNodeId === 'string' ? opts.hostNodeId.trim() : '';
+    const previous = mesh.meshHost || createDefaultMeshHostMetadata();
+
+    if (!hostDaemonId && !hostNodeId) {
+        return {
+            mesh,
+            meshHost: previous,
+            applied: false,
+            reason: 'invalid_host_daemon_id',
+            ...(previous.hostDaemonId ? { hostDaemonId: previous.hostDaemonId } : {}),
+            ...(previous.hostNodeId ? { hostNodeId: previous.hostNodeId } : {}),
+        };
+    }
+
+    // A mesh we joined as a member is hosted elsewhere — never let it pin a local host.
+    if (previous.role === 'member') {
+        return {
+            mesh,
+            meshHost: previous,
+            applied: false,
+            reason: 'not_host_role',
+            ...(previous.hostDaemonId ? { hostDaemonId: previous.hostDaemonId } : {}),
+            ...(previous.hostNodeId ? { hostNodeId: previous.hostNodeId } : {}),
+        };
+    }
+
+    const existingDaemonId = typeof previous.hostDaemonId === 'string' ? previous.hostDaemonId.trim() : '';
+    if (existingDaemonId && !opts.force) {
+        const sameHost = hostDaemonId ? daemonIdsEquivalent(existingDaemonId, hostDaemonId) : true;
+        if (!sameHost) {
+            // Refuse silently-destructive re-homing: the caller must pass force.
+            return {
+                mesh,
+                meshHost: previous,
+                applied: false,
+                reason: 'host_already_pinned',
+                hostDaemonId: existingDaemonId,
+                ...(previous.hostNodeId ? { hostNodeId: previous.hostNodeId } : {}),
+            };
+        }
+        // Same host. Only a genuinely NEW node anchor is worth a write; otherwise no-op
+        // so repeated launches never churn updatedAt.
+        const existingNodeId = typeof previous.hostNodeId === 'string' ? previous.hostNodeId.trim() : '';
+        if (!hostNodeId || hostNodeId === existingNodeId) {
+            return {
+                mesh,
+                meshHost: previous,
+                applied: false,
+                reason: 'already_pinned_same',
+                hostDaemonId: existingDaemonId,
+                ...(existingNodeId ? { hostNodeId: existingNodeId } : {}),
+            };
+        }
+    }
+
+    const now = opts.now || new Date().toISOString();
+    const effectiveDaemonId = hostDaemonId || existingDaemonId;
+    mesh.meshHost = {
+        ...previous,
+        role: 'host',
+        ...(effectiveDaemonId ? { hostDaemonId: effectiveDaemonId } : {}),
+        ...(hostNodeId ? { hostNodeId } : previous.hostNodeId ? { hostNodeId: previous.hostNodeId } : {}),
+        ...(opts.hostAddress?.trim() ? { hostAddress: opts.hostAddress.trim() } : {}),
+    };
+
+    // Keep the node-level declaration in lockstep with the pin, and single-valued.
+    const hostNode = hostNodeId
+        ? mesh.nodes.find(n => n.id === hostNodeId)
+        : effectiveDaemonId
+            ? mesh.nodes.find(n => n.daemonId && daemonIdsEquivalent(n.daemonId, effectiveDaemonId))
+            : undefined;
+    if (hostNode) {
+        for (const node of mesh.nodes) {
+            if (node.role === 'host' && node !== hostNode) node.role = undefined;
+        }
+        hostNode.role = 'host';
+        if (!mesh.meshHost.hostNodeId) mesh.meshHost.hostNodeId = hostNode.id;
+    }
+
+    mesh.updatedAt = now;
+    saveMeshConfig(config);
+    return {
+        mesh,
+        meshHost: mesh.meshHost,
+        applied: true,
+        reason: 'pinned',
+        ...(mesh.meshHost.hostDaemonId ? { hostDaemonId: mesh.meshHost.hostDaemonId } : {}),
+        ...(mesh.meshHost.hostNodeId ? { hostNodeId: mesh.meshHost.hostNodeId } : {}),
+    };
+}
+
 export function markMeshHostPairingJoined(
     meshId: string,
     opts: { hostDaemonId?: string; hostNodeId?: string; joinedAt?: string; token?: string; tokenId?: string },
@@ -704,6 +865,24 @@ export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntr
         worktreeBootstrap: opts.worktreeBootstrap,
         role: opts.role,
     };
+
+    // HOST-PIN-WRITER: when this node belongs to the mesh's pinned host daemon and the
+    // pin still has no node anchor, adopt it. createMesh pins the host daemon before any
+    // node exists, so the anchor can only be filled once the host attaches a workspace —
+    // this is that moment. Only fills a MISSING anchor: an existing hostNodeId is a
+    // settled assignment and is never re-pointed here.
+    const pinnedHostDaemonId = typeof mesh.meshHost?.hostDaemonId === 'string' ? mesh.meshHost.hostDaemonId.trim() : '';
+    const anchorMissing = !(typeof mesh.meshHost?.hostNodeId === 'string' && mesh.meshHost.hostNodeId.trim());
+    if (!node.role
+        && anchorMissing
+        && pinnedHostDaemonId
+        && mesh.meshHost?.role !== 'member'
+        && node.daemonId
+        && daemonIdsEquivalent(node.daemonId, pinnedHostDaemonId)
+        && !mesh.nodes.some(n => n.role === 'host')) {
+        node.role = 'host';
+        mesh.meshHost = { ...(mesh.meshHost || createDefaultMeshHostMetadata()), hostNodeId: node.id };
+    }
 
     mesh.nodes.push(node);
     mesh.updatedAt = new Date().toISOString();

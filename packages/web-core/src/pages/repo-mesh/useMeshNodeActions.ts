@@ -3,6 +3,7 @@
  * coordinator prompt, and coordinator launch state/actions.
  */
 import { useState, useMemo, useEffect } from 'react'
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import {
     normalizeAvailableCliProviders,
     normalizeProviderPriority,
@@ -71,6 +72,7 @@ export function useMeshNodeActions({
     // Coordinator (cloud) — coordinatorDaemonId is owned by RepoMesh.tsx, passed via activeDaemonId
     const [coordinatorCliType, setCoordinatorCliType] = useState('')
     const [launchingCoordinator, setLaunchingCoordinator] = useState(false)
+    const [settingMeshHost, setSettingMeshHost] = useState(false)
     const [launchResult, setLaunchResult] = useState<string | null>(null)
 
     // Policy save
@@ -320,6 +322,38 @@ export function useMeshNodeActions({
         finally { setSavingNodeSystemPromptId(null) }
     }
 
+    /**
+     * HOST-PIN-WRITER: persist the operator's first-setup host choice.
+     *
+     * The host pin is effectively permanent, so establishing it is its own explicit
+     * action rather than a side effect of Launch — a mis-click on a launch button must
+     * not permanently re-home a mesh. The daemon refuses reassignment of an existing
+     * pin (code 'host_already_pinned'), so this is safe to retry and cannot steal a
+     * host from another daemon.
+     *
+     * The command goes to the daemon being made host: it owns the meshes.json that
+     * holds the pin, and it is the daemon that must answer as host afterwards.
+     */
+    async function handleSetMeshHost(hostDaemonId: string) {
+        if (!selectedMesh || !hostDaemonId) return
+        setError(null)
+        setLaunchResult(null)
+        try {
+            setSettingMeshHost(true)
+            const hostNode = (selectedMesh.nodes || []).find(n =>
+                daemonIdsEquivalent(String((n as any).daemon_id || (n as any).daemonId || ''), hostDaemonId))
+            const raw = await sendCommand(hostDaemonId, 'set_mesh_host', {
+                meshId: selectedMesh.id,
+                hostDaemonId,
+                ...(hostNode?.id ? { hostNodeId: hostNode.id } : {}),
+            })
+            const result = unwrapResult(raw)
+            if (result?.success === false) { setError(result.error || 'Setting the mesh host failed'); return }
+            await loadMeshes()
+        } catch (e: any) { setError(e?.message || 'Setting the mesh host failed') }
+        finally { setSettingMeshHost(false) }
+    }
+
     async function handleLaunchCoordinator() {
         if (!selectedMesh) return
         setError(null)
@@ -368,6 +402,8 @@ export function useMeshNodeActions({
         setCoordinatorCliType,
         launchingCoordinator,
         launchResult,
+        // host pin (first-setup)
+        settingMeshHost,
         // policy
         savingPolicy,
         // coordinator prompt
@@ -392,6 +428,7 @@ export function useMeshNodeActions({
         handleSaveCoordinatorPrompt,
         handleSaveNodeSystemPrompt,
         handleLaunchCoordinator,
+        handleSetMeshHost,
     }
 }
 
