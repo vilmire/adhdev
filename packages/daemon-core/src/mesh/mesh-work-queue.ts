@@ -1011,7 +1011,11 @@ export function enqueueTask(
     const taskDifficulty = isMeshTaskDifficulty(opts?.difficulty) ? (opts!.difficulty as MeshTaskDifficulty) : undefined;
     if (isMeshTaskDifficulty(opts?.difficulty)) {
         try {
-            const preset = getDifficultyBrains()[opts!.difficulty as MeshTaskDifficulty];
+            // Scoped to the mesh the task is being enqueued into: these presets pick
+            // the MODEL the task runs on, so reading another mesh's map would stamp a
+            // model this mesh never chose (and the slot-model guard would then block
+            // or wait on it at launch).
+            const preset = getDifficultyBrains(meshId)[opts!.difficulty as MeshTaskDifficulty];
             if (preset) {
                 if (!effectiveModel && preset.model) effectiveModel = preset.model;
                 if (!effectiveThinkingLevel && preset.thinkingLevel) effectiveThinkingLevel = preset.thinkingLevel;

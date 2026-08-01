@@ -45,17 +45,22 @@ export function normalizeProviderPriority(policy: unknown): string[] {
  *
  * Precedence:
  *   1. `policy.slots` — coordinator-owned, authoritative for self and remote alike.
- *   2. Legacy-derived from `providerPriority` + machine-global difficultyBrains.
+ *   2. Legacy-derived from `providerPriority` + the OWNING MESH's difficultyBrains.
  *
  * (The former per-provider `providerRoles` cap has been removed; a persisted
  * meshes.json is migrated to slots on load, so by the time a node reaches routing
  * its cap already lives on `slots[].maxParallel`.)
  */
-export function resolveNodeCapabilitySlots(node: any): NodeCapabilitySlot[] {
+export function resolveNodeCapabilitySlots(node: any, meshId?: string): NodeCapabilitySlot[] {
     const explicit = normalizeNodeCapabilitySlots(node?.policy?.slots);
     if (explicit.length) return explicit;
+    // Legacy derivation folds the difficulty presets into the derived slots' models,
+    // so those presets must come from the mesh that OWNS this node — otherwise the
+    // derived slot declares a model a different mesh chose, and the slot-model guard
+    // then enforces a model this mesh never selected. `meshId` is optional: omitted,
+    // it resolves to the sole mesh, which is what every pre-scope caller assumed.
     let difficultyBrains: any;
-    try { difficultyBrains = getDifficultyBrains(); } catch { difficultyBrains = undefined; }
+    try { difficultyBrains = getDifficultyBrains(meshId); } catch { difficultyBrains = undefined; }
     return deriveSlotsFromLegacy({
         providerPriority: normalizeProviderPriority(node?.policy),
         difficultyBrains,

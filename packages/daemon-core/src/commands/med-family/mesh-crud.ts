@@ -583,11 +583,11 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
     magi_kind_panel_list: async (_ctx: MedFamilyContext, args: any) => {
         const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { listMagiKindPanels, resolveMagiPanelMeshId } = await import('../../config/mesh-config.js');
+            const { listMagiKindPanels, resolveScopedMeshId } = await import('../../config/mesh-config.js');
             // Report WHICH mesh the panels were read from. The old flat
             // scope: 'machine_local' hid that these are per-mesh bindings and was the
             // reason the scope read as global.
-            const meshId = requestedMeshId || resolveMagiPanelMeshId();
+            const meshId = requestedMeshId || resolveScopedMeshId();
             return {
                 success: true,
                 kindPanels: listMagiKindPanels(requestedMeshId || undefined),
@@ -611,13 +611,13 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         if (!kind) return { success: false, error: 'invalid_magi_kind_panel: task_kind is required' };
         const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { setMagiKindPanel, resolveMagiPanelMeshId } = await import('../../config/mesh-config.js');
+            const { setMagiKindPanel, resolveScopedMeshId } = await import('../../config/mesh-config.js');
             // normalizeMagiTaskKindKey + normalizeMagiSlots (inside setMagiKindPanel)
             // validate the kind and each slot (provider required; model optional;
             // replica counts clamped; nodeId must belong to the target mesh).
             // Structured errors flow back as `error`.
             const slots = setMagiKindPanel(kind, args?.slots, requestedMeshId || undefined);
-            const meshId = requestedMeshId || resolveMagiPanelMeshId();
+            const meshId = requestedMeshId || resolveScopedMeshId();
             return { success: true, kind, slots, meshId: meshId ?? null };
         } catch (e: any) {
             return { success: false, error: e.message };
@@ -629,34 +629,55 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         if (!kind) return { success: false, error: 'invalid_magi_kind_panel: task_kind is required' };
         const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { removeMagiKindPanel, resolveMagiPanelMeshId } = await import('../../config/mesh-config.js');
+            const { removeMagiKindPanel, resolveScopedMeshId } = await import('../../config/mesh-config.js');
             const removed = removeMagiKindPanel(kind, requestedMeshId || undefined);
-            const meshId = requestedMeshId || resolveMagiPanelMeshId();
+            const meshId = requestedMeshId || resolveScopedMeshId();
             return { success: true, removed, meshId: meshId ?? null };
         } catch (e: any) {
             return { success: false, error: e.message };
         }
     },
 
-    // ─── Brain routing: per-difficulty brain presets (machine-local) ───
-    // getDifficultyBrains returns the seeded defaults when nothing is configured,
-    // so the editor always shows a usable mapping. set replaces the whole map.
-    difficulty_brains_get: async (_ctx: MedFamilyContext, _args: any) => {
+    // ─── Brain routing: per-difficulty brain presets (PER MESH, machine-local) ───
+    // getDifficultyBrains returns the seeded defaults when the mesh has nothing
+    // configured, so the editor always shows a usable mapping. set replaces the whole
+    // map for ONE mesh. `meshId` is optional and resolves to the sole mesh, so
+    // existing callers keep working; with several meshes a write must name its mesh
+    // (these presets choose the model a task runs on — writing to the wrong mesh
+    // changes what that mesh costs).
+    difficulty_brains_get: async (_ctx: MedFamilyContext, args: any) => {
+        const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { getDifficultyBrains } = await import('../../config/mesh-config.js');
-            return { success: true, difficultyBrains: getDifficultyBrains() };
+            const { getDifficultyBrains, resolveScopedMeshId } = await import('../../config/mesh-config.js');
+            const meshId = requestedMeshId || resolveScopedMeshId();
+            return {
+                success: true,
+                difficultyBrains: getDifficultyBrains(requestedMeshId || undefined),
+                scope: {
+                    kind: 'mesh',
+                    storage: 'machine_local',
+                    meshId: meshId ?? null,
+                    resolvedFrom: requestedMeshId ? 'explicit' : (meshId ? 'sole_mesh' : 'ambiguous'),
+                    ...(requestedMeshId || meshId ? {} : {
+                        note: 'Several meshes are configured and no meshId was given, so these are the shipped defaults, not any mesh\'s saved presets. Pass meshId.',
+                    }),
+                },
+            };
         } catch (e: any) {
             return { success: false, error: e.message };
         }
     },
 
     difficulty_brains_set: async (_ctx: MedFamilyContext, args: any) => {
+        const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { setDifficultyBrains } = await import('../../config/mesh-config.js');
+            const { setDifficultyBrains, resolveScopedMeshId } = await import('../../config/mesh-config.js');
             // normalizeDifficultyBrainMap (inside setDifficultyBrains) drops unknown
-            // keys and empty slots. An empty result clears the override → defaults.
-            const difficultyBrains = setDifficultyBrains(args?.difficultyBrains);
-            return { success: true, difficultyBrains };
+            // keys and empty slots. An empty result clears this mesh's override →
+            // defaults, leaving every other mesh untouched.
+            const difficultyBrains = setDifficultyBrains(args?.difficultyBrains, requestedMeshId || undefined);
+            const meshId = requestedMeshId || resolveScopedMeshId();
+            return { success: true, difficultyBrains, meshId: meshId ?? null };
         } catch (e: any) {
             return { success: false, error: e.message };
         }

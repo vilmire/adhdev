@@ -775,7 +775,7 @@ export function tryAssignQueueTask(
     // here where the claiming session's providerType + node policy are both known,
     // then enforced inside the atomic claim transaction so concurrent claims can't
     // overshoot it.
-    const providerMaxParallel = resolveProviderMaxParallel(resolveNodeCapabilitySlots(node), providerType);
+    const providerMaxParallel = resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), providerType);
     // WTDISPATCH-FANOUT: tell the atomic claim whether the claiming node is a worktree
     // clone so a `convergence` task (base-only: merge → push → cleanup) is refused for
     // worktree sessions. Without it, every sibling worktree session on this daemon could
@@ -1796,7 +1796,7 @@ export function __buildSchedulingPoolForTests(
 //
 // A node's capability slots are the single source of truth for routing. When a
 // node has explicit `policy.slots` we use them; otherwise we derive slots from the
-// legacy providerPriority + the machine-global difficultyBrains so existing nodes
+// legacy providerPriority + the owning mesh's difficultyBrains so existing nodes
 // keep working (back-compat). The fitness scorer ranks a node for a
 // specific task by how well its best slot matches the task's difficulty and
 // required tags — with graceful fallback so a task is never blocked by a missing
@@ -1836,8 +1836,8 @@ function scoreSlotForTask(slot: NodeCapabilitySlot, task: FitnessTask): number {
 }
 
 /** Best (slot, score) for a task on a node, or null when the node has no slots. */
-function bestSlotForTask(node: any, task: FitnessTask): { slot: NodeCapabilitySlot; score: number } | null {
-    const slots = resolveNodeCapabilitySlots(node);
+function bestSlotForTask(node: any, task: FitnessTask, meshId?: string): { slot: NodeCapabilitySlot; score: number } | null {
+    const slots = resolveNodeCapabilitySlots(node, meshId);
     if (!slots.length) return null;
     let best: { slot: NodeCapabilitySlot; score: number } | null = null;
     for (const slot of slots) {
@@ -1848,8 +1848,8 @@ function bestSlotForTask(node: any, task: FitnessTask): { slot: NodeCapabilitySl
 }
 
 /** Node-level fitness for a task = its best slot's score (0 when the node has no slots). */
-function nodeFitnessForTask(node: any, task: FitnessTask): number {
-    return bestSlotForTask(node, task)?.score ?? 0;
+function nodeFitnessForTask(node: any, task: FitnessTask, meshId?: string): number {
+    return bestSlotForTask(node, task, meshId)?.score ?? 0;
 }
 
 function orderEligibleNodes(
@@ -1869,7 +1869,7 @@ function orderEligibleNodes(
     if (strategy === 'fitness' && opts?.task) {
         const task = opts.task;
         return [...nodes].sort((a, b) => {
-            const fitDelta = nodeFitnessForTask(b.node, task) - nodeFitnessForTask(a.node, task);
+            const fitDelta = nodeFitnessForTask(b.node, task, meshId) - nodeFitnessForTask(a.node, task, meshId);
             if (fitDelta !== 0) return fitDelta; // higher fitness first
             const prioDelta = resolveNodeSchedulingPriority(b.node?.policy) - resolveNodeSchedulingPriority(a.node?.policy);
             if (prioDelta !== 0) return prioDelta;
@@ -1934,7 +1934,7 @@ function activeProviderAssignedCount(meshId: string, nodeId: string, providerTyp
 function slotHasCapacity(meshId: string, nodeId: string, node: any, slot: NodeCapabilitySlot): boolean {
     const providerType = typeof slot.provider === 'string' ? slot.provider.trim() : '';
     if (!providerType) return false;
-    const cap = resolveProviderMaxParallel(resolveNodeCapabilitySlots(node), providerType);
+    const cap = resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), providerType);
     if (cap === undefined) return true;             // no declared cap → uncapped
     return activeProviderAssignedCount(meshId, nodeId, providerType) < cap;
 }
@@ -2234,6 +2234,7 @@ async function resolveUsableProvider(
     components: DaemonComponents,
     nodeId: string,
     node: any,
+    meshId: string | undefined,
     requiredTags?: string[],
     task?: FitnessTask,
 ): Promise<{ providerType?: string; model?: string; thinkingLevel?: string; slot?: NodeCapabilitySlot; reason?: string }> {
@@ -2244,7 +2245,7 @@ async function resolveUsableProvider(
     // slots by task→slot fitness (difficulty/requiredTags) so the best-fit slot's
     // provider is tried first, and its model/thinkingLevel ride along. Falls back
     // to the legacy providerPriority-derived slots when no explicit slots exist.
-    const slots = resolveNodeCapabilitySlots(node);
+    const slots = resolveNodeCapabilitySlots(node, meshId);
     if (!slots.length) return { reason: 'missing_provider_priority' };
     const orderedSlots = task
         ? [...slots].sort((a, b) => scoreSlotForTask(b, task) - scoreSlotForTask(a, task))
@@ -2310,13 +2311,13 @@ export function __decideSlotForModelForTests(
     node: any,
     task: { model?: string; difficulty?: string; requiredTags?: string[] },
 ): ReturnType<typeof decideSlotForModel> {
-    const best = bestSlotForTask(node, task as FitnessTask);
+    const best = bestSlotForTask(node, task as FitnessTask, meshId);
     const requestedModel = (typeof task.model === 'string' && task.model.trim())
         ? task.model.trim()
         : best?.slot?.model;
     return decideSlotForModel({
         requestedModel,
-        slots: resolveNodeCapabilitySlots(node).map(slot => ({
+        slots: resolveNodeCapabilitySlots(node, meshId).map(slot => ({
             slot,
             available: slotHasCapacity(meshId, nodeId, node, slot),
         })),
@@ -2583,7 +2584,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 // slots, e.g. cursor-cli, is otherwise invisible to providerPriority-keyed
                 // enumeration), falling back to the legacy providerPriority.
                 if (task.requiredTags?.length) {
-                    const slotProviders = resolveNodeCapabilitySlots(node).map(s => s.provider).filter(Boolean);
+                    const slotProviders = resolveNodeCapabilitySlots(node, meshId).map(s => s.provider).filter(Boolean);
                     const priorities = slotProviders.length ? slotProviders : normalizeProviderPriority(node?.policy);
                     const providerCandidates = priorities.length ? priorities : [undefined as unknown as string];
                     return providerCandidates.some(p =>
@@ -2746,7 +2747,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
 
             autoLaunchInProgress.add(launchKey);
             try {
-                const resolved = await resolveUsableProvider(components, nodeId, node, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags });
+                const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags });
                 if (!resolved.providerType) {
                     markSkip(nodeId, resolved.reason || 'provider_unusable');
                     continue;
@@ -2776,7 +2777,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 // running a model the user did not choose breaks the same invariant.
                 const slotDecision = decideSlotForModel({
                     requestedModel,
-                    slots: resolveNodeCapabilitySlots(node).map(slot => ({
+                    slots: resolveNodeCapabilitySlots(node, meshId).map(slot => ({
                         slot,
                         available: slotHasCapacity(meshId, nodeId, node, slot),
                     })),
@@ -2814,7 +2815,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 // Don't spawn a session for a (node, provider) already at its declared
                 // maxParallel cap — it would launch only to fail the claim. The claim
                 // transaction enforces the cap regardless; this just avoids a doomed launch.
-                const providerCap = resolveProviderMaxParallel(resolveNodeCapabilitySlots(node), resolved.providerType);
+                const providerCap = resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), resolved.providerType);
                 if (
                     providerCap !== undefined
                     && activeProviderAssignedCount(meshId, nodeId, resolved.providerType) >= providerCap
@@ -2941,7 +2942,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 const requiredTags = Array.isArray(task.requiredTags) ? task.requiredTags.filter((t): t is string => !!t) : [];
                 const routingDecision: MeshTaskRoutingDecision = {
                     source: 'autoLaunch',
-                    fitnessScore: nodeFitnessForTask(node, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }),
+                    fitnessScore: nodeFitnessForTask(node, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, meshId),
                     ...(skippedCandidates.length ? { skippedCandidates } : {}),
                     requiredTagsResult: {
                         required: requiredTags,

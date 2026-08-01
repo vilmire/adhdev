@@ -26,12 +26,19 @@ function emptySlot(): BrainSlotDraft { return { provider: '', model: '', thinkin
 
 interface Props {
     daemonId?: string | null
+    /**
+     * The mesh being edited. Presets are PER MESH, so this scopes both the read and
+     * the write — without it the daemon falls back to "the sole mesh", which is only
+     * correct on a single-mesh machine (and a write there would be refused rather
+     * than silently landing on the wrong mesh).
+     */
+    meshId?: string | null
     sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
     /** Provider types detected across the mesh, offered in the provider dropdown. */
     providerOptions?: string[]
 }
 
-export default function DifficultyBrainEditor({ daemonId, sendDaemonCommand, providerOptions }: Props) {
+export default function DifficultyBrainEditor({ daemonId, meshId, sendDaemonCommand, providerOptions }: Props) {
     const { t } = useTranslation()
     const { theme } = useTheme()
     const meshTheme: MeshGraphTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -62,7 +69,7 @@ export default function DifficultyBrainEditor({ daemonId, sendDaemonCommand, pro
         if (!daemonId || !sendDaemonCommand) return
         setLoading(true); setError(null)
         try {
-            const result = unwrap(await sendDaemonCommand(daemonId, 'difficulty_brains_get', {}))
+            const result = unwrap(await sendDaemonCommand(daemonId, 'difficulty_brains_get', { ...(meshId ? { meshId } : {}) }))
             if (result?.success === false) throw new Error(result.error || t('meshGraph.difficulty.errorLoad'))
             const map = (result?.difficultyBrains && typeof result.difficultyBrains === 'object') ? result.difficultyBrains : {}
             const next: Record<string, BrainSlotDraft> = {}
@@ -74,7 +81,7 @@ export default function DifficultyBrainEditor({ daemonId, sendDaemonCommand, pro
         } catch (e: any) {
             setError(e?.message || t('meshGraph.difficulty.errorLoad'))
         } finally { setLoading(false) }
-    }, [daemonId, sendDaemonCommand, t])
+    }, [daemonId, sendDaemonCommand, meshId, t])
 
     useEffect(() => { void load() }, [load])
 
@@ -98,13 +105,13 @@ export default function DifficultyBrainEditor({ daemonId, sendDaemonCommand, pro
         }
         setSaving(true); setError(null)
         try {
-            const result = unwrap(await sendDaemonCommand(daemonId, 'difficulty_brains_set', { difficultyBrains }))
+            const result = unwrap(await sendDaemonCommand(daemonId, 'difficulty_brains_set', { difficultyBrains, ...(meshId ? { meshId } : {}) }))
             if (result?.success === false) throw new Error(result.error || t('meshGraph.difficulty.errorSave'))
             await load()
         } catch (e: any) {
             setError(e?.message || t('meshGraph.difficulty.errorSave'))
         } finally { setSaving(false) }
-    }, [daemonId, sendDaemonCommand, drafts, load, t])
+    }, [daemonId, sendDaemonCommand, drafts, load, meshId, t])
 
     const inputClass = `w-full rounded-lg border px-2.5 py-1.5 text-xs ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40 text-slate-100 placeholder:text-slate-500' : 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400'}`
     const labelClass = `text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`

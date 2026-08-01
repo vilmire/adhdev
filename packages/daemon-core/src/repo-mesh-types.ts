@@ -1100,15 +1100,6 @@ export interface RepoMeshCoordinatorConfig {
  */
 export interface LocalMeshConfig {
     meshes: LocalMeshEntry[];
-    /**
-     * BRAIN-ROUTING: per-task-difficulty brain presets (machine-local).
-     * Keyed by difficulty (easy / medium / difficult / freeform);
-     * each maps to a BrainSlot (provider? / model? / thinkingLevel?). The coordinator
-     * classifies a task's difficulty at enqueue; the matching preset fills in the
-     * task's model / thinking level (an explicit task value wins). Optional; a mesh
-     * with none seeded uses DEFAULT_DIFFICULTY_BRAINS on first read.
-     */
-    difficultyBrains?: DifficultyBrainMap;
 }
 
 export interface LocalMeshEntry {
@@ -1137,6 +1128,22 @@ export interface LocalMeshEntry {
      * Optional; absent when this mesh has bound no kinds.
      */
     magiKindPanels?: MagiKindPanelMap;
+    /**
+     * BRAIN-ROUTING: per-task-difficulty brain presets for THIS mesh, stored
+     * machine-locally alongside magiKindPanels. Keyed by difficulty (easy / medium /
+     * difficult / freeform); each maps to a BrainSlot (provider? / model? /
+     * thinkingLevel?). The coordinator classifies a task's difficulty at enqueue; the
+     * matching preset fills in the task's model / thinking level (an explicit task
+     * value wins).
+     *
+     * Scope: PER MESH. It formerly sat at the config root keyed by difficulty alone,
+     * so one mesh's write overwrote every other's — and since this map picks the
+     * MODEL a task runs on, the shipped DEFAULT_DIFFICULTY_BRAINS (difficult → opus)
+     * silently applied to every mesh on the machine. A legacy root map is folded in
+     * on load (see foldLegacyTopLevelMeshSetting). Optional; a mesh with none set
+     * uses DEFAULT_DIFFICULTY_BRAINS on read.
+     */
+    difficultyBrains?: DifficultyBrainMap;
     createdAt: string;
     updatedAt: string;
 }

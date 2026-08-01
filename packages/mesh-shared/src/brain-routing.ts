@@ -32,10 +32,15 @@ export interface BrainSlot {
 }
 
 /**
- * Per-difficulty brain bindings, stored machine-local in `~/.adhdev/meshes.json`
- * under the top-level `difficultyBrains` map (sibling of `magiKindPanels`). A
- * difficulty absent from the map has no preset — the task runs with no
- * difficulty-derived model/thinking (ordinary routing).
+ * Per-difficulty brain bindings for ONE mesh, stored machine-local in
+ * `~/.adhdev/meshes.json` under that mesh's entry (`meshes[].difficultyBrains`,
+ * sibling of `magiKindPanels`). The scope is per mesh: two meshes on the same
+ * machine hold independent presets, so one can pin `difficult` to a cheaper model
+ * without changing what any other mesh runs. (It formerly sat at the config root
+ * keyed by difficulty alone — and since this map picks the MODEL a task runs on,
+ * that meant the shipped defaults, and any one mesh's override, applied to every
+ * mesh on the machine.) A difficulty absent from the map has no preset — the task
+ * runs with no difficulty-derived model/thinking (ordinary routing).
  */
 export type DifficultyBrainMap = Partial<Record<MeshTaskDifficulty, BrainSlot>>
 
@@ -92,7 +97,7 @@ export function normalizeDifficultyBrainMap(raw: unknown): DifficultyBrainMap {
 // A node's "Preferred AI tools" list is redefined as an ordered array of
 // capability slots. Each slot bundles what used to be scattered across
 // providerPriority (order), a per-provider maxParallel cap, and the
-// machine-global difficultyBrains (difficulty → model/thinking). Slot order =
+// the owning mesh's difficultyBrains (difficulty → model/thinking). Slot order =
 // preference. This single profile is the source of truth for task routing, MAGI
 // fan-out, and orchestrator-proposed edits.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -167,7 +172,7 @@ export function normalizeNodeCapabilitySlots(raw: unknown): NodeCapabilitySlot[]
 /**
  * Back-compat migration: derive capability slots from the legacy fields when a
  * node has no explicit `slots`. Order follows providerPriority; difficulty/model/
- * thinking are folded in from the machine-global difficultyBrains (each difficulty
+ * thinking are folded in from the OWNING MESH's difficultyBrains (each difficulty
  * attaches to the slot whose provider the brain preset names, or — when the brain
  * has no provider — to every slot as a shared model/thinking default for that
  * difficulty).

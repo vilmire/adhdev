@@ -24,7 +24,7 @@ import {
     listMagiKindPanelsReadOnly,
     setMagiKindPanel,
     removeMagiKindPanel,
-    resolveMagiPanelMeshId,
+    resolveScopedMeshId,
 } from '../../src/config/mesh-config.js';
 import { meshCrudHandlers } from '../../src/commands/med-family/mesh-crud.js';
 
@@ -121,12 +121,12 @@ describe('MAGI kind-panel — optional meshId resolves to the active mesh', () =
         expect(raw.meshes[0].magiKindPanels.rca).toHaveLength(1);
     });
 
-    it('resolveMagiPanelMeshId returns the sole mesh, and is ambiguous with two', () => {
+    it('resolveScopedMeshId returns the sole mesh, and is ambiguous with two', () => {
         const solo = createMesh({ name: 'solo', repoIdentity: 'github.com/acme/solo' });
-        expect(resolveMagiPanelMeshId()).toBe(solo.id);
+        expect(resolveScopedMeshId()).toBe(solo.id);
 
         createMesh({ name: 'second', repoIdentity: 'github.com/acme/second' });
-        expect(resolveMagiPanelMeshId()).toBeUndefined();
+        expect(resolveScopedMeshId()).toBeUndefined();
     });
 
     it('an omitted meshId with two meshes is an explicit error, never a silent write', () => {

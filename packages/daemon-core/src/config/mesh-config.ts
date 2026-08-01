@@ -77,32 +77,49 @@ function loadMeshConfig(options: { persistMigrations?: boolean } = {}): LocalMes
  */
 function migrateLoadedMeshConfig(config: LocalMeshConfig): boolean {
     let changed = false;
+    // Fold the legacy config-root scoped settings FIRST, so the per-node slot
+    // derivation below already sees each mesh's own difficultyBrains rather than a
+    // root map that is about to be moved or dropped.
+    if (foldLegacyTopLevelMeshSetting(config, 'magiKindPanels', 'mesh_magi_kind_panel_set({ meshId, task_kind, slots })')) changed = true;
+    if (foldLegacyTopLevelMeshSetting(config, 'difficultyBrains', 'difficulty_brains_set({ meshId, difficultyBrains })')) changed = true;
     for (const mesh of config.meshes) {
         if (!mesh || !Array.isArray(mesh.nodes)) continue;
+        // Each node's legacy slot derivation uses ITS OWN mesh's presets. Reading a
+        // global map here is what let one mesh's model choice leak into another's
+        // derived slots.
+        const brains = normalizeDifficultyBrainMap(mesh.difficultyBrains);
+        const ownerBrains = Object.keys(brains).length > 0 ? brains : { ...DEFAULT_DIFFICULTY_BRAINS };
         for (const node of mesh.nodes) {
-            if (migrateProviderRolesToSlots(node?.policy)) changed = true;
+            if (migrateProviderRolesToSlots(node?.policy, ownerBrains)) changed = true;
         }
     }
-    if (foldLegacyTopLevelMagiKindPanels(config)) changed = true;
     return changed;
 }
 
 /**
- * MAGI-KIND-PANEL scope migration: fold a legacy config-root `magiKindPanels`
- * map into its owning mesh entry, in place, then delete the root key.
+ * PER-MESH SCOPE migration: fold a legacy config-root setting map into its owning
+ * mesh entry, in place, then delete the root key.
  *
- * The root map was keyed by task_kind ALONE, so on a machine with two meshes a
- * write in one mesh silently overwrote the other's binding for the same kind and
- * the survivor pointed at foreign node IDs. Panels are now stored per mesh
- * (`meshes[].magiKindPanels`), which is what the docs already described.
+ * Two settings shared the identical defect and are migrated by this one helper:
+ *
+ *   - `magiKindPanels`  — keyed by task_kind alone, so on a two-mesh machine a write
+ *     in one mesh silently overwrote the other's binding and the survivor pointed at
+ *     foreign node IDs.
+ *   - `difficultyBrains` — keyed by difficulty alone, with the same overwrite. Worse
+ *     in effect, because this map decides which MODEL a task runs on: the shipped
+ *     DEFAULT_DIFFICULTY_BRAINS (difficult → opus) applied to every mesh on the
+ *     machine, so a model nobody selected got stamped onto tasks.
+ *
+ * Both are now stored per mesh, which is what the docs already described.
  *
  * Fold rules:
- *   - exactly one mesh → adopt the map (a mesh-scoped binding already present
- *     wins; the legacy map only fills kinds the mesh has not bound itself)
+ *   - exactly one mesh → adopt the map (a mesh-scoped value already present wins;
+ *     the legacy map only fills keys the mesh has not set itself)
  *   - several meshes  → DROP it and log. There is no field recording which mesh
- *     wrote it, and guessing would re-create the very cross-mesh mis-binding
- *     this migration removes. The ambiguity is itself the evidence the global
- *     key was wrong.
+ *     wrote it, and guessing would re-create the very cross-mesh mis-binding this
+ *     migration removes. The ambiguity is itself the evidence the global key was
+ *     wrong. Dropping is also the SAFE direction for difficultyBrains: the mesh
+ *     falls back to defaults rather than inheriting another mesh's model choice.
  *   - no meshes       → drop (nothing could own it)
  *
  * The root key is removed in every branch: keeping a dual read path alive would
@@ -110,28 +127,35 @@ function migrateLoadedMeshConfig(config: LocalMeshConfig): boolean {
  *
  * Returns true when the config was mutated (caller may persist eagerly).
  */
-function foldLegacyTopLevelMagiKindPanels(config: LocalMeshConfig): boolean {
-    const legacy = (config as { magiKindPanels?: MagiKindPanelMap }).magiKindPanels;
+function foldLegacyTopLevelMeshSetting(
+    config: LocalMeshConfig,
+    key: 'magiKindPanels' | 'difficultyBrains',
+    rebindHint: string,
+): boolean {
+    // Both keys are gone from LocalMeshConfig's type now that they live on the mesh
+    // entry, but a config loaded from disk may still carry them — hence the cast.
+    const root = config as unknown as Record<string, unknown>;
+    const legacy = root[key];
     if (!legacy || typeof legacy !== 'object' || Array.isArray(legacy)) {
         // Strip a structurally invalid root key too, so it cannot linger.
-        if ('magiKindPanels' in config) {
-            delete (config as { magiKindPanels?: MagiKindPanelMap }).magiKindPanels;
+        if (key in root) {
+            delete root[key];
             return true;
         }
         return false;
     }
-    delete (config as { magiKindPanels?: MagiKindPanelMap }).magiKindPanels;
+    delete root[key];
 
-    const kinds = Object.keys(legacy);
-    if (config.meshes.length === 1 && kinds.length > 0) {
-        const mesh = config.meshes[0];
-        const merged: MagiKindPanelMap = { ...legacy, ...(mesh.magiKindPanels ?? {}) };
-        mesh.magiKindPanels = merged;
-    } else if (kinds.length > 0) {
+    const entryKeys = Object.keys(legacy as Record<string, unknown>);
+    if (config.meshes.length === 1 && entryKeys.length > 0) {
+        const mesh = config.meshes[0] as unknown as Record<string, unknown>;
+        // Mesh-scoped values win; the legacy map only fills what the mesh has not set.
+        mesh[key] = { ...(legacy as Record<string, unknown>), ...((mesh[key] as Record<string, unknown>) ?? {}) };
+    } else if (entryKeys.length > 0) {
         console.warn(
-            `[mesh-config] Dropped legacy top-level magiKindPanels (kinds: ${kinds.join(', ')}) — `
+            `[mesh-config] Dropped legacy top-level ${key} (keys: ${entryKeys.join(', ')}) — `
             + `${config.meshes.length} meshes are configured, so the owning mesh cannot be determined. `
-            + `Re-bind the panels per mesh with mesh_magi_kind_panel_set({ meshId, task_kind, slots }).`,
+            + `Re-apply it per mesh with ${rebindHint}.`,
         );
     }
     return true;
@@ -148,7 +172,10 @@ function foldLegacyTopLevelMagiKindPanels(config: LocalMeshConfig): boolean {
  * caps in via deriveSlotsFromLegacy-equivalent logic); when it did, each cap is
  * merged into the first matching-provider slot lacking a maxParallel.
  */
-export function migrateProviderRolesToSlots(policy: unknown): boolean {
+export function migrateProviderRolesToSlots(
+    policy: unknown,
+    ownerDifficultyBrains?: DifficultyBrainMap,
+): boolean {
     if (!policy || typeof policy !== 'object' || Array.isArray(policy)) return false;
     const p = policy as Record<string, unknown>;
     const rawRoles = p.providerRoles;
@@ -183,8 +210,11 @@ export function migrateProviderRolesToSlots(policy: unknown): boolean {
         // No explicit slots: derive from legacy providerPriority, then fold caps in.
         // Falls back to a provider-per-role slot list when providerPriority is empty
         // so the cap is never silently dropped.
-        let difficultyBrains: DifficultyBrainMap | undefined;
-        try { difficultyBrains = getDifficultyBrains(); } catch { difficultyBrains = undefined; }
+        // Presets are passed in by the caller (the owning mesh's map) rather than read
+        // here: this runs inside the on-load migration, so calling getDifficultyBrains()
+        // would re-enter loadMeshConfig, and it would read the WRONG mesh's presets on a
+        // multi-mesh machine. Undefined → derivation just omits preset models.
+        const difficultyBrains: DifficultyBrainMap | undefined = ownerDifficultyBrains;
         const priority = Array.isArray(p.providerPriority)
             ? (p.providerPriority as unknown[]).map(t => typeof t === 'string' ? t.trim() : '').filter(Boolean)
             : [];
@@ -812,7 +842,7 @@ function normalizeReplicaCount(value: unknown): number | undefined {
 // (normalize / list / get / set / remove).
 //
 // Every accessor takes an OPTIONAL trailing `meshId`: omitted, it resolves to the sole
-// mesh (see resolveMagiPanelMeshId), which keeps every pre-scope call site working on
+// mesh (see resolveScopedMeshId), which keeps every pre-scope call site working on
 // the single-mesh machines that are the norm. With several meshes there is no safe
 // default — reads come back empty and writes throw — because guessing is exactly what
 // the old config-root map did, silently overwriting another mesh's binding.
@@ -881,43 +911,45 @@ export function normalizeMagiSlots(slots: unknown, knownNodeIds?: Iterable<strin
 }
 
 /**
- * Resolve which mesh a panel operation applies to when the caller did not name one.
+ * Resolve which mesh a per-mesh setting applies to when the caller did not name one.
  *
- * Panels are per mesh, but every existing call site predates that and passes no
- * meshId. On the overwhelmingly common single-mesh machine the answer is
- * unambiguous, so those callers keep working untouched. With several meshes there
- * is no safe default — returning undefined makes the read empty and the write a
- * loud `magi_kind_panel_mesh_ambiguous` error, rather than silently picking a mesh
- * and re-creating the cross-mesh overwrite this scoping fixes.
+ * Both per-mesh machine-local settings (MAGI kind-panels, difficulty brains) are
+ * reached from call sites that predate the scoping and pass no meshId. On the
+ * overwhelmingly common single-mesh machine the answer is unambiguous, so those
+ * callers keep working untouched. With several meshes there is no safe default —
+ * returning undefined makes the read fall back to nothing/defaults and the write a
+ * loud `*_mesh_ambiguous` error, rather than silently picking a mesh and re-creating
+ * the cross-mesh overwrite this scoping fixes.
  *
  * Pass `config` to resolve against an already-loaded config (avoids a second read).
  */
-export function resolveMagiPanelMeshId(config?: LocalMeshConfig): string | undefined {
+export function resolveScopedMeshId(config?: LocalMeshConfig): string | undefined {
     const meshes = (config ?? loadMeshConfig({ persistMigrations: false })).meshes;
     return meshes.length === 1 ? meshes[0].id : undefined;
 }
 
 /** Locate a mesh entry by id, or the sole mesh when no id was given. */
-function resolveMagiPanelMesh(config: LocalMeshConfig, meshId?: string): LocalMeshEntry | undefined {
-    const id = meshId?.trim() || resolveMagiPanelMeshId(config);
+function resolveScopedMesh(config: LocalMeshConfig, meshId?: string): LocalMeshEntry | undefined {
+    const id = meshId?.trim() || resolveScopedMeshId(config);
     if (!id) return undefined;
     return config.meshes.find(m => m.id === id);
 }
 
+
 /**
  * All kind-panels configured for one mesh, keyed by task_kind. Empty when the mesh
  * has none, is unknown, or when no meshId was given and the machine hosts several
- * meshes (ambiguous — see resolveMagiPanelMeshId).
+ * meshes (ambiguous — see resolveScopedMeshId).
  */
 export function listMagiKindPanels(meshId?: string): MagiKindPanelMap {
     const config = loadMeshConfig();
-    return resolveMagiPanelMesh(config, meshId)?.magiKindPanels ?? {};
+    return resolveScopedMesh(config, meshId)?.magiKindPanels ?? {};
 }
 
 /** Read-only counterpart used by dry-run onboarding; never persists migrations. */
 export function listMagiKindPanelsReadOnly(meshId?: string): MagiKindPanelMap {
     const config = loadMeshConfig({ persistMigrations: false });
-    return resolveMagiPanelMesh(config, meshId)?.magiKindPanels ?? {};
+    return resolveScopedMesh(config, meshId)?.magiKindPanels ?? {};
 }
 
 /** The slot list for one task_kind in one mesh, or undefined when not configured. */
@@ -925,7 +957,7 @@ export function getMagiKindPanel(kind: string, meshId?: string): MagiSlot[] | un
     let key: MagiTaskKind;
     try { key = normalizeMagiTaskKindKey(kind); } catch { return undefined; }
     const config = loadMeshConfig();
-    return resolveMagiPanelMesh(config, meshId)?.magiKindPanels?.[key];
+    return resolveScopedMesh(config, meshId)?.magiKindPanels?.[key];
 }
 
 /**
@@ -938,7 +970,7 @@ export function getMagiKindPanel(kind: string, meshId?: string): MagiSlot[] | un
 export function setMagiKindPanel(kind: string, slots: unknown, meshId?: string): MagiSlot[] {
     const key = normalizeMagiTaskKindKey(kind);
     const stored = loadMeshConfig();
-    const mesh = resolveMagiPanelMesh(stored, meshId);
+    const mesh = resolveScopedMesh(stored, meshId);
     if (!mesh) {
         throw new Error(
             meshId?.trim()
@@ -961,7 +993,7 @@ export function removeMagiKindPanel(kind: string, meshId?: string): boolean {
     let key: MagiTaskKind;
     try { key = normalizeMagiTaskKindKey(kind); } catch { return false; }
     const stored = loadMeshConfig();
-    const mesh = resolveMagiPanelMesh(stored, meshId);
+    const mesh = resolveScopedMesh(stored, meshId);
     if (!mesh?.magiKindPanels?.[key]) return false;
     delete mesh.magiKindPanels[key];
     if (Object.keys(mesh.magiKindPanels).length === 0) delete mesh.magiKindPanels;
@@ -998,30 +1030,57 @@ function pruneMagiKindPanelsForRemovedNode(mesh: LocalMeshEntry, nodeId: string)
     return changed;
 }
 
-// ─── Brain routing: per-difficulty brain presets (machine-local) ───
+// ─── Brain routing: per-difficulty brain presets (PER MESH, machine-local) ───
+//
+// Scoped exactly like the MAGI kind-panels above and through the same helpers
+// (resolveScopedMesh / foldLegacyTopLevelMeshSetting): the map lives on the mesh
+// entry, `meshId` is optional and resolves to the sole mesh, and a legacy config-root
+// map is folded in on load.
+//
+// This map decides which MODEL a task of a given difficulty runs on, so the old
+// config-root key was not merely untidy: the shipped DEFAULT_DIFFICULTY_BRAINS
+// (difficult → opus) applied to EVERY mesh on the machine, and one mesh's override
+// silently replaced another's. Per-mesh scope is what lets one mesh opt down to
+// sonnet without changing what any other mesh runs.
 
 /**
- * The difficulty→brain presets, machine-local. When nothing is configured yet,
+ * The difficulty→brain presets for one mesh. When that mesh has nothing configured,
  * returns the sensible DEFAULT_DIFFICULTY_BRAINS so the coordinator always has a
  * usable mapping (the operator can override via setDifficultyBrains). Returns a
  * normalized copy — never the stored reference.
+ *
+ * An omitted meshId resolves to the sole mesh; with several meshes it is ambiguous
+ * and this returns the DEFAULTS rather than leaking another mesh's model choice.
  */
-export function getDifficultyBrains(): DifficultyBrainMap {
-    const stored = loadMeshConfig().difficultyBrains;
+export function getDifficultyBrains(meshId?: string): DifficultyBrainMap {
+    const config = loadMeshConfig();
+    const stored = resolveScopedMesh(config, meshId)?.difficultyBrains;
     const normalized = normalizeDifficultyBrainMap(stored);
     return Object.keys(normalized).length > 0 ? normalized : { ...DEFAULT_DIFFICULTY_BRAINS };
 }
 
 /**
- * Replace the difficulty→brain presets wholesale (the editor pushes the full map).
- * Passing an empty/normalized-empty map clears the override, so getDifficultyBrains
- * falls back to the defaults again. Returns the normalized, persisted map.
+ * Replace one mesh's difficulty→brain presets wholesale (the editor pushes the full
+ * map). Passing an empty/normalized-empty map clears that mesh's override, so
+ * getDifficultyBrains falls back to the defaults again for it — other meshes are
+ * untouched either way. Returns the normalized, persisted map.
  */
-export function setDifficultyBrains(map: unknown): DifficultyBrainMap {
+export function setDifficultyBrains(map: unknown, meshId?: string): DifficultyBrainMap {
     const normalized = normalizeDifficultyBrainMap(map);
     const stored = loadMeshConfig();
-    if (Object.keys(normalized).length > 0) stored.difficultyBrains = normalized;
-    else delete stored.difficultyBrains;
+    const mesh = resolveScopedMesh(stored, meshId);
+    if (!mesh) {
+        throw new Error(
+            meshId?.trim()
+                ? `invalid_difficulty_brains: mesh '${meshId.trim()}' not found`
+                : `difficulty_brains_mesh_ambiguous: this machine hosts ${stored.meshes.length} meshes, `
+                  + `so a difficulty-brain write must name its mesh explicitly (meshId). Presets are per mesh — `
+                  + `they decide which model a task runs on, so writing to the wrong mesh changes what it costs.`,
+        );
+    }
+    if (Object.keys(normalized).length > 0) mesh.difficultyBrains = normalized;
+    else delete mesh.difficultyBrains;
+    mesh.updatedAt = new Date().toISOString();
     saveMeshConfig(stored);
     return normalized;
 }
