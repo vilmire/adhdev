@@ -843,9 +843,44 @@ export interface DashboardStatusEventPayload {
     viewerName?: string;
 }
 
+/**
+ * Routing-only session metadata sent to the cloud server over the WS control plane.
+ *
+ * ── Content boundary ──────────────────────────────────────────────────────
+ * The server is a signaling/routing plane: it MUST NOT receive user chat
+ * content. This type is deliberately a *narrow, hand-listed* shape rather
+ * than `Pick<CompactSessionEntry, ...>` or an `Omit<...>`, so that adding a
+ * content-bearing field to `CompactSessionEntry` (which the P2P path uses)
+ * can never silently widen what the server sees.
+ *
+ * Excluded on purpose — these ride the P2P DataChannel only:
+ *   title, summaryMetadata, lastMessagePreview, lastMessageRole,
+ *   lastMessageAt, lastMessageHash, activeChat, git, runtime* labels,
+ *   controlValues, providerControls, meshQueueStats.activeAssignments[].message
+ *
+ * Anything added here must be non-content: identifiers, enums, booleans, and
+ * counters only. Never free text authored by the user or the agent.
+ */
+export interface RoutingSessionEntry {
+    id: string;
+    parentId: string | null;
+    providerType: string;
+    providerName: string;
+    kind: SessionKind;
+    transport: SessionTransport;
+    status: SessionStatus;
+    /** Workspace path — routing/identity, not chat content. */
+    workspace: string | null;
+    cdpConnected?: boolean;
+    /** Lets the server gate push notifications for coordinator-hidden sessions. */
+    surfaceHidden?: boolean;
+    /** Lets the server suppress push notifications for user-muted sessions. */
+    muted?: boolean;
+}
+
 /** Minimal daemon->cloud status payload used for routing, fallback, and server APIs. */
 export interface CloudStatusReportPayload {
-    sessions: CompactSessionEntry[];
+    sessions: RoutingSessionEntry[];
     p2p?: StatusReportPayload['p2p'];
     timestamp: number;
 }

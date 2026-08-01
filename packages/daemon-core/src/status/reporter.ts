@@ -13,7 +13,7 @@ import {
 } from '../runtime-defaults.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { MachineInfo } from '../shared-types.js';
-import type { CloudStatusReportPayload, DaemonStatusEventPayload } from '../shared-types.js';
+import type { CloudStatusReportPayload, DaemonStatusEventPayload, RoutingSessionEntry, StatusReportPayload } from '../shared-types.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import type {
     ProviderState,
@@ -21,6 +21,53 @@ import type {
     CliProviderState,
     AcpProviderState,
 } from '../providers/provider-instance.js';
+
+// ─── Server WS content boundary ───────────────────────
+
+/**
+ * Project a full session snapshot down to the routing-only metadata the cloud
+ * server is allowed to see.
+ *
+ * ADHDev is P2P-first: chat, commands, screenshots and file ops travel over the
+ * WebRTC DataChannel, and the server WS carries auth + signaling + lightweight
+ * routing metadata only. This function IS that boundary for the status path.
+ *
+ * It copies an explicit allow-list of non-content fields. Do not rewrite it as a
+ * `delete`/`Omit` of known-bad keys — a deny-list silently leaks every new field
+ * added upstream. Anything free-text (titles, message previews, provider summary
+ * strings) stays on the P2P payload, which is assembled and sent separately and
+ * is untouched by this projection.
+ */
+export function buildCloudStatusReportPayload(
+    sessions: unknown,
+    p2p: StatusReportPayload['p2p'] | undefined,
+    timestamp: number,
+): CloudStatusReportPayload {
+    const list = Array.isArray(sessions) ? sessions : [];
+    return {
+        sessions: list.map((raw): RoutingSessionEntry => {
+            const session = (raw || {}) as Record<string, any>;
+            return {
+                id: session.id,
+                parentId: session.parentId ?? null,
+                providerType: session.providerType,
+                providerName: session.providerName || session.providerType,
+                kind: session.kind,
+                transport: session.transport,
+                status: session.status,
+                workspace: session.workspace ?? null,
+                cdpConnected: session.cdpConnected,
+                // Forward surfaceHidden/muted so the server can gate push notifications
+                // for coordinator-hidden and user-muted sessions (the WS path is the
+                // only one the server sees). Both are plain booleans, not content.
+                surfaceHidden: session.surfaceHidden,
+                muted: session.muted,
+            };
+        }),
+        p2p,
+        timestamp,
+    };
+}
 
 // ─── Daemon dependency interface ──────────────────────
 
@@ -305,28 +352,7 @@ export class DaemonStatusReporter {
         if (!serverConnected || !serverConn) return;
         // Server relay only needs compact session metadata for routing, compact status,
         // initial_state fallback, and lightweight API/session inspection.
-        const payloadSessions = Array.isArray(payload.sessions) ? payload.sessions : [];
-        const wsPayload: CloudStatusReportPayload = {
-            sessions: payloadSessions.map((session) => ({
-                id: session.id,
-                parentId: session.parentId,
-                providerType: session.providerType,
-                providerName: session.providerName || session.providerType,
-                kind: session.kind,
-                transport: session.transport,
-                status: session.status,
-                workspace: session.workspace ?? null,
-                title: session.title,
-                cdpConnected: session.cdpConnected,
-                summaryMetadata: session.summaryMetadata,
-                settings: session.settings,
-                // Forward surfaceHidden so the server can gate push notifications for
-                // coordinator-hidden sessions (the WS path is the only one the server sees).
-                surfaceHidden: session.surfaceHidden,
-            })),
-            p2p: payload.p2p,
-            timestamp: now,
-        };
+        const wsPayload = buildCloudStatusReportPayload(payload.sessions, payload.p2p, now);
         const wsHash = this.simpleHash(JSON.stringify({
             ...wsPayload,
             timestamp: undefined,

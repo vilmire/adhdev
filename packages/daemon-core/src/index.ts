@@ -28,6 +28,7 @@ export type {
   DashboardBootstrapDaemonEntry,
   VersionUpdateReason,
   CloudStatusReportPayload,
+  RoutingSessionEntry,
   DaemonStatusEventPayload,
   DashboardStatusEventPayload,
   SessionTransport,
@@ -433,7 +434,7 @@ export type {
 } from './commands/upgrade-helper.js';
 
 // ── Status ──
-export { DaemonStatusReporter } from './status/reporter.js';
+export { DaemonStatusReporter, buildCloudStatusReportPayload } from './status/reporter.js';
 export { buildSessionEntries, findCdpManager, hasCdpManager, isCdpConnected, isCoordinatorSpawnedHiddenWorker, resolveSurfaceHidden, resolveMuted, resolveSpawnedSessionHideMute } from './status/builders.js';
 export { buildStatusSnapshot, buildMachineInfo, buildAvailableProviders, getLastDisplayMessage } from './status/snapshot.js';
 export { getDaemonBuildInfo } from './build-info.js';
