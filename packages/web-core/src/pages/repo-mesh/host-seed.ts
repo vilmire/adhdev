@@ -34,6 +34,44 @@ import type { MeshNode } from './types'
  * All id comparisons go through daemonIdsEquivalent so daemon_mach_/mach_/standalone_
  * forms of one machine match.
  */
+/** Minimal shape of the daemon-resolved meshHost payload the dashboard reads. */
+export interface ResolvedMeshHostPayload {
+    hostDaemonId?: string
+    hostNodeId?: string
+    /** Daemon-side flag: the pin was inferred from the evaluating daemon, not persisted. */
+    hostSynthesized?: boolean
+}
+
+/**
+ * HOST-SELF-SYNTHESIS-GUARD — demote a synthesized host pin to "no pin".
+ *
+ * `meshHost.role` defaults to 'host' on every peer, so a mesh whose host was never
+ * persisted makes EVERY daemon answer "I am the host" when asked. Which daemon the
+ * dashboard asks is P2P arrival order, so a synthesized pin is not a fact about the
+ * mesh — it is a fact about who answered. Rendering it as an established host produced
+ * a confident badge naming an arbitrary machine, and the same id is the coordinator
+ * Launch target, whose launch permanently pins the host.
+ *
+ * So a synthesized pin is stripped here: the caller falls through to the neutral
+ * first-setup state, which requires the operator to choose the host explicitly.
+ * An authoritative pin (persisted hostDaemonId/hostNodeId, or a node the daemon
+ * declared role:'host') passes through untouched.
+ *
+ * The daemon-side resolver applies the same guard before it ever synthesizes on a
+ * multi-peer mesh; this is the dashboard-side layer, which additionally covers a
+ * single-peer synthesis (still only a guess) and older daemons that omit the flag.
+ */
+export function readAuthoritativeMeshHostPin(meshHost: ResolvedMeshHostPayload | undefined): {
+    hostDaemonId: string
+    hostNodeId: string
+} {
+    if (!meshHost || meshHost.hostSynthesized) return { hostDaemonId: '', hostNodeId: '' }
+    return {
+        hostDaemonId: String(meshHost.hostDaemonId || ''),
+        hostNodeId: String(meshHost.hostNodeId || ''),
+    }
+}
+
 export function resolveFirstSetupSeedDaemonId(
     daemons: RepoMeshDaemonEntry[],
     nodes: MeshNode[],

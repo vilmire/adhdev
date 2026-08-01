@@ -29,7 +29,7 @@ import { useMeshList } from './repo-mesh/useMeshList'
 import { useMeshNodeActions } from './repo-mesh/useMeshNodeActions'
 import { useMeshQueue } from './repo-mesh/useMeshQueue'
 import { useMeshGraph, getCachedMeshGraphStatus } from './repo-mesh/useMeshGraph'
-import { resolveFirstSetupSeedDaemonId } from './repo-mesh/host-seed'
+import { resolveFirstSetupSeedDaemonId, readAuthoritativeMeshHostPin } from './repo-mesh/host-seed'
 import type { MeshNode, MeshQueueEntry, AvailableCliAgent } from './repo-mesh/types'
 
 // Re-export types that cloud/standalone wrappers may reference
@@ -67,7 +67,20 @@ export default function RepoMesh() {
     // used by the create-mesh daemon picker so it never stalls on empty state.
     const loadDaemonMetadata = useDaemonMetadataLoader()
 
-    // Standalone: first daemon; cloud: selected coordinator daemon
+    // An ARBITRARY connected daemon — NOT an identity.
+    //
+    // On standalone there is exactly one daemon, so this is "the" daemon and using it
+    // as a command target is correct. On cloud `daemons` is ordered by P2P arrival, so
+    // index 0 is whichever peer connected first — it carries no meaning about which
+    // machine owns anything. It is therefore legitimate ONLY as (a) a source of
+    // provider/workspace inventory for pickers and (b) a connection-availability
+    // fallback for commands that are not machine-specific.
+    //
+    // HOST-SELF-SYNTHESIS-GUARD: it must NEVER participate in resolving WHICH daemon
+    // hosts a mesh, nor in targeting a coordinator launch — a launch permanently pins
+    // the host, so a wrong target here pins the wrong machine forever. Host identity
+    // comes from the persisted/daemon-resolved pin only (persistedHostInfo /
+    // resolveFirstSetupSeedDaemonId), which stays unresolved rather than guessing.
     const primaryDaemon = daemons[0] as RepoMeshDaemonEntry | undefined
     const primaryDaemonId = primaryDaemon?.id || ''
 
@@ -130,8 +143,20 @@ export default function RepoMesh() {
     // to command over P2P until the host reconnects. Cleared once the host is back.
     const [hostRebindDaemonId, setHostRebindDaemonId] = useState('')
 
+    // Resolved command/view-source daemon for THIS mesh.
+    //
+    // HOST-SELF-SYNTHESIS-GUARD: the cloud branch no longer falls back to
+    // `primaryDaemonId` (= daemons[0] = P2P arrival order). That fallback is what made
+    // mesh_status/graph/queue/node-detail query — and handleLaunchCoordinator target —
+    // an arbitrary peer whenever the host pin had not resolved yet, so the dashboard
+    // showed an unrelated machine as host and a Launch would have pinned it for good.
+    // With no authoritative host signal we resolve to '' instead: the live panels stay
+    // empty and MeshHostDaemonSection renders its neutral first-setup state, which
+    // requires the operator to pick the host explicitly.
+    // Standalone (no meshHostDaemonSection) has exactly one daemon, so primaryDaemonId
+    // is that daemon rather than an arbitrary choice — unchanged.
     const resolvedActiveDaemonId = features.meshHostDaemonSection
-        ? (coordinatorDaemonId || primaryDaemonId)
+        ? coordinatorDaemonId
         : primaryDaemonId
 
     // ─── Queue ───
@@ -213,11 +238,17 @@ export default function RepoMesh() {
     )
 
     const nodes: MeshNode[] = selectedMesh?.nodes || []
-    const selectedHostNode = useMemo(
+    // The node on the *command-target* daemon. This is an attachment check, not a host
+    // identity: it gates "you must attach a workspace on this daemon before launching",
+    // so it must follow coordinatorDaemonId (the daemon a launch would run on) even in
+    // first-setup where no host is resolved yet. For DISPLAY, prefer
+    // persistedHostInfo.hostNode (see hostNodeForDisplay below) so the host name and the
+    // host node path can never come from two different machines.
+    const commandTargetNode = useMemo(
         () => nodes.find(n => daemonIdsEquivalent(String(n.daemon_id || n.daemonId || ''), coordinatorDaemonId)),
         [nodes, coordinatorDaemonId],
     )
-    const isHostNodeAttached = features.meshHostDaemonSection ? !!selectedHostNode : true
+    const isHostNodeAttached = features.meshHostDaemonSection ? !!commandTargetNode : true
 
     // The daemon this mesh is pinned to as its host. The host is a fixed 1:1 pin
     // decided daemon-side at mesh creation, so this is read from persisted meshHost
@@ -229,11 +260,24 @@ export default function RepoMesh() {
     // instead of collapsing to '' and re-exposing a picker. Resolution goes through
     // daemonIdsEquivalent because the persisted id is frequently a config-form id
     // that does not byte-equal a connected runtime daemon id.
-    const persistedHostInfo = useMemo<{ pinned: boolean; daemonId: string; label: string; online: boolean }>(() => {
+    //
+    // HOST-SELF-SYNTHESIS-GUARD: a pin the daemon flagged `hostSynthesized` was inferred
+    // from whichever daemon answered (its own identity), not read from config. Treating
+    // it as pinned is what rendered a confident host badge for an arbitrary peer, so it
+    // is deliberately demoted to `pinned:false` → the neutral first-setup state that
+    // makes the operator choose. Note the daemon-side guard already withholds the
+    // synthesis on a multi-peer mesh; this is the second layer, and it also covers a
+    // single-peer mesh where the pin is still only a guess.
+    //
+    // Display coherence: `hostNode` is resolved HERE and returned alongside the daemon
+    // id/label, so the "Host:" name and the "Host node:" path always come from one
+    // resolved object instead of two independently-derived keys that can disagree
+    // mid-transition.
+    const persistedHostInfo = useMemo<{ pinned: boolean; daemonId: string; label: string; online: boolean; hostNode: MeshNode | undefined }>(() => {
         if (!features.meshHostDaemonSection || !selectedMesh) {
-            return { pinned: false, daemonId: '', label: '', online: false }
+            return { pinned: false, daemonId: '', label: '', online: false, hostNode: undefined }
         }
-        const listMeshHost = (selectedMesh as any).meshHost as { hostDaemonId?: string; hostNodeId?: string } | undefined
+        const listMeshHost = (selectedMesh as any).meshHost as { hostDaemonId?: string; hostNodeId?: string; hostSynthesized?: boolean } | undefined
         // HOST-MISSEED-CLOUD-SURFACE: the mesh_status payload (meshGraphStatus.meshHost)
         // carries the daemon-side *resolved* host pin (resolveMeshHostStatus synthesizes
         // hostDaemonId = the host daemon for a role:'host' mesh whose pin was never
@@ -242,31 +286,38 @@ export default function RepoMesh() {
         // daemon already resolved this daemon as host. Read the resolved pin from the
         // loaded mesh_status FIRST, then fall back to the list entry's meshHost.
         const statusMeshHost = (meshGraphStatus?.meshId && String(meshGraphStatus.meshId) === String(selectedMesh.id ?? ''))
-            ? (meshGraphStatus.meshHost as { hostDaemonId?: string; hostNodeId?: string } | undefined)
+            ? (meshGraphStatus.meshHost as { hostDaemonId?: string; hostNodeId?: string; hostSynthesized?: boolean } | undefined)
             : undefined
         const meshHost = statusMeshHost?.hostDaemonId ? statusMeshHost : (listMeshHost ?? statusMeshHost)
-        const pinnedDaemonId = String(meshHost?.hostDaemonId || '')
+        // HOST-SELF-SYNTHESIS-GUARD: a synthesized pin is the evaluating daemon's guess
+        // about itself — not an established host. Strip it so we fall through to the
+        // neutral first-setup state rather than badging an arbitrary daemon as host.
+        const authoritativePin = readAuthoritativeMeshHostPin(meshHost)
+        const pinnedDaemonId = authoritativePin.hostDaemonId
         // HOST-MISSEED-FIRSTSETUP transition boost: the mesh-list `meshHost` may still
         // lack a persisted pin (the daemon-side read-side default only fills it in the
         // mesh_status payload, not the list entry). When hostNodeId is absent, infer the
         // host node from a node already flagged role:'host' so the host badge resolves to
         // M4 instead of collapsing to a picker before the pin propagates.
         const inferredHostNode = nodes.find(n => (n as any).role === 'host')
-        const hostNodeId = String(meshHost?.hostNodeId || (inferredHostNode as any)?.id || '')
+        // Same demotion for the node anchor (a synthesized pin's hostNodeId is the
+        // evaluating daemon's own node). A node explicitly flagged role:'host' IS a real
+        // daemon-side declaration and is still honoured.
+        const hostNodeId = authoritativePin.hostNodeId || String((inferredHostNode as any)?.id || '')
         const hostNode = hostNodeId ? nodes.find(n => String(n.id) === hostNodeId) : undefined
         const nodeDaemonId = String(hostNode?.daemon_id || hostNode?.daemonId || '')
 
         // Effective persisted host daemon id (config-form id is fine — kept as-is so
         // the badge/command target stays stable even when the daemon is offline).
         const effectiveId = pinnedDaemonId || nodeDaemonId
-        if (!effectiveId) return { pinned: false, daemonId: '', label: '', online: false }
+        if (!effectiveId) return { pinned: false, daemonId: '', label: '', online: false, hostNode: undefined }
 
         // Resolve to a connected runtime daemon if one matches → host is online.
         const connected =
             daemons.find(d => pinnedDaemonId && daemonIdsEquivalent(d.id, pinnedDaemonId)) ||
             (nodeDaemonId ? daemons.find(d => daemonIdsEquivalent(d.id, nodeDaemonId)) : undefined)
         if (connected) {
-            return { pinned: true, daemonId: connected.id, label: daemonDisplayLabel(connected), online: true }
+            return { pinned: true, daemonId: connected.id, label: daemonDisplayLabel(connected), online: true, hostNode }
         }
 
         // Host daemon is offline / not connected: preserve the pin and a label from
@@ -276,11 +327,20 @@ export default function RepoMesh() {
             String((hostNode as any)?.machineLabel || '') ||
             String((hostNode as any)?.workspace || '') ||
             effectiveId
-        return { pinned: true, daemonId: effectiveId, label: offlineLabel, online: false }
+        return { pinned: true, daemonId: effectiveId, label: offlineLabel, online: false, hostNode }
     }, [selectedMesh, nodes, daemons, meshGraphStatus, features.meshHostDaemonSection])
 
     const persistedHostDaemonId = persistedHostInfo.daemonId
     const hostOnline = persistedHostInfo.online
+
+    // Display coherence: the host NAME and the host NODE path must describe the same
+    // machine. Both now come from the single resolved persistedHostInfo whenever a host
+    // is pinned. Only in first-setup (nothing pinned) do we fall back to the
+    // command-target node — there the section's own copy says "will host on <daemon>",
+    // so the node shown is that same command target and the two still agree.
+    const hostNodeForDisplay = persistedHostInfo.pinned
+        ? persistedHostInfo.hostNode
+        : commandTargetNode
 
     // While the pinned host is offline, route commands through the chosen re-bind
     // daemon (a connected daemon) if one is set and still connected. Otherwise the
@@ -372,9 +432,14 @@ export default function RepoMesh() {
     // HOST-MISSEED-CLOUD-SURFACE: feed the daemon-resolved host pin (mesh_status
     // meshHost.hostDaemonId for THIS mesh) into the seed so the transition-window seed
     // prefers the daemon the daemon itself names as host.
+    // HOST-SELF-SYNTHESIS-GUARD: only an AUTHORITATIVE pin may seed the first-setup
+    // candidate. Feeding a synthesized pin here would re-introduce the defect through
+    // the back door — the seed becomes coordinatorDaemonId, which is the Launch target,
+    // and launching pins the host permanently. An unresolved seed ('') is correct: the
+    // section then asks the operator to choose.
     const resolvedHostPinDaemonId = useMemo(() => {
         if (!meshGraphStatus?.meshId || String(meshGraphStatus.meshId) !== String(selectedMesh?.id ?? '')) return undefined
-        return (meshGraphStatus.meshHost as { hostDaemonId?: string } | undefined)?.hostDaemonId
+        return readAuthoritativeMeshHostPin(meshGraphStatus.meshHost as any).hostDaemonId || undefined
     }, [meshGraphStatus, selectedMesh])
     const firstSetupSeedDaemonId = useMemo(
         () => resolveFirstSetupSeedDaemonId(daemons, nodes, resolvedActiveDaemonId, primaryDaemonId, resolvedHostPinDaemonId),
@@ -622,7 +687,7 @@ export default function RepoMesh() {
             launchingCoordinator={launchingCoordinator}
             launchResult={launchResult}
             isHostNodeAttached={isHostNodeAttached}
-            selectedHostNode={selectedHostNode}
+            selectedHostNode={hostNodeForDisplay}
             hostPinned={persistedHostInfo.pinned}
             hostLabel={persistedHostInfo.label}
             hostOnline={hostOnline}

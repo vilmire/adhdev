@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { resolveFirstSetupSeedDaemonId } from '../../src/pages/repo-mesh/host-seed'
+import { resolveFirstSetupSeedDaemonId, readAuthoritativeMeshHostPin } from '../../src/pages/repo-mesh/host-seed'
 
 // HOST-MISSEED-FIRSTSETUP / -FALLBACK-REMOVAL: a two-daemon mesh where the host (M4,
 // coordinator) is at index 1 and an unrelated member (M1, moltbot) sits at daemons[0]
@@ -93,5 +93,56 @@ describe('HOST-MISSEED-FIRSTSETUP first-setup host seed priority (authoritative-
 
     it('returns empty string when there are no connected daemons', () => {
         expect(resolveFirstSetupSeedDaemonId([], [], 'x', 'y', 'z')).toBe('')
+    })
+})
+
+/**
+ * HOST-SELF-SYNTHESIS-GUARD — dashboard-side demotion of a synthesized host pin.
+ *
+ * The observed defect: the host badge showed M1-Server (moltbot) and, after a refresh,
+ * flipped to the local Mac — under UI copy claiming the host "cannot be reassigned".
+ * The daemon-side resolver filled hostDaemonId with whichever daemon was asked, so the
+ * badge reflected P2P arrival order, and the same id was the Launch target that would
+ * have pinned that wrong machine permanently.
+ */
+describe('HOST-SELF-SYNTHESIS-GUARD synthesized-pin demotion', () => {
+    it('strips a synthesized pin so the caller renders the neutral first-setup state', () => {
+        const pin = readAuthoritativeMeshHostPin({
+            hostDaemonId: M1_MEMBER.id,
+            hostNodeId: 'node-m1',
+            hostSynthesized: true,
+        })
+        expect(pin.hostDaemonId).toBe('')
+        expect(pin.hostNodeId).toBe('')
+    })
+
+    it('passes an authoritative (persisted) pin through untouched', () => {
+        const pin = readAuthoritativeMeshHostPin({ hostDaemonId: M4_HOST.id, hostNodeId: 'node-m4' })
+        expect(pin.hostDaemonId).toBe(M4_HOST.id)
+        expect(pin.hostNodeId).toBe('node-m4')
+    })
+
+    it('treats an explicitly false flag as authoritative (not demoted)', () => {
+        const pin = readAuthoritativeMeshHostPin({ hostDaemonId: M4_HOST.id, hostSynthesized: false })
+        expect(pin.hostDaemonId).toBe(M4_HOST.id)
+    })
+
+    it('returns an empty pin for a missing meshHost payload', () => {
+        expect(readAuthoritativeMeshHostPin(undefined)).toEqual({ hostDaemonId: '', hostNodeId: '' })
+    })
+
+    it('a demoted pin cannot seed the first-setup Launch target', () => {
+        // End-to-end of the launch-risk path: synthesized pin → stripped → seed '' →
+        // coordinatorDaemonId '' → Launch button disabled until the operator picks.
+        const synthesized = { hostDaemonId: M1_MEMBER.id, hostSynthesized: true }
+        const seedInput = readAuthoritativeMeshHostPin(synthesized).hostDaemonId || undefined
+        const seed = resolveFirstSetupSeedDaemonId(DAEMONS, [], undefined, undefined, seedInput)
+        expect(seed).toBe('')
+        expect(seed).not.toBe(M1_MEMBER.id)
+    })
+
+    it('an authoritative pin still seeds the Launch target (no regression)', () => {
+        const seedInput = readAuthoritativeMeshHostPin({ hostDaemonId: M4_HOST.id }).hostDaemonId || undefined
+        expect(resolveFirstSetupSeedDaemonId(DAEMONS, [], undefined, undefined, seedInput)).toBe(M4_HOST.id)
     })
 })

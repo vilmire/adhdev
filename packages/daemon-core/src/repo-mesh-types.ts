@@ -65,6 +65,16 @@ export interface RepoMeshHostStatus extends RepoMeshHostMetadata {
     canOwnCoordinator: boolean;
     canOwnQueue: boolean;
     defaulted: boolean;
+    /**
+     * HOST-SELF-SYNTHESIS-GUARD: true when `hostDaemonId` was NOT read from persisted
+     * config but inferred from the evaluating daemon's own identity (a role:'host' mesh
+     * whose pin was never written, with no other daemon attached). It is a best-effort
+     * default, not an established pin — consumers that would show a confident host badge
+     * or target a coordinator launch must treat it as "host not established yet" and
+     * require an explicit operator choice. Absent/false = the pin is authoritative
+     * (persisted hostDaemonId/hostNodeId, or a node declared role:'host').
+     */
+    hostSynthesized?: boolean;
 }
 
 export interface RepoMeshNode {

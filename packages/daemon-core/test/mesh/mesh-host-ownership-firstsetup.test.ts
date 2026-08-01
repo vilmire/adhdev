@@ -24,14 +24,33 @@ describe('HOST-MISSEED-FIRSTSETUP read-side host pin', () => {
         const mesh = {
             meshHost: { role: 'host', pairing: { status: 'not_configured' } },
             nodes: [
-                // bare form vs cloud-prefixed local form — daemonIdsEquivalent must match
+                // bare form vs cloud-prefixed local form — daemonIdsEquivalent must match,
+                // so this counts as a SELF node and does not block the synthesis.
                 { id: 'node-self', daemonId: 'mach_1b46842a15d3409d96ad33e767a916dd' },
-                { id: 'node-other', daemonId: 'daemon_mach_b6c8' },
+                { id: 'node-self-worktree', daemonId: 'daemon_mach_1b46842a15d3409d96ad33e767a916dd' },
             ],
         }
         const status = resolveMeshHostStatus(mesh, { localDaemonId })
         expect(status.hostDaemonId).toBe(localDaemonId)
         expect(status.hostNodeId).toBe('node-self')
+    })
+
+    // HOST-SELF-SYNTHESIS-GUARD: the original version of the test above also carried a
+    // node bound to a DIFFERENT daemon, and asserted that the local daemon still won.
+    // That is the defect — with a foreign peer attached and no persisted pin, every peer
+    // claims the host and the answer depends on which daemon was asked. See
+    // mesh-host-self-synthesis-guard.test.ts for the full contract.
+    it('does not self-synthesize once a node bound to another daemon is attached', () => {
+        const mesh = {
+            meshHost: { role: 'host', pairing: { status: 'not_configured' } },
+            nodes: [
+                { id: 'node-self', daemonId: 'mach_1b46842a15d3409d96ad33e767a916dd' },
+                { id: 'node-other', daemonId: 'daemon_mach_b6c8' },
+            ],
+        }
+        const status = resolveMeshHostStatus(mesh, { localDaemonId })
+        expect(status.hostDaemonId).toBeUndefined()
+        expect(status.hostNodeId).toBeUndefined()
     })
 
     it('does NOT synthesize a host pin for a member daemon', () => {
