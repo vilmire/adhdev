@@ -63,6 +63,8 @@ export function buildRefineJobHandle(self: DaemonCommandRouter, args: {
         interactionId?: string;
         retryOfJobId?: string;
         coordinatorDaemonId?: string;
+        /** Requesting coordinator SESSION (REFINE-EVENT-SESSION-SCOPED-UNICAST). */
+        coordinatorSessionId?: string;
     }): MeshRefineJobHandle {
         return {
             success: true,
@@ -79,6 +81,7 @@ export function buildRefineJobHandle(self: DaemonCommandRouter, args: {
             ...(args.completedAt ? { completedAt: args.completedAt } : {}),
             ...(args.retryOfJobId ? { retryOfJobId: args.retryOfJobId } : {}),
             ...(args.coordinatorDaemonId ? { targetCoordinatorDaemonId: args.coordinatorDaemonId } : {}),
+            ...(args.coordinatorSessionId ? { targetCoordinatorSessionId: args.coordinatorSessionId } : {}),
             eventDelivery: { pendingEvents: true, ledger: true },
             evidence: {
                 pendingEventsCommand: 'get_pending_mesh_events',
@@ -220,9 +223,25 @@ export function queueRefineJobEvent(self: DaemonCommandRouter, event: 'refine:ac
             nodeLabel: handle.targetNodeId,
             nodeId: handle.targetNodeId,
             workspace: handle.workspace,
-            metadataEvent,
+            metadataEvent: {
+                ...metadataEvent,
+                // REFINE-EVENT-SESSION-SCOPED-UNICAST: mirror the session INSIDE
+                // metadataEvent too. handleMeshForwardEvent reads the coordinator session
+                // anchor from `metadataEvent.meshCoordinatorSessionId` (a top-level field
+                // alone is dropped when the event crosses a machine boundary), so this is
+                // what survives the P2P relay for a remote-executing refine.
+                ...(handle.targetCoordinatorSessionId
+                    ? { meshCoordinatorSessionId: handle.targetCoordinatorSessionId }
+                    : {}),
+            },
             queuedAt: Date.now(),
             ...(handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {}),
+            // THE FIX: address the terminal event to the requesting coordinator SESSION,
+            // not just its daemon. stampPendingEventV2 folds this into the v2 unicast
+            // `intendedFor`, so identityDeliversTo's both-sides-session branch excludes a
+            // sibling coordinator session on the same daemon. Absent (legacy requester) →
+            // session-less intendedFor → daemon-level delivery exactly as before.
+            ...(handle.targetCoordinatorSessionId ? { targetCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}),
         };
         if (typeof self.deps.instanceManager?.getByCategory === 'function') {
             const forwarded = handleMeshForwardEvent(
@@ -246,6 +265,16 @@ export function queueRefineJobEvent(self: DaemonCommandRouter, event: 'refine:ac
                     // re-queued event self-fallbacks to THIS (the executing/worker)
                     // daemon and the real coordinator's drain excludes it.
                     ...(handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {}),
+                    // REFINE-EVENT-SESSION-SCOPED-UNICAST: carry the SESSION half of the
+                    // return address across the relay as well. buildRelayMetadataEvent
+                    // reads meshCoordinatorSessionId (falling back to
+                    // targetCoordinatorSessionId), so both spellings are supplied.
+                    ...(handle.targetCoordinatorSessionId
+                        ? {
+                            targetCoordinatorSessionId: handle.targetCoordinatorSessionId,
+                            meshCoordinatorSessionId: handle.targetCoordinatorSessionId,
+                        }
+                        : {}),
                     ...(slimResult ? { result: slimResult } : {}),
                 },
             );
@@ -2109,6 +2138,8 @@ export function buildRefineBatchJobHandle(self: DaemonCommandRouter, args: {
         jobId?: string;
         interactionId?: string;
         coordinatorDaemonId?: string;
+        /** Requesting coordinator SESSION (REFINE-EVENT-SESSION-SCOPED-UNICAST). */
+        coordinatorSessionId?: string;
     }): MeshRefineBatchJobHandle {
         return {
             success: true,
@@ -2125,6 +2156,7 @@ export function buildRefineBatchJobHandle(self: DaemonCommandRouter, args: {
             startedAt: args.startedAt || new Date().toISOString(),
             ...(args.completedAt ? { completedAt: args.completedAt } : {}),
             ...(args.coordinatorDaemonId ? { targetCoordinatorDaemonId: args.coordinatorDaemonId } : {}),
+            ...(args.coordinatorSessionId ? { targetCoordinatorSessionId: args.coordinatorSessionId } : {}),
             eventDelivery: { pendingEvents: true, ledger: true },
             evidence: {
                 pendingEventsCommand: 'get_pending_mesh_events',
@@ -2165,9 +2197,18 @@ export function queueRefineBatchJobEvent(self: DaemonCommandRouter,
             meshId: handle.meshId,
             nodeLabel: handle.batchLabel,
             nodeId: handle.batchLabel,
-            metadataEvent,
+            metadataEvent: {
+                ...metadataEvent,
+                // REFINE-EVENT-SESSION-SCOPED-UNICAST — see queueRefineJobEvent.
+                ...(handle.targetCoordinatorSessionId
+                    ? { meshCoordinatorSessionId: handle.targetCoordinatorSessionId }
+                    : {}),
+            },
             queuedAt: Date.now(),
             ...(handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {}),
+            // THE FIX (batch half) — address the batch terminal event to the requesting
+            // coordinator SESSION so a sibling session cannot consume it.
+            ...(handle.targetCoordinatorSessionId ? { targetCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}),
         };
         if (typeof self.deps.instanceManager?.getByCategory === 'function') {
             const forwarded = handleMeshForwardEvent(
@@ -2185,6 +2226,14 @@ export function queueRefineBatchJobEvent(self: DaemonCommandRouter,
                     // the sessionless batch job's terminal event must stay targeted
                     // at the originating coordinator, not self-fallback to this daemon.
                     ...(handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {}),
+                    // REFINE-EVENT-SESSION-SCOPED-UNICAST — session half of the return
+                    // address, both spellings (see queueRefineJobEvent).
+                    ...(handle.targetCoordinatorSessionId
+                        ? {
+                            targetCoordinatorSessionId: handle.targetCoordinatorSessionId,
+                            meshCoordinatorSessionId: handle.targetCoordinatorSessionId,
+                        }
+                        : {}),
                     ...(result ? { result } : {}),
                 },
             );
@@ -2282,6 +2331,9 @@ export async function finishMeshRefineBatchJob(self: DaemonCommandRouter,
             jobId: handle.jobId,
             interactionId: handle.interactionId,
             coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+            // REFINE-EVENT-SESSION-SCOPED-UNICAST — carry the requester's session onto the
+            // terminal batch handle (see the single-node path).
+            coordinatorSessionId: handle.targetCoordinatorSessionId,
         });
         const terminal: MeshRefineBatchTerminalJob = { ...terminalHandle, result: normalizedResult };
         self.terminalRefineBatchJobs.set(key, terminal);
@@ -2340,7 +2392,12 @@ export async function startMeshRefineBatchJob(self: DaemonCommandRouter, meshId:
         const coordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
             ? args.coordinatorDaemonId.trim()
             : (self.deps.statusInstanceId || undefined);
-        const handle = buildRefineBatchJobHandle(self, { meshId, nodeIds, order, coordinatorDaemonId });
+        // REFINE-EVENT-SESSION-SCOPED-UNICAST — see startMeshRefineJob for the rationale
+        // (no self-fallback; absent → daemon-level delivery, unchanged).
+        const coordinatorSessionId = typeof args?.coordinatorSessionId === 'string' && args.coordinatorSessionId.trim()
+            ? args.coordinatorSessionId.trim()
+            : undefined;
+        const handle = buildRefineBatchJobHandle(self, { meshId, nodeIds, order, coordinatorDaemonId, coordinatorSessionId });
         self.runningRefineBatchJobs.set(key, handle);
         await appendRefineBatchJobLedger(self, 'task_dispatched', handle);
         queueRefineBatchJobEvent(self, 'refine:accepted', handle);
@@ -2491,6 +2548,11 @@ export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: Mes
             retryOfJobId: handle.retryOfJobId,
             node: { daemonId: handle.targetDaemonId, workspace: handle.workspace },
             coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+            // REFINE-EVENT-SESSION-SCOPED-UNICAST: carry the requester's session from the
+            // accepted handle onto the TERMINAL handle. Dropping it here would leave the
+            // completed/failed event — the one the coordinator actually waits on — back at
+            // daemon-level addressing, i.e. the original defect.
+            coordinatorSessionId: handle.targetCoordinatorSessionId,
         });
         const terminal: MeshRefineTerminalJob = { ...terminalHandle, result: normalizedResult };
         self.terminalRefineJobs.set(key, terminal);
@@ -2520,7 +2582,17 @@ export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: stri
         const coordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
             ? args.coordinatorDaemonId.trim()
             : (self.deps.statusInstanceId || undefined);
-        const handle = buildRefineJobHandle(self, { meshId, nodeId, node, retryOfJobId: terminal?.jobId, coordinatorDaemonId });
+        // REFINE-EVENT-SESSION-SCOPED-UNICAST: capture the caller's coordinator SESSION
+        // too. The daemon id alone routes to the right MACHINE; on a machine running more
+        // than one coordinator session the terminal event then went to whichever polled
+        // first. There is NO self-fallback here on purpose: this daemon's own session is
+        // not the requester, and inventing one would address the event to a coordinator
+        // that never asked. Absent → daemon-level delivery, i.e. exactly the old
+        // behaviour, never a stuck event.
+        const coordinatorSessionId = typeof args?.coordinatorSessionId === 'string' && args.coordinatorSessionId.trim()
+            ? args.coordinatorSessionId.trim()
+            : undefined;
+        const handle = buildRefineJobHandle(self, { meshId, nodeId, node, retryOfJobId: terminal?.jobId, coordinatorDaemonId, coordinatorSessionId });
         self.runningRefineJobs.set(key, handle);
         await appendRefineJobLedger(self, 'task_dispatched', handle);
         queueRefineJobEvent(self, 'refine:accepted', handle);

@@ -7930,6 +7930,7 @@ async function meshRefineNode(ctx, args) {
     ...args.execute !== void 0 ? { execute: args.execute } : {},
     ...args.dry_run !== void 0 ? { dryRun: args.dry_run } : {},
     ...coordinatorDaemonId ? { coordinatorDaemonId } : {},
+    ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {},
     inlineMesh: ctx.mesh
   });
   if (result?.success && result.async !== true && result.removeResult?.removed !== false) {
@@ -7951,6 +7952,7 @@ async function meshRefineBatch(ctx, args = {}) {
     ...args.execute !== void 0 ? { execute: args.execute } : {},
     ...args.dry_run !== void 0 ? { dryRun: args.dry_run } : {},
     ...coordinatorDaemonId ? { coordinatorDaemonId } : {},
+    ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {},
     inlineMesh: ctx.mesh
   });
   const payload = unwrapCommandPayload(result) ?? result;

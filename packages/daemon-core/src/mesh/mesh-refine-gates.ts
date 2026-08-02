@@ -221,6 +221,17 @@ export type MeshRefineJobHandle = {
      * pending-events queue instead of the shared broadcast queue.
      */
     targetCoordinatorDaemonId?: string;
+    /**
+     * The coordinator SESSION ID that initiated this refine job (REFINE-EVENT-SESSION-
+     * SCOPED-UNICAST). The daemon anchor above narrows delivery to the right MACHINE;
+     * this narrows it to the right coordinator SESSION on that machine. Without it the
+     * terminal event's v2 `intendedFor` is session-less, and identityDeliversTo — which
+     * compares sessions only when BOTH sides name one — matches ANY drainer on the
+     * daemon: unicast silently degrades to first-come-first-served, and a sibling
+     * coordinator session polling first consumes this job's result.
+     * Absent on legacy / version-skewed requesters → daemon-level delivery, unchanged.
+     */
+    targetCoordinatorSessionId?: string;
     eventDelivery: {
         pendingEvents: true;
         ledger: true;
@@ -259,6 +270,9 @@ export type MeshRefineBatchJobHandle = {
     completedAt?: string;
     duplicate?: boolean;
     targetCoordinatorDaemonId?: string;
+    /** Requesting coordinator SESSION (REFINE-EVENT-SESSION-SCOPED-UNICAST) — same
+     *  contract as the single-node handle's field of the same name. */
+    targetCoordinatorSessionId?: string;
     eventDelivery: {
         pendingEvents: true;
         ledger: true;

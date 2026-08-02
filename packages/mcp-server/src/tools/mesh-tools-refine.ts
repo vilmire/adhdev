@@ -233,6 +233,15 @@ export async function meshRefineNode(
     // (meshContext.coordinatorDaemonId → resolveCoordinatorDaemonId). Without it the
     // executing daemon falls back to its OWN statusInstanceId, scoping the terminal
     // event to an inbox this coordinator never drains (event trims to held).
+    //
+    // REFINE-EVENT-SESSION-SCOPED-UNICAST: the daemon anchor alone routes the terminal
+    // event to the right MACHINE. When that machine runs more than one coordinator
+    // session, `intendedFor` was session-less and identityDeliversTo — which compares
+    // sessions only when BOTH sides name one — matched ANY drainer there, so unicast
+    // degraded to first-come-first-served and a sibling coordinator consumed this job's
+    // result. Send the SESSION half of the return address too; the drainer side already
+    // stamps its own session (mesh-tools-internal drainerIdentity), so the pair completes
+    // the match. Absent (legacy ctx) → daemon-level delivery, unchanged.
     const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
     const result = await commandForNode(ctx, node, 'refine_mesh_node', {
         meshId: ctx.mesh.id,
@@ -240,6 +249,7 @@ export async function meshRefineNode(
         ...(args.execute !== undefined ? { execute: args.execute } : {}),
         ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}),
         ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
+        ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
         inlineMesh: ctx.mesh,
     });
     if (result?.success && result.async !== true && result.removeResult?.removed !== false) {
@@ -272,6 +282,8 @@ export async function meshRefineBatch(
     // terminal event must be scoped to THIS coordinator's daemon id so its drain
     // recovers it; absent, the executing daemon self-fallback stamps its own id and
     // the event is excluded from the coordinator's drain (trims to held).
+    // REFINE-EVENT-SESSION-SCOPED-UNICAST: session half of the return address — same
+    // contract as meshRefineNode above.
     const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
     const result = await ctx.transport.command('batch_refine_mesh_nodes', {
         meshId: ctx.mesh.id,
@@ -279,6 +291,7 @@ export async function meshRefineBatch(
         ...(args.execute !== undefined ? { execute: args.execute } : {}),
         ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}),
         ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
+        ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
         inlineMesh: ctx.mesh,
     });
 
