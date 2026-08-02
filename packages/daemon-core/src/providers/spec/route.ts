@@ -26,6 +26,10 @@ export function createCliAdapter(
     cliArgs: string[],
     extraEnv: Record<string, string>,
     transportFactory?: PtyTransportFactory,
+    /** FSMLOG-SESSION-ATTRIBUTION (D3): owning session id, threaded to SpecCliAdapter so the
+     *  FSM driver's log lines carry a session segment. Spec path only — the legacy
+     *  ProviderCliAdapter already tags its logs per instance. */
+    sessionId?: string,
 ): CliAdapter {
     // Prefer the path provider-loader already resolved (it walks the
     // compatibility[i].spec → specs/default.json → spec.json chain).
@@ -42,7 +46,7 @@ export function createCliAdapter(
     if (specPath) {
         try {
             LOG.info('spec-route', `[${provider.type}] routing through SpecCliAdapter (${path.relative(dir || '', specPath) || specPath})`);
-            return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory);
+            return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId);
         } catch (err) {
             LOG.warn('spec-route', `[${provider.type}] spec invalid, falling back to ProviderCliAdapter: ${(err as Error).message}`);
         }

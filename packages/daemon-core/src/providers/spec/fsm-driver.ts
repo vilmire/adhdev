@@ -165,6 +165,15 @@ export interface SpecDriverOpts {
     emitTrace?: boolean;
     transportFactory?: PtyTransportFactory;
     extraCliArgs?: string[];
+    /**
+     * FSMLOG-SESSION-ATTRIBUTION (D3): the owning provider instance's session id, used only to
+     * prefix this driver's log lines. Without it every concurrent session logs under the same
+     * `[cli/claude-code/4.0.json]` tag, so multi-session logs cannot be attributed to a session
+     * — the direct cause of a misdiagnosis where one session's FSM transitions were read as
+     * another's. Optional: callers that have no session id (tests, out-of-tree embedders) fall
+     * back to a per-instance short uid, which still groups one driver's lines together.
+     */
+    sessionId?: string;
 }
 
 function countNewlines(s: string): number {
@@ -174,6 +183,10 @@ function countNewlines(s: string): number {
 }
 
 const SUBMIT_DELAY_FLOOR_MS = 200;
+
+/** FSMLOG-SESSION-ATTRIBUTION (D3): fallback log-tag sequence for drivers constructed without a
+ *  session id. Process-local and monotonic — enough to group one driver's lines together. */
+let fsmDriverSeq = 0;
 
 // win32 ConPTY submit reliability — TWO independent concerns, do not conflate:
 //
@@ -385,8 +398,12 @@ export class FsmDriver implements ISpecDriver {
      *  the shadow verdict currently disagrees with the real one), so the
      *  shadow log emits on FLIP only, not every frame. */
     private shadowDivergenceLast = new Map<string, boolean>();
+    /** FSMLOG-SESSION-ATTRIBUTION (D3): session segment of every log line's prefix. */
+    private readonly sessionTag: string;
 
     constructor(private readonly opts: SpecDriverOpts) {
+        const sessionId = typeof opts.sessionId === 'string' ? opts.sessionId.trim() : '';
+        this.sessionTag = sessionId ? sessionId.slice(0, 8) : `d${++fsmDriverSeq}`;
         this.loadSpecOrThrow();
         this.adapter = new TerminalAdapter(
             this.buildAdapterOpts(),
@@ -1543,8 +1560,16 @@ export class FsmDriver implements ISpecDriver {
         if (this.stateHistory.length > 50) this.stateHistory.shift();
     }
 
+    /**
+     * FSMLOG-SESSION-ATTRIBUTION (D3): log prefix identifying BOTH the spec being driven and the
+     * session driving it. Previously spec-only, which made every concurrent session of the same
+     * provider log under an identical tag. The session segment is the owning instance's session id
+     * (short form — the leading 8 chars are what mesh ledger/trace lines carry, so logs grep-join
+     * against them), or a per-driver `d<n>` fallback when no session id was supplied.
+     */
     private specTag(): string {
-        return this.opts.specPath.split('/').slice(-3).join('/');
+        const spec = this.opts.specPath.split(/[/\\]/).slice(-3).join('/');
+        return `${spec}|${this.sessionTag}`;
     }
 
     private emit(ev: DashboardEvent): void {

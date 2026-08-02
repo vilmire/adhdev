@@ -2182,12 +2182,17 @@ describe('setupMeshEventForwarding', () => {
         },
       })
 
+      // NO-PROGRESS-STALE-EVIDENCE (D1): the monitor must name the task it fired for, matching
+      // what the real stall watchdog emits (cli-provider-instance stamps taskId from
+      // completingTurnTaskId()). Suppression is task-scoped, so the echoed taskId is what proves
+      // this terminal is evidence about THIS turn rather than some earlier task on the session.
       const result = handleMeshForwardEvent(components, {
         event: 'monitor:no_progress',
         meshId,
         nodeId: 'node_child_1',
         targetSessionId: 'runtime-session-1',
         providerType: 'codex-cli',
+        taskId: 'task-done',
       })
 
       expect(result).toMatchObject({

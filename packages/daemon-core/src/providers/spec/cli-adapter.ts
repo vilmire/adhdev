@@ -143,6 +143,9 @@ export class SpecCliAdapter implements CliAdapter {
         cliArgs: string[],
         extraEnv: Record<string, string>,
         transportFactory?: PtyTransportFactory,
+        /** FSMLOG-SESSION-ATTRIBUTION (D3): owning session id, passed to the driver purely so its
+         *  log lines are attributable to a session when several run concurrently. */
+        sessionId?: string,
     ) {
         const raw = JSON.parse(fs.readFileSync(specPath, 'utf8'));
         this.spec = {
@@ -170,6 +173,7 @@ export class SpecCliAdapter implements CliAdapter {
             emitTrace: false,
             transportFactory,
             extraCliArgs: cliArgs,
+            sessionId,
         });
         this.driver.subscribe((ev) => this.handleEvent(ev));
     }

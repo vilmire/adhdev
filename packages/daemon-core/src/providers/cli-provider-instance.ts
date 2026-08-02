@@ -551,7 +551,9 @@ export class CliProviderInstance implements ProviderInstance {
         this.launchMode = options?.launchMode || 'new';
         this.initialThinkingLevel = options?.initialThinkingLevel;
         this.onProviderSessionResolved = options?.onProviderSessionResolved;
-        this.adapter = createCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory) as ProviderCliAdapter;
+        // FSMLOG-SESSION-ATTRIBUTION (D3): hand the resolved session id (assigned just above) to
+        // the adapter so a spec-driven FSM tags its log lines with the owning session.
+        this.adapter = createCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory, this.instanceId) as ProviderCliAdapter;
         if (this.providerSessionId) {
             this.adapter.updateRuntimeMeta({ providerSessionId: this.providerSessionId });
         }

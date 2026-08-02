@@ -235,3 +235,160 @@ describe('EARLYNOTIFY-GATEBYPASS: converge synth completions through the gate', 
     expect(reconciled?.evidenceLevel).toBeUndefined()
   })
 })
+
+// NO-PROGRESS-STALE-EVIDENCE (D1): the terminal-ledger suppression branch of the no-progress
+// reconcile must be scoped to the task the monitor fired FOR. Both directions matter, so both
+// are asserted here:
+//   (1) the PRIOR task's terminal must NOT suppress a genuinely wedged CURRENT task's monitor
+//       (the observed defect: a 24-minute-old terminal from the previous task suppressed the
+//       wedge signal purely because both tasks ran in the same session);
+//   (2) the SAME task's own terminal MUST still suppress — a task that really finished must not
+//       page the coordinator as stalled (the kimi-reconcile false-positive this branch exists for).
+describe('NO-PROGRESS-STALE-EVIDENCE: terminal-ledger suppression is task-scoped', () => {
+  // Append a terminal for `taskId`, `ageMs` in the past, on the shared session.
+  function seedTerminal(meshId: string, taskId: string, ageMs: number) {
+    MeshRuntimeStore.getInstance().appendLedgerEntry({
+      id: `terminal-${taskId}`,
+      meshId,
+      timestamp: new Date(Date.now() - ageMs).toISOString(),
+      kind: 'task_completed',
+      nodeId: NODE_ID,
+      sessionId: SESSION_ID,
+      providerType: 'claude-code',
+      payload: {
+        event: 'agent:generating_completed',
+        taskId,
+        providerSessionId: 'provider-session-shared',
+        finalSummary: 'previous task report',
+        completedViaReady: true,
+      },
+    })
+  }
+
+  // The stall watchdog's payload shape (cli-provider-instance emits taskId + stall anchor).
+  function noProgressEvent(taskId: string | undefined, stalledMs: number) {
+    const now = Date.now()
+    return {
+      targetSessionId: SESSION_ID,
+      providerType: 'claude-code',
+      meshWorkerStall: true,
+      observedStatus: 'generating',
+      timestamp: now,
+      stalledMs,
+      lastOutputAt: now - stalledMs,
+      ...(taskId ? { taskId } : {}),
+    }
+  }
+
+  it('the PRIOR task terminal does not suppress a wedged CURRENT task no-progress monitor', () => {
+    const meshId = `mesh_noprog_prior_task_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: NODE_ID, workspace: WORKSPACE }], policy: {} })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      // Prior task finished 24 minutes ago; the CURRENT task is wedged with no terminal at all.
+      seedTerminal(meshId, 'task_prior_6cc0d79a', 24 * 60_000)
+
+      const reconciled = buildNoProgressCompletionReconciliation({
+        meshId,
+        nodeId: NODE_ID,
+        nodeLabel: `Node '${NODE_ID}'`,
+        metadataEvent: noProgressEvent('task_current_100382d1', 5 * 60_000),
+      })
+
+      // Must NOT be suppressed — the coordinator has to learn this task is wedged.
+      expect(reconciled).toBeNull()
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('the SAME task terminal still suppresses its own no-progress monitor', () => {
+    const meshId = `mesh_noprog_same_task_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: NODE_ID, workspace: WORKSPACE }], policy: {} })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const taskId = 'task_already_done'
+      seedTerminal(meshId, taskId, 60_000)
+
+      const reconciled = buildNoProgressCompletionReconciliation({
+        meshId,
+        nodeId: NODE_ID,
+        nodeLabel: `Node '${NODE_ID}'`,
+        metadataEvent: noProgressEvent(taskId, 5 * 60_000),
+      })
+
+      expect(reconciled?.source).toBe('no_progress_terminal_ledger_suppression')
+      expect(reconciled?.terminalLedgerKind).toBe('task_completed')
+      expect(reconciled?.terminalLedgerScope).toBe('task')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('a taskId-less monitor falls back to session scope but rejects evidence older than the stall', () => {
+    const meshId = `mesh_noprog_fallback_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: NODE_ID, workspace: WORKSPACE }], policy: {} })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      // Terminal is 24 minutes old; the stall episode began 5 minutes ago, so the terminal
+      // predates the stall and cannot be evidence about the current turn.
+      seedTerminal(meshId, 'task_prior', 24 * 60_000)
+
+      expect(buildNoProgressCompletionReconciliation({
+        meshId,
+        nodeId: NODE_ID,
+        nodeLabel: `Node '${NODE_ID}'`,
+        metadataEvent: noProgressEvent(undefined, 5 * 60_000),
+      })).toBeNull()
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('a taskId-less monitor still suppresses on a terminal recorded after the stall began', () => {
+    const meshId = `mesh_noprog_fallback_recent_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: NODE_ID, workspace: WORKSPACE }], policy: {} })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      // Terminal landed 1 minute ago, well inside a stall episode that began 5 minutes ago.
+      seedTerminal(meshId, 'task_recent', 60_000)
+
+      const reconciled = buildNoProgressCompletionReconciliation({
+        meshId,
+        nodeId: NODE_ID,
+        nodeLabel: `Node '${NODE_ID}'`,
+        metadataEvent: noProgressEvent(undefined, 5 * 60_000),
+      })
+
+      expect(reconciled?.source).toBe('no_progress_terminal_ledger_suppression')
+      expect(reconciled?.terminalLedgerScope).toBe('session_recency_bounded')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('a taskId-less monitor with no stall anchor refuses to suppress (fails open)', () => {
+    const meshId = `mesh_noprog_no_anchor_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: NODE_ID, workspace: WORKSPACE }], policy: {} })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      seedTerminal(meshId, 'task_prior', 60_000)
+
+      // No taskId, no lastOutputAt, no stalledMs → the stall episode cannot be dated, so there is
+      // no defensible basis for suppression.
+      expect(buildNoProgressCompletionReconciliation({
+        meshId,
+        nodeId: NODE_ID,
+        nodeLabel: `Node '${NODE_ID}'`,
+        metadataEvent: { targetSessionId: SESSION_ID, providerType: 'claude-code', meshWorkerStall: true },
+      })).toBeNull()
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+})

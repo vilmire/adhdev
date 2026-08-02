@@ -127,8 +127,20 @@ export function findRecentTerminalLedgerEvidence(args: {
     meshId: string;
     sessionId?: string;
     nodeId?: string;
+    /**
+     * NO-PROGRESS-STALE-EVIDENCE (D1) fallback bound: when set, a terminal entry OLDER than
+     * this epoch-ms cutoff is not accepted as evidence. Session-scoped lookup alone matches
+     * ANY terminal on the session, so a prior task's terminal (observed: 24 minutes old) can
+     * masquerade as evidence for the task running NOW. Callers that cannot supply a taskId
+     * pass a conservative cutoff so at least stale-by-time evidence is rejected. Unset →
+     * unbounded, the historical behaviour every other caller relies on.
+     */
+    notBeforeMs?: number;
 }): { id: string; kind: MeshLedgerKind; payload: Record<string, unknown>; timestamp: string } | null {
     if (!args.sessionId && !args.nodeId) return null;
+    const notBefore = typeof args.notBeforeMs === 'number' && Number.isFinite(args.notBeforeMs)
+        ? args.notBeforeMs
+        : null;
     // Tail-limit: 200 entries gives a wide enough window to catch terminal events for active
     // sessions while avoiding a full O(n) scan. If a terminal is older than 200 entries,
     // the MeshRuntimeStore fingerprint dedup will still block duplicate processing downstream.
@@ -136,6 +148,12 @@ export function findRecentTerminalLedgerEvidence(args: {
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
         if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') continue;
+        if (notBefore !== null) {
+            // Reject terminals older than the caller's cutoff. An unparseable timestamp is
+            // treated as too old — a bounded caller asked for recency it cannot verify.
+            const entryTime = new Date(entry.timestamp).getTime();
+            if (!Number.isFinite(entryTime) || entryTime < notBefore) continue;
+        }
         if (args.sessionId && sessionIdsEquivalent(entry.sessionId, args.sessionId)) {
             return { id: entry.id, kind: entry.kind, payload: entry.payload || {}, timestamp: entry.timestamp };
         }
@@ -571,16 +589,72 @@ export function buildNoProgressCompletionReconciliation(args: {
         };
     }
 
-    const terminal = findRecentTerminalLedgerEvidence({
-        meshId: args.meshId,
-        sessionId: sessionId || undefined,
-        nodeId: nodeId || undefined,
-    });
+    // NO-PROGRESS-STALE-EVIDENCE (D1). This branch suppresses a no-progress monitor when the
+    // task it fired for ALREADY has a terminal — a legitimate false-positive filter (a task that
+    // genuinely finished must not page the coordinator as stalled). The bug was the SCOPE of the
+    // lookup: a bare session-scoped search matched ANY terminal on the session, so the PREVIOUS
+    // task's terminal suppressed the no-progress of a task that was truly wedged. Observed: a
+    // wedged task's monitor suppressed by the prior task's terminal from 24 minutes earlier,
+    // purely because both ran in the same session.
+    //
+    // The monitor event stamps the turn's taskId (cli-provider-instance's stall watchdog uses
+    // completingTurnTaskId()), so the authoritative lookup is task-scoped: only THIS task's own
+    // terminal suppresses THIS task's no-progress signal.
+    const taskId = readNonEmptyString(args.metadataEvent.taskId);
+    const terminal = taskId
+        ? findTerminalLedgerEvidenceForTask({
+            meshId: args.meshId,
+            taskId,
+            sessionId: sessionId || undefined,
+            nodeId: nodeId || undefined,
+        })
+        // FALLBACK (no taskId on the event — an ad-hoc/non-task turn, or a legacy daemon whose
+        // monitor payload predates the taskId stamp). Task-scoping is impossible, so fall back to
+        // the session-scoped lookup but bound it by RECENCY: a terminal older than the stall the
+        // monitor is reporting cannot be evidence about the current turn. The monitor carries how
+        // long output has been static (stalledMs / lastOutputAt), which dates the start of the
+        // stall episode; a terminal predating that is by construction about earlier work. Without
+        // any such anchor we refuse to suppress at all — an unsuppressed no-progress is a
+        // recoverable false page, while a wrongly-suppressed one silently strands a wedged task.
+        : (() => {
+            const notBeforeMs = resolveNoProgressEvidenceFloor(args.metadataEvent);
+            if (notBeforeMs === null) return null;
+            return findRecentTerminalLedgerEvidence({
+                meshId: args.meshId,
+                sessionId: sessionId || undefined,
+                nodeId: nodeId || undefined,
+                notBeforeMs,
+            });
+        })();
     if (!terminal) return null;
     return {
         ...args.metadataEvent,
         source: 'no_progress_terminal_ledger_suppression',
         terminalLedgerKind: terminal.kind,
         terminalLedgerAt: terminal.timestamp,
+        terminalLedgerScope: taskId ? 'task' : 'session_recency_bounded',
     };
+}
+
+/**
+ * Epoch-ms floor for terminal evidence admitted by the taskId-less no-progress fallback.
+ * Derived from the monitor's own stall anchor, in priority order:
+ *   1. `lastOutputAt` — the exact wall clock of the last PTY movement (the stall's start).
+ *   2. `timestamp - stalledMs` — the same instant reconstructed when only the duration is stamped.
+ * Returns null when the event carries neither, i.e. we cannot date the stall episode and so
+ * decline to suppress (fail OPEN toward paging the coordinator).
+ */
+function resolveNoProgressEvidenceFloor(metadataEvent: Record<string, unknown>): number | null {
+    const lastOutputAt = readFiniteNumber(metadataEvent.lastOutputAt);
+    if (lastOutputAt !== null && lastOutputAt > 0) return lastOutputAt;
+    const stalledMs = readFiniteNumber(metadataEvent.stalledMs);
+    const timestamp = readFiniteNumber(metadataEvent.timestamp);
+    if (stalledMs !== null && stalledMs >= 0 && timestamp !== null && timestamp > 0) {
+        return timestamp - stalledMs;
+    }
+    return null;
+}
+
+function readFiniteNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
