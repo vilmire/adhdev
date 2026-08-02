@@ -360,7 +360,15 @@ export class MeshRuntimeStore {
                 event_id TEXT,
                 scope TEXT,
                 dispatched_by TEXT,
-                intended_for TEXT
+                intended_for TEXT,
+                -- REFINE-EVENT-SESSION-SCOPED-UNICAST: WHO consumed this row. The ledger
+                -- previously recorded only THAT an event was drained, never by which
+                -- coordinator identity — so a mis-delivered unicast (a sibling session
+                -- consuming another coordinator's event) left no evidence and had to be
+                -- inferred. Written at drain time as the JSON-serialized drainer
+                -- CoordinatorIdentity. NULL on rows drained before this column existed
+                -- and on any drain whose caller passed no identity (daemon-level drain).
+                drained_by TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_mesh_pending_events_mesh_drained
@@ -635,8 +643,12 @@ export class MeshRuntimeStore {
             //    each missing one. All nullable — legacy rows read back as v1 events
             //    (protocol_version NULL) with no reader change. Idempotent: the column
             //    check short-circuits once present, and every ADD COLUMN is guarded.
+            //    `drained_by` (REFINE-EVENT-SESSION-SCOPED-UNICAST) joins the same
+            //    additive-nullable set: existing rows read back NULL, meaning "drained
+            //    before drainer attribution existed / drained without an identity" — it is
+            //    never interpreted as an identity, only rendered as unknown.
             const pendingCols = this.tableColumns('mesh_pending_events');
-            for (const col of ['protocol_version', 'event_id', 'scope', 'dispatched_by', 'intended_for'] as const) {
+            for (const col of ['protocol_version', 'event_id', 'scope', 'dispatched_by', 'intended_for', 'drained_by'] as const) {
                 if (!pendingCols.has(col)) {
                     this.db.exec(`ALTER TABLE mesh_pending_events ADD COLUMN ${col} TEXT`);
                 }
@@ -2301,7 +2313,11 @@ export class MeshRuntimeStore {
     drainPendingEvents(
         meshId: string,
         coordinatorDaemonId?: string | null | ReadonlyArray<string>,
-        opts?: { onlyEvents?: ReadonlySet<string> },
+        // `drainedBy` (REFINE-EVENT-SESSION-SCOPED-UNICAST) is the pre-serialized
+        // drainer CoordinatorIdentity JSON, recorded on the rows this call consumes so
+        // a mis-delivered unicast is auditable after the fact instead of inferred.
+        // Omitted → the column stays NULL, exactly as before (no behaviour change).
+        opts?: { onlyEvents?: ReadonlySet<string>; drainedBy?: string | null },
     ): Array<{ id: string; event: string; payload: unknown }> {
         return this.transaction(() => {
             const onlyEvents = opts?.onlyEvents;
@@ -2337,8 +2353,8 @@ export class MeshRuntimeStore {
             const ids = rows.map(r => r.id);
             const now = Date.now();
             this.db.prepare(
-                `UPDATE mesh_pending_events SET drained = 1, drained_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`
-            ).run(now, ...ids);
+                `UPDATE mesh_pending_events SET drained = 1, drained_at = ?, drained_by = ? WHERE id IN (${ids.map(() => '?').join(',')})`
+            ).run(now, opts?.drainedBy ?? null, ...ids);
             return rows.map(r => ({
                 id: r.id,
                 event: r.event,
@@ -2364,6 +2380,40 @@ export class MeshRuntimeStore {
             id: r.id,
             event: r.event,
             payload: (() => { try { return JSON.parse(r.payload); } catch { return {}; } })(),
+        }));
+    }
+
+    /**
+     * REFINE-EVENT-SESSION-SCOPED-UNICAST — drain attribution audit. Returns the most
+     * recent pending-event rows for a mesh with WHO drained each one, so a suspected
+     * mis-delivery ("my refine result went to another coordinator session") is answered
+     * from the ledger instead of inferred from timing. `drainedBy` is the serialized
+     * drainer CoordinatorIdentity, or null when the row is still queued, was drained
+     * before this column existed, or was drained by a caller that passed no identity.
+     */
+    recentDrainedPendingEvents(meshId: string, limit = 100): Array<{
+        id: string;
+        event: string;
+        scope: string | null;
+        intendedFor: string | null;
+        drainedBy: string | null;
+        drained: boolean;
+        queuedAt: number;
+        drainedAt: number | null;
+    }> {
+        const rows = this.db.prepare(
+            `SELECT id, event, scope, intended_for, drained_by, drained, queued_at, drained_at
+             FROM mesh_pending_events WHERE mesh_id = ? ORDER BY queued_at DESC LIMIT ?`
+        ).all(meshId, Math.max(1, limit)) as Array<Record<string, unknown>>;
+        return rows.map(r => ({
+            id: r.id as string,
+            event: r.event as string,
+            scope: (r.scope as string | null) ?? null,
+            intendedFor: (r.intended_for as string | null) ?? null,
+            drainedBy: (r.drained_by as string | null) ?? null,
+            drained: r.drained === 1,
+            queuedAt: r.queued_at as number,
+            drainedAt: (r.drained_at as number | null) ?? null,
         }));
     }
 
@@ -2569,8 +2619,11 @@ export class MeshRuntimeStore {
      */
     requeueDrainedPendingEventByFingerprint(meshId: string, fingerprint: string): boolean {
         if (!fingerprint) return false;
+        // drained_by is cleared with drained_at: the row is queued again, so the
+        // previous drainer is no longer the consumer of record. Leaving it set would
+        // make the audit surface attribute the row to a coordinator that gave it back.
         const changes = this.db.prepare(
-            `UPDATE mesh_pending_events SET drained = 0, drained_at = NULL
+            `UPDATE mesh_pending_events SET drained = 0, drained_at = NULL, drained_by = NULL
              WHERE mesh_id = ? AND fingerprint = ? AND drained = 1`
         ).run(meshId, fingerprint).changes;
         if (changes > 0) this.maybeCheckpointWal();
