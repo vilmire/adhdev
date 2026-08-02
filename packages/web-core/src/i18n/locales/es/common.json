@@ -495,7 +495,7 @@
                     "details": [
                         "La confianza proviene de la independencia: distintas IA en distintas máquinas fallan de distintas maneras.",
                         "Cuando los agentes discrepan, la propia discrepancia señala qué conviene volver a comprobar.",
-                        "Se ejecuta mediante mesh_magi_review; la síntesis pondera el acuerdo frente al acoplamiento de las fuentes."
+                        "La síntesis pondera el acuerdo frente al acoplamiento de las fuentes."
                     ]
                 },
                 "magiPanel": {

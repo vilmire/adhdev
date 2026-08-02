@@ -495,7 +495,7 @@
                     "details": [
                         "Confidence comes from independence — different AIs on different machines fail in different ways.",
                         "When the agents disagree, the disagreement itself flags what to double-check.",
-                        "Run via mesh_magi_review; the synthesis weighs agreement against source coupling."
+                        "The synthesis weighs agreement against source coupling."
                     ]
                 },
                 "magiPanel": {
