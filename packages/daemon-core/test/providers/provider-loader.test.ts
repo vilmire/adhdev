@@ -541,6 +541,50 @@ describe('ProviderLoader settings schema', () => {
     });
   });
 
+  // Regression: provider types and aliases share one namespace across
+  // categories, so `extension/codex` (type 'codex') shadowed the `codex` alias
+  // of `cli/codex-cli` on a plain resolveAlias. That made `adhdev launch codex`
+  // resolve to the IDE webview provider and fail with "IDE 'codex' not found".
+  it('scopes alias resolution to the requested categories without changing the default order', () => {
+    writeProvider(userDir, 'extension', 'codex', {
+      type: 'codex',
+      name: 'Codex',
+      displayName: 'Codex (IDE)',
+      category: 'extension',
+      extensionIdPattern: 'openai.codex',
+    });
+    writeProvider(userDir, 'cli', 'codex-cli', {
+      type: 'codex-cli',
+      name: 'Codex CLI',
+      displayName: 'Codex CLI',
+      category: 'cli',
+      aliases: ['codex'],
+      spawn: { command: 'codex' },
+    });
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    // Default (unscoped) behaviour is deliberately unchanged: the direct type
+    // match still wins, so the existing IDE/webview consumers keep resolving.
+    expect(loader.resolveAlias('codex')).toBe('codex');
+    expect(loader.getByAlias('codex')?.category).toBe('extension');
+
+    // Launch-scoped resolution skips the out-of-category direct match and
+    // follows the alias to the CLI provider.
+    expect(loader.resolveAlias('codex', ['cli', 'acp'])).toBe('codex-cli');
+    expect(loader.getByAlias('codex', ['cli', 'acp'])?.type).toBe('codex-cli');
+
+    // A direct type match is still honoured when it is inside the scope.
+    expect(loader.resolveAlias('codex-cli', ['cli', 'acp'])).toBe('codex-cli');
+    expect(loader.resolveAlias('codex', ['extension'])).toBe('codex');
+
+    // Nothing in scope → input returned as-is, and getByAlias hands back
+    // undefined rather than an out-of-scope provider.
+    expect(loader.resolveAlias('codex', ['ide'])).toBe('codex');
+    expect(loader.getByAlias('codex', ['ide'])).toBeUndefined();
+  });
+
   it('stores machine executable and argv overrides outside providerSettings', () => {
     writeProvider(userDir, 'cli', 'foo-cli', {
       type: 'foo-cli',

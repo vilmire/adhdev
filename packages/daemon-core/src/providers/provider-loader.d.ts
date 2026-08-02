@@ -111,12 +111,15 @@ export declare class ProviderLoader {
     * Resolve provider type by alias
     * 'claude' → 'claude-cli', 'codex' → 'codex-cli' etc
     * Returns input as-is if no match found.
+    * `categories` narrows resolution to those categories; omitting it keeps the
+    * original direct-match-then-alias order for every existing caller.
     */
-    resolveAlias(input: string): string;
+    resolveAlias(input: string, categories?: readonly ProviderCategory[]): string;
     /**
     * Get provider with alias resolution (get + alias fallback)
+    * `categories` narrows resolution and filters the returned module.
     */
-    getByAlias(input: string): ProviderModule | undefined;
+    getByAlias(input: string, categories?: readonly ProviderCategory[]): ProviderModule | undefined;
     /**
     * Build CLI/ACP detection list (replaces cli-detector)
     * Dynamically generated from provider.js spawn.command.

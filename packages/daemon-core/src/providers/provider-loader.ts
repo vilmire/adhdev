@@ -862,22 +862,42 @@ export class ProviderLoader {
  * Resolve provider type by alias
  * 'claude' → 'claude-cli', 'codex' → 'codex-cli' etc
  * Returns input as-is if no match found.
+ *
+ * `categories` narrows resolution to the given provider categories. Without it
+ * the resolution order is unchanged (direct type match first, then alias scan)
+ * — every existing caller keeps its exact behaviour.
+ *
+ * The hint exists because provider types and aliases share one namespace across
+ * categories, so a direct match can shadow an alias that a category-scoped
+ * caller actually wants. Concretely: `extension/codex` declares `type: 'codex'`
+ * while `cli/codex-cli` declares `aliases: ['codex']`, so unscoped
+ * `resolveAlias('codex')` returns the IDE-webview provider. `adhdev launch`
+ * only ever starts a cli/acp session, so it passes `['cli', 'acp']` and gets
+ * `codex-cli`. Within a scope the direct-match-first order still holds.
  */
-  resolveAlias(input: string): string {
+  resolveAlias(input: string, categories?: readonly ProviderCategory[]): string {
+    const inScope = (p: ProviderModule | undefined): boolean =>
+      !!p && (!categories || categories.includes(p.category));
+
  // 1. directly match
-    if (this.providers.has(input)) return input;
+    const direct = this.providers.get(input);
+    if (inScope(direct)) return input;
  // 2. alias match
     for (const p of this.providers.values()) {
-      if (p.aliases?.includes(input)) return p.type;
+      if (p.aliases?.includes(input) && inScope(p)) return p.type;
     }
     return input;
   }
 
  /**
  * Get provider with alias resolution (get + alias fallback)
+ * `categories` narrows resolution the same way as `resolveAlias`, and also
+ * filters the returned module so an out-of-scope provider is never handed back.
  */
-  getByAlias(input: string): ProviderModule | undefined {
-    return this.providers.get(this.resolveAlias(input));
+  getByAlias(input: string, categories?: readonly ProviderCategory[]): ProviderModule | undefined {
+    const resolved = this.providers.get(this.resolveAlias(input, categories));
+    if (resolved && categories && !categories.includes(resolved.category)) return undefined;
+    return resolved;
   }
 
  /**
