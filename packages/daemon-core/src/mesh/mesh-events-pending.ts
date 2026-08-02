@@ -238,6 +238,11 @@ const meshV2DrainCounters = {
     /** unicast events re-attributed to the drainer via daemon-core match (a
      *  coordinatorRunId change orphaned them). */
     v2ReattributedToDrainer: 0,
+    /** REFINE-EVENT-SESSION-SCOPED-UNICAST: unicast events delivered while addressed only
+     *  at DAEMON granularity (no sessionId in intendedFor) even though >1 coordinator
+     *  session was live on that daemon — i.e. delivered by race, not by address. Non-zero
+     *  here names an emit path that still fails to stamp targetCoordinatorSessionId. */
+    v2AmbiguousUnicastDelivered: 0,
     /** v1 (unversioned) events passed through as broadcast (rollout baseline). */
     v1BroadcastAccepted: 0,
     /** T6 enforce: v2 events that FAILED validation and were QUARANTINED (held back
@@ -380,6 +385,10 @@ function routeV2EventsForDrainer(
         /** false for a non-destructive peek so the frequent status-poll path does
          *  not inflate the delivery counters (only the real drain counts). */
         countMetrics: boolean;
+        /** REFINE-EVENT-SESSION-SCOPED-UNICAST ambiguity guard: how many coordinator
+         *  sessions are currently live on a daemon. Optional — when absent the guard is
+         *  inert (treated as 0) and routing behaviour is completely unchanged. */
+        countLiveCoordinatorSessions?: (daemonId: string) => number;
     },
 ): PendingMeshCoordinatorEvent[] {
     if (!drainer) return events;
@@ -490,6 +499,29 @@ function routeV2EventsForDrainer(
             continue;
         }
 
+        // AMBIGUOUS-UNICAST guard (REFINE-EVENT-SESSION-SCOPED-UNICAST): a unicast event
+        // whose intendedFor names NO session is addressable only at daemon granularity.
+        // When more than one coordinator session is live on that daemon, whichever one
+        // polls first wins — a silent race that produced exactly this defect (a refine
+        // result consumed by a sibling coordinator). Delivery is UNCHANGED (holding the
+        // event back would risk stranding it forever, which is strictly worse than
+        // mis-attribution); the race is merely made observable so the emitting path can
+        // be found and fixed. One-shot per event so a re-peeled event cannot spam.
+        if (
+            validated.intendedFor
+            && !validated.intendedFor.sessionId
+            && daemonIdsEquivalent(validated.intendedFor.daemonId, drainer.daemonId)
+        ) {
+            const liveSessions = ctx.countLiveCoordinatorSessions?.(validated.intendedFor.daemonId) ?? 0;
+            if (liveSessions > 1) {
+                warnV2Once(
+                    `${event.meshId}::${eventId}::ambiguous-unicast`,
+                    `v2 unicast ${event.event} on mesh ${event.meshId} carries NO coordinator session but ${liveSessions} coordinator sessions are live on ${validated.intendedFor.daemonId} — delivery is first-come-first-served and may reach the wrong coordinator. Delivered to ${coordinatorIdentityKey(drainer)}. The EMITTING path must stamp targetCoordinatorSessionId.`,
+                );
+                bump('v2AmbiguousUnicastDelivered');
+            }
+        }
+
         // Unicast: deliver iff intendedFor addresses THIS drainer. identityDeliversTo
         // treats a daemon-form-fallback runId (no real coordinatorRunId wired yet) as
         // form-agnostic so a `daemon_mach_X`-addressed event reaches a bare-`mach_X`
@@ -498,6 +530,7 @@ function routeV2EventsForDrainer(
         if (validated.intendedFor && identityDeliversTo(validated.intendedFor, drainer)) {
             ctx.batchSeen.add(eventId);
             bump('v2Delivered');
+            LOG.debug('MeshEventsV2', `unicast ${event.event} (mesh ${event.meshId}, eventId ${eventId}) delivered to ${coordinatorIdentityKey(drainer)}; intendedFor=${coordinatorIdentityKey(validated.intendedFor)}`);
             kept.push(event);
             continue;
         }
@@ -531,6 +564,7 @@ function routeV2EventsForDrainer(
 
         // Addressed to a genuinely different coordinator (different machine, or
         // system scope) → not for this drainer. Skipped (left for its own drainer).
+        LOG.debug('MeshEventsV2', `unicast ${event.event} (mesh ${event.meshId}, eventId ${eventId}) NOT delivered to ${coordinatorIdentityKey(drainer)}; intendedFor=${validated.intendedFor ? coordinatorIdentityKey(validated.intendedFor) : 'none'} — left for its own drainer`);
         bump('v2RoutedAway');
     }
     return kept;
@@ -1242,7 +1276,13 @@ function selectiveDrainFile(
 export function drainPendingMeshCoordinatorEvents(
     meshId?: string,
     coordinatorDaemonId?: string | ReadonlyArray<string>,
-    opts?: { onlyEvents?: ReadonlySet<string>; drainerIdentity?: CoordinatorIdentity },
+    opts?: {
+        onlyEvents?: ReadonlySet<string>;
+        drainerIdentity?: CoordinatorIdentity;
+        /** REFINE-EVENT-SESSION-SCOPED-UNICAST ambiguity guard (observability only —
+         *  never changes what is delivered). Absent → guard inert. */
+        countLiveCoordinatorSessions?: (daemonId: string) => number;
+    },
 ): PendingMeshCoordinatorEvent[] {
     if (!meshId) return [];
 
@@ -1286,7 +1326,15 @@ export function drainPendingMeshCoordinatorEvents(
     try {
         const store = MeshRuntimeStore.getInstance();
         if (store.pendingEventCount(meshId) > 0) {
-            for (const row of store.drainPendingEvents(meshId, daemonIds.length > 0 ? daemonIds : undefined, onlyEvents ? { onlyEvents } : undefined)) {
+            // Record WHO drained these rows (REFINE-EVENT-SESSION-SCOPED-UNICAST
+            // observability). Serialized here rather than in the store so the store stays
+            // identity-agnostic. Undefined drainer → NULL, unchanged from before.
+            const drainedBy = drainer ? JSON.stringify(drainer) : null;
+            for (const row of store.drainPendingEvents(
+                meshId,
+                daemonIds.length > 0 ? daemonIds : undefined,
+                { ...(onlyEvents ? { onlyEvents } : {}), drainedBy },
+            )) {
                 const event = row.payload as PendingMeshCoordinatorEvent;
                 if (event) pushUnique(event);
             }
@@ -1351,6 +1399,7 @@ export function drainPendingMeshCoordinatorEvents(
         alreadyDrained: (eventId) => priorDrainedEventIds.has(eventId),
         batchSeen: new Set<string>(),
         countMetrics: true,
+        ...(opts?.countLiveCoordinatorSessions ? { countLiveCoordinatorSessions: opts.countLiveCoordinatorSessions } : {}),
     });
     return reconcilePendingMeshCoordinatorEvents(meshId, routed);
 }

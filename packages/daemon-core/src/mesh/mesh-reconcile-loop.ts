@@ -531,6 +531,15 @@ function drainAndInjectIntoTargets(
         pendingEvents = drainPendingMeshCoordinatorEvents(
             meshId,
             drainDaemonIds.length > 0 ? drainDaemonIds : localDaemonId,
+            {
+                // AMBIGUOUS-UNICAST guard (REFINE-EVENT-SESSION-SCOPED-UNICAST): observability
+                // only — it warns when a session-less unicast event is delivered while several
+                // coordinator sessions are live and racing for it. Never changes delivery, so
+                // an event can't be stranded by it. targetCoordinators is this daemon's live
+                // coordinator set for the mesh, which is exactly the racing population.
+                countLiveCoordinatorSessions: () =>
+                    new Set(targetCoordinators.map(c => c.sessionId).filter(Boolean)).size,
+            },
         );
     } catch (e: any) {
         LOG.warn('MeshReconcile', `Drain failed for mesh ${meshId}: ${e?.message || e}`);
