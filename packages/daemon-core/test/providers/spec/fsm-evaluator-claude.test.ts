@@ -1736,3 +1736,83 @@ describe('claude-cli v4 FSM — AskUserQuestion picker is a choice, not an appro
         expect(pairMember.section, 'numbered-pair member must be footer-scoped').toBe('footer');
     });
 });
+
+// ── FSM-APPROVAL-STATE-STALENESS ─────────────────────────────────────────────
+// Live (moltbot, session e6693f02, task c5805e2a): an approval was resolved and
+// the modal left the screen, yet the FSM stayed in `approval` for 97+ seconds.
+// mesh_approve then failed "did not match any visible button" and the completed
+// task was left awaiting_approval.
+//
+// Root cause: `footer` anchors on /^[❯›>]/ with anchor_last, i.e. the LAST line
+// STARTING with a prompt marker. After a resolve, claude-cli scrolls the old
+// modal up and draws the new input box below it as `│ > │` — the `>` is inside
+// a box border, NOT at line start, so it never anchors. The dead modal's
+// `❯ 1. Yes` therefore remains the last anchor and `footer` still reports the
+// resolved modal's choices. Both content guards on approval→idle
+// (not(footer ~ `1.`) and not(footer ~ `Esc to cancel`)) stay false forever.
+//
+// The stable_ms/cursor_above clause is NOT implicated: it measures the lines
+// strictly ABOVE the cursor (end = cursorRow, exclusive), which are the quiet
+// transcript lines — it is satisfied throughout. The wedge is purely the stale
+// footer anchor.
+const resolvedApprovalWithPromptBoxBelow = [
+    '⏺ Running the command now.',
+    '',
+    'Do you want to proceed?',
+    ' ❯ 1. Yes',
+    '   2. No',
+    '',
+    ' Esc to cancel',
+    '',
+    '⏺ Done. Updated 3 files.',
+    '',
+    '╭──────────────────────────────────────────╮',
+    '│ > next task please                       │',
+    '╰──────────────────────────────────────────╯',
+    '  ? for shortcuts',
+].join('\n');
+
+describe('claude-cli v4 FSM — approval→idle after the modal is resolved (FSM-APPROVAL-STATE-STALENESS)', () => {
+    const spec = loadSpec();
+
+    it('footer must not keep resolving to a RESOLVED modal once a new input box is drawn below it', () => {
+        const lines = strip(resolvedApprovalWithPromptBoxBelow);
+        const sections = resolveSections(spec.sections ?? {}, lines);
+        const footer = sectionText(sections, 'footer', lines.join('\n'));
+        // Pre-fix this footer is "❯ 1. Yes / 2. No / Esc to cancel / … / │ > … │",
+        // i.e. the dead modal. The live input box must win the anchor instead.
+        expect(footer).not.toMatch(/(?:^|\n)\s*(?:[❯›]\s*)?1\.\s+\S/);
+        expect(footer).not.toMatch(/Esc to cancel/);
+    });
+
+    it('approval→idle fires once the modal is resolved and the prompt box is drawn', () => {
+        const lines = strip(resolvedApprovalWithPromptBoxBelow);
+        // Cursor sits in the input box; the stable region (lines strictly above
+        // it) has been quiet well past the 3000ms hold.
+        const key = stableKeyOf(spec, 'approval→idle');
+        const ev = evaluateFsm(
+            spec, 'approval', resolvedApprovalWithPromptBoxBelow,
+            { row: lines.length - 3, col: 4 }, undefined,
+            clk(100_000, 0, [[key, 10_000]]),
+        );
+        const exit = ev.transitions.find(t => t.label === 'approval→idle');
+        expect(exit?.cond?.result, 'approval→idle guard still blocked by the stale footer').toBe(true);
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('FALSE-RELEASE GUARD: a LIVE approval modal (no input box below) still holds `approval`', () => {
+        // The same quiet-region clock, but the modal is genuinely on screen and
+        // no prompt box has been drawn. Releasing here would drop a real
+        // approval request — strictly worse than the wedge being fixed.
+        const key = stableKeyOf(spec, 'approval→idle');
+        const lines = strip(dividerlessApproval);
+        const ev = evaluateFsm(
+            spec, 'approval', dividerlessApproval,
+            { row: lines.length - 1, col: 2 }, undefined,
+            clk(100_000, 0, [[key, 10_000]]),
+        );
+        const exit = ev.transitions.find(t => t.label === 'approval→idle');
+        expect(exit?.fires, 'a live approval modal must NOT exit to idle').toBe(false);
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+});
