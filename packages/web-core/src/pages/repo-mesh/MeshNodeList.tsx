@@ -342,13 +342,6 @@ export function MeshNodeList({
                 </div>
             )}
 
-            {/* Cloud: setup inventory warning */}
-            {features.addNodeDaemonPicker && (
-                <div className="mb-3 text-[12px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
-                    {t('repoMesh.nodeList.setupInventoryWarning')}
-                </div>
-            )}
-
             {machineNodes.length === 0 ? (
                 <EmptyState icon={<IconFolder />} title={t('repoMesh.nodeList.emptyTitle')} description={t('repoMesh.nodeList.emptyDescription')} />
             ) : (

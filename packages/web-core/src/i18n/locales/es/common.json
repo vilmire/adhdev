@@ -605,7 +605,7 @@
             "removeBindingDisabledTitle": "Nada que eliminar — este kind no está configurado"
         },
         "synthesis": {
-            "empty": "Todavía no se ha guardado ninguna síntesis de verificación cruzada de MAGI para esta mesh. Ejecuta una revisión MAGI (mesh_magi_review) y recógela (mesh_magi_collect); el resumen sintetizado aparecerá aquí, guardado en el ledger de la mesh.",
+            "empty": "Todavía no hay resultados de verificación cruzada para esta mesh.",
             "synthesized": "sintetizado",
             "running": "en ejecución",
             "answered": "{{answered}}/{{total}} respondidas",
@@ -704,7 +704,7 @@
             "checking": "Comprobando",
             "heal": "Reparar",
             "loadingGraph": "Cargando grafo…",
-            "bootstrapBanner": "Esperando datos en vivo — se muestra el inventario de configuración hasta que las sondas mesh_status de los pares tengan éxito.",
+            "bootstrapBanner": "Cargando información de la mesh. El estado en vivo aparecerá en breve.",
             "emptyGraph": "Todavía no hay un grafo de malla en vivo disponible para este coordinador.",
             "fieldMachine": "Máquina",
             "fieldLocality": "Localidad",
@@ -765,7 +765,7 @@
             "loadingStatus": "Cargando el estado de la malla en vivo…",
             "noGraph": "Todavía no hay un grafo de malla en vivo disponible para este coordinador.",
             "errorNoMeshId": "Este coordinador no expone un ID de malla en vivo.",
-            "errorUnexpectedPayload": "mesh_status devolvió una carga útil inesperada."
+            "errorUnexpectedPayload": "No se pudo cargar la información del grafo. Inténtalo de nuevo en unos momentos."
         },
         "health": {
             "panelTitle": "Panel de salud de la malla",
@@ -915,7 +915,6 @@
             "preferredToolsHint": "Orden utilizado al iniciar sin un proveedor explícito.",
             "add": "Agregar",
             "cancel": "Cancelar",
-            "setupInventoryWarning": "Solo inventario de configuración — el detalle en vivo de git/sesión/rama se muestra en la ventana emergente del grafo una vez que la verdad agregada directa de mesh_status está disponible desde el Mesh Host.",
             "emptyTitle": "Sin nodos",
             "emptyDescription": "Agrega un espacio de trabajo a este mesh.",
             "setupInventory": "inventario de configuración",

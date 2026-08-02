@@ -605,7 +605,7 @@
             "removeBindingDisabledTitle": "제거할 것이 없습니다 — 이 kind는 구성되지 않았습니다"
         },
         "synthesis": {
-            "empty": "이 메시에 아직 영속된 MAGI 교차 검증 합성이 없습니다. MAGI 리뷰(mesh_magi_review)를 실행하고 수집(mesh_magi_collect)하세요. 합성된 요약이 메시 원장에 영속되어 여기에 표시됩니다.",
+            "empty": "아직 이 메시에 대한 교차 검증 결과가 없습니다.",
             "synthesized": "합성됨",
             "running": "실행 중",
             "answered": "{{answered}}/{{total}} 응답",
@@ -704,7 +704,7 @@
             "checking": "확인 중",
             "heal": "힐",
             "loadingGraph": "그래프 로딩 중…",
-            "bootstrapBanner": "라이브 데이터 대기 중 — 피어 mesh_status 프로브 성공 전까지 설정 인벤토리를 표시합니다.",
+            "bootstrapBanner": "메시 정보를 불러오는 중입니다. 잠시 후 실시간 상태가 표시됩니다.",
             "emptyGraph": "이 코디네이터에 대한 라이브 메시 그래프가 아직 없습니다.",
             "fieldMachine": "머신",
             "fieldLocality": "로컬리티",
@@ -765,7 +765,7 @@
             "loadingStatus": "라이브 메시 상태 로딩 중…",
             "noGraph": "이 코디네이터에 대한 라이브 메시 그래프가 아직 없습니다.",
             "errorNoMeshId": "이 코디네이터는 라이브 메시 ID를 노출하지 않습니다.",
-            "errorUnexpectedPayload": "mesh_status가 예상치 못한 응답을 반환했습니다."
+            "errorUnexpectedPayload": "그래프 정보를 불러오지 못했습니다. 잠시 후 다시 시도해주세요."
         },
         "health": {
             "panelTitle": "메시 헬스 패널",
@@ -915,7 +915,6 @@
             "preferredToolsHint": "명시적 프로바이더 없이 실행할 때 사용되는 순서.",
             "add": "추가",
             "cancel": "취소",
-            "setupInventoryWarning": "설정 인벤토리 전용 — 라이브 git/세션/브랜치 세부 정보는 메시 호스트에서 직접 집계된 mesh_status 실측이 확보된 후 그래프 팝업에 표시됩니다.",
             "emptyTitle": "노드 없음",
             "emptyDescription": "이 메시에 워크스페이스를 추가하세요.",
             "setupInventory": "설정 인벤토리",

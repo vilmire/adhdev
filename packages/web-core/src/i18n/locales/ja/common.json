@@ -605,7 +605,7 @@
             "removeBindingDisabledTitle": "削除するものがありません — この kind は未設定です"
         },
         "synthesis": {
-            "empty": "このメッシュにはまだ MAGI クロス検証の統合結果が保存されていません。MAGI レビュー（mesh_magi_review）を実行して収集（mesh_magi_collect）すると、統合された要約がここに表示され、メッシュ台帳に保存されます。",
+            "empty": "このメッシュのクロス検証結果はまだありません。",
             "synthesized": "統合済み",
             "running": "実行中",
             "answered": "{{answered}}/{{total}} 件回答済み",
@@ -704,7 +704,7 @@
             "checking": "確認中",
             "heal": "修復",
             "loadingGraph": "グラフを読み込み中…",
-            "bootstrapBanner": "ライブデータを待機中 — ピアの mesh_status プローブが成功するまでセットアップインベントリを表示します。",
+            "bootstrapBanner": "メッシュ情報を読み込んでいます。まもなくライブステータスが表示されます。",
             "emptyGraph": "このコーディネーターにはまだ利用可能なライブメッシュグラフがありません。",
             "fieldMachine": "マシン",
             "fieldLocality": "ローカリティ",
@@ -765,7 +765,7 @@
             "loadingStatus": "ライブメッシュステータスを読み込み中…",
             "noGraph": "このコーディネーターにはまだ利用可能なライブメッシュグラフがありません。",
             "errorNoMeshId": "このコーディネーターはライブメッシュ ID を公開していません。",
-            "errorUnexpectedPayload": "mesh_status が予期しないペイロードを返しました。"
+            "errorUnexpectedPayload": "グラフ情報を読み込めませんでした。しばらくしてから再度お試しください。"
         },
         "health": {
             "panelTitle": "メッシュヘルスパネル",
@@ -915,7 +915,6 @@
             "preferredToolsHint": "明示的なプロバイダーなしで起動する際に使用される順序です。",
             "add": "追加",
             "cancel": "キャンセル",
-            "setupInventoryWarning": "セットアップインベントリのみ — ライブな git／セッション／ブランチの詳細は、Mesh Host から直接集約された mesh_status の真実が利用可能になった後、グラフのポップアップに表示されます。",
             "emptyTitle": "ノードなし",
             "emptyDescription": "このメッシュにワークスペースを追加してください。",
             "setupInventory": "セットアップインベントリ",

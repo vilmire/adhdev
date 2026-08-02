@@ -605,7 +605,7 @@
             "removeBindingDisabledTitle": "无可移除 — 此 kind 尚未配置"
         },
         "synthesis": {
-            "empty": "此 mesh 尚未保存任何 MAGI 交叉验证综合结果。运行 MAGI 审查（mesh_magi_review）并收集（mesh_magi_collect），综合摘要随后会显示在此处，并保存到 mesh 台账。",
+            "empty": "此 mesh 暂无交叉验证结果。",
             "synthesized": "已综合",
             "running": "运行中",
             "answered": "已回答 {{answered}}/{{total}}",
@@ -704,7 +704,7 @@
             "checking": "正在检查",
             "heal": "修复",
             "loadingGraph": "正在加载图谱…",
-            "bootstrapBanner": "正在等待实时数据 — 在对等 mesh_status 探测成功前显示设置清单。",
+            "bootstrapBanner": "正在加载 mesh 信息，实时状态即将显示。",
             "emptyGraph": "此协调器暂无可用的实时网格图谱。",
             "fieldMachine": "机器",
             "fieldLocality": "位置",
@@ -765,7 +765,7 @@
             "loadingStatus": "正在加载实时网格状态…",
             "noGraph": "此协调器暂无可用的实时网格图谱。",
             "errorNoMeshId": "此协调器未公开实时网格 ID。",
-            "errorUnexpectedPayload": "mesh_status 返回了意外的负载。"
+            "errorUnexpectedPayload": "图数据加载失败，请稍后重试。"
         },
         "health": {
             "panelTitle": "网格健康面板",
@@ -915,7 +915,6 @@
             "preferredToolsHint": "在未指定提供方启动时使用的顺序。",
             "add": "添加",
             "cancel": "取消",
-            "setupInventoryWarning": "仅为设置清单 — 实时的 git／会话／分支详情将在 Mesh Host 提供直接聚合的 mesh_status 真实数据后显示在图弹窗中。",
             "emptyTitle": "无节点",
             "emptyDescription": "向此 mesh 添加一个工作区。",
             "setupInventory": "设置清单",

@@ -605,7 +605,7 @@
             "removeBindingDisabledTitle": "Nothing to remove — this kind is unconfigured"
         },
         "synthesis": {
-            "empty": "No MAGI cross-verification synthesis has been persisted for this mesh yet. Run a MAGI review (mesh_magi_review) and collect it (mesh_magi_collect); the synthesized summary then appears here, persisted to the mesh ledger.",
+            "empty": "No cross-verification results for this mesh yet.",
             "synthesized": "synthesized",
             "running": "running",
             "answered": "{{answered}}/{{total}} answered",
@@ -704,7 +704,7 @@
             "checking": "Checking",
             "heal": "Heal",
             "loadingGraph": "Loading graph…",
-            "bootstrapBanner": "Awaiting live data — showing setup inventory until peer mesh_status probes succeed.",
+            "bootstrapBanner": "Loading mesh info. Live status will appear shortly.",
             "emptyGraph": "No live mesh graph is available for this coordinator yet.",
             "fieldMachine": "Machine",
             "fieldLocality": "Locality",
@@ -765,7 +765,7 @@
             "loadingStatus": "Loading live mesh status…",
             "noGraph": "No live mesh graph is available for this coordinator yet.",
             "errorNoMeshId": "This coordinator does not expose a live mesh id.",
-            "errorUnexpectedPayload": "mesh_status returned an unexpected payload."
+            "errorUnexpectedPayload": "Couldn't load graph data. Please try again shortly."
         },
         "health": {
             "panelTitle": "Mesh Health Panel",
@@ -915,7 +915,6 @@
             "preferredToolsHint": "Order used when launching without an explicit provider.",
             "add": "Add",
             "cancel": "Cancel",
-            "setupInventoryWarning": "Setup inventory only — live git/session/branch detail is shown in the graph popup after direct aggregate mesh_status truth is available from the Mesh Host.",
             "emptyTitle": "No nodes",
             "emptyDescription": "Add a workspace to this mesh.",
             "setupInventory": "setup inventory",
