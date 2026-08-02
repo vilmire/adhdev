@@ -211,7 +211,7 @@ ADHDev는 네 가지 프로바이더 카테고리를 통해 코딩 에이전트�
 
 **IDE 익스텐션** (CDP 웹뷰): Claude Code (VS Code), Codex, Cline, Roo Code.
 
-**ACP 에이전트** (stdio, Agent Client Protocol): 35개 내장 어댑터 — Gemini CLI, Qwen Code, Goose, GitHub Copilot, Cursor (ACP), Claude Agent, Codex CLI, Kimi CLI, Cline, Kilo, Junie, OpenHands 등.
+**ACP 에이전트** (stdio, Agent Client Protocol): 32개 내장 어댑터 — Gemini CLI, Qwen Code, Goose, GitHub Copilot, Cursor (ACP), Claude Agent, Codex CLI, Kimi CLI, Cline, Kilo, Junie, OpenHands 등.
 
 > **내장 ≠ 검증됨.** ADHDev는 광범위한 인벤토리를 제공합니다. 카탈로그에 있다는 것은 통합이 존재한다는 의미이지, 엔드-투-엔드로 검증되었다는 의미가 아닙니다. 지원 수준은 다양합니다. 라이브 정책을 참조하세요:
 >
