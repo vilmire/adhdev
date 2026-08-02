@@ -31,6 +31,7 @@
     "lint": "eslint \"src/mesh/**/*.ts\"",
     "test": "vitest run",
     "test:fast": "vitest run --config vitest.fast.config.mts",
+    "test:fast:ci": "vitest run --config vitest.fast.config.mts --silent --reporter=dot",
     "test:git": "vitest run --config vitest.git.config.mts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.json"
