@@ -104,15 +104,67 @@ export function __resetIdleAutoFastForwardForTests(): void {
  * touches the ENABLE decision. When a node carries no workspace path (should not
  * happen for a launchable node, but be defensive), we skip the read entirely.
  */
-function loadRepoConfigForNode(node: any): RepoMeshDeclarativeConfig | null {
+export function loadRepoConfigForNode(node: any): RepoMeshDeclarativeConfig | null {
     const workspace = typeof node?.workspace === 'string' && node.workspace.trim() ? node.workspace.trim() : '';
     if (!workspace) return null;
     try {
         const result = loadRepoMeshJsonConfig(workspace);
-        return result.sourceType === 'repo_file' && result.config ? result.config : null;
+        if (result.sourceType !== 'repo_file' || !result.config) return null;
+        // REMOTE-NODE-AUTO-APPROVE-MODE-DELIVERY: loadRepoMeshJsonConfig falls back to
+        // process.cwd() when the requested workspace carries no config. On a coordinator
+        // running inside its own checkout, that fallback would return the COORDINATOR's
+        // mesh.json for a REMOTE node whose workspace lives on another machine —
+        // attributing one machine's declared modes to another. Only accept a file that
+        // actually lives under the node's own workspace; the worker re-resolves its real
+        // config at launch time (delegated-worker-mode-delivery.ts).
+        if (!isConfigPathInsideWorkspace(result.path, workspace)) return null;
+        return result.config;
     } catch {
         return null;
     }
+}
+
+/** True when the matched config file actually lives under `workspace`. */
+function isConfigPathInsideWorkspace(configPath: string | undefined, workspace: string): boolean {
+    if (typeof configPath !== 'string' || !configPath) return false;
+    const toPosix = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '');
+    const ws = toPosix(workspace);
+    const target = toPosix(configPath);
+    return !!ws && (target === ws || target.startsWith(`${ws}/`));
+}
+
+/**
+ * Coordinator-side observability for the previously SILENT downgrade: the repo asked
+ * for a mode but this process could not read that node's workspace (the remote-node
+ * case), so the envelope carries the provider-spec default instead. The worker
+ * re-resolves at launch, but the coordinator log is what makes the gap visible from
+ * the side that made the decision.
+ */
+function warnUnreadableRepoConfigForNode(node: any, providerType: string | undefined): void {
+    const workspace = typeof node?.workspace === 'string' && node.workspace.trim() ? node.workspace.trim() : '';
+    if (!workspace) return;
+    const nodeId = readNonEmptyString(node?.id) || readNonEmptyString(node?.nodeId) || 'unknown-node';
+    LOG.warn(
+        'MeshQueue',
+        `repo mesh.json unreadable from this daemon for node=${nodeId} workspace=${workspace} `
+        + `provider=${providerType || 'unknown'} — delegated auto-approve MODE falls back to the provider `
+        + `default here; the worker daemon re-resolves it from its own checkout at launch`,
+    );
+}
+
+/**
+ * Resolve the delegated-worker auto-approve envelope for a node, warning when the
+ * repo config that should decide the MODE is not readable from this process.
+ */
+function delegatedWorkerAutoApproveSettingsForNode(
+    mesh: any,
+    node: any,
+    provider: any,
+    providerType: string | undefined,
+): ReturnType<typeof delegatedWorkerAutoApproveSettings> {
+    const repoConfig = loadRepoConfigForNode(node);
+    if (!repoConfig) warnUnreadableRepoConfigForNode(node, providerType);
+    return delegatedWorkerAutoApproveSettings(mesh?.policy, node?.policy, provider, repoConfig, providerType);
 }
 
 export function getMeshWithCache(components: DaemonComponents, meshId: string): any | undefined {
@@ -989,11 +1041,10 @@ export function tryAssignQueueTask(
                 meshNodeFor: meshId,
                 meshNodeId: nodeId,
                 launchedByCoordinator: true,
-                ...delegatedWorkerAutoApproveSettings(
-                    mesh?.policy,
-                    node?.policy,
+                ...delegatedWorkerAutoApproveSettingsForNode(
+                    mesh,
+                    node,
                     components.providerLoader?.getMeta(providerType),
-                    loadRepoConfigForNode(node),
                     providerType,
                 ),
                 ...(localDaemonId ? { meshCoordinatorDaemonId: localDaemonId } : {}),
@@ -2837,11 +2888,10 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     // Coordinator-dispatched worker: auto-approve unless mesh/node policy
                     // opts out (default true). Lands in settingsOverride and beats the
                     // global per-provider-type boolean/mode through explicit opposite-key clearing.
-                    ...delegatedWorkerAutoApproveSettings(
-                        mesh?.policy,
-                        node?.policy,
+                    ...delegatedWorkerAutoApproveSettingsForNode(
+                        mesh,
+                        node,
                         components.providerLoader?.getMeta(resolved.providerType),
-                        loadRepoConfigForNode(node),
                         resolved.providerType,
                     ),
                     launchedByCoordinator: true,

@@ -21,6 +21,7 @@ import { appendRecentActivity } from '../config/recent-activity.js';
 import { shortHash } from '../system/hash.js';
 import { unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace } from '../mesh/coordinator-registry.js';
 import { DuplicateMeshDispatchError } from '../mesh/mesh-duplicate-dispatch.js';
+import { resolveDelegatedWorkerAutoApproveModeForLaunch, logDelegatedWorkerModeDelivery } from '../mesh/delegated-worker-mode-delivery.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
 import { buildLegacyModelModeSummaryMetadata, normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
 import { CliProviderInstance } from '../providers/cli-provider-instance.js';
@@ -1613,7 +1614,40 @@ export class DaemonCliManager {
 
                 const providerType = this.providerLoader.resolveAlias(cliType);
                 const provLookup = this.providerLoader.getMeta(providerType) as ProviderModule | undefined;
-                const settingsOverride = args?.settings && typeof args.settings === 'object' ? args.settings : undefined;
+                let settingsOverride = args?.settings && typeof args.settings === 'object' ? args.settings : undefined;
+                // REMOTE-NODE-AUTO-APPROVE-MODE-DELIVERY: the coordinator picks the
+                // delegated-worker auto-approve MODE from `.adhdev/mesh.json`, but it reads
+                // `node.workspace` on ITS OWN filesystem — impossible for a remote node, so a
+                // repo-requested mode was silently replaced by the provider spec default. This
+                // daemon IS the worker machine and `dir` is the real checkout, so re-resolve
+                // the MODE here. ENABLE and the DANGEROUS opt-in stay coordinator-owned; a
+                // workspace with no readable repo config keeps the coordinator's value.
+                if (settingsOverride?.launchedByCoordinator === true) {
+                    const envelopeMode = typeof settingsOverride.autoApproveMode === 'string'
+                        ? settingsOverride.autoApproveMode
+                        : undefined;
+                    const modeResolution = resolveDelegatedWorkerAutoApproveModeForLaunch({
+                        workspace: dir,
+                        providerType,
+                        provider: provLookup,
+                        settings: settingsOverride,
+                    });
+                    logDelegatedWorkerModeDelivery(modeResolution, {
+                        workspace: dir,
+                        providerType,
+                        meshNodeId: typeof settingsOverride.meshNodeId === 'string' ? settingsOverride.meshNodeId : undefined,
+                        envelopeMode,
+                    });
+                    if (modeResolution.changed && modeResolution.autoApproveMode) {
+                        // Mirror delegatedWorkerAutoApproveSettings' opposite-key clearing so the
+                        // mode cannot be bypassed by a stale global boolean.
+                        settingsOverride = {
+                            ...settingsOverride,
+                            autoApproveMode: modeResolution.autoApproveMode,
+                            autoApprove: undefined,
+                        };
+                    }
+                }
                 const delegatedLaunch = settingsOverride?.launchedByCoordinator === true
                     ? buildCoordinatorDelegatedCliLaunchOptions({
                         cliType,
