@@ -1873,7 +1873,11 @@
             "signIn": "登录 →",
             "failed": "失败",
             "successMessage": "CLI 身份验证已完成！",
-            "returnToTerminal": "您可以返回终端。"
+            "returnToTerminal": "您可以返回终端。",
+            "registryPublishTitle": "授权注册表发布",
+            "authorizeRegistryPublishAs": "以 {{name}} 身份授予提供程序注册表发布权限？",
+            "registryPublishWarning": "这将授予一个短期令牌（15 分钟），可在注册表中发布、推广和撤回提供程序包。这不是守护进程注册。仅在您自己发起注册表发布时才批准。需要管理员账户。",
+            "signInFirstRegistryPublish": "请使用管理员账户登录以授权注册表发布。"
         },
         "privacy": {
             "title": "隐私政策",

@@ -1873,7 +1873,11 @@
             "signIn": "Iniciar sesión →",
             "failed": "Error",
             "successMessage": "¡Autenticación de la CLI completada!",
-            "returnToTerminal": "Puedes volver a la terminal."
+            "returnToTerminal": "Puedes volver a la terminal.",
+            "registryPublishTitle": "Autorizar publicación en el registro",
+            "authorizeRegistryPublishAs": "¿Conceder acceso de publicación al registro de proveedores como {{name}}?",
+            "registryPublishWarning": "Esto concede un token de corta duración (15 minutos) que puede publicar, promover y retirar paquetes de proveedores en el registro. No es un registro de daemon. Apruébalo solo si iniciaste una publicación en el registro. Requiere una cuenta de administrador.",
+            "signInFirstRegistryPublish": "Inicia sesión con una cuenta de administrador para autorizar la publicación en el registro."
         },
         "privacy": {
             "title": "Política de privacidad",

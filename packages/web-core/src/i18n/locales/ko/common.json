@@ -1873,7 +1873,11 @@
             "signIn": "로그인 →",
             "failed": "실패",
             "successMessage": "CLI 인증이 완료되었습니다!",
-            "returnToTerminal": "터미널로 돌아갈 수 있습니다."
+            "returnToTerminal": "터미널로 돌아갈 수 있습니다.",
+            "registryPublishTitle": "레지스트리 게시 권한 승인",
+            "authorizeRegistryPublishAs": "{{name}}(으)로 프로바이더 레지스트리 게시 권한을 승인하시겠습니까?",
+            "registryPublishWarning": "레지스트리의 프로바이더 패키지를 게시·승격·철회할 수 있는 단기 토큰(15분)이 발급됩니다. 데몬 등록이 아닙니다. 직접 레지스트리 게시를 시작한 경우에만 승인하세요. 관리자 계정이 필요합니다.",
+            "signInFirstRegistryPublish": "레지스트리 게시를 승인하려면 관리자 계정으로 로그인해 주세요."
         },
         "privacy": {
             "title": "개인정보처리방침",

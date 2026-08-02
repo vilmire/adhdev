@@ -1873,7 +1873,11 @@
             "signIn": "Sign In →",
             "failed": "Failed",
             "successMessage": "CLI authentication complete!",
-            "returnToTerminal": "You can return to the terminal."
+            "returnToTerminal": "You can return to the terminal.",
+            "registryPublishTitle": "Authorize Registry Publishing",
+            "authorizeRegistryPublishAs": "Grant provider registry publishing access as {{name}}?",
+            "registryPublishWarning": "This grants a short-lived token (15 minutes) that can publish, promote and yank provider packages in the registry. It is not a daemon registration. Only approve this if you started a registry publish yourself. Requires an admin account.",
+            "signInFirstRegistryPublish": "Please sign in with an admin account to authorize registry publishing."
         },
         "privacy": {
             "title": "Privacy Policy",

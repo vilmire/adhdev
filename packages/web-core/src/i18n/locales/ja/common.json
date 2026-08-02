@@ -1873,7 +1873,11 @@
             "signIn": "サインイン →",
             "failed": "失敗しました",
             "successMessage": "CLI の認証が完了しました！",
-            "returnToTerminal": "ターミナルに戻ることができます。"
+            "returnToTerminal": "ターミナルに戻ることができます。",
+            "registryPublishTitle": "レジストリ公開の認可",
+            "authorizeRegistryPublishAs": "{{name}} としてプロバイダーレジストリの公開権限を認可しますか？",
+            "registryPublishWarning": "レジストリのプロバイダーパッケージを公開・昇格・取り下げできる短期トークン（15分）が発行されます。デーモン登録ではありません。ご自身でレジストリ公開を開始した場合のみ承認してください。管理者アカウントが必要です。",
+            "signInFirstRegistryPublish": "レジストリ公開を認可するには、管理者アカウントでサインインしてください。"
         },
         "privacy": {
             "title": "プライバシーポリシー",
