@@ -1,0 +1,138 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+import {
+  LOG,
+  getCurrentDaemonLogPath,
+  getDaemonLogDir,
+  getLogDirPath,
+} from '../../src/logging/logger.js'
+
+/**
+ * The log directory must be resolved LAZILY, not frozen at module import.
+ *
+ * As a module-level `const`, LOG_DIR was captured the moment the logger was
+ * first imported. A test that sets ADHDEV_CONFIG_DIR afterwards — the normal
+ * shape, since the logger is transitively imported by almost everything — was
+ * silently ignored, so `LOG.warn`/`LOG.info` emitted by production code under
+ * test appended to the REAL ~/.adhdev/logs/daemon-<date>.log that the live
+ * daemon writes. That is how win32-only fixture lines surfaced in a live darwin
+ * daemon log and were misread as a production defect.
+ *
+ * Note these tests deliberately do NOT use vi.resetModules(): the whole point is
+ * that a logger imported BEFORE the env is set still honors it. Re-importing
+ * would hide exactly the regression being guarded.
+ */
+describe('daemon log dir lazy resolution', () => {
+  let tmpHome: string
+  const originalEnv = process.env.ADHDEV_CONFIG_DIR
+
+  beforeEach(() => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-lazylog-'))
+  })
+
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env.ADHDEV_CONFIG_DIR
+    else process.env.ADHDEV_CONFIG_DIR = originalEnv
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }) } catch { /* noop */ }
+  })
+
+  it('honors ADHDEV_CONFIG_DIR set AFTER the logger was imported', () => {
+    // The logger module is already loaded (static import at the top of this
+    // file) before this line runs — that is the regression scenario.
+    process.env.ADHDEV_CONFIG_DIR = tmpHome
+
+    const expectedDir = path.join(tmpHome, 'logs')
+    expect(getDaemonLogDir()).toBe(expectedDir)
+    expect(getLogDirPath()).toBe(expectedDir)
+    expect(getCurrentDaemonLogPath().startsWith(expectedDir)).toBe(true)
+  })
+
+  it('routes actual log writes to a directory set after import', async () => {
+    process.env.ADHDEV_CONFIG_DIR = tmpHome
+
+    const marker = `lazy-resolution-marker-${Date.now()}`
+    LOG.error('LazyLogDirTest', marker)
+
+    // AsyncBatchWriter flushes on a 50ms timer — wait past it.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+
+    const logPath = getCurrentDaemonLogPath()
+    expect(logPath.startsWith(path.join(tmpHome, 'logs'))).toBe(true)
+    expect(fs.existsSync(logPath)).toBe(true)
+    expect(fs.readFileSync(logPath, 'utf-8')).toContain(marker)
+  })
+
+  it('does not leak a redirected write back into the real ~/.adhdev/logs', async () => {
+    // The actual harm being fixed: a test writing into the live daemon's file.
+    const realLogPath = path.join(
+      os.homedir(),
+      '.adhdev',
+      'logs',
+      `daemon-${new Date().toISOString().slice(0, 10)}.log`,
+    )
+    const before = fs.existsSync(realLogPath) ? fs.readFileSync(realLogPath, 'utf-8') : ''
+
+    process.env.ADHDEV_CONFIG_DIR = tmpHome
+    const marker = `must-not-reach-real-log-${Date.now()}`
+    LOG.error('LazyLogDirTest', marker)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+
+    const after = fs.existsSync(realLogPath) ? fs.readFileSync(realLogPath, 'utf-8') : ''
+    expect(after).not.toContain(marker)
+    // And nothing else got appended to the live file either.
+    expect(after).toBe(before)
+  })
+
+  it('switches directories when ADHDEV_CONFIG_DIR changes again', async () => {
+    process.env.ADHDEV_CONFIG_DIR = tmpHome
+    const firstMarker = `first-home-${Date.now()}`
+    LOG.error('LazyLogDirTest', firstMarker)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    const firstPath = getCurrentDaemonLogPath()
+
+    const secondHome = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-lazylog2-'))
+    try {
+      process.env.ADHDEV_CONFIG_DIR = secondHome
+      const secondMarker = `second-home-${Date.now()}`
+      LOG.error('LazyLogDirTest', secondMarker)
+      await new Promise((resolve) => setTimeout(resolve, 200))
+
+      const secondPath = getCurrentDaemonLogPath()
+      expect(secondPath.startsWith(path.join(secondHome, 'logs'))).toBe(true)
+      expect(secondPath).not.toBe(firstPath)
+      expect(fs.readFileSync(secondPath, 'utf-8')).toContain(secondMarker)
+      // The first home keeps its own line and does not receive the second one.
+      expect(fs.readFileSync(firstPath, 'utf-8')).toContain(firstMarker)
+      expect(fs.readFileSync(firstPath, 'utf-8')).not.toContain(secondMarker)
+    } finally {
+      try { fs.rmSync(secondHome, { recursive: true, force: true }) } catch { /* noop */ }
+    }
+  })
+
+  // ★ Production invariant: the daemon's real log path must not change.
+  it('defaults to ~/.adhdev/logs/daemon-YYYY-MM-DD.log with no env override', () => {
+    delete process.env.ADHDEV_CONFIG_DIR
+
+    const expectedDir = path.join(os.homedir(), '.adhdev', 'logs')
+    expect(getDaemonLogDir()).toBe(expectedDir)
+    expect(getLogDirPath()).toBe(expectedDir)
+
+    const today = new Date().toISOString().slice(0, 10)
+    expect(getCurrentDaemonLogPath()).toBe(path.join(expectedDir, `daemon-${today}.log`))
+  })
+
+  it('ignores a blank/whitespace ADHDEV_CONFIG_DIR and keeps the production path', () => {
+    process.env.ADHDEV_CONFIG_DIR = '   '
+    const expectedDir = path.join(os.homedir(), '.adhdev', 'logs')
+    expect(getDaemonLogDir()).toBe(expectedDir)
+  })
+
+  it('resolves the dated file per call so a rollover is not snapshotted', () => {
+    delete process.env.ADHDEV_CONFIG_DIR
+    const expectedDir = path.join(os.homedir(), '.adhdev', 'logs')
+    const someDay = new Date('2026-01-02T03:04:05.000Z')
+    expect(getCurrentDaemonLogPath(someDay)).toBe(path.join(expectedDir, 'daemon-2026-01-02.log'))
+  })
+})

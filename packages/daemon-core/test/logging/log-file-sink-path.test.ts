@@ -10,8 +10,11 @@ import * as path from 'path'
  * macOS etc.) that made the daemon log undiscoverable. ADHDEV_CONFIG_DIR
  * overrides the ~/.adhdev base so isolated/standalone homes keep their own logs.
  *
- * LOG_DIR is resolved once at module load, so each case sets the env then
- * re-imports the logger with a fresh module registry.
+ * These cases set the env then re-import with a fresh module registry. That is
+ * no longer *required* — the log dir is resolved lazily now, see
+ * log-dir-lazy-resolution.test.ts which asserts an env set AFTER import is
+ * honored — but re-importing is still the cleanest way to assert the
+ * import-time startup behavior (dir creation, legacy-layout migration) here.
  */
 describe('daemon log file sink path', () => {
   let tmpHome: string

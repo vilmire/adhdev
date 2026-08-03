@@ -7,7 +7,7 @@
  * inlined cases did.
  */
 import * as fs from 'fs';
-import { getRecentLogs, LOG_PATH } from '../../logging/logger.js';
+import { getRecentLogs, getCurrentDaemonLogPath } from '../../logging/logger.js';
 import { getRecentDebugTrace } from '../../logging/debug-trace.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 
@@ -33,8 +33,12 @@ export const diagnosticsHandlers: Record<string, LowFamilyHandler> = {
                 return { success: true, logs: [], totalBuffered: 0 };
             }
             // Priority 2: file fallback
-            if (fs.existsSync(LOG_PATH)) {
-                const content = fs.readFileSync(LOG_PATH, 'utf-8');
+            // Resolved per call: the active log file changes on date rollover
+            // (and with ADHDEV_CONFIG_DIR), so a snapshotted path would serve
+            // yesterday's file to the dashboard.
+            const logPath = getCurrentDaemonLogPath();
+            if (fs.existsSync(logPath)) {
+                const content = fs.readFileSync(logPath, 'utf-8');
                 const allLines = content.split('\n');
                 const recent = allLines.slice(-count).join('\n');
                 return { success: true, logs: recent, totalLines: allLines.length };
