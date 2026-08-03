@@ -710,3 +710,25 @@ export {
   V1_PRIMITIVE_CATALOG,
   V1_ALL_PRIMITIVES,
 } from './providers/sdk/v1/index.js';
+
+// ── Provider quota ──
+// Plan-consumption reporting per CLI provider. `claude-cli` additionally needs
+// an opt-in setup step (it reports quota only to a statusline command), so the
+// install/uninstall surface is exported alongside the fetchers for the CLI.
+export {
+  fetchKimiQuota,
+  fetchCodexQuota,
+  fetchClaudeQuota,
+  installClaudeStatusline,
+  uninstallClaudeStatusline,
+  readStatuslineStatus,
+  StatuslineInstallError,
+  type ProviderQuota,
+  type QuotaProvider,
+  type QuotaStatus,
+  type QuotaFailureKind,
+  type QuotaWindow,
+  type QuotaMetadata,
+  type StatuslineStatus,
+  type StatuslineInstallPaths,
+} from './quota/index.js';
