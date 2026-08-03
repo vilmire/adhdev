@@ -501,6 +501,79 @@ describe('Windows installer-managed atomic upgrade', () => {
     expect(fs.readFileSync(layout.pointerPath, 'utf8')).toBe(path.basename(result.stagedPrefix))
   })
 
+  /**
+   * D2: a failed upgrade used to leave its staged version-* prefix on disk. The
+   * generic cleanup only sweeps a bounded slice of inactive prefixes and TS-only
+   * self-upgraders never run install.ps1's stale-install sweep, so the debris
+   * accumulated — one leftover survived 9 days and took part in a repeat
+   * conpty.node outage.
+   */
+  describe('failed-upgrade staged prefix cleanup', () => {
+    function stagedPrefixes(layout: WindowsInstallerLayout): string[] {
+      return fs.readdirSync(layout.installRoot, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && e.name.startsWith('version-') && e.name !== layout.activeVersionName)
+        .map((e) => e.name)
+    }
+
+    it('removes the staged prefix when the conpty gate rejects the install', async () => {
+      const { layout } = fixture()
+      await expect(performWindowsAtomicUpgrade({
+        layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.4', portableNode: process.execPath,
+        hooks: hooks({
+          install: (prefix) => {
+            installPackage(prefix, '1.0.18-rc.4')
+            fs.rmSync(path.join(prefix, 'node_modules', 'adhdev', 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node'), { force: true })
+          },
+          // The default cleanup hook is a no-op here, so anything left behind is
+          // debris the failure path itself failed to reclaim.
+          cleanup: () => {},
+        }),
+      })).rejects.toThrow('conpty.node')
+
+      expect(stagedPrefixes(layout)).toEqual([])
+      // The only working install must survive untouched.
+      expect(fs.existsSync(layout.activePrefix)).toBe(true)
+      expect(fs.readFileSync(layout.pointerPath, 'utf8')).toBe('version-old')
+    })
+
+    it('removes the staged prefix when the post-activation health gate fails', async () => {
+      const { layout } = fixture()
+      await expect(performWindowsAtomicUpgrade({
+        layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.4', portableNode: process.execPath,
+        hooks: hooks({
+          install: (prefix) => installPackage(prefix, '1.0.18-rc.4'),
+          waitForHealth: async () => false,
+          cleanup: () => {},
+        }),
+      })).rejects.toThrow('health/version gate')
+
+      expect(stagedPrefixes(layout)).toEqual([])
+      // Rollback restored the pointer AND the active prefix is intact.
+      expect(fs.existsSync(layout.activePrefix)).toBe(true)
+      expect(fs.readFileSync(layout.pointerPath, 'utf8')).toBe('version-old')
+    })
+
+    it('removes the staged prefix when install itself throws, leaving the active tree intact', async () => {
+      const { layout } = fixture()
+      const logs: string[] = []
+      // Earliest possible failure: the staged dir exists but was never populated.
+      // The sentinel proves cleanup targeted only the staged prefix.
+      fs.writeFileSync(path.join(layout.activePrefix, 'sentinel.txt'), 'active install')
+      await expect(performWindowsAtomicUpgrade({
+        layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.4', portableNode: process.execPath,
+        hooks: hooks({
+          install: () => { throw new Error('npm install exploded') },
+          cleanup: () => {},
+          log: (m) => logs.push(m),
+        }),
+      })).rejects.toThrow('npm install exploded')
+
+      expect(stagedPrefixes(layout)).toEqual([])
+      expect(fs.readFileSync(path.join(layout.activePrefix, 'sentinel.txt'), 'utf8')).toBe('active install')
+      expect(logs.some((l) => /Cleaned up failed staged prefix/.test(l))).toBe(true)
+    })
+  })
+
   // FIX B: cleanup deletes inactive version-* prefixes in-process with fs.rm
   // instead of shelling out to powershell.exe under a 5000ms spawnSync timeout,
   // which ETIMEDOUT'd on Windows and left orphan version-* dirs accumulating.
