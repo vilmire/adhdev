@@ -5,7 +5,7 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 51 tools (== ALL_MESH_TOOLS, kept in sync with the coordinator-prompt TOOLS table
+ * 52 tools (== ALL_MESH_TOOLS, kept in sync with the coordinator-prompt TOOLS table
  * by the 6-6 consistency test in daemon-core coordinator-prompt.test.ts):
  *   mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
  *   mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
@@ -21,7 +21,8 @@
  *   mesh_requeue_held_events,
  *   mesh_mission_upsert, mesh_mission_list, mesh_review_inbox, mesh_magi_review,
  *   mesh_magi_collect,
- *   mesh_magi_kind_panel_set, mesh_magi_kind_panel_list
+ *   mesh_magi_kind_panel_set, mesh_magi_kind_panel_list,
+ *   mesh_node_slots_set, mesh_node_slots_list, mesh_node_slots_propose
  */
 
 // This module is a re-export barrel. The implementation was split by domain into
@@ -148,6 +149,10 @@ export {
     meshNodeSlotsSet,
     meshNodeSlotsList,
 } from './mesh-tools-slots.js';
+
+export {
+    meshNodeSlotsPropose,
+} from './mesh-tools-slot-autodetect.js';
 
 export {
     computeIdleDispatchAckRisk,

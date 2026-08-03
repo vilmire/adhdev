@@ -990,6 +990,19 @@ export const MESH_NODE_SLOTS_LIST_TOOL = {
     },
 };
 
+export const MESH_NODE_SLOTS_PROPOSE_TOOL = {
+    name: 'mesh_node_slots_propose',
+    description: 'AUTO-DETECT a node\'s installed CLI agents and DRAFT a capability-slot profile from them — the "just allow it and it figures out the slots" path. READ-ONLY: it probes the node (get_status_metadata → availableProviders, filtered to category=cli + installed=true), maps each detected CLI through a seeded provider→(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` plus per-slot rationale. It NEVER writes — apply the draft with mesh_node_slots_set({ node_id, slots: proposedSlots, write: true }) after user approval. CRITICAL: slot writes are WHOLESALE replacements, so the response computes `droppedSlots` / `droppedProviders` / `destructive` — existing hand-tuned slots (capability tags, tuned maxParallel, providers not currently on PATH) are NOT preserved by the draft. Present those before approving. Detects nothing → proposes nothing (it will NOT propose an empty list that would wipe the profile). Optional include_magi drafts one cross-provider MAGI panel of the detected providers.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'REQUIRED — the mesh node id to detect installed CLI agents on and draft slots for.' },
+            include_magi: { type: 'boolean', description: 'When true, also draft a MAGI panel (one slot per detected provider, pinned to this node, models unpinned) for binding via mesh_magi_kind_panel_set. Defaults false. Deliberately NOT a per-task_kind assignment — provider manifests carry no rca/design/claim_audit suitability data.' },
+        },
+        required: ['node_id'],
+    },
+};
+
 export const MESH_WRITE_MESH_JSON_CONFIG_TOOL = {
     name: 'mesh_write_mesh_json_config',
     description: 'Write `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Gated WRITE sibling of the draft-only export_mesh_json_config. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false), never clobbers an existing repo mesh.json unless overwrite=true, and validates before writing. Overwrite silently replaces the file, so present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope (commit target) — distinct from the machine-local MAGI kind-panel writes.',
@@ -1055,4 +1068,5 @@ export const ALL_MESH_TOOLS = [
     MESH_MAGI_KIND_PANEL_LIST_TOOL,
     MESH_NODE_SLOTS_SET_TOOL,
     MESH_NODE_SLOTS_LIST_TOOL,
+    MESH_NODE_SLOTS_PROPOSE_TOOL,
 ];

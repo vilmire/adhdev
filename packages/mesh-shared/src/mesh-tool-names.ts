@@ -70,6 +70,7 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_magi_kind_panel_list',
     'mesh_node_slots_set',
     'mesh_node_slots_list',
+    'mesh_node_slots_propose',
 ] as const;
 
 export type CanonicalMeshToolName = typeof CANONICAL_MESH_TOOL_NAMES[number];

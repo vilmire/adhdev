@@ -406,6 +406,160 @@ function normalizeNodeCapabilitySlots(raw) {
   }
   return out;
 }
+var CLI_SLOT_RECIPES = Object.freeze({
+  "claude-cli": [
+    {
+      model: "sonnet",
+      thinkingLevel: "high",
+      difficulty: ["medium", "easy"],
+      maxParallel: 5,
+      rationale: "Primary workhorse \u2014 widest parallelism for routine work."
+    },
+    {
+      model: "opus",
+      thinkingLevel: "high",
+      difficulty: ["difficult"],
+      maxParallel: 1,
+      rationale: "Reserved for hard tasks; capped at 1 to bound cost."
+    }
+  ],
+  "kimi": [
+    {
+      model: "kimi-code/k3",
+      difficulty: ["medium", "difficult"],
+      maxParallel: 2,
+      rationale: "Independent second opinion on mid/hard work."
+    }
+  ],
+  "codex-cli": [
+    {
+      difficulty: ["medium", "difficult", "freeform"],
+      maxParallel: 2,
+      rationale: "Broad range including freeform; no model pin."
+    }
+  ],
+  "antigravity-cli": [
+    {
+      model: "Gemini 3.1 Pro (High)",
+      difficulty: ["easy"],
+      maxParallel: 2,
+      rationale: "Cheap capacity for easy tasks."
+    }
+  ],
+  "cursor-cli": [
+    {
+      model: "auto",
+      difficulty: ["easy"],
+      maxParallel: 1,
+      rationale: "Easy tasks only; auto model selection."
+    }
+  ],
+  "hermes-cli": [
+    {
+      difficulty: ["medium"],
+      maxParallel: 2,
+      provisional: true,
+      // NOTE: ESTIMATE, NOT OBSERVED. hermes-cli is absent from the live
+      // slot configuration this table was seeded from, so `medium` is a
+      // conservative placement rather than a transcription. Revisit once
+      // it has real usage data.
+      rationale: "ESTIMATE \u2014 no live slot to transcribe; conservative mid placement. Adjust after real use."
+    }
+  ]
+});
+var UNKNOWN_CLI_SLOT_RECIPE = Object.freeze({
+  difficulty: ["medium"],
+  maxParallel: 1,
+  provisional: true,
+  rationale: "Unrecognized provider \u2014 conservative default (medium, maxParallel 1). Review before relying on it."
+});
+function slotKey(slot) {
+  return [
+    slot.provider,
+    slot.model ?? "",
+    slot.thinkingLevel ?? "",
+    [...slot.difficulty ?? []].sort().join("|"),
+    [...slot.capability ?? []].sort().join("|"),
+    slot.maxParallel ?? ""
+  ].join("\0");
+}
+function dedupeDetected(detected) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const d of detected) {
+    const type = typeof d?.type === "string" ? d.type.trim() : "";
+    if (!type || seen.has(type)) continue;
+    seen.add(type);
+    out.push({ ...d, type });
+  }
+  return out;
+}
+function buildSlotProposal(detected, currentSlots = []) {
+  const providers = dedupeDetected(detected ?? []);
+  const proposedSlots = [];
+  const entries = [];
+  const unknownProviders = [];
+  const provisionalProviders = [];
+  for (const provider of providers) {
+    const known = CLI_SLOT_RECIPES[provider.type];
+    const recipes = known ?? [UNKNOWN_CLI_SLOT_RECIPE];
+    const isUnknown = !known;
+    if (isUnknown) unknownProviders.push(provider.type);
+    let providerProvisional = false;
+    for (const recipe of recipes) {
+      const slot = normalizeNodeCapabilitySlot({
+        provider: provider.type,
+        model: recipe.model,
+        thinkingLevel: recipe.thinkingLevel,
+        difficulty: recipe.difficulty,
+        maxParallel: recipe.maxParallel
+      });
+      if (!slot) continue;
+      const provisional = recipe.provisional === true;
+      if (provisional) providerProvisional = true;
+      proposedSlots.push(slot);
+      entries.push({
+        slot,
+        unknownProvider: isUnknown,
+        provisional,
+        ...recipe.rationale ? { rationale: recipe.rationale } : {}
+      });
+    }
+    if (providerProvisional) provisionalProviders.push(provider.type);
+  }
+  const proposedKeys = new Set(proposedSlots.map(slotKey));
+  const droppedSlots = currentSlots.filter((slot) => !proposedKeys.has(slotKey(slot)));
+  const proposedProviders = new Set(proposedSlots.map((s) => s.provider));
+  const droppedProviders = [...new Set(
+    droppedSlots.map((s) => s.provider).filter((p) => !proposedProviders.has(p))
+  )];
+  return {
+    proposedSlots,
+    entries,
+    unknownProviders,
+    provisionalProviders,
+    droppedSlots,
+    droppedProviders,
+    destructive: droppedSlots.length > 0
+  };
+}
+function buildMagiPanelProposal(detected, opts = {}) {
+  const providers = dedupeDetected(detected ?? []);
+  const tableOrder = Object.keys(CLI_SLOT_RECIPES);
+  const rank = (type) => {
+    const i = tableOrder.indexOf(type);
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+  };
+  const ordered = [...providers].sort((a, b) => rank(a.type) - rank(b.type));
+  const limit = Number.isFinite(opts.maxSlots) && opts.maxSlots > 0 ? Math.floor(opts.maxSlots) : ordered.length;
+  return ordered.slice(0, limit).map((p) => ({
+    ...opts.nodeId ? { nodeId: opts.nodeId } : {},
+    provider: p.type
+    // A model is intentionally NOT pinned: the panel's job is cross-provider
+    // independence, and pinning models here would silently couple the panel
+    // to this table's cost assumptions rather than to review quality.
+  }));
+}
 var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_status",
   "mesh_list_nodes",
@@ -457,7 +611,8 @@ var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_magi_kind_panel_set",
   "mesh_magi_kind_panel_list",
   "mesh_node_slots_set",
-  "mesh_node_slots_list"
+  "mesh_node_slots_list",
+  "mesh_node_slots_propose"
 ];
 var CANONICAL_MESH_TOOL_COUNT = CANONICAL_MESH_TOOL_NAMES.length;
 var STATUS_PROBE_ARG_KEY = "_statusProbe";
@@ -1619,6 +1774,18 @@ var MESH_NODE_SLOTS_LIST_TOOL = {
     required: ["node_id"]
   }
 };
+var MESH_NODE_SLOTS_PROPOSE_TOOL = {
+  name: "mesh_node_slots_propose",
+  description: 'AUTO-DETECT a node\'s installed CLI agents and DRAFT a capability-slot profile from them \u2014 the "just allow it and it figures out the slots" path. READ-ONLY: it probes the node (get_status_metadata \u2192 availableProviders, filtered to category=cli + installed=true), maps each detected CLI through a seeded provider\u2192(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` plus per-slot rationale. It NEVER writes \u2014 apply the draft with mesh_node_slots_set({ node_id, slots: proposedSlots, write: true }) after user approval. CRITICAL: slot writes are WHOLESALE replacements, so the response computes `droppedSlots` / `droppedProviders` / `destructive` \u2014 existing hand-tuned slots (capability tags, tuned maxParallel, providers not currently on PATH) are NOT preserved by the draft. Present those before approving. Detects nothing \u2192 proposes nothing (it will NOT propose an empty list that would wipe the profile). Optional include_magi drafts one cross-provider MAGI panel of the detected providers.',
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "REQUIRED \u2014 the mesh node id to detect installed CLI agents on and draft slots for." },
+      include_magi: { type: "boolean", description: "When true, also draft a MAGI panel (one slot per detected provider, pinned to this node, models unpinned) for binding via mesh_magi_kind_panel_set. Defaults false. Deliberately NOT a per-task_kind assignment \u2014 provider manifests carry no rca/design/claim_audit suitability data." }
+    },
+    required: ["node_id"]
+  }
+};
 var MESH_WRITE_MESH_JSON_CONFIG_TOOL = {
   name: "mesh_write_mesh_json_config",
   description: "Write `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Gated WRITE sibling of the draft-only export_mesh_json_config. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false), never clobbers an existing repo mesh.json unless overwrite=true, and validates before writing. Overwrite silently replaces the file, so present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope (commit target) \u2014 distinct from the machine-local MAGI kind-panel writes.",
@@ -1682,7 +1849,8 @@ var ALL_MESH_TOOLS = [
   MESH_MAGI_KIND_PANEL_SET_TOOL,
   MESH_MAGI_KIND_PANEL_LIST_TOOL,
   MESH_NODE_SLOTS_SET_TOOL,
-  MESH_NODE_SLOTS_LIST_TOOL
+  MESH_NODE_SLOTS_LIST_TOOL,
+  MESH_NODE_SLOTS_PROPOSE_TOOL
 ];
 
 // src/tools/mesh-compact.ts
@@ -6483,6 +6651,110 @@ async function meshNodeSlotsSet(ctx, args) {
   }
 }
 
+// src/tools/mesh-tools-slot-autodetect.ts
+function extractInstalledCliProviders(raw) {
+  const payload = unwrapCommandPayload(raw);
+  const list = payload?.status?.availableProviders ?? payload?.availableProviders ?? raw?.status?.availableProviders;
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue;
+    if (entry.category !== "cli") continue;
+    if (entry.installed !== true) continue;
+    const type = typeof entry.type === "string" ? entry.type.trim() : "";
+    if (!type) continue;
+    const displayName = typeof entry.displayName === "string" && entry.displayName.trim() ? entry.displayName.trim() : typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : void 0;
+    const version = typeof entry.providerVersion === "string" && entry.providerVersion.trim() ? entry.providerVersion.trim() : void 0;
+    out.push({ type, ...displayName ? { displayName } : {}, ...version ? { version } : {} });
+  }
+  return out;
+}
+async function meshNodeSlotsPropose(ctx, args = {}) {
+  const nodeId = String(args.node_id || args.nodeId || "").trim();
+  if (!nodeId) return JSON.stringify({ success: false, error: "node_id required" });
+  const includeMagi = args.include_magi === true || args.includeMagi === true;
+  try {
+    const node = await findNodeWithRefresh(ctx, nodeId);
+    let statusResult;
+    try {
+      statusResult = await commandForNode(ctx, node, "get_status_metadata", {}, { statusProbe: true });
+    } catch (e) {
+      return JSON.stringify({
+        success: false,
+        nodeId: node.id,
+        code: "detection_unavailable",
+        error: `Could not probe node for installed providers: ${e?.message || String(e)}`,
+        nextAction: "Node may be offline. Retry when it is online, or set slots manually with mesh_node_slots_set."
+      }, null, 2);
+    }
+    const detected = extractInstalledCliProviders(statusResult);
+    const currentSlots = normalizeNodeCapabilitySlots(node?.policy?.slots);
+    if (detected.length === 0) {
+      return JSON.stringify({
+        success: true,
+        nodeId: node.id,
+        detectedCliProviders: [],
+        currentSlots,
+        proposedSlots: [],
+        note: "No installed CLI providers detected on this node \u2014 nothing to propose. This is NOT a proposal to clear the node's slots: applying an empty slot list would wipe the existing profile. Left unchanged.",
+        nextAction: currentSlots.length ? "Node keeps its current slots. If detection is wrong, check the daemon's provider list (older daemons may not report `installed`)." : "Install a CLI agent on the node, or configure slots manually with mesh_node_slots_set."
+      }, null, 2);
+    }
+    const proposal = buildSlotProposal(detected, currentSlots);
+    const magiPanel = includeMagi ? buildMagiPanelProposal(detected, { nodeId: node.id }) : void 0;
+    const warnings = [];
+    if (proposal.destructive) {
+      warnings.push(
+        `DESTRUCTIVE: applying this proposal would REMOVE ${proposal.droppedSlots.length} existing slot(s)${proposal.droppedProviders.length ? `, dropping provider(s) entirely: ${proposal.droppedProviders.join(", ")}` : ""}. mesh_node_slots_set replaces the slot list wholesale \u2014 hand-tuned slots (capability tags, tuned maxParallel, providers not currently on PATH) are NOT preserved. Review droppedSlots before approving.`
+      );
+    }
+    if (proposal.unknownProviders.length) {
+      warnings.push(
+        `Unrecognized provider(s) with no mapping entry: ${proposal.unknownProviders.join(", ")}. Proposed with a conservative default (difficulty medium, maxParallel 1).`
+      );
+    }
+    if (proposal.provisionalProviders.length) {
+      warnings.push(
+        `Provisional (estimated, not observed) placement for: ${proposal.provisionalProviders.join(", ")}. Adjust after real usage.`
+      );
+    }
+    return JSON.stringify({
+      success: true,
+      dryRun: true,
+      nodeId: node.id,
+      detectionSource: "get_status_metadata \u2192 status.availableProviders (category=cli, installed=true)",
+      detectedCliProviders: detected,
+      currentSlots,
+      proposedSlots: proposal.proposedSlots,
+      rationale: proposal.entries.map((e) => ({
+        provider: e.slot.provider,
+        ...e.slot.model ? { model: e.slot.model } : {},
+        ...e.slot.difficulty ? { difficulty: e.slot.difficulty } : {},
+        ...e.slot.maxParallel !== void 0 ? { maxParallel: e.slot.maxParallel } : {},
+        ...e.unknownProvider ? { unknownProvider: true } : {},
+        ...e.provisional ? { provisional: true } : {},
+        ...e.rationale ? { why: e.rationale } : {}
+      })),
+      droppedSlots: proposal.droppedSlots,
+      droppedProviders: proposal.droppedProviders,
+      destructive: proposal.destructive,
+      ...warnings.length ? { warnings } : {},
+      ...magiPanel ? {
+        magiPanelProposal: {
+          slots: magiPanel,
+          scope: "ONE panel of the detected providers, pinned to this node. Not a per-kind assignment.",
+          rationale: "MAGI's value is cross-provider independence, and detection supports exactly that: one panel of distinct installed providers. Nothing in a provider manifest grades a provider for rca vs design vs claim_audit, so no per-kind split is proposed \u2014 you choose the task_kind to bind this to. Models are intentionally left unpinned.",
+          nextAction: "Bind with mesh_magi_kind_panel_set({ task_kind, slots }) \u2014 dry-run first, then write=true after approval."
+        }
+      } : {},
+      note: "PROPOSAL ONLY \u2014 nothing was written. This tool never mutates node config.",
+      nextAction: "Present this diff to the user. On approval, apply with mesh_node_slots_set({ node_id, slots: proposedSlots, write: true }). Its own dry-run (write omitted) will restate the same current-vs-proposed diff."
+    }, null, 2);
+  } catch (e) {
+    return JSON.stringify({ success: false, error: e?.message || String(e) });
+  }
+}
+
 // src/tools/mesh-tools-session.ts
 function computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, sessionId) {
   if (!sessionWasIdle || dispatchPreRecorded) return {};
@@ -9342,6 +9614,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_node_slots_list":
             text = await meshNodeSlotsList(meshCtx, a);
+            break;
+          case "mesh_node_slots_propose":
+            text = await meshNodeSlotsPropose(meshCtx, a);
             break;
           default:
             return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
