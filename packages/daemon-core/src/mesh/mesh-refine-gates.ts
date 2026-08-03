@@ -232,6 +232,25 @@ export type MeshRefineJobHandle = {
      * Absent on legacy / version-skewed requesters → daemon-level delivery, unchanged.
      */
     targetCoordinatorSessionId?: string;
+    /**
+     * Refinery serialization ⓪: accept-time verdict on whether the base moved out
+     * from under this branch, scoped to the submodules the branch actually touches.
+     * Recorded as a signal only — it never gates or delays acceptance today. A later
+     * serialization queue reads this to decide which jobs may run in parallel;
+     * `unknown` is fail-closed and must be treated as "must serialize".
+     */
+    baseDivergence?: {
+        verdict: 'clear' | 'diverged' | 'unknown';
+        scopes: Array<{
+            path: string;
+            verdict: 'clear' | 'diverged' | 'unknown';
+            liveBaseHead?: string;
+            mergeBase?: string;
+            error?: string;
+        }>;
+        touchedSubmodulePaths: string[];
+        durationMs: number;
+    };
     eventDelivery: {
         pendingEvents: true;
         ledger: true;

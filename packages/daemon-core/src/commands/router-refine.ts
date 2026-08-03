@@ -17,6 +17,7 @@ import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../mes
 import { resolveCoordinatorSelfIds, daemonIdListIncludes } from '../mesh/mesh-reconcile-identity.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
+import { assessRefineBaseDivergence } from '../mesh/mesh-refine-base-divergence.js';
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
 import { classifyChangedPackages } from '../git/git-status.js';
@@ -2562,6 +2563,63 @@ export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: Mes
         queueRefineJobEvent(self, isTerminalSuccess ? 'refine:completed' : 'refine:failed', terminalHandle, normalizedResult);
     }
 
+/**
+ * ⓪ Run the accept-time base-divergence pre-check and record its verdict on the
+ * live job handle (and the running-jobs map entry, which is the same object).
+ *
+ * Signal-only by design: with no serialization queue yet there is nowhere to park a
+ * diverged job, so the honest behaviour is to record and let the job proceed exactly
+ * as it does today — the pipeline's own sync_base stage still rebases it. A later
+ * queue reads `handle.baseDivergence` to decide what may run in parallel.
+ *
+ * Never throws and never blocks: it runs detached from the accept path, and any
+ * failure leaves the handle without a verdict rather than disturbing the job.
+ */
+export async function recordRefineAcceptBaseDivergence(
+    self: DaemonCommandRouter,
+    handle: MeshRefineJobHandle,
+    node: any,
+): Promise<void> {
+    try {
+        const mesh = (await self.getMeshForCommand(handle.meshId, undefined, { preferInline: true }))?.mesh;
+        const sourceNode = node?.clonedFromNodeId
+            ? mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, node.clonedFromNodeId))
+            : mesh?.nodes?.find((n: any) => !n.isLocalWorktree);
+        const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
+        const workspace = readStringValue(node?.workspace);
+        if (!repoRoot || !workspace) return;
+
+        const branch = typeof node?.worktreeBranch === 'string' && node.worktreeBranch.trim()
+            ? node.worktreeBranch.trim()
+            : (() => {
+                try {
+                    return execFileSync('git', ['branch', '--show-current'], { cwd: workspace, encoding: 'utf8' }).trim();
+                } catch { return ''; }
+            })();
+        if (!branch) return;
+
+        const baseBranch = (() => {
+            try {
+                return execFileSync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8' }).trim() || 'main';
+            } catch { return 'main'; }
+        })();
+
+        const assessment = await assessRefineBaseDivergence({ repoRoot, workspace, baseBranch, branch });
+        handle.baseDivergence = {
+            verdict: assessment.verdict,
+            scopes: assessment.scopes,
+            touchedSubmodulePaths: assessment.touchedSubmodulePaths,
+            durationMs: assessment.durationMs,
+        };
+        LOG.debug('Mesh', `[Refinery] accept base-divergence pre-check for node ${handle.targetNodeId}`
+            + ` (jobId=${handle.jobId}): verdict=${assessment.verdict}`
+            + ` touchedSubmodules=[${assessment.touchedSubmodulePaths.join(', ')}]`
+            + ` in ${assessment.durationMs}ms`);
+    } catch {
+        // Signal-only: a failed pre-check must never disturb the refine job itself.
+    }
+}
+
 export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: string, nodeId: string, args: any): Promise<CommandRouterResult> {
         const key = buildRefineJobKey(self, meshId, nodeId);
         const running = self.runningRefineJobs.get(key);
@@ -2598,6 +2656,12 @@ export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: stri
         queueRefineJobEvent(self, 'refine:accepted', handle);
 
         setImmediate(() => {
+            // ⓪ Accept-time base-divergence pre-check. Recorded onto the live handle as a
+            // signal for a later serialization queue; it never gates or delays acceptance.
+            // Deliberately runs HERE, off the accept path, so accept latency stays exactly
+            // 0 no matter how large the repo or how many submodules the branch touches —
+            // measured at ~63ms on a small repo, but the accept path must not pay it at all.
+            void recordRefineAcceptBaseDivergence(self, handle, node);
             void finishMeshRefineJob(self, handle, args);
         });
 
