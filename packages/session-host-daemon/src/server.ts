@@ -7,6 +7,7 @@ import {
   createLineParser,
   createResponseEnvelope,
   getDefaultSessionHostEndpoint,
+  isTerminalRecord,
 } from '@adhdev/session-host-core';
 import type {
   CreateSessionPayload,
@@ -472,9 +473,28 @@ export class SessionHostServer extends EventEmitter {
     }, 200));
   }
 
-  private persistNow(sessionId: string): void {
+  /**
+   * @param allowTerminal - write even if the record is terminal. Only the exit
+   * handler sets this, to stamp the final terminated record for the brief
+   * post-mortem window before cleanup.
+   */
+  private persistNow(sessionId: string, allowTerminal = false): void {
     const record = this.registry.getSession(sessionId);
     if (!record) return;
+    // Never write a live file for an already-terminated record. A persist can
+    // land after the exit handler stamped the termination — e.g. a PTY onData
+    // debounce (schedulePersist) that raced handleRuntimeExit. Writing here
+    // recreates the file after storage.remove() deleted it, resurrecting a
+    // self-contradictory record (lifecycle:'stopping' + termination stamped
+    // 'stopped') that then surfaces as a live attach target for a PID that
+    // already exited.
+    //
+    // Keyed on the record itself rather than a "removed sessions" set on
+    // purpose: a restart reuses the same sessionId (restartRuntime stops and
+    // relaunches in place), so a sticky per-id block would permanently stop
+    // persisting the restarted live session. A terminal record naturally
+    // stops being terminal once the session is running again.
+    if (!allowTerminal && isTerminalRecord(record)) return;
     const snapshot = this.getSnapshot(sessionId);
     try {
       this.storage.save(record, snapshot);
@@ -761,6 +781,11 @@ export class SessionHostServer extends EventEmitter {
       });
     }
 
+    const pendingPersistTimer = this.persistTimers.get(record.sessionId);
+    if (pendingPersistTimer) {
+      clearTimeout(pendingPersistTimer);
+      this.persistTimers.delete(record.sessionId);
+    }
     this.registry.deleteSession(record.sessionId);
     this.storage.remove(record.sessionId);
     this.storage.removeTombstone(record.sessionId);
@@ -815,7 +840,12 @@ export class SessionHostServer extends EventEmitter {
     this.registry.markStopped(record.sessionId, termination.lifecycle, termination);
     this.runtimes.delete(record.sessionId);
     this.resolveExitWaiters(record.sessionId, exitCode);
-    this.persistNow(record.sessionId);
+    const pendingPersistTimer = this.persistTimers.get(record.sessionId);
+    if (pendingPersistTimer) {
+      clearTimeout(pendingPersistTimer);
+      this.persistTimers.delete(record.sessionId);
+    }
+    this.persistNow(record.sessionId, true);
     // Persist a tombstone that survives live-record cleanup so the termination
     // stays inspectable after the 5s removal below.
     this.storage.saveTombstone(record.sessionId, termination);
@@ -848,8 +878,21 @@ export class SessionHostServer extends EventEmitter {
       termination.lifecycle === 'stopped' ? undefined : summary,
     );
     // Clean up the live persistence file after a brief delay (allow post-mortem
-    // reads). The tombstone written above is retained.
-    setTimeout(() => this.storage.remove(record.sessionId), 5_000).unref?.();
+    // reads). The tombstone written above is retained. The registry entry is
+    // dropped in the same tick as the file so the record can no longer be
+    // served — and so no persist can find it and recreate the file (see
+    // resurrection RCA: a persist landing after storage.remove() but finding
+    // the record still registered recreates a stale live file).
+    setTimeout(() => {
+      // A restart reuses the sessionId: restartRuntime() stops the runtime,
+      // which schedules this cleanup, then relaunches in place. If the session
+      // is live again by the time this fires, it belongs to the new runtime —
+      // deleting it would unregister and unpersist a running session.
+      const current = this.registry.getSession(record.sessionId);
+      if (current && !isTerminalRecord(current)) return;
+      this.registry.deleteSession(record.sessionId);
+      this.storage.remove(record.sessionId);
+    }, 5_000).unref?.();
     return termination;
   }
 }

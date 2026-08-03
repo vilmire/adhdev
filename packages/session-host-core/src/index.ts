@@ -62,6 +62,7 @@ export {
   getWorkspaceLabel,
   isSessionHostLiveRuntime,
   isSessionHostRecoverySnapshot,
+  isTerminalRecord,
   partitionSessionHostDiagnosticsSessions,
   partitionSessionHostRecords,
   resolveAttachableRuntimeRecord,
