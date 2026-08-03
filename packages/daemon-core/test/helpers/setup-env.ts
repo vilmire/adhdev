@@ -40,6 +40,30 @@ if (!process.env.ADHDEV_CONFIG_DIR) {
   process.env.ADHDEV_CONFIG_DIR = dir
 }
 
+// Make the verification path load the REPO's provider specs (the sibling
+// `adhdev-providers` checkout) instead of whatever published bundle happens to be
+// installed on the runner.
+//
+// Without this, `ProviderLoader` resolves channel='stable' (the production default,
+// since neither Refinery nor ci.yml sets ADHDEV_PROVIDER_CHANNEL) and stable REFUSES
+// every sibling checkout, falling back to `${getConfigDir()}/providers`. Combined
+// with the ADHDEV_CONFIG_DIR isolation above, that fallback is an empty temp dir. So
+// a provider spec fix — e.g. adhdev-providers/cli/claude-cli/specs/4.0.json — could
+// go green in CI/Refinery without the gate ever loading the edited file. A broken
+// spec was equally invisible.
+//
+// We deliberately do NOT set ADHDEV_PROVIDER_CHANNEL=preview here. The channel also
+// governs verified-store activation, channel sync targets, the preview registry echo
+// contract and the unverified-tarball fallback; flipping it would change behavior far
+// beyond spec loading and would stop testing the stable code path that production
+// actually runs. This narrower switch lifts only the sibling refusal.
+//
+// Only a default — a test that needs to observe the production refusal (see
+// provider-loader channel-policy tests) deletes or overrides it locally.
+if (!process.env.ADHDEV_ALLOW_SIBLING_PROVIDERS_ON_STABLE) {
+  process.env.ADHDEV_ALLOW_SIBLING_PROVIDERS_ON_STABLE = '1'
+}
+
 // git 2.43+ spawns a background `gc --auto` child after receiving a push into a
 // bare repo. Tests that call rmSync(root, {recursive, force}) in finally can race
 // that gc process writing into objects/ — rmdir throws ENOTEMPTY because force:true

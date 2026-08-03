@@ -223,6 +223,27 @@ export class ProviderLoader {
    * the resolved provider channel is 'stable' (production mode).
    */
   private static readonly UNVERIFIED_TARBALL_ENV_VAR = 'ADHDEV_PROVIDER_ALLOW_UNVERIFIED_TARBALL';
+  /**
+   * Verification-path opt-in that lets a STABLE runtime adopt a sibling
+   * `adhdev-providers` checkout, without switching the provider channel.
+   *
+   * Why this exists as its own switch rather than reusing
+   * `ADHDEV_PROVIDER_CHANNEL=preview`: the channel is not a single-purpose
+   * flag. It also selects which verified-store activations are loaded
+   * (`listActiveActivations(channel)`), which rows the channel sync targets,
+   * whether the registry echo contract is enforced (`channel === 'preview'`
+   * in channel/runtime.ts), and whether the unverified tarball fallback is
+   * permitted. Flipping the channel to make the repo's specs load would drag
+   * all of that along and would no longer be testing the stable code path.
+   * This switch changes exactly one thing: the sibling-adoption refusal.
+   *
+   * Production safety is unchanged. A stable daemon still refuses a sibling
+   * checkout, because the refusal is only lifted when this env var is
+   * explicitly set to '1' AND the pre-existing opt-in (marker file or
+   * ADHDEV_USE_SIBLING_PROVIDERS) already applies. Nothing sets it outside
+   * the test/verification harness.
+   */
+  private static readonly SIBLING_STABLE_OVERRIDE_ENV_VAR = 'ADHDEV_ALLOW_SIBLING_PROVIDERS_ON_STABLE';
 
   /** Resolved provider channel (explicit config/env wins; otherwise derived from the daemon release channel; absent/ambiguous → 'stable'). */
   readonly channel: ProviderChannel;
@@ -236,13 +257,22 @@ export class ProviderLoader {
 
   private probeStarts: string[] = [];
   private siblingLogged = false;
-  private siblingRefusalLogged = false;
   /** Active verified-channel object dirs, refreshed by loadAll(). */
   private channelObjectRoots: string[] = [];
   private userDirSource: ProviderUserDirSource = 'home-default';
 
   /** Process-level dedup for stderr sibling-adoption notices (shared across all ProviderLoader instances). */
   private static siblingStderrLogged: Set<string> = new Set();
+
+  /**
+   * Process-level dedup for the stable-channel sibling REFUSAL notice, mirroring
+   * `siblingStderrLogged` on the adoption path. This was previously an instance
+   * field, so every new ProviderLoader re-armed it. Under vitest's per-file module
+   * isolation that meant one line per test file (measured 36–40 repeats), which
+   * flooded the truncated tail of Refinery failure reports and cut off the actual
+   * failing test names and assertions — diagnostic output destroying diagnostics.
+   */
+  private static siblingRefusalLogged: Set<string> = new Set();
 
   private static looksLikeProviderRoot(candidate: string): boolean {
     try {
@@ -281,9 +311,22 @@ export class ProviderLoader {
             // silently override verified channel activations. Non-stable
             // development use still requires the explicit opt-in (marker
             // file or env var).
-            if (this.channel === 'stable') {
-              if (!this.siblingRefusalLogged) {
-                this.siblingRefusalLogged = true;
+            //
+            // Verification-path exception: the test/CI/Refinery harness must
+            // exercise the repo's own provider specs, not whichever published
+            // bundle happens to be installed on the runner. Without this,
+            // editing e.g. adhdev-providers/cli/claude-cli/specs/4.0.json and
+            // watching the gate go green proves nothing — the gate never
+            // loaded the edit. The override is deliberately narrower than a
+            // channel flip: it lifts ONLY this refusal, leaving verified-store
+            // activation, channel sync, the registry echo contract and the
+            // unverified-tarball gate on their stable behavior. Production is
+            // unaffected because nothing sets this env var outside the harness.
+            const stableSiblingOverride =
+              process.env[ProviderLoader.SIBLING_STABLE_OVERRIDE_ENV_VAR] === '1';
+            if (this.channel === 'stable' && !stableSiblingOverride) {
+              if (!ProviderLoader.siblingRefusalLogged.has(siblingCandidate)) {
+                ProviderLoader.siblingRefusalLogged.add(siblingCandidate);
                 this.log(`Refusing sibling provider checkout (channel=stable): ${siblingCandidate}. Set providerChannel=preview (or ${'ADHDEV_PROVIDER_CHANNEL'}=preview) to opt in for development.`);
                 try {
                   process.stderr.write(

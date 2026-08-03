@@ -126,6 +126,7 @@ describe('Channel policy — sibling checkout adoption', () => {
   let tmpRoot = '';
   let projectDir = '';
   let siblingDir = '';
+  let overrideBefore: string | undefined;
 
   beforeEach(() => {
     tmpRoot = makeTmp('adhdev-channel-sibling-');
@@ -134,15 +135,26 @@ describe('Channel policy — sibling checkout adoption', () => {
     mkdirSync(projectDir, { recursive: true });
     mkdirSync(join(siblingDir, 'cli'), { recursive: true });
     writeFileSync(join(siblingDir, '.adhdev-provider-root'), '', 'utf-8');
+    // The suite-wide setup (test/helpers/setup-env.ts) turns on the
+    // verification-path sibling override so the gate loads the repo's real
+    // provider specs. This describe block asserts the PRODUCTION policy, so it
+    // must observe the un-overridden behavior — clear it here.
+    overrideBefore = process.env.ADHDEV_ALLOW_SIBLING_PROVIDERS_ON_STABLE;
+    delete process.env.ADHDEV_ALLOW_SIBLING_PROVIDERS_ON_STABLE;
   });
 
   afterEach(() => {
+    if (overrideBefore === undefined) delete process.env.ADHDEV_ALLOW_SIBLING_PROVIDERS_ON_STABLE;
+    else process.env.ADHDEV_ALLOW_SIBLING_PROVIDERS_ON_STABLE = overrideBefore;
     if (tmpRoot && existsSync(tmpRoot)) rmSync(tmpRoot, { recursive: true, force: true });
     tmpRoot = projectDir = siblingDir = '';
   });
 
   it('stable runtime refuses sibling adoption even with the .adhdev-provider-root marker', () => {
     const logs: string[] = [];
+    // The refusal notice is deduped per sibling path per process (static guard).
+    // This sibling dir is a fresh tmp path per run, so the notice is always
+    // first-seen here and the log assertion below stays meaningful.
     const loader = new ProviderLoader({
       probeStarts: [projectDir],
       channel: 'stable',
