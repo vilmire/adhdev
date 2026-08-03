@@ -81,6 +81,10 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     const appName = options.appName;
     const timeoutMs = options.timeoutMs ?? DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
     const isManagedPid = options.isManagedPid ?? (() => true);
+    // Pid whose command line could not be read and which was therefore stopped
+    // defensively. Bounds the unverifiable-host restart to once per pid per
+    // process so a permanently unreadable host can never be killed in a loop.
+    let unverifiedStopPid: number | null = null;
 
     // Instance context is resolved lazily (per call, cached per process) rather
     // than at factory creation: entrypoints like daemon-standalone pin
@@ -257,13 +261,45 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         // running. Because the old host is reachable on the same socket endpoint,
         // `ensureSharedSessionHostReady` would reuse it and lazy requires would
         // resolve against the deleted tree. Detect the mismatch and stop the stale
-        // host before it can be reused; a matching or unreadable host is left alone.
+        // host before it can be reused.
+        //
+        // The command line is not always readable: `getProcessCommandLine` shells
+        // out to PowerShell (Get-CimInstance) with a wmic fallback, and AV/EDR
+        // policy, a locked-down execution policy or a 5s timeout make BOTH fail —
+        // structurally, every single time on an affected box. Treating that
+        // `null` as "looks fine" is what let a stale host from a deleted prefix
+        // survive for 9 days and take `create_session` down with
+        // `Failed to load native module: conpty.node`. So an unverifiable host is
+        // treated as possibly-stale and stopped: a wrong kill costs one immediate
+        // respawn, a missed kill costs a long-latent outage.
+        //
+        // Anti-loop: the unverifiable-host stop is allowed at most once per pid
+        // per process. If the freshly spawned host is *also* unreadable, the
+        // second `ensureReady` leaves it alone, so this can never degrade into a
+        // kill/respawn loop. A genuine prefix mismatch (readable command line) is
+        // not rate-limited — that evidence is conclusive.
         if (process.platform === 'win32') {
             const existingPid = getPid();
             if (existingPid !== null) {
                 const runningPath = getRunningSessionHostScriptPath(existingPid);
                 const currentEntry = resolveEntry();
-                if (runningPath && !pathsEquivalent(runningPath, currentEntry)) {
+                if (runningPath === null) {
+                    if (unverifiedStopPid !== existingPid) {
+                        unverifiedStopPid = existingPid;
+                        LOG.warn(
+                            'SessionHost',
+                            `Could not read the command line of host pid ${existingPid}; cannot prove it runs from ${currentEntry}. ` +
+                                'Stopping it once and respawning rather than risking reuse of a stale-prefix host.',
+                        );
+                        stopManagedSessionHostProcess();
+                    } else {
+                        LOG.warn(
+                            'SessionHost',
+                            `Host pid ${existingPid} is still unverifiable; leaving it alone (already restarted once this process) ` +
+                                'to avoid a kill/respawn loop.',
+                        );
+                    }
+                } else if (!pathsEquivalent(runningPath, currentEntry)) {
                     LOG.warn(
                         'SessionHost',
                         `Detected stale host pid ${existingPid} running from ${runningPath}; restarting from ${currentEntry}`,
