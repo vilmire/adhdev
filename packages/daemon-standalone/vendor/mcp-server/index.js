@@ -943,6 +943,7 @@ var MESH_STATUS_TOOL = {
       _gemini_compat: { type: "string", description: "Dummy property for Gemini compatibility. Ignore this." },
       includeStaleDirectWorkDetails: { type: "boolean", description: "Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only." },
       includeSessions: { type: "boolean", description: "Opt in to per-node live session arrays. Default false: compact mode returns a per-node sessionSummary (counts) and de-duplicated full session lists under top-level daemonSessions keyed by daemonId (sessions are not repeated for every node that shares a daemon). Set true to also include the full session array on each node." },
+      includeUsage: { type: "boolean", description: "Opt in to the token/cost usage rollup for this mesh (usage.total, usage.retained, usage.byNode, usage.costCoverage). Default false \u2014 usage is not read on ordinary status polls. Token counts come from each provider native transcript; costUsd is only present for providers that compute one themselves (hermes), so costCoverage reports how many sessions contributed a cost." },
       compact: { type: "boolean", description: "Slim payload for LLM callers. Default true. Folds per-node session arrays to sessionSummary and de-duplicates daemon-shared sessions into daemonSessions. Set false (or verbose=true) for the full dashboard-grade payload." },
       verbose: { type: "boolean", description: "Force the full payload; overrides compact." }
     }
@@ -4102,6 +4103,12 @@ async function meshStatus(ctx, args = {}) {
   try {
     response.ledgerSummary = ledgerSummary;
   } catch {
+  }
+  if (args.includeUsage === true) {
+    try {
+      response.usage = (0, import_daemon_core4.summarizeMeshUsage)(mesh.id);
+    } catch {
+    }
   }
   try {
     if (compact) {
