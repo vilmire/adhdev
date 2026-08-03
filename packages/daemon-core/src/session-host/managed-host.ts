@@ -61,6 +61,29 @@ export interface ManagedSessionHostOptions {
      * session-host daemon; standalone kills unconditionally (returns true here).
      */
     isManagedPid?: (pid: number) => boolean;
+    /**
+     * Optional companion to `isManagedPid`, used only to decide whether a
+     * pidfile may be retained after a failed stop.
+     *
+     * `isManagedPid` collapses two very different negatives into `false`: "the
+     * command line could not be read" and "the command line was read and this is
+     * clearly not our process". Return `true` here when the pid was positively
+     * IDENTIFIED (its command line was readable), regardless of whether it turned
+     * out to be ours. A pid that is identified but unmanaged is a recycled pid
+     * owned by a stranger, so its pidfile is dropped instead of retained.
+     */
+    identifiesPid?: (pid: number) => boolean;
+    /**
+     * Test-only override for the resolved session-host entry path.
+     *
+     * `resolveEntry()` derives the packaged-install candidates from this
+     * module's own `__dirname`, which in any test process is the real
+     * daemon-core src tree. That makes the one condition the conpty guards act
+     * on — a PACKAGED prefix whose prebuild is missing — impossible to stage
+     * in-process, so without this seam those guards cannot be covered at all.
+     * Production never sets it and behavior is unchanged when omitted.
+     */
+    resolveEntryOverride?: () => string;
 }
 
 export interface ManagedSessionHost {
@@ -108,6 +131,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     }
 
     function resolveEntry(): string {
+        if (options.resolveEntryOverride) return options.resolveEntryOverride();
         const packagedCandidates = [
             path.resolve(__dirname, '../vendor/session-host-daemon/index.js'),
             path.resolve(__dirname, '../../vendor/session-host-daemon/index.js'),
@@ -274,23 +298,77 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         }
     }
 
+    /**
+     * Is `pid` still alive? Signal 0 performs the permission/existence check
+     * without delivering a signal, so this never terminates anything.
+     *
+     * Unlike `getProcessCommandLine` (PowerShell/wmic, blocked outright on the
+     * boxes this fix targets) this is a plain kernel call that always answers.
+     * `EPERM` means the process exists but is owned by someone else — alive for
+     * our purposes, and a pid we could not have killed anyway.
+     */
+    function isPidAlive(pid: number): boolean {
+        try {
+            process.kill(pid, 0);
+            return true;
+        } catch (error) {
+            return (error as NodeJS.ErrnoException)?.code === 'EPERM';
+        }
+    }
+
     function stopManagedSessionHostProcess(): boolean {
         let stopped = false;
         const pidFile = getPidFile();
+        // Keep the pidfile when a tracked host is still alive but we failed to
+        // kill it. Unconditionally deleting it is what disarmed the D1
+        // stale-prefix guard in production: `isManagedPid` returns false when the
+        // command line is unreadable (fail-closed), so the kill was skipped — yet
+        // the pidfile was removed anyway, so the NEXT `ensureReady` read
+        // `getPid() === null` and skipped the whole unverified-host block. The
+        // zombie then survived every restart with nothing left tracking it.
+        // Retaining the pidfile keeps the survivor visible to that guard.
+        let keepPidFile = false;
         try {
             if (fs.existsSync(pidFile)) {
                 const pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
-                if (Number.isFinite(pid) && pid !== process.pid && isManagedPid(pid)) {
-                    stopped = killPid(pid) || stopped;
+                if (Number.isFinite(pid) && pid !== process.pid) {
+                    const managed = isManagedPid(pid);
+                    if (managed) {
+                        stopped = killPid(pid) || stopped;
+                    }
+                    // Retain the pidfile only for a pid that survived AND that we
+                    // could not positively attribute to someone else.
+                    //
+                    // `isManagedPid` is three-valued in practice: true (proven
+                    // ours), false-because-unreadable (the blocked-probe case this
+                    // fix exists for), and false-because-proven-unrelated (a
+                    // recycled pid now owned by an unrelated process). Only the
+                    // first two may be retained — retaining a proven-unrelated pid
+                    // would make the stale-host guard treat a stranger's process
+                    // as our zombie host on the next start. `identifiesPid` lets a
+                    // caller distinguish the last case; without it we fall back to
+                    // liveness alone, which matches the previous behavior for
+                    // hosts that are genuinely ours.
+                    const provenUnrelated = !managed && options.identifiesPid?.(pid) === true;
+                    keepPidFile = !provenUnrelated && isPidAlive(pid);
+                    if (keepPidFile) {
+                        LOG.warn(
+                            'SessionHost',
+                            `Session-host pid ${pid} is still alive after the stop attempt; keeping ${pidFile} ` +
+                                'so the stale-host guard can still see it on the next start.',
+                        );
+                    }
                 }
             }
         } catch {
             // noop
         } finally {
-            try {
-                fs.unlinkSync(pidFile);
-            } catch {
-                // noop
+            if (!keepPidFile) {
+                try {
+                    fs.unlinkSync(pidFile);
+                } catch {
+                    // noop
+                }
             }
         }
 
