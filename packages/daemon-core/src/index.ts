@@ -519,6 +519,19 @@ export {
 } from './chat/subscription-updates.js';
 export { runAsyncBatch } from './chat/async-batch.js';
 export type { AsyncBatchOptions } from './chat/async-batch.js';
+export {
+    DEFAULT_CHAT_TAIL_MISSING_SESSION_POLICY,
+    decideMissingSessionAttempt,
+    isMissingLiveSessionResult,
+    recordMissingSessionAttempt,
+    resolveBackoffMs,
+    shouldWarnForMissingSession,
+} from './chat/chat-tail-missing-session-backoff.js';
+export type {
+    ChatTailMissingSessionDecision,
+    ChatTailMissingSessionPolicy,
+    ChatTailMissingSessionState,
+} from './chat/chat-tail-missing-session-backoff.js';
 export type {
   ChatTailSubscriptionCursor,
   PrepareSessionChatTailUpdateInput,
