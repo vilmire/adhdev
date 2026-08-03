@@ -187,22 +187,35 @@ function packageRootForPrefix(prefix: string, packageName: string): string {
 // .npmrc sets build-from-source=true), the install script deletes the prebuild
 // and may leave no conpty.node on machines without build tools. Verify it
 // survived before we ever activate the staged prefix.
-const CONPTY_PREBUILD_RELATIVE_PATH = path.join(
+//
+// npm may hoist node-pty to <prefix>/node_modules/node-pty (no nested adhdev/
+// node_modules/ segment) depending on the install-time dependency graph, so
+// both candidate layouts are checked; only fail when NEITHER has the prebuild.
+const CONPTY_PREBUILD_NESTED_RELATIVE_PATH = path.join(
   'node_modules', 'adhdev', 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node'
 );
+const CONPTY_PREBUILD_HOISTED_RELATIVE_PATH = path.join(
+  'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node'
+);
 
-function resolveStagedConptyPrebuildPath(stagedPrefix: string): string {
-  return path.join(stagedPrefix, CONPTY_PREBUILD_RELATIVE_PATH);
+export function resolveConptyPrebuildCandidates(prefix: string): string[] {
+  return [
+    path.join(prefix, CONPTY_PREBUILD_NESTED_RELATIVE_PATH),
+    path.join(prefix, CONPTY_PREBUILD_HOISTED_RELATIVE_PATH),
+  ];
 }
 
-export function verifyStagedConptyPrebuild(stagedPrefix: string): void {
-  const conptyPath = resolveStagedConptyPrebuildPath(stagedPrefix);
-  if (!fs.existsSync(conptyPath)) {
+export function verifyStagedConptyPrebuild(stagedPrefix: string, log?: (message: string) => void): void {
+  const candidates = resolveConptyPrebuildCandidates(stagedPrefix);
+  const found = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!found) {
     throw new Error(
-      `Staged install is missing required native addon: ${conptyPath}. ` +
+      `Staged install is missing required native addon: node-pty's conpty.node prebuild ` +
+      `(checked: ${candidates.join(', ')}). ` +
       'Aborting activation to prevent a daemon boot crash.'
     );
   }
+  log?.(`conpty prebuild verified at ${found}`);
 }
 
 function readPackageCliEntry(prefix: string, packageName: string, targetVersion: string): string {
@@ -437,7 +450,7 @@ export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeO
   try {
     hooks.log(`Installing ${packageName}@${targetVersion} into inactive prefix ${stagedPrefix}`);
     await hooks.install(stagedPrefix, portableNode);
-    verifyStagedConptyPrebuild(stagedPrefix);
+    verifyStagedConptyPrebuild(stagedPrefix, hooks.log);
     const stagedCliEntry = readPackageCliEntry(stagedPrefix, packageName, targetVersion);
     pinStagedShims(stagedPrefix, portableNode, stagedCliEntry);
     validateStagedCli(portableNode, stagedCliEntry, targetVersion);

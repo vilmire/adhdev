@@ -9,7 +9,7 @@ import {
     type SessionHostRequestType,
 } from '@adhdev/session-host-core';
 import { getProcessCommandLine, parseNodeScriptPath } from '../commands/process-lifecycle.js';
-import { findPortableNode22 } from '../commands/windows-atomic-upgrade.js';
+import { findPortableNode22, resolveConptyPrebuildCandidates } from '../commands/windows-atomic-upgrade.js';
 import { resolveInstanceDir } from '../commands/upgrade-helper.js';
 import { getProcessInstanceContext } from '../config/instance-context.js';
 import { LOG } from '../logging/logger.js';
@@ -203,8 +203,56 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         return process.execPath;
     }
 
+    /**
+     * Re-verify node-pty's conpty.node prebuild survives in the ACTIVE prefix,
+     * right before every session-host spawn on win32.
+     *
+     * The install-time gate (`verifyStagedConptyPrebuild` in windows-atomic-
+     * upgrade.ts) only proves the prebuild existed at staging time. A live
+     * production incident showed it can vanish from the activated prefix
+     * afterward through a mechanism that gate cannot see (root cause
+     * unconfirmed after investigation — env-var casing, AV/EDR quarantine, and
+     * a stray npm config were all checked and ruled out). Re-checking at spawn
+     * time is the only remaining defense against that class of failure, and it
+     * turns the prior symptom (a 4ms `Cannot find module './prebuilds/win32-x64/
+     * conpty.node'` require crash inside the session-host child, with no hint
+     * of which prefix was checked) into an immediate, actionable daemon-side
+     * error that names the exact paths that were checked.
+     *
+     * Only applies to the packaged install layout `resolveEntry()` returns
+     * (`<activePrefix>/node_modules/adhdev/vendor/session-host-daemon/index.js`,
+     * matched by locating the `node_modules` segment that precedes it). In a
+     * monorepo dev/test checkout `resolveEntry()` falls through to
+     * `require.resolve('@adhdev/session-host-daemon')`, which resolves to a
+     * workspace package path with no such segment — there is no "active
+     * prefix" to check there, so the check is skipped rather than guessing.
+     */
+    function verifyConptyPrebuildBeforeSpawn(entry: string): void {
+        if (process.platform !== 'win32') return;
+        // Normalize both separators explicitly (not path.sep, which reflects the
+        // HOST platform running this check, not necessarily the separator style
+        // baked into `entry`) so the marker match is robust regardless of how
+        // the path string was assembled upstream.
+        const normalized = entry.replace(/\\/g, '/');
+        const marker = '/node_modules/adhdev/vendor/session-host-daemon/';
+        const markerIndex = normalized.lastIndexOf(marker);
+        if (markerIndex === -1) return;
+        const activePrefix = entry.slice(0, markerIndex);
+        const candidates = resolveConptyPrebuildCandidates(activePrefix);
+        const found = candidates.find((candidate) => fs.existsSync(candidate));
+        if (!found) {
+            throw new Error(
+                'conpty.node missing at boot despite passing the install-time gate — likely deleted ' +
+                    `post-install (checked: ${candidates.join(', ')}). Every session-host spawn would crash ` +
+                    'requiring node-pty; refusing to spawn.',
+            );
+        }
+        LOG.info('SessionHost', `conpty prebuild verified before spawn at ${found}`);
+    }
+
     function spawnHost(): void {
         const entry = resolveEntry();
+        verifyConptyPrebuildBeforeSpawn(entry);
         const nodeExecutable = resolveSessionHostNode();
         let stdio: StdioOptions = 'ignore';
         let logFd: number | null = null;

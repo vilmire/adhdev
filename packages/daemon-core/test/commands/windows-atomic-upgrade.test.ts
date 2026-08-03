@@ -502,6 +502,71 @@ describe('Windows installer-managed atomic upgrade', () => {
   })
 
   /**
+   * D4-b: a production incident took multiple investigation rounds partly
+   * because the conpty gate logged nothing on success — there was no way to
+   * tell from daemon-upgrade.log whether the gate had even run. It must now
+   * log the exact verified path on every successful upgrade.
+   */
+  it('D4-b: logs the verified conpty prebuild path on successful activation', async () => {
+    const { layout } = fixture()
+    const logLines: string[] = []
+    const result = await performWindowsAtomicUpgrade({
+      layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.4', portableNode: process.execPath,
+      hooks: hooks({
+        install: (prefix) => installPackage(prefix, '1.0.18-rc.4'),
+        log: (message) => logLines.push(message),
+      }),
+    })
+    const expectedPath = path.join(result.stagedPrefix, 'node_modules', 'adhdev', 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node')
+    expect(logLines.some((line) => line.includes('conpty prebuild verified at') && line.includes(expectedPath))).toBe(true)
+  })
+
+  /**
+   * D4-a (shared path resolution): npm may hoist node-pty to
+   * `<prefix>/node_modules/node-pty` instead of nesting it under
+   * `node_modules/adhdev/node_modules/node-pty`, depending on the install-time
+   * dependency graph. The gate must accept either layout — only reject when
+   * BOTH are missing — otherwise a hoisted install would be false-flagged as
+   * broken.
+   */
+  it('accepts a hoisted node-pty layout (node_modules/node-pty, no nested adhdev/node_modules)', async () => {
+    const { layout } = fixture()
+    const logLines: string[] = []
+    const result = await performWindowsAtomicUpgrade({
+      layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.4', portableNode: process.execPath,
+      hooks: hooks({
+        install: (prefix) => {
+          installPackage(prefix, '1.0.18-rc.4')
+          // Remove the nested layout the fixture seeds by default and place the
+          // prebuild at the hoisted location instead.
+          fs.rmSync(path.join(prefix, 'node_modules', 'adhdev', 'node_modules', 'node-pty'), { recursive: true, force: true })
+          const hoistedConpty = path.join(prefix, 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node')
+          fs.mkdirSync(path.dirname(hoistedConpty), { recursive: true })
+          fs.writeFileSync(hoistedConpty, 'conpty.node placeholder (hoisted)')
+        },
+        log: (message) => logLines.push(message),
+      }),
+    })
+    const hoistedPath = path.join(result.stagedPrefix, 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node')
+    expect(fs.existsSync(hoistedPath)).toBe(true)
+    expect(logLines.some((line) => line.includes('conpty prebuild verified at') && line.includes(hoistedPath))).toBe(true)
+  })
+
+  it('rejects when neither the nested nor the hoisted node-pty layout has the conpty prebuild', async () => {
+    const { layout } = fixture()
+    await expect(performWindowsAtomicUpgrade({
+      layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.4', portableNode: process.execPath,
+      hooks: hooks({
+        install: (prefix) => {
+          installPackage(prefix, '1.0.18-rc.4')
+          fs.rmSync(path.join(prefix, 'node_modules', 'adhdev', 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node'), { force: true })
+          // No hoisted fallback seeded either — both candidates are absent.
+        },
+      }),
+    })).rejects.toThrow('conpty.node')
+  })
+
+  /**
    * D2: a failed upgrade used to leave its staged version-* prefix on disk. The
    * generic cleanup only sweeps a bounded slice of inactive prefixes and TS-only
    * self-upgraders never run install.ps1's stale-install sweep, so the debris

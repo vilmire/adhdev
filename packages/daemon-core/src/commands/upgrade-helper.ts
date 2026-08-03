@@ -834,7 +834,7 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
   // user an actionable notice instead of restarting into a broken install.
   if (process.platform === 'win32' && installCommand.surface.installPrefix) {
     try {
-      verifyStagedConptyPrebuild(installCommand.surface.installPrefix);
+      verifyStagedConptyPrebuild(installCommand.surface.installPrefix, appendUpgradeLog);
     } catch (error: any) {
       appendUpgradeLog(`Post-install conpty verification failed: ${error?.message || String(error)}`);
       emitUpgradeFailureNotice([
