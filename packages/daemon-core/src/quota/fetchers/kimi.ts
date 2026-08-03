@@ -1,0 +1,295 @@
+/**
+ * Kimi Code quota fetcher.
+ *
+ * Auth philosophy (see CLAUDE.md): ADHDev does NOT manage provider API keys.
+ * We read the access token the Kimi CLI already wrote to disk and use it for a
+ * single authenticated GET. We never refresh, rotate or rewrite that file —
+ * Kimi's refresh flow rotates the refresh token, so writing it back from here
+ * would log out a live `kimi` session. When the token has expired we simply
+ * report "cannot query" and let the CLI refresh it on its next run.
+ *
+ * Endpoint/field facts (base URL, `/usages`, the `usage` + `limits` shape and
+ * the `KIMI_CODE_HOME` / `KIMI_CODE_BASE_URL` env overrides) were established
+ * from the Kimi CLI's own managed-usage code, cross-checked against the
+ * reference implementation in stablyai/orca (MIT). No Orca code is copied here.
+ */
+'use strict';
+
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import {
+    SESSION_WINDOW_MINUTES,
+    WEEKLY_WINDOW_MINUTES,
+    quotaFailure,
+    windowFromUsage,
+    type ProviderQuota,
+    type QuotaWindow,
+} from '../types.js';
+import type { QuotaFetchDeps } from './deps.js';
+import { resolveDeps } from './deps.js';
+
+const DEFAULT_BASE_URL = 'https://api.kimi.com/coding/v1';
+const REQUEST_TIMEOUT_MS = 10_000;
+/** Refuse to spend a token that expires mid-flight. */
+const EXPIRY_SKEW_SECONDS = 5;
+
+function kimiHome(env: NodeJS.ProcessEnv): string {
+    const override = env.KIMI_CODE_HOME?.trim();
+    return override ? override : path.join(os.homedir(), '.kimi-code');
+}
+
+function credentialsPath(env: NodeJS.ProcessEnv): string {
+    return path.join(kimiHome(env), 'credentials', 'kimi-code.json');
+}
+
+function baseUrl(env: NodeJS.ProcessEnv): string {
+    const override = env.KIMI_CODE_BASE_URL?.trim();
+    return (override ? override : DEFAULT_BASE_URL).replace(/\/+$/, '');
+}
+
+interface KimiCredentials {
+    accessToken: string;
+    /** Unix *seconds*, as written by the CLI. */
+    expiresAt: number | null;
+}
+
+type CredentialsResult =
+    | { kind: 'ok'; credentials: KimiCredentials }
+    | { kind: 'missing' }
+    | { kind: 'invalid'; reason: string };
+
+function parseCredentials(raw: string): CredentialsResult {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return { kind: 'invalid', reason: 'Kimi credentials file is not valid JSON' };
+    }
+    if (typeof parsed !== 'object' || parsed === null) {
+        return { kind: 'invalid', reason: 'Kimi credentials file is not an object' };
+    }
+    const record = parsed as Record<string, unknown>;
+    const accessToken = record.access_token;
+    if (typeof accessToken !== 'string' || accessToken.length === 0) {
+        return { kind: 'invalid', reason: 'Kimi credentials file has no access token' };
+    }
+    const expiresAtRaw = record.expires_at;
+    const expiresAt = typeof expiresAtRaw === 'number' && Number.isFinite(expiresAtRaw)
+        ? expiresAtRaw
+        : null;
+    return { kind: 'ok', credentials: { accessToken, expiresAt } };
+}
+
+function readCredentials(deps: Required<QuotaFetchDeps>): CredentialsResult {
+    const file = credentialsPath(deps.env);
+    let raw: string;
+    try {
+        raw = fs.readFileSync(file, 'utf-8');
+    } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+            return { kind: 'missing' };
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        return { kind: 'invalid', reason: `Unable to read Kimi credentials: ${message}` };
+    }
+    return parseCredentials(raw);
+}
+
+function isExpired(credentials: KimiCredentials, nowMs: number): boolean {
+    if (credentials.expiresAt === null) {
+        // No expiry recorded — let the server be the judge rather than
+        // refusing to ask. A 401 is classified below.
+        return false;
+    }
+    return credentials.expiresAt - Math.floor(nowMs / 1000) <= EXPIRY_SKEW_SECONDS;
+}
+
+// --- response shape -------------------------------------------------------
+// `usage` is the long (weekly) quota; `limits[]` carries shorter rolling
+// windows, of which the ~5h one is the session view.
+
+function toNumber(value: unknown): number | null {
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === 'string' && value.trim() !== '') {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+}
+
+function toResetMs(value: unknown): number | null {
+    if (typeof value !== 'string' || value.trim() === '') {
+        return null;
+    }
+    const ms = new Date(value).getTime();
+    return Number.isNaN(ms) ? null : ms;
+}
+
+function windowMinutes(window: unknown): number | null {
+    if (typeof window !== 'object' || window === null) {
+        return null;
+    }
+    const record = window as Record<string, unknown>;
+    const duration = toNumber(record.duration);
+    if (duration === null) {
+        return null;
+    }
+    const unit = String(record.timeUnit ?? '').toUpperCase();
+    if (unit.includes('SECOND')) return Math.round(duration / 60);
+    if (unit.includes('MINUTE')) return duration;
+    if (unit.includes('HOUR')) return duration * 60;
+    if (unit.includes('DAY')) return duration * 60 * 24;
+    return duration;
+}
+
+/** Map one `detail` block, deriving `used` from `remaining` when needed. */
+function mapDetail(detail: unknown, minutes: number): QuotaWindow | null {
+    if (typeof detail !== 'object' || detail === null) {
+        return null;
+    }
+    const record = detail as Record<string, unknown>;
+    const limit = toNumber(record.limit);
+    let used = toNumber(record.used);
+    if (used === null) {
+        const remaining = toNumber(record.remaining);
+        if (remaining !== null && limit !== null) {
+            used = limit - remaining;
+        }
+    }
+    const resetsAt = toResetMs(record.resetTime) ?? toResetMs(record.resetAt);
+    return windowFromUsage(used, limit, minutes, resetsAt);
+}
+
+function mapUsageResponse(data: unknown): ProviderQuota {
+    const record = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
+    const weekly = mapDetail(record.usage, WEEKLY_WINDOW_MINUTES);
+
+    let session: QuotaWindow | null = null;
+    const limits = Array.isArray(record.limits) ? record.limits : [];
+    for (const entry of limits) {
+        if (typeof entry !== 'object' || entry === null) {
+            continue;
+        }
+        const limitRecord = entry as Record<string, unknown>;
+        const minutes = windowMinutes(limitRecord.window) ?? SESSION_WINDOW_MINUTES;
+        const mapped = mapDetail(limitRecord.detail, minutes);
+        if (!mapped) {
+            continue;
+        }
+        // Keep whichever reported window sits closest to a 5h session.
+        const better =
+            session === null ||
+            Math.abs(minutes - SESSION_WINDOW_MINUTES) <
+                Math.abs(session.windowMinutes - SESSION_WINDOW_MINUTES);
+        if (better) {
+            session = mapped;
+        }
+    }
+
+    if (!session && !weekly) {
+        return quotaFailure('kimi', 'error', 'Kimi usage response contained no quota windows', {
+            source: 'oauth',
+            failureKind: 'parse',
+        });
+    }
+    return {
+        provider: 'kimi',
+        session,
+        weekly,
+        updatedAt: Date.now(),
+        error: null,
+        status: 'ok',
+        metadata: { source: 'oauth' },
+    };
+}
+
+function retryAfterMs(header: string | null, nowMs: number): number | undefined {
+    if (!header) {
+        return undefined;
+    }
+    const seconds = Number(header);
+    if (Number.isFinite(seconds)) {
+        return nowMs + seconds * 1000;
+    }
+    const at = new Date(header).getTime();
+    return Number.isNaN(at) ? undefined : at;
+}
+
+/**
+ * Fetch Kimi Code subscription usage. Never throws — every failure path
+ * resolves to a snapshot whose `status` is 'error' or 'unavailable'.
+ */
+export async function fetchKimiQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
+    const deps = resolveDeps(overrides);
+
+    const credentialsResult = readCredentials(deps);
+    if (credentialsResult.kind === 'missing') {
+        return quotaFailure('kimi', 'unavailable', 'Not signed in to Kimi Code', {
+            source: 'oauth',
+            failureKind: 'missing-credentials',
+        });
+    }
+    if (credentialsResult.kind === 'invalid') {
+        return quotaFailure('kimi', 'error', credentialsResult.reason, {
+            source: 'oauth',
+            failureKind: 'parse',
+        });
+    }
+
+    const credentials = credentialsResult.credentials;
+    if (isExpired(credentials, deps.now())) {
+        // Deliberately do not refresh: the CLI owns the token lifecycle.
+        return quotaFailure(
+            'kimi',
+            'error',
+            'Kimi session expired — run kimi on this machine to refresh, then retry',
+            { source: 'oauth', failureKind: 'expired-token' },
+        );
+    }
+
+    try {
+        const response = await deps.fetch(`${baseUrl(deps.env)}/usages`, {
+            headers: {
+                Authorization: `Bearer ${credentials.accessToken}`,
+                Accept: 'application/json',
+            },
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+
+        if (response.status === 401 || response.status === 403) {
+            return quotaFailure(
+                'kimi',
+                'error',
+                `Kimi usage request was rejected (HTTP ${response.status})`,
+                { source: 'oauth', failureKind: 'unauthorized' },
+            );
+        }
+        if (response.status === 429) {
+            return quotaFailure('kimi', 'error', 'Kimi usage request was rate limited', {
+                source: 'oauth',
+                failureKind: 'rate-limited',
+                retryAtMs: retryAfterMs(response.headers?.get?.('retry-after') ?? null, deps.now()),
+            });
+        }
+        if (!response.ok) {
+            return quotaFailure(
+                'kimi',
+                'error',
+                `Kimi usage request failed (HTTP ${response.status})`,
+                { source: 'oauth', failureKind: response.status >= 500 ? 'server' : 'unknown' },
+            );
+        }
+
+        return mapUsageResponse(await response.json());
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return quotaFailure('kimi', 'error', `Kimi usage request failed: ${message}`, {
+            source: 'oauth',
+            failureKind: 'network',
+        });
+    }
+}
