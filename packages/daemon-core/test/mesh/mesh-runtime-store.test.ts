@@ -1673,7 +1673,12 @@ describe('mesh-runtime-store', () => {
             expect(store.taskHasConfirmedDelivery(MESH, taskId)).toBe(true);
         });
 
-        it('does not record a delivery when the dispatch is not materialised (no missionId)', () => {
+        it('records a confirmed delivery even with no missionId (redrive protection)', () => {
+            // MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT: this previously asserted the
+            // opposite — no missionId meant no delivery row, so
+            // recoverStrandedAssignedDispatches could reclaim and REDRIVE a task the
+            // worker had already completed. Redrive protection must not depend on
+            // whether the caller supplied a mission.
             const taskId = randomUUID();
             const entry = recordDirectDispatchTask(MESH, 'echo probe', {
                 id: taskId,
@@ -1681,9 +1686,9 @@ describe('mesh-runtime-store', () => {
                 assignedNodeId: 'node_w',
                 assignedSessionId: 'sess_w',
             });
-            expect(entry).toBeNull();
+            expect(entry).not.toBeNull();
             const store = MeshRuntimeStore.getInstance();
-            expect(store.taskHasConfirmedDelivery(MESH, taskId)).toBe(false);
+            expect(store.taskHasConfirmedDelivery(MESH, taskId)).toBe(true);
         });
     });
 

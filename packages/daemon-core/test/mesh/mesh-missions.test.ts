@@ -126,19 +126,25 @@ describe('M3 — mission persistence', () => {
         expect(stats.completed).toBe(1);
     });
 
-    it('leaves a direct dispatch with no mission_id unattributed (backward compatible)', () => {
+    it('leaves a direct dispatch with no mission_id unattributed (but still tracked)', () => {
         const mission = upsertMeshMission(meshId, { title: 'Unattributed control' });
 
-        // No mission_id → helper is a no-op and creates no queue entry.
-        const skipped = recordDirectDispatchTask(meshId, 'untracked task', {
+        // MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT: a missing mission_id means
+        // "not attributable to a mission" — nothing more. The entry IS created, so the
+        // dispatch still gets a turn attempt and a confirmed delivery record. It
+        // previously returned null here, which silently cost mission-less dispatches
+        // their terminal-state convergence and their redrive protection.
+        const entry = recordDirectDispatchTask(meshId, 'untracked task', {
             id: randomUUID(),
             missionId: '   ',
             assignedNodeId: 'node-1',
             assignedSessionId: 'session-x',
         });
-        expect(skipped).toBeNull();
+        expect(entry).not.toBeNull();
+        expect(entry!.missionId).toBeUndefined();
 
-        expect(getQueue(meshId)).toHaveLength(0);
+        // The point of this test is unchanged: it must not be attributed to any mission.
+        expect(getQueue(meshId)).toHaveLength(1);
         const agg = summarizeMissionTasks(meshId, mission.id);
         expect(agg.total).toBe(0);
         expect(computeMeshMissionStats(meshId, mission.id).taskCount).toBe(0);

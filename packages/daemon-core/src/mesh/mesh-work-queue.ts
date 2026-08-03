@@ -1092,14 +1092,39 @@ export function enqueueTask(
  *
  * Intentionally separate from {@link enqueueTask}: enqueue creates `pending`
  * work for the queue to assign, whereas this records work already dispatched
- * out-of-band. They share the missionId stamping rule and mode validation.
+ * out-of-band. They share the mode validation; missionId is stamped when present.
+ *
+ * MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT: `missionId` is deliberately OPTIONAL.
+ * It once gated this whole function, because the function's only job was mission
+ * ATTRIBUTION (the counts described above). Two things were later folded in that
+ * have nothing to do with missions, and both silently inherited that gate:
+ *
+ *   1. openTurnAttempt/recordTurnAck — without an attempt, a completion event
+ *      reaches proposeTurnCompletion with nothing to resolve, so
+ *      ensureLegacyTurnAttempt mints a `legacy-<taskId>-0` row whose sessionId
+ *      does not match the worker binding. The reducer then refuses the flip
+ *      (stale_attempt / session_mismatch) and mesh-event-forwarding returns
+ *      early, skipping updateSessionTaskStatus, updateDirectDispatchStatus and
+ *      markSessionDeliveriesTerminal — the session stays `generating` forever.
+ *   2. createSessionDelivery — the confirmed-delivery record that stops
+ *      recoverStrandedAssignedDispatches from reclaiming an already-completed
+ *      task (see the note at that call). Skipping it does not merely delay a
+ *      status: on an unlucky interleaving the watchdog REDRIVES finished work.
+ *
+ * So a `mesh_send_task` without a mission lost both terminal-state convergence
+ * and redrive protection. Opening the attempt is what makes every direct
+ * dispatch reducer-authoritative from `accepted`, exactly like the queue path
+ * (mesh-queue-assignment.ts openTurnAttempt), and it must not depend on whether
+ * the caller happened to pass a mission.
  */
 export function recordDirectDispatchTask(
     meshId: string,
     message: string,
     opts: {
         id: string;
-        missionId: string;
+        /** Optional: stamped for mission attribution when present. Never gates
+         *  attempt-opening or delivery recording — see the note above. */
+        missionId?: string;
         assignedNodeId?: string;
         assignedSessionId?: string;
         taskMode?: MeshTaskMode | string;
@@ -1108,8 +1133,9 @@ export function recordDirectDispatchTask(
         dispatchedAt?: string;
     },
 ): MeshWorkQueueEntry | null {
+    // A missing missionId only means "not attributable to a mission" — it must not
+    // skip the turn attempt or the delivery record (see the note above).
     const missionId = typeof opts.missionId === 'string' ? opts.missionId.trim() : '';
-    if (!missionId) return null;
     const taskId = typeof opts.id === 'string' ? opts.id.trim() : '';
     if (!taskId) return null;
     // DELIVERY-MSG-GUARD (upstream defence): the direct-dispatch path materialises the
@@ -1138,7 +1164,7 @@ export function recordDirectDispatchTask(
             status: 'assigned',
             ...(modeValidation.taskMode ? { taskMode: modeValidation.taskMode } : {}),
             ...(readonly ? { readonly: true } : {}),
-            missionId,
+            ...(missionId ? { missionId } : {}),
             ...(opts.assignedNodeId ? { targetNodeId: opts.assignedNodeId, assignedNodeId: opts.assignedNodeId } : {}),
             ...(opts.assignedSessionId ? { targetSessionId: opts.assignedSessionId, assignedSessionId: opts.assignedSessionId } : {}),
             dispatchTimestamp: now,

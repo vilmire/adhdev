@@ -6971,17 +6971,15 @@ async function meshSendTask(ctx, args) {
             via: "p2p_direct",
             dispatchedAt
           });
-          if (missionId) {
-            (0, import_daemon_core4.recordDirectDispatchTask)(ctx.mesh.id, message, {
-              id: taskId,
-              missionId,
-              assignedNodeId: args.node_id,
-              assignedSessionId: dispatchedSessionId,
-              taskMode,
-              ...readonly ? { readonly: true } : {},
-              dispatchedAt
-            });
-          }
+          (0, import_daemon_core4.recordDirectDispatchTask)(ctx.mesh.id, message, {
+            id: taskId,
+            ...missionId ? { missionId } : {},
+            assignedNodeId: args.node_id,
+            assignedSessionId: dispatchedSessionId,
+            taskMode,
+            ...readonly ? { readonly: true } : {},
+            dispatchedAt
+          });
         } catch {
         }
       }
@@ -7173,19 +7171,17 @@ async function meshSendTask(ctx, args) {
           error: dispatchPayload?.error || dispatchResult?.error || "agent_command rejected the task"
         });
       }
-      if (missionId) {
-        try {
-          (0, import_daemon_core4.recordDirectDispatchTask)(ctx.mesh.id, message, {
-            id: taskId,
-            missionId,
-            assignedNodeId: args.node_id,
-            assignedSessionId: args.session_id,
-            taskMode,
-            ...readonly ? { readonly: true } : {},
-            dispatchedAt
-          });
-        } catch {
-        }
+      try {
+        (0, import_daemon_core4.recordDirectDispatchTask)(ctx.mesh.id, message, {
+          id: taskId,
+          ...missionId ? { missionId } : {},
+          assignedNodeId: args.node_id,
+          assignedSessionId: args.session_id,
+          taskMode,
+          ...readonly ? { readonly: true } : {},
+          dispatchedAt
+        });
+      } catch {
       }
       let deliveryId;
       try {

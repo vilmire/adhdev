@@ -397,17 +397,22 @@ export async function meshSendTask(
                         via: 'p2p_direct',
                         dispatchedAt,
                     });
-                    if (missionId) {
-                        recordDirectDispatchTask(ctx.mesh.id, message, {
-                            id: taskId,
-                            missionId,
-                            assignedNodeId: args.node_id,
-                            assignedSessionId: dispatchedSessionId,
-                            taskMode,
-                            ...(readonly ? { readonly: true } : {}),
-                            dispatchedAt,
-                        });
-                    }
+                    // MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT: called unconditionally.
+                    // This opens the turn attempt that makes the completion event
+                    // reducer-authoritative, and writes the confirmed delivery the
+                    // stranded-assigned watchdog checks. Gating it on missionId left a
+                    // mission-less mesh_send_task with neither, so the session never
+                    // reached a terminal state and finished work could be redriven.
+                    // missionId is now optional and only affects mission attribution.
+                    recordDirectDispatchTask(ctx.mesh.id, message, {
+                        id: taskId,
+                        ...(missionId ? { missionId } : {}),
+                        assignedNodeId: args.node_id,
+                        assignedSessionId: dispatchedSessionId,
+                        taskMode,
+                        ...(readonly ? { readonly: true } : {}),
+                        dispatchedAt,
+                    });
                 } catch { /* best-effort */ }
             }
             const returnedSessionId = result.sessionId
@@ -667,19 +672,20 @@ export async function meshSendTask(
                     error: dispatchPayload?.error || dispatchResult?.error || 'agent_command rejected the task',
                 });
             }
-            if (missionId) {
-                try {
-                    recordDirectDispatchTask(ctx.mesh.id, message, {
-                        id: taskId,
-                        missionId,
-                        assignedNodeId: args.node_id,
-                        assignedSessionId: args.session_id,
-                        taskMode,
-                        ...(readonly ? { readonly: true } : {}),
-                        dispatchedAt,
-                    });
-                } catch { /* best-effort */ }
-            }
+            // MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT: unconditional — see the note at
+            // the sibling call site above. The turn attempt and the confirmed delivery
+            // record must not depend on whether a mission was supplied.
+            try {
+                recordDirectDispatchTask(ctx.mesh.id, message, {
+                    id: taskId,
+                    ...(missionId ? { missionId } : {}),
+                    assignedNodeId: args.node_id,
+                    assignedSessionId: args.session_id,
+                    taskMode,
+                    ...(readonly ? { readonly: true } : {}),
+                    dispatchedAt,
+                });
+            } catch { /* best-effort */ }
             // Create a delivery record for session-level ACK tracking
             let deliveryId: string | undefined;
             try {
