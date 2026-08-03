@@ -2,13 +2,28 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-let mockHomeDir = ''
+// Static import, NOT `await import()` inside the test body. The router module
+// graph pulls in most of the daemon (mesh, cdp, providers, session-host) and
+// costs ~60s of esbuild transform on a cold worker. Vitest bills a top-level
+// import to the untimed collect/import phase, but bills a dynamic import inside
+// a test to `testTimeout` — which made both tests here blow the 30s deadline
+// while doing no actual work. The `vi.mock('os')` below is hoisted above this
+// import and `homedir` is resolved lazily per call, so the mock still applies.
+import { DaemonCommandRouter } from '../../src/commands/router.js'
+
+// `var`, not `let`: some modules in the router graph (e.g.
+// providers/native-history/hermes-cli-transcript.ts) call `os.homedir()` at
+// module-evaluation time, which now runs while this module's bindings are still
+// in the temporal dead zone. A `let` would throw ReferenceError there; a `var` is
+// hoisted and reads as `undefined`, and those module-level constants are not
+// under test. Per-test reads still see the real temp dir set in beforeEach.
+var mockHomeDir = ''
 
 vi.mock('os', async () => {
   const actual = await vi.importActual<typeof import('os')>('os')
   return {
     ...actual,
-    homedir: () => mockHomeDir,
+    homedir: () => mockHomeDir ?? '',
   }
 })
 
@@ -39,7 +54,6 @@ function writeCodexSession(workspace: string, historySessionId: string): string 
 describe('list_saved_sessions native-source command surface', () => {
   beforeEach(() => {
     mockHomeDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-list-native-source-'))
-    vi.resetModules()
   })
 
   afterEach(() => {
@@ -53,7 +67,6 @@ describe('list_saved_sessions native-source command surface', () => {
     const historySessionId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
     const sourcePath = writeCodexSession(workspace, historySessionId)
 
-    const { DaemonCommandRouter } = await import('../../src/commands/router.js')
     const router = new DaemonCommandRouter({
       commandHandler: { handle: vi.fn(async () => ({ success: false, error: 'unexpected delegation' })) } as any,
       cliManager: { handleCliCommand: vi.fn(async () => ({ success: false, error: 'unexpected cli delegation' })) } as any,
@@ -148,7 +161,6 @@ describe('list_saved_sessions native-source command surface', () => {
       scripts: { listNativeHistory: nativeHistoryScript },
     }))
 
-    const { DaemonCommandRouter } = await import('../../src/commands/router.js')
     const router = new DaemonCommandRouter({
       commandHandler: { handle: vi.fn(async () => ({ success: false, error: 'unexpected delegation' })) } as any,
       cliManager: { handleCliCommand: vi.fn(async () => ({ success: false, error: 'unexpected cli delegation' })) } as any,
