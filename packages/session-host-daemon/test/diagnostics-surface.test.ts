@@ -220,20 +220,30 @@ test('send_input no-output diagnostic is suppressed when terminal output advance
 test('getHostDiagnostics applies limit to recovery and inactive session groups without dropping live runtimes', () => {
   const server = new SessionHostServer({ appName: 'adhdev-test-surface-limit' })
 
-  const liveOne = buildRecord({ sessionId: 'live-1', lifecycle: 'running' })
-  const liveTwo = buildRecord({ sessionId: 'live-2', lifecycle: 'running' })
+  // listSessions() sorts by lastActivityAt descending (most recent first, see
+  // registry.ts). Pin explicit, well-separated timestamps here instead of
+  // relying on buildRecord's Date.now() default: two records built back to
+  // back can land on the same millisecond or tick over into the next one,
+  // which nondeterministically flips which record sorts first and made this
+  // test flaky (~1/12 runs). The "-1" record in each pair must sort ahead of
+  // its "-2" sibling, so give it a strictly larger lastActivityAt.
+  const baseActivity = Date.now()
+  const liveOne = buildRecord({ sessionId: 'live-1', lifecycle: 'running', lastActivityAt: baseActivity + 40 })
+  const liveTwo = buildRecord({ sessionId: 'live-2', lifecycle: 'running', lastActivityAt: baseActivity + 30 })
   const recoveryOne = buildRecord({
     sessionId: 'recovery-1',
     lifecycle: 'stopped',
     meta: { restoredFromStorage: true, runtimeRecoveryState: 'orphan_snapshot' },
+    lastActivityAt: baseActivity + 20,
   })
   const recoveryTwo = buildRecord({
     sessionId: 'recovery-2',
     lifecycle: 'stopped',
     meta: { restoredFromStorage: true, runtimeRecoveryState: 'orphan_snapshot' },
+    lastActivityAt: baseActivity + 10,
   })
-  const inactiveOne = buildRecord({ sessionId: 'inactive-1', lifecycle: 'stopped' })
-  const inactiveTwo = buildRecord({ sessionId: 'inactive-2', lifecycle: 'stopped' })
+  const inactiveOne = buildRecord({ sessionId: 'inactive-1', lifecycle: 'stopped', lastActivityAt: baseActivity + 2 })
+  const inactiveTwo = buildRecord({ sessionId: 'inactive-2', lifecycle: 'stopped', lastActivityAt: baseActivity + 1 })
 
   for (const record of [liveOne, liveTwo, recoveryOne, recoveryTwo, inactiveOne, inactiveTwo]) {
     server.registry.restoreSession(record)
