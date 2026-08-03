@@ -1,5 +1,13 @@
 import { execFileSync, type ExecFileSyncOptions } from 'child_process';
 import * as path from 'path';
+import { LOG } from '../logging/logger.js';
+
+function errorText(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+/** Distinct command-line-probe failure causes already warned about this process. */
+const warnedCommandLineFailures = new Set<string>();
 
 export interface ProcessLifecycleOptions {
     platform?: NodeJS.Platform;
@@ -20,6 +28,12 @@ function getWindowsProcessCommandLine(
     exec: typeof import('child_process').execFileSync,
 ): string | null {
     const pidFilter = `ProcessId=${pid}`;
+    // Both probes failing is not a benign "no such process": AV/EDR blocking
+    // powershell.exe, a restrictive execution policy, or a 5s timeout all land
+    // here and make every lookup return null. Callers treat null as
+    // "unverifiable" and take defensive action, so record WHY it failed —
+    // without this the win32 stale-host guard fires with no diagnosable cause.
+    const failures: string[] = [];
 
     try {
         const psOut = exec('powershell.exe', [
@@ -31,8 +45,9 @@ function getWindowsProcessCommandLine(
         ], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
         const text = String(psOut).trim();
         if (text) return text;
-    } catch {
-        // fall through to wmic fallback
+        failures.push('powershell Get-CimInstance returned no CommandLine');
+    } catch (error) {
+        failures.push(`powershell Get-CimInstance failed: ${errorText(error)}`);
     }
 
     try {
@@ -41,10 +56,27 @@ function getWindowsProcessCommandLine(
         ], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
         const text = String(wmicOut).trim();
         if (text) return text;
-    } catch {
-        // noop
+        failures.push('wmic returned no CommandLine');
+    } catch (error) {
+        failures.push(`wmic failed: ${errorText(error)}`);
     }
 
+    // `listOwnedNodeProcesses` calls this once per node pid on the box, so a
+    // systematically broken probe (AV/EDR, execution policy) would otherwise
+    // emit one warn per pid per sweep. Warn once per distinct failure signature
+    // — the actionable content is WHY it failed, not which pid it happened on —
+    // and keep the per-pid detail at debug.
+    const signature = failures.join('; ');
+    if (!warnedCommandLineFailures.has(signature)) {
+        warnedCommandLineFailures.add(signature);
+        LOG.warn(
+            'ProcessLifecycle',
+            `Could not read a process command line (pid ${pid}): ${signature}. ` +
+                'Process-identity checks that depend on it will fail safe. This is logged once per distinct cause.',
+        );
+    } else {
+        LOG.debug('ProcessLifecycle', `Could not read the command line of pid ${pid}: ${signature}`);
+    }
     return null;
 }
 
@@ -67,7 +99,11 @@ export function getProcessCommandLine(
             stdio: ['ignore', 'pipe', 'ignore'],
         })).trim();
         return text || null;
-    } catch {
+    } catch (error) {
+        // `ps -p <dead pid>` exits non-zero, so this is the ordinary "process is
+        // gone" path as well as a genuine probe failure. Log at debug so the
+        // signal exists without spamming a warn line per reaped pid.
+        LOG.debug('ProcessLifecycle', `ps lookup failed for pid ${pid}: ${errorText(error)}`);
         return null;
     }
 }
