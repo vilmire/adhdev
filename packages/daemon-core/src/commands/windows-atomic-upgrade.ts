@@ -195,7 +195,7 @@ function resolveStagedConptyPrebuildPath(stagedPrefix: string): string {
   return path.join(stagedPrefix, CONPTY_PREBUILD_RELATIVE_PATH);
 }
 
-function verifyStagedConptyPrebuild(stagedPrefix: string): void {
+export function verifyStagedConptyPrebuild(stagedPrefix: string): void {
   const conptyPath = resolveStagedConptyPrebuildPath(stagedPrefix);
   if (!fs.existsSync(conptyPath)) {
     throw new Error(
@@ -386,6 +386,46 @@ function publishStableShimsAndPointer(layout: WindowsInstallerLayout, versionNam
   atomicWrite(layout.pointerPath, versionName, 'ascii');
 }
 
+/**
+ * Delete the prefix a failed upgrade attempt just staged.
+ *
+ * Safety is the whole point of the guards here: the ACTIVE prefix (and the
+ * stable shim tree) is the only working install on the box, so a bug that let
+ * this delete it would turn a recoverable failed upgrade into a dead install.
+ * The target must therefore be a `version-*` directory under the install root
+ * and must differ from both the active and stable prefixes; anything else is
+ * refused and logged rather than removed.
+ */
+function removeFailedStagedPrefix(
+  stagedPrefix: string,
+  layout: WindowsInstallerLayout,
+  log: (message: string) => void,
+): void {
+  try {
+    const staged = normalizeForCompare(stagedPrefix);
+    const protectedPrefixes = [layout.activePrefix, layout.stablePrefix, layout.installRoot];
+    if (protectedPrefixes.some((candidate) => normalizeForCompare(candidate) === staged)) {
+      log(`Refusing to clean up ${stagedPrefix}: it is the active/stable install, not a staged prefix`);
+      return;
+    }
+    if (normalizeForCompare(path.dirname(stagedPrefix)) !== normalizeForCompare(layout.installRoot)
+      || !path.basename(stagedPrefix).startsWith('version-')) {
+      log(`Refusing to clean up ${stagedPrefix}: not a version-* prefix under ${layout.installRoot}`);
+      return;
+    }
+    if (!fs.existsSync(stagedPrefix)) return;
+    removeInactivePrefix(stagedPrefix, log);
+    if (fs.existsSync(stagedPrefix)) {
+      log(`Failed staged prefix ${stagedPrefix} could not be fully removed; a future update will retry`);
+    } else {
+      log(`Cleaned up failed staged prefix ${stagedPrefix}`);
+    }
+  } catch (error: any) {
+    // Never let cleanup bookkeeping mask the original upgrade failure.
+    log(`Failed staged-prefix cleanup errored for ${stagedPrefix}: ${error?.message || String(error)}`);
+  }
+}
+
 export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeOptions): Promise<WindowsAtomicUpgradeResult> {
   const { layout, packageName, targetVersion, portableNode, hooks } = options;
   const versionName = `version-${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
@@ -444,6 +484,14 @@ export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeO
       }
     }
     try { hooks.restartOld(portableNode); } catch { hooks.log('Failed to restart the previous daemon during rollback'); }
+    // Remove the prefix this attempt just staged. The generic cleanup below only
+    // sweeps a bounded, sorted slice of inactive prefixes, so a failed staged
+    // tree could survive it indefinitely — one such leftover sat on a user's box
+    // for 9 days and took part in a repeat conpty.node outage. TS-only
+    // self-upgraders never run install.ps1's stale-install sweep, so nothing else
+    // reclaims it. Cleanup failure is not fatal (the upgrade already failed and
+    // the previous version is intact), but it must be logged.
+    removeFailedStagedPrefix(stagedPrefix, layout, hooks.log);
     try { await hooks.cleanup(layout, layout.activePrefix); } catch { /* failure path must preserve original error */ }
     throw error;
   }
