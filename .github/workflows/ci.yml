@@ -188,8 +188,14 @@ jobs:
       - name: Test @adhdev/web-core
         run: npm run test -w packages/web-core
 
+      - name: Test @adhdev/session-host-daemon
+        run: npm run test -w packages/session-host-daemon
+
       - name: Typecheck @adhdev/daemon-core
         run: npm run typecheck -w packages/daemon-core
+
+      - name: Typecheck @adhdev/session-host-daemon
+        run: npm run typecheck -w packages/session-host-daemon
 
   publish:
     needs: [build, test]
