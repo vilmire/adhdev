@@ -273,7 +273,16 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
       requiresFinalAssistantBeforeIdle: true,
       transcriptAuthority: 'provider',
     }
-    instance.completedDebouncePending = armedPending({ lastOutputAtArm: Date.now() })
+    // Pin ONE timestamp for both the arm snapshot and the observed adapter output.
+    // These were two independent Date.now() calls, which fabricated up to 1ms of
+    // phantom "new PTY output during settle" whenever the wall clock ticked between
+    // them — the false-idle continuity guard (cli-provider-instance.ts, `latestOutputAt
+    // > pending.lastOutputAtArm`) then correctly cancelled the pending completion and
+    // this case saw 0 events instead of 1. Rare in isolation, but reliably hit under
+    // full-suite CPU contention. The scenario under test is a settle window with NO new
+    // output, so the two values must be the same instant by construction.
+    const settleOutputAt = Date.now()
+    instance.completedDebouncePending = armedPending({ lastOutputAtArm: settleOutputAt })
     const emitted: any[] = []
     const reScheduled: number[] = []
     instance.adapter = {
@@ -283,7 +292,7 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
       isWaitingForResponse: false,
       isProcessing: () => false,
       getPartialResponse: () => '',
-      getStatus: () => ({ status: 'idle', lastOutputAt: Date.now() }),
+      getStatus: () => ({ status: 'idle', lastOutputAt: settleOutputAt }),
       getScriptParsedStatus: () => ({ status: 'idle', messages: [assistantMsg('interim narration', TURN_START + 6_000)] }),
       getScreenText: () => '',
     }
