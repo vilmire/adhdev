@@ -10,8 +10,9 @@
  */
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SessionUsageTotals } from '../../src/providers/native-history/usage-normalize.js';
 
 // The store writes under getConfigDir(), which test/helpers/setup-env.ts
@@ -47,12 +48,43 @@ function totals(fields: Partial<SessionUsageTotals> & { providerSessionId: strin
     };
 }
 
+/**
+ * Own this file's config-dir isolation rather than inheriting it.
+ *
+ * `setup-env.ts` points ADHDEV_CONFIG_DIR at a per-run tmp dir, but only when
+ * the var is unset, and several sibling suites legitimately `delete` it while
+ * exercising the unset-env path (config-dir, provider-loader, chat-history,
+ * loader-integration, …). Vitest reuses worker processes, so a file that ran
+ * after one of those deletes inherits an *unset* var — and this store then
+ * resolves getUsageDir() to the developer's real ~/.adhdev, where it both
+ * writes test data outside the sandbox and `rmSync`s a real directory.
+ * Observed before this guard: a "2 sessions" assertion receiving 1641 from
+ * state accumulated across runs, and ENOENT on rename when a parallel worker
+ * removed the shared dir mid-write.
+ *
+ * Assigning per test (not at import time) is what makes this safe: setup-env
+ * runs after this module's top level, so an import-time override would be
+ * replaced before the first test — the hazard the note above warns about.
+ */
+let usageConfigDir = '';
+const previousConfigDir = process.env.ADHDEV_CONFIG_DIR;
+
 beforeEach(() => {
+    usageConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-usage-store-test-'));
+    process.env.ADHDEV_CONFIG_DIR = usageConfigDir;
     try { fs.rmSync(getUsageDir(), { recursive: true, force: true }); } catch { /* ignore */ }
+});
+
+afterEach(() => {
+    try { fs.rmSync(usageConfigDir, { recursive: true, force: true }); } catch { /* ignore */ }
 });
 
 afterAll(() => {
     try { fs.rmSync(getUsageDir(), { recursive: true, force: true }); } catch { /* ignore */ }
+    // Hand the env back exactly as found: this file overrides it per test, and
+    // leaking that override would make sibling suites depend on our temp dir.
+    if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR;
+    else process.env.ADHDEV_CONFIG_DIR = previousConfigDir;
 });
 
 describe('recordSessionUsage', () => {

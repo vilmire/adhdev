@@ -24,6 +24,29 @@ import {
  * that a logger imported BEFORE the env is set still honors it. Re-importing
  * would hide exactly the regression being guarded.
  */
+
+/**
+ * Wait until a marker actually lands in a log file.
+ *
+ * AsyncBatchWriter batches behind a 50ms timer and then appends
+ * asynchronously, exposing no completion signal to await. A fixed sleep is a
+ * guess at that latency rather than an observation of it: on a loaded machine
+ * the timer fires late and the append lands after the assertion, so the test
+ * fails on scheduling instead of on behaviour. Polling returns as soon as the
+ * write is really visible and only spends the deadline when it never arrives.
+ *
+ * Returns the file contents so callers assert on what was actually observed.
+ */
+async function waitForMarker(logPath: string, marker: string, timeoutMs = 10_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs
+  let contents = ''
+  while (Date.now() < deadline) {
+    contents = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf-8') : ''
+    if (contents.includes(marker)) return contents
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  return contents
+}
 describe('daemon log dir lazy resolution', () => {
   let tmpHome: string
   const originalEnv = process.env.ADHDEV_CONFIG_DIR
@@ -55,13 +78,13 @@ describe('daemon log dir lazy resolution', () => {
     const marker = `lazy-resolution-marker-${Date.now()}`
     LOG.error('LazyLogDirTest', marker)
 
-    // AsyncBatchWriter flushes on a 50ms timer — wait past it.
-    await new Promise((resolve) => setTimeout(resolve, 200))
-
     const logPath = getCurrentDaemonLogPath()
     expect(logPath.startsWith(path.join(tmpHome, 'logs'))).toBe(true)
+
+    const contents = await waitForMarker(logPath, marker)
+
     expect(fs.existsSync(logPath)).toBe(true)
-    expect(fs.readFileSync(logPath, 'utf-8')).toContain(marker)
+    expect(contents).toContain(marker)
   })
 
   it('does not leak a redirected write back into the real ~/.adhdev/logs', async () => {
@@ -90,17 +113,17 @@ describe('daemon log dir lazy resolution', () => {
     process.env.ADHDEV_CONFIG_DIR = tmpHome
     const firstMarker = `first-home-${Date.now()}`
     LOG.error('LazyLogDirTest', firstMarker)
-    await new Promise((resolve) => setTimeout(resolve, 120))
     const firstPath = getCurrentDaemonLogPath()
+    await waitForMarker(firstPath, firstMarker)
 
     const secondHome = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-lazylog2-'))
     try {
       process.env.ADHDEV_CONFIG_DIR = secondHome
       const secondMarker = `second-home-${Date.now()}`
       LOG.error('LazyLogDirTest', secondMarker)
-      await new Promise((resolve) => setTimeout(resolve, 200))
 
       const secondPath = getCurrentDaemonLogPath()
+      await waitForMarker(secondPath, secondMarker)
       expect(secondPath.startsWith(path.join(secondHome, 'logs'))).toBe(true)
       expect(secondPath).not.toBe(firstPath)
       expect(fs.readFileSync(secondPath, 'utf-8')).toContain(secondMarker)

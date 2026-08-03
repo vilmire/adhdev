@@ -143,21 +143,35 @@ describe('FsmDriver — antigravity busy→idle bounded fallback (repaint wedge)
 
             // The turn completes: agy repaints with no marker, no esc to cancel.
             pty.feed('\x1b[2J\x1b[H' + COMPLETED_FRAME);
-            await sleep(300);
-            expect(driver.getFsmDebug().currentState).toBe('busy');
 
             // Repaint the benign token ticker every 400ms — each repaint lands
             // inside the cursor_above:4 window and resets the strict arm's
             // stable clock (the live wedge). The ticker NEVER stops, so any
             // idle commit must come from the bounded fallback arm.
+            //
+            // The wedge has to be continuous from the completion frame onward.
+            // Starting the interval after a 300ms pause left the screen quiet
+            // from +300ms until the first tick at +700ms; with stable_ms=800
+            // and timer jitter the strict arm could accumulate its quiet window
+            // and commit idle at ~500ms — the fallback never ran, and the test
+            // failed ~2 in 10 asserting on a race rather than on the bound.
+            // Feed the first repaint immediately, then keep the interval going.
             let n = 125;
-            const ticker = setInterval(() => {
+            const feedTick = () => {
                 pty.feed(`\x1b[3;1H  · ${n++} tokens\x1b[4;2H`);
-            }, 400);
+            };
+            feedTick();
+            const ticker = setInterval(feedTick, 400);
             try {
+                // Still busy shortly after completion: the repaints keep the
+                // strict arm from ever seeing its stable window.
+                await sleep(300);
+                expect(driver.getFsmDebug().currentState).toBe('busy');
+
                 // Past stable_ms (800) but before the fallback bound (6000):
-                // the strict arm is demonstrably wedged by the ticker.
-                await sleep(PRE_BOUND_CHECK_MS);
+                // the strict arm is demonstrably wedged by the ticker. The
+                // early check above already consumed 300ms of that budget.
+                await sleep(PRE_BOUND_CHECK_MS - 300);
                 expect(driver.getFsmDebug().currentState).toBe('busy');
 
                 // Within bound + wake/debounce slack the fallback commits idle.

@@ -54,12 +54,22 @@ describe('daemon log file sink path', () => {
     logger.LOG.info('SinkTest', 'hello file sink persists')
     logger.LOG.error('SinkTest', 'a failure line was recorded')
 
-    // AsyncBatchWriter flushes on a 50ms timer — wait past it.
-    await new Promise((resolve) => setTimeout(resolve, 200))
-
     const logPath = logger.getCurrentDaemonLogPath()
+
+    // AsyncBatchWriter batches behind a 50ms timer and then appends
+    // asynchronously with no completion signal to await. A fixed sleep is a
+    // guess at that latency; on a loaded machine the append lands after the
+    // assertion and the test fails on scheduling rather than on behaviour.
+    // Poll for the post-condition, returning as soon as it really holds.
+    const deadline = Date.now() + 10_000
+    let content = ''
+    while (Date.now() < deadline) {
+      content = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf-8') : ''
+      if (content.includes('hello file sink persists') && content.includes('a failure line was recorded')) break
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+
     expect(fs.existsSync(logPath)).toBe(true)
-    const content = fs.readFileSync(logPath, 'utf-8')
     expect(content).toContain('hello file sink persists')
     expect(content).toContain('a failure line was recorded')
     // The same lines feed the in-memory ring buffer the dashboard Logs tab reads,
