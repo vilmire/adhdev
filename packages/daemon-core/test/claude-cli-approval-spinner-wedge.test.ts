@@ -58,6 +58,34 @@ function clock(stateAgeMs: number): FsmClock {
   }
 }
 
+/**
+ * A clock for a screen that is still REPAINTING. `stateEnteredAt` is old (the
+ * FSM has been parked a long time) but every tracked region changed 200ms ago,
+ * so any `stable_ms` clause above 200ms is unsatisfiable.
+ *
+ * This is the live-wedge condition and it is what makes the tests below
+ * load-bearing: with the fully-stable `clock()` above, `approval→idle`'s
+ * `stable_ms:3000 + cursor_above:5` clause is handed to the test for free, so a
+ * modal-gone screen leaves `approval` even with this fix reverted. Under
+ * `liveClock` that escape hatch is shut and only the modal-absence rule can fire.
+ */
+function liveClock(stateAgeMs: number): FsmClock {
+  const now = 1_000_000
+  const recentlyChanged = now - 200
+  return {
+    now,
+    stateEnteredAt: now - stateAgeMs,
+    regionLastChangedAt: new Map<number | string, number>([
+      [-1, recentlyChanged],
+      [5, recentlyChanged],
+      [12, recentlyChanged],
+      ['section:footer', recentlyChanged],
+      ['section:modal', recentlyChanged],
+      ['section:status_tail', recentlyChanged],
+    ]),
+  }
+}
+
 maybe('claude-cli 4.0 approval ✻-spinner wedge', () => {
   if (!specAvailable) return
   const loaded = loadFsmSpec(SPEC_PATH)
@@ -271,5 +299,183 @@ maybe('claude-cli 4.0 approval ✻-spinner wedge', () => {
     const settled = evaluateFsm(
       spec, 'approval_resolving', answeredWithBodyList, { row: 5, col: 0 }, undefined, clock(1_300))
     expect(settled.fired?.to).toBe('busy')
+  })
+})
+
+/**
+ * APPROVAL-MODAL-VANISHED wedge (observed 2026-08-03, Windows moltbot).
+ *
+ * Symptom: `State: approval / waiting_approval` with `Modal: none`, oscillating
+ * `approval ↔ approval_resolving` about once a second, forever. Switching the
+ * inner Claude to auto mode did not release it.
+ *
+ * Root cause — every exit from `approval` required something OTHER than the one
+ * fact that actually held ("the modal is gone"):
+ *
+ *   approval→resolving            needs the busy SPINNER (cond 6)
+ *   approval-resolving→busy       needs the busy SPINNER
+ *   approval→idle                 needs spinner-absent AND `stable_ms:3000 +
+ *                                 cursor_above:5` — a fully frozen screen
+ *
+ * i.e. the spec used the spinner as a PROXY for "the approval was answered".
+ * The spinner means "work resumed", not "the modal closed": a user who answers
+ * a prompt that produces no further work — or who simply presses Esc — leaves a
+ * screen with no modal and no spinner, and the `stable_ms` clause cannot rescue
+ * it while the CLI keeps repainting (a footer hint or the `⏵⏵ auto mode on`
+ * banner ticking is enough). Nothing could fire, so the FSM never left.
+ *
+ * Fix: a probation state `approval_vanished`. `approval→vanished` fires on
+ * modal-absence ALONE — no spinner clause, no `stable_ms` clause. Because the
+ * dashboard status of `approval_vanished` is still `approval`, passing through
+ * it is invisible unless it settles.
+ *
+ * Transient-parse-miss vs really-gone is distinguished STRUCTURALLY rather than
+ * by trusting a single frame, which matters because `deriveModal` deliberately
+ * tolerates a frame whose buttons fail to parse (fsm-driver.ts:841-845) and the
+ * condition DSL has no "held true for N ms" primitive at all: the machine sits
+ * in `approval_vanished` for 1200ms, and `vanished→approval-modal-returned`
+ * (priority 120) snaps straight back to `approval` the moment any modal cue
+ * reappears. Only an absence that PERSISTS past `elapsed_ms:1200` reaches
+ * `idle`. A repaint flicker costs one silent round trip; a real close settles.
+ */
+maybe('claude-cli 4.0 approval-modal-vanished wedge (no spinner, no quiet screen)', () => {
+  if (!specAvailable) return
+  const loaded = loadFsmSpec(SPEC_PATH)
+  if (!loaded.ok) throw new Error(`spec load failed: ${loaded.errors.join('; ')}`)
+  const spec = loaded.spec
+
+  // The live wedge screen: the approval modal is GONE (no numbered choices, no
+  // "Do you want to…", no "Esc to cancel"), there is NO spinner, and the modal
+  // section re-anchors onto the `⏵⏵ auto mode on` banner between two rules —
+  // which is why deriveModal reported `Modal: none` every single frame.
+  const modalGoneNoSpinner = [
+    '⏺ Ran the build.',
+    '  ⎿  done',
+    '',
+    '─'.repeat(80),
+    '⏵⏵ auto mode on',
+    '─'.repeat(80),
+    '❯',
+    '─'.repeat(80),
+    '  ➜ adhdev git:(main)',
+  ].join('\n')
+
+  const realApprovalModal = [
+    '⏺ Reading the file.',
+    '',
+    '─'.repeat(80),
+    ' Do you want to run this command?',
+    '',
+    ' ❯ 1. Yes',
+    '   2. No, and tell Claude what to do differently',
+    '',
+    ' Esc to cancel · Tab to amend',
+  ].join('\n')
+
+  it('leaves approval on modal-absence alone — no spinner, screen still repainting', () => {
+    // `liveClock` is the load-bearing part: the screen is NOT quiet, so
+    // approval→idle's stable_ms clause is unsatisfiable and the pre-fix spec
+    // has no firing edge at all here (the observed wedge).
+    const r = evaluateFsm(
+      spec, 'approval', modalGoneNoSpinner, { row: 6, col: 0 }, undefined, liveClock(3_000))
+    expect(r.fired?.to).toBe('approval_vanished')
+  })
+
+  it('is still wedge-free after 30s parked in approval (the reported symptom)', () => {
+    const r = evaluateFsm(
+      spec, 'approval', modalGoneNoSpinner, { row: 6, col: 0 }, undefined, liveClock(30_000))
+    expect(r.fired?.to).toBe('approval_vanished')
+  })
+
+  it('settles approval_vanished → idle once the absence persists past the probation window', () => {
+    const justBefore = evaluateFsm(
+      spec, 'approval_vanished', modalGoneNoSpinner, { row: 6, col: 0 }, undefined, liveClock(1_199))
+    expect(justBefore.fired).toBeFalsy()
+
+    const justAfter = evaluateFsm(
+      spec, 'approval_vanished', modalGoneNoSpinner, { row: 6, col: 0 }, undefined, liveClock(1_200))
+    expect(justAfter.fired?.to).toBe('idle')
+  })
+
+  it('treats a REAPPEARING modal as a transient parse miss and returns to approval', () => {
+    // The distinction the fix turns on: a frame whose modal failed to parse is
+    // followed by a frame where it is back. That must NOT settle to idle — and
+    // must recover even after the probation deadline has already passed.
+    const early = evaluateFsm(
+      spec, 'approval_vanished', realApprovalModal, { row: 5, col: 0 }, undefined, liveClock(100))
+    expect(early.fired?.to).toBe('approval')
+
+    const afterDeadline = evaluateFsm(
+      spec, 'approval_vanished', realApprovalModal, { row: 5, col: 0 }, undefined, liveClock(2_000))
+    expect(afterDeadline.fired?.to).toBe('approval')
+  })
+
+  it('does NOT leave approval early while a real modal is on screen (no false exit)', () => {
+    // The counter-invariant. An open approval must hold indefinitely — long past
+    // the 1200ms probation window — or the fix would be a new defect that
+    // silently dismisses prompts the user never answered.
+    for (const age of [400, 3_000, 30_000, 120_000]) {
+      const r = evaluateFsm(
+        spec, 'approval', realApprovalModal, { row: 5, col: 0 }, undefined, liveClock(age))
+      expect(r.fired?.to, `real modal must hold approval at age=${age}`).toBeUndefined()
+    }
+  })
+
+  it('resumes straight to busy when the spinner appears during probation', () => {
+    const resumed = [
+      '⏺ Approved — continuing.',
+      '',
+      '✻ Moonwalking… (12s · ↓ 2.0k tokens)',
+      '',
+      '─'.repeat(80),
+      '❯',
+      '─'.repeat(80),
+    ].join('\n')
+    const r = evaluateFsm(
+      spec, 'approval_vanished', resumed, { row: 5, col: 0 }, undefined, liveClock(400))
+    expect(r.fired?.to).toBe('busy')
+  })
+
+  /**
+   * (b) picker mis-classification. An AskUserQuestion choice list matches the
+   * `→picker` rule, but `approval→resolving` listed `picker` in its `from`, so a
+   * picker whose choices had cleared rolled into `approval_resolving` — and
+   * `approval-resolving→approval-no-spinner` (priority 50) then dropped it into
+   * `approval`, a state the spec has no direct `picker→approval` edge to. That
+   * back door is why a plain question could end up reported as a pending
+   * approval. `approval→resolving` is now `from: "approval"` only.
+   */
+  it('does not roll a cleared picker into approval_resolving (no picker→approval back door)', () => {
+    const pickerCleared = [
+      '⏺ Working.',
+      '',
+      '✻ Moonwalking… (1m 03s · ↓ 6.0k tokens)',
+      '',
+      '─'.repeat(80),
+      '❯',
+      '─'.repeat(80),
+      '  ➜ adhdev git:(main)',
+    ].join('\n')
+    const r = evaluateFsm(
+      spec, 'picker', pickerCleared, { row: 5, col: 0 }, undefined, clock(5_000))
+    expect(r.fired?.to).not.toBe('approval_resolving')
+    expect(r.fired?.to).not.toBe('approval')
+  })
+
+  it('still reaches picker (not approval) on an AskUserQuestion choice list', () => {
+    // Guards the (b) change from over-reaching: picker ENTRY must be untouched.
+    const askUserQuestion = [
+      '⏺ Which approach?',
+      '',
+      '─'.repeat(80),
+      ' ❯ 1. 내',
+      '   2. Another',
+      '   3. Type something',
+      '',
+      ' Enter to select · ↑/↓ to navigate',
+    ].join('\n')
+    const r = evaluateFsm(
+      spec, 'busy', askUserQuestion, { row: 7, col: 0 }, undefined, clock(10_000))
+    expect(r.fired?.to).toBe('picker')
   })
 })
