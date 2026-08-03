@@ -9,6 +9,7 @@ import {
   findPortableNode22,
   performWindowsAtomicUpgrade,
   resolveWindowsInstallerLayout,
+  verifyStagedConptyPrebuild,
 } from './windows-atomic-upgrade.js';
 import {
   getProcessCommandLine,
@@ -313,6 +314,16 @@ function buildInstallEnvWithNodeOnPath(baseEnv: NodeJS.ProcessEnv = process.env)
   // hatch the guard already honors. This is scoped to the helper-built env only —
   // it never weakens the guard for a user-run `npm i -g adhdev`.
   env.ADHDEV_BOOTSTRAP = '1';
+  // Same conpty.node protection the atomic path already applies to its install
+  // env. If a machine-level or user .npmrc sets build-from-source=true, npm
+  // rebuilds node-pty from source: the install script deletes the shipped
+  // win32-x64 prebuild first, and on a box with no build tools the rebuild
+  // leaves NO conpty.node at all — every create_session then dies with
+  // "Failed to load native module: conpty.node". Pinning it false here forces
+  // the prebuild path for the fallback in-place install too. Both spellings are
+  // set because npm normalizes config keys inconsistently across versions.
+  env.npm_config_build_from_source = 'false';
+  env['npm_config_build-from-source'] = 'false';
   return env;
 }
 
@@ -808,6 +819,33 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
   }
   if (installOutput.trim()) {
     appendUpgradeLog(installOutput.trim());
+  }
+
+  // A zero-exit npm install is NOT proof of a usable install: if node-pty was
+  // rebuilt from source without build tools, npm reports success while leaving
+  // no conpty.node behind, and every subsequent create_session fails with
+  // "Failed to load native module: conpty.node". The atomic path gates on this
+  // before flipping its pointer; the fallback in-place path had no such check.
+  //
+  // Fallback is in-place, so there is no pointer swap to roll back — the files
+  // are already overwritten. What we CAN still protect is the running daemon:
+  // throw before spawnDetachedDaemonRestart so the current process keeps
+  // serving on the last-known-good code it already has loaded, and leave the
+  // user an actionable notice instead of restarting into a broken install.
+  if (process.platform === 'win32' && installCommand.surface.installPrefix) {
+    try {
+      verifyStagedConptyPrebuild(installCommand.surface.installPrefix);
+    } catch (error: any) {
+      appendUpgradeLog(`Post-install conpty verification failed: ${error?.message || String(error)}`);
+      emitUpgradeFailureNotice([
+        `adhdev ${spec} installed but is missing node-pty's native addon (conpty.node).`,
+        'Starting it would break every session with "Failed to load native module: conpty.node",',
+        'so the running daemon was left on its previous version and was NOT restarted.',
+        'To recover, reinstall (this forces the shipped prebuild instead of a source rebuild):',
+        `  ${buildManualRecoveryCommand(installCommand)}`,
+      ]);
+      throw error;
+    }
   }
 
   // npm may leave a staging dir behind on Windows when prebuild-install holds
