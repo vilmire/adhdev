@@ -33,7 +33,15 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('Coordinator runtime is not a delegation default')
   })
 
-  it('6-2: includes Task Messaging Requirements — OSS English commits, scoped tests, convergence state', () => {
+  it('6-2: Task Messaging Requirements carries only the generic, tool-backed convergence rule — no repo-specific prose', () => {
+    // The prompt is injected into every mesh coordinator regardless of which repo
+    // it runs against, so it must never hardcode conventions specific to THIS repo
+    // (e.g. an oss/ AGPL submodule or a vitest-based test suite a random user's
+    // repo won't have). Branch convergence stays: it restates the requiredFinalStates
+    // enum a real mesh_status tool call returns (mesh-tools-internal.ts), which is
+    // meaningful for any git-based mesh node. Repo-specific rules like OSS English
+    // commits and scoped test runs belong in that repo's own `.adhdev/mesh.json`
+    // (coordinator.systemPromptAppend) instead — see the test below.
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {
         id: 'mesh_1',
@@ -55,12 +63,43 @@ describe('Repo Mesh coordinator prompt', () => {
     })
 
     expect(prompt).toContain('### Task Messaging Requirements')
-    // Rule 1 — OSS English commits.
-    expect(prompt).toContain('commit messages in `oss/` MUST be English')
-    // Rule 2 — scoped test runs.
-    expect(prompt).toContain('run only the tests covering the changed files')
-    // Rule 3 — branch convergence final state in the completion report.
+    // The only rule left: branch convergence final state in the completion report.
     expect(prompt).toContain('require the completion report to classify the touched branch into exactly one final state')
+
+    // Repo-specific rules must NOT be hardcoded into the default prompt.
+    expect(prompt).not.toContain('oss/` MUST be English')
+    expect(prompt).not.toContain('run only the tests covering the changed files')
+  })
+
+  it('mesh.coordinator.systemPromptAppend can carry repo-specific task-messaging rules (the .adhdev/mesh.json round-trip)', () => {
+    // Confirms the migration path actually works: a repo commits its own rules
+    // (e.g. this repo's OSS English commits / scoped test run conventions) into
+    // `.adhdev/mesh.json`'s coordinator.systemPromptAppend, and they land in the
+    // rendered prompt exactly like any other mesh-level append.
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [
+          {
+            id: 'node_1',
+            workspace: '/repo',
+            daemonId: 'daemon_1',
+            userOverrides: {},
+            policy: {},
+          },
+        ],
+        coordinator: {
+          systemPromptAppend: 'Commit messages in `oss/` MUST be English. Run only the tests covering the changed files.',
+        },
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+      coordinatorCliType: 'claude-cli',
+    })
+
+    expect(prompt).toContain('Commit messages in `oss/` MUST be English. Run only the tests covering the changed files.')
   })
 
   it('instructs worktree affinity — keep a branch\'s follow-up work on its worktree node', () => {
