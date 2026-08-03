@@ -72,17 +72,18 @@ describe('daemon log dir lazy resolution', () => {
       'logs',
       `daemon-${new Date().toISOString().slice(0, 10)}.log`,
     )
-    const before = fs.existsSync(realLogPath) ? fs.readFileSync(realLogPath, 'utf-8') : ''
-
     process.env.ADHDEV_CONFIG_DIR = tmpHome
     const marker = `must-not-reach-real-log-${Date.now()}`
     LOG.error('LazyLogDirTest', marker)
     await new Promise((resolve) => setTimeout(resolve, 200))
 
+    // Byte-for-byte equality of the file before/after is NOT asserted: a live
+    // daemon on this machine may concurrently append unrelated lines to the
+    // same real log file between reads. The contract under test is that OUR
+    // marker never reaches it — the unique marker string is sufficient proof
+    // since it cannot appear in the file except from this test's own write.
     const after = fs.existsSync(realLogPath) ? fs.readFileSync(realLogPath, 'utf-8') : ''
     expect(after).not.toContain(marker)
-    // And nothing else got appended to the live file either.
-    expect(after).toBe(before)
   })
 
   it('switches directories when ADHDEV_CONFIG_DIR changes again', async () => {
