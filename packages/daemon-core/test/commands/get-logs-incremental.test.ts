@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../src/logging/logger.js', () => ({
   getRecentLogs: mocks.getRecentLogs,
-  LOG_PATH: '/tmp/adhdev-test-daemon.log',
+  getCurrentDaemonLogPath: () => '/tmp/adhdev-test-daemon.log',
   LOG: {
     debug: vi.fn(),
     info: vi.fn(),
