@@ -75,6 +75,11 @@ import {
   runAsyncBatch,
   startLocalIpcServer,
   withRawTerminalAttachment,
+  decideMissingSessionAttempt,
+  isMissingLiveSessionResult,
+  recordMissingSessionAttempt,
+  shouldWarnForMissingSession,
+  type ChatTailMissingSessionState,
   type NamedKey,
   type LocalIpcServerHandle,
   normalizeInteractivePromptResponse,
@@ -363,6 +368,13 @@ interface ChatTailSubscriptionState {
     tailLimit: number;
   };
   lastDeliveredSignature: string;
+  /**
+   * Set once the target session stops resolving in the live registry, cleared as
+   * soon as a read succeeds. Drives the retry backoff / give-up that keeps an
+   * orphaned subscription from re-reading `read_chat` on every flush. See
+   * chat-tail-missing-session-backoff.ts in daemon-core.
+   */
+  missingSession?: ChatTailMissingSessionState;
 }
 
 interface MachineRuntimeSubscriptionState {
@@ -1816,6 +1828,31 @@ class StandaloneServer {
       ...(request.historySessionId ? { historySessionId: request.historySessionId } : {}),
       ...(state.cursor.tailLimit > 0 ? { tailLimit: state.cursor.tailLimit } : {}),
     });
+
+    // The session vanished from the live registry (stopped agent, reclaimed
+    // worker). The subscription itself survives — only an explicit client
+    // unsubscribe removes one — so record the miss and let flushWsChatSubscriptions'
+    // backoff pace (and eventually drop) it. Publishing nothing here is
+    // deliberate: the pane keeps its last rendered transcript rather than being
+    // blanked by a transient miss during session startup.
+    if (isMissingLiveSessionResult(result)) {
+      const now = Date.now();
+      const missing = recordMissingSessionAttempt(state.missingSession, now);
+      state.missingSession = missing;
+      // One warn per streak — repeating it many times a second adds no
+      // information. Later misses stay at debug so the cause stays traceable.
+      const message = `[chat_tail] session ${request.targetSessionId} is not in the live registry`;
+      if (shouldWarnForMissingSession(missing)) {
+        missing.warned = true;
+        LOG.warn('Standalone', `${message} — backing off, and dropping the subscription if it stays absent`);
+      } else {
+        LOG.debug('Standalone', `${message} (miss #${missing.consecutiveMisses})`);
+      }
+      return null;
+    }
+    // A successful read clears the streak so a session that recovers (or was
+    // merely slow to attach) immediately returns to the normal flush cadence.
+    if (state.missingSession) state.missingSession = undefined;
     const prepared = prepareSessionChatTailUpdate({
       key,
       sessionId: request.targetSessionId,
@@ -2018,6 +2055,7 @@ class StandaloneServer {
       const targets = targetWs ? [targetWs] : Array.from(this.clients);
       const hotSessionIds = options.onlyActive ? this.getHotChatSessionIdsForWsFlush() : null;
       const forceSessionIds = options.forceSessionIds ?? null;
+      const now = Date.now();
       const tasks: Array<{ ws: WebSocket; key: string; sub: ChatTailSubscriptionState }> = [];
       for (const ws of targets) {
         if (ws.readyState !== WebSocket.OPEN) continue;
@@ -2025,6 +2063,18 @@ class StandaloneServer {
         if (!subs || subs.size === 0) continue;
         for (const [key, sub] of subs.entries()) {
           const targetSessionId = sub.request.params.targetSessionId;
+          // Pace a subscription whose session has left the live registry. This
+          // guard precedes the forced/hot checks on purpose: `forceSessionIds`
+          // carries newly-settled sessions, which is exactly the state a
+          // just-stopped session passes through, so honoring the force first
+          // would re-admit the storm this backoff exists to stop.
+          const decision = decideMissingSessionAttempt(sub.missingSession, now);
+          if (decision.action === 'skip') continue;
+          if (decision.action === 'drop') {
+            subs.delete(key);
+            LOG.info('Standalone', `[chat_tail] subscription dropped: session=${targetSessionId} key=${key} — live session absent for ${Math.round((now - (sub.missingSession?.firstMissingAt ?? now)) / 1000)}s`);
+            continue;
+          }
           const isForced = forceSessionIds?.has(targetSessionId) === true;
           if (
             !isForced
