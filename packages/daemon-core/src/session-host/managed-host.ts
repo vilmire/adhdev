@@ -435,6 +435,51 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             }
         }
 
+        // D4-b: re-verify conpty on the REUSE path, not just the spawn path.
+        //
+        // `ensureSharedSessionHostReady` returns the endpoint immediately when a
+        // host answers on the socket, so `spawnHost()` — and with it the D4-a
+        // pre-spawn conpty gate — is never reached. A zombie session-host from a
+        // deleted prefix answers that socket perfectly well: it only fails later,
+        // inside `create_session`, when it lazily requires node-pty and the
+        // conpty.node under its own (now deleted) prefix is gone. That is the
+        // exact production incident this guards: a host spawned from a prefix
+        // deleted on 07-24 kept serving the socket and failing every session
+        // start in 4ms, and manually killing it restored service.
+        //
+        // The pid-based guards above cannot catch it, because all three of them
+        // (`getRunningSessionHostScriptPath`, `isManagedPid`, and
+        // `listOwnedNodeProcesses`) depend on `getProcessCommandLine`, which
+        // fails structurally on the affected boxes (`Get-CimInstance` access
+        // denied plus no `wmic`). This check deliberately uses an INDEPENDENT
+        // signal — the presence of conpty.node in the currently active prefix —
+        // so it works with no process-inspection privileges at all.
+        //
+        // `resolveEntry()` always names the CURRENT install's entry (recomputed
+        // from this module's own location), so on a healthy install this passes
+        // and nothing is stopped. It only fires when the active prefix genuinely
+        // has no usable conpty prebuild, i.e. when every session start is already
+        // doomed — see the loop-safety note below.
+        if (process.platform === 'win32') {
+            try {
+                verifyConptyPrebuildBeforeSpawn(resolveEntry());
+            } catch (error) {
+                // Anti-loop: stopping here does NOT create a kill/respawn cycle.
+                // The subsequent spawn runs the same check inside `spawnHost()`
+                // (D4-a) and throws before spawning, so `ensureReady` fails fast
+                // and loudly instead of respawning. And in this state the host is
+                // useless by construction — every `create_session` would crash
+                // requiring node-pty — so stopping it costs nothing that was
+                // working. Repair means restoring the prebuild, not retrying.
+                LOG.warn(
+                    'SessionHost',
+                    `conpty prebuild missing in the active prefix; a reachable session-host would fail every ` +
+                        `create_session. Stopping it rather than reusing it: ${error instanceof Error ? error.message : String(error)}`,
+                );
+                stopManagedSessionHostProcess();
+            }
+        }
+
         try {
             return await ensureSharedSessionHostReady({
                 appName,
