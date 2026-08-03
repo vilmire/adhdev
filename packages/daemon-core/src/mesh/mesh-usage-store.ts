@@ -45,10 +45,20 @@
  * The rollup means the mesh-level number never silently shrinks: detail is
  * lost on eviction, but the total is preserved.
  *
+ * ── Write cost ──────────────────────────────────────────────────────────────
+ *
+ * The file is one JSON object, so updating a single session rewrites all of it.
+ * That is acceptable at one write per assistant turn, but it means the read
+ * side must not also re-parse the whole file on every write: a process that had
+ * just written the file was parsing its own output back on the next call. The
+ * parsed file is therefore cached in-process and validated by mtime+size, which
+ * halves the steady-state write at cap (~175ms → ~88ms for 2000 sessions, the
+ * remainder being the unavoidable serialize + atomic rename of ~400KB).
+ *
  * OSS code (AGPL-3.0). Must not import from packages/ (proprietary).
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { getConfigDir } from '../config/config.js';
 import {
@@ -114,16 +124,57 @@ function emptyFile(meshId: string): MeshUsageFile {
     return { version: 1, meshId, sessions: {} };
 }
 
+/**
+ * Parsed-file cache, keyed by absolute path.
+ *
+ * Usage is written once per assistant turn — the highest-frequency event in the
+ * system (see the header note). Without this cache every write re-read and
+ * re-parsed the whole file just to mutate one key, making a sequence of N
+ * writes O(N²) in both parse and serialize: recording 2000 sessions took ~150s,
+ * essentially all of it spent re-parsing state this process had itself just
+ * written.
+ *
+ * `mtimeMs`/`size` are stamped from the file we wrote, so an edit by another
+ * process (or a test writing the file directly) invalidates the entry and we
+ * fall back to a real read. That keeps the cache an optimization rather than a
+ * second source of truth: on any doubt, disk wins.
+ */
+interface CachedUsageFile {
+    file: MeshUsageFile;
+    mtimeMs: number;
+    size: number;
+}
+const usageFileCache = new Map<string, CachedUsageFile>();
+
 function readUsageFile(meshId: string): MeshUsageFile {
     const path = getUsagePath(meshId);
-    if (!existsSync(path)) return emptyFile(meshId);
+    let stat: { mtimeMs: number; size: number } | undefined;
+    try {
+        const s = statSync(path);
+        stat = { mtimeMs: s.mtimeMs, size: s.size };
+    } catch {
+        // Missing file: nothing to read, and any cache entry is stale.
+        usageFileCache.delete(path);
+        return emptyFile(meshId);
+    }
+
+    const cached = usageFileCache.get(path);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+        return cached.file;
+    }
+
     try {
         const parsed = JSON.parse(readFileSync(path, 'utf-8')) as MeshUsageFile;
-        if (!parsed || typeof parsed !== 'object' || !parsed.sessions) return emptyFile(meshId);
+        if (!parsed || typeof parsed !== 'object' || !parsed.sessions) {
+            usageFileCache.delete(path);
+            return emptyFile(meshId);
+        }
+        usageFileCache.set(path, { file: parsed, mtimeMs: stat.mtimeMs, size: stat.size });
         return parsed;
     } catch {
         // A truncated/corrupt file must not take the caller down; usage is
         // derived data and rebuilds from the transcripts on the next read.
+        usageFileCache.delete(path);
         return emptyFile(meshId);
     }
 }
@@ -138,7 +189,17 @@ function writeUsageFile(meshId: string, file: MeshUsageFile): void {
         renameSync(tmp, path);
     } catch (e) {
         try { unlinkSync(tmp); } catch { /* best-effort */ }
+        usageFileCache.delete(path);
         throw e;
+    }
+    // Cache what we just wrote, stamped with the renamed file's own stat, so the
+    // next read is a stat() instead of a full parse. If the stat fails, drop the
+    // entry rather than trusting an unstamped one.
+    try {
+        const s = statSync(path);
+        usageFileCache.set(path, { file, mtimeMs: s.mtimeMs, size: s.size });
+    } catch {
+        usageFileCache.delete(path);
     }
 }
 
@@ -217,7 +278,15 @@ export function recordSessionUsage(
     };
     file.sessions[usage.providerSessionId] = entry;
     enforceBounds(file, now);
-    writeUsageFile(meshId, file);
+    try {
+        writeUsageFile(meshId, file);
+    } catch (e) {
+        // `file` may be the cached object, and we just mutated it. A failed
+        // write means those mutations were never persisted, so the cache must
+        // not keep serving them as if they were.
+        usageFileCache.delete(getUsagePath(meshId));
+        throw e;
+    }
     return entry;
 }
 

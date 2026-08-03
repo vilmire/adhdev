@@ -106,10 +106,40 @@ describe('bounded growth', () => {
     it('evicts the oldest sessions past the cap and folds them into the rollup', () => {
         const now = 2_000_000_000_000;
         const overflow = 5;
-        for (let i = 0; i < MAX_SESSIONS_PER_MESH + overflow; i += 1) {
+        const total = MAX_SESSIONS_PER_MESH + overflow;
+
+        // Seed everything below the cap straight to disk, and drive only the
+        // overflow writes through the API.
+        //
+        // Going through recordSessionUsage for all 2005 would not test anything
+        // extra — the first 2000 writes are under the cap, so they exercise the
+        // upsert path already covered above, not eviction. What they DO cost is
+        // 2005 sequential atomic whole-file writes: the store rewrites the
+        // entire file on every key update, so the run is quadratic. Measured
+        // floor for that write pattern alone, with zero store logic, is ~49s —
+        // above the 30s budget no matter how fast the implementation gets.
+        // Seeding keeps the assertions identical while leaving the eviction
+        // transition itself (crossing the cap) genuinely driven by the API.
+        const seeded = MAX_SESSIONS_PER_MESH - 1;
+        const sessions: Record<string, unknown> = {};
+        for (let i = 0; i < seeded; i += 1) {
+            sessions[`s${i}`] = {
+                ...totals({ providerSessionId: `s${i}`, inputTokens: 10, lastUsageAt: now - (total - i) * 1000 }),
+                updatedAt: now,
+            };
+        }
+        fs.mkdirSync(getUsageDir(), { recursive: true });
+        fs.writeFileSync(
+            path.join(getUsageDir(), `${MESH}.json`),
+            JSON.stringify({ version: 1, meshId: MESH, sessions }),
+            'utf-8',
+        );
+
+        // These cross the cap, so eviction runs on the real code path.
+        for (let i = seeded; i < total; i += 1) {
             recordSessionUsage(
                 MESH,
-                totals({ providerSessionId: `s${i}`, inputTokens: 10, lastUsageAt: now - (MAX_SESSIONS_PER_MESH + overflow - i) * 1000 }),
+                totals({ providerSessionId: `s${i}`, inputTokens: 10, lastUsageAt: now - (total - i) * 1000 }),
                 undefined,
                 now,
             );
