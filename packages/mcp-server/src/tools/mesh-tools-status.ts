@@ -34,6 +34,7 @@ import {
     getActiveDirectDispatches,
     getLatestActiveLaunchFailure,
     getLedgerSummary,
+    summarizeMeshUsage,
     getMeshStatusMissionSummaries,
     getMeshStatusMissionsCompact,
     getNodeLaunchReadiness,
@@ -99,7 +100,7 @@ export function summarizePendingEventProtocolMetrics(
 
 // ─── Tool Implementations ───────────────────────
 
-export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; includeSessions?: boolean; compact?: boolean; verbose?: boolean } = {}): Promise<string> {
+export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; includeSessions?: boolean; includeUsage?: boolean; compact?: boolean; verbose?: boolean } = {}): Promise<string> {
     const rateResult = recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_status' });
     // Default to the slim payload for LLM callers; verbose forces the full payload.
     const compact = args.verbose === true ? false : (args.compact ?? true);
@@ -697,6 +698,17 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     try {
         response.ledgerSummary = ledgerSummary;
     } catch { /* ledger read is best-effort */ }
+
+    // Token/cost usage rollup. OPT-IN (includeUsage) rather than default-on:
+    // mesh_status is the highest-frequency coordinator poll and already fights
+    // the MCP token cap, so a rollup nobody asked for would cost every caller
+    // budget on every poll. Read-only and best-effort — a missing or corrupt
+    // usage file must never fail a status call.
+    if (args.includeUsage === true) {
+        try {
+            response.usage = summarizeMeshUsage(mesh.id);
+        } catch { /* usage read is best-effort */ }
+    }
 
     // M3-2: mission summaries — goal + live task aggregates (derived, not stored).
     // M7: each mission also carries time/attempt stats derived from the ledger.

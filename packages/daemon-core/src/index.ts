@@ -308,6 +308,10 @@ export type { RepoSettings, LoadRepoSettingsOptions } from './config/repo-settin
 // ── Mesh Task Ledger ──
 export { appendLedgerEntry, appendRemoteLedgerEntries, buildTaskCompletionEvidence, normalizeMeshWorkerResult, readLedgerEntries, readLedgerSlice, readLedgerSliceFromStore, getLedgerSummary, getLedgerDir, getSessionRecoveryContext, ledgerEntryTaskId, MAX_LEDGER_SLICE_LIMIT, tombstoneOperatingNote, readOperatingNotes, pruneOperatingNotes, isOperatingNoteTombstoned, OPERATING_NOTE_KIND, OPERATING_NOTE_TOMBSTONE_KIND, OPERATING_NOTE_DEDUPE_WINDOW, OPERATING_NOTE_KEEP_LATEST } from './mesh/mesh-ledger.js';
 export type { AppendRemoteLedgerResult, MeshLedgerEntry, MeshLedgerKind, MeshLedgerSlice, MeshLedgerSummary, ReadLedgerOptions, ReadLedgerSliceOptions, SessionRecoveryContext, MeshTaskCompletionEvidence, MeshWorkerResultArtifact, MeshProcessArtifact, MeshValidationResultArtifact } from './mesh/mesh-ledger.js';
+export { recordSessionUsage, readSessionUsage, summarizeMeshUsage, getUsageDir, MAX_SESSIONS_PER_MESH, USAGE_MAX_AGE_MS } from './mesh/mesh-usage-store.js';
+export type { MeshSessionUsage, MeshUsageSummary, EvictedUsageRollup } from './mesh/mesh-usage-store.js';
+export { foldUsageRecords, sumSessionUsage, makeUsage, totalTokens, isEmptyUsage, readTokenCount } from './providers/native-history/usage-normalize.js';
+export type { NativeUsage, NativeUsageRecord, NativeUsageMode, SessionUsageTotals } from './providers/native-history/usage-normalize.js';
 export { fastForwardMeshNode } from './mesh/mesh-fast-forward.js';
 export type { MeshFastForwardNodeArgs, MeshFastForwardPlannedStep, MeshFastForwardResult } from './mesh/mesh-fast-forward.js';
 export { buildMeshLedgerReconciliationEvidence, buildMeshLedgerReplicaEvidence } from './mesh/mesh-ledger-reconciliation.js';
