@@ -1074,9 +1074,15 @@ var SessionHostServer = class extends import_events.EventEmitter {
       this.persistNow(sessionId);
     }, 200));
   }
-  persistNow(sessionId) {
+  /**
+   * @param allowTerminal - write even if the record is terminal. Only the exit
+   * handler sets this, to stamp the final terminated record for the brief
+   * post-mortem window before cleanup.
+   */
+  persistNow(sessionId, allowTerminal = false) {
     const record = this.registry.getSession(sessionId);
     if (!record) return;
+    if (!allowTerminal && (0, import_session_host_core5.isTerminalRecord)(record)) return;
     const snapshot = this.getSnapshot(sessionId);
     try {
       this.storage.save(record, snapshot);
@@ -1312,6 +1318,11 @@ var SessionHostServer = class extends import_events.EventEmitter {
         this.recordRuntimeTransition(record.sessionId, "prune_duplicate_timeout", "stopping", void 0, false, error?.message || String(error));
       });
     }
+    const pendingPersistTimer = this.persistTimers.get(record.sessionId);
+    if (pendingPersistTimer) {
+      clearTimeout(pendingPersistTimer);
+      this.persistTimers.delete(record.sessionId);
+    }
     this.registry.deleteSession(record.sessionId);
     this.storage.remove(record.sessionId);
     this.storage.removeTombstone(record.sessionId);
@@ -1357,7 +1368,12 @@ var SessionHostServer = class extends import_events.EventEmitter {
     this.registry.markStopped(record.sessionId, termination.lifecycle, termination);
     this.runtimes.delete(record.sessionId);
     this.resolveExitWaiters(record.sessionId, exitCode);
-    this.persistNow(record.sessionId);
+    const pendingPersistTimer = this.persistTimers.get(record.sessionId);
+    if (pendingPersistTimer) {
+      clearTimeout(pendingPersistTimer);
+      this.persistTimers.delete(record.sessionId);
+    }
+    this.persistNow(record.sessionId, true);
     this.storage.saveTombstone(record.sessionId, termination);
     this.emitEvent({ type: "session_exit", sessionId: record.sessionId, exitCode, signal, termination });
     const summary = `reason=${termination.reason} exitCode=${termination.exitCode === null ? "unknown" : termination.exitCode} signal=${termination.signal ?? "none"}`;
@@ -1386,7 +1402,12 @@ var SessionHostServer = class extends import_events.EventEmitter {
       termination.lifecycle === "stopped",
       termination.lifecycle === "stopped" ? void 0 : summary
     );
-    setTimeout(() => this.storage.remove(record.sessionId), 5e3).unref?.();
+    setTimeout(() => {
+      const current = this.registry.getSession(record.sessionId);
+      if (current && !(0, import_session_host_core5.isTerminalRecord)(current)) return;
+      this.registry.deleteSession(record.sessionId);
+      this.storage.remove(record.sessionId);
+    }, 5e3).unref?.();
     return termination;
   }
 };

@@ -35,6 +35,11 @@ declare class SessionHostServer extends EventEmitter {
     private handleIncomingRequest;
     private writeEnvelopeSafely;
     private schedulePersist;
+    /**
+     * @param allowTerminal - write even if the record is terminal. Only the exit
+     * handler sets this, to stamp the final terminated record for the brief
+     * post-mortem window before cleanup.
+     */
     private persistNow;
     private getHostDiagnostics;
     private recordHostLog;
