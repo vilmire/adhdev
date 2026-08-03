@@ -162,45 +162,24 @@ export const DEFAULT_PROVIDER_VERIFICATION: ProviderVerification = {
 export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
   "antigravity": {
     "status": "unverified",
-    "testedOn": [
-      "macOS 26.4"
-    ],
-    "testedVersions": [
-      "Antigravity 1.22.2"
-    ],
-    "validatedFlows": [
-      "read_chat",
-      "list_sessions"
-    ],
-    "lastValidated": "2026-04-09",
-    "notes": "Local smoke test confirmed read_chat and list_sessions. A fresh new_session plus send_chat flow did not produce a readable conversation transcript, so promotion is blocked.",
-    "evidence": "Manual local validation via standalone API on 2026-04-09",
-    "owner": "core",
+    "testedOn": [],
+    "testedVersions": [],
+    "validatedFlows": [],
+    "lastValidated": null,
+    "notes": "",
+    "evidence": "",
+    "owner": "community",
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "cursor": {
-    "status": "partial",
-    "testedOn": [
-      "macOS 26.4"
-    ],
-    "testedVersions": [
-      "Cursor 3.0.13"
-    ],
-    "validatedFlows": [
-      "detect",
-      "launch",
-      "read_chat",
-      "send_chat",
-      "list_sessions",
-      "switch_session",
-      "new_session",
-      "list_models",
-      "list_modes"
-    ],
-    "lastValidated": "2026-04-09",
-    "notes": "Detection, launch, fresh new-session send/read, session listing, session switching, model listing, and mode listing were validated locally. The tested build currently exposes only Auto in the model picker, and set_model plus resolve_action remain unverified.",
-    "evidence": "Manual local validation via standalone API on 2026-04-09",
-    "owner": "core",
+    "status": "unverified",
+    "testedOn": [],
+    "testedVersions": [],
+    "validatedFlows": [],
+    "lastValidated": null,
+    "notes": "",
+    "evidence": "",
+    "owner": "community",
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "kiro": {
@@ -281,69 +260,36 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "claude-cli": {
-    "status": "partial",
-    "testedOn": [
-      "macOS 26.4"
-    ],
-    "testedVersions": [
-      "Claude Code 2.1.84"
-    ],
-    "validatedFlows": [
-      "launch",
-      "send_chat",
-      "read_chat",
-      "resume",
-      "reconnect",
-      "stop"
-    ],
-    "lastValidated": "2026-04-09",
-    "notes": "Saved-session listing, resume launch, daemon-restart reconnect, and live read_chat were confirmed locally. A parser false-positive that trimmed short exact-match answers as prompt echo was fixed during validation; the provider still remains partial until more than one app/version combination is covered.",
-    "evidence": "Manual local validation via standalone API on 2026-04-09",
-    "owner": "core",
+    "status": "unverified",
+    "testedOn": [],
+    "testedVersions": [],
+    "validatedFlows": [],
+    "lastValidated": null,
+    "notes": "",
+    "evidence": "",
+    "owner": "community",
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "codex-cli": {
-    "status": "partial",
-    "testedOn": [
-      "macOS 26.4"
-    ],
-    "testedVersions": [
-      "codex-cli 0.118.0"
-    ],
-    "validatedFlows": [
-      "launch",
-      "send_chat",
-      "read_chat",
-      "resume",
-      "reconnect",
-      "stop"
-    ],
-    "lastValidated": "2026-04-09",
-    "notes": "Fresh launch, live send/read, saved-session resume, daemon-restart reconnect, and stop were validated locally after tightening onboarding-screen parsing, providerSessionId recovery, and history replay dedupe. Some older saved transcripts may still need one-time compaction if they were polluted before the fix.",
-    "evidence": "Manual local validation via standalone API and session-host restart recovery on 2026-04-09",
-    "owner": "core",
+    "status": "unverified",
+    "testedOn": [],
+    "testedVersions": [],
+    "validatedFlows": [],
+    "lastValidated": null,
+    "notes": "",
+    "evidence": "",
+    "owner": "community",
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "cursor-cli": {
-    "status": "partial",
-    "testedOn": [
-      "macOS 26.4"
-    ],
-    "testedVersions": [
-      "Cursor 3.0.16",
-      "cursor-agent 2026.04.17-787b533"
-    ],
-    "validatedFlows": [
-      "launch",
-      "send_chat",
-      "read_chat",
-      "resume",
-      "list_models"
-    ],
-    "lastValidated": "2026-04-23",
-    "notes": "Provider root was updated to launch `cursor agent` instead of the obsolete standalone `agent` binary. Fresh launch via ADHDev plus headless send/read, explicit UUID resume, plan mode, and model listing were validated locally after Cursor login. Interactive in-session `/model` switching now has provider controls/scripts but still needs a direct ADHDev live-session validation before this provider can move beyond partial.",
-    "evidence": "Manual local validation with `adhdev launch cursor-cli`, `cursor agent --print`, `cursor agent --resume`, `cursor agent --list-models`, and provider contract tests on 2026-04-23",
-    "owner": "core",
+    "status": "unverified",
+    "testedOn": [],
+    "testedVersions": [],
+    "validatedFlows": [],
+    "lastValidated": null,
+    "notes": "",
+    "evidence": "",
+    "owner": "community",
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "hermes-cli": {
@@ -391,25 +337,14 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "codex": {
-    "status": "partial",
-    "testedOn": [
-      "macOS 26.4"
-    ],
-    "testedVersions": [
-      "openai.chatgpt 26.406.31014"
-    ],
-    "validatedFlows": [
-      "read_chat",
-      "new_session",
-      "send_chat",
-      "list_sessions",
-      "switch_session",
-      "resolve_action"
-    ],
-    "lastValidated": "2026-04-10",
-    "notes": "Cursor-hosted Codex on macOS now has locale-agnostic read/list/switch handling, approve-path resolve_action, and transcript cleanup for localized timestamps plus stale replay turns. It remains Partial because recent-task history can still collapse to the current chat and some send_chat attempts still fail to materialize as a real turn, even though false-success reporting is now blocked.",
-    "evidence": "Manual local validation via standalone API on 2026-04-10 against Cursor-hosted Codex webview, including recent-task list/switch, approve-path resolve_action, and transcript cleanup verification",
-    "owner": "core",
+    "status": "unverified",
+    "testedOn": [],
+    "testedVersions": [],
+    "validatedFlows": [],
+    "lastValidated": null,
+    "notes": "",
+    "evidence": "",
+    "owner": "community",
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "roo-code": {
@@ -545,28 +480,14 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "cursor-acp": {
-    "status": "partial",
-    "testedOn": [
-      "macOS 26.4"
-    ],
-    "testedVersions": [
-      "cursor-agent 2026.03.25-933d5a6"
-    ],
-    "validatedFlows": [
-      "launch",
-      "send_chat",
-      "read_chat",
-      "resolve_action",
-      "list_models",
-      "set_model",
-      "list_modes",
-      "set_mode",
-      "stop"
-    ],
-    "lastValidated": "2026-04-09",
-    "notes": "Approval flow, model change, mode change, and hard stop were validated locally. Reconnect and session resume are still unverified.",
-    "evidence": "Manual local validation via standalone API on 2026-04-09",
-    "owner": "core",
+    "status": "unverified",
+    "testedOn": [],
+    "testedVersions": [],
+    "validatedFlows": [],
+    "lastValidated": null,
+    "notes": "",
+    "evidence": "",
+    "owner": "community",
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "deepagents-acp": {
@@ -793,7 +714,7 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
 
 export const PROVIDER_VERIFICATION_STATUS: Record<string, ProviderVerificationStatus> = {
   "antigravity": "unverified",
-  "cursor": "partial",
+  "cursor": "unverified",
   "kiro": "unverified",
   "pearai": "unverified",
   "trae": "unverified",
@@ -801,14 +722,14 @@ export const PROVIDER_VERIFICATION_STATUS: Record<string, ProviderVerificationSt
   "vscodium": "unverified",
   "windsurf": "unverified",
   "antigravity-cli": "unverified",
-  "claude-cli": "partial",
-  "codex-cli": "partial",
-  "cursor-cli": "partial",
+  "claude-cli": "unverified",
+  "codex-cli": "unverified",
+  "cursor-cli": "unverified",
   "hermes-cli": "unverified",
   "kimi": "unverified",
   "opencode": "unverified",
   "cline": "unverified",
-  "codex": "partial",
+  "codex": "unverified",
   "roo-code": "unverified",
   "claude-code-vscode": "unverified",
   "agentpool-acp": "unverified",
@@ -821,7 +742,7 @@ export const PROVIDER_VERIFICATION_STATUS: Record<string, ProviderVerificationSt
   "codebuddy-acp": "unverified",
   "codex-acp": "unverified",
   "crow-cli-acp": "unverified",
-  "cursor-acp": "partial",
+  "cursor-acp": "unverified",
   "deepagents-acp": "unverified",
   "dimcode-acp": "unverified",
   "docker-cagent-acp": "unverified",
