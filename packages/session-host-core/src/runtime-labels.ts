@@ -53,14 +53,35 @@ export interface SessionHostSurfaceRecordLike {
   lifecycle?: string | null;
   surfaceKind?: SessionHostSurfaceKind | null;
   meta?: Record<string, unknown> | null;
+  termination?: unknown;
 }
 
 const LIVE_LIFECYCLES = new Set(['starting', 'running', 'stopping', 'interrupted']);
+const TERMINAL_LIFECYCLES = new Set(['stopped', 'failed']);
+
+/**
+ * True when a record has reached a terminal state: either its lifecycle is
+ * terminal, or it carries a termination stamp (which the exit handler writes
+ * alongside the lifecycle, and which can outlive a stale 'stopping' value).
+ *
+ * Used both to keep terminated records from being persisted as live files and
+ * to keep them from surfacing as attach targets.
+ */
+export function isTerminalRecord(record: SessionHostSurfaceRecordLike | null | undefined): boolean {
+  if (!record) return false;
+  if (record.termination) return true;
+  return TERMINAL_LIFECYCLES.has(String(record.lifecycle || '').trim());
+}
 
 export function isSessionHostLiveRuntime(record: SessionHostSurfaceRecordLike | null | undefined): boolean {
   if (!record) return false;
   if (record.surfaceKind === 'live_runtime') return true;
   if (record.surfaceKind === 'recovery_snapshot' || record.surfaceKind === 'inactive_record') return false;
+  // A record stamped with a termination is terminal even if its lifecycle is
+  // still 'stopping' — e.g. a stale file recreated by a late persist that
+  // raced the exit/cleanup path. Without this, such records surface as a
+  // live runtime (attach target) for a PID that already exited.
+  if (record.termination) return false;
   const lifecycle = String(record.lifecycle || '').trim();
   return LIVE_LIFECYCLES.has(lifecycle);
 }

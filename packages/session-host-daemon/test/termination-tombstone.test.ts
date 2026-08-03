@@ -133,6 +133,158 @@ test('an explicit stop request is attributed in the termination diagnostic', () 
   assert.equal(server.stopRequests.has(record.sessionId), false);
 });
 
+test('a late persist arriving after cleanup does not resurrect the removed live file', async () => {
+  const appName = `adhdev-test-term-resurrect-${process.pid}`;
+  const server = new SessionHostServer({ appName }) as any;
+  const rootDir = path.join(os.homedir(), '.adhdev', 'session-host', appName);
+  const realSetTimeout = global.setTimeout;
+  let cleanup: (() => void) | null = null;
+  // Capture the 5s cleanup callback so the test can fire it deterministically.
+  (global as any).setTimeout = (fn: () => void, ms?: number) => {
+    if (ms === 5_000) {
+      cleanup = fn;
+      return { unref() {} } as any;
+    }
+    return realSetTimeout(fn as any, ms as any);
+  };
+  try {
+    const sessionId = 'resurrect-race';
+    const record = buildRecord({ sessionId, osPid: 4242, lifecycle: 'running' });
+    server.registry.restoreSession(record);
+    server.runtimes.set(sessionId, {});
+
+    server.handleRuntimeExit(record, 0, null);
+    // The live persistence file exists immediately after exit (post-mortem window).
+    assert.equal(server.storage.loadAll().some((s: any) => s.record.sessionId === sessionId), true);
+
+    // Fire the real cleanup timeout body.
+    assert.ok(cleanup, 'cleanup timeout was not scheduled');
+    cleanup!();
+    assert.equal(server.storage.loadAll().some((s: any) => s.record.sessionId === sessionId), false);
+    // The registry no longer serves this session either.
+    assert.equal(server.registry.getSession(sessionId), null);
+
+    // A stray late write (e.g. a PTY onData that raced the exit handler)
+    // must not recreate the file for an already-removed session.
+    server.persistNow(sessionId);
+    assert.equal(server.storage.loadAll().some((s: any) => s.record.sessionId === sessionId), false);
+  } finally {
+    global.setTimeout = realSetTimeout;
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('a late persist is refused while the terminated record is still registered', () => {
+  // The post-mortem window (between exit and the 5s cleanup) is the window the
+  // resurrection actually happened in: the record is still registered, so a
+  // late persist finds it and writes a stale live file. Guarding only on
+  // "record removed" would miss this.
+  const appName = `adhdev-test-term-postmortem-${process.pid}`;
+  const server = new SessionHostServer({ appName }) as any;
+  const rootDir = path.join(os.homedir(), '.adhdev', 'session-host', appName);
+  try {
+    const sessionId = 'postmortem-write';
+    const record = buildRecord({ sessionId, osPid: 5150, lifecycle: 'running' });
+    server.registry.restoreSession(record);
+    server.runtimes.set(sessionId, {});
+
+    server.handleRuntimeExit(record, 0, null);
+    server.storage.remove(sessionId);
+
+    // Record is still registered (cleanup has not fired yet) but is terminal.
+    assert.ok(server.registry.getSession(sessionId));
+    server.persistNow(sessionId);
+    assert.equal(server.storage.loadAll().some((s: any) => s.record.sessionId === sessionId), false);
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('a restart reusing the sessionId keeps persisting and survives the old cleanup', () => {
+  // restartRuntime() stops the runtime (scheduling a cleanup) and relaunches
+  // under the SAME sessionId. Neither the deferred cleanup nor any persist
+  // guard may treat the restarted live session as the terminated one.
+  const appName = `adhdev-test-term-restart-reuse-${process.pid}`;
+  const server = new SessionHostServer({ appName }) as any;
+  const rootDir = path.join(os.homedir(), '.adhdev', 'session-host', appName);
+  const realSetTimeout = global.setTimeout;
+  let cleanup: (() => void) | null = null;
+  (global as any).setTimeout = (fn: () => void, ms?: number) => {
+    if (ms === 5_000) {
+      cleanup = fn;
+      return { unref() {} } as any;
+    }
+    return realSetTimeout(fn as any, ms as any);
+  };
+  try {
+    const sessionId = 'restart-reuse';
+    server.registry.restoreSession(buildRecord({ sessionId, osPid: 111, lifecycle: 'running' }));
+    server.runtimes.set(sessionId, {});
+
+    server.handleRuntimeExit(server.registry.getSession(sessionId), 0, null);
+
+    // Restart: same id, live again (registry.restoreSession replaces the
+    // terminated record, clearing the termination stamp).
+    server.registry.deleteSession(sessionId);
+    server.registry.restoreSession(buildRecord({ sessionId, osPid: 222, lifecycle: 'running' }));
+    server.runtimes.set(sessionId, {});
+
+    // The old exit's cleanup now fires — it must not touch the live session.
+    assert.ok(cleanup, 'cleanup timeout was not scheduled');
+    cleanup!();
+    assert.ok(server.registry.getSession(sessionId), 'restarted live session was unregistered by a stale cleanup');
+
+    // And the restarted session must still be persistable.
+    server.persistNow(sessionId);
+    const persisted = server.storage.loadAll().find((s: any) => s.record.sessionId === sessionId);
+    assert.ok(persisted, 'restarted live session was permanently blocked from persisting');
+    assert.equal(persisted.record.osPid, 222);
+  } finally {
+    global.setTimeout = realSetTimeout;
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('handleRuntimeExit clears a pending scheduled persist so it cannot fire after cleanup', () => {
+  const appName = `adhdev-test-term-clear-timer-${process.pid}`;
+  const server = new SessionHostServer({ appName }) as any;
+  const rootDir = path.join(os.homedir(), '.adhdev', 'session-host', appName);
+  try {
+    const sessionId = 'clear-timer';
+    const record = buildRecord({ sessionId, osPid: 99, lifecycle: 'running' });
+    server.registry.restoreSession(record);
+    server.runtimes.set(sessionId, {});
+
+    // Simulate onData scheduling a debounced persist just before exit.
+    server.schedulePersist(sessionId);
+    assert.equal(server.persistTimers.has(sessionId), true);
+
+    server.handleRuntimeExit(record, 0, null);
+
+    // The pending timer from before exit must be cleared, not left to fire later.
+    assert.equal(server.persistTimers.has(sessionId), false);
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('a live persist still succeeds for a session that was never removed', () => {
+  const appName = `adhdev-test-term-live-persist-${process.pid}`;
+  const server = new SessionHostServer({ appName }) as any;
+  const rootDir = path.join(os.homedir(), '.adhdev', 'session-host', appName);
+  try {
+    const sessionId = 'still-live';
+    const record = buildRecord({ sessionId, osPid: 7, lifecycle: 'running' });
+    server.registry.restoreSession(record);
+    server.runtimes.set(sessionId, {});
+
+    server.persistNow(sessionId);
+    assert.equal(server.storage.loadAll().some((s: any) => s.record.sessionId === sessionId), true);
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
 test('tombstone is retained on disk after the live runtime record is removed', () => {
   const appName = `adhdev-test-term-disk-${process.pid}`;
   const storage = new SessionHostStorage({ appName });
