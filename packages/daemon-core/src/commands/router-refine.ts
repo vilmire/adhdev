@@ -2417,14 +2417,79 @@ export async function startMeshRefineBatchJob(self: DaemonCommandRouter, meshId:
         };
     }
 
+/**
+ * ③ Decide whether a finished single-node refine attempt earns the ONE automatic
+ * retry. Pure, so the bound is unit-testable without driving the whole pipeline.
+ *
+ * Delegates the retryable judgement to `classifyBatchNodeConvergence` — the exact
+ * classifier the batch path's retryQueue uses — so the single-node and batch paths
+ * cannot drift apart on what "retryable" means. Only the base-movement family
+ * (base_moved / base_locked) qualifies; a real conflict never does.
+ *
+ * `alreadyRetried` is the bound: a result that already carries the retry marker is
+ * terminal no matter what it failed with. This is what makes the retry exactly-once
+ * rather than a loop that could starve a node while the base keeps moving.
+ */
+export function shouldAutoRetryRefine(result: Record<string, unknown>): { retry: boolean; code: string } {
+    const alreadyRetried = result.refineRetried === true;
+    const { retryable, code } = classifyBatchNodeConvergence(result);
+    return { retry: retryable && !alreadyRetried, code };
+}
+
+/**
+ * ③ Run the refine pipeline once, capturing a thrown error as a failure result.
+ * Shared by the first attempt and the single automatic retry below.
+ */
+async function runRefinePipelineOnce(
+    self: DaemonCommandRouter,
+    meshId: string,
+    nodeId: string,
+    args: any,
+): Promise<Record<string, unknown>> {
+    try {
+        return await executeMeshRefineNodeSynchronously(self, meshId, nodeId, args) as Record<string, unknown>;
+    } catch (e: any) {
+        return { success: false, error: e?.message || String(e) };
+    }
+}
+
 export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: MeshRefineJobHandle, args: any): Promise<void> {
         const key = buildRefineJobKey(self, handle.meshId, handle.targetNodeId);
-        let result: Record<string, unknown>;
-        try {
-            result = await executeMeshRefineNodeSynchronously(self, handle.meshId, handle.targetNodeId, args) as Record<string, unknown>;
-        } catch (e: any) {
-            result = { success: false, error: e?.message || String(e) };
+        let result = await runRefinePipelineOnce(self, handle.meshId, handle.targetNodeId, args);
+
+        // ③ Single automatic retry for a base-movement blocker (base_moved / base_locked).
+        //
+        // The batch path has had this second pass since DS2 (runMeshRefineBatchConvergence's
+        // retryQueue); the single-node async path had NO automatic retry at all, so a
+        // coordinator received task_failed for a blocker that is transient by construction:
+        // the node did not converge because a PEER advanced the base or held the lease while
+        // it ran, not because of anything about its own content. That is exactly the failure
+        // a re-run fixes, and it is what forced four manual rebases in a single day.
+        //
+        // Retryability is decided by the SAME classifier the batch uses
+        // (classifyBatchNodeConvergence), so the two paths cannot drift: a real conflict is
+        // never retried, only the base-movement family. The batch path itself is untouched.
+        //
+        // No new recovery logic is needed on the retry — the full pipeline re-runs, so
+        // refineSyncBaseStage re-fetches and auto-rebases onto the NEW base (aborting to
+        // blocked_review on a real conflict), the validation gate re-runs the repo's
+        // configured commands (which is where this repo's vendor-drift check lives, so a
+        // rebase that invalidated the vendor bundle is caught), and patch-equivalence
+        // re-verifies against the new base.
+        //
+        // Bounded to exactly ONE retry, matching the batch. There is deliberately no loop
+        // and no re-queue: a base that keeps moving must surface to a human rather than
+        // starve the node in an unbounded retry cycle.
+        const firstAttempt = shouldAutoRetryRefine(result);
+        if (firstAttempt.retry) {
+            LOG.info('Mesh', `[Refinery] Base-movement blocker (${firstAttempt.code}) for node ${handle.targetNodeId}`
+                + ` (jobId=${handle.jobId}); retrying once automatically.`);
+            result = await runRefinePipelineOnce(self, handle.meshId, handle.targetNodeId, args);
+            // Whatever this attempt produced is terminal — success, a different failure, or
+            // the same base-movement blocker. It is NOT retried again.
+            result = { ...result, refineRetried: true, refineRetryOfCode: firstAttempt.code };
         }
+
         const completedAt = new Date().toISOString();
 
         // B1: Discriminated terminal status — do not rely solely on result.success.

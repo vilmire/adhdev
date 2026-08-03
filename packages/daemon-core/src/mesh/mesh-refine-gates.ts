@@ -1338,6 +1338,10 @@ export type SubmoduleGitlinkConvergeResult = {
      *   not_diverged        — the gitlink is ff/behind/equal (gate handles it)
      *   rebase_conflict     — replaying branch-side onto base-side hit a real
      *                         content conflict inside the submodule (aborted)
+     *   rebase_dropped_branch_commits — the rebase exited 0 but the branch-side
+     *                         commits are NOT reachable from the rebased tip (git
+     *                         skipped them as already-applied). Converging would
+     *                         silently discard the branch side, so we refuse.
      */
     reason?: string;
     /**
@@ -1352,7 +1356,7 @@ export type SubmoduleGitlinkConvergeResult = {
         baseCommit?: string;
         branchCommit?: string;
         rebasedCommit?: string;
-        action: 'rebased' | 'skipped_not_diverged' | 'rebase_conflict';
+        action: 'rebased' | 'skipped_not_diverged' | 'rebase_conflict' | 'rebase_dropped_branch_commits';
     }>;
 };
 
@@ -1455,6 +1459,51 @@ export function convergeDivergedSubmoduleGitlinks(
             gitlinks.push({ path, baseCommit, branchCommit, action: 'rebase_conflict' });
             // Real submodule content conflict → do NOT converge; caller keeps blocked_review.
             return { converged: false, reason: 'rebase_conflict', resolutions: [], gitlinks };
+        }
+
+        // ★ POINTER RE-TARGETING GATE — the guard against silently losing one side.
+        //
+        // `git rebase` exits 0 even when it drops every commit it was asked to replay:
+        // if the base side already contains an EQUIVALENT patch (a sibling landed the
+        // same content under a different SHA — precisely the parallel-refine case),
+        // the replayed commits become empty and git skips them ("skipped previously
+        // applied commit"). The rebase then "succeeds" with HEAD == baseCommit, and
+        // the branch-side work is unreachable from the pointer we are about to stage
+        // into the root commit. Without this check that work vanishes silently.
+        //
+        // The gate demands positive proof that the branch side survived. Note the
+        // discriminator is NOT `merge-base --is-ancestor branchCommit rebasedCommit`:
+        // a rebase always rewrites SHAs, so the original branchCommit is never an
+        // ancestor of the rebased tip even on a perfectly clean replay — that check
+        // would block every legitimate convergence. (Verified empirically before
+        // choosing this signal.)
+        //
+        // The signal that actually distinguishes the two cases is how many commits the
+        // rebase LANDED on top of the base: a clean replay leaves >=1 commit in
+        // `baseCommit..rebasedCommit`, while a fully-dropped replay leaves 0 (and
+        // rebasedCommit collapses onto baseCommit). Anything we cannot positively
+        // verify is refused and left to the defer→blocked_review path so a human
+        // decides, rather than this code silently discarding a side.
+        const branchWorkSurvived = (() => {
+            if (!rebasedCommit) return false;
+            // Trivially preserved when the rebase was a no-op (already up to date).
+            if (rebasedCommit === branchCommit) return true;
+            // A tip that collapsed onto the base carries none of the branch's work.
+            if (rebasedCommit === baseCommit) return false;
+            try {
+                const replayed = execFileSync(GIT, ['rev-list', '--count', `${baseCommit}..${rebasedCommit}`], {
+                    cwd: submoduleRepoPath, encoding: 'utf8',
+                }).trim();
+                return Number.parseInt(replayed, 10) > 0;
+            } catch {
+                return false;
+            }
+        })();
+        if (!branchWorkSurvived) {
+            // Restore the submodule checkout to the branch side; converge nothing.
+            try { execFileSync(GIT, ['checkout', '-q', '--detach', branchCommit], { cwd: submoduleRepoPath, stdio: 'ignore' }); } catch { /* ignore */ }
+            gitlinks.push({ path, baseCommit, branchCommit, rebasedCommit, action: 'rebase_dropped_branch_commits' });
+            return { converged: false, reason: 'rebase_dropped_branch_commits', resolutions: [], gitlinks };
         }
 
         gitlinks.push({ path, baseCommit, branchCommit, rebasedCommit, action: 'rebased' });
