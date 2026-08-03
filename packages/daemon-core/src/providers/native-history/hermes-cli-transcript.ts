@@ -20,6 +20,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { loadBetterSqlite3 } from '../../system/load-better-sqlite3.js';
+import {
+    foldUsageRecords,
+    makeUsage,
+    type NativeUsageRecord,
+    type SessionUsageTotals,
+} from './usage-normalize.js';
 
 export interface NativeHistoryMessage {
     id: string;
@@ -37,6 +43,8 @@ export interface NativeHistorySession {
     sourceMtimeMs: number;
     nativeHistoryCoverage: 'full';
     workspace?: string;
+    /** Token/cost totals, omitted when the db records no usage for the cluster. */
+    usage?: SessionUsageTotals;
 }
 
 export interface NativeHistorySessionMeta {
@@ -152,6 +160,103 @@ function loadMessagesForSession(db: any, sessionId: string): NativeHistoryMessag
     return out;
 }
 
+/** Usage columns on `sessions`, absent on hermes older than the billing schema. */
+const HERMES_USAGE_COLUMNS = [
+    'input_tokens',
+    'output_tokens',
+    'cache_read_tokens',
+    'cache_write_tokens',
+    'reasoning_tokens',
+    'estimated_cost_usd',
+    'actual_cost_usd',
+    'cost_status',
+    'cost_source',
+    'model',
+] as const;
+
+/**
+ * Which of the usage columns this db actually has.
+ *
+ * Older hermes predates the billing columns entirely, and selecting a missing
+ * column throws — which would take the whole message read down with it. So the
+ * column set is probed first and the SELECT is built from what exists.
+ */
+function resolveHermesUsageColumns(db: any): string[] {
+    try {
+        const present = new Set<string>(
+            db.prepare('PRAGMA table_info(sessions)').all().map((r: any) => String(r?.name ?? '')),
+        );
+        return HERMES_USAGE_COLUMNS.filter((c) => present.has(c));
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * Pick a trustworthy USD cost from a hermes `sessions` row.
+ *
+ * hermes writes `estimated_cost_usd = 0.0` alongside `cost_status = 'unknown'`
+ * / `cost_source = 'none'` when it had no pricing table for the model — an
+ * observed-live default, not a measurement. Returning that 0 would render as
+ * "this session was free", so an untrusted row yields undefined ("unknown")
+ * instead. `actual_cost_usd` (billed truth) wins over the estimate when set.
+ */
+function readHermesCost(row: any): number | undefined {
+    const actual = Number(row?.actual_cost_usd);
+    if (Number.isFinite(actual) && actual > 0) return actual;
+
+    const status = String(row?.cost_status ?? '').toLowerCase();
+    const source = String(row?.cost_source ?? '').toLowerCase();
+    if (status === 'unknown' || source === 'none' || !status) return undefined;
+
+    const estimated = Number(row?.estimated_cost_usd);
+    if (Number.isFinite(estimated) && estimated >= 0) return estimated;
+    return undefined;
+}
+
+/**
+ * Load token/cost usage for a whole session cluster.
+ *
+ * Each `sessions` row holds session-to-date totals for THAT row, and a logical
+ * hermes turn spans several rows (see resolveClusterSessionIds), so the rows
+ * are summed — but each row is tagged `delta` relative to its siblings so the
+ * fold adds them rather than last-wins-ing a single row's total.
+ */
+function loadUsageForCluster(db: any, clusterIds: string[]): NativeUsageRecord[] {
+    if (clusterIds.length === 0) return [];
+    const columns = resolveHermesUsageColumns(db);
+    if (columns.length === 0) return [];
+
+    const placeholders = clusterIds.map(() => '?').join(', ');
+    let rows: any[];
+    try {
+        rows = db.prepare(
+            `SELECT ${columns.join(', ')}, started_at FROM sessions WHERE id IN (${placeholders})`,
+        ).all(...clusterIds);
+    } catch {
+        return [];
+    }
+
+    const records: NativeUsageRecord[] = [];
+    for (const row of rows) {
+        const usage = makeUsage({
+            inputTokens: row.input_tokens,
+            outputTokens: row.output_tokens,
+            cacheReadTokens: row.cache_read_tokens,
+            cacheCreationTokens: row.cache_write_tokens,
+            reasoningTokens: row.reasoning_tokens,
+            costUsd: readHermesCost(row),
+            model: typeof row.model === 'string' ? row.model : undefined,
+        });
+        records.push({
+            ...usage,
+            mode: 'delta',
+            receivedAt: Math.floor(Number(row.started_at) * 1000) || 0,
+        });
+    }
+    return records;
+}
+
 export function readSession(sessionPath: string, requestedSessionId?: string): NativeHistorySession | null {
     if (!sessionPath) return null;
 
@@ -191,7 +296,7 @@ export function readSession(sessionPath: string, requestedSessionId?: string): N
             }
             const messages = loadMessagesForSession(db, sessionId);
             if (messages.length === 0) return null;
-            return {
+            const session: NativeHistorySession = {
                 messages,
                 providerSessionId: sessionId,
                 source: 'provider-native',
@@ -199,6 +304,16 @@ export function readSession(sessionPath: string, requestedSessionId?: string): N
                 sourceMtimeMs: statMtimeMs(sessionPath),
                 nativeHistoryCoverage: 'full',
             };
+            // Usage spans the same cluster the messages were read from, so the
+            // totals cover the whole logical session rather than the anchor row.
+            const usageRecords = loadUsageForCluster(db, resolveClusterSessionIds(db, sessionId));
+            if (usageRecords.length > 0) {
+                session.usage = foldUsageRecords(usageRecords, {
+                    providerSessionId: sessionId,
+                    agent: 'hermes-cli',
+                });
+            }
+            return session;
         } finally {
             try { db.close(); } catch { /* ignore */ }
         }

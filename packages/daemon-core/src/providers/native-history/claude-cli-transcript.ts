@@ -15,6 +15,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import {
+  foldUsageRecords,
+  makeUsage,
+  type NativeUsageRecord,
+  type SessionUsageTotals,
+} from './usage-normalize.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -43,6 +49,8 @@ export interface NativeHistorySession {
   sourceMtimeMs: number;
   nativeHistoryCoverage: 'full';
   workspace?: string;
+  /** Token/cost totals, omitted when the transcript records no usage. */
+  usage?: SessionUsageTotals;
 }
 
 export interface NativeHistorySessionMeta {
@@ -161,6 +169,40 @@ function extractUserContentParts(
   return parts;
 }
 
+/**
+ * Extract a per-message usage delta from a claude-cli transcript line.
+ *
+ * Shape (assistant lines only): `message.usage = { input_tokens,
+ * output_tokens, cache_creation_input_tokens, cache_read_input_tokens, ... }`.
+ * Returns null when the line carries no usage — user lines, tool results, and
+ * transcripts written by older CLI versions all legitimately lack it.
+ *
+ * Note `usage.iterations[]` is deliberately ignored: it is a per-iteration
+ * BREAKDOWN of the same totals already on the parent object, so folding it in
+ * would double-count every streamed message.
+ */
+function extractClaudeUsage(
+  message: Record<string, unknown>,
+  receivedAt: number,
+): NativeUsageRecord | null {
+  const raw = message.usage;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const usage = raw as Record<string, unknown>;
+
+  const normalized = makeUsage({
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    cacheReadTokens: usage.cache_read_input_tokens,
+    cacheCreationTokens: usage.cache_creation_input_tokens,
+    model: typeof message.model === 'string' ? message.model : undefined,
+  });
+
+  // A usage object present but entirely zero still counts as an observation —
+  // dropping it would silently lose the record count. Only a structurally
+  // absent usage returns null (handled above).
+  return { ...normalized, mode: 'delta', receivedAt };
+}
+
 /** Claude projects root: ~/.claude/projects */
 function claudeProjectsRoot(): string {
   return path.join(os.homedir(), '.claude', 'projects');
@@ -197,19 +239,29 @@ function resolveTranscriptPath(sessionId: string, workspace?: string): string | 
 }
 
 /**
- * Parse a single JSONL transcript file into NativeHistoryMessages.
- * Malformed lines are silently skipped.
+ * Parse a single JSONL transcript file into NativeHistoryMessages plus the
+ * session's token usage.
+ *
+ * Malformed lines are silently skipped. Usage collection is additive: the
+ * `messages` array is byte-for-byte what this function returned before usage
+ * existed, so every existing caller is unaffected.
  */
 function parseTranscriptFile(
   filePath: string,
   sessionId: string,
   workspaceFallback?: string,
-): NativeHistoryMessage[] {
+): { messages: NativeHistoryMessage[]; usageRecords: NativeUsageRecord[] } {
   let raw: string;
-  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
+  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return { messages: [], usageRecords: [] }; }
 
   const lines = raw.split('\n').filter(Boolean);
   const records: NativeHistoryMessage[] = [];
+  const usageRecords: NativeUsageRecord[] = [];
+  // Claude re-emits a streamed assistant message across several lines that
+  // share one `message.id`, each carrying the same cumulative usage for that
+  // message. Keying on the id keeps exactly one observation per message so a
+  // long streamed reply is not counted many times over.
+  const seenUsageMessageIds = new Set<string>();
   let fallbackTs = Date.now();
   let detectedWorkspace = typeof workspaceFallback === 'string' ? workspaceFallback.trim() : '';
 
@@ -252,6 +304,18 @@ function parseTranscriptFile(
 
     if (!message) continue;
 
+    // Collect usage BEFORE the content switch: an assistant line whose content
+    // yields no renderable parts (e.g. a pure tool_use turn already deduped
+    // away) still consumed tokens and must still be billed.
+    const usageRecord = extractClaudeUsage(message, receivedAt);
+    if (usageRecord) {
+      const messageId = String(message.id || '').trim();
+      if (!messageId || !seenUsageMessageIds.has(messageId)) {
+        if (messageId) seenUsageMessageIds.add(messageId);
+        usageRecords.push(usageRecord);
+      }
+    }
+
     if (type === 'user') {
       for (const part of extractUserContentParts(message.content)) {
         const msg: NativeHistoryMessage = {
@@ -285,7 +349,7 @@ function parseTranscriptFile(
     }
   }
 
-  return records;
+  return { messages: records, usageRecords };
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -304,13 +368,13 @@ export function readSession(sessionPath: string): NativeHistorySession | null {
   if (!fs.existsSync(sessionPath)) return null;
 
   const sourceMtimeMs = statMtimeMs(sessionPath);
-  const messages = parseTranscriptFile(sessionPath, basename);
+  const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename);
   if (messages.length === 0) return null;
 
   const firstSystem = messages.find((m) => m.kind === 'session_start');
   const workspace = firstSystem?.workspace || firstSystem?.content || undefined;
 
-  return {
+  const session: NativeHistorySession = {
     messages,
     providerSessionId: basename,
     source: 'provider-native',
@@ -319,6 +383,13 @@ export function readSession(sessionPath: string): NativeHistorySession | null {
     nativeHistoryCoverage: 'full',
     workspace,
   };
+  if (usageRecords.length > 0) {
+    session.usage = foldUsageRecords(usageRecords, {
+      providerSessionId: basename,
+      agent: 'claude-cli',
+    });
+  }
+  return session;
 }
 
 /**
@@ -363,7 +434,7 @@ export async function listSessions(watchPath: string): Promise<NativeHistorySess
       if (!isSafeSessionId(sessionId)) continue;
 
       const sourceMtimeMs = statMtimeMs(entryPath);
-      const messages = parseTranscriptFile(entryPath, sessionId);
+      const { messages } = parseTranscriptFile(entryPath, sessionId);
       const visible = messages.filter((m) => m.kind !== 'session_start');
       if (visible.length === 0) continue;
 

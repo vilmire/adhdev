@@ -29,8 +29,15 @@ import type {
     NativeHistoryMessageMap,
     NativeHistorySqliteSource,
     NativeHistoryToolMap,
+    NativeHistoryUsageMap,
 } from './types.js';
 import { SPAWN_BIND_GRACE_MS } from '../native-history/constants.js';
+import {
+    foldUsageRecords,
+    makeUsage,
+    type NativeUsageRecord,
+    type SessionUsageTotals,
+} from '../native-history/usage-normalize.js';
 import {
     claimTranscript,
     isTranscriptClaimedByOther,
@@ -106,6 +113,9 @@ export interface NativeHistoryResult {
      *  owned by other live sessions); NO messages and NO providerSessionId are
      *  returned so no durable pin can be written from the ambiguity. */
     unavailableReason?: string;
+    /** Token totals, present only when the spec declares `usage_records` and
+     *  the transcript actually carried at least one matching record. */
+    usage?: SessionUsageTotals;
 }
 
 const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
@@ -398,9 +408,21 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
 
     // Multi-shape (records[]) vs single-shape (message_map) projection.
     const shapes = compileRecordShapes(src);
+    // Usage lines are matched on a SEPARATE pass-through of the same records:
+    // they are not messages, and a usage line that matched no message shape
+    // would otherwise be dropped before it could be counted.
+    const pickUsage = compileUsageShapes(src);
     const messages: NativeHistoryMessage[] = [];
+    const usageRecords: NativeUsageRecord[] = [];
     for (let i = 0; i < lines.length; i += 1) {
         const rec = lines[i];
+        if (pickUsage) {
+            const usageMap = pickUsage(rec);
+            if (usageMap) {
+                const usageRecord = projectUsageRecord(rec, usageMap, mtime);
+                if (usageRecord) usageRecords.push(usageRecord);
+            }
+        }
         const shape = shapes.pick(rec);
         if (!shape) continue;
         for (const msg of projectMessages(rec, shape.map, i, lines.length, mtime)) {
@@ -419,6 +441,14 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
         workspace: transcriptWorkspace,
         attribution: outcome?.attribution,
         ownerConfirmed: outcome?.ownerConfirmed,
+        ...(usageRecords.length > 0
+            ? {
+                usage: foldUsageRecords(usageRecords, {
+                    providerSessionId: providerSessionId || '',
+                    agent: typeof input.agentType === 'string' ? input.agentType : 'unknown',
+                }),
+            }
+            : {}),
     };
 }
 
@@ -822,6 +852,70 @@ function compileRecordShapes(src: NativeHistoryJsonlSource): {
             if (filter && !filter(record)) return null;
             return { map };
         },
+    };
+}
+
+/**
+ * Compile the optional `usage_records` matchers into a picker.
+ *
+ * Mirrors `compileRecordShapes` but for token usage: usage lines are not
+ * messages and must not enter the `messages` array. Returns null when the spec
+ * declares no usage extraction, so every existing provider skips the work
+ * entirely.
+ */
+function compileUsageShapes(src: NativeHistoryJsonlSource): ((record: any) => NativeHistoryUsageMap | null) | null {
+    if (!Array.isArray(src.usage_records) || src.usage_records.length === 0) return null;
+    const compiled = src.usage_records.map((r) => ({
+        where: r.where ? compileWhere(r.where) : null,
+        map: r.usage_map,
+    }));
+    return (record: any) => {
+        for (const shape of compiled) {
+            if (!shape.where || shape.where(record)) return shape.map;
+        }
+        return null;
+    };
+}
+
+/**
+ * Project one matched record onto a normalized usage record via its usage_map.
+ *
+ * Returns null when the map resolves no token path at all, so a record that
+ * matched the `where` but carries nothing countable (a malformed or
+ * partially-written line) does not inflate the observation count.
+ */
+function projectUsageRecord(
+    record: any,
+    map: NativeHistoryUsageMap,
+    sourceMtimeMs: number,
+): NativeUsageRecord | null {
+    const read = (p?: string): unknown => (p ? jsonPathGet(record, p) : undefined);
+
+    const input = read(map.input_tokens);
+    const output = read(map.output_tokens);
+    const cacheRead = read(map.cache_read_tokens);
+    const cacheCreation = read(map.cache_creation_tokens);
+    const reasoning = read(map.reasoning_tokens);
+    if (
+        input === undefined && output === undefined && cacheRead === undefined
+        && cacheCreation === undefined && reasoning === undefined
+    ) return null;
+
+    const modelRaw = read(map.model);
+    const usage = makeUsage({
+        inputTokens: input,
+        outputTokens: output,
+        cacheReadTokens: cacheRead,
+        cacheCreationTokens: cacheCreation,
+        reasoningTokens: reasoning,
+        model: typeof modelRaw === 'string' ? modelRaw : undefined,
+    });
+
+    const parsedTs = map.timestamp_ms ? parseTimestamp(read(map.timestamp_ms)) : null;
+    return {
+        ...usage,
+        mode: map.mode === 'cumulative' ? 'cumulative' : 'delta',
+        receivedAt: parsedTs == null ? sourceMtimeMs : parsedTs,
     };
 }
 

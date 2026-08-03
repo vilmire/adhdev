@@ -18,6 +18,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import {
+  foldUsageRecords,
+  makeUsage,
+  type NativeUsageRecord,
+  type SessionUsageTotals,
+} from './usage-normalize.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -46,6 +52,8 @@ export interface NativeHistorySession {
   sourceMtimeMs: number;
   nativeHistoryCoverage: 'full';
   workspace?: string;
+  /** Token totals, omitted when the rollout records no token_count events. */
+  usage?: SessionUsageTotals;
 }
 
 export interface NativeHistorySessionMeta {
@@ -198,6 +206,56 @@ function pushAssistantStandardMessage(
 }
 
 /**
+ * Extract token usage from a codex `token_count` event payload.
+ *
+ * Shape: `payload.info.total_token_usage = { input_tokens,
+ * cached_input_tokens, output_tokens, reasoning_output_tokens, total_tokens }`.
+ *
+ * Two field-level traps, both observed in live rollouts:
+ *
+ *  1. `info` is frequently `null` — codex emits a bare `token_count` carrying
+ *     only `rate_limits` (a quota refresh with no token delta). Those lines
+ *     must yield no record at all, not a zeroed one.
+ *  2. `total_token_usage` is CUMULATIVE session-to-date and is re-reported in
+ *     full on every turn, so it is tagged `cumulative` and folded by
+ *     last-wins. `last_token_usage` (the per-turn delta) sits right beside it;
+ *     reading BOTH and summing would double-count, so only the cumulative
+ *     total is taken.
+ *
+ *  Also note `input_tokens` here is INCLUSIVE of `cached_input_tokens` (unlike
+ *  claude, where they are disjoint). The cached portion is subtracted out so
+ *  `inputTokens` means the same thing — uncached input — across providers.
+ */
+function extractCodexUsage(
+  payload: Record<string, unknown>,
+  receivedAt: number,
+): NativeUsageRecord | null {
+  const info = payload.info;
+  if (!info || typeof info !== 'object' || Array.isArray(info)) return null;
+
+  const totals = (info as Record<string, unknown>).total_token_usage;
+  if (!totals || typeof totals !== 'object' || Array.isArray(totals)) return null;
+  const t = totals as Record<string, unknown>;
+
+  const rawInput = Number(t.input_tokens);
+  const cached = Number(t.cached_input_tokens);
+  const uncachedInput = Number.isFinite(rawInput) && Number.isFinite(cached)
+    ? Math.max(0, rawInput - cached)
+    : rawInput;
+
+  const usage = makeUsage({
+    inputTokens: uncachedInput,
+    outputTokens: t.output_tokens,
+    cacheReadTokens: t.cached_input_tokens,
+    // Codex reports no cache-creation dimension.
+    cacheCreationTokens: 0,
+    reasoningTokens: t.reasoning_output_tokens,
+  });
+
+  return { ...usage, mode: 'cumulative', receivedAt };
+}
+
+/**
  * Read the first line of a Codex JSONL session file and parse the session_meta record.
  * Returns the payload object (containing id, cwd, etc.) or null.
  */
@@ -223,12 +281,13 @@ function parseSessionFile(
   filePath: string,
   sessionId: string,
   workspaceFallback?: string,
-): NativeHistoryMessage[] {
+): { messages: NativeHistoryMessage[]; usageRecords: NativeUsageRecord[] } {
   let raw: string;
-  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
+  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return { messages: [], usageRecords: [] }; }
 
   const lines = raw.split('\n').filter(Boolean);
   const records: NativeHistoryMessage[] = [];
+  const usageRecords: NativeUsageRecord[] = [];
   let fallbackTs = Date.now();
   let detectedWorkspace = typeof workspaceFallback === 'string' ? workspaceFallback.trim() : '';
 
@@ -250,7 +309,7 @@ function parseSessionFile(
     if (type === 'session_meta') {
       // Validate session identity — if the meta reports a different id, bail out
       const metaId = String(payload.id ?? '').trim();
-      if (metaId && metaId !== sessionId) return [];
+      if (metaId && metaId !== sessionId) return { messages: [], usageRecords: [] };
 
       const metaWorkspace = String(payload.cwd ?? '').trim();
       if (!detectedWorkspace && metaWorkspace) detectedWorkspace = metaWorkspace;
@@ -290,6 +349,9 @@ function parseSessionFile(
           flattenCodexContent(payload.message),
           detectedWorkspace,
         );
+      } else if (payloadType === 'token_count') {
+        const usageRecord = extractCodexUsage(payload, receivedAt);
+        if (usageRecord) usageRecords.push(usageRecord);
       }
       continue;
     }
@@ -350,7 +412,7 @@ function parseSessionFile(
     }
   }
 
-  return records;
+  return { messages: records, usageRecords };
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -386,13 +448,13 @@ export function readSession(sessionPath: string): NativeHistorySession | null {
 
   const workspaceFallback = typeof meta?.cwd === 'string' ? meta.cwd : undefined;
   const sourceMtimeMs = statMtimeMs(sessionPath);
-  const messages = parseSessionFile(sessionPath, sessionId, workspaceFallback);
+  const { messages, usageRecords } = parseSessionFile(sessionPath, sessionId, workspaceFallback);
   if (messages.length === 0) return null;
 
   const firstSystem = messages.find((m) => m.kind === 'session_start');
   const workspace = firstSystem?.workspace || firstSystem?.content || undefined;
 
-  return {
+  const session: NativeHistorySession = {
     messages,
     providerSessionId: sessionId,
     source: 'provider-native',
@@ -401,6 +463,13 @@ export function readSession(sessionPath: string): NativeHistorySession | null {
     nativeHistoryCoverage: 'full',
     workspace,
   };
+  if (usageRecords.length > 0) {
+    session.usage = foldUsageRecords(usageRecords, {
+      providerSessionId: sessionId,
+      agent: 'codex-cli',
+    });
+  }
+  return session;
 }
 
 /**
@@ -447,7 +516,7 @@ export async function listSessions(watchPath: string): Promise<NativeHistorySess
 
       const workspaceFallback = typeof meta?.cwd === 'string' ? meta.cwd : undefined;
       const sourceMtimeMs = statMtimeMs(entryPath);
-      const messages = parseSessionFile(entryPath, sessionId, workspaceFallback);
+      const { messages } = parseSessionFile(entryPath, sessionId, workspaceFallback);
       const visible = messages.filter((m) => m.kind !== 'session_start');
       if (visible.length === 0) continue;
 

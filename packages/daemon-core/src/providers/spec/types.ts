@@ -147,6 +147,18 @@ export interface NativeHistoryJsonlSource {
     records?: Array<{ where?: string; message_map: NativeHistoryMessageMap }>;
     message_filter?: { where: string };
     /**
+     * Token-usage extraction. Usage lines are NOT messages — kimi writes
+     * `type=="usage.record"` rows carrying only token counts, which the
+     * `records[]` message matchers deliberately drop — so they are matched and
+     * projected separately here and surfaced on `result.usage` instead of in
+     * `messages`. Absent → no usage is read and behaviour is unchanged.
+     *
+     * `mode` declares the accumulation semantics (see usage-normalize):
+     * `delta` sums across records, `cumulative` takes the newest. kimi tags its
+     * records `usageScope:"turn"`, i.e. `delta`.
+     */
+    usage_records?: Array<{ where?: string; usage_map: NativeHistoryUsageMap }>;
+    /**
      * Fallback workspace attribution when the transcript carries no
      * `session_meta` cwd record. Some stores (cursor-agent) do NOT write a
      * session_meta line and keep the workspace only in the on-disk project-slug
@@ -195,6 +207,32 @@ export interface NativeHistorySqliteSource {
      */
     session_cluster_query?: string;
     message_map: NativeHistoryMessageMap;
+}
+
+/**
+ * Projection of one on-disk usage record onto the normalized token fields.
+ *
+ * Each entry is a jsonpath-lite path (the same `$.a.b` syntax `message_map`
+ * uses) into the record. Every token path is optional: a provider that does not
+ * report a dimension simply omits it and that field folds in as 0.
+ */
+export interface NativeHistoryUsageMap {
+    /** Accumulation semantics of this record shape. Defaults to 'delta'. */
+    mode?: 'delta' | 'cumulative';
+    /** Non-cached input tokens. */
+    input_tokens?: string;
+    /** Generated output tokens. */
+    output_tokens?: string;
+    /** Input tokens served from cache. */
+    cache_read_tokens?: string;
+    /** Input tokens written into the cache. */
+    cache_creation_tokens?: string;
+    /** Reasoning/thinking tokens, when reported separately. */
+    reasoning_tokens?: string;
+    /** Model identifier this usage is attributed to. */
+    model?: string;
+    /** Epoch-ms timestamp of the observation. */
+    timestamp_ms?: string;
 }
 
 export interface NativeHistoryMessageMap {
