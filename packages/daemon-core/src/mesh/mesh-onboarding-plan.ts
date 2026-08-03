@@ -27,6 +27,8 @@ export type MeshOnboardingOperation = 'auto' | 'add_existing' | 'clone_worktree'
 export type MeshOnboardingErrorCode =
     | 'not_git_repository'
     | 'remote_not_found'
+    | 'remote_not_selected'
+    | 'no_commits_for_local_identity'
     | 'ambiguous_remotes'
     | 'detached_head'
     | 'unsafe_branch'
@@ -245,6 +247,34 @@ async function discoverRemotes(repoRoot: string, currentBranch: string): Promise
     };
 }
 
+/**
+ * Derive a stable identity for a repository that has no usable remote.
+ *
+ * A remote URL is only a convenience for inferring identity; a repository whose
+ * history exists locally is already uniquely identified by its root commit. The
+ * `local/` prefix keeps the value inside the `host/path` shape that
+ * `normalizeRepoIdentity` round-trips unchanged, and cannot collide with a real
+ * hostname.
+ *
+ * Repositories built by merging unrelated histories have several root commits,
+ * and `git rev-list` does not order them stably across branches or checkout
+ * order, so the roots are sorted and the lexicographically first one is taken.
+ *
+ * Returns '' when the repository has no commits: there is nothing stable to
+ * derive from yet, and silently falling back to a path or UUID would change the
+ * identity once the first commit lands, orphaning the mesh.
+ */
+async function deriveLocalRepoIdentity(repoRoot: string): Promise<string> {
+    const raw = await git(repoRoot, ['rev-list', '--max-parents=0', 'HEAD'], true);
+    const roots = raw
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => /^[0-9a-f]{40}$/i.test(line))
+        .sort();
+    const root = roots[0];
+    return root ? `local/${root.toLowerCase()}` : '';
+}
+
 async function resolveDefaultBranch(repoRoot: string, remoteName: string, currentBranch: string): Promise<string> {
     const symbolic = await git(repoRoot, ['symbolic-ref', '--quiet', '--short', `refs/remotes/${remoteName}/HEAD`], true);
     if (symbolic.startsWith(`${remoteName}/`)) return symbolic.slice(remoteName.length + 1);
@@ -339,12 +369,39 @@ async function discoverGit(workspaceInput: string): Promise<MeshOnboardingDiscov
     }
 
     const remoteDiscovery = await discoverRemotes(repoRoot, currentBranch);
-    if (!remoteDiscovery.remotes.length || !remoteDiscovery.selectedRemote) {
+
+    // A repository with no remote at all is still a complete mesh participant:
+    // identity falls back to the local root commit. Remotes that exist but do
+    // not yield a canonical choice are a different, operator-resolvable problem
+    // and must not be reported as "no remote is configured".
+    if (!remoteDiscovery.remotes.length) {
+        const localIdentity = await deriveLocalRepoIdentity(repoRoot);
+        if (!localIdentity) {
+            return failure(
+                'no_commits_for_local_identity',
+                'This repository has no remote and no commits, so a stable repository identity cannot be derived.',
+                'Create at least one commit (the root commit becomes the local identity), or pass an explicit repo identity when creating the mesh.',
+                { discovery: partial },
+            );
+        }
+        const localDefaultBranch = await resolveDefaultBranch(repoRoot, '', currentBranch);
+        return {
+            ...partial,
+            remotes: [],
+            origin: undefined,
+            upstream: undefined,
+            selectedRemote: '',
+            repoIdentity: localIdentity,
+            defaultBranch: localDefaultBranch,
+        } as MeshOnboardingDiscovery;
+    }
+    if (!remoteDiscovery.selectedRemote) {
+        const detail = remoteDiscovery.remotes.map(remote => remote.name).join(', ');
         return failure(
-            'remote_not_found',
-            'No Git remote is configured, so a stable repository identity cannot be inferred.',
-            'Add a canonical remote (normally origin), or keep using the explicit mesh_create API with a reviewed repo identity.',
-            { discovery: partial },
+            'remote_not_selected',
+            `No canonical remote could be selected among multiple remotes (${detail}).`,
+            'Name one of them origin or upstream, set the current branch to track one of them, or pass an explicit repo identity when creating the mesh.',
+            { discovery: { ...partial, remotes: remoteDiscovery.remotes, origin: remoteDiscovery.origin, upstream: remoteDiscovery.upstream } },
         );
     }
     if (remoteDiscovery.ambiguous) {

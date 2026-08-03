@@ -166,6 +166,118 @@ describe('planMeshOnboarding', () => {
         expect(result.action).toMatch(/canonical remote/i);
     });
 
+    it('derives a local/<root-sha> identity for a repository with no remote', async () => {
+        const repo = mkdtempSync(join(tmpdir(), 'mesh-plan-local-only-'));
+        roots.push(repo);
+        run(repo, ['init', '-b', 'main']);
+        run(repo, ['config', 'user.email', 'mesh-test@example.com']);
+        run(repo, ['config', 'user.name', 'Mesh Test']);
+        writeFileSync(join(repo, 'README.md'), '# local only\n');
+        run(repo, ['add', 'README.md']);
+        run(repo, ['commit', '-m', 'initial']);
+
+        const rootCommit = run(repo, ['rev-list', '--max-parents=0', 'HEAD']);
+        const result = await planMeshOnboarding({ workspace: repo, meshes: [] });
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+        expect(result.discovery.repoIdentity).toBe(`local/${rootCommit}`);
+        expect(result.discovery.remotes).toEqual([]);
+        expect(result.discovery.selectedRemote).toBe('');
+        expect(result.discovery.defaultBranch).toBe('main');
+        expect(result.plan.kind).toBe('create_mesh_and_onboard');
+        // The identity must survive the normalizer unchanged, otherwise mesh
+        // membership matching would never find the mesh it just created.
+        expect(normalizeRepoIdentity(result.discovery.repoIdentity)).toBe(result.discovery.repoIdentity);
+    });
+
+    it('matches an existing local-identity mesh, proving the derived identity round-trips', async () => {
+        const repo = mkdtempSync(join(tmpdir(), 'mesh-plan-local-match-'));
+        roots.push(repo);
+        run(repo, ['init', '-b', 'main']);
+        run(repo, ['config', 'user.email', 'mesh-test@example.com']);
+        run(repo, ['config', 'user.name', 'Mesh Test']);
+        writeFileSync(join(repo, 'README.md'), '# local match\n');
+        run(repo, ['add', 'README.md']);
+        run(repo, ['commit', '-m', 'initial']);
+
+        const rootCommit = run(repo, ['rev-list', '--max-parents=0', 'HEAD']);
+        const result = await planMeshOnboarding({
+            workspace: repo,
+            meshes: [mesh(`local/${rootCommit}`, undefined, 'mesh_local')],
+        });
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+        expect(result.plan.kind).toBe('add_existing_workspace');
+        expect(result.compatibleMesh?.id).toBe('mesh_local');
+    });
+
+    it('derives a deterministic identity for a multi-root repository', async () => {
+        const repo = mkdtempSync(join(tmpdir(), 'mesh-plan-multi-root-'));
+        roots.push(repo);
+        run(repo, ['init', '-b', 'main']);
+        run(repo, ['config', 'user.email', 'mesh-test@example.com']);
+        run(repo, ['config', 'user.name', 'Mesh Test']);
+        writeFileSync(join(repo, 'a.txt'), 'a\n');
+        run(repo, ['add', 'a.txt']);
+        run(repo, ['commit', '-m', 'first history']);
+        // Second independent history, merged in: the repository now has two
+        // root commits and `git rev-list` does not order them stably.
+        run(repo, ['checkout', '--orphan', 'second']);
+        run(repo, ['rm', '-rf', '--cached', '.']);
+        rmSync(join(repo, 'a.txt'), { force: true });
+        writeFileSync(join(repo, 'b.txt'), 'b\n');
+        run(repo, ['add', 'b.txt']);
+        run(repo, ['commit', '-m', 'second history']);
+        run(repo, ['checkout', 'main']);
+        run(repo, ['merge', '--allow-unrelated-histories', '-m', 'merge histories', 'second']);
+
+        const allRoots = run(repo, ['rev-list', '--max-parents=0', 'HEAD']).split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+        expect(allRoots.length).toBeGreaterThan(1);
+        const expected = `local/${[...allRoots].sort()[0]}`;
+
+        const first = await planMeshOnboarding({ workspace: repo, meshes: [] });
+        const second = await planMeshOnboarding({ workspace: repo, meshes: [] });
+        expect(first.success).toBe(true);
+        expect(second.success).toBe(true);
+        if (!first.success || !second.success) return;
+        expect(first.discovery.repoIdentity).toBe(expected);
+        // Repeated calls must agree, independent of branch/checkout ordering.
+        expect(second.discovery.repoIdentity).toBe(first.discovery.repoIdentity);
+    });
+
+    it('fails closed for a repository with no remote and no commits', async () => {
+        const repo = mkdtempSync(join(tmpdir(), 'mesh-plan-empty-'));
+        roots.push(repo);
+        run(repo, ['init', '-b', 'main']);
+        run(repo, ['config', 'user.email', 'mesh-test@example.com']);
+        run(repo, ['config', 'user.name', 'Mesh Test']);
+        const result = await planMeshOnboarding({ workspace: repo, meshes: [] });
+        expect(result.success).toBe(false);
+        if (result.success) return;
+        expect(result.code).toBe('no_commits_for_local_identity');
+        expect(result.action).toMatch(/commit/i);
+    });
+
+    it('reports unselectable remotes separately from a missing remote', async () => {
+        const repo = mkdtempSync(join(tmpdir(), 'mesh-plan-unselectable-'));
+        roots.push(repo);
+        run(repo, ['init', '-b', 'main']);
+        run(repo, ['config', 'user.email', 'mesh-test@example.com']);
+        run(repo, ['config', 'user.name', 'Mesh Test']);
+        writeFileSync(join(repo, 'README.md'), '# unselectable\n');
+        run(repo, ['add', 'README.md']);
+        run(repo, ['commit', '-m', 'initial']);
+        // Two remotes, neither named origin/upstream and neither tracked, so no
+        // canonical remote can be chosen. This is not "no remote configured".
+        run(repo, ['remote', 'add', 'alpha', 'https://github.com/acme/project.git']);
+        run(repo, ['remote', 'add', 'beta', 'https://github.com/acme/project.git']);
+        const result = await planMeshOnboarding({ workspace: repo, meshes: [] });
+        expect(result.success).toBe(false);
+        if (result.success) return;
+        expect(result.code).toBe('remote_not_selected');
+        expect(result.error).toMatch(/alpha/);
+    });
+
     it('returns a typed non-git error', async () => {
         const dir = mkdtempSync(join(tmpdir(), 'mesh-plan-nongit-'));
         roots.push(dir);
