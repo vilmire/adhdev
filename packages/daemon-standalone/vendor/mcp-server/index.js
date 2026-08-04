@@ -2032,7 +2032,7 @@ var STALE_ASSIGNED_QUEUE_MS = 30 * 6e4;
 var OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 6e4;
 var ACTIVE_QUEUE_STATUSES = /* @__PURE__ */ new Set(["pending", "assigned"]);
 var HISTORICAL_QUEUE_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
-function buildQueueLivenessIndex(mesh) {
+function buildQueueLivenessIndex(mesh, liveVerifiedNodes) {
   const nodeIds = /* @__PURE__ */ new Set();
   const nodeSessionIds = /* @__PURE__ */ new Map();
   for (const node of Array.isArray(mesh?.nodes) ? mesh.nodes : []) {
@@ -2042,20 +2042,33 @@ function buildQueueLivenessIndex(mesh) {
     const sessions = collectNodeSessionIds(node);
     if (sessions.size > 0) nodeSessionIds.set(nodeId, sessions);
   }
-  return { nodeIds, nodeSessionIds };
+  const verifiedLiveNodeIds = /* @__PURE__ */ new Set();
+  for (const node of Array.isArray(liveVerifiedNodes) ? liveVerifiedNodes : []) {
+    if (node?.__liveProbeVerified !== true) continue;
+    const nodeId = readString(node.id) || readString(node.nodeId) || readString(node.node_id);
+    if (!nodeId) continue;
+    verifiedLiveNodeIds.add(nodeId);
+    nodeSessionIds.set(nodeId, collectNodeSessionIds(node));
+  }
+  return { nodeIds, nodeSessionIds, verifiedLiveNodeIds };
 }
+var SESSION_LIVENESS_STARTUP_GRACE_MS = 2 * 6e4;
 function queueAssignmentStaleReason(task, liveness) {
   if (task?.status !== "assigned") return void 0;
   const nodeId = readString(task.assignedNodeId) || readString(task.nodeId) || readString(task.node_id) || readString(task.targetNodeId);
   const sessionId = readString(task.assignedSessionId) || readString(task.sessionId) || readString(task.session_id) || readString(task.targetSessionId);
+  const updatedAt = new Date(task.updatedAt).getTime();
+  const ageMs = Number.isFinite(updatedAt) ? Date.now() - updatedAt : null;
   if (nodeId && liveness.nodeIds.size > 0 && !liveness.nodeIds.has(nodeId)) {
     return "assigned node is not present in the current mesh snapshot";
   }
   if (nodeId && sessionId && liveness.nodeSessionIds.has(nodeId) && !liveness.nodeSessionIds.get(nodeId).has(sessionId)) {
-    return "assigned session is not live on the assigned node";
+    const verifiedByProbe = liveness.verifiedLiveNodeIds.size === 0 || liveness.verifiedLiveNodeIds.has(nodeId);
+    const pastStartupGrace = ageMs === null || ageMs >= SESSION_LIVENESS_STARTUP_GRACE_MS;
+    if (verifiedByProbe && pastStartupGrace) {
+      return "assigned session is not live on the assigned node";
+    }
   }
-  const updatedAt = new Date(task.updatedAt).getTime();
-  const ageMs = Number.isFinite(updatedAt) ? Date.now() - updatedAt : null;
   if (!nodeId && ageMs !== null && ageMs >= STALE_ASSIGNED_QUEUE_MS) {
     return "assigned task has no assigned node metadata";
   }
@@ -2231,8 +2244,8 @@ function compactActiveWorkRecords(records) {
   const capped = records.slice(0, COMPACT_MAX_ACTIVE_WORK_ROWS).map(compactActiveWorkRecord);
   return { records: capped, omitted: Math.max(0, records.length - capped.length) };
 }
-function annotateQueueStaleness(queue, mesh) {
-  const liveness = buildQueueLivenessIndex(mesh);
+function annotateQueueStaleness(queue, mesh, liveVerifiedNodes) {
+  const liveness = buildQueueLivenessIndex(mesh, liveVerifiedNodes);
   const now = Date.now();
   return queue.map((task) => {
     const taskStatus = typeof task?.status === "string" ? task.status : void 0;
@@ -3306,6 +3319,14 @@ async function collectLiveStatusSessions(ctx, node) {
     return [];
   }
 }
+async function collectLiveStatusSessionsVerified(ctx, node) {
+  try {
+    const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
+    return { sessions: extractStatusMetadataSessions(statusResult), verified: true };
+  } catch {
+    return { sessions: [], verified: false };
+  }
+}
 async function collectLiveStatusProbe(ctx, node) {
   try {
     const statusResult = await commandForNode(ctx, node, "get_status_metadata", {}, { statusProbe: true });
@@ -3334,6 +3355,16 @@ async function collectMeshViewQueueNodesWithLiveSessions(ctx) {
   const nodes = await Promise.all(ctx.mesh.nodes.map(async (node) => {
     const liveSessions = await collectLiveStatusSessions(ctx, node);
     return liveSessions.length > 0 ? { ...node, sessions: liveSessions } : node;
+  }));
+  return nodes;
+}
+async function collectMeshViewQueueNodesWithLiveSessionsVerified(ctx) {
+  const nodes = await Promise.all(ctx.mesh.nodes.map(async (node) => {
+    const { sessions: liveSessions, verified } = await collectLiveStatusSessionsVerified(ctx, node);
+    if (verified) {
+      return { ...node, sessions: liveSessions, __liveProbeVerified: true };
+    }
+    return { ...node, __liveProbeVerified: false };
   }));
   return nodes;
 }
@@ -4470,12 +4501,12 @@ async function meshViewQueue(ctx, args) {
       const depState = (0, import_daemon_core4.describeTaskDependencyState)(task, statusById);
       return { ...task, ...depState };
     });
-    const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh));
+    const liveNodes = await collectMeshViewQueueNodesWithLiveSessionsVerified(ctx);
+    const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh, liveNodes));
     const queue = filterQueueForView(fullQueue, view, statusFilter);
     const summary = buildQueueStatusSummary(fullQueue);
     const visibleSummary = buildQueueStatusSummary(queue);
     const maintenance = buildQueueMaintenanceReport(fullQueue);
-    const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
     let ledgerEntries = (0, import_daemon_core4.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
     let directDispatches = (0, import_daemon_core4.getActiveDirectDispatches)(ctx.mesh.id);
     const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, directDispatches, ledgerEntries);
