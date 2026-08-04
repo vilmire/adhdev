@@ -1883,7 +1883,23 @@ function summarizeCompactSubmodules(submodules) {
     ...outOfSync.length > 0 ? { outOfSyncPaths: outOfSync } : {}
   };
 }
-var MESH_COMPACT_PRESERVED_MARKER_FIELDS = ["dataFreshness"];
+var MESH_COMPACT_PRESERVED_MARKER_FIELDS = ["dataFreshness", "quota"];
+function summarizeNodeQuota(quota) {
+  if (!quota || typeof quota !== "object" || Array.isArray(quota)) return void 0;
+  const out = {};
+  for (const [provider, snapshot] of Object.entries(quota)) {
+    if (!snapshot || typeof snapshot !== "object") continue;
+    const status = typeof snapshot.status === "string" ? snapshot.status : "unknown";
+    if (status !== "ok") {
+      const kind = typeof snapshot.metadata?.failureKind === "string" ? snapshot.metadata.failureKind : void 0;
+      out[provider] = kind ? `${status}:${kind}` : status;
+      continue;
+    }
+    const pct = (w) => w && Number.isFinite(w.usedPercent) ? `${Math.round(w.usedPercent)}%` : "\u2014";
+    out[provider] = `${pct(snapshot.session)}/${pct(snapshot.weekly)}`;
+  }
+  return Object.keys(out).length > 0 ? out : void 0;
+}
 function compactMeshStatusNode(entry) {
   if (!entry || typeof entry !== "object") return entry;
   const next = { ...entry };
@@ -1920,6 +1936,11 @@ function compactMeshStatusNode(entry) {
       isDaemonAffecting: b.isDaemonAffecting !== false,
       seeStaleDaemonBuilds: true
     };
+  }
+  if (next.quota !== void 0) {
+    const summary = summarizeNodeQuota(next.quota);
+    if (summary) next.quota = summary;
+    else delete next.quota;
   }
   delete next.capabilityTagsByProvider;
   const elideSkip = /* @__PURE__ */ new Set(["git", "machine", "branchConvergence", "staleDaemonBuild", "sessions", ...MESH_COMPACT_PRESERVED_MARKER_FIELDS]);
@@ -2770,6 +2791,13 @@ function extractSubmodules(value, ignorePaths) {
   if (ignorePaths.length === 0) return subs;
   const ignoreSet = new Set(ignorePaths);
   return subs.filter((s) => s?.path && !ignoreSet.has(s.path));
+}
+function extractReporterNodeFactsQuota(value) {
+  const payload = unwrapCommandPayload(value);
+  const facts = payload?.reporterNodeFacts ?? value?.reporterNodeFacts;
+  const quota = facts?.quota;
+  if (!quota || typeof quota !== "object" || Array.isArray(quota)) return void 0;
+  return Object.keys(quota).length > 0 ? quota : void 0;
 }
 function assignFullGitSnapshot(entry, status) {
   if (!status || typeof status !== "object" || Array.isArray(status)) return;
@@ -3742,6 +3770,8 @@ async function meshStatus(ctx, args = {}) {
       if (status?.daemonBuildBehind && typeof status.daemonBuildBehind === "object") {
         entry.staleDaemonBuild = status.daemonBuildBehind;
       }
+      const reportedQuota = extractReporterNodeFactsQuota(statusResult);
+      if (reportedQuota) entry.quota = reportedQuota;
       const submodules = extractSubmodules(statusResult, node.policy?.submoduleIgnorePaths || []);
       if (submodules && submodules.some((s) => s?.outOfSync)) {
         entry.submoduleWarning = "One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.";
