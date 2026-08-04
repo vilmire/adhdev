@@ -1963,6 +1963,23 @@ export async function collectLiveStatusSessions(ctx: MeshContext, node: LocalMes
     }
 }
 
+// Same probe as collectLiveStatusSessions, but distinguishes "probe succeeded and
+// found zero sessions" from "probe failed/timed out" — collectLiveStatusSessions
+// collapses both to `[]`, which is fine for its callers (fall back to the persisted
+// snapshot either way) but is NOT safe as staleness evidence: a failed probe must
+// never be treated as proof a session is gone.
+async function collectLiveStatusSessionsVerified(
+    ctx: MeshContext,
+    node: LocalMeshNodeEntry,
+): Promise<{ sessions: any[]; verified: boolean }> {
+    try {
+        const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {});
+        return { sessions: extractStatusMetadataSessions(statusResult), verified: true };
+    } catch {
+        return { sessions: [], verified: false };
+    }
+}
+
 
 /**
  * One get_status_metadata probe → both the live session list and the daemon's
@@ -2008,6 +2025,25 @@ export async function collectMeshViewQueueNodesWithLiveSessions(ctx: MeshContext
         return liveSessions.length > 0
             ? { ...node, sessions: liveSessions }
             : node;
+    }));
+    return nodes;
+}
+
+// Variant of collectMeshViewQueueNodesWithLiveSessions that additionally stamps each
+// node with `__liveProbeVerified` so a caller (annotateQueueStaleness's optional
+// liveVerifiedNodes param) can tell a confirmed-empty probe apart from a failed one.
+// Purely additive: node.sessions merge behavior is identical to the unverified
+// variant, so existing shape/consumers of the node object are unaffected.
+export async function collectMeshViewQueueNodesWithLiveSessionsVerified(ctx: MeshContext): Promise<any[]> {
+    const nodes = await Promise.all(ctx.mesh.nodes.map(async (node) => {
+        const { sessions: liveSessions, verified } = await collectLiveStatusSessionsVerified(ctx, node);
+        if (verified) {
+            // A verified probe (even a confirmed-empty one) is authoritative — replace
+            // the node's session field rather than leaving a stale persisted array
+            // behind for a caller that keys off __liveProbeVerified to trust it.
+            return { ...node, sessions: liveSessions, __liveProbeVerified: true };
+        }
+        return { ...node, __liveProbeVerified: false };
     }));
     return nodes;
 }

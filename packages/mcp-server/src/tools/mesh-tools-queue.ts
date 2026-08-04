@@ -19,7 +19,7 @@ import {
     buildQueueStatusSummary,
     buildQueueTriggerGuidance,
     cancelTask,
-    collectMeshViewQueueNodesWithLiveSessions,
+    collectMeshViewQueueNodesWithLiveSessionsVerified,
     compactActiveWorkRecords,
     compactQueueRow,
     compactQueueRows,
@@ -395,12 +395,20 @@ export async function meshViewQueue(
             const depState = describeTaskDependencyState(task, statusById);
             return { ...task, ...depState };
         });
-        const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh));
+        // Live-probe nodes BEFORE judging staleness so the staleness check can be
+        // corroborated by verified-live evidence instead of only the (possibly stale
+        // itself) persisted mesh snapshot — see annotateQueueStaleness's
+        // liveVerifiedNodes param. Probe failures never count as evidence of absence
+        // (queueAssignmentStaleReason only trusts nodes the probe actually verified).
+        // The verified variant's node shape is a superset of the plain one (adds
+        // __liveProbeVerified; sessions merge identically), so it's reused below for
+        // dispatch reconciliation / active-work evidence instead of probing twice.
+        const liveNodes = await collectMeshViewQueueNodesWithLiveSessionsVerified(ctx);
+        const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh, liveNodes));
         const queue = filterQueueForView(fullQueue, view, statusFilter);
         const summary = buildQueueStatusSummary(fullQueue);
         const visibleSummary = buildQueueStatusSummary(queue);
         const maintenance = buildQueueMaintenanceReport(fullQueue);
-        const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
         let ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
         let directDispatches = getActiveDirectDispatches(ctx.mesh.id);
         const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, directDispatches, ledgerEntries);

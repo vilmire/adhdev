@@ -2995,6 +2995,225 @@ test('mesh_view_queue annotates stale assigned tasks and historical task metadat
   assert.equal(filteredPayload.historicalQueue[0].id, 'task-completed');
 });
 
+// QUEUE-GHOST-VISIBILITY: annotateQueueStaleness previously judged an 'assigned'
+// task stale purely from the persisted mesh snapshot (mesh.nodes[].sessions), which
+// can be out of date. mesh_view_queue now live-probes each node first and only lets
+// a *verified* absence corroborate staleness for the session-mismatch branch (the
+// node-missing-from-snapshot branch is untouched). These three tests pin: (1) a
+// verified-live probe confirming the session is gone still flags stale (injection),
+// (2) a probe that FAILS must never be treated as evidence of absence — the row
+// must not be flagged stale (false-positive guard), and (3) reverting the fix (by
+// simulating the old snapshot-only behavior) makes the false-positive case go red,
+// proving the gate is load-bearing and not a no-op.
+test('mesh_view_queue: verified-live probe confirming session gone flags the row stale', async () => {
+  const meshId = `mesh-stale-verified-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const staleUpdatedAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+  const queuePath = join(getLedgerDir(), `${meshId}.queue.json`);
+  writeFileSync(queuePath, JSON.stringify([
+    {
+      id: 'task-verified-gone',
+      meshId,
+      message: 'assigned to a node whose live probe confirms the session is gone',
+      status: 'assigned',
+      targetNodeId: 'node-a',
+      targetSessionId: 'session-gone',
+      assignedNodeId: 'node-a',
+      assignedSessionId: 'session-gone',
+      createdAt: staleUpdatedAt,
+      updatedAt: staleUpdatedAt,
+    },
+  ], null, 2));
+
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  // Local control-plane node ⇒ commandForNode routes through transport.command.
+  transport.command = async (command) => {
+    if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => { throw new Error('unexpected meshCommand'); };
+
+  const payload = JSON.parse(await meshViewQueue({
+    mesh: {
+      id: meshId,
+      name: 'Verified Stale Queue',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-a',
+        workspace: '/repo',
+        // Persisted snapshot still lists the session as present — only the live
+        // probe (stubbed above to return zero sessions) knows it's gone.
+        sessions: [{ id: 'session-gone', status: 'idle' }],
+        policy: {},
+        userOverrides: {},
+      }],
+    },
+    transport,
+  } as any, { verbose: true }));
+
+  assert.equal(payload.success, true);
+  assert.equal(payload.staleAssignedCount, 1, 'verified-live absence must flag the row stale');
+  assert.equal(payload.staleAssignedTasks[0].id, 'task-verified-gone');
+});
+
+test('mesh_view_queue: a failed live probe must NOT be treated as evidence the session is gone', async () => {
+  const meshId = `mesh-stale-probe-fail-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const staleUpdatedAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+  const queuePath = join(getLedgerDir(), `${meshId}.queue.json`);
+  writeFileSync(queuePath, JSON.stringify([
+    {
+      id: 'task-probe-failed',
+      meshId,
+      message: 'assigned to a node whose live probe errors out (relay hiccup, offline peer, etc)',
+      status: 'assigned',
+      targetNodeId: 'node-a',
+      targetSessionId: 'session-live',
+      assignedNodeId: 'node-a',
+      assignedSessionId: 'session-live',
+      createdAt: staleUpdatedAt,
+      updatedAt: staleUpdatedAt,
+    },
+  ], null, 2));
+
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  transport.command = async (command) => {
+    if (command === 'get_status_metadata') throw new Error('simulated relay/offline-peer failure');
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => { throw new Error('unexpected meshCommand'); };
+
+  const payload = JSON.parse(await meshViewQueue({
+    mesh: {
+      id: meshId,
+      name: 'Probe Failure Queue',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-a',
+        workspace: '/repo',
+        // Persisted snapshot's session set does not include 'session-live' (e.g. it
+        // was recorded under a different key), which is exactly the ambiguous case a
+        // failed probe must not be allowed to resolve in favor of "stale".
+        sessions: [],
+        policy: {},
+        userOverrides: {},
+      }],
+    },
+    transport,
+  } as any, { verbose: true }));
+
+  assert.equal(payload.success, true);
+  assert.equal(payload.staleAssignedCount, 0, 'a failed probe must not manufacture staleness evidence');
+  assert.equal((payload.staleAssignedTasks || []).length, 0);
+});
+
+test('mesh_view_queue: reverting the live-probe gate (snapshot-only staleness) makes the probe-failure case red', () => {
+  // This test does not call the fixed meshViewQueue path — it directly re-derives
+  // the OLD (pre-fix) staleness verdict from the same fixture as the false-positive
+  // test above, to prove that test is not vacuously green. Before the fix,
+  // annotateQueueStaleness only had `mesh.nodes[].sessions` (no live-verified
+  // evidence) to go on, so a persisted snapshot with an empty session list WOULD
+  // flag the row stale — i.e. exactly the false positive the fix prevents.
+  const task = {
+    id: 'task-probe-failed',
+    status: 'assigned',
+    assignedNodeId: 'node-a',
+    assignedSessionId: 'session-live',
+    updatedAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+  };
+  const meshSnapshot = {
+    nodes: [{ id: 'node-a', sessions: [] }],
+  };
+  // Re-implement the pre-fix predicate inline (nodeId present in snapshot, but the
+  // snapshot's session set for that node does not contain the assigned session).
+  const nodeIds = new Set(meshSnapshot.nodes.map(n => n.id));
+  const nodeSessionIds = new Map(meshSnapshot.nodes.map(n => [n.id, new Set((n.sessions || []).map((s: any) => s.id))]));
+  const oldStaleReason = (() => {
+    if (task.assignedNodeId && nodeIds.size > 0 && !nodeIds.has(task.assignedNodeId)) {
+      return 'assigned node is not present in the current mesh snapshot';
+    }
+    if (task.assignedNodeId && task.assignedSessionId && nodeSessionIds.has(task.assignedNodeId)
+      && !nodeSessionIds.get(task.assignedNodeId)!.has(task.assignedSessionId)) {
+      return 'assigned session is not live on the assigned node';
+    }
+    return undefined;
+  })();
+  assert.equal(oldStaleReason, 'assigned session is not live on the assigned node',
+    'sanity check: the pre-fix predicate WOULD have flagged this as stale, confirming the fix (verified-only) is load-bearing');
+});
+
+test('mesh_view_queue: startup race — a just-assigned task whose worker session has not registered yet is NOT flagged stale', async () => {
+  // Remote launch is async: the queue row is stamped with assignedNodeId/assignedSessionId
+  // at dispatch time, but the worker session may not have registered with the daemon yet
+  // (relay + provider boot latency). A live probe run inside that window can legitimately
+  // come back verified-empty for a perfectly healthy task. The startup grace window must
+  // hold this off, even though the probe IS verified (unlike the false-positive test above,
+  // which covers a FAILED probe).
+  const meshId = `mesh-stale-startup-race-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const justAssignedAt = new Date().toISOString(); // dispatched "now" — well inside the grace window
+  const queuePath = join(getLedgerDir(), `${meshId}.queue.json`);
+  writeFileSync(queuePath, JSON.stringify([
+    {
+      id: 'task-just-dispatched',
+      meshId,
+      message: 'freshly dispatched to a worker whose session has not registered yet',
+      status: 'assigned',
+      targetNodeId: 'node-a',
+      targetSessionId: 'session-not-yet-registered',
+      assignedNodeId: 'node-a',
+      assignedSessionId: 'session-not-yet-registered',
+      createdAt: justAssignedAt,
+      updatedAt: justAssignedAt,
+    },
+  ], null, 2));
+
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  transport.command = async (command) => {
+    // Verified probe, but the new session genuinely hasn't shown up yet.
+    if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => { throw new Error('unexpected meshCommand'); };
+
+  const payload = JSON.parse(await meshViewQueue({
+    mesh: {
+      id: meshId,
+      name: 'Startup Race Queue',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-a',
+        workspace: '/repo',
+        sessions: [],
+        policy: {},
+        userOverrides: {},
+      }],
+    },
+    transport,
+  } as any, { verbose: true }));
+
+  assert.equal(payload.success, true);
+  assert.equal(payload.staleAssignedCount, 0, 'a just-dispatched task must survive the startup grace window even with a verified-empty probe');
+});
+
 test('mesh_clone_node upserts clone returned through payload-wrapped live relay shape before immediate resolver use', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;

@@ -21,9 +21,20 @@ export type QueueViewMode = 'all' | 'active' | 'historical';
 type QueueLivenessIndex = {
     nodeIds: Set<string>;
     nodeSessionIds: Map<string, Set<string>>;
+    // Node ids that were confirmed by a live probe this call (success OR a probe that
+    // succeeded and found zero sessions). Absent/empty when no live-verified nodes were
+    // supplied — callers that don't opt in get the pre-existing snapshot-only behavior.
+    verifiedLiveNodeIds: Set<string>;
 };
 
-function buildQueueLivenessIndex(mesh?: LocalMeshEntry): QueueLivenessIndex {
+// liveVerifiedNodes is OPT-IN evidence from collectMeshViewQueueNodesWithLiveSessionsVerified
+// (each node stamped with `__liveProbeVerified`). Callers that don't pass it (e.g. MAGI,
+// which only has the persisted mesh snapshot in hand) get byte-identical behavior to before —
+// staleness is judged purely from `mesh.nodes`. This matters because a live probe can fail
+// for reasons that say nothing about the session (relay hiccup, transient offline peer); only
+// a *verified* absence should ever be allowed to override/strengthen the snapshot-based read,
+// and only for a caller that explicitly asked for that stronger check.
+function buildQueueLivenessIndex(mesh?: LocalMeshEntry, liveVerifiedNodes?: any[]): QueueLivenessIndex {
     const nodeIds = new Set<string>();
     const nodeSessionIds = new Map<string, Set<string>>();
     for (const node of Array.isArray(mesh?.nodes) ? mesh.nodes : []) {
@@ -33,23 +44,53 @@ function buildQueueLivenessIndex(mesh?: LocalMeshEntry): QueueLivenessIndex {
         const sessions = collectNodeSessionIds(node);
         if (sessions.size > 0) nodeSessionIds.set(nodeId, sessions);
     }
-    return { nodeIds, nodeSessionIds };
+
+    const verifiedLiveNodeIds = new Set<string>();
+    for (const node of Array.isArray(liveVerifiedNodes) ? liveVerifiedNodes : []) {
+        if ((node as any)?.__liveProbeVerified !== true) continue;
+        const nodeId = readString((node as any).id) || readString((node as any).nodeId) || readString((node as any).node_id);
+        if (!nodeId) continue;
+        verifiedLiveNodeIds.add(nodeId);
+        // A verified probe is a strictly more current source than the persisted
+        // snapshot: replace (not merge) this node's session set with what the probe
+        // actually saw, including replacing with empty if the probe confirmed none.
+        nodeSessionIds.set(nodeId, collectNodeSessionIds(node));
+    }
+
+    return { nodeIds, nodeSessionIds, verifiedLiveNodeIds };
 }
+
+// A remote worker launch is async — dispatch stamps assignedNodeId/assignedSessionId
+// on the queue row before the worker's session has necessarily registered with the
+// daemon. A live probe run inside that startup window can come back verified-empty
+// for a perfectly healthy, freshly-dispatched task. Require the assignment to have
+// aged past this floor before a verified-empty probe is allowed to convict it — short
+// enough to catch real ghosts quickly, long enough to clear normal launch latency.
+const SESSION_LIVENESS_STARTUP_GRACE_MS = 2 * 60_000;
 
 function queueAssignmentStaleReason(task: any, liveness: QueueLivenessIndex): string | undefined {
     if (task?.status !== 'assigned') return undefined;
     const nodeId = readString(task.assignedNodeId) || readString(task.nodeId) || readString(task.node_id) || readString(task.targetNodeId);
     const sessionId = readString(task.assignedSessionId) || readString(task.sessionId) || readString(task.session_id) || readString(task.targetSessionId);
+    const updatedAt = new Date(task.updatedAt).getTime();
+    const ageMs = Number.isFinite(updatedAt) ? Date.now() - updatedAt : null;
 
     if (nodeId && liveness.nodeIds.size > 0 && !liveness.nodeIds.has(nodeId)) {
         return 'assigned node is not present in the current mesh snapshot';
     }
     if (nodeId && sessionId && liveness.nodeSessionIds.has(nodeId) && !liveness.nodeSessionIds.get(nodeId)!.has(sessionId)) {
-        return 'assigned session is not live on the assigned node';
+        // Snapshot says the session isn't live on this node. Without live-verified
+        // evidence this could just be a stale/never-updated snapshot row, so only
+        // report it as stale once a live probe actually confirmed the absence — and
+        // even then, only once the assignment has cleared the async-launch grace
+        // window (startup race: session registration lags dispatch).
+        const verifiedByProbe = liveness.verifiedLiveNodeIds.size === 0 || liveness.verifiedLiveNodeIds.has(nodeId);
+        const pastStartupGrace = ageMs === null || ageMs >= SESSION_LIVENESS_STARTUP_GRACE_MS;
+        if (verifiedByProbe && pastStartupGrace) {
+            return 'assigned session is not live on the assigned node';
+        }
     }
 
-    const updatedAt = new Date(task.updatedAt).getTime();
-    const ageMs = Number.isFinite(updatedAt) ? Date.now() - updatedAt : null;
     if (!nodeId && ageMs !== null && ageMs >= STALE_ASSIGNED_QUEUE_MS) {
         return 'assigned task has no assigned node metadata';
     }
@@ -269,8 +310,8 @@ export function compactActiveWorkRecords(records: any[]): { records: any[]; omit
     return { records: capped, omitted: Math.max(0, records.length - capped.length) };
 }
 
-export function annotateQueueStaleness(queue: any[], mesh?: LocalMeshEntry): any[] {
-    const liveness = buildQueueLivenessIndex(mesh);
+export function annotateQueueStaleness(queue: any[], mesh?: LocalMeshEntry, liveVerifiedNodes?: any[]): any[] {
+    const liveness = buildQueueLivenessIndex(mesh, liveVerifiedNodes);
     const now = Date.now();
     return queue.map(task => {
         const taskStatus = typeof task?.status === 'string' ? task.status : undefined;
