@@ -169,12 +169,28 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Build order follows the @adhdev dependency graph, because the typecheck
+      # steps below resolve workspace imports through each package's published
+      # `types`/`exports` — i.e. through its dist/, not its src/. A package whose
+      # dependency was never built fails with TS2307 "Cannot find module".
+      #
+      # terminal-mux-{core,control} are built here for exactly that reason:
+      # without them "Typecheck @adhdev/terminal-mux-cli" and
+      # "Typecheck @adhdev/daemon-standalone" both fail on TS2307. This is
+      # invisible locally (and to Refinery, which runs from the root worktree)
+      # because dist/ already exists there — it only reproduces in a clean
+      # checkout, which is what CI is.
+      #
+      # Order: session-host-core → terminal-mux-core → terminal-mux-control
+      # (mux-core needs session-host-core; mux-control needs both).
       - name: Build packages required for tests
         run: |
           npm run build -w packages/session-host-core
           npm run build -w packages/session-host-daemon
           npm run build -w packages/mesh-shared
           npm run build -w packages/daemon-core
+          npm run build -w packages/terminal-mux-core
+          npm run build -w packages/terminal-mux-control
 
       - name: Test @adhdev/mesh-shared
         run: npm run test -w packages/mesh-shared
