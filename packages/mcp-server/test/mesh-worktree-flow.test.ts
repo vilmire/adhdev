@@ -3510,8 +3510,18 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
   assert.equal(directCalls[1].args.action, 'send_chat');
   assert.equal(directCalls[1].args.message, 'run targeted task');
 
+  // MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT (oss a79686f2): recordDirectDispatchTask now
+  // runs for every direct dispatch, not just mission-attributed ones, so it materialises
+  // one row for this task. The point of this assertion is that the task was DISPATCHED
+  // directly rather than left for the queue to assign, so assert that shape rather than
+  // an empty queue: the row is already 'assigned' to the target session and nothing is
+  // sitting in 'pending' awaiting a claim.
   const queued = getQueue(meshId);
-  assert.equal(queued.length, 0);
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].id, result.taskId);
+  assert.equal(queued[0].status, 'assigned');
+  assert.equal(queued[0].assignedSessionId, 'session-hermes');
+  assert.equal(queued.filter((entry: any) => entry.status === 'pending').length, 0);
 });
 
 test('local IPC mesh_send_task rejects coordinator session as worker target', async () => {

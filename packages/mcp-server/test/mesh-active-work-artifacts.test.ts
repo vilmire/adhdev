@@ -16,6 +16,7 @@ const SELF_MACHINE_ID = loadConfig().machineId;
 import { __clearDirectDispatchesForTests, __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
 import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
+import { recordTurnAck, recordTurnStage } from '../../daemon-core/src/mesh/mesh-turn-ledger.js';
 
 function cleanupMesh(meshId: string): void {
   __clearMeshQueueForTests(meshId);
@@ -250,18 +251,69 @@ test('direct mesh_send_task is visible as source=direct active work in status an
     assert.equal(send.source, 'direct');
     assert.equal(typeof send.taskId, 'string');
 
-    const status = JSON.parse(await meshStatus(ctx as any));
-    const direct = status.activeWork.find((entry: any) => entry.source === 'direct' && entry.taskId === send.taskId);
+    // MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT (oss a79686f2): every direct dispatch now
+    // opens a turn attempt at 'accepted' and immediately ACKs it 'delivered', exactly as
+    // the queue path does. The reducer projection outranks the live session point sample
+    // (mesh-active-work.ts `turnOverlay?.status || liveStatus`), so a freshly dispatched
+    // task reads 'assigned' even though the mocked session already reports 'generating' —
+    // the transport handed off the prompt, but the worker has not yet echoed progress.
+    const dispatched = JSON.parse(await meshStatus(ctx as any));
+    const direct = dispatched.activeWork.find((entry: any) => entry.source === 'direct' && entry.taskId === send.taskId);
     assert.ok(direct, 'expected direct task in mesh_status.activeWork');
     assert.equal(direct.nodeId, 'node-remote');
     assert.equal(direct.sessionId, 'sess-direct');
     assert.equal(direct.providerType, 'hermes-cli');
-    assert.equal(direct.status, 'generating');
+    assert.equal(direct.status, 'assigned');
+    assert.equal(direct.turnStage, 'delivered');
+    assert.equal(typeof direct.attemptId, 'string');
+    assert.ok(!direct.attemptId.startsWith('legacy-'), 'the attempt must be a real opened attempt, not a legacy fallback row');
     assert.equal(direct.taskTitle, 'Implement direct active work visibility');
     assert.equal(typeof direct.elapsedMs, 'number');
+    assert.equal(dispatched.activeWorkSummary.directActiveCount, 1);
+    // No worker progress yet, so there is no generating work to warn about.
+    assert.equal(dispatched.activeWorkSummary.generatingCount, 0);
+    assert.equal(dispatched.pollingGuidance, undefined);
+
+    // The worker consumes the prompt and then echoes progress. The FSM forbids
+    // delivered → generating (a turn cannot start before the prompt was consumed),
+    // so this is the real worker sequence, not a shortcut. Once the attempt reaches
+    // 'generating' the projection flips and arms the anti-polling guidance.
+    const consumed = recordTurnAck({
+      meshId,
+      taskId: send.taskId,
+      kind: 'consumed',
+      attemptId: direct.attemptId,
+      sessionId: 'sess-direct',
+    });
+    assert.equal(consumed?.stage, 'consumed', 'the prompt-consumed ACK must advance the attempt');
+    const advanced = recordTurnStage({
+      meshId,
+      taskId: send.taskId,
+      stage: 'generating',
+      attemptId: direct.attemptId,
+      sessionId: 'sess-direct',
+    });
+    assert.equal(advanced?.applied, true, 'the generating progress echo must be applied to the open attempt');
+
+    const status = JSON.parse(await meshStatus(ctx as any));
+    const generating = status.activeWork.find((entry: any) => entry.source === 'direct' && entry.taskId === send.taskId);
+    assert.ok(generating, 'expected direct task to remain visible after the progress echo');
+    assert.equal(generating.status, 'generating');
+    assert.equal(generating.turnStage, 'generating');
+    assert.equal(generating.attemptId, direct.attemptId, 'the progress echo must not mint a new attempt');
     assert.equal(status.activeWorkSummary.directActiveCount, 1);
+    // recordDirectDispatchTask materialises an `assigned` QUEUE row for the same taskId
+    // alongside the direct-dispatch record, so one dispatch projects two activeWork rows
+    // that share a single attempt. This is long-standing behaviour of the mission-attributed
+    // path — a79686f2 only extended it to mission-less dispatches — so generatingCount counts
+    // both. Pinned explicitly so a future de-duplication has to update this expectation
+    // deliberately rather than silently halving a count nobody was asserting.
+    const rowsForTask = status.activeWork.filter((entry: any) => entry.taskId === send.taskId);
+    assert.deepEqual(rowsForTask.map((entry: any) => entry.source).sort(), ['direct', 'queue']);
+    assert.equal(rowsForTask.every((entry: any) => entry.status === 'generating'), true);
+    assert.equal(new Set(rowsForTask.map((entry: any) => entry.attemptId)).size, 1, 'both projections must share the one opened attempt');
     assert.equal(status.pollingGuidance.activeGeneratingWork, true);
-    assert.equal(status.pollingGuidance.generatingCount, 1);
+    assert.equal(status.pollingGuidance.generatingCount, rowsForTask.length);
     assert.match(status.pollingGuidance.message, /Do not repeatedly poll mesh_status\/mesh_view_queue\/mesh_read_chat/i);
     assert.match(status.pollingGuidance.nextRecommendedAction, /wait for pendingCoordinatorEvents|completion events/i);
     assert.doesNotMatch(status.pollingGuidance.nextRecommendedAction, /mesh_read_chat once/i);
@@ -273,7 +325,7 @@ test('direct mesh_send_task is visible as source=direct active work in status an
     assert.equal(activeView.visibleHistoricalCount, 0);
     assert.ok(activeView.activeWork.some((entry: any) => entry.source === 'direct' && entry.taskId === send.taskId));
     assert.equal(activeView.pollingGuidance.activeGeneratingWork, true);
-    assert.equal(activeView.pollingGuidance.generatingCount, 1);
+    assert.equal(activeView.pollingGuidance.generatingCount, rowsForTask.length);
     assert.match(activeView.pollingGuidance.message, /Do not repeatedly poll mesh_status\/mesh_view_queue\/mesh_read_chat/i);
     assert.match(activeView.pollingGuidance.nextRecommendedAction, /wait for pendingCoordinatorEvents|completion events/i);
     assert.doesNotMatch(activeView.pollingGuidance.nextRecommendedAction, /mesh_read_chat once/i);
@@ -310,10 +362,11 @@ test('leak #2: compact activeWork drops the triple-echoed task prompt; verbose k
     // A short title survives for recognition, capped at 80 chars.
     assert.equal(typeof row.taskTitle, 'string');
     assert.ok(row.taskTitle.length <= 81, `taskTitle must be capped (<=80+ellipsis); got ${row.taskTitle.length}`);
-    // Dispatch scalars preserved.
+    // Dispatch scalars preserved. No progress echo yet, so the attempt is still at
+    // delivered and the reducer projects 'assigned' (see the note in the test above).
     assert.equal(row.nodeId, 'node-remote');
     assert.equal(row.sessionId, 'sess-direct');
-    assert.equal(row.status, 'generating');
+    assert.equal(row.status, 'assigned');
     assert.equal(typeof compact.activeWorkHint, 'string');
     // The 5KB prompt must NOT appear anywhere in the compact payload.
     assert.equal(compactStr.includes(longPrompt), false, 'compact must not carry the full delegation prompt');
