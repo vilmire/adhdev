@@ -209,6 +209,12 @@ jobs:
       - name: Test @adhdev/web-standalone
         run: npm run test -w packages/web-standalone
 
+      # Dual runner: `node --import tsx --test test/*.test.ts && vitest run`.
+      # Both halves must pass — the node:test half covers session-host stop and
+      # CLI arg handling, the vitest half covers the HTTP surfaces.
+      - name: Test @adhdev/daemon-standalone
+        run: npm run test -w packages/daemon-standalone
+
       - name: Typecheck @adhdev/daemon-core
         run: npm run typecheck -w packages/daemon-core
 
@@ -226,6 +232,9 @@ jobs:
 
       - name: Typecheck @adhdev/terminal-render-web
         run: npm run typecheck -w packages/terminal-render-web
+
+      - name: Typecheck @adhdev/daemon-standalone
+        run: npm run typecheck -w packages/daemon-standalone
 
   publish:
     needs: [build, test]

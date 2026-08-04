@@ -68,22 +68,63 @@ function writePidFile(homeDir: string, pid: number): string {
   return pidFile
 }
 
+type KillCall = [number, NodeJS.Signals | number | undefined]
+
+/**
+ * Install a `process.kill` mock that models the real kernel contract rather
+ * than blanket-returning `true`.
+ *
+ * This matters because `stopManagedSessionHostProcess` probes liveness with
+ * `process.kill(pid, 0)` after the SIGTERM and RETAINS the pidfile when the
+ * process is still alive (daemon-core `7096da10`). Signal 0 delivers nothing —
+ * it is purely an existence/permission check — and it THROWS `ESRCH` once the
+ * process is gone. A mock that always returns `true` therefore claims every pid
+ * is immortal, which is precisely the state the retention branch exists for,
+ * and no test could ever observe an ordinary successful stop.
+ *
+ * `survivesSigterm` picks which of the two real outcomes to stage:
+ *   - `false` (default): SIGTERM works, the pid is then dead, signal 0 throws
+ *     ESRCH, and the pidfile is deleted — the ordinary stop.
+ *   - `true`: the pid outlives SIGTERM, signal 0 succeeds, and the pidfile is
+ *     kept so the next `ensureReady` stale-host guard can still see the zombie.
+ */
+function mockProcessKill(
+  t: TestContext,
+  options: { survivesSigterm?: boolean } = {},
+): KillCall[] {
+  const survivesSigterm = options.survivesSigterm ?? false
+  const killCalls: KillCall[] = []
+  const dead = new Set<number>()
+
+  t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
+    killCalls.push([pid, signal])
+    if (dead.has(pid)) {
+      const error: NodeJS.ErrnoException = new Error(`kill ESRCH`)
+      error.code = 'ESRCH'
+      error.errno = -3
+      error.syscall = 'kill'
+      throw error
+    }
+    // Signal 0 is a probe: it reports existence and never terminates.
+    if (signal !== 0 && !survivesSigterm) dead.add(pid)
+    return true
+  }) as typeof process.kill)
+
+  return killCalls
+}
+
 test('stopSessionHost only targets the current namespace pid file and does not sweep unrelated session-host processes', async (t) => {
   const homeDir = makeTempHome()
   pinTempInstance(t, homeDir)
 
   const { stopSessionHost } = await importSessionHostModule()
   const execCalls: Array<[string, string[]]> = []
-  const killCalls: Array<[number, NodeJS.Signals | number | undefined]> = []
 
   t.mock.method(childProcessModule, 'execFileSync', (((command: string, args: readonly string[] = []) => {
     execCalls.push([command, [...args]])
     throw new Error('unexpected execFileSync call')
   }) as unknown) as typeof childProcessModule.execFileSync)
-  t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
-    killCalls.push([pid, signal])
-    return true
-  }) as typeof process.kill)
+  const killCalls = mockProcessKill(t)
 
   assert.equal(stopSessionHost(), false)
   assert.deepEqual(execCalls, [])
@@ -96,16 +137,37 @@ test('stopSessionHost still stops the pid-file-owned process for the current nam
   const pidFile = writePidFile(homeDir, 5151)
 
   const { stopSessionHost } = await importSessionHostModule()
-  const killCalls: Array<[number, NodeJS.Signals | number | undefined]> = []
-
-  t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
-    killCalls.push([pid, signal])
-    return true
-  }) as typeof process.kill)
+  const killCalls = mockProcessKill(t)
 
   assert.equal(stopSessionHost(), true)
-  assert.deepEqual(killCalls, [[5151, 'SIGTERM']])
+  // SIGTERM to terminate, then signal 0 to check whether it actually died.
+  assert.deepEqual(killCalls, [
+    [5151, 'SIGTERM'],
+    [5151, 0],
+  ])
+  // The pid died, so nothing is left to track and the pidfile is removed.
   assert.equal(fs.existsSync(pidFile), false)
+})
+
+test('stopSessionHost keeps the pid file when the host outlives SIGTERM', async (t) => {
+  // The D1 stale-prefix guard in ensureReady() is entered ONLY via
+  // getPid() !== null, so deleting the pidfile of a survivor is what let a
+  // zombie session-host hold the socket across every restart with nothing
+  // tracking it. A host that ignores SIGTERM must stay visible to that guard.
+  const homeDir = makeTempHome()
+  pinTempInstance(t, homeDir)
+  const pidFile = writePidFile(homeDir, 7171)
+
+  const { stopSessionHost } = await importSessionHostModule()
+  const killCalls = mockProcessKill(t, { survivesSigterm: true })
+
+  assert.equal(stopSessionHost(), true)
+  assert.deepEqual(killCalls, [
+    [7171, 'SIGTERM'],
+    [7171, 0],
+  ])
+  assert.equal(fs.existsSync(pidFile), true)
+  assert.equal(fs.readFileSync(pidFile, 'utf8').trim(), '7171')
 })
 
 test('stopSessionHost pid-file stop is repeatable back-to-back in the same process', async (t) => {
@@ -114,16 +176,19 @@ test('stopSessionHost pid-file stop is repeatable back-to-back in the same proce
   const pidFile = writePidFile(homeDir, 6161)
 
   const { stopSessionHost } = await importSessionHostModule()
-  const killCalls: Array<[number, NodeJS.Signals | number | undefined]> = []
-
-  t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
-    killCalls.push([pid, signal])
-    return true
-  }) as typeof process.kill)
+  const killCalls = mockProcessKill(t)
 
   assert.equal(stopSessionHost(), true)
-  assert.deepEqual(killCalls, [[6161, 'SIGTERM']])
+  assert.deepEqual(killCalls, [
+    [6161, 'SIGTERM'],
+    [6161, 0],
+  ])
   assert.equal(fs.existsSync(pidFile), false)
+
+  // Second call: the pidfile is gone, so there is nothing left to signal.
+  killCalls.length = 0
+  assert.equal(stopSessionHost(), false)
+  assert.deepEqual(killCalls, [])
 })
 
 test('stopSessionHost with no pid file still returns false after a pid-file scenario ran first', async (t) => {
@@ -131,12 +196,7 @@ test('stopSessionHost with no pid file still returns false after a pid-file scen
   pinTempInstance(t, homeDir)
 
   const { stopSessionHost } = await importSessionHostModule()
-  const killCalls: Array<[number, NodeJS.Signals | number | undefined]> = []
-
-  t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
-    killCalls.push([pid, signal])
-    return true
-  }) as typeof process.kill)
+  const killCalls = mockProcessKill(t)
 
   assert.equal(stopSessionHost(), false)
   assert.deepEqual(killCalls, [])
@@ -164,14 +224,13 @@ test('stopSessionHost ignores a hostile inherited config dir/home even after it 
   })
 
   const { stopSessionHost } = await importSessionHostModule()
-  const killCalls: Array<[number, NodeJS.Signals | number | undefined]> = []
-  t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
-    killCalls.push([pid, signal])
-    return true
-  }) as typeof process.kill)
+  const killCalls = mockProcessKill(t)
 
   assert.equal(stopSessionHost(), true)
-  assert.deepEqual(killCalls, [[4242, 'SIGTERM']])
+  assert.deepEqual(killCalls, [
+    [4242, 'SIGTERM'],
+    [4242, 0],
+  ])
   assert.equal(fs.existsSync(hostilePidFile), false)
 
   // Phase 2: pin an isolated temp instance (the same reset every test performs)
@@ -189,6 +248,9 @@ test('stopSessionHost ignores a hostile inherited config dir/home even after it 
   killCalls.length = 0
 
   assert.equal(stopSessionHost(), true)
-  assert.deepEqual(killCalls, [[5151, 'SIGTERM']])
+  assert.deepEqual(killCalls, [
+    [5151, 'SIGTERM'],
+    [5151, 0],
+  ])
   assert.equal(fs.existsSync(pidFile), false)
 })
