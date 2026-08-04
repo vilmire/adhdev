@@ -23,6 +23,44 @@ export interface MeshNodeFactsDaemonBuild {
     builtAt?: string
 }
 
+/**
+ * One rolling quota window, structurally identical to daemon-core's
+ * `QuotaWindow`. Redeclared here rather than imported because this package is a
+ * dependency-free leaf (see the header of index.ts) and must never import
+ * daemon-core — the dependency arrow points the other way. daemon-core's
+ * richer type stays assignable to this one, so the producer passes its snapshot
+ * straight through with no mapping layer to drift.
+ */
+export interface MeshNodeFactsQuotaWindow {
+    usedPercent: number
+    windowMinutes: number
+    resetsAt: number | null
+}
+
+/**
+ * A provider's quota snapshot as reported by the node that owns the credentials.
+ *
+ * `status` is the field that matters to a reader: 'ok' means the windows are
+ * usable, anything else means they are not. A node that CANNOT read a quota
+ * still reports an entry (status 'unavailable'/'error' + metadata.failureKind)
+ * rather than omitting the provider — an absent entry means "this node never
+ * told us", a present failing entry means "this node looked and could not
+ * tell", and a reader that cannot distinguish those two cannot diagnose
+ * anything. Extra provider-specific fields (buckets, monthly) ride through via
+ * the index signature.
+ */
+export interface MeshNodeFactsProviderQuota {
+    provider: string
+    status: string
+    session: MeshNodeFactsQuotaWindow | null
+    weekly: MeshNodeFactsQuotaWindow | null
+    /** Unix ms of the snapshot itself — older than the bundle's reportedAt. */
+    updatedAt: number
+    error: string | null
+    metadata?: { failureKind?: string; source?: string; planType?: string | null; [extra: string]: unknown }
+    [extra: string]: unknown
+}
+
 export interface MeshNodeFacts {
     schemaVersion: number
     reportedAt: number
@@ -31,6 +69,17 @@ export interface MeshNodeFacts {
     platform?: string
     arch?: string
     machineNickname?: string
+    /**
+     * Per-provider quota snapshots, keyed by QuotaProvider id ('claude-cli',
+     * 'codex-cli', 'kimi'). OBSERVATION ONLY — nothing routes on this yet.
+     *
+     * Freshness is `Date.now() - reportedAt` (the bundle stamp) plus each
+     * entry's own `updatedAt`; there is deliberately NO ttl/expiry field here,
+     * because refresh cadence is owned by the reporting node and the delivery
+     * cadence by whoever calls git_status. Neither end is in a position to
+     * assert a TTL, so readers judge age themselves.
+     */
+    quota?: Record<string, MeshNodeFactsProviderQuota>
     /** Future fields ride through opaquely — do not enumerate them in relays. */
     [extra: string]: unknown
 }

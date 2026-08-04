@@ -40,6 +40,7 @@ import type { IdeProviderInstance } from '../providers/ide-provider-instance.js'
 import { createDefaultGitCommandServices } from '../git/git-commands.js';
 import { setupMeshEventForwarding } from '../mesh/mesh-events.js';
 import { setupMeshReconcileLoop } from '../mesh/mesh-reconcile-loop.js';
+import { setupQuotaRefreshLoop } from '../quota/refresh.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
 import { applyProcessHardening } from './process-hardening.js';
@@ -141,6 +142,11 @@ export interface DaemonComponents {
     // single-model (queue + polling) delivery: drains the pending-events queue
     // on a fixed interval and injects into live CLI coordinators when idle.
     meshReconcileLoop?: { stop(): void };
+    // Periodic provider-quota refresh handle. Fills the in-memory quota cache
+    // that buildLocalNodeFacts READS (never fetches from) so quota rides the
+    // node-facts bundle without charging a codex app-server spawn to every
+    // git_status. Skips ticks entirely while this machine is idle.
+    quotaRefreshLoop?: { stop(): void };
     // Canonical status/daemon identity (e.g. `standalone_<machineId>` /
     // `daemon_<machineId>`). This is the SAME id the MCP layer stamps as a
     // worker's meshCoordinatorDaemonId (ctx.localDaemonId, sourced from
@@ -468,6 +474,10 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // old spontaneous-forward push paths.
     setupMeshEventForwarding(components);
     components.meshReconcileLoop = setupMeshReconcileLoop(components);
+    // 11b. Periodic quota refresh (observation only — nothing routes on it).
+    // Writes the cache that buildLocalNodeFacts reads; the builder never
+    // fetches, so mesh_status stays as cheap as it was.
+    components.quotaRefreshLoop = setupQuotaRefreshLoop(components);
 
     // 12. Resume any refine jobs that were interrupted by a previous daemon restart.
     setImmediate(() => void router.resumePendingRefineJobsOnStartup());
@@ -516,13 +526,14 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     const {
         poller, cdpInitializer, agentStreamManager,
         cliManager, instanceManager, cdpManagers,
-        meshReconcileLoop,
+        meshReconcileLoop, quotaRefreshLoop,
     } = components;
 
     // 1. Stop timers
     poller.stop();
     cdpInitializer.stop();
     try { meshReconcileLoop?.stop(); } catch { /* noop */ }
+    try { quotaRefreshLoop?.stop(); } catch { /* noop */ }
 
     // 2. Dispose agent stream
     try {

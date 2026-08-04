@@ -13,7 +13,19 @@
 
 import type { MeshNodeFacts } from '@adhdev/mesh-shared';
 import { getDaemonBuildInfo } from '../build-info.js';
+import { readQuotaCache } from '../quota/refresh.js';
 
+/**
+ * ★PERFORMANCE CONTRACT: this function must stay CHEAP and SYNCHRONOUS.
+ *
+ * It runs inside every `git_status`, and `mesh_status` probes git_status on
+ * every node on every call. Quota therefore comes from a cache the refresh loop
+ * fills on its own timer (`../quota/refresh.js`) — reading it is a map lookup.
+ * NEVER call a quota fetcher (or any other spawn/network/fs work) from here:
+ * the codex fetcher alone spawns a `codex app-server` child (~900ms), which
+ * would be charged to every node of every mesh_status. Regression test:
+ * test/mesh/node-facts-quota.test.ts asserts zero fetcher calls.
+ */
 export function buildLocalNodeFacts(deps?: {
     providerVersions?: Record<string, string> | null;
     machineNickname?: string | null;
@@ -42,6 +54,17 @@ export function buildLocalNodeFacts(deps?: {
     const machineNickname = typeof deps?.machineNickname === 'string' && deps.machineNickname.trim()
         ? deps.machineNickname.trim()
         : undefined;
+    // Cache READ only — see the performance contract above. Undefined until the
+    // refresh loop's first tick, which is the honest report: absent `quota`
+    // means "this node has not told us", distinct from a present entry whose
+    // status is 'unavailable' ("it looked and could not read one").
+    const quota = (() => {
+        try {
+            return readQuotaCache();
+        } catch {
+            return undefined; // facts stamp is best-effort observability
+        }
+    })();
     return {
         schemaVersion: 1,
         reportedAt: Date.now(),
@@ -50,5 +73,6 @@ export function buildLocalNodeFacts(deps?: {
         platform: process.platform,
         arch: process.arch,
         ...(machineNickname ? { machineNickname } : {}),
+        ...(quota ? { quota } : {}),
     };
 }

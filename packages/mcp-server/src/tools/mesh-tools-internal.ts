@@ -1146,6 +1146,25 @@ export function extractSubmodules(value: any, ignorePaths: string[]): any[] | un
     return subs.filter((s: any) => s?.path && !ignoreSet.has(s.path));
 }
 
+/**
+ * Pull the reported provider-quota map out of a git_status response.
+ *
+ * Quota rides `reporterNodeFacts` — the versioned node-facts bundle the
+ * reporting daemon ships wholesale. Only this ONE field is read out here; the
+ * bundle itself must keep travelling opaquely through relays (deploy-lag
+ * visibility design §a), so this is a read, never a rebuild. Returns undefined
+ * for a reporter that predates the field, which the caller renders as "this
+ * node never told us" — distinct from a reported entry whose status is a
+ * failure.
+ */
+export function extractReporterNodeFactsQuota(value: any): Record<string, any> | undefined {
+    const payload = unwrapCommandPayload(value);
+    const facts = payload?.reporterNodeFacts ?? value?.reporterNodeFacts;
+    const quota = facts?.quota;
+    if (!quota || typeof quota !== 'object' || Array.isArray(quota)) return undefined;
+    return Object.keys(quota).length > 0 ? quota : undefined;
+}
+
 export function assignFullGitSnapshot(entry: Record<string, unknown>, status: any): void {
     if (!status || typeof status !== 'object' || Array.isArray(status)) return;
     entry.git = status;

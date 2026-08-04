@@ -46,6 +46,19 @@ export {
     type QuotaSpawn,
 } from './fetchers/deps.js';
 
+export {
+    QUOTA_ACTIVITY_WINDOW_MS,
+    QUOTA_REFRESH_INTERVAL_MS,
+    clearQuotaCache,
+    hasRecentCliActivity,
+    readQuotaCache,
+    refreshQuotaCacheOnce,
+    setupQuotaRefreshLoop,
+    startQuotaRefreshLoop,
+    type QuotaRefreshLoopHandle,
+    type QuotaRefreshLoopOptions,
+} from './refresh.js';
+
 export { fetchKimiQuota } from './fetchers/kimi.js';
 export { fetchCodexQuota } from './fetchers/codex.js';
 export { fetchClaudeQuota, STALE_AFTER_MS } from './fetchers/claude.js';

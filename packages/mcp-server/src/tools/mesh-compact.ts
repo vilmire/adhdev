@@ -61,7 +61,38 @@ function summarizeCompactSubmodules(submodules: any): Record<string, unknown> | 
 // was silently dropped by the allowlist-based minimal stub, so it read null on
 // exactly the quiet nodes a coordinator most needs the marker for. Add a new marker
 // field HERE once and both fold paths preserve it; never hand-list it in two places.
-const MESH_COMPACT_PRESERVED_MARKER_FIELDS = ['dataFreshness'] as const;
+const MESH_COMPACT_PRESERVED_MARKER_FIELDS = ['dataFreshness', 'quota'] as const;
+
+/**
+ * Fold a node's reported quota bundle into a terse per-provider marker.
+ *
+ * OBSERVATION ONLY — nothing routes on this; it exists so a coordinator can see
+ * which machine still has headroom before deciding where to send work by hand.
+ *
+ * Compact shape is one short string per provider ("38%/12%" = session/weekly,
+ * or a bare status word when the node could not read one) because the raw
+ * bundle is ~4 nested objects per provider and would cost more bytes on every
+ * node than the whole rest of the compact entry. A provider that FAILED still
+ * appears, carrying its failureKind: "this node looked and could not tell" is a
+ * different diagnosis from "this node never reported", and collapsing the two
+ * into an absent key would destroy exactly the distinction worth having.
+ */
+export function summarizeNodeQuota(quota: any): Record<string, string> | undefined {
+    if (!quota || typeof quota !== 'object' || Array.isArray(quota)) return undefined;
+    const out: Record<string, string> = {};
+    for (const [provider, snapshot] of Object.entries(quota as Record<string, any>)) {
+        if (!snapshot || typeof snapshot !== 'object') continue;
+        const status = typeof snapshot.status === 'string' ? snapshot.status : 'unknown';
+        if (status !== 'ok') {
+            const kind = typeof snapshot.metadata?.failureKind === 'string' ? snapshot.metadata.failureKind : undefined;
+            out[provider] = kind ? `${status}:${kind}` : status;
+            continue;
+        }
+        const pct = (w: any): string => (w && Number.isFinite(w.usedPercent) ? `${Math.round(w.usedPercent)}%` : '—');
+        out[provider] = `${pct(snapshot.session)}/${pct(snapshot.weekly)}`;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+}
 
 // Compact-mode per-node fold for mesh_status. The dashboard/verbose payload
 // (`results`) is untouched; this only slims the LLM-facing node copy. It folds
@@ -125,6 +156,13 @@ export function compactMeshStatusNode(entry: any): any {
             isDaemonAffecting: b.isDaemonAffecting !== false,
             seeStaleDaemonBuilds: true,
         };
+    }
+
+    // Quota folds to one short string per provider; the full bundle stays in verbose.
+    if (next.quota !== undefined) {
+        const summary = summarizeNodeQuota(next.quota);
+        if (summary) next.quota = summary;
+        else delete next.quota;
     }
 
     // branchConvergence is kept intact for detailed compact nodes (it carries the

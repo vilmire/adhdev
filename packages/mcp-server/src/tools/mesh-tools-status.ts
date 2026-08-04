@@ -30,6 +30,7 @@ import {
     countUncommittedChanges,
     drainCoordinatorPendingEvents,
     extractGitStatus,
+    extractReporterNodeFactsQuota,
     extractSubmodules,
     getActiveDirectDispatches,
     getLatestActiveLaunchFailure,
@@ -199,6 +200,13 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             if (status?.daemonBuildBehind && typeof status.daemonBuildBehind === 'object') {
                 entry.staleDaemonBuild = status.daemonBuildBehind;
             }
+            // Provider quota, as reported by the node that owns the credentials.
+            // Rides the same git_status envelope as the rest of the node-facts
+            // bundle — the daemon fills it from a cached snapshot on its own
+            // refresh timer, so reading it here costs this probe nothing extra.
+            // OBSERVATION ONLY: no routing/scheduling gate consumes this.
+            const reportedQuota = extractReporterNodeFactsQuota(statusResult);
+            if (reportedQuota) entry.quota = reportedQuota;
             // Submodule out-of-sync warning
             const submodules = extractSubmodules(statusResult, (node.policy as any)?.submoduleIgnorePaths || []);
             if (submodules && submodules.some((s: any) => s?.outOfSync)) {
