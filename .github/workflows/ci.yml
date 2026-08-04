@@ -191,11 +191,41 @@ jobs:
       - name: Test @adhdev/session-host-daemon
         run: npm run test -w packages/session-host-daemon
 
+      - name: Test @adhdev/session-host-core
+        run: npm run test -w packages/session-host-core
+
+      # terminal-mux-{core,cli} tests import leaf modules directly rather than
+      # the package barrel, so they never load the @adhdev/ghostty-vt-node
+      # native binding and stay green on runners without a prebuilt.
+      - name: Test @adhdev/terminal-mux-core
+        run: npm run test -w packages/terminal-mux-core
+
+      - name: Test @adhdev/terminal-mux-cli
+        run: npm run test -w packages/terminal-mux-cli
+
+      - name: Test @adhdev/terminal-render-web
+        run: npm run test -w packages/terminal-render-web
+
+      - name: Test @adhdev/web-standalone
+        run: npm run test -w packages/web-standalone
+
       - name: Typecheck @adhdev/daemon-core
         run: npm run typecheck -w packages/daemon-core
 
       - name: Typecheck @adhdev/session-host-daemon
         run: npm run typecheck -w packages/session-host-daemon
+
+      - name: Typecheck @adhdev/session-host-core
+        run: npm run typecheck -w packages/session-host-core
+
+      - name: Typecheck @adhdev/terminal-mux-core
+        run: npm run typecheck -w packages/terminal-mux-core
+
+      - name: Typecheck @adhdev/terminal-mux-cli
+        run: npm run typecheck -w packages/terminal-mux-cli
+
+      - name: Typecheck @adhdev/terminal-render-web
+        run: npm run typecheck -w packages/terminal-render-web
 
   publish:
     needs: [build, test]

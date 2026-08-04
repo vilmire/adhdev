@@ -11,6 +11,7 @@
   "scripts": {
     "build": "tsup src/index.tsx --format esm --dts",
     "dev": "tsup src/index.tsx --format esm --dts --watch",
+    "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
@@ -22,6 +23,7 @@
   "devDependencies": {
     "@types/react": "^18.3.0",
     "tsup": "^8.5.1",
+    "tsx": "^4.19.0",
     "typescript": "^5.5.0"
   },
   "license": "AGPL-3.0-or-later"
