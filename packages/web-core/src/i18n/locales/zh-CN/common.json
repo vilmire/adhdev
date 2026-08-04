@@ -2414,7 +2414,10 @@
             "distributionTitle": "分配仅决定未指定目标的工作如何在符合条件的节点间分散。各节点的负载、优先级和提供程序上限见下方。",
             "protocolTitle": "协议与提供程序版本",
             "nodesRuntime": "节点 — 运行时",
-            "noNodesReporting": "尚无节点上报运行时。"
+            "noNodesReporting": "尚无节点上报运行时。",
+            "quotaTitle": "套餐用量",
+            "quotaNotCollected": "尚未采集套餐用量 — 节点会在首次刷新（约 15 分钟）之后、且有代理活动时才上报。",
+            "quotaFreshnessHint": "该用量所在运行时 facts 数据包的时间"
         },
         "overview": {
             "missionCard": "任务",

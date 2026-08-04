@@ -2414,7 +2414,10 @@
             "distributionTitle": "Distribution only governs how untargeted work is spread across eligible nodes. Per-node load, priority, and provider caps are below.",
             "protocolTitle": "Protocol & provider versions",
             "nodesRuntime": "Nodes — runtime",
-            "noNodesReporting": "No nodes reporting runtime yet."
+            "noNodesReporting": "No nodes reporting runtime yet.",
+            "quotaTitle": "Plan quota",
+            "quotaNotCollected": "Plan quota not collected yet — a node reports it after its first refresh (~15 min) and only while an agent has been active.",
+            "quotaFreshnessHint": "Age of the runtime facts bundle this quota rode in on"
         },
         "overview": {
             "missionCard": "Missions",

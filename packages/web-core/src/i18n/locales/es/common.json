@@ -2414,7 +2414,10 @@
             "distributionTitle": "La distribución solo determina cómo se reparte el trabajo sin destino entre los nodos elegibles. La carga por nodo, la prioridad y los límites de proveedores aparecen a continuación.",
             "protocolTitle": "Versiones de protocolo y proveedores",
             "nodesRuntime": "Nodos — runtime",
-            "noNodesReporting": "Todavía no hay nodos que reporten el runtime."
+            "noNodesReporting": "Todavía no hay nodos que reporten el runtime.",
+            "quotaTitle": "Cuota del plan",
+            "quotaNotCollected": "Aún no se ha recopilado la cuota del plan: un nodo la reporta tras su primera actualización (~15 min) y solo si un agente ha estado activo.",
+            "quotaFreshnessHint": "Antigüedad del paquete de datos de runtime en el que llegó esta cuota"
         },
         "overview": {
             "missionCard": "Misiones",

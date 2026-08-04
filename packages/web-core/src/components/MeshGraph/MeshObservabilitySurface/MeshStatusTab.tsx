@@ -10,7 +10,13 @@ import { MeshGraphThemeContext } from './meshSurfaceTheme'
 import { Badge } from './meshSurfacePrimitives'
 import {
     SCHEDULING_STRATEGY_LABELS,
+    collectNodeQuotaEntries,
+    describeQuotaFailure,
+    formatQuotaFreshness,
+    formatQuotaWindow,
     healthTone,
+    quotaProviderLabel,
+    quotaUsageTone,
     schedulingReasonLabel,
     shortCommit,
     summarizeNodeDrift,
@@ -80,6 +86,75 @@ function MeshNodeSchedulingBadges({ scheduling }: { scheduling?: RepoMeshNodeSch
     )
 }
 
+// Per-node provider plan quota, read from the versioned facts bundle
+// (nodeFacts.quota — observation only, nothing routes on it). Three states are
+// kept visually distinct on purpose; see the helper block in
+// meshSurfaceHelpers.ts for why conflating them misleads:
+//   - unreported: no quota key yet. NORMAL for a daemon started < ~15min ago or
+//     one sitting idle, so it renders as a muted line, never a warning badge.
+//   - unavailable/error: the node looked and could not read it — failureKind
+//     shown, because that is what tells "not installed" from "channel broken".
+//   - ok: the 5h / 7d windows, tinted at the same 70/90% thresholds the
+//     `adhdev quota` CLI uses.
+function MeshNodeQuotaRows({ node }: { node: RepoMeshNodeStatus }) {
+    const { t } = useTranslation('common')
+    const meshTheme = useContext(MeshGraphThemeContext)
+    const entries = collectNodeQuotaEntries(node)
+    // Only claim "not collected yet" for a node that actually sent a facts
+    // bundle. A node with no facts at all is an older/quiet daemon, and saying
+    // anything about its quota would be inventing a state it never reported.
+    if (entries.length === 0) {
+        if (!node.nodeFacts) return null
+        return (
+            <div className={`mt-1.5 text-[11px] ${meshTheme.textSecondary}`}>
+                {t('mesh.status.quotaNotCollected')}
+            </div>
+        )
+    }
+    const freshness = formatQuotaFreshness(node.nodeFacts?.reportedAt)
+    return (
+        <div className="mt-2 flex flex-col gap-1.5">
+            <div className="flex flex-wrap items-baseline gap-2">
+                <span className={`text-[11px] font-semibold ${meshTheme.textPrimary}`}>{t('mesh.status.quotaTitle')}</span>
+                {freshness && (
+                    <span className={`text-[10px] ${meshTheme.textSecondary}`} title={t('mesh.status.quotaFreshnessHint')}>
+                        {freshness}
+                    </span>
+                )}
+            </div>
+            {entries.map(({ provider, quota }) => {
+                const session = formatQuotaWindow(quota.session)
+                const weekly = formatQuotaWindow(quota.weekly)
+                const hasWindows = !!(session || weekly)
+                return (
+                    <div key={provider} className="flex flex-wrap items-center gap-1.5">
+                        <span className={`text-[11px] ${meshTheme.textPrimary}`}>{quotaProviderLabel(provider)}</span>
+                        {session && (
+                            <Badge
+                                label={`5h ${session}`}
+                                tone={quotaUsageTone(quota.session?.usedPercent ?? NaN)}
+                                title="Rolling 5-hour plan window reported by this node"
+                            />
+                        )}
+                        {weekly && (
+                            <Badge
+                                label={`7d ${weekly}`}
+                                tone={quotaUsageTone(quota.weekly?.usedPercent ?? NaN)}
+                                title="Rolling 7-day plan window reported by this node"
+                            />
+                        )}
+                        {!hasWindows && (
+                            <span className={`text-[11px] ${meshTheme.textSecondary}`} title="This node reported that it could not read this provider's quota">
+                                {describeQuotaFailure(quota)}
+                            </span>
+                        )}
+                    </div>
+                )
+            })}
+        </div>
+    )
+}
+
 function MeshNodeRuntimeRow({ node, mainAnchorCommit }: { node: RepoMeshNodeStatus; mainAnchorCommit?: string }) {
     const meshTheme = useContext(MeshGraphThemeContext)
     const sessionCount = (node.activeSessionDetails?.length ?? node.activeSessions?.length ?? 0)
@@ -135,6 +210,7 @@ function MeshNodeRuntimeRow({ node, mainAnchorCommit }: { node: RepoMeshNodeStat
                     ))}
                 </div>
             )}
+            <MeshNodeQuotaRows node={node} />
             <div className={`mt-1.5 text-[11px] ${meshTheme.textSecondary}`}>
                 {summarizeNodeDrift(node)}
                 {head ? <span className="ml-2 font-mono opacity-70">@{head}</span> : null}

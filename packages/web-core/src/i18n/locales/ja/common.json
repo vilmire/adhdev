@@ -2414,7 +2414,10 @@
             "distributionTitle": "分散は、ターゲット未指定の作業を対象ノード間にどう振り分けるかのみを制御します。ノードごとの負荷、優先度、プロバイダー上限は以下のとおりです。",
             "protocolTitle": "プロトコルとプロバイダーのバージョン",
             "nodesRuntime": "ノード — ランタイム",
-            "noNodesReporting": "ランタイムを報告しているノードはまだありません。"
+            "noNodesReporting": "ランタイムを報告しているノードはまだありません。",
+            "quotaTitle": "プラン使用量",
+            "quotaNotCollected": "プラン使用量はまだ収集されていません — ノードは最初の更新（約15分）以降、エージェントが動作していた場合にのみ報告します。",
+            "quotaFreshnessHint": "この使用量が含まれていたランタイム facts バンドルの経過時間"
         },
         "overview": {
             "missionCard": "ミッション",

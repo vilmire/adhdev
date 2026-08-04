@@ -5,6 +5,7 @@ import type {
     RepoMeshQueueTask,
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
+import type { MeshNodeFactsProviderQuota, MeshNodeFactsQuotaWindow } from '@adhdev/mesh-shared'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from '../types'
 import type { MeshGraphSessionDetail } from '../../../utils/mesh-visualization'
 
@@ -171,6 +172,124 @@ export function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
     if (driftedSubmodules.length > 0) parts.push(`${driftedSubmodules.length} submodule drift`)
     if (git.hasConflicts) parts.push('conflicts')
     return parts.join(' · ') || 'Clean'
+}
+
+// ─── Provider quota (nodeFacts.quota) ───────────────────────────────────────
+// Observation-only surfacing of the per-provider plan quota a node reports in
+// its MeshNodeFacts bundle. THREE states must stay visually distinct, because
+// two of them are normal and only one is a problem:
+//   'unreported' — the node has sent facts but no quota key yet. This is the
+//       EXPECTED state for a freshly started daemon: the refresh loop's first
+//       tick is at +15min, not at boot, and it skips ticks entirely on an idle
+//       machine. Rendering this like a failure would train the owner to read a
+//       healthy daemon as broken, so it is deliberately muted, not a warning.
+//   'unavailable' / 'error' — the node LOOKED and could not read the quota. The
+//       daemon reports these explicitly (rather than omitting the provider) so
+//       "never told us" and "told us it could not tell" stay distinguishable;
+//       failureKind is surfaced because it is what separates "not installed"
+//       from "channel broken".
+//   'ok' — real numbers.
+
+/** Provider ids are wire keys ('claude-cli'); show the product name. */
+const QUOTA_PROVIDER_LABELS: Record<string, string> = {
+    'claude-cli': 'Claude Code',
+    'codex-cli': 'Codex CLI',
+    kimi: 'Kimi Code',
+}
+
+export function quotaProviderLabel(provider: string): string {
+    return QUOTA_PROVIDER_LABELS[provider] ?? provider
+}
+
+/**
+ * Tone for a usage percentage. Same 70/90 thresholds the `adhdev quota` CLI
+ * uses for its bar colour, so the two surfaces agree on what "getting close"
+ * means.
+ */
+export function quotaUsageTone(usedPercent: number): 'default' | 'good' | 'warn' | 'danger' | 'info' {
+    if (!Number.isFinite(usedPercent)) return 'default'
+    if (usedPercent >= 90) return 'danger'
+    if (usedPercent >= 70) return 'warn'
+    return 'good'
+}
+
+/** "23.5% used" / "23.5% used · resets in 2h 14m" for one rolling window. */
+export function formatQuotaWindow(window: MeshNodeFactsQuotaWindow | null | undefined, now: number = Date.now()): string | null {
+    if (!window || typeof window.usedPercent !== 'number' || !Number.isFinite(window.usedPercent)) return null
+    const used = `${window.usedPercent.toFixed(1)}% used`
+    const resets = formatQuotaReset(window.resetsAt, now)
+    return resets ? `${used} · ${resets}` : used
+}
+
+/** "resets in 2h 14m" — omitted entirely when the node reported no reset time. */
+export function formatQuotaReset(resetsAt: number | null | undefined, now: number = Date.now()): string | null {
+    if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null
+    const deltaMs = resetsAt - now
+    if (deltaMs <= 0) return 'resets now'
+    const minutes = Math.round(deltaMs / 60_000)
+    if (minutes < 60) return `resets in ${minutes}m`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return `resets in ${hours}h ${minutes % 60}m`
+    return `resets in ${Math.floor(hours / 24)}d ${hours % 24}h`
+}
+
+/**
+ * The failure line for a non-ok provider. Prefers the daemon's own message and
+ * appends failureKind when it adds information the message does not already
+ * carry — the kind is the field that separates "not installed" from "expired
+ * credentials" from "channel broken".
+ */
+export function describeQuotaFailure(quota: MeshNodeFactsProviderQuota): string {
+    const message = typeof quota.error === 'string' ? quota.error.trim() : ''
+    const kindRaw = quota.metadata?.failureKind
+    const kind = typeof kindRaw === 'string' ? kindRaw.trim() : ''
+    const kindLabel = kind ? kind.replace(/[_-]+/g, ' ') : ''
+    if (message && kindLabel && !message.toLowerCase().includes(kindLabel.toLowerCase())) {
+        return `${message} (${kindLabel})`
+    }
+    if (message) return message
+    if (kindLabel) return kindLabel
+    return quota.status === 'unavailable' ? 'not available on this node' : 'could not read quota'
+}
+
+export type NodeQuotaEntry = {
+    provider: string
+    quota: MeshNodeFactsProviderQuota
+}
+
+/**
+ * Read the quota map off a node's facts bundle in a stable display order, so
+ * providers do not reshuffle between refreshes. Returns [] for the unreported
+ * state — the caller distinguishes that from "reported and failing".
+ */
+export function collectNodeQuotaEntries(node: RepoMeshNodeStatus): NodeQuotaEntry[] {
+    const quota = node.nodeFacts?.quota
+    if (!quota || typeof quota !== 'object' || Array.isArray(quota)) return []
+    const entries: NodeQuotaEntry[] = []
+    for (const [provider, value] of Object.entries(quota)) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+        entries.push({ provider, quota: value as MeshNodeFactsProviderQuota })
+    }
+    return entries.sort((a, b) => quotaProviderLabel(a.provider).localeCompare(quotaProviderLabel(b.provider)))
+}
+
+/**
+ * Age of the facts bundle this quota rode in on. Deliberately derived from the
+ * bundle's existing `reportedAt` rather than any TTL field: refresh cadence is
+ * owned by the reporting node and delivery cadence by whoever calls git_status,
+ * so neither end is in a position to assert an expiry (mesh-shared node-facts.ts).
+ * The reader judges age instead.
+ */
+export function formatQuotaFreshness(reportedAt: number | null | undefined, now: number = Date.now()): string | null {
+    if (typeof reportedAt !== 'number' || !Number.isFinite(reportedAt) || reportedAt <= 0) return null
+    const ageMs = now - reportedAt
+    if (ageMs < 0) return 'just now'
+    const minutes = Math.floor(ageMs / 60_000)
+    if (minutes < 1) return 'just now'
+    if (minutes < 60) return `${minutes}m ago`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return `${hours}h ${minutes % 60}m ago`
+    return `${Math.floor(hours / 24)}d ${hours % 24}h ago`
 }
 
 // Maps the raw daemon-reported strategy to the 2-mode product vocabulary (Spread /
