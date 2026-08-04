@@ -118,6 +118,17 @@ export const MESH_REFINE_CONFIG_LOCATIONS = [
     'repo-mesh.refine.yml',
 ];
 
+// NOTE: this schema is documentation only — returned by get_mesh_refine_config_schema
+// for humans/tools to read. The real gate is validateMeshRefineConfig() below, a
+// hand-written validator that does NOT run this schema through a JSON-schema engine.
+// It enforces: version === 1, validation.bootstrap in ('inherit'|'skip'), each command's
+// `command` (non-empty after tokenizing), args (string[]), cwd (string), timeoutMs
+// (1000-600000), outputLimitBytes (1024-1048576), env (string map), scopes (enum set).
+// It does NOT enforce: array length bounds (commands/bootstrapCommands accept any count,
+// including zero), additionalProperties:false (unknown keys pass through silently), or
+// the `category` enum (an unrecognized value is coerced to 'custom' rather than rejected).
+// Keep this schema's declared constraints truthful to that — don't add a bound here
+// (minItems/maxItems/etc.) unless validateMeshRefineConfig is updated to enforce it too.
 export const MESH_REFINE_CONFIG_SCHEMA = {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
     title: 'ADHDev Repo Mesh Refinery Config',
@@ -143,8 +154,7 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
                 },
                 commands: {
                     type: 'array',
-                    minItems: 1,
-                    maxItems: 8,
+                    description: 'Not schema-length-limited: validateMeshRefineConfig accepts any number of commands (including zero).',
                     items: {
                         type: 'object',
                         additionalProperties: false,
@@ -167,8 +177,7 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
                 },
                 bootstrapCommands: {
                     type: 'array',
-                    maxItems: 4,
-                    description: 'DEPRECATED: define bootstrap once in .adhdev/worktree_bootstrap.json. Honored only when no worktree_bootstrap config exists (with a deprecation warning); worktree_bootstrap wins when both exist.',
+                    description: 'DEPRECATED: define bootstrap once in .adhdev/worktree_bootstrap.json. Honored only when no worktree_bootstrap config exists (with a deprecation warning); worktree_bootstrap wins when both exist. Not schema-length-limited: validateMeshRefineConfig accepts any number of entries.',
                     items: {
                         type: 'object',
                         additionalProperties: false,
