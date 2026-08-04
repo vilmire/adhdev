@@ -22,6 +22,17 @@
  * birth order (coordinator first, then the two replicas) so their natural creation
  * order is coord < replicaA < replicaB, and floors are expressed relative to
  * Date.now() — mirroring the sibling antigravity-conversation-binding-isolation test.
+ *
+ * Creation order alone is NOT enough to express that ordering, though: the
+ * dispatcher's safeBirthtime() truncates birthtimeMs to whole milliseconds, and
+ * three back-to-back sqlite creates land inside ONE millisecond on a warm FS. The
+ * floored births then tie, the oldest-birth sort degenerates to a no-op, and the
+ * winner falls out of readdir order — where COORD ('cccc…') sorts LAST and loses.
+ * That is a fixture artifact, not a product bug (real antigravity sessions are
+ * spawned seconds apart), so waitPastMs() below spins until the wall clock has
+ * actually advanced past the previous store's floored birth ms, guaranteeing
+ * coord < replicaA < replicaB as whole-ms integers under any load. The beforeEach
+ * then asserts that separation, so a silent tie fails setup instead of flaking.
  */
 
 import * as fs from 'fs';
@@ -103,6 +114,27 @@ async function makeConversationDb(
   return filePath;
 }
 
+/**
+ * The store's birth ms as the DISPATCHER sees it. Mirrors safeBirthtime() in
+ * dispatcher.ts (Math.floor of birthtimeMs, falling back to mtimeMs) so the
+ * fixture orders stores by the SAME key the production code sorts on, rather
+ * than by a proxy that could drift from it.
+ */
+function flooredBirthMs(filePath: string): number {
+  const st = fs.statSync(filePath);
+  const birth = Math.floor(st.birthtimeMs);
+  return birth > 0 ? birth : Math.floor(st.mtimeMs);
+}
+
+/**
+ * Spin the wall clock forward until Date.now() has passed `afterMs`, so the NEXT
+ * file created is born in a strictly later whole millisecond. A busy-wait (not a
+ * timer) keeps this synchronous and bounded to <2ms per call.
+ */
+function waitPastMs(afterMs: number): void {
+  while (Date.now() <= afterMs) { /* spin — sub-ms, no timer needed */ }
+}
+
 function turn(prompt: string, answer: string) {
   return [
     { step_type: 14, payload: encodeUserStep(prompt) },
@@ -122,9 +154,26 @@ describe('antigravity coordinator + MAGI replica birth-floor isolation (D3)', ()
     __resetAntigravityClaimRegistry();
     // Created in birth order: coordinator FIRST (oldest birth), replicas after.
     // The coordinator is mesh-heavy; replicas do task work.
-    await makeConversationDb(COORD, turn('mesh_dispatch task to replica', 'coordinator answer'));
-    await makeConversationDb(REPLICA_A, turn('do the replica-A work', 'replica A answer'));
-    await makeConversationDb(REPLICA_B, turn('do the replica-B work', 'replica B answer'));
+    //
+    // Each create is separated until its floored birth ms strictly exceeds the
+    // previous store's, so the dispatcher's whole-ms birth sort has a total
+    // order. Without this the three creates share one ms under load, the sort
+    // ties, and the winner is decided by readdir order (COORD sorts last).
+    const coordPath = await makeConversationDb(COORD, turn('mesh_dispatch task to replica', 'coordinator answer'));
+    const coordBirth = flooredBirthMs(coordPath);
+
+    waitPastMs(coordBirth);
+    const replicaAPath = await makeConversationDb(REPLICA_A, turn('do the replica-A work', 'replica A answer'));
+    const replicaABirth = flooredBirthMs(replicaAPath);
+
+    waitPastMs(replicaABirth);
+    const replicaBPath = await makeConversationDb(REPLICA_B, turn('do the replica-B work', 'replica B answer'));
+    const replicaBBirth = flooredBirthMs(replicaBPath);
+
+    // Fail loudly in setup if the FS did not give us the separation we asked
+    // for, rather than letting the assertions below flake on a silent tie.
+    expect(coordBirth).toBeLessThan(replicaABirth);
+    expect(replicaABirth).toBeLessThan(replicaBBirth);
   });
   afterEach(() => {
     vi.restoreAllMocks();
