@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { MESH_REFINE_CONFIG_SCHEMA, validateMeshRefineConfig } from '../../src/mesh/refine-config'
@@ -35,13 +33,43 @@ describe('refine-config command count (declared vs enforced)', () => {
     expect(result.rejectedCommands).toHaveLength(0)
   })
 
-  it("this repo's own .adhdev/refine.json validates cleanly (currently 16 commands)", () => {
-    const repoRoot = join(__dirname, '../../../../..')
-    const raw = readFileSync(join(repoRoot, '.adhdev/refine.json'), 'utf-8')
-    const config = JSON.parse(raw)
+  // A realistic .adhdev/refine.json shape — mixed categories, a cwd-scoped entry
+  // and a bootstrapCommands block, at the 16-command size that motivated dropping
+  // the old maxItems: 8 bound.
+  //
+  // This deliberately does NOT read the root repo's real .adhdev/refine.json. That
+  // version reached ACROSS the submodule boundary (join(__dirname,'../../../../..'))
+  // and so could not load in the OSS-only CI checkout, which took the v1.0.32
+  // release red. Refinery never caught it because Refinery runs from the root
+  // worktree where the path resolves. The root config is now covered by a test in
+  // the root repo that owns it (packages/daemon-cloud/test/refine-config-repo.test.ts).
+  it('accepts a realistic 16-command config with bootstrapCommands', () => {
+    const config = {
+      version: 1,
+      validation: {
+        required: true,
+        bootstrapCommands: [
+          { command: 'node', args: ['scripts/refine-bootstrap.mjs'], category: 'custom', timeoutMs: 600000 },
+        ],
+        commands: [
+          { command: 'node', args: ['scripts/check-submodule-sync.mjs'], category: 'custom', timeoutMs: 60000 },
+          { command: 'npm', args: ['run', 'typecheck'], category: 'typecheck', timeoutMs: 600000 },
+          ...Array.from({ length: 12 }, (_, i) => ({
+            command: 'npm',
+            args: ['run', `test:pkg-${i}`],
+            category: 'test',
+            timeoutMs: 300000,
+          })),
+          { command: 'node', args: ['scripts/check-vendor-drift.mjs'], category: 'build', cwd: 'oss', timeoutMs: 300000 },
+          { command: 'node', args: ['scripts/check-provider-channel-drift.mjs'], category: 'build', timeoutMs: 300000 },
+        ],
+      },
+    }
     const result = validateMeshRefineConfig(config, '.adhdev/refine.json')
     expect(result.valid).toBe(true)
     expect(result.rejectedCommands).toHaveLength(0)
+    expect(result.commands).toHaveLength(16)
     expect(result.commands.length).toBeGreaterThan(8)
+    expect(result.bootstrapCommands).toHaveLength(1)
   })
 })
