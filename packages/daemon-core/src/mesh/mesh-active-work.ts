@@ -453,6 +453,15 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
     const staleDirectWork: MeshActiveWorkRecord[] = [];
     const terminalDirectWork: MeshActiveWorkRecord[] = [];
 
+    // ACTIVEWORK-DUPLICATE-ROWS: recordDirectDispatchTask materialises an `assigned` QUEUE row
+    // for the same taskId alongside the direct-dispatch record, so a single mesh_send_task used
+    // to project TWO activeWork rows for one (taskId, attemptId) — inflating generatingCount in
+    // the coordinator's polling guidance and the dashboard. No consumer branches on `source`, so
+    // the two rows carried no distinct information. The queue row is kept (it carries taskMode /
+    // createdAt / updatedAt that the direct row lacks, and the turnOverlay logic is identical)
+    // and the direct row is skipped below, mirroring the `dbTaskIds.has()` idiom already used to
+    // de-duplicate ledger dispatches against MeshRuntimeStore dispatches.
+    const queueTaskIds = new Set<string>();
     for (const task of opts.queue || []) {
         if (task.status !== 'pending' && task.status !== 'assigned') continue;
         const { title, summary } = summarizeMessage(task.message || '');
@@ -491,6 +500,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             ? turnProjectionActiveWorkStatus(opts.meshId, task.id)
             : null;
         if (turnOverlay) queueStatus = turnOverlay.status;
+        queueTaskIds.add(task.id);
         records.push({
             taskId: task.id,
             source: 'queue',
@@ -515,6 +525,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
     if (opts.directDispatches !== undefined) {
         const dbTaskIds = new Set(opts.directDispatches.map(d => d.taskId));
         for (const dispatch of opts.directDispatches) {
+            if (queueTaskIds.has(dispatch.taskId)) continue; // already emitted as a queue row above
             const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId ?? undefined, dispatch.sessionId ?? undefined);
             const dbStatus = dispatch.status; // 'dispatched' | 'acked' | 'completed' | 'failed' | 'stale'
             const isTerminal = dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'stale';
@@ -577,6 +588,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         const terminals = ledgerEntries.filter(entry => TERMINAL_LEDGER_KINDS.has(entry.kind) || entry.kind === 'task_approval_needed');
         for (const dispatch of ledgerEntries.filter(isDirectDispatch)) {
             if (dbTaskIds.has(directDispatchTaskId(dispatch))) continue; // already covered by MeshRuntimeStore path above
+            if (queueTaskIds.has(directDispatchTaskId(dispatch))) continue; // already emitted as a queue row above
             const { record, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminals, nodes: opts.nodes, now });
             if (terminalRow) {
                 terminalDirectWork.push(record);
@@ -593,6 +605,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         const ledgerEntries = (opts.ledgerEntries || []).slice().sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
         const terminals = ledgerEntries.filter(entry => TERMINAL_LEDGER_KINDS.has(entry.kind) || entry.kind === 'task_approval_needed');
         for (const dispatch of ledgerEntries.filter(isDirectDispatch)) {
+            if (queueTaskIds.has(directDispatchTaskId(dispatch))) continue; // already emitted as a queue row above
             const { record, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminals, nodes: opts.nodes, now });
             if (terminalRow) {
                 terminalDirectWork.push(record);

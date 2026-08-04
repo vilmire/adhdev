@@ -236,7 +236,7 @@ function seedDirectTranscriptDispatch(meshId: string, taskId: string): void {
   });
 }
 
-test('direct mesh_send_task is visible as source=direct active work in status and active queue view', async () => {
+test('direct mesh_send_task projects exactly one active work row in status and active queue view', async () => {
   const meshId = 'mesh-active-direct-test';
   cleanupMesh(meshId);
   const { ctx, calls } = createRemoteCtx(meshId);
@@ -257,19 +257,35 @@ test('direct mesh_send_task is visible as source=direct active work in status an
     // (mesh-active-work.ts `turnOverlay?.status || liveStatus`), so a freshly dispatched
     // task reads 'assigned' even though the mocked session already reports 'generating' —
     // the transport handed off the prompt, but the worker has not yet echoed progress.
+    // ACTIVEWORK-DUPLICATE-ROWS: recordDirectDispatchTask materialises an `assigned` QUEUE row
+    // for the same taskId alongside the direct-dispatch record. Both projections carried the
+    // same attempt and no consumer branches on `source`, so buildMeshActiveWork now skips the
+    // direct row when the queue loop already emitted that taskId — one dispatch, ONE row. The
+    // surviving row is the queue one (it carries taskMode/createdAt/updatedAt the direct row
+    // lacks). Pinned as a single row so a regression that reintroduces the duplicate fails here.
     const dispatched = JSON.parse(await meshStatus(ctx as any));
-    const direct = dispatched.activeWork.find((entry: any) => entry.source === 'direct' && entry.taskId === send.taskId);
-    assert.ok(direct, 'expected direct task in mesh_status.activeWork');
+    const dispatchedRows = dispatched.activeWork.filter((entry: any) => entry.taskId === send.taskId);
+    assert.equal(dispatchedRows.length, 1, `one dispatch must project exactly one activeWork row; got ${JSON.stringify(dispatchedRows.map((e: any) => e.source))}`);
+    const direct = dispatchedRows[0];
+    assert.equal(direct.source, 'queue', 'the surviving row must be the field-richer queue projection');
     assert.equal(direct.nodeId, 'node-remote');
     assert.equal(direct.sessionId, 'sess-direct');
-    assert.equal(direct.providerType, 'hermes-cli');
     assert.equal(direct.status, 'assigned');
     assert.equal(direct.turnStage, 'delivered');
     assert.equal(typeof direct.attemptId, 'string');
     assert.ok(!direct.attemptId.startsWith('legacy-'), 'the attempt must be a real opened attempt, not a legacy fallback row');
     assert.equal(direct.taskTitle, 'Implement direct active work visibility');
     assert.equal(typeof direct.elapsedMs, 'number');
-    assert.equal(dispatched.activeWorkSummary.directActiveCount, 1);
+    // Known, accepted trade-off of keeping the queue row: `providerType` is a direct-row-only
+    // field, so it is absent here. Pinned so the loss stays deliberate — if a consumer ever
+    // needs providerType on activeWork, it must be added to the queue projection, not restored
+    // by reintroducing the duplicate row.
+    assert.equal(direct.providerType, undefined, 'the queue projection does not carry providerType');
+    // The de-duplicated row is queue-sourced, so the direct tally for this dispatch is 0 and
+    // the total is 1 — the count that actually matters is "one dispatch, one active row".
+    assert.equal(dispatched.activeWorkSummary.totalActiveCount, 1);
+    assert.equal(dispatched.activeWorkSummary.directActiveCount, 0);
+    assert.equal(dispatched.activeWorkSummary.queueActiveCount, 1);
     // No worker progress yet, so there is no generating work to warn about.
     assert.equal(dispatched.activeWorkSummary.generatingCount, 0);
     assert.equal(dispatched.pollingGuidance, undefined);
@@ -296,24 +312,21 @@ test('direct mesh_send_task is visible as source=direct active work in status an
     assert.equal(advanced?.applied, true, 'the generating progress echo must be applied to the open attempt');
 
     const status = JSON.parse(await meshStatus(ctx as any));
-    const generating = status.activeWork.find((entry: any) => entry.source === 'direct' && entry.taskId === send.taskId);
-    assert.ok(generating, 'expected direct task to remain visible after the progress echo');
+    const rowsForTask = status.activeWork.filter((entry: any) => entry.taskId === send.taskId);
+    // ACTIVEWORK-DUPLICATE-ROWS regression pin: still exactly one row after the progress echo.
+    // If the direct-loop skip guard is removed, this goes to 2 (['direct','queue']) and fails.
+    assert.equal(rowsForTask.length, 1, `the progress echo must not resurrect the duplicate row; got ${JSON.stringify(rowsForTask.map((e: any) => e.source))}`);
+    const generating = rowsForTask[0];
+    assert.equal(generating.source, 'queue');
     assert.equal(generating.status, 'generating');
     assert.equal(generating.turnStage, 'generating');
     assert.equal(generating.attemptId, direct.attemptId, 'the progress echo must not mint a new attempt');
-    assert.equal(status.activeWorkSummary.directActiveCount, 1);
-    // recordDirectDispatchTask materialises an `assigned` QUEUE row for the same taskId
-    // alongside the direct-dispatch record, so one dispatch projects two activeWork rows
-    // that share a single attempt. This is long-standing behaviour of the mission-attributed
-    // path — a79686f2 only extended it to mission-less dispatches — so generatingCount counts
-    // both. Pinned explicitly so a future de-duplication has to update this expectation
-    // deliberately rather than silently halving a count nobody was asserting.
-    const rowsForTask = status.activeWork.filter((entry: any) => entry.taskId === send.taskId);
-    assert.deepEqual(rowsForTask.map((entry: any) => entry.source).sort(), ['direct', 'queue']);
-    assert.equal(rowsForTask.every((entry: any) => entry.status === 'generating'), true);
-    assert.equal(new Set(rowsForTask.map((entry: any) => entry.attemptId)).size, 1, 'both projections must share the one opened attempt');
+    assert.equal(status.activeWorkSummary.totalActiveCount, 1);
+    assert.equal(status.activeWorkSummary.directActiveCount, 0);
+    // The count the coordinator is actually shown: one generating dispatch reports 1, not 2.
+    assert.equal(status.activeWorkSummary.generatingCount, 1);
     assert.equal(status.pollingGuidance.activeGeneratingWork, true);
-    assert.equal(status.pollingGuidance.generatingCount, rowsForTask.length);
+    assert.equal(status.pollingGuidance.generatingCount, 1);
     assert.match(status.pollingGuidance.message, /Do not repeatedly poll mesh_status\/mesh_view_queue\/mesh_read_chat/i);
     assert.match(status.pollingGuidance.nextRecommendedAction, /wait for pendingCoordinatorEvents|completion events/i);
     assert.doesNotMatch(status.pollingGuidance.nextRecommendedAction, /mesh_read_chat once/i);
@@ -323,9 +336,9 @@ test('direct mesh_send_task is visible as source=direct active work in status an
 
     const activeView = JSON.parse(await meshViewQueue(ctx as any, { view: 'active' }));
     assert.equal(activeView.visibleHistoricalCount, 0);
-    assert.ok(activeView.activeWork.some((entry: any) => entry.source === 'direct' && entry.taskId === send.taskId));
+    assert.equal(activeView.activeWork.filter((entry: any) => entry.taskId === send.taskId).length, 1, 'mesh_view_queue must show the same single de-duplicated row');
     assert.equal(activeView.pollingGuidance.activeGeneratingWork, true);
-    assert.equal(activeView.pollingGuidance.generatingCount, rowsForTask.length);
+    assert.equal(activeView.pollingGuidance.generatingCount, 1);
     assert.match(activeView.pollingGuidance.message, /Do not repeatedly poll mesh_status\/mesh_view_queue\/mesh_read_chat/i);
     assert.match(activeView.pollingGuidance.nextRecommendedAction, /wait for pendingCoordinatorEvents|completion events/i);
     assert.doesNotMatch(activeView.pollingGuidance.nextRecommendedAction, /mesh_read_chat once/i);
