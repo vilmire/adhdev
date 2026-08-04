@@ -308,14 +308,32 @@ export type MeshRefineBatchTerminalJob = MeshRefineBatchJobHandle & { result?: R
 const REFINE_VALIDATION_CATEGORIES = ['typecheck', 'test', 'lint', 'build'] as const;
 const REFINE_VALIDATION_TIMEOUT_MS = 120_000;
 const REFINE_VALIDATION_OUTPUT_LIMIT_BYTES = 128 * 1024;
-const REFINE_VALIDATION_SUMMARY_CHARS = 2_000;
+// Head+tail budget (was head-only 2000 chars — see REFINE-LOG-TRUNCATION). A
+// gate command's failing assertion (e.g. "Test Files 1 failed") lands at the
+// END of stdout/stderr, but a head-only cut kept only the command-startup
+// prelude (sibling-daemon banners, git "empty repository" warnings) and threw
+// away the verdict every time. Applied uniformly across all six call sites
+// (not just the failing-gate path): the six sites mix genuine gate-command
+// runs with rare exception handlers, and splitting the budget by call site
+// would require guessing which callers are "hot" vs "rare" without evidence.
+// A short passing output is unaffected either way (values under the budget
+// are returned unmodified), so the uniform 8000 does not grow the common-case
+// payload. Downstream cap: MESH_COMPLETION_SURFACE_MAX_CHARS = 16_000 in
+// mesh-events-utils.ts comfortably exceeds this 8000 budget, so nothing is
+// re-truncated on the way to the coordinator.
+const REFINE_VALIDATION_SUMMARY_HEAD_CHARS = 2_000;
+const REFINE_VALIDATION_SUMMARY_TAIL_CHARS = 6_000;
+const REFINE_VALIDATION_SUMMARY_CHARS = REFINE_VALIDATION_SUMMARY_HEAD_CHARS + REFINE_VALIDATION_SUMMARY_TAIL_CHARS;
 const REFINE_VALIDATION_MAX_COMMANDS = 4;
 const REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024;
 
 export function truncateValidationOutput(value: unknown): string {
     const text = typeof value === 'string' ? value : value == null ? '' : String(value);
     if (text.length <= REFINE_VALIDATION_SUMMARY_CHARS) return text;
-    return `${text.slice(0, REFINE_VALIDATION_SUMMARY_CHARS)}\n[truncated ${text.length - REFINE_VALIDATION_SUMMARY_CHARS} chars]`;
+    const head = text.slice(0, REFINE_VALIDATION_SUMMARY_HEAD_CHARS);
+    const tail = text.slice(text.length - REFINE_VALIDATION_SUMMARY_TAIL_CHARS);
+    const omitted = text.length - REFINE_VALIDATION_SUMMARY_HEAD_CHARS - REFINE_VALIDATION_SUMMARY_TAIL_CHARS;
+    return `${head}\n[... ${omitted} chars omitted ...]\n${tail}`;
 }
 
 /**
