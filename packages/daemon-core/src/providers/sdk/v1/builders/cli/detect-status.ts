@@ -74,6 +74,15 @@ interface ModalSpec {
   buttonPattern: string;
   buttonFlags?: string;
   buttonLabelGroup?: number;
+  /**
+   * Where the modal cue must appear. NOTE the enum differs from spinner /
+   * settled-prompt scopes — it mirrors `tui/modal@1`'s own schema (and
+   * parse-approval.ts's ModalTuiSpec), so `scopeText()` (whose enum is
+   * `live-frame-tail | whole-screen | recent-buffer | last-n-lines`) is NOT
+   * applicable here and must not be reused for it.
+   */
+  scope?: 'between-last-two-separators' | 'window-around-question' | 'whole-screen';
+  scopeWindowLines?: number;
 }
 
 export type DispatchGroup =
@@ -251,6 +260,80 @@ export function isAskUserQuestionPickerSignature(text: string): boolean {
   return PICKER_OPTION_ROW.test(text);
 }
 
+/** Index of the deepest line matching the question pattern or any variant. */
+function findModalQuestionLine(spec: ModalSpec, lines: string[]): number {
+  const buttonFlags = spec.buttonFlags && spec.buttonFlags.includes('m')
+    ? spec.buttonFlags
+    : `${spec.buttonFlags ?? ''}m`;
+  const buttonRe = compile(spec.buttonPattern, buttonFlags);
+  const isButtonLine = (line: string): boolean => {
+    buttonRe.lastIndex = 0;
+    return buttonRe.test(line);
+  };
+  const matchers = [
+    compile(spec.questionPattern, spec.questionFlags ?? 'i'),
+    ...(spec.questionVariants ?? []).map((v) => compile(v.regex, v.flags ?? 'i')),
+  ];
+  // Prefer a question line that is not ALSO a button line: a question keyword
+  // frequently appears inside a button label (cursor's `Trust` matches both its
+  // prose question and its `[a] Trust this workspace` button). Mirrors
+  // parse-approval.ts's findQuestionLineIndex.
+  for (const allowButtonLines of [false, true]) {
+    for (const re of matchers) {
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        re.lastIndex = 0;
+        if (re.test(lines[i]) && (allowButtonLines || !isButtonLine(lines[i]))) return i;
+      }
+    }
+  }
+  return -1;
+}
+
+/**
+ * Does the modal spec's declared `scope` hold for the question found at
+ * `questionIndex`?
+ *
+ * Per `tui/modal@1`, scope declares "where on the screen the question + buttons
+ * must appear TOGETHER". That co-location requirement is the load-bearing part
+ * at this cue-only layer: testing the question against a window centred on that
+ * same question is tautological (the question is always inside its own window),
+ * so honoring scope has to mean checking that the modal's BUTTONS accompany it.
+ *
+ * A stale/leftover question whose button rows the CLI already cleared therefore
+ * stops firing `waiting_approval`, while a live modal — question plus its button
+ * block within `scopeWindowLines` — still does.
+ *
+ * `whole-screen` (and an undeclared scope) keeps the historical behaviour: the
+ * question alone is enough.
+ */
+function modalScopeSatisfied(spec: ModalSpec, lines: string[], questionIndex: number): boolean {
+  const scope = spec.scope;
+  if (!scope || scope === 'whole-screen') return true;
+  // An INLINE approval carries its options in the question line itself and
+  // renders no button rows at all (claude-cli's `(y/n)` / `[Y/n]` fallback
+  // variant). Requiring a separate button block would suppress a real approval —
+  // the exact over-narrowing this scoping must not cause — so a self-contained
+  // prompt satisfies co-location on its own.
+  if (/\((?:y\/n|yes\/no)\)|\[[Yy]\/[Nn]\]/.test(lines[questionIndex])) return true;
+  const buttonFlags = spec.buttonFlags && spec.buttonFlags.includes('m')
+    ? spec.buttonFlags
+    : `${spec.buttonFlags ?? ''}m`;
+  const buttonRe = compile(spec.buttonPattern, buttonFlags);
+  const window = spec.scopeWindowLines && spec.scopeWindowLines > 0 ? spec.scopeWindowLines : 16;
+  // `between-last-two-separators` frames the modal between horizontal rules; at
+  // the cue layer the practical requirement is identical (buttons accompany the
+  // question), so both scopes share the co-location window. The separator frame
+  // itself matters only where buttons are extracted (parse-approval.ts).
+  const start = Math.max(0, questionIndex - 2);
+  const end = Math.min(lines.length, questionIndex + window);
+  for (let i = start; i < end; i += 1) {
+    if (i === questionIndex) continue;
+    buttonRe.lastIndex = 0;
+    if (buttonRe.test(lines[i])) return true;
+  }
+  return false;
+}
+
 function modalMatches(spec: ModalSpec, input: CliStatusInput): boolean {
   // Status-level modal detection is cue-only — does the question appear at all?
   // Button extraction lives in buildParseApprovalFromTui.
@@ -258,15 +341,23 @@ function modalMatches(spec: ModalSpec, input: CliStatusInput): boolean {
   // A question picker (AskUserQuestion) is never an approval — bail before any
   // approval cue can match its numbered option rows (mission f1d25e11).
   if (isAskUserQuestionPickerSignature(text)) return false;
-  const question = compile(spec.questionPattern, spec.questionFlags ?? 'i');
-  if (question.test(text)) return true;
-  for (const variant of spec.questionVariants ?? []) {
-    const re = compile(variant.regex, variant.flags ?? 'i');
-    if (re.test(text)) return true;
-  }
+  // Honor the spec's declared `scope`. Before this the question cue was tested
+  // against the WHOLE screen regardless of what the manifest asked for, so a
+  // leftover question line the CLI never cleared kept firing waiting_approval —
+  // cursor-cli declared `window-around-question: 20` and still wedged in
+  // `starting` because the engine discarded the request.
+  const lines = text.split('\n');
+  const questionIndex = findModalQuestionLine(spec, lines);
+  if (questionIndex >= 0 && modalScopeSatisfied(spec, lines, questionIndex)) return true;
   // The question line can scroll out of the captured frame while the button
   // block (and a residual spinner) remain. Hold the modal cue on the button
   // block alone so waiting_approval does not flap to generating mid-approval.
+  //
+  // This deliberately stays on the WHOLE screen even under a question-anchored
+  // scope: the whole point of this branch is that there is no question line to
+  // anchor a window on. Narrowing it would mean an in-progress approval whose
+  // question has scrolled away is never detected — a strictly worse defect
+  // (approval never surfaces) than the stale cue this scoping fixes.
   if (buttonBlockApprovalCue(spec, text)) return true;
   return false;
 }

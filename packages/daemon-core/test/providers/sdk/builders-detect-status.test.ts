@@ -277,6 +277,147 @@ describe('buildDetectStatusFromTui — stale modal box supersession (cursor-cli)
   });
 });
 
+describe('buildDetectStatusFromTui — modal spec `scope` is honored', () => {
+  // MODAL-SCOPE-IGNORED: `modalMatches` read `input.screenText` verbatim, so a
+  // manifest's declared modal `scope` was silently discarded — cursor-cli
+  // shipped `window-around-question: 20` and still wedged. These lock the
+  // engine to what the spec asks for, and (critically) lock the ONE region that
+  // must stay whole-screen: the scrolled-out-question button-block fallback.
+  const baseModal = {
+    $schema: 'adhdev:tui/modal@1' as const,
+    questionPattern: 'Run this command|Do you want to|Do you trust|Trust|approve|Allow',
+    questionFlags: 'i',
+    buttonPattern:
+      '^[\\s│┃|]*(?:[❯›>▶●]\\s*)?(?:\\d+[.)]|\\[[A-Za-z]\\])\\s+([^│┃|]+?)\\s*[│┃|]?\\s*$',
+    buttonLabelGroup: 1,
+    buttonFlags: 'm',
+  };
+  // Mirrors adhdev-providers/cli/cursor-cli/provider.v1.json.
+  const scopedSpec: DetectStatusTuiSpec = {
+    settledPrompt: {
+      $schema: 'adhdev:tui/settled-prompt@1',
+      regex: '^\\s*(?:Auto|Plan|Ask)\\b[^\\n]*\\n\\s*(?:~|/)[^\\n]+$',
+      flags: 'm',
+      scope: 'last-n-lines',
+      scopeWindowLines: 8,
+    },
+    modal: { ...baseModal, scope: 'window-around-question', scopeWindowLines: 20 },
+    dispatchOrder: {
+      $schema: 'adhdev:tui/dispatch-order@1',
+      order: ['modal', 'spinner', 'settled-prompt'],
+      onNoMatch: 'preserve-last',
+    },
+  };
+  // Identical except the modal declares nothing — the pre-fix whole-screen read.
+  const unscopedSpec: DetectStatusTuiSpec = {
+    ...scopedSpec,
+    modal: { ...baseModal },
+  };
+
+  // A stale trust QUESTION the CLI never cleared, with its button rows already
+  // gone (the answered box's options were repainted away) and the live idle
+  // composer below.
+  //
+  // `scope` declares that the question + buttons must appear TOGETHER, so this
+  // orphaned question no longer counts as a modal cue. Two properties keep the
+  // test honest about which code path decides it:
+  //   - No approve/decline button pair survives anywhere, so the whole-screen
+  //     `buttonBlockApprovalCue` fallback stays silent and cannot mask the result.
+  //   - The intervening lines are ordinary tool prose, so no button row drifts
+  //     into the declared 20-line window.
+  const staleQuestionThenIdleComposer = [
+    '  ⚠ Workspace Trust Required',
+    '  Do you trust the contents of this directory?',
+    '    /private/tmp/adhdev-selfhost-cursor',
+    ...Array.from({ length: 22 }, (_, i) => `  ⏺ Reading src/module-${i + 1}.ts`),
+    '  Auto',
+    '  /private/tmp/adhdev-selfhost-cursor · main',
+  ].join('\n');
+
+  it('yields idle when the declared window excludes the stale box (scope honored)', () => {
+    expect(buildDetectStatusFromTui(scopedSpec)(statusInput(staleQuestionThenIdleComposer))).toBe('idle');
+  });
+
+  it('an undeclared scope still accepts an orphaned question (whole-screen back-compat)', () => {
+    // The contrast that isolates `scope`: same orphaned question, no composer
+    // below (so the pre-existing `modalSupersededBySettledPrompt` stale-box
+    // mitigation cannot fire and mask the comparison). Whole-screen semantics
+    // accept the bare question; the scoped spec below rejects it. This pins that
+    // honoring `scope` — not the older spatial mitigation — is what changed.
+    const orphanedQuestionOnly = [
+      '  ⚠ Workspace Trust Required',
+      '  Do you trust the contents of this directory?',
+      '    /private/tmp/adhdev-selfhost-cursor',
+      ...Array.from({ length: 22 }, (_, i) => `  ⏺ Reading src/module-${i + 1}.ts`),
+    ].join('\n');
+    expect(buildDetectStatusFromTui(unscopedSpec)(statusInput(orphanedQuestionOnly))).toBe(
+      'waiting_approval',
+    );
+    expect(buildDetectStatusFromTui(scopedSpec)(statusInput(orphanedQuestionOnly))).not.toBe(
+      'waiting_approval',
+    );
+  });
+
+  it('still fires waiting_approval for a LIVE modal under the same scoped spec', () => {
+    // Guards against over-narrowing: scoping must not cost real approvals.
+    const live = [
+      '  Run this command?',
+      '    ls -la',
+      '  ❯ 1. Yes',
+      '    2. No, and tell Cursor what to do differently',
+    ].join('\n');
+    expect(buildDetectStatusFromTui(scopedSpec)(statusInput(live))).toBe('waiting_approval');
+  });
+
+  it('REGRESSION GUARD: a modal whose question scrolled out of frame is still detected via the button block', () => {
+    // The load-bearing constraint (detect-status.ts:267-270). With the question
+    // line gone there is no anchor to window around, so the button-block cue
+    // must keep reading the whole screen. If scoping ever narrows this branch,
+    // an in-progress approval becomes undetectable — strictly worse than the
+    // stale box this scoping fixes. `Yes`/`No` = affirmative + decline pair.
+    const scrolledOut = [
+      '    ⏺ Reading src/index.ts',
+      '    ⏺ Reading src/app.ts',
+      '  ❯ 1. Yes',
+      '    2. No, and tell Cursor what to do differently',
+    ].join('\n');
+    expect(buildDetectStatusFromTui(scopedSpec)(statusInput(scrolledOut))).toBe('waiting_approval');
+  });
+
+  it('REGRESSION GUARD: an inline (y/n) approval with NO button rows still fires', () => {
+    // The second over-narrowing trap: claude-cli's `(y/n)` fallback variant
+    // renders its options inside the question line and draws no button block at
+    // all. A co-location rule that demanded separate button rows would suppress
+    // a real approval and wedge the session.
+    const inlineSpec: DetectStatusTuiSpec = {
+      ...scopedSpec,
+      modal: {
+        ...baseModal,
+        questionPattern: 'Are you sure',
+        questionVariants: [{ regex: '\\(y/n\\)|\\[Y/n\\]', flags: 'i', label: 'y-n-fallback' }],
+        scope: 'window-around-question',
+        scopeWindowLines: 48,
+      },
+    };
+    expect(buildDetectStatusFromTui(inlineSpec)(statusInput('Are you sure? (y/n)'))).toBe(
+      'waiting_approval',
+    );
+  });
+
+  it('anchors the window on the prose question, not a button label sharing its keyword', () => {
+    // cursor's questionPattern matches the bare word `Trust`, which also appears
+    // in the `[a] Trust this workspace` BUTTON. Anchoring there would slide the
+    // window down and drop the real question above it.
+    const screen = [
+      '  Do you trust the contents of this directory?',
+      '    /private/tmp/x',
+      '  ▶ [a] Trust this workspace',
+      '    [q] Quit',
+    ].join('\n');
+    expect(buildDetectStatusFromTui(scopedSpec)(statusInput(screen))).toBe('waiting_approval');
+  });
+});
+
 describe('buildDetectStatusFromTui — spec validation', () => {
   it('rejects an invalid spinner regex with a helpful error', () => {
     const spec: DetectStatusTuiSpec = {
