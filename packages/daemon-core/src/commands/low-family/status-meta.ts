@@ -11,6 +11,13 @@ import { loadConfig, updateConfig } from '../../config/config.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../../status/snapshot.js';
 import { getDaemonBuildInfo } from '../../build-info.js';
 import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
+// Cache-only read (no fetcher call) — see quota/refresh.ts header. Both
+// get_machine_runtime_stats and get_session_info are on-demand commands (dialog
+// open / machine page load), not the periodic mesh_status probe, but the
+// cheapness of readQuotaCache() means there is no reason to treat them
+// differently: it is a synchronous map lookup, never a fetch.
+import { readQuotaCache } from '../../quota/index.js';
+import { fetchCodexQuota } from '../../quota/fetchers/codex.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 
 export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
@@ -39,9 +46,19 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
     },
 
     get_machine_runtime_stats: async (_ctx: LowFamilyContext, _args: any) => {
+        void fetchCodexQuota();
+        const quota = readQuotaCache();
         return {
             success: true,
-            machine: buildMachineInfo('full'),
+            machine: {
+                ...buildMachineInfo('full'),
+                // Omit the key entirely rather than shipping `quota: undefined`
+                // — same "never reported" vs "reported empty" contract as
+                // buildLocalNodeFacts (mesh/node-facts.ts). `'quota' in machine`
+                // must stay false until the refresh loop's first tick.
+                ...(quota ? { quota } : {}),
+                machineNickname: loadConfig().machineNickname,
+            },
             timestamp: Date.now(),
         };
     },
@@ -83,6 +100,7 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
         const providerMetaForSession = providerType
             ? ctx.deps.providerLoader.resolve?.(providerType) || ctx.deps.providerLoader.getMeta(providerType)
             : undefined;
+        const quota = readQuotaCache();
         return {
             success: true,
             session: {
@@ -98,6 +116,14 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
                 runtimeMetadata: runtimeMeta,
                 launch: launchInfo,
             },
+            // Machine-scoped, not session-scoped: this daemon is the one the
+            // dialog already talked to (ctx handles the routing), so it can
+            // answer for its own machine's quota with no mesh lookup. Cache
+            // read only — see the import comment above. Key omitted entirely
+            // (not `quota: undefined`) until the refresh loop's first tick —
+            // same never-reported-vs-reported-empty contract as node-facts.ts.
+            ...(quota ? { quota } : {}),
+            machineNickname: loadConfig().machineNickname,
             coordinator: coord ? {
                 meshId: coord.meshId,
                 startedAt: coord.startedAt,

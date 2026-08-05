@@ -351,9 +351,33 @@ describe('provider quota helpers', () => {
       'utf8',
     )
     // web-core ships to the browser: a VALUE import from the daemon-core barrel
-    // drags Node builtins in and breaks the dashboard. Quota types come from
-    // the dependency-free mesh-shared leaf, type-only.
-    expect(helpers).toContain("import type { MeshNodeFactsProviderQuota, MeshNodeFactsQuotaWindow } from '@adhdev/mesh-shared'")
+    // drags Node builtins in and breaks the dashboard. The remaining mesh-shaped
+    // quota type (MeshNodeFactsProviderQuota, used by NodeQuotaEntry /
+    // collectNodeQuotaEntries / collectMachineQuotaGroups, which stayed here
+    // because they take RepoMeshNodeStatus/RepoMeshStatus) is type-only from
+    // the dependency-free mesh-shared leaf.
+    expect(helpers).toContain("import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'")
     expect(helpers).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+'@adhdev\/daemon-core'/m)
+  })
+
+  it('presentation helpers moved to utils/quota-format.ts stay bundle-safe there too', () => {
+    // quotaProviderLabel/formatQuotaWindow/formatQuotaReset/quotaUsageTone/
+    // describeQuotaFailure/formatQuotaFreshness were relocated out of this
+    // MeshGraph-scoped file (pure move, no behavior change) so the machine
+    // page and session-info dialog can format quota without importing from
+    // the mesh observability subtree. meshSurfaceHelpers.ts re-exports them so
+    // this file's own imports above keep resolving unchanged.
+    const quotaFormat = fs.readFileSync(
+      path.join(import.meta.dirname, '../../src/utils/quota-format.ts'),
+      'utf8',
+    )
+    expect(quotaFormat).toContain("import type { MeshNodeFactsProviderQuota, MeshNodeFactsQuotaWindow } from '@adhdev/mesh-shared'")
+    expect(quotaFormat).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+'@adhdev\/daemon-core'/m)
+
+    const helpers = fs.readFileSync(
+      path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshObservabilitySurface/meshSurfaceHelpers.ts'),
+      'utf8',
+    )
+    expect(helpers).toContain("from '../../../utils/quota-format'")
   })
 })

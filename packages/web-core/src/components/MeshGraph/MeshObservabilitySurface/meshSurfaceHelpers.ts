@@ -9,9 +9,30 @@ import type {
 // (A VALUE import from the @adhdev/daemon-core barrel would drag Node builtins
 // into the browser bundle and break the dashboard — types only from there.)
 import { canonicalDaemonId } from '@adhdev/mesh-shared'
-import type { MeshNodeFactsProviderQuota, MeshNodeFactsQuotaWindow } from '@adhdev/mesh-shared'
+import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from '../types'
 import type { MeshGraphSessionDetail } from '../../../utils/mesh-visualization'
+// Presentation-tier quota helpers moved to utils/quota-format.ts (pure move —
+// they depend only on @adhdev/mesh-shared types, not on anything MeshGraph-
+// specific) so the machine page and session-info dialog can format the same
+// quota values without importing from this mesh-observability subtree.
+// Re-exported here so existing imports of this file keep working unchanged.
+import {
+    quotaProviderLabel,
+    quotaUsageTone,
+    formatQuotaReset,
+    formatQuotaWindow,
+    describeQuotaFailure,
+    formatQuotaFreshness,
+} from '../../../utils/quota-format'
+export {
+    quotaProviderLabel,
+    quotaUsageTone,
+    formatQuotaReset,
+    formatQuotaWindow,
+    describeQuotaFailure,
+    formatQuotaFreshness,
+}
 
 export type SessionListEntry = {
     nodeId: string
@@ -194,68 +215,6 @@ export function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
 //       from "channel broken".
 //   'ok' — real numbers.
 
-/** Provider ids are wire keys ('claude-cli'); show the product name. */
-const QUOTA_PROVIDER_LABELS: Record<string, string> = {
-    'claude-cli': 'Claude Code',
-    'codex-cli': 'Codex CLI',
-    kimi: 'Kimi Code',
-}
-
-export function quotaProviderLabel(provider: string): string {
-    return QUOTA_PROVIDER_LABELS[provider] ?? provider
-}
-
-/**
- * Tone for a usage percentage. Same 70/90 thresholds the `adhdev quota` CLI
- * uses for its bar colour, so the two surfaces agree on what "getting close"
- * means.
- */
-export function quotaUsageTone(usedPercent: number): 'default' | 'good' | 'warn' | 'danger' | 'info' {
-    if (!Number.isFinite(usedPercent)) return 'default'
-    if (usedPercent >= 90) return 'danger'
-    if (usedPercent >= 70) return 'warn'
-    return 'good'
-}
-
-/** "23.5% used" / "23.5% used · resets in 2h 14m" for one rolling window. */
-export function formatQuotaWindow(window: MeshNodeFactsQuotaWindow | null | undefined, now: number = Date.now()): string | null {
-    if (!window || typeof window.usedPercent !== 'number' || !Number.isFinite(window.usedPercent)) return null
-    const used = `${window.usedPercent.toFixed(1)}% used`
-    const resets = formatQuotaReset(window.resetsAt, now)
-    return resets ? `${used} · ${resets}` : used
-}
-
-/** "resets in 2h 14m" — omitted entirely when the node reported no reset time. */
-export function formatQuotaReset(resetsAt: number | null | undefined, now: number = Date.now()): string | null {
-    if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null
-    const deltaMs = resetsAt - now
-    if (deltaMs <= 0) return 'resets now'
-    const minutes = Math.round(deltaMs / 60_000)
-    if (minutes < 60) return `resets in ${minutes}m`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `resets in ${hours}h ${minutes % 60}m`
-    return `resets in ${Math.floor(hours / 24)}d ${hours % 24}h`
-}
-
-/**
- * The failure line for a non-ok provider. Prefers the daemon's own message and
- * appends failureKind when it adds information the message does not already
- * carry — the kind is the field that separates "not installed" from "expired
- * credentials" from "channel broken".
- */
-export function describeQuotaFailure(quota: MeshNodeFactsProviderQuota): string {
-    const message = typeof quota.error === 'string' ? quota.error.trim() : ''
-    const kindRaw = quota.metadata?.failureKind
-    const kind = typeof kindRaw === 'string' ? kindRaw.trim() : ''
-    const kindLabel = kind ? kind.replace(/[_-]+/g, ' ') : ''
-    if (message && kindLabel && !message.toLowerCase().includes(kindLabel.toLowerCase())) {
-        return `${message} (${kindLabel})`
-    }
-    if (message) return message
-    if (kindLabel) return kindLabel
-    return quota.status === 'unavailable' ? 'not available on this node' : 'could not read quota'
-}
-
 export type NodeQuotaEntry = {
     provider: string
     quota: MeshNodeFactsProviderQuota
@@ -362,25 +321,6 @@ function machineDisplayName(node: RepoMeshNodeStatus): string | undefined {
     const nickname = node.nodeFacts?.machineNickname
     if (typeof nickname === 'string' && nickname.trim()) return nickname.trim()
     return undefined
-}
-
-/**
- * Age of the facts bundle this quota rode in on. Deliberately derived from the
- * bundle's existing `reportedAt` rather than any TTL field: refresh cadence is
- * owned by the reporting node and delivery cadence by whoever calls git_status,
- * so neither end is in a position to assert an expiry (mesh-shared node-facts.ts).
- * The reader judges age instead.
- */
-export function formatQuotaFreshness(reportedAt: number | null | undefined, now: number = Date.now()): string | null {
-    if (typeof reportedAt !== 'number' || !Number.isFinite(reportedAt) || reportedAt <= 0) return null
-    const ageMs = now - reportedAt
-    if (ageMs < 0) return 'just now'
-    const minutes = Math.floor(ageMs / 60_000)
-    if (minutes < 1) return 'just now'
-    if (minutes < 60) return `${minutes}m ago`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h ${minutes % 60}m ago`
-    return `${Math.floor(hours / 24)}d ${hours % 24}h ago`
 }
 
 // Maps the raw daemon-reported strategy to the 2-mode product vocabulary (Spread /

@@ -24,6 +24,9 @@ import type {
     SessionHostRuntimeTransition as CoreSessionHostRuntimeTransition,
     SessionHostDiagnostics as CoreSessionHostDiagnostics,
 } from '@adhdev/session-host-core';
+// Dependency-free leaf (mesh-shared never imports daemon-core) — type-only,
+// same convention as mesh/node-facts.ts.
+import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 
 export type {
     StatusResponse,
@@ -699,6 +702,15 @@ export interface MachineInfo {
     loadavg?: number[];
     uptime?: number;
     release?: string;
+    /**
+     * Provider plan quota, cache-only (see quota/refresh.ts — never a live
+     * fetch). Undefined until the machine's 15-minute refresh loop has ticked
+     * at least once; absent from the object entirely rather than an empty map,
+     * so "never reported" stays distinguishable from "reported and empty".
+     */
+    quota?: Record<string, MeshNodeFactsProviderQuota>;
+    /** Operator-set machine label (config machineNickname), self-reported. */
+    machineNickname?: string | null;
 }
 
 /** Detected IDE on a machine */
