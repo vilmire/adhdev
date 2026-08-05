@@ -118,13 +118,26 @@ function runFetch(options: {
     return { promise, child, clock, spawnCalls };
 }
 
-/** Standard happy-path responder. */
-function respondOk(result: unknown) {
+/**
+ * Standard happy-path responder.
+ *
+ * `account/read` is answered too: after the rate limits land, the fetcher asks
+ * the SAME app-server session who is signed in, so the reader can tell whose
+ * quota it is. `account` defaults to undefined — i.e. the account is unknown —
+ * which is the shape every pre-existing case expects (no email on the snapshot).
+ */
+function respondOk(result: unknown, account?: unknown) {
     return (child: FakeChild, request: { id: number; method: string }) => {
         if (request.method === 'initialize') {
             child.emitStdout(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {} })}\n`);
         } else if (request.method === 'account/rateLimits/read') {
             child.emitStdout(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, result })}\n`);
+        } else if (request.method === 'account/read') {
+            child.emitStdout(`${JSON.stringify({
+                jsonrpc: '2.0',
+                id: request.id,
+                ...(account === undefined ? { error: { code: -32000, message: 'no account' } } : { result: account }),
+            })}\n`);
         }
     };
 }
@@ -337,5 +350,35 @@ describe('fetchCodexQuota', () => {
 
         expect(quota.status).toBe('ok');
         expect(child.signals).toEqual(['SIGTERM']);
+    });
+
+    // ── Account label (whose quota is this?) ────────────────────────────────
+    it('labels the snapshot with the signed-in account from account/read', () => {
+        // The email comes from the CLI's own session, NOT from reading
+        // $CODEX_HOME/auth.json — see the fetcher header for why that matters.
+        return (async () => {
+            const { promise } = runFetch({
+                respond: respondOk(PLUS_ACCOUNT_RESULT, {
+                    account: { type: 'chatgpt', email: 'user@example.com', planType: 'plus' },
+                    requiresOpenaiAuth: true,
+                }),
+            });
+            const quota = await promise;
+            expect(quota.status).toBe('ok');
+            expect(quota.metadata?.accountEmail).toBe('user@example.com');
+            // planType still comes from the rate-limits payload, unchanged.
+            expect(quota.metadata?.planType).toBe('plus');
+        })();
+    });
+
+    it('still reports quota when the account lookup fails', () => {
+        // An unreadable account is a missing LABEL, never a failed reading.
+        return (async () => {
+            const { promise } = runFetch({ respond: respondOk(PLUS_ACCOUNT_RESULT) });
+            const quota = await promise;
+            expect(quota.status).toBe('ok');
+            expect(quota.weekly).not.toBeNull();
+            expect(quota.metadata?.accountEmail).toBeUndefined();
+        })();
     });
 });

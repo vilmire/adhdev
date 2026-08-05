@@ -13,6 +13,7 @@ import { IconClock, IconMonitor, IconTerminal, IconBot } from '../../components/
 import {
     collectQuotaEntries,
     describeQuotaFailure,
+    formatQuotaAccount,
     formatQuotaWindow,
     quotaProviderLabel,
     quotaUsageTone,
@@ -62,6 +63,13 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
                     return (
                         <div key={provider} className="flex flex-wrap items-center gap-2">
                             <span className="text-[12px] text-text-primary min-w-[92px]">{quotaProviderLabel(provider)}</span>
+                            {/* Whose quota — omitted entirely for providers that
+                                report no account (Claude Code exposes none). */}
+                            {formatQuotaAccount(quota) && (
+                                <span className="text-[10px] text-text-secondary" title={t('machine.quota.accountHint')}>
+                                    {formatQuotaAccount(quota)}
+                                </span>
+                            )}
                             {session && (
                                 <QuotaChip label={`5h ${session}`} tone={quotaUsageTone(quota.session?.usedPercent ?? NaN)} title={t('machine.quota.sessionHint')} />
                             )}

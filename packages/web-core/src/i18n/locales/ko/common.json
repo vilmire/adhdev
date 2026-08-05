@@ -2419,7 +2419,8 @@
             "quotaFreshnessHint": "이 사용량이 실려 온 런타임 facts 번들의 경과 시간",
             "machinesQuota": "머신 — 플랜 사용량",
             "machineNotReporting": "이 머신은 아직 런타임 정보를 보고하지 않았습니다 — 오프라인이거나 연결되지 않아 플랜 사용량을 알 수 없습니다.",
-            "quotaClaudeSetupHint": "Claude Code 에는 사용량 API 가 없어 ADHDev 가 statusLine 에서 읽습니다. `adhdev quota claude:install` 이 기존 statusline 을 감싸 그대로 유지하며, claude:uninstall 로 복원합니다."
+            "quotaClaudeSetupHint": "Claude Code 에는 사용량 API 가 없어 ADHDev 가 statusLine 에서 읽습니다. `adhdev quota claude:install` 이 기존 statusline 을 감싸 그대로 유지하며, claude:uninstall 로 복원합니다.",
+            "quotaAccountHint": "이 사용량이 속한 로그인 계정 — 프로바이더 CLI 가 보고한 값"
         },
         "overview": {
             "missionCard": "미션",
@@ -2745,7 +2746,8 @@
             "title": "플랜 사용량",
             "sessionHint": "이 머신이 보고한 5시간 롤링 플랜 창",
             "weeklyHint": "이 머신이 보고한 7일 롤링 플랜 창",
-            "failureHint": "이 머신이 해당 프로바이더의 사용량을 읽지 못했다고 보고했습니다"
+            "failureHint": "이 머신이 해당 프로바이더의 사용량을 읽지 못했다고 보고했습니다",
+            "accountHint": "이 사용량이 속한 로그인 계정 — 프로바이더 CLI 가 보고한 값"
         }
     },
     "settings": {

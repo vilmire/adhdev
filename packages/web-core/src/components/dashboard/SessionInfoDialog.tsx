@@ -26,6 +26,7 @@ import Dialog from '../ui/Dialog'
 import {
     collectQuotaEntries,
     describeQuotaFailure,
+    formatQuotaAccount,
     formatQuotaWindow,
     quotaProviderLabel,
     quotaUsageTone,
@@ -239,7 +240,7 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                 return (
                                     <Row
                                         key={provider}
-                                        k={quotaProviderLabel(provider)}
+                                        k={[quotaProviderLabel(provider), formatQuotaAccount(quota)].filter(Boolean).join(' · ')}
                                         v={
                                             session || weekly ? (
                                                 <span className="inline-flex flex-wrap items-center gap-1.5">

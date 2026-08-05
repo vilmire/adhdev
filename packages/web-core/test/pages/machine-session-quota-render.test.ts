@@ -116,7 +116,10 @@ describe('machine detail — Overview tab', () => {
 describe('session info dialog — compact form', () => {
   it('renders one Row per provider with usage chips', () => {
     expect(dialogSource).toContain('collectQuotaEntries(data.quota)')
-    expect(dialogSource).toMatch(/<Row\s+key=\{provider\}\s+k=\{quotaProviderLabel\(provider\)\}/)
+    // The Row label is provider + (when reported) the account it belongs to,
+    // joined only when there is something to join — see formatQuotaAccount.
+    expect(dialogSource).toMatch(/<Row\s+key=\{provider\}/)
+    expect(dialogSource).toContain("k={[quotaProviderLabel(provider), formatQuotaAccount(quota)].filter(Boolean).join(' · ')}")
     expect(dialogSource).toContain('<QuotaChip label={`5h ${session}`}')
     expect(dialogSource).toContain('<QuotaChip label={`7d ${weekly}`}')
     expect(dialogSource).toContain('describeQuotaFailure(quota)')

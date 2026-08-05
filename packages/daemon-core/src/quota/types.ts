@@ -71,6 +71,24 @@ export interface QuotaMetadata {
     retryAtMs?: number;
     /** Subscription tier when the provider reports one (e.g. "plus"). */
     planType?: string | null;
+    /**
+     * The signed-in account this quota belongs to, when the provider's own CLI
+     * reports it (codex: `account/read` → `account.email`). Present so a reader
+     * can tell WHOSE 27% they are looking at when several accounts are in play.
+     *
+     * ★PII — P2P / local surfaces ONLY. This must never reach the server.
+     * The status path is guarded by four independent allow-lists
+     * (CLAUDE.md "Server content boundary"), and none of them carries quota
+     * today: `buildCloudStatusReportPayload` does not even take a machine
+     * object, and `RoutingSessionEntry` has no quota field. Adding this value
+     * to any of those — or to the push-notification body — turns a one-line
+     * allow-list edit into an irreversible personal-data leak. The regression
+     * suite `test/quota/account-email-server-boundary.test.ts` fails if this
+     * field name appears in any of those layers; do not weaken it.
+     *
+     * Never persisted alongside a token, and never logged.
+     */
+    accountEmail?: string | null;
 }
 
 /** Normalized quota snapshot for a single provider. */

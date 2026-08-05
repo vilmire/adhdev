@@ -102,6 +102,26 @@ export function shouldShowClaudeSetupHint(provider: string, quota: MeshNodeFacts
     return quota.status !== 'ok'
 }
 
+/**
+ * The account/plan label for a provider row: "you@example.com · Plus".
+ *
+ * Both halves are optional and independent — codex reports both, kimi reports
+ * neither, and Claude Code exposes no account at all. Returns null when there
+ * is nothing to say, so a provider without an account renders no empty slot and
+ * no "unknown" placeholder: the absence is simply invisible.
+ *
+ * ★The email is PII travelling on a P2P-only path. Rendering it is fine; it
+ * must never be forwarded to a server payload or a push body. See
+ * daemon-core QuotaMetadata.accountEmail.
+ */
+export function formatQuotaAccount(quota: MeshNodeFactsProviderQuota | undefined): string | null {
+    const meta = quota?.metadata
+    const email = typeof meta?.accountEmail === 'string' ? meta.accountEmail.trim() : ''
+    const plan = typeof meta?.planType === 'string' ? meta.planType.trim() : ''
+    const parts = [email, plan].filter(Boolean)
+    return parts.length > 0 ? parts.join(' · ') : null
+}
+
 export type QuotaEntry = {
     provider: string
     quota: MeshNodeFactsProviderQuota

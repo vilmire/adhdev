@@ -2419,7 +2419,8 @@
             "quotaFreshnessHint": "Age of the runtime facts bundle this quota rode in on",
             "machinesQuota": "Machines — plan quota",
             "machineNotReporting": "This machine has not reported runtime facts yet — it is offline or unreachable, so its plan quota is unknown.",
-            "quotaClaudeSetupHint": "Claude Code has no quota API — ADHDev reads it from your statusLine. `adhdev quota claude:install` wraps your existing one (it keeps working) and claude:uninstall restores it."
+            "quotaClaudeSetupHint": "Claude Code has no quota API — ADHDev reads it from your statusLine. `adhdev quota claude:install` wraps your existing one (it keeps working) and claude:uninstall restores it.",
+            "quotaAccountHint": "The signed-in account this quota belongs to, as reported by the provider CLI"
         },
         "overview": {
             "missionCard": "Missions",
@@ -2745,7 +2746,8 @@
             "title": "Plan quota",
             "sessionHint": "Rolling 5-hour plan window reported by this machine",
             "weeklyHint": "Rolling 7-day plan window reported by this machine",
-            "failureHint": "This machine reported that it could not read this provider's quota"
+            "failureHint": "This machine reported that it could not read this provider's quota",
+            "accountHint": "The signed-in account this quota belongs to, as reported by the provider CLI"
         }
     },
     "settings": {

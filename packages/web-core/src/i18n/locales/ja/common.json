@@ -2419,7 +2419,8 @@
             "quotaFreshnessHint": "この使用量が含まれていたランタイム facts バンドルの経過時間",
             "machinesQuota": "マシン — プラン使用量",
             "machineNotReporting": "このマシンはまだランタイム情報を報告していません — オフラインまたは接続不可のため、プラン使用量は不明です。",
-            "quotaClaudeSetupHint": "Claude Code には使用量 API がないため、ADHDev は statusLine から読み取ります。`adhdev quota claude:install` は既存の statusline をラップして動作を維持し、claude:uninstall で復元できます。"
+            "quotaClaudeSetupHint": "Claude Code には使用量 API がないため、ADHDev は statusLine から読み取ります。`adhdev quota claude:install` は既存の statusline をラップして動作を維持し、claude:uninstall で復元できます。",
+            "quotaAccountHint": "この使用量が属するログイン中のアカウント（プロバイダー CLI の報告値）"
         },
         "overview": {
             "missionCard": "ミッション",
@@ -2745,7 +2746,8 @@
             "title": "プラン使用量",
             "sessionHint": "このマシンが報告した5時間ローリングのプラン枠",
             "weeklyHint": "このマシンが報告した7日間ローリングのプラン枠",
-            "failureHint": "このマシンはこのプロバイダーの使用量を読み取れなかったと報告しました"
+            "failureHint": "このマシンはこのプロバイダーの使用量を読み取れなかったと報告しました",
+            "accountHint": "この使用量が属するログイン中のアカウント（プロバイダー CLI の報告値）"
         }
     },
     "settings": {

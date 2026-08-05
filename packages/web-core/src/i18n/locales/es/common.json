@@ -2419,7 +2419,8 @@
             "quotaFreshnessHint": "Antigüedad del paquete de datos de runtime en el que llegó esta cuota",
             "machinesQuota": "Máquinas — cuota del plan",
             "machineNotReporting": "Esta máquina aún no ha reportado datos de runtime: está desconectada o inaccesible, así que se desconoce su cuota del plan.",
-            "quotaClaudeSetupHint": "Claude Code no tiene API de cuota: ADHDev la lee de tu statusLine. `adhdev quota claude:install` envuelve la que ya tienes (sigue funcionando) y claude:uninstall la restaura."
+            "quotaClaudeSetupHint": "Claude Code no tiene API de cuota: ADHDev la lee de tu statusLine. `adhdev quota claude:install` envuelve la que ya tienes (sigue funcionando) y claude:uninstall la restaura.",
+            "quotaAccountHint": "La cuenta con la sesión iniciada a la que pertenece esta cuota, según reporta la CLI del proveedor"
         },
         "overview": {
             "missionCard": "Misiones",
@@ -2745,7 +2746,8 @@
             "title": "Cuota del plan",
             "sessionHint": "Ventana móvil de 5 horas del plan reportada por esta máquina",
             "weeklyHint": "Ventana móvil de 7 días del plan reportada por esta máquina",
-            "failureHint": "Esta máquina informó que no pudo leer la cuota de este proveedor"
+            "failureHint": "Esta máquina informó que no pudo leer la cuota de este proveedor",
+            "accountHint": "La cuenta con la sesión iniciada a la que pertenece esta cuota, según reporta la CLI del proveedor"
         }
     },
     "settings": {

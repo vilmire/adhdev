@@ -57,7 +57,13 @@ export interface MeshNodeFactsProviderQuota {
     /** Unix ms of the snapshot itself — older than the bundle's reportedAt. */
     updatedAt: number
     error: string | null
-    metadata?: { failureKind?: string; source?: string; planType?: string | null; [extra: string]: unknown }
+    /**
+     * `accountEmail` is PII and rides this bundle because the bundle is
+     * P2P/local only — it must never be added to a server-bound payload. See
+     * daemon-core `QuotaMetadata.accountEmail` and the regression suite that
+     * pins its absence from every server allow-list.
+     */
+    metadata?: { failureKind?: string; source?: string; planType?: string | null; accountEmail?: string | null; [extra: string]: unknown }
     [extra: string]: unknown
 }
 

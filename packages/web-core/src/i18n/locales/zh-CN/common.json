@@ -2419,7 +2419,8 @@
             "quotaFreshnessHint": "该用量所在运行时 facts 数据包的时间",
             "machinesQuota": "机器 — 套餐用量",
             "machineNotReporting": "该机器尚未上报运行时信息 — 处于离线或无法连接状态，因此套餐用量未知。",
-            "quotaClaudeSetupHint": "Claude Code 没有用量 API，ADHDev 从 statusLine 读取。`adhdev quota claude:install` 会包装你现有的 statusline（继续正常工作），claude:uninstall 可还原。"
+            "quotaClaudeSetupHint": "Claude Code 没有用量 API，ADHDev 从 statusLine 读取。`adhdev quota claude:install` 会包装你现有的 statusline（继续正常工作），claude:uninstall 可还原。",
+            "quotaAccountHint": "该用量所属的登录账号（由提供程序 CLI 上报）"
         },
         "overview": {
             "missionCard": "任务",
@@ -2745,7 +2746,8 @@
             "title": "套餐用量",
             "sessionHint": "该机器上报的 5 小时滚动套餐窗口",
             "weeklyHint": "该机器上报的 7 天滚动套餐窗口",
-            "failureHint": "该机器报告无法读取此提供程序的用量"
+            "failureHint": "该机器报告无法读取此提供程序的用量",
+            "accountHint": "该用量所属的登录账号（由提供程序 CLI 上报）"
         }
     },
     "settings": {

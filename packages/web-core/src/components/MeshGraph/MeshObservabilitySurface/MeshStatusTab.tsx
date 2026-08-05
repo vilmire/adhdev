@@ -12,6 +12,7 @@ import {
     SCHEDULING_STRATEGY_LABELS,
     collectMachineQuotaGroups,
     describeQuotaFailure,
+    formatQuotaAccount,
     formatQuotaFreshness,
     formatQuotaWindow,
     healthTone,
@@ -149,6 +150,14 @@ function MeshMachineQuotaCard({ machine }: { machine: MachineQuotaGroup }) {
                         return (
                             <div key={provider} className="flex flex-wrap items-center gap-1.5">
                                 <span className={`text-[11px] ${meshTheme.textPrimary}`}>{quotaProviderLabel(provider)}</span>
+                                {/* Whose quota this is. Absent for providers that
+                                    report no account (Claude Code exposes none), and
+                                    then nothing renders — no placeholder. */}
+                                {formatQuotaAccount(quota) && (
+                                    <span className={`text-[10px] ${meshTheme.textSecondary}`} title={t('mesh.status.quotaAccountHint')}>
+                                        {formatQuotaAccount(quota)}
+                                    </span>
+                                )}
                                 {session && (
                                     <Badge
                                         label={`5h ${session}`}

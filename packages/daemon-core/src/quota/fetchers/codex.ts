@@ -47,6 +47,14 @@ const KILL_ESCALATION_MS = 2_000;
 
 const INITIALIZE_ID = 1;
 const RATE_LIMITS_ID = 2;
+/**
+ * `account/read` on the same app-server session reports `{ account: { type,
+ * email, planType }, requiresOpenaiAuth }`. Asking the CLI keeps the standing
+ * rule that we never read `$CODEX_HOME/auth.json` ourselves (see the header):
+ * the account label comes from the tool that owns the credential, exactly like
+ * the rate limits do.
+ */
+const ACCOUNT_ID = 3;
 
 const CLIENT_NAME = 'adhdev';
 const CLIENT_VERSION = '1.0.0';
@@ -126,6 +134,23 @@ function assignWindows(windows: QuotaWindow[]): { session: QuotaWindow | null; w
         }
     }
     return { session, weekly };
+}
+
+/**
+ * Attach the signed-in account's email to a quota snapshot, when `account/read`
+ * reported one. ONLY the email is taken — no token, no `sub`, nothing else from
+ * the account object — so the value that travels is the minimum that answers
+ * "whose quota is this?".
+ *
+ * Returns the snapshot unchanged when the account is unknown, so a provider
+ * that cannot report one simply has no label rather than an empty placeholder.
+ */
+export function withAccountEmail(quota: ProviderQuota, accountResult: unknown): ProviderQuota {
+    const root = (typeof accountResult === 'object' && accountResult !== null ? accountResult : {}) as Record<string, unknown>;
+    const account = (typeof root.account === 'object' && root.account !== null ? root.account : {}) as Record<string, unknown>;
+    const email = typeof account.email === 'string' ? account.email.trim() : '';
+    if (!email) return quota;
+    return { ...quota, metadata: { ...(quota.metadata ?? {}), accountEmail: email } };
 }
 
 function mapRateLimits(result: unknown, nowMs: number): ProviderQuota {
@@ -217,6 +242,13 @@ export async function fetchCodexQuota(overrides: QuotaFetchDeps = {}): Promise<P
         let timeoutHandle: unknown;
         let killHandle: unknown;
         let stderr = '';
+        /**
+         * The quota snapshot, held between the rate-limits reply and the
+         * account/read reply. If the timeout or a child exit fires in that gap,
+         * `finish` below still resolves with it rather than losing a good
+         * reading to a slow account lookup.
+         */
+        let pendingQuota: ProviderQuota | null = null;
 
         /**
          * Single exit point. Resolves once and always tears the child down:
@@ -226,6 +258,12 @@ export async function fetchCodexQuota(overrides: QuotaFetchDeps = {}): Promise<P
         const finish = (quota: ProviderQuota): void => {
             if (settled) {
                 return;
+            }
+            // A good quota reading already in hand outranks any failure raised
+            // while we were only enriching it with the account label — the
+            // timeout and the child-exit paths both land here.
+            if (pendingQuota !== null && quota.status !== 'ok') {
+                quota = pendingQuota;
             }
             settled = true;
             deps.clearTimeout(timeoutHandle);
@@ -310,7 +348,32 @@ export async function fetchCodexQuota(overrides: QuotaFetchDeps = {}): Promise<P
                     );
                     return;
                 }
-                finish(mapRateLimits(message.result, deps.now()));
+                // Quota is in hand. Ask the SAME app-server session who is signed
+                // in, so the reader can tell whose usage this is. Best-effort by
+                // construction: any failure below still finishes with the quota
+                // we already have, just without the account label.
+                pendingQuota = mapRateLimits(message.result, deps.now());
+                try {
+                    child.stdin.write(
+                        `${JSON.stringify({
+                            jsonrpc: '2.0',
+                            id: ACCOUNT_ID,
+                            method: 'account/read',
+                        })}\n`,
+                    );
+                } catch {
+                    finish(pendingQuota);
+                }
+                return;
+            }
+
+            if (message.id === ACCOUNT_ID) {
+                // Only reachable after the rate-limits reply set pendingQuota, but
+                // an out-of-order/duplicate reply must not crash the fetcher.
+                if (pendingQuota === null) return;
+                // Never let account enrichment turn a good quota reading into a
+                // failure — an unreadable account is a missing label, not an error.
+                finish(withAccountEmail(pendingQuota, message.error ? undefined : message.result));
             }
         };
 

@@ -14,6 +14,7 @@ import {
   quotaProviderLabel,
   quotaUsageTone,
   shouldShowClaudeSetupHint,
+  formatQuotaAccount,
 } from '../../src/components/MeshGraph/MeshObservabilitySurface/meshSurfaceHelpers'
 import { canonicalizeRepoMeshStatus } from '../../src/utils/repo-mesh-status'
 
@@ -498,5 +499,43 @@ describe('claude-only quota setup hint', () => {
     expect(source).toContain('describeQuotaFailure(quota)')
     expect(source).toContain("t('mesh.status.quotaNotCollected')")
     expect(source).toContain("t('mesh.status.machineNotReporting')")
+  })
+})
+
+// ── Account + plan label ────────────────────────────────────────────────────
+// "codex 27%" does not say WHOSE 27%. planType already rode metadata unused;
+// accountEmail is new (codex `account/read`). Both are optional and provider
+// dependent — Claude Code reports no account at all.
+describe('quota account label', () => {
+  const q = (metadata: Record<string, unknown>) => ({
+    provider: 'codex-cli', status: 'ok', session: null, weekly: null,
+    updatedAt: 1, error: null, metadata,
+  }) as any
+
+  it('joins email and plan when both are reported', () => {
+    expect(formatQuotaAccount(q({ accountEmail: 'user@example.com', planType: 'plus' })))
+      .toBe('user@example.com · plus')
+  })
+
+  it('shows whichever half is reported, alone', () => {
+    expect(formatQuotaAccount(q({ planType: 'plus' }))).toBe('plus')
+    expect(formatQuotaAccount(q({ accountEmail: 'user@example.com' }))).toBe('user@example.com')
+  })
+
+  it('renders NOTHING for a provider with no account (Claude Code)', () => {
+    // No empty slot, no "unknown" placeholder — the absence is invisible.
+    expect(formatQuotaAccount(q({ source: 'statusline' }))).toBeNull()
+    expect(formatQuotaAccount(q({}))).toBeNull()
+    expect(formatQuotaAccount(undefined)).toBeNull()
+    expect(formatQuotaAccount(q({ accountEmail: '  ', planType: '' }))).toBeNull()
+  })
+
+  it('is rendered on the mesh Status card, guarded so absence draws nothing', () => {
+    const source = fs.readFileSync(
+      path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshObservabilitySurface/MeshStatusTab.tsx'),
+      'utf8',
+    )
+    expect(source).toContain('formatQuotaAccount(quota) && (')
+    expect(source).toContain("t('mesh.status.quotaAccountHint')")
   })
 })
