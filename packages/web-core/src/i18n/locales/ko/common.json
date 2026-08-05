@@ -2415,9 +2415,9 @@
             "protocolTitle": "프로토콜 및 프로바이더 버전",
             "nodesRuntime": "노드 — 런타임",
             "noNodesReporting": "아직 런타임을 보고하는 노드가 없습니다.",
-            "quotaTitle": "플랜 사용량",
-            "quotaNotCollected": "아직 플랜 사용량을 수집하지 않았습니다 — 첫 갱신(약 15분) 이후, 그리고 에이전트가 활동한 경우에만 노드가 보고합니다.",
-            "quotaFreshnessHint": "이 사용량이 실려 온 런타임 facts 번들의 경과 시간"
+            "quotaNotCollected": "아직 플랜 사용량을 수집하지 않았습니다 — 첫 갱신(약 15분) 이후, 그리고 에이전트가 활동한 경우에만 머신이 보고합니다.",
+            "quotaFreshnessHint": "이 사용량이 실려 온 런타임 facts 번들의 경과 시간",
+            "machinesQuota": "머신 — 플랜 사용량"
         },
         "overview": {
             "missionCard": "미션",

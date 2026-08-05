@@ -10,7 +10,7 @@ import { MeshGraphThemeContext } from './meshSurfaceTheme'
 import { Badge } from './meshSurfacePrimitives'
 import {
     SCHEDULING_STRATEGY_LABELS,
-    collectNodeQuotaEntries,
+    collectMachineQuotaGroups,
     describeQuotaFailure,
     formatQuotaFreshness,
     formatQuotaWindow,
@@ -20,6 +20,7 @@ import {
     schedulingReasonLabel,
     shortCommit,
     summarizeNodeDrift,
+    type MachineQuotaGroup,
 } from './meshSurfaceHelpers'
 
 // ─── Status / Runtime tab ───────────────────────────────────────────────────
@@ -86,71 +87,103 @@ function MeshNodeSchedulingBadges({ scheduling }: { scheduling?: RepoMeshNodeSch
     )
 }
 
-// Per-node provider plan quota, read from the versioned facts bundle
-// (nodeFacts.quota — observation only, nothing routes on it). Three states are
-// kept visually distinct on purpose; see the helper block in
-// meshSurfaceHelpers.ts for why conflating them misleads:
+// Provider plan quota, rendered PER MACHINE — not per node.
+//
+// Quota is a machine property: the codex/kimi/claude credentials are machine
+// local and the 5h/7d windows belong to that machine's plan. It arrives on
+// MeshNodeFacts (a per-node envelope) purely because git_status is the
+// transport, and letting the transport dictate the display unit is what put
+// the same numbers on every card: a machine with N worktree nodes repeated one
+// codex reading N times, which reads as N independent quotas. Nodes are
+// grouped by canonical daemon id so each machine's quota appears exactly once.
+//
+// Three states stay visually distinct here exactly as they did per node; see
+// the helper block in meshSurfaceHelpers.ts for why conflating them misleads:
 //   - unreported: no quota key yet. NORMAL for a daemon started < ~15min ago or
 //     one sitting idle, so it renders as a muted line, never a warning badge.
-//   - unavailable/error: the node looked and could not read it — failureKind
+//   - unavailable/error: the machine looked and could not read it — failureKind
 //     shown, because that is what tells "not installed" from "channel broken".
 //   - ok: the 5h / 7d windows, tinted at the same 70/90% thresholds the
 //     `adhdev quota` CLI uses.
-function MeshNodeQuotaRows({ node }: { node: RepoMeshNodeStatus }) {
+function MeshMachineQuotaCard({ machine }: { machine: MachineQuotaGroup }) {
     const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
-    const entries = collectNodeQuotaEntries(node)
-    // Only claim "not collected yet" for a node that actually sent a facts
-    // bundle. A node with no facts at all is an older/quiet daemon, and saying
-    // anything about its quota would be inventing a state it never reported.
-    if (entries.length === 0) {
-        if (!node.nodeFacts) return null
-        return (
-            <div className={`mt-1.5 text-[11px] ${meshTheme.textSecondary}`}>
-                {t('mesh.status.quotaNotCollected')}
-            </div>
-        )
-    }
-    const freshness = formatQuotaFreshness(node.nodeFacts?.reportedAt)
+    const freshness = formatQuotaFreshness(machine.reportedAt)
     return (
-        <div className="mt-2 flex flex-col gap-1.5">
-            <div className="flex flex-wrap items-baseline gap-2">
-                <span className={`text-[11px] font-semibold ${meshTheme.textPrimary}`}>{t('mesh.status.quotaTitle')}</span>
+        <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
+            <div className="flex flex-wrap items-center gap-2">
+                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>{machine.label}</span>
+                {machine.daemonBuildVersion && (
+                    <Badge label={machine.daemonBuildVersion} tone="default" title="Daemon build version running on this machine" />
+                )}
+                {machine.nodeCount > 1 && (
+                    <Badge
+                        label={`${machine.nodeCount} nodes`}
+                        tone="default"
+                        title="Mesh nodes (workspaces/worktrees) hosted by this machine — they share this one plan quota"
+                    />
+                )}
                 {freshness && (
                     <span className={`text-[10px] ${meshTheme.textSecondary}`} title={t('mesh.status.quotaFreshnessHint')}>
                         {freshness}
                     </span>
                 )}
             </div>
-            {entries.map(({ provider, quota }) => {
-                const session = formatQuotaWindow(quota.session)
-                const weekly = formatQuotaWindow(quota.weekly)
-                const hasWindows = !!(session || weekly)
-                return (
-                    <div key={provider} className="flex flex-wrap items-center gap-1.5">
-                        <span className={`text-[11px] ${meshTheme.textPrimary}`}>{quotaProviderLabel(provider)}</span>
-                        {session && (
-                            <Badge
-                                label={`5h ${session}`}
-                                tone={quotaUsageTone(quota.session?.usedPercent ?? NaN)}
-                                title="Rolling 5-hour plan window reported by this node"
-                            />
-                        )}
-                        {weekly && (
-                            <Badge
-                                label={`7d ${weekly}`}
-                                tone={quotaUsageTone(quota.weekly?.usedPercent ?? NaN)}
-                                title="Rolling 7-day plan window reported by this node"
-                            />
-                        )}
-                        {!hasWindows && (
-                            <span className={`text-[11px] ${meshTheme.textSecondary}`} title="This node reported that it could not read this provider's quota">
-                                {describeQuotaFailure(quota)}
-                            </span>
-                        )}
-                    </div>
-                )
-            })}
+            {machine.quota.length === 0 ? (
+                <div className={`mt-1.5 text-[11px] ${meshTheme.textSecondary}`}>
+                    {t('mesh.status.quotaNotCollected')}
+                </div>
+            ) : (
+                <div className="mt-2 flex flex-col gap-1.5">
+                    {machine.quota.map(({ provider, quota }) => {
+                        const session = formatQuotaWindow(quota.session)
+                        const weekly = formatQuotaWindow(quota.weekly)
+                        const hasWindows = !!(session || weekly)
+                        return (
+                            <div key={provider} className="flex flex-wrap items-center gap-1.5">
+                                <span className={`text-[11px] ${meshTheme.textPrimary}`}>{quotaProviderLabel(provider)}</span>
+                                {session && (
+                                    <Badge
+                                        label={`5h ${session}`}
+                                        tone={quotaUsageTone(quota.session?.usedPercent ?? NaN)}
+                                        title="Rolling 5-hour plan window reported by this machine"
+                                    />
+                                )}
+                                {weekly && (
+                                    <Badge
+                                        label={`7d ${weekly}`}
+                                        tone={quotaUsageTone(quota.weekly?.usedPercent ?? NaN)}
+                                        title="Rolling 7-day plan window reported by this machine"
+                                    />
+                                )}
+                                {!hasWindows && (
+                                    <span className={`text-[11px] ${meshTheme.textSecondary}`} title="This machine reported that it could not read this provider's quota">
+                                        {describeQuotaFailure(quota)}
+                                    </span>
+                                )}
+                            </div>
+                        )
+                    })}
+                </div>
+            )}
+        </div>
+    )
+}
+
+function MeshMachinesQuotaSection({ status }: { status: RepoMeshStatus }) {
+    const { t } = useTranslation('common')
+    const meshTheme = useContext(MeshGraphThemeContext)
+    const machines = collectMachineQuotaGroups(status)
+    // Machines that never sent a facts bundle are dropped by the collector, so
+    // an empty list means nothing in the mesh has reported runtime facts at
+    // all. Say nothing rather than render an empty heading.
+    if (machines.length === 0) return null
+    return (
+        <div className="flex flex-col gap-2">
+            <span className={`px-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
+                {t('mesh.status.machinesQuota')}
+            </span>
+            {machines.map(machine => <MeshMachineQuotaCard key={machine.machineKey} machine={machine} />)}
         </div>
     )
 }
@@ -210,7 +243,6 @@ function MeshNodeRuntimeRow({ node, mainAnchorCommit }: { node: RepoMeshNodeStat
                     ))}
                 </div>
             )}
-            <MeshNodeQuotaRows node={node} />
             <div className={`mt-1.5 text-[11px] ${meshTheme.textSecondary}`}>
                 {summarizeNodeDrift(node)}
                 {head ? <span className="ml-2 font-mono opacity-70">@{head}</span> : null}
@@ -284,6 +316,11 @@ export function MeshStatusTab({ canonicalStatus }: { canonicalStatus: RepoMeshSt
         <div className="flex flex-col gap-3 p-1">
             <MeshSchedulingCard scheduling={canonicalStatus.scheduling} />
             <MeshProtocolVisibilityCard status={canonicalStatus} />
+            {/* Machines before nodes: quota is a machine property, and several
+                nodes can share one machine. Grouping it here keeps each plan
+                reading in exactly one place instead of repeating it on every
+                worktree card below. */}
+            <MeshMachinesQuotaSection status={canonicalStatus} />
             <div className="flex flex-col gap-2">
                 <span className={`px-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
                     {t('mesh.status.nodesRuntime')}

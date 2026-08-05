@@ -2415,9 +2415,9 @@
             "protocolTitle": "Versiones de protocolo y proveedores",
             "nodesRuntime": "Nodos — runtime",
             "noNodesReporting": "Todavía no hay nodos que reporten el runtime.",
-            "quotaTitle": "Cuota del plan",
-            "quotaNotCollected": "Aún no se ha recopilado la cuota del plan: un nodo la reporta tras su primera actualización (~15 min) y solo si un agente ha estado activo.",
-            "quotaFreshnessHint": "Antigüedad del paquete de datos de runtime en el que llegó esta cuota"
+            "quotaNotCollected": "Aún no se ha recopilado la cuota del plan: una máquina la reporta tras su primera actualización (~15 min) y solo si un agente ha estado activo.",
+            "quotaFreshnessHint": "Antigüedad del paquete de datos de runtime en el que llegó esta cuota",
+            "machinesQuota": "Máquinas — cuota del plan"
         },
         "overview": {
             "missionCard": "Misiones",

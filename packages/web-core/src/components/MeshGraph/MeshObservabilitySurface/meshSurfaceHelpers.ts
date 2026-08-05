@@ -5,6 +5,10 @@ import type {
     RepoMeshQueueTask,
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
+// Value import is safe here: @adhdev/mesh-shared is the dependency-free leaf.
+// (A VALUE import from the @adhdev/daemon-core barrel would drag Node builtins
+// into the browser bundle and break the dashboard — types only from there.)
+import { canonicalDaemonId } from '@adhdev/mesh-shared'
 import type { MeshNodeFactsProviderQuota, MeshNodeFactsQuotaWindow } from '@adhdev/mesh-shared'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from '../types'
 import type { MeshGraphSessionDetail } from '../../../utils/mesh-visualization'
@@ -271,6 +275,93 @@ export function collectNodeQuotaEntries(node: RepoMeshNodeStatus): NodeQuotaEntr
         entries.push({ provider, quota: value as MeshNodeFactsProviderQuota })
     }
     return entries.sort((a, b) => quotaProviderLabel(a.provider).localeCompare(quotaProviderLabel(b.provider)))
+}
+
+export type MachineQuotaGroup = {
+    /** Canonical grouping key — the machine core, not a raw daemon id form. */
+    machineKey: string
+    /** Human-facing machine name (operator nickname when the machine set one). */
+    label: string
+    /** Daemon build version, shown next to the name like the node build chip. */
+    daemonBuildVersion?: string
+    /** How many mesh nodes this machine hosts — they share this one quota. */
+    nodeCount: number
+    /** Freshest facts stamp across this machine's nodes. */
+    reportedAt?: number
+    quota: NodeQuotaEntry[]
+}
+
+/**
+ * Group mesh nodes into MACHINES and attach each machine's quota once.
+ *
+ * Why grouping is required rather than rendering per node: quota is a machine
+ * property (machine-local credentials, machine-wide 5h/7d windows) that rides a
+ * per-node envelope because git_status is the transport. A machine hosting
+ * several worktree nodes therefore reports the SAME numbers on every node, and
+ * rendering them per node makes one codex reading look like N independent ones.
+ *
+ * Grouping key is `canonicalDaemonId` — NOT the raw daemonId string. The same
+ * daemon legitimately appears as `mach_<hex>`, `daemon_mach_<hex>` and
+ * `standalone_mach_<hex>`; comparing raw forms is the recurring identity defect
+ * in this codebase and here it would split one machine into several cards,
+ * reintroducing the duplication this function exists to remove. Nodes with no
+ * usable daemon id fall back to their machineId, then to their own nodeId, so
+ * an unidentified node becomes its own machine rather than colliding with
+ * every other unidentified node under a shared empty key.
+ *
+ * Machines that never sent a facts bundle are OMITTED entirely: with no report
+ * there is nothing to say, and claiming "not collected yet" would invent a
+ * state the machine never described. A machine that sent facts but no quota
+ * key IS included (with an empty quota list) — that is the real "not collected
+ * yet", which the caller renders as a muted line.
+ */
+export function collectMachineQuotaGroups(status: RepoMeshStatus): MachineQuotaGroup[] {
+    const groups = new Map<string, MachineQuotaGroup>()
+    for (const node of status.nodes) {
+        const facts = node.nodeFacts
+        const machineKey = canonicalDaemonId(node.daemonId) || node.machineId || node.nodeId
+        if (!machineKey) continue
+        let group = groups.get(machineKey)
+        if (!group) {
+            group = { machineKey, label: '', nodeCount: 0, quota: [] }
+            groups.set(machineKey, group)
+        }
+        group.nodeCount += 1
+        // Prefer the freshest report when a machine's nodes disagree: the newest
+        // bundle is the one whose quota numbers are least stale.
+        const reportedAt = typeof facts?.reportedAt === 'number' && Number.isFinite(facts.reportedAt)
+            ? facts.reportedAt
+            : undefined
+        const isFresher = reportedAt !== undefined && (group.reportedAt === undefined || reportedAt > group.reportedAt)
+        if (isFresher) group.reportedAt = reportedAt
+        const entries = collectNodeQuotaEntries(node)
+        if (entries.length > 0 && (isFresher || group.quota.length === 0)) group.quota = entries
+        const version = facts?.daemonBuild?.version || node.daemonBuildVersion
+        if (version && (isFresher || !group.daemonBuildVersion)) group.daemonBuildVersion = version
+        const label = machineDisplayName(node)
+        if (label && (isFresher || !group.label)) group.label = label
+    }
+    return [...groups.values()]
+        // A machine that never reported facts has nothing to say about quota.
+        .filter(group => group.reportedAt !== undefined)
+        .map(group => ({ ...group, label: group.label || group.machineKey }))
+        .sort((a, b) => a.label.localeCompare(b.label))
+}
+
+/**
+ * The name to show for the machine hosting a node.
+ *
+ * `machineNickname` (operator-set, self-reported on the facts bundle) is the
+ * only value that names the MACHINE. `node.machineLabel` is deliberately not
+ * preferred: buildMeshNodeDisplayLabel falls back to a workspace basename, so
+ * two worktrees on one machine carry different machineLabels and using it here
+ * would label one machine inconsistently depending on which node was seen
+ * first.
+ */
+function machineDisplayName(node: RepoMeshNodeStatus): string | undefined {
+    const nickname = node.nodeFacts?.machineNickname
+    if (typeof nickname === 'string' && nickname.trim()) return nickname.trim()
+    return undefined
 }
 
 /**

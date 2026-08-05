@@ -3,6 +3,7 @@ import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import {
+  collectMachineQuotaGroups,
   collectNodeQuotaEntries,
   describeQuotaFailure,
   formatQuotaFreshness,
@@ -13,12 +14,18 @@ import {
 } from '../../src/components/MeshGraph/MeshObservabilitySurface/meshSurfaceHelpers'
 import { canonicalizeRepoMeshStatus } from '../../src/utils/repo-mesh-status'
 
-// Provider quota surfacing on the Status/Runtime tab. The behaviour under test
-// is the THREE-STATE distinction: a node that has not reported quota yet is a
-// NORMAL freshly-started/idle daemon (the refresh loop's first tick is at
-// +15min and idle machines skip ticks), a node reporting status
-// 'unavailable'/'error' looked and failed, and only 'ok' carries numbers.
-// Collapsing those three is the defect this suite guards against.
+// Provider quota surfacing on the Status/Runtime tab. Two contracts are under
+// test:
+//
+// 1. UNIT — quota is a MACHINE property, so it renders once per machine, not
+//    once per node. It rides a per-node envelope only because git_status is the
+//    transport; a machine with several worktree nodes reports identical numbers
+//    on each, and rendering per node made one codex reading look like N.
+//
+// 2. THREE STATES — a machine that has not reported quota yet is a NORMAL
+//    freshly-started/idle daemon (first refresh tick is at +15min and idle
+//    machines skip ticks), a machine reporting 'unavailable'/'error' looked and
+//    failed, and only 'ok' carries numbers. Collapsing those three misleads.
 
 function nodeWithQuota(quota: unknown, reportedAt = Date.now()): any {
   return {
@@ -31,6 +38,146 @@ function nodeWithQuota(quota: unknown, reportedAt = Date.now()): any {
     nodeFacts: { schemaVersion: 1, reportedAt, ...(quota ? { quota } : {}) },
   }
 }
+
+const OK_QUOTA = {
+  'codex-cli': {
+    provider: 'codex-cli', status: 'ok', updatedAt: 1, error: null,
+    session: { usedPercent: 26, windowMinutes: 300, resetsAt: null },
+    weekly: { usedPercent: 12, windowMinutes: 10080, resetsAt: null },
+  },
+}
+
+/** One mesh node bound to a machine, with optional facts. */
+function node(overrides: Record<string, unknown>): any {
+  return {
+    nodeId: 'node_x',
+    machineLabel: 'Node X',
+    workspace: '/repo',
+    health: 'online',
+    providers: [],
+    activeSessions: [],
+    ...overrides,
+  }
+}
+
+function statusOf(nodes: any[]): any {
+  return {
+    meshId: 'mesh_m', meshName: 'M', repoIdentity: 'repo',
+    refreshedAt: '2026-08-05T00:00:00.000Z',
+    nodes, queue: { tasks: [] }, ledger: { entries: [] },
+  }
+}
+
+function facts(quota: unknown, extra: Record<string, unknown> = {}): any {
+  return { schemaVersion: 1, reportedAt: 1_000, ...(quota ? { quota } : {}), ...extra }
+}
+
+describe('machine-scoped quota grouping', () => {
+  it('renders one machine (and one quota block) when several nodes share a daemon', () => {
+    // THE core contract of the machine-unit fix. Three worktree nodes on one
+    // machine previously produced three identical codex readings.
+    const groups = collectMachineQuotaGroups(statusOf([
+      node({ nodeId: 'n_main', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA, { machineNickname: 'M1-Server' }) }),
+      node({ nodeId: 'n_wt1', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA, { machineNickname: 'M1-Server' }) }),
+      node({ nodeId: 'n_wt2', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA, { machineNickname: 'M1-Server' }) }),
+    ]))
+
+    expect(groups).toHaveLength(1)
+    expect(groups[0].nodeCount).toBe(3)
+    expect(groups[0].label).toBe('M1-Server')
+    // The codex reading appears exactly once, not once per node.
+    expect(groups[0].quota).toHaveLength(1)
+    expect(groups[0].quota[0].provider).toBe('codex-cli')
+  })
+
+  it('groups by canonical daemon id, so interchangeable id forms are one machine', () => {
+    // mach_ / daemon_mach_ / standalone_mach_ are the same machine. Raw-string
+    // grouping would split it into three cards and reintroduce the duplication
+    // this function exists to remove (the canon-identity defect class).
+    const groups = collectMachineQuotaGroups(statusOf([
+      node({ nodeId: 'n1', daemonId: 'mach_abc', nodeFacts: facts(OK_QUOTA) }),
+      node({ nodeId: 'n2', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA) }),
+      node({ nodeId: 'n3', daemonId: 'standalone_mach_abc', nodeFacts: facts(OK_QUOTA) }),
+    ]))
+
+    expect(groups).toHaveLength(1)
+    expect(groups[0].nodeCount).toBe(3)
+  })
+
+  it('keeps genuinely different machines apart', () => {
+    const groups = collectMachineQuotaGroups(statusOf([
+      node({ nodeId: 'n1', daemonId: 'daemon_mach_aaa', nodeFacts: facts(OK_QUOTA, { machineNickname: 'Air' }) }),
+      node({ nodeId: 'n2', daemonId: 'daemon_mach_bbb', nodeFacts: facts(null, { machineNickname: 'Jupiter' }) }),
+    ]))
+
+    expect(groups.map(g => g.label)).toEqual(['Air', 'Jupiter'])
+    expect(groups.find(g => g.label === 'Air')!.quota).toHaveLength(1)
+    // Reported facts but no quota key = the "not collected yet" state, kept.
+    expect(groups.find(g => g.label === 'Jupiter')!.quota).toEqual([])
+  })
+
+  it('stays silent about machines that never reported a facts bundle', () => {
+    // No report at all: saying "not collected yet" would invent a state the
+    // machine never described. Distinct from "reported facts, no quota key".
+    const groups = collectMachineQuotaGroups(statusOf([
+      node({ nodeId: 'n_old', daemonId: 'daemon_mach_old' }),
+      node({ nodeId: 'n_new', daemonId: 'daemon_mach_new', nodeFacts: facts(null) }),
+    ]))
+
+    expect(groups.map(g => g.machineKey)).toEqual(['daemon_mach_new'])
+  })
+
+  it('names a machine by its operator nickname, not a workspace-derived node label', () => {
+    // machineLabel falls back to a workspace basename, so two worktrees on one
+    // machine carry different machineLabels — using it would name one machine
+    // inconsistently depending on which node was seen first.
+    const groups = collectMachineQuotaGroups(statusOf([
+      node({ nodeId: 'n1', machineLabel: 'adhdev · host', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA, { machineNickname: 'vilmire-Jupiter' }) }),
+      node({ nodeId: 'n2', machineLabel: 'adhdev-wt · host', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA, { machineNickname: 'vilmire-Jupiter' }) }),
+    ]))
+
+    expect(groups[0].label).toBe('vilmire-Jupiter')
+
+    // With no nickname reported, fall back to the stable machine key rather
+    // than an arbitrary node's workspace label.
+    const unnamed = collectMachineQuotaGroups(statusOf([
+      node({ nodeId: 'n1', machineLabel: 'adhdev · host', daemonId: 'daemon_mach_zzz', nodeFacts: facts(OK_QUOTA) }),
+    ]))
+    expect(unnamed[0].label).toBe('daemon_mach_zzz')
+  })
+
+  it('prefers the freshest bundle when a machine has nodes reporting at different times', () => {
+    const stale = { 'codex-cli': { provider: 'codex-cli', status: 'ok', updatedAt: 1, error: null, session: { usedPercent: 10, windowMinutes: 300, resetsAt: null }, weekly: null } }
+    const fresh = { 'codex-cli': { provider: 'codex-cli', status: 'ok', updatedAt: 2, error: null, session: { usedPercent: 55, windowMinutes: 300, resetsAt: null }, weekly: null } }
+    const groups = collectMachineQuotaGroups(statusOf([
+      node({ nodeId: 'n_old', daemonId: 'daemon_mach_abc', nodeFacts: { schemaVersion: 1, reportedAt: 1_000, quota: stale, machineNickname: 'Air' } }),
+      node({ nodeId: 'n_new', daemonId: 'daemon_mach_abc', nodeFacts: { schemaVersion: 1, reportedAt: 9_000, quota: fresh, machineNickname: 'Air' } }),
+    ]))
+
+    expect(groups).toHaveLength(1)
+    expect(groups[0].reportedAt).toBe(9_000)
+    expect(groups[0].quota[0].quota.session?.usedPercent).toBe(55)
+  })
+
+  it('does not collide unidentified nodes into one shared machine', () => {
+    // No daemonId and no machineId: each falls back to its own nodeId, so two
+    // unrelated unidentified nodes stay separate instead of merging under ''.
+    const groups = collectMachineQuotaGroups(statusOf([
+      node({ nodeId: 'n_a', nodeFacts: facts(OK_QUOTA) }),
+      node({ nodeId: 'n_b', nodeFacts: facts(OK_QUOTA) }),
+    ]))
+
+    expect(groups).toHaveLength(2)
+    expect(groups.map(g => g.machineKey).sort()).toEqual(['n_a', 'n_b'])
+  })
+
+  it('survives a malformed node list instead of throwing in the render path', () => {
+    expect(collectMachineQuotaGroups(statusOf([]))).toEqual([])
+    expect(collectMachineQuotaGroups(statusOf([
+      node({ nodeId: 'n1', daemonId: 'daemon_mach_abc', nodeFacts: facts('not-an-object') }),
+    ]))[0].quota).toEqual([])
+  })
+})
 
 describe('provider quota helpers', () => {
   it('reads quota entries off the facts bundle in stable label order', () => {
@@ -164,23 +311,38 @@ describe('provider quota helpers', () => {
     expect(collectNodeQuotaEntries(canonical.nodes[0])).toHaveLength(1)
   })
 
-  it('renders the three states distinctly in MeshStatusTab', () => {
+  it('renders the three states distinctly, in the machine section', () => {
     const source = fs.readFileSync(
       path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshObservabilitySurface/MeshStatusTab.tsx'),
       'utf8',
     )
-    // Mounted on the node runtime row.
-    expect(source).toContain('<MeshNodeQuotaRows node={node} />')
+    // Mounted as its own machine section, ABOVE the node list.
+    expect(source).toContain('<MeshMachinesQuotaSection status={canonicalStatus} />')
+    expect(source).toContain("t('mesh.status.machinesQuota')")
+    expect(source.indexOf('<MeshMachinesQuotaSection'))
+      .toBeLessThan(source.indexOf("t('mesh.status.nodesRuntime')"))
+    // Quota must NOT render per node any more — that was the duplication bug.
+    expect(source).not.toContain('<MeshNodeQuotaRows')
+    expect(source).not.toContain('collectNodeQuotaEntries')
     // Unreported -> muted secondary text, explicitly NOT a warn/danger Badge.
     expect(source).toContain("t('mesh.status.quotaNotCollected')")
     expect(source).toMatch(/quotaNotCollected[\s\S]{0,80}<\/div>/)
-    // A node that never sent facts at all says nothing about quota.
-    expect(source).toContain('if (!node.nodeFacts) return null')
     // Failing -> the failureKind-bearing description.
     expect(source).toContain('describeQuotaFailure(quota)')
     // Normal -> both windows, tinted by usage.
     expect(source).toContain('quotaUsageTone(quota.session?.usedPercent ?? NaN)')
     expect(source).toContain('quotaUsageTone(quota.weekly?.usedPercent ?? NaN)')
+  })
+
+  it('groups on the canonical daemon id helper rather than raw string equality', () => {
+    const helpers = fs.readFileSync(
+      path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshObservabilitySurface/meshSurfaceHelpers.ts'),
+      'utf8',
+    )
+    // Raw daemon-id comparison is the recurring identity defect in this repo;
+    // here it would split one machine across several cards.
+    expect(helpers).toContain("import { canonicalDaemonId } from '@adhdev/mesh-shared'")
+    expect(helpers).toContain('canonicalDaemonId(node.daemonId)')
   })
 
   it('imports quota types without pulling the daemon-core barrel into the browser bundle', () => {
