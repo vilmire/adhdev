@@ -732,3 +732,14 @@ export {
   type StatuslineStatus,
   type StatuslineInstallPaths,
 } from './quota/index.js';
+
+// Shared CLI rendering for `adhdev quota` — used by both daemon-cloud
+// (Commander) and daemon-standalone (hand-rolled arg parsing) so the
+// terminal output stays identical without duplicating it per CLI host.
+export {
+  printQuota,
+  printClaudeInstallResult,
+  printClaudeUninstallResult,
+  printClaudeStatuslineStatus,
+  printQuotaInstallError,
+} from './quota/cli.js';

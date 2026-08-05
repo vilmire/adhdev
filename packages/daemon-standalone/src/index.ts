@@ -96,6 +96,7 @@ import {
   proxySessionHostAttach,
   proxySessionHostList,
 } from './session-host.js';
+import { runQuotaCommand } from './quota-cli.js';
 import { shouldAutoRestoreHostedSessionsOnStartup } from './startup-restore-policy.js';
 import { StandaloneSessionHostControlPlane } from './session-host-control.js';
 import { SessionHostClient, type SessionHostEndpoint, type SessionHostEvent } from '@adhdev/session-host-core';
@@ -2684,6 +2685,10 @@ async function main(): Promise<void> {
   if (primaryCommand === 'list' || primaryCommand === 'runtimes') {
     const showAll = args.includes('--all');
     const exitCode = await proxySessionHostList(showAll);
+    process.exit(exitCode);
+  }
+  if (primaryCommand === 'quota') {
+    const exitCode = await runQuotaCommand(args.slice(1));
     process.exit(exitCode);
   }
   // Canonical CLI contract (see standalone-cli-args.ts): --host/-H takes an

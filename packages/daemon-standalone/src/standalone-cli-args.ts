@@ -41,6 +41,8 @@ export const STANDALONE_HELP_TEXT = `
 Usage: adhdev-standalone [options]
        adhdev-standalone list [--all]
        adhdev-standalone attach <sessionId> [--read-only|--takeover]
+       adhdev-standalone quota <claude|codex|kimi>
+       adhdev-standalone quota claude:install | claude:uninstall | claude:status
 
 Options:
   --port, -p <port>      Port to run the standalone server on (default: 3847)
@@ -61,6 +63,7 @@ Runtime commands:
   list, runtimes      Show hosted CLI runtimes
   attach              Attach local terminal to a runtime
   open                Open a local terminal window running adhmux for a runtime
+  quota               Show remaining plan quota for your AI coding agents
 `;
 
 /** Hosts that bind every interface (public opt-in). Used by the startup warning. */

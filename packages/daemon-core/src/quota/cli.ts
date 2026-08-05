@@ -1,0 +1,128 @@
+/**
+ * Quota CLI rendering — shared terminal output for `adhdev quota`.
+ *
+ * Both daemon-cloud (Commander-based `adhdev quota ...`) and daemon-standalone
+ * (hand-rolled arg parsing) need identical output for the same underlying
+ * fetch/install results, so the rendering lives here once instead of being
+ * duplicated per CLI host.
+ */
+
+import chalk from 'chalk';
+import type { ProviderQuota, QuotaWindow } from './types.js';
+import type { InstallResult, UninstallResult, StatuslineStatus } from './statusline/install.js';
+
+function formatWindow(label: string, window: QuotaWindow | null): string {
+    if (!window) {
+        return `  ${label.padEnd(8)} ${chalk.gray('not reported')}`;
+    }
+    const percent = `${window.usedPercent.toFixed(1)}%`;
+    const bar = renderBar(window.usedPercent);
+    const reset = window.resetsAt === null ? '' : chalk.gray(`  resets ${formatRelative(window.resetsAt)}`);
+    return `  ${label.padEnd(8)} ${bar} ${percent.padStart(6)} used${reset}`;
+}
+
+function renderBar(usedPercent: number): string {
+    const width = 20;
+    const filled = Math.round((Math.min(100, Math.max(0, usedPercent)) / 100) * width);
+    const bar = '█'.repeat(filled) + '░'.repeat(width - filled);
+    if (usedPercent >= 90) return chalk.red(bar);
+    if (usedPercent >= 70) return chalk.yellow(bar);
+    return chalk.green(bar);
+}
+
+function formatRelative(atMs: number): string {
+    const deltaMs = atMs - Date.now();
+    if (deltaMs <= 0) {
+        return 'now';
+    }
+    const minutes = Math.round(deltaMs / 60_000);
+    if (minutes < 60) return `in ${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `in ${hours}h ${minutes % 60}m`;
+    return `in ${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+function truncate(value: string, max: number): string {
+    return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+}
+
+/** Render one provider's quota block: "5 hour"/"7 day" bars + any error line. */
+export function printQuota(name: string, quota: ProviderQuota): void {
+    console.log();
+    console.log(chalk.bold(name));
+    if (quota.status === 'ok' || quota.session || quota.weekly) {
+        console.log(formatWindow('5 hour', quota.session));
+        console.log(formatWindow('7 day', quota.weekly));
+    }
+    if (quota.error) {
+        const tone = quota.status === 'unavailable' ? chalk.gray : chalk.yellow;
+        console.log(`  ${tone(quota.error)}`);
+    }
+    console.log();
+}
+
+/** Render the outcome of `installClaudeStatusline()`. */
+export function printClaudeInstallResult(result: InstallResult): void {
+    console.log();
+    console.log(
+        chalk.green(
+            result.outcome === 'reinstalled'
+                ? '✓ Claude Code quota reporting re-installed'
+                : '✓ Claude Code quota reporting installed',
+        ),
+    );
+    if (result.originalCommand) {
+        console.log(chalk.gray('  Your existing statusline is preserved and still runs:'));
+        console.log(chalk.gray(`    ${truncate(result.originalCommand, 100)}`));
+        console.log(chalk.gray(`  Backup: ${result.paths.backupFile}`));
+    } else {
+        console.log(chalk.gray('  You had no statusline configured; one was not added.'));
+    }
+    console.log();
+    console.log(chalk.gray('  Open a Claude Code session, then run `adhdev quota claude`.'));
+    console.log(chalk.gray('  Undo any time with `adhdev quota claude:uninstall`.'));
+    console.log();
+}
+
+/** Render the outcome of `uninstallClaudeStatusline()`. */
+export function printClaudeUninstallResult(result: UninstallResult): void {
+    console.log();
+    if (result.outcome === 'restored') {
+        console.log(chalk.green('✓ Your original statusline has been restored'));
+    } else if (result.outcome === 'removed') {
+        console.log(chalk.green('✓ Claude Code quota reporting removed'));
+        console.log(chalk.gray('  You had no statusline before install, so none was left behind.'));
+    } else {
+        console.log(chalk.yellow('• Claude Code quota reporting was not installed'));
+        console.log(chalk.gray('  Your statusLine setting was left untouched.'));
+    }
+    console.log();
+}
+
+/** Render the result of `readStatuslineStatus()`. */
+export function printClaudeStatuslineStatus(status: StatuslineStatus): void {
+    console.log();
+    if (status.installed) {
+        console.log(chalk.green('✓ Installed'));
+        console.log(
+            chalk.gray(
+                status.wrappedCommand
+                    ? `  Wrapping your statusline: ${truncate(status.wrappedCommand, 100)}`
+                    : '  You had no statusline before install.',
+            ),
+        );
+        console.log(chalk.gray(`  Snapshot: ${status.paths.snapshotFile}`));
+    } else {
+        console.log(chalk.yellow('• Not installed'));
+        if (status.foreignStatusLine) {
+            console.log(chalk.gray('  You have your own statusLine configured; install would wrap it.'));
+        }
+        console.log(chalk.gray('  Set up with `adhdev quota claude:install`.'));
+    }
+    console.log();
+}
+
+/** Render a `StatuslineInstallError` the same way both CLI hosts do. */
+export function printQuotaInstallError(message: string): void {
+    console.error(chalk.red(`\n✗ ${message}\n`));
+}
