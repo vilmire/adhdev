@@ -551,6 +551,8 @@ export class DaemonCommandHandler implements CommandHelpers {
             case 'install_provider_manifest': return this.handleInstallProviderManifest(args);
             case 'uninstall_provider_manifest': return this.handleUninstallProviderManifest(args);
             case 'check_provider_updates': return this.handleCheckProviderUpdates(args);
+            case 'activate_provider_updates': return this.handleActivateProviderUpdates(args);
+            case 'rollback_provider_update': return this.handleRollbackProviderUpdate(args);
             case 'list_installed_providers': return this.handleListInstalledProviders(args);
             case 'add_provider_source': return this.handleAddProviderSource(args);
             case 'remove_provider_source': return this.handleRemoveProviderSource(args);
@@ -1145,12 +1147,27 @@ export class DaemonCommandHandler implements CommandHelpers {
     }
 
     /**
-     * For each installed provider, ask the registry for its current latest
-     * version and report whether an update is available. The user can then
-     * call install_provider_manifest to upgrade (it overwrites the file).
+     * Report, for each installed provider, what this daemon is actually
+     * PINNED to and what the registry currently offers.
      *
-     * Returns { providers: [{ type, category, installedVersion, latestVersion,
-     *   updateAvailable, error? }] }
+     * READ-ONLY. It used to end by calling syncVerifiedChannel(), i.e. it
+     * downloaded, verified AND ACTIVATED — a command named `check` that moved
+     * the pointer, reachable over `GET /api/v1/providers/updates`, so a plain
+     * GET mutated state. Activation now lives in `activate_provider_updates`.
+     *
+     * It also compared the wrong number. `.upstream` holds the installed
+     * manifest, but the daemon loads the pinned store object, and those
+     * diverge by design (the pin only advances on an explicit activation).
+     * Reporting `.upstream` described a machine that was not the one running:
+     * with `.upstream` at 1.0.3 and the pin at 1.0.0 it said "up to date"
+     * while the daemon ran the older spec. `activeVersion` is now the pin.
+     *
+     * `installedVersion` is kept as an alias of the pin so existing readers
+     * do not silently flip meaning; it is the number that decides behaviour.
+     *
+     * Returns { providers: [{ type, category, activeVersion, installedVersion,
+     *   upstreamVersion, latestVersion, updateAvailable, stale, digest,
+     *   activatedAt, previousVersion, error? }] }
      */
     private async handleCheckProviderUpdates(_args: any): Promise<CommandResult> {
         const installed = this.handleListInstalledProviders({});
@@ -1177,43 +1194,115 @@ export class DaemonCommandHandler implements CommandHelpers {
         }
 
         const installedList = (installed as unknown as { providers: Array<{ type: string; category: string; version: string }> }).providers;
+        // The pin is what the daemon loads; `.upstream` is only what is on
+        // disk. Where a provider has no pin (channel store empty/disabled),
+        // fall back to the upstream version so the row is still meaningful.
+        const pins = this._ctx.providerLoader?.listVerifiedChannelPins?.() ?? new Map();
         const checks = await Promise.all(
             installedList.map(async (p) => {
+                const pin = pins.get(p.type);
+                const activeVersion = pin?.active?.providerVersion ?? p.version;
+                const base = {
+                    type: p.type,
+                    category: p.category,
+                    activeVersion,
+                    // Alias of the pin: this is the version that decides
+                    // behaviour, which is what a field named "installed" is
+                    // read as. `upstreamVersion` carries the on-disk manifest.
+                    installedVersion: activeVersion,
+                    upstreamVersion: p.version,
+                    digest: pin?.active?.digest ?? null,
+                    activatedAt: pin?.active?.activatedAt ?? null,
+                    previousVersion: pin?.previous?.providerVersion ?? null,
+                };
                 try {
                     const remote = await fetchJson(`${REGISTRY}/providers/${encodeURIComponent(p.type)}`);
                     const latestVersion = String(remote?.version ?? '');
-                    return {
-                        type: p.type,
-                        category: p.category,
-                        installedVersion: p.version,
-                        latestVersion,
-                        updateAvailable: latestVersion !== '' && latestVersion !== p.version,
-                    };
+                    const stale = latestVersion !== '' && latestVersion !== activeVersion;
+                    return { ...base, latestVersion, updateAvailable: stale, stale };
                 } catch (e: any) {
                     return {
-                        type: p.type,
-                        category: p.category,
-                        installedVersion: p.version,
+                        ...base,
                         latestVersion: null,
                         updateAvailable: false,
+                        stale: false,
                         error: e?.message ?? String(e),
                     };
                 }
             })
         );
 
-        // Stage 2: attempt a verified channel sync (fail-closed — on any
-        // failure the last-known-good activations keep loading). This is the
-        // manual sync entry point named by the boot path; boot itself stays
-        // network-free.
+        // NO sync here. Activation moved to `activate_provider_updates` so
+        // this command — and the GET that exposes it — cannot change state.
+        // `channelSync: null` is kept so existing readers of the field see a
+        // shape they already handle rather than an absent key.
+        return { success: true, providers: checks, channelSync: null };
+    }
+
+    /**
+     * Download, verify and ACTIVATE the newest channel objects: the pointer
+     * flip that `check_provider_updates` used to perform as a side effect.
+     *
+     * Deliberately explicit and deliberately not automatic. The pin design is
+     * intentional (content-addressed store, atomic pointer flip, retention,
+     * last-known-good, rollback as a local flip) and boot stays network-free.
+     * This command is the user saying "now".
+     *
+     * Fail-closed: on any registry/transport/digest failure nothing is
+     * activated and the last-known-good objects keep loading.
+     */
+    private async handleActivateProviderUpdates(_args: any): Promise<CommandResult> {
+        const before = this._ctx.providerLoader?.listVerifiedChannelPins?.() ?? new Map();
         let channelSync: unknown = null;
         try {
             channelSync = await this._ctx.providerLoader?.syncVerifiedChannel?.() ?? null;
         } catch (e: any) {
-            channelSync = { error: e?.message ?? String(e) };
+            return { success: false, error: e?.message ?? String(e) };
         }
+        const after = this._ctx.providerLoader?.listVerifiedChannelPins?.() ?? new Map();
 
-        return { success: true, providers: checks, channelSync };
+        // Report what actually moved. "The sync succeeded" and "this machine
+        // now runs a different spec" are different statements, and the second
+        // is the one the caller needs — that gap is what hid the kimi fix.
+        const activated: Array<{ type: string; from: string | null; to: string }> = [];
+        for (const [type, pointer] of after) {
+            const wasVersion = before.get(type)?.active?.providerVersion ?? null;
+            const nowVersion = pointer.active?.providerVersion;
+            if (nowVersion && wasVersion !== nowVersion) {
+                activated.push({ type, from: wasVersion, to: nowVersion });
+            }
+        }
+        return { success: true, activated, channelSync };
+    }
+
+    /**
+     * Flip a provider back to its previously activated object.
+     *
+     * Purely local — the previous object is still in the content-addressed
+     * store, so this needs no network and works when the registry is down.
+     * That is the point of keeping last-known-good, and it was already
+     * implemented on the loader but reachable from nowhere.
+     *
+     * Args: { providerType: string }
+     */
+    private async handleRollbackProviderUpdate(args: any): Promise<CommandResult> {
+        const providerType = typeof args?.providerType === 'string' ? args.providerType.trim() : '';
+        if (!providerType) return { success: false, error: 'providerType required' };
+
+        const digest = this._ctx.providerLoader?.rollbackVerifiedChannel?.(providerType) ?? null;
+        if (!digest) {
+            // No previous activation to return to. Not an error the user can
+            // act on by retrying, so say which case it is.
+            return { success: false, error: `no rollback target for ${providerType}` };
+        }
+        const pin = this._ctx.providerLoader?.listVerifiedChannelPins?.()?.get(providerType);
+        return {
+            success: true,
+            providerType,
+            digest,
+            activeVersion: pin?.active?.providerVersion ?? null,
+            previousVersion: pin?.previous?.providerVersion ?? null,
+        };
     }
 
     // ─── External provider sources (3rd-party git URLs) ──────────────

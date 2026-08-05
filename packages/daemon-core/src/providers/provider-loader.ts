@@ -47,7 +47,7 @@ import type { ProviderSourceConfigSnapshot, ProviderUserDirSource } from '../con
 import { executeNativeHistory, executeNativeHistoryList } from './spec/native-history-executor.js';
 import { createNativeHistoryDispatcher, type ReaderId } from './native-history/dispatcher.js';
 import { resolveProviderChannel, type ProviderChannel } from './channel/contract.js';
-import { ProviderChannelStore } from './channel/store.js';
+import { ProviderChannelStore, type ActivationPointer } from './channel/store.js';
 import {
   ProviderChannelRuntime,
   collectSyncTargetTypes,
@@ -857,6 +857,28 @@ export class ProviderLoader {
     if (this.countVerifiedChannelPointers() > 0) return null;
     if (!this.hasUpstream()) return null;
     return this.syncVerifiedChannel();
+  }
+
+ /**
+  * The verified-channel PIN for each provider: what this daemon actually
+  * loads, as opposed to what is sitting in `.upstream`.
+  *
+  * Those two diverge by design. The store pin only advances on an explicit
+  * activation (`check_provider_updates` today), so a published fix can be
+  * present in the repo and in ~/.adhdev/providers/.upstream while the daemon
+  * keeps running an older pinned object — which is exactly how a shipped kimi
+  * resume fix stayed invisible on a machine for a full day. Anything that
+  * reports "the installed version" without this is reporting the wrong number.
+  *
+  * Pure read: no network, no pointer writes.
+  */
+  listVerifiedChannelPins(): Map<string, ActivationPointer> {
+    if (!this.channelStore) return new Map();
+    try {
+      return this.channelStore.listPointers(this.channel).pointers;
+    } catch {
+      return new Map();
+    }
   }
 
  /**
@@ -2781,7 +2803,19 @@ export class ProviderLoader {
             const source = (normalizedProvider as any)._sourceLayer ?? 'upstream';
             const overrideWarning = existed && source === 'user' ? ' ⚠ OVERRIDES upstream' : '';
             const sourceName = (normalizedProvider as any)._sourceName;
-            const sourceLabel = sourceName ? `${source}/${sourceName}` : source;
+            // Say WHERE the manifest was actually read from, not just which
+            // precedence slot it occupies. A content-addressed store object
+            // takes the `upstream` TRUST layer (deliberately — see the layer
+            // derivation above, which must not change), but logging it as
+            // `[upstream]` reads as "~/.adhdev/providers/.upstream", and the
+            // store load runs AFTER and overwrites that directory's entries.
+            // Two separate misdiagnoses came from trusting that label while
+            // the daemon was really running a pinned store object of a
+            // different version, so name the store and pin the version.
+            const pinnedVersion = (normalizedProvider as any).providerVersion;
+            const sourceLabel = isChannelStoreObject
+              ? `channel-store:${this.channel}${pinnedVersion ? ` v${pinnedVersion}` : ''}`
+              : (sourceName ? `${source}/${sourceName}` : source);
             this.log(`  ${existed ? '🔄' : '✅'} ${normalizedProvider.type} (${normalizedProvider.category}) — ${normalizedProvider.name} [${sourceLabel}]${overrideWarning}`);
           }
         } catch (e) {

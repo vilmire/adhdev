@@ -1270,7 +1270,9 @@ class StandaloneServer {
 
     // ─── Provider management REST (curl-friendly testing) ───────
     // GET  /api/v1/providers/installed    → list installed providers + versions
-    // GET  /api/v1/providers/updates      → check_provider_updates result
+    // GET  /api/v1/providers/updates      → check_provider_updates (READ-ONLY: pins vs registry)
+    // POST /api/v1/providers/activate     → activate_provider_updates (moves the pointer)
+    // POST /api/v1/providers/rollback     → body: { providerType } (local flip to previous)
     // POST /api/v1/providers/install      → body: { type, category?, version? }
     // POST /api/v1/providers/uninstall    → body: { type, category }
     if (apiPath?.startsWith('/providers/')) {
@@ -1289,6 +1291,14 @@ class StandaloneServer {
             cmdType = 'list_installed_providers';
           } else if (subPath === '/updates' && method === 'GET') {
             cmdType = 'check_provider_updates';
+          } else if (subPath === '/activate' && method === 'POST') {
+            // The pointer flip. It lives behind POST because it changes what
+            // this daemon loads; GET /updates is now purely a report.
+            cmdType = 'activate_provider_updates';
+            body = await this.readJsonBody(req).catch(() => ({}));
+          } else if (subPath === '/rollback' && method === 'POST') {
+            cmdType = 'rollback_provider_update';
+            body = await this.readJsonBody(req).catch(() => ({}));
           } else if (subPath === '/install' && method === 'POST') {
             cmdType = 'install_provider_manifest';
             body = await this.readJsonBody(req).catch(() => ({}));
