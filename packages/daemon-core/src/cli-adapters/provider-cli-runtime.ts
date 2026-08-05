@@ -1,5 +1,6 @@
 import * as os from 'os';
 import * as path from 'path';
+import { LOG } from '../logging/logger.js';
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
 import type { PtySpawnOptions, PtyRuntimeTransport } from './pty-transport.js';
 import type { TerminalScreen } from './terminal-screen.js';
@@ -42,6 +43,8 @@ export function resolveCliSpawnPlan(options: {
         workingDir,
         extraArgs,
         extraEnv,
+        diagnosticCliType: provider.type,
+        diagnosticProviderVersion: provider.providerVersion,
     });
 }
 
@@ -79,8 +82,13 @@ export function resolveCliSpawnPlanFromParts(options: {
     extraArgs?: string[];
     extraEnv?: Record<string, string>;
     geometry?: CliSpawnGeometry;
+    /** Provider type + manifest version, for the spawn diagnostic below. Optional
+     *  so no caller is forced to thread it, but every real launch path should
+     *  pass it — a spawn line without identity is far less useful. */
+    diagnosticCliType?: string;
+    diagnosticProviderVersion?: string;
 }): CliSpawnPlan {
-    const { command, baseArgs, shell, baseEnv, workingDir, extraArgs, extraEnv, geometry } = options;
+    const { command, baseArgs, shell, baseEnv, workingDir, extraArgs, extraEnv, geometry, diagnosticCliType, diagnosticProviderVersion } = options;
     const binaryPath = findBinary(command);
     const isWin = os.platform() === 'win32';
     const allArgs = [...(baseArgs ?? []), ...(extraArgs ?? [])].map((arg) =>
@@ -120,6 +128,28 @@ export function resolveCliSpawnPlanFromParts(options: {
     // rather than process.cwd(). Keep the generic ADHDev launch workspace as
     // the single source of truth so PTY cwd and tool cwd cannot diverge.
     env.TERMINAL_CWD = workingDir;
+
+    // Log the ACTUAL argv and the manifest version that produced it, here at the
+    // shared chokepoint rather than in any one caller. A resume that hands the
+    // CLI a wrong-shaped session id fails inside the provider ("Session <id> not
+    // found") with nothing on our side to compare against. Diagnosing the kimi
+    // resume defect cost two round-trips for exactly this reason: the argv was
+    // invisible, and once it was visible the argv alone still could not
+    // distinguish "our expansion is wrong" from "this machine is pinned to an
+    // older spec" — a daemon resolves providers from the content-addressed
+    // channel store, whose pin only advances on check_provider_updates, so the
+    // repo checkout and ~/.adhdev/providers/.upstream can both show a fix the
+    // running daemon does not have.
+    //
+    // This lives here because the legacy provider-module path and the spec/FSM
+    // path both funnel through this function: logging in ProviderCliAdapter
+    // alone covered kimi but silently missed codex, which spawns via FsmDriver.
+    // Args are provider flags and ids — never prompt or transcript text — so
+    // this stays content-free.
+    LOG.info(
+        'CLI',
+        `[${diagnosticCliType || 'cli'}] Spawning (spec v${diagnosticProviderVersion || 'unknown'}) in ${workingDir}: ${binaryPath} ${allArgs.join(' ')}`,
+    );
 
     return {
         binaryPath,

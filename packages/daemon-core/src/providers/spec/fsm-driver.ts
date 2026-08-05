@@ -637,6 +637,11 @@ export class FsmDriver implements ISpecDriver {
             extraArgs: this.opts.extraCliArgs ?? [],
             extraEnv: this.opts.extraEnv ?? {},
             geometry: { cols, rows },
+            // CliSpecV4 is the FSM runtime spec (specs/4.0.json), not the
+            // provider manifest, so it carries no `type`/`providerVersion`.
+            // `id`/`name` is the identity this path actually has; the manifest
+            // version is genuinely unavailable here rather than omitted.
+            diagnosticCliType: this.spec.id || this.spec.name,
         });
         return {
             binary: plan.shellCmd,
