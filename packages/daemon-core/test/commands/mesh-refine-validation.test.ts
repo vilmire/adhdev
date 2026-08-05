@@ -270,7 +270,14 @@ describe('refine_mesh_node validation gate', () => {
     expect(messages[1]).toContain('failed')
     expect(messages[1]).toContain('job_id=refine_job_delivery_failed')
     expect(messages[1]).toContain('code=validation_failed')
-  })
+    // 90s like the other real-work cases in this file. `vi.setConfig` in
+    // beforeAll does not reliably reach tests that vitest has already
+    // collected, so this test silently kept the 30s default and timed out on
+    // CI under full-suite parallel load — it needs ~7s in isolation, so the
+    // budget is about scheduling contention, not about the test being slow.
+    // Raising it does not weaken anything: the assertions above are unchanged
+    // and a genuine hang still fails, just at 90s.
+  }, 90000)
 
   it('buffers forwarded refine terminal events for MCP coordinators when no live CLI coordinator exists', () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-pending-delivery-'))
@@ -1512,7 +1519,10 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       rmTempRepo(root)
     }
-  })
+    // 90s like the other real-git cases here: these init real repos and run
+    // an async refine job, and the beforeAll vi.setConfig does not reliably
+    // reach already-collected tests (see the delivery test above).
+  }, 90000)
 
   it('refine_mesh_node defaults to a synchronous dry-run plan (no merge) unless execute=true', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-dryrun-'))
@@ -1571,7 +1581,10 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       rmTempRepo(root)
     }
-  })
+    // 90s like the other real-git cases here: these init real repos and run
+    // an async refine job, and the beforeAll vi.setConfig does not reliably
+    // reach already-collected tests (see the delivery test above).
+  }, 90000)
 
   it('M2-2: refine skips bootstrap when worktree_bootstrap is ready with unchanged staleInputs', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-m2-cached-'))
