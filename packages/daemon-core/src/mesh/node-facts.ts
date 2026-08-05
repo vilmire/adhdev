@@ -14,6 +14,7 @@
 import type { MeshNodeFacts } from '@adhdev/mesh-shared';
 import { getDaemonBuildInfo } from '../build-info.js';
 import { readQuotaCache } from '../quota/refresh.js';
+import { getProviderSpecPins } from '../detection/cli-detector.js';
 
 /**
  * ★PERFORMANCE CONTRACT: this function must stay CHEAP and SYNCHRONOUS.
@@ -65,11 +66,32 @@ export function buildLocalNodeFacts(deps?: {
             return undefined; // facts stamp is best-effort observability
         }
     })();
+    // The verified-channel PIN per provider: which provider MANIFEST this node
+    // actually loads. Deliberately a SEPARATE field from providerVersions,
+    // which is the CLI BINARY version — a node can run kimi-code 1.2.3 while
+    // pinned to kimi spec 1.0.0, so folding them together would repeat the
+    // multi-identifier confusion behind the canon-identity defect class.
+    //
+    // This is the field that makes a remote node's pin knowable at all. A
+    // published provider fix does not propagate on its own (the pin advances
+    // only on an explicit activation, by design), so without this a node that
+    // never adopted a fix is indistinguishable from one that did.
+    //
+    // Local read, no network — same best-effort contract as quota below.
+    const providerSpecPins = (() => {
+        try {
+            const pins = getProviderSpecPins();
+            return Object.keys(pins).length > 0 ? pins : undefined;
+        } catch {
+            return undefined; // facts stamp is best-effort observability
+        }
+    })();
     return {
         schemaVersion: 1,
         reportedAt: Date.now(),
         ...(build ? { daemonBuild: build } : {}),
         ...(providerVersions ? { providerVersions } : {}),
+        ...(providerSpecPins ? { providerSpecPins } : {}),
         platform: process.platform,
         arch: process.arch,
         ...(machineNickname ? { machineNickname } : {}),

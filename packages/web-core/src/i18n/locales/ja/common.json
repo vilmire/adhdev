@@ -2623,7 +2623,21 @@
             "quotaAccountLabel": "使用量にアカウントを表示",
             "quotaAccountLabelHint": "このプロバイダーのプラン使用量にログイン中のアカウントを併記します。オフの場合は非表示ではなく、アカウントを取得しません。",
             "quotaAccountLabelOn": "オン",
-            "quotaAccountLabelOff": "オフ"
+            "quotaAccountLabelOff": "オフ",
+            "labelSpecPin": "仕様ピン:",
+            "labelActivatedAt": "適用日時:",
+            "labelPreviousPin": "以前のピン:",
+            "labelDigest": "ダイジェスト:",
+            "specPinStale": "{{latest}} あり",
+            "specPinStaleHint": "このマシンは古い仕様を読み込んでいます。チャンネルには {{latest}} があります。",
+            "specPinUpdate": "仕様を更新",
+            "specPinUpdateHint": "最新のプロバイダー仕様をダウンロード・検証してこのマシンに適用します。",
+            "specPinUpdateConfirm": "更新を確認",
+            "specPinUpdating": "更新中…",
+            "specPinCancel": "キャンセル",
+            "specPinRollback": "ロールバック",
+            "specPinRollbackHint": "仕様 {{version}} に戻します（ローカル、ダウンロード不要）。",
+            "specPinRollingBack": "ロールバック中…"
         },
         "providerFix": {
             "aiAgent": "AI エージェント",

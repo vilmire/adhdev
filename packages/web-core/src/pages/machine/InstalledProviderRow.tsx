@@ -76,6 +76,35 @@ interface InstalledProviderRowProps {
      */
     quotaAccountLabelEnabled?: boolean
     onQuotaAccountLabelToggle?: (enabled: boolean) => Promise<void>
+    /**
+     * Verified-channel PIN for this provider — the manifest the daemon actually
+     * loads, which is NOT the same as the CLI binary version shown above it.
+     * `undefined` while loading or when this provider has no pin.
+     *
+     * Provider updates do not propagate on their own: the pin advances only on
+     * an explicit activation (by design, for reproducibility + rollback). So a
+     * machine can sit on an old spec indefinitely with nothing on screen saying
+     * so — which is exactly how a published kimi fix stayed unadopted for a day.
+     * This row is where that becomes visible.
+     */
+    pin?: ProviderPinInfo
+    /** Activate the newest channel objects (moves the pointer). */
+    onActivateUpdate?: () => Promise<void>
+    /** Flip back to the previous pinned object — local, no network. */
+    onRollbackUpdate?: () => Promise<void>
+}
+
+export interface ProviderPinInfo {
+    /** Manifest version currently activated (what the daemon loads). */
+    activeVersion?: string | null
+    /** Newest version the channel offers. */
+    latestVersion?: string | null
+    /** True when activeVersion is behind latestVersion. */
+    stale?: boolean
+    digest?: string | null
+    activatedAt?: string | null
+    /** Rollback target; absent means there is nothing to roll back to. */
+    previousVersion?: string | null
 }
 
 export default function InstalledProviderRow({
@@ -88,7 +117,17 @@ export default function InstalledProviderRow({
     onResetCommand,
     quotaAccountLabelEnabled,
     onQuotaAccountLabelToggle,
+    pin,
+    onActivateUpdate,
+    onRollbackUpdate,
 }: InstalledProviderRowProps) {
+    const [pinBusy, setPinBusy] = useState<'activate' | 'rollback' | null>(null)
+    // Activating replaces what the daemon loads for every session started
+    // afterwards, so it asks first. Rollback does not: it returns to the object
+    // that was already running, is a purely local pointer flip, and is the
+    // action a user reaches for when an update just broke something — putting a
+    // dialog in front of that is friction at the worst moment.
+    const [confirmActivate, setConfirmActivate] = useState(false)
     const { t } = useTranslation('common')
     const STATUS_LABEL_I18N: Record<string, string> = {
         detected: t('machine.providerRow.statusDetected'),
@@ -171,6 +210,31 @@ export default function InstalledProviderRow({
                         <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelType')}</span> <span className="font-mono">{prov.type}</span></div>
                         {(providerInfo as any)?.providerVersion && (
                             <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelVersion')}</span> {(providerInfo as any).providerVersion}</div>
+                        )}
+                        {/* Verified-channel PIN. Rendered separately from the
+                            manifest version above because they answer different
+                            questions: that is the CLI binary, this is the spec
+                            the daemon loads. They routinely disagree. */}
+                        {pin?.activeVersion && (
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-text-secondary font-medium">{t('machine.providerRow.labelSpecPin')}</span>
+                                <span className="font-mono">{pin.activeVersion}</span>
+                                {pin.stale && pin.latestVersion && (
+                                    <span
+                                        className="px-1 py-px rounded border border-amber-500/30 text-amber-400"
+                                        title={t('machine.providerRow.specPinStaleHint', { latest: pin.latestVersion })}
+                                    >{t('machine.providerRow.specPinStale', { latest: pin.latestVersion })}</span>
+                                )}
+                            </div>
+                        )}
+                        {pin?.activatedAt && (
+                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelActivatedAt')}</span> {new Date(pin.activatedAt).toLocaleString()}</div>
+                        )}
+                        {pin?.previousVersion && (
+                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelPreviousPin')}</span> <span className="font-mono">{pin.previousVersion}</span></div>
+                        )}
+                        {pin?.digest && (
+                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelDigest')}</span> <span className="font-mono">{pin.digest.replace(/^sha256:/, '').slice(0, 12)}</span></div>
                         )}
                         {(providerInfo as any)?.binary && (
                             <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelBinary')}</span> <span className="font-mono">{(providerInfo as any).binary}</span></div>
@@ -300,6 +364,46 @@ export default function InstalledProviderRow({
                                     className="machine-btn text-[10px] px-2 py-0.5"
                                 >{t('machine.providerRow.resetCommand')}</button>
                             </>
+                        )}
+                        {/* Pin actions. Update asks first (it changes what every
+                            later session loads); rollback does not (it returns to
+                            the object that was already running, locally). */}
+                        {onActivateUpdate && pin?.stale && !confirmActivate && (
+                            <button
+                                onClick={() => setConfirmActivate(true)}
+                                disabled={pinBusy !== null}
+                                className="machine-btn text-[10px] px-2 py-0.5 text-amber-400 border-amber-500/25"
+                                title={t('machine.providerRow.specPinUpdateHint')}
+                            >{t('machine.providerRow.specPinUpdate')}</button>
+                        )}
+                        {onActivateUpdate && confirmActivate && (
+                            <>
+                                <button
+                                    onClick={() => {
+                                        setPinBusy('activate')
+                                        void onActivateUpdate()
+                                            .finally(() => { setPinBusy(null); setConfirmActivate(false) })
+                                    }}
+                                    disabled={pinBusy !== null}
+                                    className="machine-btn text-[10px] px-2 py-0.5 text-amber-400 border-amber-500/25"
+                                >{pinBusy === 'activate' ? t('machine.providerRow.specPinUpdating') : t('machine.providerRow.specPinUpdateConfirm')}</button>
+                                <button
+                                    onClick={() => setConfirmActivate(false)}
+                                    disabled={pinBusy !== null}
+                                    className="machine-btn text-[10px] px-2 py-0.5"
+                                >{t('machine.providerRow.specPinCancel')}</button>
+                            </>
+                        )}
+                        {onRollbackUpdate && pin?.previousVersion && (
+                            <button
+                                onClick={() => {
+                                    setPinBusy('rollback')
+                                    void onRollbackUpdate().finally(() => setPinBusy(null))
+                                }}
+                                disabled={pinBusy !== null}
+                                className="machine-btn text-[10px] px-2 py-0.5"
+                                title={t('machine.providerRow.specPinRollbackHint', { version: pin.previousVersion })}
+                            >{pinBusy === 'rollback' ? t('machine.providerRow.specPinRollingBack') : t('machine.providerRow.specPinRollback')}</button>
                         )}
                     </div>
                 </div>

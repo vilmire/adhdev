@@ -72,6 +72,21 @@ export interface MeshNodeFacts {
     reportedAt: number
     daemonBuild?: MeshNodeFactsDaemonBuild
     providerVersions?: Record<string, string>
+    /**
+     * Verified-channel PIN per provider type: which provider MANIFEST the node
+     * actually loads. NOT the same as `providerVersions`, which is the CLI
+     * BINARY version — a node can run kimi-code 1.2.3 while pinned to kimi
+     * spec 1.0.0. Keep them separate; folding them would repeat the
+     * multi-identifier confusion behind the canon-identity defect class.
+     *
+     * This is what makes a remote node's pin knowable. Provider fixes do not
+     * propagate on their own (the pin advances only on an explicit
+     * activation, by design), so without this field a node that never adopted
+     * a published fix looks exactly like one that did.
+     *
+     * A missing entry means "no pin", never a fabricated value.
+     */
+    providerSpecPins?: Record<string, string>
     platform?: string
     arch?: string
     machineNickname?: string

@@ -16,7 +16,7 @@ const QUOTA_ACCOUNT_PROVIDERS = new Set(['codex-cli'])
 import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './providerSettings'
 import { extractProviderSourceConfigPayload, normalizeProviderDirInput, type ProviderSourceConfigPayload } from './providerSourceConfig'
 import ProviderCloneModal from './ProviderCloneModal'
-import InstalledProviderRow from './InstalledProviderRow'
+import InstalledProviderRow, { type ProviderPinInfo } from './InstalledProviderRow'
 import Card from '../../components/Card'
 import SourcesPanel from './SourcesPanel'
 
@@ -33,6 +33,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
     // pair (get/set_quota_account_label) rather than riding the provider-manifest
     // settings payload. Rendered on the provider whose quota carries the label.
     const [quotaAccountLabel, setQuotaAccountLabel] = useState<boolean | undefined>(undefined)
+    const [pins, setPins] = useState<Record<string, ProviderPinInfo>>({})
     const [loading, setLoading] = useState(false)
     const [savingKey, setSavingKey] = useState<string | null>(null)
     const [filter, setFilter] = useState<'all' | 'acp' | 'cli' | 'ide' | 'extension'>('all')
@@ -96,10 +97,61 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
         }
     }, [machineId, sendDaemonCommand, fetchQuotaAccountLabel])
 
+    /**
+     * Verified-channel pins + what the channel currently offers.
+     *
+     * `check_provider_updates` is READ-ONLY (it reports; it does not activate),
+     * so it is safe to call on mount. Activation is a separate explicit
+     * command behind a button.
+     */
+    const fetchPins = useCallback(async () => {
+        if (!machineId) return
+        try {
+            const res = await sendDaemonCommand(machineId, 'check_provider_updates', {})
+            const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as
+                { providers?: Array<Record<string, any>> } | undefined
+            const next: Record<string, ProviderPinInfo> = {}
+            for (const row of body?.providers ?? []) {
+                if (typeof row?.type !== 'string') continue
+                next[row.type] = {
+                    activeVersion: row.activeVersion ?? null,
+                    latestVersion: row.latestVersion ?? null,
+                    stale: row.stale === true,
+                    digest: row.digest ?? null,
+                    activatedAt: row.activatedAt ?? null,
+                    previousVersion: row.previousVersion ?? null,
+                }
+            }
+            setPins(next)
+        } catch { /* leave empty — rows then show no pin rather than a wrong one */ }
+    }, [machineId, sendDaemonCommand])
+
+    const handleActivatePins = useCallback(async () => {
+        if (!machineId) return
+        try {
+            await sendDaemonCommand(machineId, 'activate_provider_updates', {})
+        } finally {
+            // Report what actually moved, not what we hoped would.
+            await fetchPins()
+            await fetchSettings()
+        }
+    }, [machineId, sendDaemonCommand, fetchPins])
+
+    const handleRollbackPin = useCallback(async (providerType: string) => {
+        if (!machineId) return
+        try {
+            await sendDaemonCommand(machineId, 'rollback_provider_update', { providerType })
+        } finally {
+            await fetchPins()
+            await fetchSettings()
+        }
+    }, [machineId, sendDaemonCommand, fetchPins])
+
     useEffect(() => {
         if (settings.length === 0) fetchSettings()
         if (!sourceConfig) fetchSourceConfig()
         if (quotaAccountLabel === undefined) fetchQuotaAccountLabel()
+        fetchPins()
     }, [])
 
     const handleSetSetting = async (providerType: string, key: string, value: unknown) => {
@@ -280,6 +332,9 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                             onResetCommand={handleResetProviderCommand}
                             quotaAccountLabelEnabled={QUOTA_ACCOUNT_PROVIDERS.has(prov.type) ? quotaAccountLabel : undefined}
                             onQuotaAccountLabelToggle={QUOTA_ACCOUNT_PROVIDERS.has(prov.type) ? handleQuotaAccountLabelToggle : undefined}
+                            pin={pins[prov.type]}
+                            onActivateUpdate={handleActivatePins}
+                            onRollbackUpdate={() => handleRollbackPin(prov.type)}
                         />
                     ))}
                 </div>

@@ -2623,7 +2623,21 @@
             "quotaAccountLabel": "사용량에 계정 표시",
             "quotaAccountLabelHint": "이 프로바이더의 플랜 사용량에 로그인 계정을 함께 표시합니다. 끄면 계정을 숨기는 게 아니라 아예 조회하지 않습니다.",
             "quotaAccountLabelOn": "켬",
-            "quotaAccountLabelOff": "끔"
+            "quotaAccountLabelOff": "끔",
+            "labelSpecPin": "스펙 핀:",
+            "labelActivatedAt": "적용 시각:",
+            "labelPreviousPin": "이전 핀:",
+            "labelDigest": "다이제스트:",
+            "specPinStale": "{{latest}} 있음",
+            "specPinStaleHint": "이 머신은 옛 스펙을 로드 중입니다. 채널에는 {{latest}} 가 있습니다.",
+            "specPinUpdate": "스펙 업데이트",
+            "specPinUpdateHint": "최신 프로바이더 스펙을 내려받아 검증하고 이 머신에 적용합니다.",
+            "specPinUpdateConfirm": "업데이트 확인",
+            "specPinUpdating": "업데이트 중…",
+            "specPinCancel": "취소",
+            "specPinRollback": "되돌리기",
+            "specPinRollbackHint": "스펙 {{version}} 으로 되돌립니다(로컬, 다운로드 없음).",
+            "specPinRollingBack": "되돌리는 중…"
         },
         "providerFix": {
             "aiAgent": "AI 에이전트",

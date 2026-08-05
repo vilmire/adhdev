@@ -2623,7 +2623,21 @@
             "quotaAccountLabel": "在用量中显示账号",
             "quotaAccountLabelHint": "为该提供程序的套餐用量标注登录账号。关闭时不是隐藏，而是根本不获取账号。",
             "quotaAccountLabelOn": "开",
-            "quotaAccountLabelOff": "关"
+            "quotaAccountLabelOff": "关",
+            "labelSpecPin": "规格固定:",
+            "labelActivatedAt": "启用时间:",
+            "labelPreviousPin": "上一个固定:",
+            "labelDigest": "摘要:",
+            "specPinStale": "有 {{latest}}",
+            "specPinStaleHint": "此机器正在加载旧规格。频道提供 {{latest}}。",
+            "specPinUpdate": "更新规格",
+            "specPinUpdateHint": "下载、验证并在此机器上启用最新的提供程序规格。",
+            "specPinUpdateConfirm": "确认更新",
+            "specPinUpdating": "更新中…",
+            "specPinCancel": "取消",
+            "specPinRollback": "回滚",
+            "specPinRollbackHint": "恢复到规格 {{version}}（本地，无需下载）。",
+            "specPinRollingBack": "回滚中…"
         },
         "providerFix": {
             "aiAgent": "AI 代理",

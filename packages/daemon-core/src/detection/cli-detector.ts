@@ -286,3 +286,41 @@ export function getCachedProviderVersions(providerLoader?: ProviderLoader): Reco
     }
     return { ...cachedProviderVersions };
 }
+
+/**
+ * Return the `{ providerType: pinnedSpecVersion }` map for this daemon — the
+ * verified-channel PIN, i.e. which provider MANIFEST the daemon actually loads.
+ *
+ * Deliberately SEPARATE from getCachedProviderVersions(). That map is the CLI
+ * BINARY version (what `claude --version` prints); this one is the spec pin
+ * (what ~/.adhdev/providers/.store activated). They answer different questions
+ * and routinely disagree — a machine can run kimi-code 1.2.3 while pinned to
+ * kimi spec 1.0.0 — so folding them into one field would be exactly the
+ * multi-identifier confusion that keeps producing canon-identity defects.
+ *
+ * Why this exists: a published provider fix does not reach a machine on its own
+ * (the pin only advances on an explicit activation, by design). Without this
+ * field there is NO way to ask a remote node which spec it is running, so a
+ * shipped fix can sit unadopted on a node indefinitely and look identical to a
+ * node that has it.
+ *
+ * Pure local read: no network, no pointer writes, no detection pass.
+ */
+export function getProviderSpecPins(providerLoader?: ProviderLoader): Record<string, string> {
+    const loader = providerLoader ?? defaultProviderLoader;
+    const out: Record<string, string> = {};
+    try {
+        const pins = loader?.listVerifiedChannelPins?.();
+        if (!pins) return out;
+        for (const [type, pointer] of pins) {
+            const version = pointer?.active?.providerVersion;
+            // A missing entry means "no pin" — never a fabricated value, same
+            // contract as buildProviderVersions above.
+            if (typeof version === 'string' && version) out[type] = version;
+        }
+    } catch {
+        // Best-effort: a corrupt/absent store reports no pins rather than
+        // failing the envelope that carries it.
+    }
+    return out;
+}

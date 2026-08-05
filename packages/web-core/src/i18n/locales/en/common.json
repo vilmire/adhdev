@@ -2623,7 +2623,21 @@
             "quotaAccountLabel": "Show account on quota",
             "quotaAccountLabelHint": "Label this provider's plan quota with the signed-in account. Off means the account is never fetched, not just hidden.",
             "quotaAccountLabelOn": "On",
-            "quotaAccountLabelOff": "Off"
+            "quotaAccountLabelOff": "Off",
+            "labelSpecPin": "Spec pin:",
+            "labelActivatedAt": "Activated:",
+            "labelPreviousPin": "Previous pin:",
+            "labelDigest": "Digest:",
+            "specPinStale": "update {{latest}}",
+            "specPinStaleHint": "This machine loads an older spec. Channel offers {{latest}}.",
+            "specPinUpdate": "Update spec",
+            "specPinUpdateHint": "Download, verify and activate the newest provider spec on this machine.",
+            "specPinUpdateConfirm": "Confirm update",
+            "specPinUpdating": "Updating…",
+            "specPinCancel": "Cancel",
+            "specPinRollback": "Roll back",
+            "specPinRollbackHint": "Return to spec {{version}} (local, no download).",
+            "specPinRollingBack": "Rolling back…"
         },
         "providerFix": {
             "aiAgent": "AI Agent",

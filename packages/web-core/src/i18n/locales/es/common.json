@@ -2623,7 +2623,21 @@
             "quotaAccountLabel": "Mostrar la cuenta en la cuota",
             "quotaAccountLabelHint": "Etiqueta la cuota de este proveedor con la cuenta con sesión iniciada. Desactivado significa que la cuenta nunca se consulta, no solo que se oculta.",
             "quotaAccountLabelOn": "Activado",
-            "quotaAccountLabelOff": "Desactivado"
+            "quotaAccountLabelOff": "Desactivado",
+            "labelSpecPin": "Pin de spec:",
+            "labelActivatedAt": "Activado:",
+            "labelPreviousPin": "Pin anterior:",
+            "labelDigest": "Digest:",
+            "specPinStale": "actualizar {{latest}}",
+            "specPinStaleHint": "Esta máquina carga una spec antigua. El canal ofrece {{latest}}.",
+            "specPinUpdate": "Actualizar spec",
+            "specPinUpdateHint": "Descargar, verificar y activar la spec más reciente en esta máquina.",
+            "specPinUpdateConfirm": "Confirmar",
+            "specPinUpdating": "Actualizando…",
+            "specPinCancel": "Cancelar",
+            "specPinRollback": "Revertir",
+            "specPinRollbackHint": "Volver a la spec {{version}} (local, sin descarga).",
+            "specPinRollingBack": "Revirtiendo…"
         },
         "providerFix": {
             "aiAgent": "Agente de IA",
