@@ -593,6 +593,25 @@ export interface MeshWorkQueueEntry {
      */
     thinkingLevel?: string;
     /**
+     * MODEL-SOURCE marker: who put the value in {@link model}. 'explicit' = the
+     * caller passed it; 'preset' = the difficulty→brain preset filled it at
+     * enqueue. Without this the two are indistinguishable downstream, and an
+     * unconditional "task.model wins" rule lets a preset silently override the
+     * difficulty-matched slot's own model (or, with the fail-closed slot guard,
+     * blocks the task on nodes that never declared the preset model). Same
+     * marker class as quotaShowAccountEmailSetByUser (config.ts): machine-written
+     * vs user-written values must be distinguishable.
+     *
+     * BACKWARD COMPAT: rows enqueued before this field existed carry no marker.
+     * The assignment path treats an absent marker as 'explicit' — it never lets
+     * a slot override a value that MIGHT be a user's choice. That keeps legacy
+     * rows on exactly their pre-fix behaviour; only newly enqueued preset rows
+     * get the relaxed precedence.
+     */
+    modelSource?: 'explicit' | 'preset';
+    /** Same source marker as {@link modelSource}, for the thinkingLevel axis. */
+    thinkingLevelSource?: 'explicit' | 'preset';
+    /**
      * SLOT-ROUTING (ORCHESTRATION_NODE_SLOTS.md): the coordinator's difficulty
      * classification for this task ('easy'|'medium'|'difficult'|'freeform'),
      * PERSISTED on the entry so the scheduler can match it against node capability
@@ -1005,6 +1024,12 @@ export function enqueueTask(
     // an unconfigured preset just leaves the explicit values (or none) in place.
     let effectiveModel = typeof opts?.model === 'string' && opts.model.trim() ? opts.model.trim() : undefined;
     let effectiveThinkingLevel = typeof opts?.thinkingLevel === 'string' && opts.thinkingLevel.trim() ? opts.thinkingLevel.trim() : undefined;
+    // MODEL-SOURCE: record WHO supplied each value so the assignment path can
+    // tell a user's choice (never overridden by a slot) from a preset default
+    // (a difficulty-matched slot's own model wins over it). A value the caller
+    // passed is 'explicit' until proven preset-filled below.
+    let modelSource: 'explicit' | 'preset' | undefined = effectiveModel ? 'explicit' : undefined;
+    let thinkingLevelSource: 'explicit' | 'preset' | undefined = effectiveThinkingLevel ? 'explicit' : undefined;
     // SLOT-ROUTING: persist the difficulty class on the entry so the scheduler can
     // match it against node capability slots at assignment time (not just resolve
     // model/thinking here). Absent/invalid → undefined (task carries no difficulty).
@@ -1017,8 +1042,8 @@ export function enqueueTask(
             // or wait on it at launch).
             const preset = getDifficultyBrains(meshId)[opts!.difficulty as MeshTaskDifficulty];
             if (preset) {
-                if (!effectiveModel && preset.model) effectiveModel = preset.model;
-                if (!effectiveThinkingLevel && preset.thinkingLevel) effectiveThinkingLevel = preset.thinkingLevel;
+                if (!effectiveModel && preset.model) { effectiveModel = preset.model; modelSource = 'preset'; }
+                if (!effectiveThinkingLevel && preset.thinkingLevel) { effectiveThinkingLevel = preset.thinkingLevel; thinkingLevelSource = 'preset'; }
             }
         } catch { /* preset read is best-effort — never block enqueue */ }
     }
@@ -1058,8 +1083,8 @@ export function enqueueTask(
             ...(maxRetries !== undefined ? { maxRetries } : {}),
             ...(typeof opts?.missionId === 'string' && opts.missionId.trim() ? { missionId: opts.missionId.trim() } : {}),
             ...(typeof opts?.consensusGroupId === 'string' && opts.consensusGroupId.trim() ? { consensusGroupId: opts.consensusGroupId.trim() } : {}),
-            ...(effectiveModel ? { model: effectiveModel } : {}),
-            ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}),
+            ...(effectiveModel && modelSource ? { model: effectiveModel, modelSource } : {}),
+            ...(effectiveThinkingLevel && thinkingLevelSource ? { thinkingLevel: effectiveThinkingLevel, thinkingLevelSource } : {}),
             ...(taskDifficulty ? { difficulty: taskDifficulty } : {}),
             ...(typeof opts?.sourceCoordinatorSessionId === 'string' && opts.sourceCoordinatorSessionId.trim()
                 ? { sourceCoordinatorSessionId: opts.sourceCoordinatorSessionId.trim() }

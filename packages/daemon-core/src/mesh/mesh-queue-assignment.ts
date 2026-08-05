@@ -1903,6 +1903,58 @@ function nodeFitnessForTask(node: any, task: FitnessTask, meshId?: string): numb
     return bestSlotForTask(node, task, meshId)?.score ?? 0;
 }
 
+/**
+ * Does `slot` accept tasks of `difficulty`? Mirrors scoreSlotForTask's two
+ * positive-difficulty branches: an exact difficulty-list match, or a
+ * general-purpose slot (no difficulty list) which accepts any difficulty.
+ * An absent/invalid difficulty is covered by NOTHING.
+ */
+function slotCoversTaskDifficulty(slot: NodeCapabilitySlot | undefined, difficulty: string | undefined): boolean {
+    if (!slot) return false;
+    if (!isMeshTaskDifficulty(difficulty)) return false;
+    if (!slot.difficulty?.length) return true; // general-purpose slot: fallback for any difficulty
+    return slot.difficulty.includes(difficulty as MeshTaskDifficulty);
+}
+
+/**
+ * Resolve one launch axis (model / thinkingLevel) between the value stamped on
+ * the task at enqueue and the winning slot's own value.
+ *
+ * MODEL-SOURCE precedence (defect 0fcec9f1): the difficulty→brain preset fills
+ * task.model at enqueue (mesh-work-queue.ts), so "task.model always wins" let
+ * a preset silently override the difficulty-matched slot — and with the
+ * fail-closed slot-model guard it BLOCKED the task on every node whose slots
+ * never declared the preset model (observed: difficulty:'easy' preset to
+ * 'haiku' blocked on sonnet-slot nodes). The modelSource marker restores the
+ * distinction:
+ *   - 'explicit' task value → task value wins, always. A slot must never
+ *     override what the user chose.
+ *   - 'preset' task value + the winning slot covers the task's difficulty →
+ *     the SLOT's value wins. The preset is only the mesh's convenience
+ *     default; the operator's slot declaration is the authority on what runs
+ *     on that node.
+ *   - 'preset' task value but no covering slot (or the slot declares nothing
+ *     for this axis) → the preset value stands; the fail-closed guard
+ *     downstream decides run/wait/notify on it exactly as before (no
+ *     regression on nodes whose slots don't cover the difficulty).
+ *   - no task value → the slot fills the blank (unchanged).
+ *
+ * BACKWARD COMPAT: rows enqueued before modelSource existed have no marker and
+ * are treated as 'explicit' — never let a slot override a value that MIGHT be
+ * a user's choice. Same convention as quotaShowAccountEmailSetByUser.
+ */
+function resolveLaunchAxis(
+    taskValue: string | undefined,
+    taskSource: 'explicit' | 'preset' | undefined,
+    slotValue: string | undefined,
+    slotCoversDifficulty: boolean,
+): string | undefined {
+    const stamped = (typeof taskValue === 'string' && taskValue.trim()) ? taskValue.trim() : undefined;
+    if (!stamped) return slotValue;
+    if (taskSource !== 'preset') return stamped;
+    return (slotCoversDifficulty && slotValue) ? slotValue : stamped;
+}
+
 function orderEligibleNodes(
     meshId: string,
     strategy: RepoMeshSchedulingStrategy,
@@ -2360,12 +2412,18 @@ export function __decideSlotForModelForTests(
     meshId: string,
     nodeId: string,
     node: any,
-    task: { model?: string; difficulty?: string; requiredTags?: string[] },
+    task: { model?: string; modelSource?: 'explicit' | 'preset'; difficulty?: string; requiredTags?: string[] },
 ): ReturnType<typeof decideSlotForModel> {
     const best = bestSlotForTask(node, task as FitnessTask, meshId);
-    const requestedModel = (typeof task.model === 'string' && task.model.trim())
-        ? task.model.trim()
-        : best?.slot?.model;
+    // Mirror the production call site's MODEL-SOURCE precedence
+    // (resolveLaunchAxis): an explicit model wins; a preset-stamped one yields
+    // to the difficulty-covering slot's own model.
+    const requestedModel = resolveLaunchAxis(
+        task.model,
+        task.modelSource,
+        best?.slot?.model,
+        slotCoversTaskDifficulty(best?.slot, task.difficulty),
+    );
     return decideSlotForModel({
         requestedModel,
         slots: resolveNodeCapabilitySlots(node, meshId).map(slot => ({
@@ -2803,11 +2861,13 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     markSkip(nodeId, resolved.reason || 'provider_unusable');
                     continue;
                 }
-                // Slot-derived model/thinking: an explicit task.model/thinkingLevel
-                // (resolved from the enqueue-time brain) is preferred; the matched
-                // slot fills what the task left blank (ORCHESTRATION_NODE_SLOTS.md).
-                const requestedModel = (typeof task.model === 'string' && task.model.trim()) ? task.model.trim() : resolved.model;
-                const effectiveThinkingLevel = (typeof task.thinkingLevel === 'string' && task.thinkingLevel.trim()) ? task.thinkingLevel.trim() : resolved.thinkingLevel;
+                // Slot-derived model/thinking precedence (see resolveLaunchAxis):
+                // an EXPLICIT task.model/thinkingLevel always wins; a
+                // PRESET-stamped one yields to the difficulty-covering slot's
+                // own value; otherwise the slot fills what the task left blank.
+                const slotCoversDifficulty = slotCoversTaskDifficulty(resolved.slot, (task as any).difficulty);
+                const requestedModel = resolveLaunchAxis(task.model, (task as any).modelSource, resolved.model, slotCoversDifficulty);
+                const effectiveThinkingLevel = resolveLaunchAxis(task.thinkingLevel, (task as any).thinkingLevelSource, resolved.thinkingLevel, slotCoversDifficulty);
 
                 // SLOT MODEL GUARD: the requested model must be one this node's slots
                 // declare. The difficulty→brain presets stamp a model at enqueue time
