@@ -623,22 +623,27 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         })()
         : results;
 
+    // MISSION-STATUS-TASK-WARNING-sibling MESH-CAP-SURFACE-REMOVAL: mesh.policy is
+    // spread minus maxParallelTasks, and the mesh-level scheduling rollup drops the
+    // global-cap numbers (maxParallelTasks/maxReadonlyParallelTasks/activeWriteAssigned/
+    // activeReadonlyAssigned/globalWriteCapReached/globalReadonlyCapReached). Real
+    // concurrency is governed per-node/per-slot (nodes[].scheduling.providerRoles /
+    // capReasons, still present below) — the global number does not represent actual
+    // capacity and misleads a coordinator into narrating "N of M slots free" from it.
+    // Exposure-only: buildMeshSchedulingRuntime still computes these internally for
+    // maybeAutoLaunchOneQueueSession's own gating; only the response surface changed.
+    const { maxParallelTasks: _omitPolicyMaxParallelTasks, ...policyForResponse } = (mesh.policy || {}) as unknown as Record<string, unknown>;
     const response: Record<string, unknown> = {
         meshId: mesh.id,
         meshName: mesh.name,
         repoIdentity: mesh.repoIdentity,
-        policy: mesh.policy,
-        // Mesh-level scheduling rollup (strategy + global cap consumption). Per-node
-        // detail (load/priority/provider caps/claim-block reasons) lives on each
+        policy: policyForResponse,
+        // Mesh-level scheduling rollup (strategy only — the global cap numbers are
+        // deliberately not surfaced here, see the comment above). Per-node detail
+        // (load/priority/provider caps/claim-block reasons) lives on each
         // nodes[].scheduling; the node array is dropped here to avoid duplicating it.
         scheduling: {
             strategy: schedulingRuntime.strategy,
-            maxParallelTasks: schedulingRuntime.maxParallelTasks,
-            maxReadonlyParallelTasks: schedulingRuntime.maxReadonlyParallelTasks,
-            activeWriteAssigned: schedulingRuntime.activeWriteAssigned,
-            activeReadonlyAssigned: schedulingRuntime.activeReadonlyAssigned,
-            globalWriteCapReached: schedulingRuntime.globalWriteCapReached,
-            globalReadonlyCapReached: schedulingRuntime.globalReadonlyCapReached,
         },
         payloadMode: compact ? 'compact' : 'full',
         refreshedAt: new Date().toISOString(),

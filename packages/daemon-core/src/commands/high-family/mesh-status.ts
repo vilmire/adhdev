@@ -724,18 +724,17 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         branchConvergenceSummary: summarizeInlineMeshBranchConvergence(nodeStatuses),
                         ...(previewFreshness ? { previewFreshness, deployFreshness: previewFreshness } : {}),
                         nodes: nodeStatuses,
-                        // Mesh-level scheduling rollup (strategy + global cap consumption). Mirrors
-                        // the MCP `mesh_status` tool's `scheduling` block field-for-field so both
-                        // surfaces read the same runtime; per-node detail lives on each
-                        // nodes[].scheduling above.
+                        // Mesh-level scheduling rollup (strategy only). Mirrors the MCP
+                        // `mesh_status` tool's `scheduling` block field-for-field — the global-cap
+                        // numbers (maxParallelTasks/maxReadonlyParallelTasks/activeWriteAssigned/
+                        // activeReadonlyAssigned/globalWriteCapReached/globalReadonlyCapReached)
+                        // are deliberately not surfaced: real concurrency is governed per-node/
+                        // per-slot (nodes[].scheduling.providerRoles/capReasons above), and the
+                        // global number does not represent actual capacity. Exposure-only —
+                        // buildMeshSchedulingRuntime still computes these internally for
+                        // maybeAutoLaunchOneQueueSession's own gating.
                         scheduling: {
                             strategy: schedulingRuntime.strategy,
-                            maxParallelTasks: schedulingRuntime.maxParallelTasks,
-                            maxReadonlyParallelTasks: schedulingRuntime.maxReadonlyParallelTasks,
-                            activeWriteAssigned: schedulingRuntime.activeWriteAssigned,
-                            activeReadonlyAssigned: schedulingRuntime.activeReadonlyAssigned,
-                            globalWriteCapReached: schedulingRuntime.globalWriteCapReached,
-                            globalReadonlyCapReached: schedulingRuntime.globalReadonlyCapReached,
                         },
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },
