@@ -40,7 +40,7 @@ import type { IdeProviderInstance } from '../providers/ide-provider-instance.js'
 import { createDefaultGitCommandServices } from '../git/git-commands.js';
 import { setupMeshEventForwarding } from '../mesh/mesh-events.js';
 import { setupMeshReconcileLoop } from '../mesh/mesh-reconcile-loop.js';
-import { setupQuotaRefreshLoop, refreshQuotaCacheOnBoot, hydrateQuotaCacheFromDisk } from '../quota/refresh.js';
+import { setupQuotaRefreshLoop, refreshQuotaCacheOnBoot, hydrateQuotaCacheFromDisk, quotaProviderEnabledFromLoader } from '../quota/refresh.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
 import { applyProcessHardening } from './process-hardening.js';
@@ -491,8 +491,12 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // deliberately bypasses the idle gate the periodic loop applies — see
     // refreshQuotaCacheOnBoot.
     setImmediate(() => {
-        try { hydrateQuotaCacheFromDisk(); } catch { /* fail-soft: an unusable cache is just an empty one */ }
-        refreshQuotaCacheOnBoot();
+        // The enable gate (machineProviders[type].enabled via ProviderLoader)
+        // is the SAME authority cli-manager and mesh-queue-assignment launch
+        // on: a provider this machine cannot run is never probed for quota.
+        const isQuotaProviderEnabled = quotaProviderEnabledFromLoader(components.providerLoader);
+        try { hydrateQuotaCacheFromDisk(process.env, isQuotaProviderEnabled); } catch { /* fail-soft: an unusable cache is just an empty one */ }
+        refreshQuotaCacheOnBoot(isQuotaProviderEnabled);
     });
 
     // 12. Resume any refine jobs that were interrupted by a previous daemon restart.

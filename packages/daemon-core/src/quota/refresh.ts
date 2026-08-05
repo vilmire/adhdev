@@ -48,6 +48,31 @@ const REFRESHERS: ReadonlyArray<{ provider: QuotaProvider; fetch: () => Promise<
 ];
 
 /**
+ * Whether a provider's quota is probed on THIS machine. The daemon already has
+ * exactly one authority for "this machine uses provider X":
+ * `ProviderLoader.isMachineProviderEnabled` — the same gate cli-manager
+ * consults before launching an instance and mesh-queue-assignment consults
+ * before claiming a task. A provider that fails that gate can never run here,
+ * so its quota can never be spent here: probing it would spend a codex
+ * app-server spawn (or surface a `missing-credentials` "failure") for a number
+ * nothing on this machine can use — and that phantom failure reads like a real
+ * defect next to genuine ones. The predicate is evaluated per refresh, never
+ * cached, so enabling a provider later takes effect on the next tick.
+ */
+export type QuotaProviderEnabled = (provider: QuotaProvider) => boolean;
+
+/**
+ * Adapt the machine provider-enable authority to the quota predicate. Defined
+ * once here so the loop, the boot refresh and hydration all share one mapping
+ * instead of each re-deriving "enabled" from the loader their own way.
+ */
+export function quotaProviderEnabledFromLoader(loader: {
+    isMachineProviderEnabled(providerType: string): boolean;
+}): QuotaProviderEnabled {
+    return (provider) => loader.isMachineProviderEnabled(provider);
+}
+
+/**
  * Latest snapshot per provider — the runtime authority.
  *
  * Backed by a file (see ./persist.ts) so a restart can restore the last
@@ -117,7 +142,10 @@ export function clearQuotaCache(): void {
  */
 let hydrated = false;
 
-export function hydrateQuotaCacheFromDisk(env: NodeJS.ProcessEnv = process.env): number {
+export function hydrateQuotaCacheFromDisk(
+    env: NodeJS.ProcessEnv = process.env,
+    isEnabled?: QuotaProviderEnabled,
+): number {
     if (hydrated) return 0;
     hydrated = true;
     let restored: Record<string, MeshNodeFactsProviderQuota> | undefined;
@@ -133,6 +161,11 @@ export function hydrateQuotaCacheFromDisk(env: NodeJS.ProcessEnv = process.env):
     let count = 0;
     for (const [provider, quota] of Object.entries(restored)) {
         if (cache.has(provider)) continue; // a live measurement always wins
+        // A provider disabled since the snapshot was written is not restored:
+        // its stale "unavailable" reading would otherwise keep showing for a
+        // provider this machine no longer runs — the exact phantom-failure
+        // noise the enable gate exists to remove.
+        if (isEnabled && !isEnabled(provider as QuotaProvider)) continue;
         cache.set(provider, quota);
         hydratedOnly.add(provider);
         count += 1;
@@ -156,9 +189,24 @@ export function __resetQuotaHydrationForTests(): void {
  */
 export async function refreshQuotaCacheOnce(
     fetchers: ReadonlyArray<{ provider: QuotaProvider; fetch: () => Promise<ProviderQuota> }> = REFRESHERS,
+    isEnabled?: QuotaProviderEnabled,
 ): Promise<void> {
+    // A disabled provider is not probed at all — no spawn, no request — and any
+    // snapshot it left behind (live or hydrated) is dropped, so a stale
+    // "unavailable" reading cannot outlive the disable and keep masquerading as
+    // a current problem. The prune runs even when the active list ends up
+    // empty: the persist below then rewrites the file without those entries.
+    const active = isEnabled ? fetchers.filter(({ provider }) => isEnabled(provider)) : fetchers;
+    if (isEnabled) {
+        for (const { provider } of fetchers) {
+            if (!isEnabled(provider)) {
+                cache.delete(provider);
+                hydratedOnly.delete(provider);
+            }
+        }
+    }
     await Promise.all(
-        fetchers.map(async ({ provider, fetch }) => {
+        active.map(async ({ provider, fetch }) => {
             try {
                 cache.set(provider, toWireQuota(await fetch()));
                 hydratedOnly.delete(provider); // measured in this process now
@@ -246,6 +294,12 @@ export interface QuotaRefreshLoopOptions {
     intervalMs?: number;
     /** Injectable for tests; defaults to the real per-provider fetchers. */
     fetchers?: ReadonlyArray<{ provider: QuotaProvider; fetch: () => Promise<ProviderQuota> }>;
+    /**
+     * Machine-level enable gate (see QuotaProviderEnabled). Evaluated on every
+     * tick, so a provider enabled or disabled between ticks takes effect on the
+     * next one — no restart, no cache flush needed.
+     */
+    isEnabled?: QuotaProviderEnabled;
 }
 
 /**
@@ -259,6 +313,7 @@ export interface QuotaRefreshLoopOptions {
  */
 export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRefreshLoopHandle {
     const intervalMs = options.intervalMs ?? QUOTA_REFRESH_INTERVAL_MS;
+    const fetchers = options.fetchers ?? REFRESHERS;
     let running = false;
     const timer = setInterval(() => {
         if (running) return; // never overlap ticks
@@ -270,9 +325,17 @@ export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRe
             // it as idle so a broken probe costs staleness, never a spawn storm.
             active = false;
         }
-        if (!active) return;
+        // Backfill exception to the idle gate: an ENABLED provider with no
+        // snapshot at all (typically one enabled after the boot refresh ran)
+        // has a real quota number we have simply never read, so one fetch is
+        // worth it even on an idle machine. A recorded failure counts as a
+        // snapshot, so a failing fetcher cannot re-trigger this every tick.
+        const needsBackfill = options.isEnabled
+            ? fetchers.some(({ provider }) => options.isEnabled!(provider) && !cache.has(provider))
+            : false;
+        if (!active && !needsBackfill) return;
         running = true;
-        void refreshQuotaCacheOnce(options.fetchers)
+        void refreshQuotaCacheOnce(fetchers, options.isEnabled)
             .catch((e: any) => LOG.warn('Quota', `Quota refresh tick error: ${e?.message || e}`))
             .finally(() => { running = false; });
     }, intervalMs);
@@ -293,9 +356,13 @@ export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRe
  */
 export function setupQuotaRefreshLoop(components: {
     instanceManager: { collectHotChatSessionStates(): Array<{ status?: unknown; lastMessageAt?: unknown }> };
+    providerLoader?: { isMachineProviderEnabled(providerType: string): boolean };
 }): QuotaRefreshLoopHandle {
     return startQuotaRefreshLoop({
         hasRecentCliActivity: () => hasRecentCliActivity(components.instanceManager.collectHotChatSessionStates()),
+        isEnabled: components.providerLoader
+            ? quotaProviderEnabledFromLoader(components.providerLoader)
+            : undefined,
     });
 }
 
@@ -332,7 +399,7 @@ export function setupQuotaRefreshLoop(components: {
  */
 let bootRefreshInFlight = false;
 
-export function refreshQuotaCacheOnBoot(): void {
+export function refreshQuotaCacheOnBoot(isEnabled?: QuotaProviderEnabled): void {
     // NOTE: the "already populated" guard deliberately ignores entries restored
     // from disk (`hydratedOnly`). Hydration exists to make a restart show its
     // last numbers INSTANTLY, not to skip re-measuring them — treating restored
@@ -341,7 +408,7 @@ export function refreshQuotaCacheOnBoot(): void {
     // this boot refresh was added to close.
     if (bootRefreshInFlight || hasFreshlyMeasuredQuota()) return;
     bootRefreshInFlight = true;
-    void refreshQuotaCacheOnce()
+    void refreshQuotaCacheOnce(REFRESHERS, isEnabled)
         .catch((e: any) => LOG.warn('Quota', `Boot quota refresh failed: ${e?.message || e}`))
         .finally(() => { bootRefreshInFlight = false; });
 }

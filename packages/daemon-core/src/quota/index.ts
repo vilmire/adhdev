@@ -51,11 +51,13 @@ export {
     QUOTA_REFRESH_INTERVAL_MS,
     clearQuotaCache,
     hasRecentCliActivity,
+    quotaProviderEnabledFromLoader,
     readQuotaCache,
     refreshQuotaCacheOnBoot,
     refreshQuotaCacheOnce,
     setupQuotaRefreshLoop,
     startQuotaRefreshLoop,
+    type QuotaProviderEnabled,
     type QuotaRefreshLoopHandle,
     type QuotaRefreshLoopOptions,
 } from './refresh.js';
