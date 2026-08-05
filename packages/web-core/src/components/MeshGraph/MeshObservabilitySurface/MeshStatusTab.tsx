@@ -18,6 +18,7 @@ import {
     quotaProviderLabel,
     quotaUsageTone,
     schedulingReasonLabel,
+    shouldShowClaudeSetupHint,
     shortCommit,
     summarizeNodeDrift,
     type MachineQuotaGroup,
@@ -165,6 +166,15 @@ function MeshMachineQuotaCard({ machine }: { machine: MachineQuotaGroup }) {
                                 {!hasWindows && (
                                     <span className={`text-[11px] ${meshTheme.textSecondary}`} title="This machine reported that it could not read this provider's quota">
                                         {describeQuotaFailure(quota)}
+                                    </span>
+                                )}
+                                {/* Claude-only: the daemon's message already names the
+                                    command, so this adds the missing REASON — Claude Code
+                                    has no outbound quota API, unlike codex/kimi. Not a
+                                    fourth state; a hint on the existing failure line. */}
+                                {shouldShowClaudeSetupHint(provider, quota) && (
+                                    <span className={`text-[11px] ${meshTheme.textSecondary} opacity-80`}>
+                                        {t('mesh.status.quotaClaudeSetupHint')}
                                     </span>
                                 )}
                             </div>

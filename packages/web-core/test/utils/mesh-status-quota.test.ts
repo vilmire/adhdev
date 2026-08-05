@@ -13,6 +13,7 @@ import {
   formatQuotaWindow,
   quotaProviderLabel,
   quotaUsageTone,
+  shouldShowClaudeSetupHint,
 } from '../../src/components/MeshGraph/MeshObservabilitySurface/meshSurfaceHelpers'
 import { canonicalizeRepoMeshStatus } from '../../src/utils/repo-mesh-status'
 
@@ -448,5 +449,54 @@ describe('provider quota helpers', () => {
       'utf8',
     )
     expect(helpers).toContain("from '../../../utils/quota-format'")
+  })
+})
+
+// ── Claude-only setup hint ──────────────────────────────────────────────────
+// Claude Code exposes no outbound quota API: the numbers exist only in the JSON
+// it pipes to a user-configured statusLine, so reading them means wrapping that
+// slot. codex/kimi answer a live query and need no setup. The dashboard says
+// "unavailable" for all three, so the missing piece is the REASON — the daemon's
+// own message already names the command.
+describe('claude-only quota setup hint', () => {
+  const failing = (provider: string, kind: string, status = 'unavailable') => ({
+    provider, status, session: null, weekly: null, updatedAt: 1,
+    error: 'nope', metadata: { failureKind: kind },
+  }) as any
+
+  it('shows the hint for a claude provider that could not report', () => {
+    expect(shouldShowClaudeSetupHint('claude-cli', failing('claude-cli', 'missing-credentials'))).toBe(true)
+    // Any non-ok claude status qualifies — a future claude-side failure code
+    // must not silently drop the explanation.
+    expect(shouldShowClaudeSetupHint('claude-cli', failing('claude-cli', 'unsupported', 'error'))).toBe(true)
+  })
+
+  it('NEVER shows it for codex or kimi — even on the same failureKind', () => {
+    // THE core contract. kimi emits `missing-credentials` too (fetchers/kimi.ts),
+    // where it means "log in to kimi" — this hint would answer that wrongly.
+    expect(shouldShowClaudeSetupHint('kimi', failing('kimi', 'missing-credentials'))).toBe(false)
+    expect(shouldShowClaudeSetupHint('codex-cli', failing('codex-cli', 'missing-credentials'))).toBe(false)
+    expect(shouldShowClaudeSetupHint('codex-cli', failing('codex-cli', 'cli-unavailable'))).toBe(false)
+  })
+
+  it('does not show it when claude is reporting fine', () => {
+    expect(shouldShowClaudeSetupHint('claude-cli', {
+      provider: 'claude-cli', status: 'ok', updatedAt: 1, error: null,
+      session: { usedPercent: 10, windowMinutes: 300, resetsAt: null }, weekly: null,
+    } as any)).toBe(false)
+  })
+
+  it('renders as a hint on the existing failure line, not a fourth state', () => {
+    const source = fs.readFileSync(
+      path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshObservabilitySurface/MeshStatusTab.tsx'),
+      'utf8',
+    )
+    expect(source).toContain('shouldShowClaudeSetupHint(provider, quota)')
+    expect(source).toContain("t('mesh.status.quotaClaudeSetupHint')")
+    // The three-state branches are untouched: the hint sits alongside the
+    // failure text, inside the same !hasWindows provider row.
+    expect(source).toContain('describeQuotaFailure(quota)')
+    expect(source).toContain("t('mesh.status.quotaNotCollected')")
+    expect(source).toContain("t('mesh.status.machineNotReporting')")
   })
 })

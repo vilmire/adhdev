@@ -24,10 +24,12 @@ import {
     formatQuotaWindow,
     describeQuotaFailure,
     formatQuotaFreshness,
+    shouldShowClaudeSetupHint,
 } from '../../../utils/quota-format'
 export {
     quotaProviderLabel,
     quotaUsageTone,
+    shouldShowClaudeSetupHint,
     formatQuotaReset,
     formatQuotaWindow,
     describeQuotaFailure,

@@ -80,6 +80,28 @@ export function describeQuotaFailure(quota: MeshNodeFactsProviderQuota): string 
     return quota.status === 'unavailable' ? 'not available on this node' : 'could not read quota'
 }
 
+/**
+ * Should we explain, next to this provider's failure line, WHY Claude alone
+ * needs a setup step?
+ *
+ * Claude Code exposes no outbound quota interface: the numbers exist only in
+ * the JSON it pipes to a user-configured `statusLine` command, so reading them
+ * means occupying that slot with a wrapper. codex/kimi answer a live query and
+ * need nothing. That asymmetry is invisible on a dashboard that just says
+ * "unavailable", and the missing piece is the REASON — the daemon's own message
+ * already names the command to run.
+ *
+ * Deliberately gated on the PROVIDER, not on failureKind: kimi emits
+ * `missing-credentials` too (fetchers/kimi.ts), and there it means "log in to
+ * kimi", which this hint would answer wrongly. Gated on non-ok rather than on a
+ * specific kind so a future claude-side failure code does not silently drop the
+ * explanation.
+ */
+export function shouldShowClaudeSetupHint(provider: string, quota: MeshNodeFactsProviderQuota): boolean {
+    if (provider !== 'claude-cli') return false
+    return quota.status !== 'ok'
+}
+
 export type QuotaEntry = {
     provider: string
     quota: MeshNodeFactsProviderQuota

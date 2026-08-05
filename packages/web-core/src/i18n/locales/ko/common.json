@@ -2418,7 +2418,8 @@
             "quotaNotCollected": "아직 플랜 사용량을 수집하지 않았습니다 — 첫 갱신(약 15분) 이후, 그리고 에이전트가 활동한 경우에만 머신이 보고합니다.",
             "quotaFreshnessHint": "이 사용량이 실려 온 런타임 facts 번들의 경과 시간",
             "machinesQuota": "머신 — 플랜 사용량",
-            "machineNotReporting": "이 머신은 아직 런타임 정보를 보고하지 않았습니다 — 오프라인이거나 연결되지 않아 플랜 사용량을 알 수 없습니다."
+            "machineNotReporting": "이 머신은 아직 런타임 정보를 보고하지 않았습니다 — 오프라인이거나 연결되지 않아 플랜 사용량을 알 수 없습니다.",
+            "quotaClaudeSetupHint": "Claude Code 에는 사용량 API 가 없어 ADHDev 가 statusLine 에서 읽습니다. `adhdev quota claude:install` 이 기존 statusline 을 감싸 그대로 유지하며, claude:uninstall 로 복원합니다."
         },
         "overview": {
             "missionCard": "미션",
