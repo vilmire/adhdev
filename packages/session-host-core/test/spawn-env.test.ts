@@ -2,6 +2,28 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { sanitizeSpawnEnv } from '../src/spawn-env.js'
 
+/** Runs `fn` with `process.platform` overridden, always restoring it after. */
+function withPlatform<T>(platform: NodeJS.Platform, fn: () => T): T {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+  try {
+    return fn()
+  } finally {
+    Object.defineProperty(process, 'platform', original)
+  }
+}
+
+const PARENT_CLAUDE_ENV = {
+  HOME: '/tmp/home',
+  CLAUDECODE: '1',
+  CLAUDE_CODE_CHILD_SESSION: '1',
+  CLAUDE_CODE_ENTRYPOINT: 'cli',
+  CLAUDE_CODE_SESSION_ID: 'parent-session-uuid',
+  CLAUDE_CODE_EXECPATH: '/path/to/claude',
+  CLAUDE_CODE_BRIDGE_SESSION_ID: 'parent-bridge-session-uuid',
+  CLAUDE_CONFIG_DIR: '/tmp/home/.claude',
+}
+
 test('sanitizeSpawnEnv removes parent Codex session controls from child CLIs', () => {
   const env = sanitizeSpawnEnv({
     HOME: '/tmp/home',
@@ -32,32 +54,53 @@ test('sanitizeSpawnEnv also removes parent Codex session controls from overrides
   assert.equal(env.NO_COLOR, undefined)
 })
 
-test('sanitizeSpawnEnv strips parent Claude Code session markers on win32', () => {
-  // A daemon launched from inside a Claude Code session inherits these markers;
-  // forwarding CLAUDE_CODE_CHILD_SESSION to a spawned claude-cli makes it run as
-  // a nested child that never persists its ~/.claude/projects transcript, so the
-  // native-source history read finds nothing and the live dashboard is empty.
-  const env = sanitizeSpawnEnv({
-    HOME: '/tmp/home',
-    CLAUDECODE: '1',
-    CLAUDE_CODE_CHILD_SESSION: '1',
-    CLAUDE_CODE_ENTRYPOINT: 'cli',
-    CLAUDE_CODE_SESSION_ID: 'parent-session-uuid',
-    CLAUDE_CODE_EXECPATH: '/path/to/claude',
-    CLAUDE_CONFIG_DIR: '/tmp/home/.claude',
-  })
+// ★THE core contract this task fixes: the strip is unconditional, not gated to
+// win32. A daemon launched from inside a Claude Code session inherits these
+// markers; forwarding CLAUDE_CODE_CHILD_SESSION to a spawned claude-cli makes
+// it run as a nested child that never persists its ~/.claude/projects
+// transcript, so the native-source history read finds nothing and the live
+// dashboard is empty — reproduced live on darwin, not just win32.
+for (const platform of ['darwin', 'linux', 'win32'] as const) {
+  test(`sanitizeSpawnEnv strips parent Claude Code session markers on ${platform}`, () => {
+    const env = withPlatform(platform, () => sanitizeSpawnEnv(PARENT_CLAUDE_ENV))
 
-  // Scoped to win32 for now; on other platforms the markers pass through.
-  if (process.platform === 'win32') {
     assert.equal(env.CLAUDECODE, undefined)
     assert.equal(env.CLAUDE_CODE_CHILD_SESSION, undefined)
     assert.equal(env.CLAUDE_CODE_ENTRYPOINT, undefined)
     assert.equal(env.CLAUDE_CODE_SESSION_ID, undefined)
     assert.equal(env.CLAUDE_CODE_EXECPATH, undefined)
-  } else {
-    assert.equal(env.CLAUDE_CODE_CHILD_SESSION, '1')
-  }
-  // User-facing config dir must always be preserved (not a session marker).
-  assert.equal(env.CLAUDE_CONFIG_DIR, '/tmp/home/.claude')
-  assert.equal(env.HOME, '/tmp/home')
+    // CLAUDE_CODE_BRIDGE_SESSION_ID: the parent's remote bridge/reattach
+    // session id — left in place, a spawned child could try to reattach to the
+    // PARENT's remote session instead of starting fresh.
+    assert.equal(env.CLAUDE_CODE_BRIDGE_SESSION_ID, undefined)
+    // User-facing config dir must always be preserved (not a session marker).
+    assert.equal(env.CLAUDE_CONFIG_DIR, '/tmp/home/.claude')
+    assert.equal(env.HOME, '/tmp/home')
+  })
+}
+
+// ★Parent-env-untouched contract: sanitizeSpawnEnv builds a CHILD env for the
+// spawned process; it must never mutate the coordinator's own process.env (or
+// any other object the caller still holds a reference to). Deleting a key on
+// the returned object must be invisible to the caller's original input.
+test('sanitizeSpawnEnv never mutates the base env object it is given', () => {
+  const baseEnv = { ...PARENT_CLAUDE_ENV }
+  const baseEnvSnapshotBefore = { ...baseEnv }
+
+  withPlatform('darwin', () => sanitizeSpawnEnv(baseEnv))
+
+  assert.deepEqual(baseEnv, baseEnvSnapshotBefore)
+  assert.equal(baseEnv.CLAUDE_CODE_CHILD_SESSION, '1')
+  assert.equal(baseEnv.CLAUDE_CODE_BRIDGE_SESSION_ID, 'parent-bridge-session-uuid')
+})
+
+test('sanitizeSpawnEnv never mutates process.env itself', () => {
+  // process.env is compared via a plain-object snapshot on BOTH sides — comparing
+  // the live process.env object directly against a plain-object snapshot trips
+  // assert.deepEqual on prototype/exotic-object differences unrelated to content.
+  const before = { ...process.env }
+
+  withPlatform('darwin', () => sanitizeSpawnEnv({ ...PARENT_CLAUDE_ENV, ...process.env }))
+
+  assert.deepEqual({ ...process.env }, before)
 })

@@ -63,16 +63,32 @@ export function sanitizeSpawnEnv(
     // native-source history reader finds no file and the live dashboard renders
     // empty. This bites when the daemon itself was launched from inside a Claude
     // Code session (the markers are inherited and forwarded to every child).
-    // Scoped to win32 for now: the macOS/Linux path works today and we want to
-    // keep the blast radius small. Safe to make unconditional later — a
-    // daemon-spawned claude should always be a fresh top-level session.
-    if (process.platform === 'win32') {
-        delete env.CLAUDECODE;
-        delete env.CLAUDE_CODE_CHILD_SESSION;
-        delete env.CLAUDE_CODE_ENTRYPOINT;
-        delete env.CLAUDE_CODE_SESSION_ID;
-        delete env.CLAUDE_CODE_EXECPATH;
-    }
+    // Unconditional: originally scoped to win32 (35b462c5) because the bug had
+    // only been OBSERVED there at the time — the Windows daemon that surfaced it
+    // happened to have been launched from inside a Claude Code session, and
+    // macOS/Linux "looked fine" only because no one had hit that same launch
+    // circumstance yet, not because the platform behaves differently. The
+    // marker-inheritance mechanism itself was never platform-specific — nothing
+    // about how Claude Code detects a nested child session depends on OS.
+    // Confirmed reproduced identically on darwin (live coordinator measurement,
+    // this task): a daemon started from inside a Claude Code session inherits
+    // and forwards the same markers there too. A daemon-spawned claude should
+    // always be a fresh top-level session, on every platform — exactly what the
+    // original commit already called out as "safe to make unconditional later."
+    delete env.CLAUDECODE;
+    delete env.CLAUDE_CODE_CHILD_SESSION;
+    delete env.CLAUDE_CODE_ENTRYPOINT;
+    delete env.CLAUDE_CODE_SESSION_ID;
+    delete env.CLAUDE_CODE_EXECPATH;
+    // CLAUDE_CODE_BRIDGE_SESSION_ID is the same kind of parent-identity marker
+    // (observed grouped with CLAUDECODE/CLAUDE_CODE_SESSION_ID/
+    // CLAUDE_CODE_CHILD_SESSION/CLAUDE_CODE_EXECPATH in the installed `claude`
+    // binary's own env-var table, alongside a `buildBridgeReattachEnvFromState`
+    // helper) — it identifies the parent's remote bridge/reattach session. Left
+    // in place, a spawned child could try to reattach to the PARENT's remote
+    // session instead of starting fresh, which is a worse variant of the same
+    // "not actually a fresh top-level session" bug this block exists to prevent.
+    delete env.CLAUDE_CODE_BRIDGE_SESSION_ID;
 
     applyTerminalColorEnv(env);
     return env;
