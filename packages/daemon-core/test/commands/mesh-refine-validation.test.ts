@@ -1554,6 +1554,20 @@ describe('refine_mesh_node validation gate', () => {
         inlineMesh: mesh,
       })
       expect(executed).toMatchObject({ success: true, async: true, status: 'accepted' })
+
+      // `accepted` means the job was QUEUED, not finished — it goes on running
+      // git in this temp repo after the assertion. Returning here would drop
+      // into the `finally` while git is still writing .git/objects/pack, and
+      // the recursive remove then races it:
+      //
+      //   ENOTEMPTY: directory not empty, rmdir '.../repo/.git/objects/pack'
+      //
+      // which fails a test whose assertions all passed. Every other async case
+      // in this file already waits for the terminal ledger entry; this one did
+      // not, because it is "about" the dry-run defaults and the execute:true
+      // call is only there to contrast with them. Wait for it anyway — owning
+      // the process we started is what makes the cleanup safe.
+      await waitForRefineLedger(mesh.id, executed.jobId)
     } finally {
       rmTempRepo(root)
     }
