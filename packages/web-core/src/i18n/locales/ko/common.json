@@ -2619,7 +2619,11 @@
             "disable": "비활성화",
             "enable": "활성화",
             "detect": "감지",
-            "resetCommand": "명령어 초기화"
+            "resetCommand": "명령어 초기화",
+            "quotaAccountLabel": "사용량에 계정 표시",
+            "quotaAccountLabelHint": "이 프로바이더의 플랜 사용량에 로그인 계정을 함께 표시합니다. 끄면 계정을 숨기는 게 아니라 아예 조회하지 않습니다.",
+            "quotaAccountLabelOn": "켬",
+            "quotaAccountLabelOff": "끔"
         },
         "providerFix": {
             "aiAgent": "AI 에이전트",

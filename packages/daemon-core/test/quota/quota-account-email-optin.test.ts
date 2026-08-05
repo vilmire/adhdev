@@ -188,35 +188,26 @@ describe('account email opt-in — ON', () => {
 });
 
 describe('the opt-in default', () => {
-    it('is off, and an unreadable config resolves to off', async () => {
-        // Resolved through resolveDeps' real default rather than an injected
-        // stub: the shipped behaviour must be off, and a config that cannot be
-        // read must fail CLOSED (an error path may never enable a PII opt-in).
+    it('defaults ON, and a malformed config still fails CLOSED', async () => {
+        // The default flipped to ON (owner decision) so every quota surface
+        // agrees. The fail-closed half is unchanged and still matters: an
+        // unreadable config must never be the thing that turns PII collection
+        // on, so a parse failure resolves to OFF rather than to the default.
         const { resolveDeps } = await import('../../src/quota/fetchers/deps.js');
-        // loadConfig() resolves its directory from ADHDEV_CONFIG_DIR (NOT
-        // ADHDEV_HOME — see config/config.ts getConfigDir), so point THAT at an
-        // empty dir to exercise the shipped default with no config file.
         const previous = process.env.ADHDEV_CONFIG_DIR;
         process.env.ADHDEV_CONFIG_DIR = home;
         try {
-            expect(resolveDeps().showAccountEmail()).toBe(false);
-            // …and the shipped DEFAULT itself is off. Asserted directly because
-            // loadConfig() materialises DEFAULT_CONFIG to disk on first call, so
-            // reading it back can only ever echo whatever the default was —
-            // this is the assertion that actually pins the value.
-            const { loadConfig } = await import('../../src/config/config.js');
-            expect(loadConfig().quotaShowAccountEmail).toBe(false);
+            expect(resolveDeps().showAccountEmail()).toBe(true);
 
-            // Explicitly off stays off…
-            writeFileSync(join(home, 'config.json'), JSON.stringify({ quotaShowAccountEmail: false }), 'utf-8');
+            // An explicit user choice is honoured either way.
+            writeFileSync(join(home, 'config.json'), JSON.stringify({
+                quotaShowAccountEmail: false, quotaShowAccountEmailSetByUser: true,
+            }), 'utf-8');
             expect(resolveDeps().showAccountEmail()).toBe(false);
 
-            // …and a malformed config must fail CLOSED, never enable a PII opt-in.
-            writeFileSync(join(home, 'config.json'), '{ not json', 'utf-8');
-            expect(resolveDeps().showAccountEmail()).toBe(false);
-
-            // Only an explicit true turns it on.
-            writeFileSync(join(home, 'config.json'), JSON.stringify({ quotaShowAccountEmail: true }), 'utf-8');
+            writeFileSync(join(home, 'config.json'), JSON.stringify({
+                quotaShowAccountEmail: true, quotaShowAccountEmailSetByUser: true,
+            }), 'utf-8');
             expect(resolveDeps().showAccountEmail()).toBe(true);
         } finally {
             if (previous === undefined) delete process.env.ADHDEV_CONFIG_DIR;

@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { printQuota, printClaudeStatuslineStatus } from '../../src/quota/cli.js';
+import { formatQuotaAccount } from '@adhdev/mesh-shared';
 import type { ProviderQuota } from '../../src/quota/types.js';
 import type { StatuslineStatus, StatuslineInstallPaths } from '../../src/quota/statusline/install.js';
 
@@ -177,5 +178,54 @@ describe('printClaudeStatuslineStatus — diagnostic output', () => {
         expect(joined).toMatch(/no quota API/i);
         expect(joined).toMatch(/wraps.*not replace/i);
         expect(joined).toContain('claude:install');
+    });
+});
+
+// ACCOUNT LABEL PARITY — the CLI must show what the dashboards show.
+//
+// The owner's report: "adhdev quota shows no account label" while the three
+// dashboards did. The fix is not a second formatter in the CLI — that is how
+// the drift started — but the SAME mesh-shared `formatQuotaAccount` both
+// surfaces call. These tests pin the parity, not merely the presence.
+describe('printQuota — account label parity with the dashboards', () => {
+    const okQuota = (metadata: Record<string, unknown>) => ({
+        provider: 'codex-cli',
+        session: null,
+        weekly: { usedPercent: 27, windowMinutes: 10080, resetsAt: null },
+        updatedAt: 1,
+        error: null,
+        status: 'ok',
+        metadata,
+    }) as any;
+
+    it('prints the account label next to the provider heading', () => {
+        const joined = captureLogs(() => printQuota('Codex CLI', okQuota({
+            source: 'app-server', planType: 'plus', accountEmail: 'user@example.com',
+        }))).join('\n');
+        expect(joined).toContain('user@example.com');
+        expect(joined).toContain('Codex CLI');
+    });
+
+    it('renders EXACTLY what the shared formatter produces (no CLI-only format)', () => {
+        // Parity assertion: if the CLI ever grows its own string, this breaks.
+        const quota = okQuota({ planType: 'plus', accountEmail: 'user@example.com' });
+        const expected = formatQuotaAccount(quota)!;
+        expect(expected).toBe('user@example.com · plus');
+        expect(captureLogs(() => printQuota('Codex CLI', quota)).join('\n')).toContain(expected);
+    });
+
+    it('shows the plan alone when no account was reported', () => {
+        // planType is not gated by the account option, so it still renders.
+        const joined = captureLogs(() => printQuota('Codex CLI', okQuota({ planType: 'plus' }))).join('\n');
+        expect(joined).toContain('plus');
+    });
+
+    it('renders the heading alone when there is nothing to label', () => {
+        // Claude Code reports no account at all — no empty separator, no
+        // "unknown" placeholder, and no stray blank segment.
+        const lines = captureLogs(() => printQuota('Claude Code', okQuota({ source: 'statusline' })));
+        const heading = lines.find(l => l.includes('Claude Code'))!;
+        expect(heading.trim()).toBe('Claude Code');
+        expect(heading).not.toContain('·');
     });
 });

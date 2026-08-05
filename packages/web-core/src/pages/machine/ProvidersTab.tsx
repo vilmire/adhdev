@@ -5,6 +5,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProviderSettingsEntry, ProviderInfo } from './types'
+
+/**
+ * Providers whose quota actually carries an account label. Only codex reports
+ * one today (via its own `account/read`); Claude Code exposes no account and
+ * kimi's token holds an opaque id, so offering the switch there would promise
+ * something those providers cannot deliver.
+ */
+const QUOTA_ACCOUNT_PROVIDERS = new Set(['codex-cli'])
 import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './providerSettings'
 import { extractProviderSourceConfigPayload, normalizeProviderDirInput, type ProviderSourceConfigPayload } from './providerSourceConfig'
 import ProviderCloneModal from './ProviderCloneModal'
@@ -21,6 +29,10 @@ interface ProvidersTabProps {
 export default function ProvidersTab({ machineId, providers, sendDaemonCommand }: ProvidersTabProps) {
     const { t } = useTranslation('common')
     const [settings, setSettings] = useState<ProviderSettingsEntry[]>([])
+    // Quota account label — machine-level config, so it has its own read/write
+    // pair (get/set_quota_account_label) rather than riding the provider-manifest
+    // settings payload. Rendered on the provider whose quota carries the label.
+    const [quotaAccountLabel, setQuotaAccountLabel] = useState<boolean | undefined>(undefined)
     const [loading, setLoading] = useState(false)
     const [savingKey, setSavingKey] = useState<string | null>(null)
     const [filter, setFilter] = useState<'all' | 'acp' | 'cli' | 'ide' | 'extension'>('all')
@@ -62,9 +74,32 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
         setLoading(false)
     }, [machineId, providers, sendDaemonCommand])
 
+    const fetchQuotaAccountLabel = useCallback(async () => {
+        if (!machineId) return
+        try {
+            const res = await sendDaemonCommand(machineId, 'get_quota_account_label', {})
+            // Standalone returns the raw response, cloud wraps it as
+            // { success, result } — accept both, as the transport docs require.
+            const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as { enabled?: unknown } | undefined
+            if (typeof body?.enabled === 'boolean') setQuotaAccountLabel(body.enabled)
+        } catch { /* leave undefined — the toggle stays hidden rather than lying */ }
+    }, [machineId, sendDaemonCommand])
+
+    const handleQuotaAccountLabelToggle = useCallback(async (enabled: boolean) => {
+        if (!machineId) return
+        setQuotaAccountLabel(enabled) // optimistic: the switch responds immediately
+        try {
+            await sendDaemonCommand(machineId, 'set_quota_account_label', { enabled })
+        } finally {
+            // Reconcile with what the daemon actually stored.
+            await fetchQuotaAccountLabel()
+        }
+    }, [machineId, sendDaemonCommand, fetchQuotaAccountLabel])
+
     useEffect(() => {
         if (settings.length === 0) fetchSettings()
         if (!sourceConfig) fetchSourceConfig()
+        if (quotaAccountLabel === undefined) fetchQuotaAccountLabel()
     }, [])
 
     const handleSetSetting = async (providerType: string, key: string, value: unknown) => {
@@ -243,6 +278,8 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                             onEnableToggle={handleMachineProviderEnable}
                             onDetect={handleDetectProvider}
                             onResetCommand={handleResetProviderCommand}
+                            quotaAccountLabelEnabled={QUOTA_ACCOUNT_PROVIDERS.has(prov.type) ? quotaAccountLabel : undefined}
+                            onQuotaAccountLabelToggle={QUOTA_ACCOUNT_PROVIDERS.has(prov.type) ? handleQuotaAccountLabelToggle : undefined}
                         />
                     ))}
                 </div>

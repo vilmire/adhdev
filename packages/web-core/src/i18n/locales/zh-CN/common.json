@@ -2619,7 +2619,11 @@
             "disable": "禁用",
             "enable": "启用",
             "detect": "检测",
-            "resetCommand": "重置命令"
+            "resetCommand": "重置命令",
+            "quotaAccountLabel": "在用量中显示账号",
+            "quotaAccountLabelHint": "为该提供程序的套餐用量标注登录账号。关闭时不是隐藏，而是根本不获取账号。",
+            "quotaAccountLabelOn": "开",
+            "quotaAccountLabelOff": "关"
         },
         "providerFix": {
             "aiAgent": "AI 代理",

@@ -2619,7 +2619,11 @@
             "disable": "Deshabilitar",
             "enable": "Habilitar",
             "detect": "Detectar",
-            "resetCommand": "Restablecer comando"
+            "resetCommand": "Restablecer comando",
+            "quotaAccountLabel": "Mostrar la cuenta en la cuota",
+            "quotaAccountLabelHint": "Etiqueta la cuota de este proveedor con la cuenta con sesión iniciada. Desactivado significa que la cuenta nunca se consulta, no solo que se oculta.",
+            "quotaAccountLabelOn": "Activado",
+            "quotaAccountLabelOff": "Desactivado"
         },
         "providerFix": {
             "aiAgent": "Agente de IA",

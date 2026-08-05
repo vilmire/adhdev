@@ -2619,7 +2619,11 @@
             "disable": "Disable",
             "enable": "Enable",
             "detect": "Detect",
-            "resetCommand": "Reset command"
+            "resetCommand": "Reset command",
+            "quotaAccountLabel": "Show account on quota",
+            "quotaAccountLabelHint": "Label this provider's plan quota with the signed-in account. Off means the account is never fetched, not just hidden.",
+            "quotaAccountLabelOn": "On",
+            "quotaAccountLabelOff": "Off"
         },
         "providerFix": {
             "aiAgent": "AI Agent",

@@ -8,7 +8,7 @@
  * ctx.deps.statusVersion plus process-global config + npm/upgrade helpers, and
  * return the same CommandRouterResult the inlined cases did.
  */
-import { loadConfig, updateConfig } from '../../config/config.js';
+import { loadConfig, updateConfig, setQuotaShowAccountEmail } from '../../config/config.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from '../upgrade-helper.js';
 import { LOG } from '../../logging/logger.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
@@ -157,5 +157,30 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
         const nickname = args?.nickname;
         updateConfig({ machineNickname: nickname || null });
         return { success: true };
+    },
+
+    /**
+     * Read the quota account-label preference for the machine page toggle.
+     * Machine-level config, so it is answered here rather than through
+     * `get_provider_settings` (which is scoped to a provider's own manifest).
+     */
+    get_quota_account_label: async (_ctx: LowFamilyContext, _args: any) => {
+        return { success: true, enabled: loadConfig().quotaShowAccountEmail === true };
+    },
+
+    /**
+     * Set it. Routed through setQuotaShowAccountEmail (not updateConfig) so the
+     * "a human chose this" marker is recorded — without it the value would be
+     * treated as a stale default and overwritten on the next default change.
+     *
+     * Takes effect on the next quota tick with no restart: the fetcher reads the
+     * config through a function at fetch time (quota/fetchers/deps.ts).
+     */
+    set_quota_account_label: async (_ctx: LowFamilyContext, args: any) => {
+        if (typeof args?.enabled !== 'boolean') {
+            return { success: false, error: 'enabled (boolean) is required' };
+        }
+        setQuotaShowAccountEmail(args.enabled);
+        return { success: true, enabled: args.enabled };
     },
 };

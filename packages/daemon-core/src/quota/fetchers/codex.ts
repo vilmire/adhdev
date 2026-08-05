@@ -368,7 +368,13 @@ export async function fetchCodexQuota(overrides: QuotaFetchDeps = {}): Promise<P
                         `${JSON.stringify({
                             jsonrpc: '2.0',
                             id: ACCOUNT_ID,
+                            // `params` is REQUIRED even though it takes no
+                            // arguments — omitting it makes the app-server
+                            // answer `-32600 Invalid request: missing field
+                            // params`, which reads as "no account" and silently
+                            // drops the label. Verified against codex-cli 0.146.0.
                             method: 'account/read',
+                            params: {},
                         })}\n`,
                     );
                 } catch {

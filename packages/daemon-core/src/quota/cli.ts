@@ -9,6 +9,7 @@
 
 import * as fs from 'node:fs';
 import chalk from 'chalk';
+import { formatQuotaAccount, type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import type { ProviderQuota, QuotaWindow } from './types.js';
 import type { InstallResult, UninstallResult, StatuslineStatus } from './statusline/install.js';
 
@@ -71,7 +72,14 @@ function formatAgo(atMs: number): string {
 /** Render one provider's quota block: "5 hour"/"7 day" bars + any error line. */
 export function printQuota(name: string, quota: ProviderQuota): void {
     console.log();
-    console.log(chalk.bold(name));
+    // The account label uses the SAME formatter the three dashboards use
+    // (mesh-shared formatQuotaAccount), so the CLI cannot drift from them —
+    // the CLI showing nothing while the UI showed an account is the exact
+    // inconsistency this shares a function to prevent. Null when there is
+    // nothing to say (no account reported, or the option is off, in which case
+    // the email was never fetched), and then the heading renders alone.
+    const account = formatQuotaAccount(quota as unknown as MeshNodeFactsProviderQuota);
+    console.log(account ? `${chalk.bold(name)}  ${chalk.gray(account)}` : chalk.bold(name));
     if (quota.status === 'ok' || quota.session || quota.weekly) {
         console.log(formatWindow('5 hour', quota.session));
         console.log(formatWindow('7 day', quota.weekly));

@@ -2619,7 +2619,11 @@
             "disable": "無効化",
             "enable": "有効化",
             "detect": "検出",
-            "resetCommand": "コマンドをリセット"
+            "resetCommand": "コマンドをリセット",
+            "quotaAccountLabel": "使用量にアカウントを表示",
+            "quotaAccountLabelHint": "このプロバイダーのプラン使用量にログイン中のアカウントを併記します。オフの場合は非表示ではなく、アカウントを取得しません。",
+            "quotaAccountLabelOn": "オン",
+            "quotaAccountLabelOff": "オフ"
         },
         "providerFix": {
             "aiAgent": "AI エージェント",

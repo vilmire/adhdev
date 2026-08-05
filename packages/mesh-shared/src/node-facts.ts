@@ -104,3 +104,30 @@ export function normalizeMeshNodeFacts(raw: unknown): MeshNodeFacts | undefined 
     if (!Number.isFinite(reportedAt) || reportedAt <= 0) return undefined
     return { ...record, schemaVersion, reportedAt } as MeshNodeFacts
 }
+
+/**
+ * The account/plan label for a provider quota row: "you@example.com · Plus".
+ *
+ * Lives HERE, in the dependency-free leaf, because both renderers need it and
+ * they cannot share code any other way: the dashboards are in web-core and the
+ * `adhdev quota` CLI is in daemon-core, and the dependency arrow runs
+ * web-core → daemon-core, never back. Duplicating the formatter in the CLI is
+ * what produced the drift this function exists to prevent — the CLI showed no
+ * account at all while the UI showed one.
+ *
+ * Both halves are optional and independent: codex reports both, kimi reports
+ * neither, and Claude Code exposes no account at all. Returns null when there
+ * is nothing to say, so a provider without an account renders no empty slot and
+ * no "unknown" placeholder — the absence is simply invisible, in every surface.
+ *
+ * ★The email is PII travelling on a P2P-only path. Rendering it locally is
+ * fine; it must never be forwarded to a server payload or a push body. See
+ * daemon-core QuotaMetadata.accountEmail and the server-boundary suite.
+ */
+export function formatQuotaAccount(quota: MeshNodeFactsProviderQuota | undefined): string | null {
+    const meta = quota?.metadata
+    const email = typeof meta?.accountEmail === 'string' ? meta.accountEmail.trim() : ''
+    const plan = typeof meta?.planType === 'string' ? meta.planType.trim() : ''
+    const parts = [email, plan].filter(Boolean)
+    return parts.length > 0 ? parts.join(' · ') : null
+}

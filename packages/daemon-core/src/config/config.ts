@@ -57,10 +57,10 @@ export interface ADHDevConfig {
     /**
      * Label provider quota with the signed-in account's email address.
      *
-     * OFF by default: the email is personal data, and quota is perfectly
-     * readable without it ("Codex CLI · 27% used"). It answers a narrower
-     * question — WHOSE 27%, when several accounts are in play — so it is opt-in
-     * rather than something a user has to notice and turn off.
+     * ON by default (owner decision, 2026-08-05). Every quota surface — the
+     * three dashboards and `adhdev quota` — shows the same label, so the
+     * account is part of the normal reading rather than a hidden extra. Users
+     * who do not want it turn it off from the machine page's provider settings.
      *
      * When off, the email is never ACQUIRED: the codex fetcher skips the
      * `account/read` call entirely, so nothing downstream (the in-memory cache,
@@ -72,6 +72,14 @@ export interface ADHDevConfig {
      * — it says "Plus", not who you are.
      */
     quotaShowAccountEmail?: boolean;
+
+    /**
+     * True once a human has explicitly chosen the value above (via the machine
+     * page toggle / setQuotaShowAccountEmail). Absent means any stored value is
+     * an old default this file wrote, not a preference — see
+     * resolveQuotaShowAccountEmail.
+     */
+    quotaShowAccountEmailSetByUser?: boolean;
 
  // Selected IDE (primary)
     selectedIde: string | null;
@@ -186,7 +194,7 @@ export interface ADHDevConfig {
 const DEFAULT_CONFIG: ADHDevConfig = {
     serverUrl: 'https://api.adhf.dev',
     allowServerApiProxy: false,
-    quotaShowAccountEmail: false,
+    quotaShowAccountEmail: true,
     selectedIde: null,
     configuredIdes: [],
     installedExtensions: [],
@@ -232,6 +240,36 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
     return typeof value === 'boolean' ? value : fallback;
 }
 
+/**
+ * Resolve `quotaShowAccountEmail`, distinguishing a value the USER chose from
+ * one this file wrote on its own.
+ *
+ * The migration problem: the option shipped opt-in (default false) in
+ * 1.0.35-rc.7. `normalizeConfig` fills every missing key from DEFAULT_CONFIG and
+ * `loadConfig` writes the result straight back when it differs from what was on
+ * disk (see the saveConfig call there), so simply STARTING an rc.7 daemon
+ * stamped `"quotaShowAccountEmail": false` into every user's config.json. Those
+ * `false`s are an artefact of the old default, not a preference — treating them
+ * as a deliberate opt-out would leave the new ON default unreachable for exactly
+ * the users who already ran the previous build.
+ *
+ * So an explicit choice is recorded separately, by the write path that a human
+ * actually triggers (`setQuotaShowAccountEmail`). Only that marker makes a
+ * stored boolean authoritative:
+ *   - marker present  → honour the stored value, whichever way it points
+ *   - marker absent   → the stored value is (at best) an old default; use the
+ *                       current default instead
+ * A user who turns the option off after this change gets the marker and keeps
+ * it off across upgrades; nobody has their choice silently reverted.
+ */
+function resolveQuotaShowAccountEmail(parsed: Record<string, any>): boolean {
+    const fallback = DEFAULT_CONFIG.quotaShowAccountEmail ?? true;
+    if (parsed.quotaShowAccountEmailSetByUser === true) {
+        return asBoolean(parsed.quotaShowAccountEmail, fallback);
+    }
+    return fallback;
+}
+
 function normalizeMachineProviders(value: unknown): Record<string, MachineProviderConfig> {
     if (!isPlainObject(value)) return {};
     const result: Record<string, MachineProviderConfig> = {};
@@ -264,7 +302,8 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
             ? parsed.serverUrl
             : DEFAULT_CONFIG.serverUrl,
         allowServerApiProxy: asBoolean(parsed.allowServerApiProxy, DEFAULT_CONFIG.allowServerApiProxy ?? false),
-        quotaShowAccountEmail: asBoolean(parsed.quotaShowAccountEmail, DEFAULT_CONFIG.quotaShowAccountEmail ?? false),
+        quotaShowAccountEmail: resolveQuotaShowAccountEmail(parsed),
+        ...(parsed.quotaShowAccountEmailSetByUser === true ? { quotaShowAccountEmailSetByUser: true } : {}),
         selectedIde: asNullableString(parsed.selectedIde),
         configuredIdes: asStringArray(parsed.configuredIdes),
         installedExtensions: asStringArray(parsed.installedExtensions),
@@ -448,6 +487,22 @@ export function updateConfig(updates: Partial<ADHDevConfig>): ADHDevConfig {
     const updated = { ...config, ...updates };
     saveConfig(updated);
     return updated;
+}
+
+/**
+ * Record a deliberate choice for the quota account label.
+ *
+ * Writes the intent marker alongside the value, which is what makes the stored
+ * boolean authoritative across future default changes — see
+ * resolveQuotaShowAccountEmail. Every human-facing write path (the machine page
+ * toggle) must go through here rather than setting the boolean directly, or the
+ * choice will be treated as an old default and overwritten.
+ */
+export function setQuotaShowAccountEmail(enabled: boolean): ADHDevConfig {
+    return updateConfig({
+        quotaShowAccountEmail: enabled,
+        quotaShowAccountEmailSetByUser: true,
+    });
 }
 
 /**

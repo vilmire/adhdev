@@ -66,6 +66,16 @@ interface InstalledProviderRowProps {
     onEnableToggle: (providerType: string, enabled: boolean) => Promise<void>
     onDetect: (providerType: string) => Promise<void>
     onResetCommand: (providerType: string) => Promise<void>
+    /**
+     * Quota account-label preference. Machine-level (not a provider manifest
+     * setting), so it is passed in rather than read from `prov.values` — but it
+     * is rendered HERE, inside the provider whose quota carries the label, which
+     * is where a user looking at that provider expects to find it.
+     * `undefined` while it is still loading, or for providers that report no
+     * account at all (then nothing renders).
+     */
+    quotaAccountLabelEnabled?: boolean
+    onQuotaAccountLabelToggle?: (enabled: boolean) => Promise<void>
 }
 
 export default function InstalledProviderRow({
@@ -76,6 +86,8 @@ export default function InstalledProviderRow({
     onEnableToggle,
     onDetect,
     onResetCommand,
+    quotaAccountLabelEnabled,
+    onQuotaAccountLabelToggle,
 }: InstalledProviderRowProps) {
     const { t } = useTranslation('common')
     const STATUS_LABEL_I18N: Record<string, string> = {
@@ -136,6 +148,23 @@ export default function InstalledProviderRow({
             {/* Expanded body */}
             {expanded && (
                 <div className="border-t border-border-subtle px-4 py-3 flex flex-col gap-3">
+                    {/* Quota account label — machine-level, but shown on the
+                        provider whose quota carries it. Only offered for
+                        providers that actually report an account (codex today);
+                        rendering it on claude/kimi would promise something the
+                        provider cannot deliver. */}
+                    {onQuotaAccountLabelToggle && quotaAccountLabelEnabled !== undefined && (
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                                <div className="text-[11px] text-text-secondary font-medium">{t('machine.providerRow.quotaAccountLabel')}</div>
+                                <div className="text-[10px] text-text-muted">{t('machine.providerRow.quotaAccountLabelHint')}</div>
+                            </div>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); void onQuotaAccountLabelToggle(!quotaAccountLabelEnabled) }}
+                                className={`machine-btn text-[10px] px-2 py-0.5 shrink-0 ${quotaAccountLabelEnabled ? 'text-green-400 border-green-500/25' : 'text-text-muted'}`}
+                            >{quotaAccountLabelEnabled ? t('machine.providerRow.quotaAccountLabelOn') : t('machine.providerRow.quotaAccountLabelOff')}</button>
+                        </div>
+                    )}
                     {/* Details: manifest metadata + source identity. Pulled
                         from the daemon's status broadcast — no extra round-trip. */}
                     <div className="grid gap-1 text-[10px] text-text-muted">
