@@ -38,7 +38,7 @@ import type { Toast } from '../components/dashboard/ToastContainer'
 import type { DashboardMobileSection } from '../components/dashboard/DashboardMobileBottomNav'
 import { getMobileDashboardMode, subscribeMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
 import { getDashboardWarmChatTailOptions } from '../utils/dashboard-warm-chat-tail'
-import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
+import { buildLiveSessionInboxStateMap, getConversationLiveInboxState, resolveSurfaceHidden } from '../components/dashboard/DashboardMobileChatShared'
 import { useConversationPrefs } from '../hooks/useConversationPrefs'
 import { appendWarningToast } from '../hooks/dashboardCommandUtils'
 import { compareMachineEntries } from '../utils/daemon-utils'
@@ -312,7 +312,10 @@ export default function Dashboard() {
     )
     const showMobileChatMode = isMobile && mobileViewMode === 'chat'
     const hiddenConversations = useMemo(
-        () => conversations.filter(conversation => getConversationLiveInboxState(conversation, liveSessionInboxState).surfaceHidden),
+        // Render boundary: resolveSurfaceHidden turns "not reported" into a
+        // concrete shown/hidden decision exactly once, so an intermediate copy
+        // that merely omitted the field can no longer assert "not hidden".
+        () => conversations.filter(conversation => resolveSurfaceHidden(getConversationLiveInboxState(conversation, liveSessionInboxState))),
         [conversations, liveSessionInboxState],
     )
 
