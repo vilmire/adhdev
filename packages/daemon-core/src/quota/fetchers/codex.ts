@@ -348,11 +348,21 @@ export async function fetchCodexQuota(overrides: QuotaFetchDeps = {}): Promise<P
                     );
                     return;
                 }
-                // Quota is in hand. Ask the SAME app-server session who is signed
-                // in, so the reader can tell whose usage this is. Best-effort by
+                pendingQuota = mapRateLimits(message.result, deps.now());
+                // The account label is OPT-IN (config `quotaShowAccountEmail`,
+                // off by default). When it is off we do not merely drop the
+                // value later — we never ASK for it, so no email exists to leak
+                // into the in-memory cache, ~/.adhdev/quota/cache.json, the
+                // node-facts bundle or any dashboard. Filtering at render time
+                // would still have written it to disk.
+                if (!deps.showAccountEmail()) {
+                    finish(pendingQuota);
+                    return;
+                }
+                // Opted in: ask the SAME app-server session who is signed in, so
+                // the reader can tell whose usage this is. Best-effort by
                 // construction: any failure below still finishes with the quota
                 // we already have, just without the account label.
-                pendingQuota = mapRateLimits(message.result, deps.now());
                 try {
                     child.stdin.write(
                         `${JSON.stringify({

@@ -89,6 +89,12 @@ function createClock() {
 function runFetch(options: {
     respond?: (child: FakeChild, request: { id: number; method: string }) => void;
     env?: NodeJS.ProcessEnv;
+    /**
+     * The account label is opt-in (config `quotaShowAccountEmail`, off by
+     * default), so a case that expects an email must ask for it explicitly —
+     * exactly as a user who enabled the option would.
+     */
+    showAccountEmail?: boolean;
 }) {
     const child = createFakeChild();
     const clock = createClock();
@@ -108,6 +114,7 @@ function runFetch(options: {
     };
 
     const promise = fetchCodexQuota({
+        showAccountEmail: () => options.showAccountEmail === true,
         spawn,
         now: () => NOW,
         env: options.env ?? ({} as NodeJS.ProcessEnv),
@@ -358,6 +365,7 @@ describe('fetchCodexQuota', () => {
         // $CODEX_HOME/auth.json — see the fetcher header for why that matters.
         return (async () => {
             const { promise } = runFetch({
+                showAccountEmail: true,
                 respond: respondOk(PLUS_ACCOUNT_RESULT, {
                     account: { type: 'chatgpt', email: 'user@example.com', planType: 'plus' },
                     requiresOpenaiAuth: true,
@@ -374,7 +382,7 @@ describe('fetchCodexQuota', () => {
     it('still reports quota when the account lookup fails', () => {
         // An unreadable account is a missing LABEL, never a failed reading.
         return (async () => {
-            const { promise } = runFetch({ respond: respondOk(PLUS_ACCOUNT_RESULT) });
+            const { promise } = runFetch({ showAccountEmail: true, respond: respondOk(PLUS_ACCOUNT_RESULT) });
             const quota = await promise;
             expect(quota.status).toBe('ok');
             expect(quota.weekly).not.toBeNull();

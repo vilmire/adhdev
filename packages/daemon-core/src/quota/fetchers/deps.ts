@@ -12,6 +12,7 @@
 
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { spawn } from 'node:child_process';
+import { loadConfig } from '../../config/config.js';
 
 /** Minimal response surface a fetcher relies on. */
 export interface QuotaFetchResponse {
@@ -65,6 +66,17 @@ export interface QuotaFetchDeps {
     /** Deferred callback, injectable so tests can drive timeouts deterministically. */
     setTimeout?: (handler: () => void, ms: number) => { unref?: () => void };
     clearTimeout?: (handle: unknown) => void;
+    /**
+     * Has the user opted into labelling quota with the signed-in account's
+     * email? Defaults to the persisted config (`quotaShowAccountEmail`, off).
+     *
+     * Injectable like every other side effect here so a test can exercise both
+     * states without writing a config file. Read through a function rather than
+     * a boolean so the answer reflects the config at FETCH time — a user who
+     * turns the option off does not have to restart the daemon for the next
+     * tick to stop collecting.
+     */
+    showAccountEmail?: () => boolean;
 }
 
 /** Fill in real implementations for anything a caller did not override. */
@@ -82,5 +94,14 @@ export function resolveDeps(overrides: QuotaFetchDeps = {}): Required<QuotaFetch
                 }) as ChildProcessWithoutNullStreams as unknown as QuotaChildProcess),
         setTimeout: overrides.setTimeout ?? ((handler, ms) => setTimeout(handler, ms)),
         clearTimeout: overrides.clearTimeout ?? ((handle) => clearTimeout(handle as NodeJS.Timeout)),
+        // Fail CLOSED: if the config cannot be read for any reason, treat the
+        // option as off. A PII opt-in must never be enabled by an error path.
+        showAccountEmail: overrides.showAccountEmail ?? (() => {
+            try {
+                return loadConfig().quotaShowAccountEmail === true;
+            } catch {
+                return false;
+            }
+        }),
     };
 }

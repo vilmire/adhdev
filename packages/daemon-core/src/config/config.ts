@@ -54,6 +54,25 @@ export interface ADHDevConfig {
      */
     allowServerApiProxy?: boolean;
 
+    /**
+     * Label provider quota with the signed-in account's email address.
+     *
+     * OFF by default: the email is personal data, and quota is perfectly
+     * readable without it ("Codex CLI · 27% used"). It answers a narrower
+     * question — WHOSE 27%, when several accounts are in play — so it is opt-in
+     * rather than something a user has to notice and turn off.
+     *
+     * When off, the email is never ACQUIRED: the codex fetcher skips the
+     * `account/read` call entirely, so nothing downstream (the in-memory cache,
+     * ~/.adhdev/quota/cache.json, the P2P node-facts bundle, any dashboard) can
+     * carry a value that was never fetched. Hiding it at render time would have
+     * left it on disk.
+     *
+     * The non-identifying plan tier (`metadata.planType`) is NOT gated by this
+     * — it says "Plus", not who you are.
+     */
+    quotaShowAccountEmail?: boolean;
+
  // Selected IDE (primary)
     selectedIde: string | null;
 
@@ -167,6 +186,7 @@ export interface ADHDevConfig {
 const DEFAULT_CONFIG: ADHDevConfig = {
     serverUrl: 'https://api.adhf.dev',
     allowServerApiProxy: false,
+    quotaShowAccountEmail: false,
     selectedIde: null,
     configuredIdes: [],
     installedExtensions: [],
@@ -244,6 +264,7 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
             ? parsed.serverUrl
             : DEFAULT_CONFIG.serverUrl,
         allowServerApiProxy: asBoolean(parsed.allowServerApiProxy, DEFAULT_CONFIG.allowServerApiProxy ?? false),
+        quotaShowAccountEmail: asBoolean(parsed.quotaShowAccountEmail, DEFAULT_CONFIG.quotaShowAccountEmail ?? false),
         selectedIde: asNullableString(parsed.selectedIde),
         configuredIdes: asStringArray(parsed.configuredIdes),
         installedExtensions: asStringArray(parsed.installedExtensions),
