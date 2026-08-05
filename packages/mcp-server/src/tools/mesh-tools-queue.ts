@@ -17,6 +17,7 @@ import {
     buildMeshNodeCapabilityTags,
     buildQueueMaintenanceReport,
     buildQueueStatusSummary,
+    buildMissionInactiveWarning,
     buildQueueTriggerGuidance,
     cancelTask,
     collectMeshViewQueueNodesWithLiveSessionsVerified,
@@ -227,6 +228,9 @@ export async function meshEnqueueTask(
         const duplicateWarning = duplicateSuspect
             ? { duplicateSuspect: { taskId: duplicateSuspect.id, status: duplicateSuspect.status, assignedNodeId: duplicateSuspect.assignedNodeId, targetNodeId: duplicateSuspect.targetNodeId }, duplicateSuspectHint: 'An in-flight task with the same message+target already exists. This new task was enqueued anyway (warn-only). Cancel one via mesh_queue_cancel if it is an accidental re-enqueue, or pass allow_duplicate=true to silence this, or block_duplicate=true to refuse next time.' }
             : {};
+        // MISSION-STATUS-TASK-WARNING: warn (never block) when this task attaches to a
+        // mission that is paused/completed/abandoned — see buildMissionInactiveWarning.
+        const missionWarning = buildMissionInactiveWarning(ctx, missionId) ?? {};
         const enqueueEcho = {
             ...(task.priority ? { priority: task.priority } : {}),
             ...(task.notBefore ? { notBefore: task.notBefore } : {}),
@@ -247,6 +251,7 @@ export async function meshEnqueueTask(
                 ...(targetNodeId ? { targetNodeId } : {}),
                 ...(preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {}),
                 ...duplicateWarning,
+                ...missionWarning,
                 queueTrigger,
                 ...buildQueueTriggerGuidance(queueTrigger),
             });
@@ -360,6 +365,7 @@ export async function meshEnqueueTask(
                 ...(preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {}),
                 ...(eagerPushDeferred ? { eagerPushDeferred: true, eagerPushDeferredReason: 'dependencies_unsatisfied' } : {}),
                 ...duplicateWarning,
+                ...missionWarning,
                 queueTrigger,
                 ...buildQueueTriggerGuidance(queueTrigger),
             });

@@ -14,6 +14,7 @@ import {
     buildMeshReadChatCacheFallback,
     buildMissingCoordinatorDaemonIdFailure,
     buildMissingNodeReadChatRecovery,
+    buildMissionInactiveWarning,
     buildQueueTriggerGuidance,
     collectLiveStatusProbe,
     collectLiveStatusSessions,
@@ -428,6 +429,7 @@ export async function meshSendTask(
                 taskMode,
                 ...(result.success && result.providerType ? { providerType: result.providerType } : {}),
                 dispatched: result.success === true,
+                ...(result.success ? (buildMissionInactiveWarning(ctx, missionId) ?? {}) : {}),
             });
         }
 
@@ -559,6 +561,7 @@ export async function meshSendTask(
                         taskMode: taskMode || undefined,
                         message: policyResult.message,
                         nextAction: `Task '${queuedTask.id}' is queued and pinned to session '${args.session_id}' — it auto-delivers the moment the session goes idle. Use mesh_status or mesh_task_history to track it; no manual resend needed.`,
+                        ...(buildMissionInactiveWarning(ctx, missionId) ?? {}),
                     });
                 }
             }
@@ -717,6 +720,7 @@ export async function meshSendTask(
                 // session whose dispatch row did NOT survive pre-record. A successfully
                 // pre-recorded idle dispatch (the NOTIF-DROP / CANON-A path) is not at risk.
                 ...computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, args.session_id),
+                ...(buildMissionInactiveWarning(ctx, missionId) ?? {}),
             });
         }
 
@@ -750,6 +754,7 @@ export async function meshSendTask(
             taskMode: task.taskMode,
             queueTrigger,
             ...buildQueueTriggerGuidance(queueTrigger),
+            ...(buildMissionInactiveWarning(ctx, missionId) ?? {}),
         };
         if (pendingEvents.length > 0) {
             result.pendingCoordinatorEvents = pendingEvents;

@@ -67,6 +67,7 @@ import {
     computeMeshMissionStats,
     computeMeshTaskStats,
     getActiveMeshMissionSummaries,
+    getMeshMission,
     getMeshStatusMissionSummaries,
     getMeshStatusMissionsCompact,
     listMeshMissionSummaries,
@@ -620,6 +621,41 @@ export function hasRecentDuplicateDispatch(ctx: MeshContext, args: { node_id: st
         }
     }
     return { duplicate: false };
+}
+
+/**
+ * MISSION-STATUS-TASK-WARNING: a task can be attached to a mission
+ * (mission_id) via mesh_enqueue_task / mesh_send_task at any time, but
+ * mission status is NEVER auto-transitioned by the system — only an explicit
+ * mesh_mission_upsert moves it. A coordinator that paused/completed/abandoned
+ * a mission and then attaches a new task to it (often by habit, reusing an
+ * id from context) silently leaves the mission looking inactive while work is
+ * in flight against it — the mission list then misrepresents what's actually
+ * happening. This is warn-only, mirroring the G4 duplicateSuspect convention:
+ * the task still enqueues/dispatches; the response just carries a hint so the
+ * coordinator notices and can mesh_mission_upsert the status back to active
+ * if that was not intentional. Returns undefined for an active mission, an
+ * absent mission_id, or an unknown mission id (nothing to warn about — an
+ * unknown id is a different problem, not this one).
+ */
+export function buildMissionInactiveWarning(
+    ctx: MeshContext,
+    missionId: string | undefined,
+): { missionInactive: { missionId: string; status: string; title: string }; missionInactiveHint: string } | undefined {
+    if (!missionId) return undefined;
+    const mission = getMeshMission(ctx.mesh.id, missionId);
+    if (!mission || mission.status === 'active') return undefined;
+    const hintByStatus: Record<string, string> = {
+        paused: `Mission '${missionId}' (${mission.title}) is paused — a new task was just attached to it anyway. Mission status is never auto-transitioned; if this mission should be active again, call mesh_mission_upsert(mission_id: '${missionId}', status: 'active').`,
+        completed: `Mission '${missionId}' (${mission.title}) is already marked completed — a new task was just attached to it anyway. If this is intentional follow-up work (e.g. a regression fix or post-deploy verification), consider whether it belongs on a new mission, or reopen this one via mesh_mission_upsert(mission_id: '${missionId}', status: 'active') if it isn't actually done.`,
+        abandoned: `Mission '${missionId}' (${mission.title}) is marked abandoned — a new task was just attached to it anyway. If this mission is being revived, call mesh_mission_upsert(mission_id: '${missionId}', status: 'active').`,
+    };
+    const hint = hintByStatus[mission.status]
+        ?? `Mission '${missionId}' (${mission.title}) is not active (status: '${mission.status}') — a new task was just attached to it anyway. Mission status is never auto-transitioned; call mesh_mission_upsert(mission_id: '${missionId}', status: 'active') if that was not intentional.`;
+    return {
+        missionInactive: { missionId, status: mission.status, title: mission.title },
+        missionInactiveHint: hint,
+    };
 }
 
 export function buildMissingNodeReadChatRecovery(ctx: MeshContext, args: { node_id: string; session_id: string; provider_session_id?: string; tail?: number; compact?: boolean }): Record<string, unknown> {
