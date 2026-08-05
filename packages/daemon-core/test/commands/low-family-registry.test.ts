@@ -43,12 +43,19 @@ const DIAGNOSTICS_CMDS = ['get_logs', 'get_debug_trace']
 const STATUS_META_CMDS = ['set_user_name', 'get_status_metadata', 'get_machine_runtime_stats', 'get_session_info']
 const COORDINATOR_PROMPT_CMDS = ['coordinator_prompt_preview', 'list_coordinator_prompts', 'write_coordinator_prompt']
 const NOTIFICATION_CMDS = ['mark_session_seen', 'delete_notification', 'mark_notification_unread']
-const DAEMON_LIFECYCLE_CMDS = ['daemon_upgrade', 'daemon_restart', 'set_machine_nickname']
+// Order matters: the assertions below compare against Object.keys(handlers),
+// so these must stay in the handler object's declaration order. The quota
+// account-label pair was appended to daemonLifecycleHandlers and so belongs at
+// the end here too.
+const DAEMON_LIFECYCLE_CMDS = [
+  'daemon_upgrade', 'daemon_restart', 'set_machine_nickname',
+  'get_quota_account_label', 'set_quota_account_label',
+]
 const MESH_LEDGER_CMDS = ['get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes', 'record_mesh_note', 'forget_mesh_note', 'import_mesh_ledger_slice']
 const MESH_NODE_LOGS_CMDS = ['get_mesh_node_logs']
 
 describe('low-family registry', () => {
-  it('registers all 44 LOW family commands once, no overlap', () => {
+  it('registers all 46 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -69,6 +76,28 @@ describe('low-family registry', () => {
     expect(Object.keys(daemonLifecycleHandlers)).toEqual(DAEMON_LIFECYCLE_CMDS)
     expect(Object.keys(meshLedgerHandlers)).toEqual(MESH_LEDGER_CMDS)
     expect(Object.keys(meshNodeLogsHandlers)).toEqual(MESH_NODE_LOGS_CMDS)
+  })
+
+  // The lists above are written by hand, which is what makes them a real gate:
+  // adding a handler without declaring it fails. But they share a blind spot —
+  // they can only check families someone remembered to list. A whole new family
+  // spread into lowFamilyRegistry and never added here would leave every
+  // assertion above passing, because each one only compares a family to its own
+  // list and the size check compares against the same incomplete union.
+  //
+  // This derives the expectation from the handler objects the registry itself
+  // spreads, so registry membership is pinned to its actual sources rather than
+  // to whatever the union above happens to cover.
+  it('registry contains exactly the union of the family handler objects', () => {
+    const union = [
+      sessionHostHandlers, specProviderDevHandlers, refineConfigHandlers,
+      diagnosticsHandlers, statusMetaHandlers, coordinatorPromptHandlers,
+      notificationHandlers, daemonLifecycleHandlers, meshLedgerHandlers,
+      meshNodeLogsHandlers,
+    ].flatMap((handlers) => Object.keys(handlers))
+
+    expect(new Set(union).size).toBe(union.length)
+    expect([...lowFamilyRegistry.keys()].sort()).toEqual([...union].sort())
   })
 
   it('session_host handler fails gracefully when the control plane is unavailable', async () => {
