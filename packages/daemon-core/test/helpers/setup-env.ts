@@ -30,9 +30,19 @@ for (const key of [
 // a per-run tmp dir keeps any test that reads or writes ~/.adhdev/state.json —
 // e.g. the read_chat provider-session pin persistence
 // (ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP) — from touching the developer's real state
-// or cross-polluting sibling tests through the shared on-disk file. Only a default;
-// a test that sets its own ADHDEV_CONFIG_DIR (or mocks getConfigDir) still wins.
-if (!process.env.ADHDEV_CONFIG_DIR) {
+// or cross-polluting sibling tests through the shared on-disk file.
+//
+// This override is UNCONDITIONAL: the dev environment itself can legitimately
+// export ADHDEV_CONFIG_DIR — the session-host daemon pins it for every child it
+// spawns (managed-host.ts), so shells/agents launched under a daemon inherit the
+// REAL ~/.adhdev path. An `if (!set)` guard then silently disabled isolation and
+// let tests write straight into the live ledger — observed 2026-08-05 as 870+
+// synthetic mesh_turn_attempts rows (stage 'delivered', fixture node/session ids
+// like node1/session1, node_worker/sess_worker, node-1/session-direct) plus
+// queue/mission/ledger residue accumulating in the production mesh-runtime.db
+// every time mesh test files ran. Tests that set their own ADHDEV_CONFIG_DIR (or
+// mock getConfigDir) still win: they assign it after this setup file runs.
+{
   const os = require('node:os') as typeof import('node:os')
   const path = require('node:path') as typeof import('node:path')
   const fs = require('node:fs') as typeof import('node:fs')
