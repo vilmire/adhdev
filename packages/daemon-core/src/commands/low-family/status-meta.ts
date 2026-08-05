@@ -17,7 +17,6 @@ import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
 // cheapness of readQuotaCache() means there is no reason to treat them
 // differently: it is a synchronous map lookup, never a fetch.
 import { readQuotaCache } from '../../quota/index.js';
-import { fetchCodexQuota } from '../../quota/fetchers/codex.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 
 export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
@@ -46,7 +45,6 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
     },
 
     get_machine_runtime_stats: async (_ctx: LowFamilyContext, _args: any) => {
-        void fetchCodexQuota();
         const quota = readQuotaCache();
         return {
             success: true,
