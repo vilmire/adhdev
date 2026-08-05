@@ -431,9 +431,42 @@ function hasArg(args: string[], flags: string[]): boolean {
     return args.some((arg) => flags.some((flag) => arg === flag || arg.startsWith(`${flag}=`)));
 }
 
+/**
+ * Expand a resume/new-session arg template, substituting `{{id}}` ANYWHERE in a
+ * part rather than only when the part is exactly `{{id}}`.
+ *
+ * Most CLIs take the session id as its own argv entry (`--resume <id>`), which
+ * the exact-match form handled. kimi does not: its own index keys sessions as
+ * `session_<uuid>` and `kimi -S <bare-uuid>` answers `Session "<uuid>" not
+ * found`, so the id it accepts is a PREFIXED string, not a bare one. Without
+ * in-string substitution a provider whose CLI decorates the id cannot express
+ * that in its spec at all, and the alternative — teaching daemon-core that kimi
+ * ids need a `session_` prefix — would put one provider's argv quirk in shared
+ * launch code.
+ *
+ * Substitution stays literal and non-recursive: every `{{id}}` occurrence in a
+ * part is replaced with the id verbatim, and a part with no placeholder is
+ * passed through untouched, so existing `["--resume", "{{id}}"]` templates
+ * behave exactly as before.
+ */
 function expandResumeArgs(template: string[] | undefined, sessionId: string): string[] | undefined {
     if (!Array.isArray(template) || template.length === 0) return undefined;
-    return template.map((part) => part === '{{id}}' ? sessionId : part);
+    return template.map((part) => {
+        if (!part.includes('{{id}}')) return part;
+        // Idempotent against an id that ALREADY carries the decoration. Both
+        // forms circulate for kimi — the executor extracts a bare uuid from the
+        // directory name while a pin/`kimi -r` hint carries `session_<uuid>` —
+        // and blindly templating a prefixed id would produce
+        // `session_session_<uuid>`, a resume failure that looks exactly like the
+        // bug this fix removes. Substituting the id's own decorated form keeps
+        // the result identical whichever form arrives.
+        const expanded = part.split('{{id}}').join(sessionId);
+        const prefix = part.slice(0, part.indexOf('{{id}}'));
+        if (prefix && sessionId.startsWith(prefix)) {
+            return part.split('{{id}}').join(sessionId.slice(prefix.length));
+        }
+        return expanded;
+    });
 }
 
 /**
