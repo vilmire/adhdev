@@ -142,8 +142,15 @@ describe('daemon-lifecycle wiring — boot refresh is fired-and-forgotten, never
         // spawn must never add to daemon startup latency (module contract in
         // quota/refresh.ts). setImmediate additionally defers it past
         // initDaemonComponents' own synchronous return.
-        expect(source).toContain('setImmediate(() => refreshQuotaCacheOnBoot());')
+        // Both the disk hydration and the boot refresh run inside one deferred
+        // callback; neither is awaited.
+        expect(source).toMatch(/setImmediate\(\(\) => \{[\s\S]{0,400}refreshQuotaCacheOnBoot\(\);[\s\S]{0,40}\}\);/)
         expect(source).not.toMatch(/await\s+refreshQuotaCacheOnBoot/)
+        expect(source).not.toMatch(/await\s+hydrateQuotaCacheFromDisk/)
+        // Hydration runs FIRST so a restart shows its last numbers immediately,
+        // and it is wrapped so an unusable cache file cannot break startup.
+        expect(source).toMatch(/hydrateQuotaCacheFromDisk\(\)[\s\S]{0,200}refreshQuotaCacheOnBoot\(\)/)
+        expect(source).toMatch(/try \{ hydrateQuotaCacheFromDisk\(\); \} catch/)
 
         // It must run after setupQuotaRefreshLoop (the periodic loop) is already
         // wired, and setupQuotaRefreshLoop's own first tick fires only after
@@ -151,7 +158,7 @@ describe('daemon-lifecycle wiring — boot refresh is fired-and-forgotten, never
         // single boot: the loop's timer cannot fire before this call has long
         // since started (and, for a healthy fetch, finished).
         const loopIdx = source.indexOf('components.quotaRefreshLoop = setupQuotaRefreshLoop(components);')
-        const bootIdx = source.indexOf('setImmediate(() => refreshQuotaCacheOnBoot());')
+        const bootIdx = source.indexOf('refreshQuotaCacheOnBoot();')
         expect(loopIdx).toBeGreaterThan(-1)
         expect(bootIdx).toBeGreaterThan(loopIdx)
     })

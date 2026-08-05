@@ -40,7 +40,7 @@ import type { IdeProviderInstance } from '../providers/ide-provider-instance.js'
 import { createDefaultGitCommandServices } from '../git/git-commands.js';
 import { setupMeshEventForwarding } from '../mesh/mesh-events.js';
 import { setupMeshReconcileLoop } from '../mesh/mesh-reconcile-loop.js';
-import { setupQuotaRefreshLoop, refreshQuotaCacheOnBoot } from '../quota/refresh.js';
+import { setupQuotaRefreshLoop, refreshQuotaCacheOnBoot, hydrateQuotaCacheFromDisk } from '../quota/refresh.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
 import { applyProcessHardening } from './process-hardening.js';
@@ -478,14 +478,22 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // Writes the cache that buildLocalNodeFacts reads; the builder never
     // fetches, so mesh_status stays as cheap as it was.
     components.quotaRefreshLoop = setupQuotaRefreshLoop(components);
-    // 11c. One-shot boot refresh so quota is populated within ~1s of startup
-    // instead of sitting empty for the periodic loop's first tick (15 min
-    // later) — a freshly booted daemon has no recent CLI activity BY
-    // DEFINITION, so this deliberately bypasses the idle gate the periodic
-    // loop applies (see refreshQuotaCacheOnBoot doc). setImmediate defers it
-    // past this function's own return, and it is never awaited: a ~900ms
-    // codex app-server spawn must not add to daemon startup latency.
-    setImmediate(() => refreshQuotaCacheOnBoot());
+    // 11c. Restore the last persisted snapshots, then fire the one-shot boot
+    // refresh. Both are deferred past this function's return and neither is
+    // awaited — a ~900ms codex app-server spawn must not add to daemon startup
+    // latency, and neither must a file read.
+    //
+    // Hydration runs FIRST so a restart shows its last known numbers
+    // immediately rather than an empty "never reported" state; the boot refresh
+    // then replaces them with fresh ones (and is skipped entirely when the
+    // cache is already populated, saving a spawn per restart). A freshly booted
+    // daemon has no recent CLI activity BY DEFINITION, so that refresh
+    // deliberately bypasses the idle gate the periodic loop applies — see
+    // refreshQuotaCacheOnBoot.
+    setImmediate(() => {
+        try { hydrateQuotaCacheFromDisk(); } catch { /* fail-soft: an unusable cache is just an empty one */ }
+        refreshQuotaCacheOnBoot();
+    });
 
     // 12. Resume any refine jobs that were interrupted by a previous daemon restart.
     setImmediate(() => void router.resumePendingRefineJobsOnStartup());

@@ -25,6 +25,7 @@ import type { ProviderQuota, QuotaProvider } from './types.js';
 import { fetchClaudeQuota } from './fetchers/claude.js';
 import { fetchCodexQuota } from './fetchers/codex.js';
 import { fetchKimiQuota } from './fetchers/kimi.js';
+import { loadQuotaCache, saveQuotaCache } from './persist.js';
 
 /**
  * How often a node re-reads its own quota. Deliberately coarse: quota moves on
@@ -47,9 +48,14 @@ const REFRESHERS: ReadonlyArray<{ provider: QuotaProvider; fetch: () => Promise<
 ];
 
 /**
- * Latest snapshot per provider. Process-local and intentionally not persisted:
- * a restarted daemon reports nothing until its first tick, and "no report yet"
- * is a state readers already handle (absent `quota` = unknown).
+ * Latest snapshot per provider — the runtime authority.
+ *
+ * Backed by a file (see ./persist.ts) so a restart can restore the last
+ * measurement instead of reporting nothing until the boot refresh lands. The
+ * Map remains the only thing readers touch; the file is purely its
+ * serialization, written after a refresh and read once at hydration. "No report
+ * yet" is still a real state readers handle (absent `quota` = unknown) — it is
+ * just no longer forced on every restart.
  */
 const cache = new Map<string, MeshNodeFactsProviderQuota>();
 
@@ -75,9 +81,69 @@ export function readQuotaCache(): Record<string, MeshNodeFactsProviderQuota> | u
     return Object.fromEntries(cache);
 }
 
+/**
+ * Providers whose entry came from the on-disk cache rather than from a fetch in
+ * THIS process. Tracked so the boot refresh can tell "we already measured" from
+ * "we restored someone else's measurement" — see refreshQuotaCacheOnBoot.
+ */
+const hydratedOnly = new Set<string>();
+
+/** True when at least one provider was measured in this process (not restored). */
+function hasFreshlyMeasuredQuota(): boolean {
+    for (const provider of cache.keys()) {
+        if (!hydratedOnly.has(provider)) return true;
+    }
+    return false;
+}
+
 /** Test seam: drop all cached snapshots. */
 export function clearQuotaCache(): void {
     cache.clear();
+    hydratedOnly.clear();
+    hydrated = false;
+}
+
+/**
+ * Restore the last persisted snapshots into the Map. One-shot per process and
+ * deliberately NOT called from `readQuotaCache` — the read path must stay a
+ * synchronous Map lookup with no file I/O (see the module header).
+ *
+ * Never overwrites a live entry: anything already measured in this process is
+ * newer than anything on disk, so hydration only fills gaps. That also makes a
+ * late call harmless.
+ *
+ * Fail-soft by construction — `loadQuotaCache` resolves every error to "no
+ * cache", which is the state a daemon is in before its first refresh anyway.
+ */
+let hydrated = false;
+
+export function hydrateQuotaCacheFromDisk(env: NodeJS.ProcessEnv = process.env): number {
+    if (hydrated) return 0;
+    hydrated = true;
+    let restored: Record<string, MeshNodeFactsProviderQuota> | undefined;
+    try {
+        restored = loadQuotaCache(env);
+    } catch (e: any) {
+        // loadQuotaCache does not throw, but a hydration failure must never be
+        // able to take down daemon startup.
+        LOG.warn('Quota', `Quota cache hydration failed (starting empty): ${e?.message || e}`);
+        return 0;
+    }
+    if (!restored) return 0;
+    let count = 0;
+    for (const [provider, quota] of Object.entries(restored)) {
+        if (cache.has(provider)) continue; // a live measurement always wins
+        cache.set(provider, quota);
+        hydratedOnly.add(provider);
+        count += 1;
+    }
+    if (count > 0) LOG.info('Quota', `Restored ${count} provider quota snapshot(s) from the on-disk cache`);
+    return count;
+}
+
+/** Test seam: allow a fresh hydration in the same process. */
+export function __resetQuotaHydrationForTests(): void {
+    hydrated = false;
 }
 
 /**
@@ -95,6 +161,7 @@ export async function refreshQuotaCacheOnce(
         fetchers.map(async ({ provider, fetch }) => {
             try {
                 cache.set(provider, toWireQuota(await fetch()));
+                hydratedOnly.delete(provider); // measured in this process now
             } catch (e: any) {
                 // Contract violation, not an ordinary quota failure — record it
                 // as one so the provider still reports a definite "could not
@@ -108,9 +175,16 @@ export async function refreshQuotaCacheOnce(
                     error: `Quota fetch threw: ${e?.message || e}`,
                     metadata: { failureKind: 'unknown' },
                 });
+                hydratedOnly.delete(provider);
             }
         }),
     );
+    // Persist whatever this tick produced, including per-provider failures —
+    // "looked and could not read" is a state worth surviving a restart, exactly
+    // like a successful reading. saveQuotaCache never throws, so a cache that
+    // cannot be written leaves the in-memory result untouched.
+    const snapshot = readQuotaCache();
+    if (snapshot) saveQuotaCache(snapshot);
 }
 
 /**
@@ -259,7 +333,13 @@ export function setupQuotaRefreshLoop(components: {
 let bootRefreshInFlight = false;
 
 export function refreshQuotaCacheOnBoot(): void {
-    if (bootRefreshInFlight || readQuotaCache() !== undefined) return; // already running or populated
+    // NOTE: the "already populated" guard deliberately ignores entries restored
+    // from disk (`hydratedOnly`). Hydration exists to make a restart show its
+    // last numbers INSTANTLY, not to skip re-measuring them — treating restored
+    // values as "already refreshed" would pin a restarted daemon to stale
+    // readings until the periodic tick 15 minutes later, which is the very gap
+    // this boot refresh was added to close.
+    if (bootRefreshInFlight || hasFreshlyMeasuredQuota()) return;
     bootRefreshInFlight = true;
     void refreshQuotaCacheOnce()
         .catch((e: any) => LOG.warn('Quota', `Boot quota refresh failed: ${e?.message || e}`))
