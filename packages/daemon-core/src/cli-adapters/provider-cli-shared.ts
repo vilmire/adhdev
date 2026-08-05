@@ -203,6 +203,14 @@ export interface CliProviderModule {
     name: string;
     category: 'cli';
     binary: string;
+    /** Manifest version of the loaded spec, carried purely for diagnostics.
+     *  A daemon resolves providers from the content-addressed channel store, so
+     *  the repo checkout and ~/.adhdev/providers/.upstream can both show a fix
+     *  the running daemon does not have (the store pin only advances on
+     *  check_provider_updates). Logging this next to the spawn argv is what
+     *  distinguishes "our arg expansion is wrong" from "this machine is pinned
+     *  to an older spec" without another diagnostic round-trip. */
+    providerVersion?: string;
     approvalKeys?: Record<number, string>;
     sendDelayMs?: number;
     /** Wall-clock budget (ms) for a single provider script invocation. Default 50. Range 1..5000.

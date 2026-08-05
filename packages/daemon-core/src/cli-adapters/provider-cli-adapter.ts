@@ -675,7 +675,22 @@ export class ProviderCliAdapter implements CliAdapter {
             extraEnv: this.extraEnv,
         });
 
-        LOG.info('CLI', `[${this.cliType}] Spawning in ${this.workingDir}`);
+        // Log the ACTUAL argv AND the spec version that produced it. A resume
+        // that hands the CLI a wrong-shaped session id fails inside the provider
+        // ("Session <id> not found") with nothing on our side to compare
+        // against. Diagnosing the kimi resume defect cost two full round-trips
+        // for exactly this reason: the argv was invisible, and once it was
+        // visible the argv alone still could not distinguish "our expansion is
+        // wrong" from "the daemon is pinned to an old provider version". The
+        // spec came from the content-addressed channel store, so the repo
+        // checkout and ~/.adhdev/providers/.upstream both showed the fix while
+        // the daemon ran a 1.0.0 object that predated it. Version here makes
+        // that failure self-evident in one line. Args are provider flags and
+        // ids — never prompt or transcript text — so this stays content-free.
+        LOG.info(
+            'CLI',
+            `[${this.cliType}] Spawning (spec v${this.provider?.providerVersion || 'unknown'}) in ${this.workingDir}: ${spawnPlan.binaryPath} ${spawnPlan.allArgs.join(' ')}`,
+        );
 
         try {
             this.ptyProcess = this.transportFactory.spawn(

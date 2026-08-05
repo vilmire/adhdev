@@ -84,3 +84,35 @@ describe('resume id templating', () => {
         expect(binding.cliArgs).toEqual(['--yolo', '-S', `session_${UUID}`]);
     });
 });
+
+// SHIPPED-SPEC GATE — the unit tests above prove the expansion is correct for a
+// spec that carries the decoration. They cannot fail when the decoration is
+// missing from the manifest we actually publish, which is precisely how this
+// defect survived a "fix": the code was right, and kimi's own provider.v1.json
+// in an earlier published version still said `["-S", "{{id}}"]`.
+//
+// A daemon resolves providers from the content-addressed channel store, so a
+// machine keeps running the pinned version until check_provider_updates flips
+// the pointer. That makes a wrong manifest expensive — it ships, pins, and then
+// looks like a code bug on every machine that pinned it. This asserts the source
+// of truth in this repo, so the manifest can never silently lose the prefix.
+describe('shipped kimi manifest', () => {
+    it('declares the session_ decoration kimi requires to resume', async () => {
+        const { readFileSync } = await import('node:fs');
+        const { fileURLToPath } = await import('node:url');
+        const { dirname, join } = await import('node:path');
+
+        const here = dirname(fileURLToPath(import.meta.url));
+        const manifestPath = join(here, '../../../../../adhdev-providers/cli/kimi/provider.v1.json');
+        const spec = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+
+        expect(spec.resume?.resumeSessionArgs).toEqual(['-S', 'session_{{id}}']);
+
+        // And the expansion of that shipped template must produce the argv that
+        // kimi actually accepts — bare uuid is the failure mode we shipped once.
+        const binding = resolveCliSessionBinding(
+            providerWith(spec.resume.resumeSessionArgs), 'kimi', [], UUID,
+        );
+        expect(binding.cliArgs).toEqual(['-S', `session_${UUID}`]);
+    });
+});
