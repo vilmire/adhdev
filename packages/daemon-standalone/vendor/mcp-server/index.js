@@ -2443,6 +2443,21 @@ function hasRecentDuplicateDispatch(ctx, args) {
   }
   return { duplicate: false };
 }
+function buildMissionInactiveWarning(ctx, missionId) {
+  if (!missionId) return void 0;
+  const mission = (0, import_daemon_core3.getMeshMission)(ctx.mesh.id, missionId);
+  if (!mission || mission.status === "active") return void 0;
+  const hintByStatus = {
+    paused: `Mission '${missionId}' (${mission.title}) is paused \u2014 a new task was just attached to it anyway. Mission status is never auto-transitioned; if this mission should be active again, call mesh_mission_upsert(mission_id: '${missionId}', status: 'active').`,
+    completed: `Mission '${missionId}' (${mission.title}) is already marked completed \u2014 a new task was just attached to it anyway. If this is intentional follow-up work (e.g. a regression fix or post-deploy verification), consider whether it belongs on a new mission, or reopen this one via mesh_mission_upsert(mission_id: '${missionId}', status: 'active') if it isn't actually done.`,
+    abandoned: `Mission '${missionId}' (${mission.title}) is marked abandoned \u2014 a new task was just attached to it anyway. If this mission is being revived, call mesh_mission_upsert(mission_id: '${missionId}', status: 'active').`
+  };
+  const hint = hintByStatus[mission.status] ?? `Mission '${missionId}' (${mission.title}) is not active (status: '${mission.status}') \u2014 a new task was just attached to it anyway. Mission status is never auto-transitioned; call mesh_mission_upsert(mission_id: '${missionId}', status: 'active') if that was not intentional.`;
+  return {
+    missionInactive: { missionId, status: mission.status, title: mission.title },
+    missionInactiveHint: hint
+  };
+}
 function buildMissingNodeReadChatRecovery(ctx, args) {
   const entries = (0, import_daemon_core3.readLedgerEntries)(ctx.mesh.id, { tail: 300 });
   const relatedEntries = entries.filter((entry) => entry.nodeId === args.node_id || entry.sessionId === args.session_id);
@@ -4097,22 +4112,18 @@ async function meshStatus(ctx, args = {}) {
     }
     return out;
   })() : results;
+  const { maxParallelTasks: _omitPolicyMaxParallelTasks, ...policyForResponse } = mesh.policy || {};
   const response = {
     meshId: mesh.id,
     meshName: mesh.name,
     repoIdentity: mesh.repoIdentity,
-    policy: mesh.policy,
-    // Mesh-level scheduling rollup (strategy + global cap consumption). Per-node
-    // detail (load/priority/provider caps/claim-block reasons) lives on each
+    policy: policyForResponse,
+    // Mesh-level scheduling rollup (strategy only — the global cap numbers are
+    // deliberately not surfaced here, see the comment above). Per-node detail
+    // (load/priority/provider caps/claim-block reasons) lives on each
     // nodes[].scheduling; the node array is dropped here to avoid duplicating it.
     scheduling: {
-      strategy: schedulingRuntime.strategy,
-      maxParallelTasks: schedulingRuntime.maxParallelTasks,
-      maxReadonlyParallelTasks: schedulingRuntime.maxReadonlyParallelTasks,
-      activeWriteAssigned: schedulingRuntime.activeWriteAssigned,
-      activeReadonlyAssigned: schedulingRuntime.activeReadonlyAssigned,
-      globalWriteCapReached: schedulingRuntime.globalWriteCapReached,
-      globalReadonlyCapReached: schedulingRuntime.globalReadonlyCapReached
+      strategy: schedulingRuntime.strategy
     },
     payloadMode: compact ? "compact" : "full",
     refreshedAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -4370,6 +4381,7 @@ async function meshEnqueueTask(ctx, args) {
       ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
     });
     const duplicateWarning = duplicateSuspect ? { duplicateSuspect: { taskId: duplicateSuspect.id, status: duplicateSuspect.status, assignedNodeId: duplicateSuspect.assignedNodeId, targetNodeId: duplicateSuspect.targetNodeId }, duplicateSuspectHint: "An in-flight task with the same message+target already exists. This new task was enqueued anyway (warn-only). Cancel one via mesh_queue_cancel if it is an accidental re-enqueue, or pass allow_duplicate=true to silence this, or block_duplicate=true to refuse next time." } : {};
+    const missionWarning = buildMissionInactiveWarning(ctx, missionId) ?? {};
     const enqueueEcho = {
       ...task.priority ? { priority: task.priority } : {},
       ...task.notBefore ? { notBefore: task.notBefore } : {},
@@ -4388,6 +4400,7 @@ async function meshEnqueueTask(ctx, args) {
         ...targetNodeId ? { targetNodeId } : {},
         ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},
         ...duplicateWarning,
+        ...missionWarning,
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger)
       });
@@ -4472,6 +4485,7 @@ async function meshEnqueueTask(ctx, args) {
         ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},
         ...eagerPushDeferred ? { eagerPushDeferred: true, eagerPushDeferredReason: "dependencies_unsatisfied" } : {},
         ...duplicateWarning,
+        ...missionWarning,
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger)
       });
@@ -7052,7 +7066,8 @@ async function meshSendTask(ctx, args) {
         ...result2.success ? { source: "direct", taskId } : {},
         taskMode,
         ...result2.success && result2.providerType ? { providerType: result2.providerType } : {},
-        dispatched: result2.success === true
+        dispatched: result2.success === true,
+        ...result2.success ? buildMissionInactiveWarning(ctx, missionId) ?? {} : {}
       });
     }
     if (args.session_id) {
@@ -7154,7 +7169,8 @@ async function meshSendTask(ctx, args) {
             sessionStatus,
             taskMode: taskMode || void 0,
             message: policyResult.message,
-            nextAction: `Task '${queuedTask.id}' is queued and pinned to session '${args.session_id}' \u2014 it auto-delivers the moment the session goes idle. Use mesh_status or mesh_task_history to track it; no manual resend needed.`
+            nextAction: `Task '${queuedTask.id}' is queued and pinned to session '${args.session_id}' \u2014 it auto-delivers the moment the session goes idle. Use mesh_status or mesh_task_history to track it; no manual resend needed.`,
+            ...buildMissionInactiveWarning(ctx, missionId) ?? {}
           });
         }
       }
@@ -7274,7 +7290,8 @@ async function meshSendTask(ctx, args) {
         // DISPATCH-ACK-RISK-STALE: only warn on a GENUINE residual loss risk — an idle
         // session whose dispatch row did NOT survive pre-record. A successfully
         // pre-recorded idle dispatch (the NOTIF-DROP / CANON-A path) is not at risk.
-        ...computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, args.session_id)
+        ...computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, args.session_id),
+        ...buildMissionInactiveWarning(ctx, missionId) ?? {}
       });
     }
     const task = (0, import_daemon_core4.enqueueTask)(ctx.mesh.id, message, {
@@ -7295,7 +7312,8 @@ async function meshSendTask(ctx, args) {
       status: task.status,
       taskMode: task.taskMode,
       queueTrigger,
-      ...buildQueueTriggerGuidance(queueTrigger)
+      ...buildQueueTriggerGuidance(queueTrigger),
+      ...buildMissionInactiveWarning(ctx, missionId) ?? {}
     };
     if (pendingEvents.length > 0) {
       result.pendingCoordinatorEvents = pendingEvents;
