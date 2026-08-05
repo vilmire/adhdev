@@ -16,18 +16,27 @@ import { buildCloudStatusReportPayload } from '../../src/status/reporter.js';
 // server-bound layer about this field, they turn red. Do not "fix" a failure
 // here by adding the field to the allow-list — the failure IS the design.
 
-const REPO_ROOT = join(import.meta.dirname, '../../../../..');
+// Paths resolve from THIS PACKAGE, never from a guessed repo root. daemon-core
+// sits at `<monorepo>/oss/packages/daemon-core` but at `<oss-repo>/packages/
+// daemon-core` in the standalone OSS checkout (vilmire/adhdev), so a repo-root
+// prefix like `oss/packages/...` is correct in one layout and a nonexistent
+// path in the other. That is exactly how this file passed locally while
+// failing every OSS CI run with ENOENT.
+const PACKAGE_ROOT = join(import.meta.dirname, '../..');
 
 function readSource(relativePath: string): string {
-    return readFileSync(join(REPO_ROOT, relativePath), 'utf-8');
+    return readFileSync(join(PACKAGE_ROOT, relativePath), 'utf-8');
 }
 
-/** The four server-side allow-list layers plus the daemon-side projection. */
+// The daemon-side layers only. The three server-side allow-lists live in
+// `packages/server`, which is proprietary and simply absent from the OSS repo —
+// an OSS test can never read them, and pretending otherwise is what broke CI.
+// Their scans moved to packages/server/test/account-email-server-boundary.test.ts,
+// next to the sources they guard. The four-layer promise in CLAUDE.md is still
+// covered end to end; it is covered from both sides of the boundary instead of
+// one test reaching across it.
 const SERVER_BOUND_SOURCES: ReadonlyArray<{ label: string; path: string }> = [
-    { label: 'daemon projection (buildCloudStatusReportPayload)', path: 'oss/packages/daemon-core/src/status/reporter.ts' },
-    { label: 'DO ingest (sanitizeSessionEntry)', path: 'packages/server/src/durable-objects/daemon-status.ts' },
-    { label: 'DO broadcast/persist (toCompactSession, toPersistedEntry)', path: 'packages/server/src/durable-objects/UserSession.ts' },
-    { label: 'automation API (toPublicSession)', path: 'packages/server/src/routes/shortcuts.ts' },
+    { label: 'daemon projection (buildCloudStatusReportPayload)', path: 'src/status/reporter.ts' },
 ];
 
 describe('accountEmail never crosses the server boundary', () => {
@@ -47,7 +56,7 @@ describe('accountEmail never crosses the server boundary', () => {
     it('RoutingSessionEntry has no quota or account field', () => {
         // The wire type for the status path. If quota is never on this type, the
         // email cannot ride it even if a projection tried to send one.
-        const shared = readSource('oss/packages/daemon-core/src/shared-types.ts');
+        const shared = readSource('src/shared-types.ts');
         const start = shared.indexOf('interface RoutingSessionEntry');
         expect(start).toBeGreaterThan(-1);
         const body = shared.slice(start, shared.indexOf('}', start));
@@ -83,18 +92,12 @@ describe('accountEmail never crosses the server boundary', () => {
         expect(serialized).not.toContain('quota');
     });
 
-    it('get_machine_runtime_stats (the quota carrier) is not a server route', () => {
-        // Quota reaches the dashboard over P2P/local command paths. If this
-        // command ever appears in the Worker, quota — and this email — would be
-        // travelling through the server.
-        for (const path of [
-            'packages/server/src/durable-objects/daemon-status.ts',
-            'packages/server/src/durable-objects/UserSession.ts',
-            'packages/server/src/routes/shortcuts.ts',
-        ]) {
-            expect(readSource(path)).not.toContain('get_machine_runtime_stats');
-        }
-    });
+    // NOTE: two scans that used to live here now run on the cloud side, in
+    // packages/server/test/account-email-server-boundary.test.ts:
+    //   - the three server allow-lists must not mention `accountEmail`
+    //   - `get_machine_runtime_stats` (the quota carrier) must not be a server
+    //     route
+    // Both read `packages/server/**`, which does not exist in the OSS repo.
 });
 
 describe('withAccountEmail — minimum viable disclosure', () => {
