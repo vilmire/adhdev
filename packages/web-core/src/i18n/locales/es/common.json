@@ -2417,7 +2417,8 @@
             "noNodesReporting": "Todavía no hay nodos que reporten el runtime.",
             "quotaNotCollected": "Aún no se ha recopilado la cuota del plan: una máquina la reporta tras su primera actualización (~15 min) y solo si un agente ha estado activo.",
             "quotaFreshnessHint": "Antigüedad del paquete de datos de runtime en el que llegó esta cuota",
-            "machinesQuota": "Máquinas — cuota del plan"
+            "machinesQuota": "Máquinas — cuota del plan",
+            "machineNotReporting": "Esta máquina aún no ha reportado datos de runtime: está desconectada o inaccesible, así que se desconoce su cuota del plan."
         },
         "overview": {
             "missionCard": "Misiones",

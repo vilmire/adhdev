@@ -2417,7 +2417,8 @@
             "noNodesReporting": "ランタイムを報告しているノードはまだありません。",
             "quotaNotCollected": "プラン使用量はまだ収集されていません — マシンは最初の更新（約15分）以降、エージェントが動作していた場合にのみ報告します。",
             "quotaFreshnessHint": "この使用量が含まれていたランタイム facts バンドルの経過時間",
-            "machinesQuota": "マシン — プラン使用量"
+            "machinesQuota": "マシン — プラン使用量",
+            "machineNotReporting": "このマシンはまだランタイム情報を報告していません — オフラインまたは接続不可のため、プラン使用量は不明です。"
         },
         "overview": {
             "missionCard": "ミッション",

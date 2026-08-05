@@ -2417,7 +2417,8 @@
             "noNodesReporting": "尚无节点上报运行时。",
             "quotaNotCollected": "尚未采集套餐用量 — 机器会在首次刷新（约 15 分钟）之后、且有代理活动时才上报。",
             "quotaFreshnessHint": "该用量所在运行时 facts 数据包的时间",
-            "machinesQuota": "机器 — 套餐用量"
+            "machinesQuota": "机器 — 套餐用量",
+            "machineNotReporting": "该机器尚未上报运行时信息 — 处于离线或无法连接状态，因此套餐用量未知。"
         },
         "overview": {
             "missionCard": "任务",

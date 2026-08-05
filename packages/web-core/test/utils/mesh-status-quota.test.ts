@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   collectMachineQuotaGroups,
+  resolveMachineLabel,
+  shortMachineKey,
   collectNodeQuotaEntries,
   describeQuotaFailure,
   formatQuotaFreshness,
@@ -116,34 +118,92 @@ describe('machine-scoped quota grouping', () => {
     expect(groups.find(g => g.label === 'Jupiter')!.quota).toEqual([])
   })
 
-  it('stays silent about machines that never reported a facts bundle', () => {
-    // No report at all: saying "not collected yet" would invent a state the
-    // machine never described. Distinct from "reported facts, no quota key".
+  // ── Contract ①: a machine with nodes always gets a card ───────────────────
+  it('keeps a card for a machine whose nodes exist but that has sent no facts', () => {
+    // Live repro: 3 nodes across 3 daemons, but the two remote peers are
+    // DEGRADED and send no facts bundle. Dropping them made a machine that is
+    // plainly listed under NODES vanish from MACHINES — read as "this machine
+    // does not exist", a worse lie than the omission was avoiding.
     const groups = collectMachineQuotaGroups(statusOf([
-      node({ nodeId: 'n_old', daemonId: 'daemon_mach_old' }),
-      node({ nodeId: 'n_new', daemonId: 'daemon_mach_new', nodeFacts: facts(null) }),
+      node({ nodeId: 'n_off', daemonId: 'daemon_mach_off', machineLabel: 'M1-Server' }),
+      node({ nodeId: 'n_new', daemonId: 'daemon_mach_new', machineLabel: 'Mac', nodeFacts: facts(null) }),
     ]))
 
-    expect(groups.map(g => g.machineKey)).toEqual(['daemon_mach_new'])
+    expect(groups.map(g => g.machineKey).sort()).toEqual(['daemon_mach_new', 'daemon_mach_off'])
+
+    // …but nothing is invented for the silent one: no quota, no reportedAt, and
+    // hasReported=false so the UI says "has not reported" rather than
+    // "not collected yet" (which would imply we had heard from it).
+    const offline = groups.find(g => g.machineKey === 'daemon_mach_off')!
+    expect(offline.hasReported).toBe(false)
+    expect(offline.quota).toEqual([])
+    expect(offline.reportedAt).toBeUndefined()
+
+    // A machine that DID report but has no quota key yet is the other state.
+    const reporting = groups.find(g => g.machineKey === 'daemon_mach_new')!
+    expect(reporting.hasReported).toBe(true)
+    expect(reporting.quota).toEqual([])
   })
 
-  it('names a machine by its operator nickname, not a workspace-derived node label', () => {
-    // machineLabel falls back to a workspace basename, so two worktrees on one
-    // machine carry different machineLabels — using it would name one machine
-    // inconsistently depending on which node was seen first.
-    const groups = collectMachineQuotaGroups(statusOf([
+  it('still renders nothing when the mesh has no nodes at all', () => {
+    // The only true "there is no machine" case.
+    expect(collectMachineQuotaGroups(statusOf([]))).toEqual([])
+  })
+
+  // ── Contract ②: deterministic name resolution ─────────────────────────────
+  it('names a machine by nickname, then node label, then a short machine key', () => {
+    // 1. nickname wins over any node label.
+    const withNickname = collectMachineQuotaGroups(statusOf([
       node({ nodeId: 'n1', machineLabel: 'adhdev · host', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA, { machineNickname: 'vilmire-Jupiter' }) }),
       node({ nodeId: 'n2', machineLabel: 'adhdev-wt · host', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA, { machineNickname: 'vilmire-Jupiter' }) }),
     ]))
+    expect(withNickname[0].label).toBe('vilmire-Jupiter')
 
-    expect(groups[0].label).toBe('vilmire-Jupiter')
-
-    // With no nickname reported, fall back to the stable machine key rather
-    // than an arbitrary node's workspace label.
-    const unnamed = collectMachineQuotaGroups(statusOf([
-      node({ nodeId: 'n1', machineLabel: 'adhdev · host', daemonId: 'daemon_mach_zzz', nodeFacts: facts(OK_QUOTA) }),
+    // 2. No nickname (this Mac has none set) → use the name the Nodes section
+    //    already shows, instead of the raw daemon id.
+    const byNodeLabel = collectMachineQuotaGroups(statusOf([
+      node({ nodeId: 'n1', machineLabel: 'vilmireui-MacBookAir-4', daemonId: 'daemon_mach_zzz', nodeFacts: facts(OK_QUOTA) }),
     ]))
-    expect(unnamed[0].label).toBe('daemon_mach_zzz')
+    expect(byNodeLabel[0].label).toBe('vilmireui-MacBookAir-4')
+
+    // 3. Neither → a shortened machine key, never the full 40-hex id.
+    const bare = collectMachineQuotaGroups(statusOf([
+      node({ nodeId: 'n1', machineLabel: '', daemonId: 'daemon_mach_1b46842a15d3409d96ad33e767a916dd', nodeFacts: facts(OK_QUOTA) }),
+    ]))
+    expect(bare[0].label).toBe('mach_1b46842a15d3…')
+    expect(bare[0].label).not.toContain('daemon_')
+  })
+
+  it('resolves the name deterministically when nodes disagree', () => {
+    // machineLabel falls back to a workspace basename, so worktrees on ONE
+    // machine legitimately carry different labels. The pick must not depend on
+    // which node is seen first — same input set, same name, either order.
+    const nodes = [
+      node({ nodeId: 'n_wt', machineLabel: 'zeta-worktree', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA) }),
+      node({ nodeId: 'n_main', machineLabel: 'alpha-main', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA) }),
+    ]
+    const forward = collectMachineQuotaGroups(statusOf(nodes))[0].label
+    const reversed = collectMachineQuotaGroups(statusOf([...nodes].reverse()))[0].label
+
+    expect(forward).toBe(reversed)
+    expect(forward).toBe('alpha-main')
+
+    // Same determinism for nicknames that disagree across a machine's nodes.
+    const nickNodes = [
+      node({ nodeId: 'a', daemonId: 'daemon_mach_n', nodeFacts: facts(OK_QUOTA, { machineNickname: 'zulu' }) }),
+      node({ nodeId: 'b', daemonId: 'daemon_mach_n', nodeFacts: facts(OK_QUOTA, { machineNickname: 'bravo' }) }),
+    ]
+    expect(collectMachineQuotaGroups(statusOf(nickNodes))[0].label)
+      .toBe(collectMachineQuotaGroups(statusOf([...nickNodes].reverse()))[0].label)
+  })
+
+  it('ignores a machineLabel that is just the raw id', () => {
+    // Some nodes carry machineLabel === daemonId; that is not a name, so it must
+    // not pre-empt the shortened key.
+    const groups = collectMachineQuotaGroups(statusOf([
+      node({ nodeId: 'n1', machineLabel: 'daemon_mach_raw', daemonId: 'daemon_mach_raw', nodeFacts: facts(OK_QUOTA) }),
+    ]))
+    expect(groups[0].label).toBe('mach_raw')
   })
 
   it('prefers the freshest bundle when a machine has nodes reporting at different times', () => {
@@ -326,7 +386,16 @@ describe('provider quota helpers', () => {
     expect(source).not.toContain('collectNodeQuotaEntries')
     // Unreported -> muted secondary text, explicitly NOT a warn/danger Badge.
     expect(source).toContain("t('mesh.status.quotaNotCollected')")
-    expect(source).toMatch(/quotaNotCollected[\s\S]{0,80}<\/div>/)
+    // …and the two silences stay distinct: "reported, quota not collected yet"
+    // vs "this machine has told us nothing at all".
+    expect(source).toContain("t('mesh.status.machineNotReporting')")
+    expect(source).toContain('machine.hasReported')
+    // Both silences render inside the SAME muted secondary line — one ternary,
+    // no Badge and no warn/danger tone on either branch.
+    expect(source).toMatch(
+      /machine\.hasReported\s*\?\s*t\('mesh\.status\.quotaNotCollected'\)\s*:\s*t\('mesh\.status\.machineNotReporting'\)/,
+    )
+    expect(source).toMatch(/machineNotReporting'\)\}\s*<\/div>/)
     // Failing -> the failureKind-bearing description.
     expect(source).toContain('describeQuotaFailure(quota)')
     // Normal -> both windows, tinted by usage.

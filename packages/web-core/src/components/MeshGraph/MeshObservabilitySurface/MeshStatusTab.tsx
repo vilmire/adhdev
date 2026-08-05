@@ -131,7 +131,13 @@ function MeshMachineQuotaCard({ machine }: { machine: MachineQuotaGroup }) {
             </div>
             {machine.quota.length === 0 ? (
                 <div className={`mt-1.5 text-[11px] ${meshTheme.textSecondary}`}>
-                    {t('mesh.status.quotaNotCollected')}
+                    {/* Two different silences, kept apart: a machine that has sent
+                        no runtime facts at all (offline/degraded peer — we simply
+                        have not heard from it) vs one that reports but whose
+                        quota refresh has not run yet. Neither invents a number. */}
+                    {machine.hasReported
+                        ? t('mesh.status.quotaNotCollected')
+                        : t('mesh.status.machineNotReporting')}
                 </div>
             ) : (
                 <div className="mt-2 flex flex-col gap-1.5">
@@ -174,9 +180,8 @@ function MeshMachinesQuotaSection({ status }: { status: RepoMeshStatus }) {
     const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
     const machines = collectMachineQuotaGroups(status)
-    // Machines that never sent a facts bundle are dropped by the collector, so
-    // an empty list means nothing in the mesh has reported runtime facts at
-    // all. Say nothing rather than render an empty heading.
+    // Empty only when the mesh has no nodes at all — a machine with nodes always
+    // gets a card now, reporting or not. Nothing to head when there is nothing.
     if (machines.length === 0) return null
     return (
         <div className="flex flex-col gap-2">

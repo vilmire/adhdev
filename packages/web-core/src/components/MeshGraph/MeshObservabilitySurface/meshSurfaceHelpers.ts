@@ -247,6 +247,14 @@ export type MachineQuotaGroup = {
     nodeCount: number
     /** Freshest facts stamp across this machine's nodes. */
     reportedAt?: number
+    /**
+     * Did ANY of this machine's nodes send a runtime facts bundle? False for a
+     * machine that is in the mesh (its nodes are listed) but is offline/degraded
+     * enough that no facts have arrived. The card still renders — a machine that
+     * exists must not vanish from the machine list — but it says "has not
+     * reported", never a fabricated number.
+     */
+    hasReported: boolean
     quota: NodeQuotaEntry[]
 }
 
@@ -268,11 +276,14 @@ export type MachineQuotaGroup = {
  * an unidentified node becomes its own machine rather than colliding with
  * every other unidentified node under a shared empty key.
  *
- * Machines that never sent a facts bundle are OMITTED entirely: with no report
- * there is nothing to say, and claiming "not collected yet" would invent a
- * state the machine never described. A machine that sent facts but no quota
- * key IS included (with an empty quota list) — that is the real "not collected
- * yet", which the caller renders as a muted line.
+ * EVERY machine that owns at least one mesh node gets a group, including one
+ * that has never sent a facts bundle (offline/degraded peers typically have
+ * not). Omitting those made a machine visible under "nodes" disappear from the
+ * machine list entirely, which reads as "this machine does not exist" — a worse
+ * lie than the one the omission was avoiding. The honest split is carried by
+ * `hasReported`: the card renders, and the quota area says "has not reported"
+ * instead of a number. No quota value is ever synthesised for such a machine —
+ * `quota` stays empty, exactly as before.
  */
 export function collectMachineQuotaGroups(status: RepoMeshStatus): MachineQuotaGroup[] {
     const groups = new Map<string, MachineQuotaGroup>()
@@ -282,7 +293,7 @@ export function collectMachineQuotaGroups(status: RepoMeshStatus): MachineQuotaG
         if (!machineKey) continue
         let group = groups.get(machineKey)
         if (!group) {
-            group = { machineKey, label: '', nodeCount: 0, quota: [] }
+            group = { machineKey, label: '', nodeCount: 0, hasReported: false, quota: [] }
             groups.set(machineKey, group)
         }
         group.nodeCount += 1
@@ -293,34 +304,61 @@ export function collectMachineQuotaGroups(status: RepoMeshStatus): MachineQuotaG
             : undefined
         const isFresher = reportedAt !== undefined && (group.reportedAt === undefined || reportedAt > group.reportedAt)
         if (isFresher) group.reportedAt = reportedAt
+        if (facts) group.hasReported = true
         const entries = collectNodeQuotaEntries(node)
         if (entries.length > 0 && (isFresher || group.quota.length === 0)) group.quota = entries
         const version = facts?.daemonBuild?.version || node.daemonBuildVersion
         if (version && (isFresher || !group.daemonBuildVersion)) group.daemonBuildVersion = version
-        const label = machineDisplayName(node)
-        if (label && (isFresher || !group.label)) group.label = label
+    }
+    // Names are resolved in a SECOND pass, over each machine's full node set, so
+    // the result cannot depend on node iteration order — see resolveMachineLabel.
+    for (const group of groups.values()) {
+        group.label = resolveMachineLabel(status, group.machineKey)
     }
     return [...groups.values()]
-        // A machine that never reported facts has nothing to say about quota.
-        .filter(group => group.reportedAt !== undefined)
-        .map(group => ({ ...group, label: group.label || group.machineKey }))
-        .sort((a, b) => a.label.localeCompare(b.label))
+        .sort((a, b) => a.label.localeCompare(b.label) || a.machineKey.localeCompare(b.machineKey))
 }
 
 /**
- * The name to show for the machine hosting a node.
+ * The name to show for a machine, resolved DETERMINISTICALLY from its whole
+ * node set rather than from whichever node happened to be seen first.
  *
- * `machineNickname` (operator-set, self-reported on the facts bundle) is the
- * only value that names the MACHINE. `node.machineLabel` is deliberately not
- * preferred: buildMeshNodeDisplayLabel falls back to a workspace basename, so
- * two worktrees on one machine carry different machineLabels and using it here
- * would label one machine inconsistently depending on which node was seen
- * first.
+ * Fallback chain:
+ *   1. `machineNickname` — operator-set and self-reported on the facts bundle.
+ *      The only field that names the MACHINE itself.
+ *   2. a node's `machineLabel` — what the Nodes section already calls this
+ *      machine, so the two sections agree instead of one showing a raw id.
+ *   3. a short prefix of the machine key.
+ *
+ * `machineLabel` is step 2, never step 1, for the original reason:
+ * buildMeshNodeDisplayLabel falls back to a workspace basename, so two worktrees
+ * on one machine carry DIFFERENT machineLabels. That is exactly why the choice
+ * among them must be deterministic — candidates are collected across all the
+ * machine's nodes and the lexicographically smallest is taken, so the same mesh
+ * state always yields the same name regardless of node order.
  */
-function machineDisplayName(node: RepoMeshNodeStatus): string | undefined {
-    const nickname = node.nodeFacts?.machineNickname
-    if (typeof nickname === 'string' && nickname.trim()) return nickname.trim()
-    return undefined
+export function resolveMachineLabel(status: RepoMeshStatus, machineKey: string): string {
+    const nicknames: string[] = []
+    const nodeLabels: string[] = []
+    for (const node of status.nodes) {
+        const key = canonicalDaemonId(node.daemonId) || node.machineId || node.nodeId
+        if (key !== machineKey) continue
+        const nickname = node.nodeFacts?.machineNickname
+        if (typeof nickname === 'string' && nickname.trim()) nicknames.push(nickname.trim())
+        const label = typeof node.machineLabel === 'string' ? node.machineLabel.trim() : ''
+        // A machineLabel that is just the raw id carries no more information than
+        // the fallback, so it is not treated as a name.
+        if (label && label !== node.nodeId && label !== node.daemonId && label !== machineKey) nodeLabels.push(label)
+    }
+    const pick = (values: string[]): string | undefined =>
+        values.length === 0 ? undefined : [...values].sort((a, b) => a.localeCompare(b))[0]
+    return pick(nicknames) ?? pick(nodeLabels) ?? shortMachineKey(machineKey)
+}
+
+/** `daemon_mach_1b46842a…` → `mach_1b46842a` — readable without inventing a name. */
+export function shortMachineKey(machineKey: string): string {
+    const core = machineKey.replace(/^(daemon_|standalone_)/, '')
+    return core.length <= 20 ? core : `${core.slice(0, 17)}…`
 }
 
 // Maps the raw daemon-reported strategy to the 2-mode product vocabulary (Spread /

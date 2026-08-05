@@ -2417,7 +2417,8 @@
             "noNodesReporting": "No nodes reporting runtime yet.",
             "quotaNotCollected": "Plan quota not collected yet — a machine reports it after its first refresh (~15 min) and only while an agent has been active.",
             "quotaFreshnessHint": "Age of the runtime facts bundle this quota rode in on",
-            "machinesQuota": "Machines — plan quota"
+            "machinesQuota": "Machines — plan quota",
+            "machineNotReporting": "This machine has not reported runtime facts yet — it is offline or unreachable, so its plan quota is unknown."
         },
         "overview": {
             "missionCard": "Missions",
