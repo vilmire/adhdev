@@ -16,6 +16,19 @@ import { resolveCliSessionBinding } from '../../src/commands/cli-manager.js';
 // the `session_`-prefixed form resumes and replies. The fix lets a provider spec
 // express the decoration (`"-S", "session_{{id}}"`), which requires `{{id}}` to
 // substitute INSIDE a part rather than only when the part is exactly `{{id}}`.
+//
+// kimi's own log (~/.kimi-code/logs/kimi-code.log) shows BOTH failure modes and
+// distinguishes them, which is what pins the id form as the defect here:
+//
+//   Session "<bare-uuid>" not found.                        <- wrong id FORM
+//   Session "session_<uuid>" was created under a different directory.
+//
+// The second only appears when the prefixed id RESOLVES — so kimi additionally
+// requires the resume to run from the session's original workDir. adhdev already
+// satisfies that (provider-cli-runtime spawns with cwd = the launch workspace,
+// and the saved record carries that same workspace), so it is a precondition to
+// respect rather than a second bug; the assertion below locks the id form, which
+// is the part adhdev was getting wrong.
 
 /** Minimal provider shape the binding resolver reads. */
 function providerWith(resumeSessionArgs: string[]) {
