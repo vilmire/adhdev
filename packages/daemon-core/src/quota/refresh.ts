@@ -224,3 +224,49 @@ export function setupQuotaRefreshLoop(components: {
         hasRecentCliActivity: () => hasRecentCliActivity(components.instanceManager.collectHotChatSessionStates()),
     });
 }
+
+/**
+ * One-shot boot-time refresh so a freshly started daemon does not sit for a
+ * full QUOTA_REFRESH_INTERVAL_MS (15 min) before quota shows up anywhere
+ * (get_machine_runtime_stats / get_session_info / mesh_status). The periodic
+ * loop's first tick is deliberately NOT at boot (see startQuotaRefreshLoop) —
+ * this is the one call that IS.
+ *
+ * Deliberately bypasses hasRecentCliActivity: the whole point of the idle gate
+ * is "an agent hasn't run recently, so the number can't have moved" — but in
+ * the seconds after boot there is BY DEFINITION no recent activity yet, so
+ * gating this call on the same signal would always skip it and the boot
+ * refresh would never fire, defeating the feature entirely. Every tick after
+ * this one still goes through the unmodified idle gate via
+ * startQuotaRefreshLoop.
+ *
+ * Fire-and-forget by design — the caller (initDaemonComponents) must not
+ * await this. Codex's fetcher spawns an `codex app-server` child (~900ms);
+ * that cost must never be added to daemon startup latency, which is exactly
+ * the cost this module's cache exists to keep off any synchronous path (see
+ * module header). A fetch failure is caught and logged, never thrown, so it
+ * can never fail the boot sequence it doesn't block.
+ *
+ * Idempotent per process: skips outright if the cache already holds anything
+ * OR a boot refresh is already in flight, so calling this more than once —
+ * including twice back-to-back before the first fetch resolves, which the
+ * cache-emptiness check alone would not catch — never spends more than one
+ * codex spawn per process. A daemon that restarts often each gets its own
+ * fresh empty cache and `bootRefreshInFlight` flag (see the `cache` doc
+ * above), so that case still costs one spawn per restart, which is the
+ * unavoidable price of the feature this call implements.
+ */
+let bootRefreshInFlight = false;
+
+export function refreshQuotaCacheOnBoot(): void {
+    if (bootRefreshInFlight || readQuotaCache() !== undefined) return; // already running or populated
+    bootRefreshInFlight = true;
+    void refreshQuotaCacheOnce()
+        .catch((e: any) => LOG.warn('Quota', `Boot quota refresh failed: ${e?.message || e}`))
+        .finally(() => { bootRefreshInFlight = false; });
+}
+
+/** Test seam: reset the boot-refresh in-flight flag so cases start clean. */
+export function __resetQuotaBootRefreshForTests(): void {
+    bootRefreshInFlight = false;
+}

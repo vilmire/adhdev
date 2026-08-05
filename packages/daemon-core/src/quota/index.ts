@@ -52,6 +52,7 @@ export {
     clearQuotaCache,
     hasRecentCliActivity,
     readQuotaCache,
+    refreshQuotaCacheOnBoot,
     refreshQuotaCacheOnce,
     setupQuotaRefreshLoop,
     startQuotaRefreshLoop,
