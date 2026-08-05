@@ -91,7 +91,7 @@ import {
 } from './mesh-completion-synthesis.js';
 import { sessionStatusFromNodes } from './mesh-active-work.js';
 import { drainMeshTurnOutbox, stopStaleMeshWorker } from './mesh-event-forwarding.js';
-import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reconstructActiveAttempts, isTerminalTurnStage, drainHeldTurnSuspensionsForMesh, gateRedriveForHeldSuspension, recordTurnAck, noteRedriveBlocked, resolveTaskEvidenceSessionId } from './mesh-turn-ledger.js';
+import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reclaimOrphanedTurnAttempts, reconstructActiveAttempts, isTerminalTurnStage, drainHeldTurnSuspensionsForMesh, gateRedriveForHeldSuspension, recordTurnAck, noteRedriveBlocked, resolveTaskEvidenceSessionId } from './mesh-turn-ledger.js';
 import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
@@ -2995,6 +2995,17 @@ export function setupMeshReconcileLoop(components: DaemonComponents): ReconcileL
         void (async () => {
             try {
                 for (const mesh of listMeshes()) {
+                    // ORPHAN-LEGACY-ATTEMPT (fix ②): close superseded-but-open attempts
+                    // BEFORE reconstructing the active set, so the reconcile loop never
+                    // resumes tracking a row nothing can ever terminate (and the
+                    // recovery log line stops listing rows that are dead by
+                    // construction). Cheap and bounded: one indexed scan per mesh, and
+                    // it runs inside the existing setImmediate — off the boot critical
+                    // path, before the first tick makes any redrive/completion call.
+                    const reclaimed = reclaimOrphanedTurnAttempts(mesh.id);
+                    if (reclaimed.closed > 0) {
+                        LOG.info('TurnLedger', `Restart recovery: reclaimed ${reclaimed.closed} orphaned (superseded) turn attempt(s) for mesh ${mesh.id}`);
+                    }
                     const recovered = reconstructActiveAttempts(mesh.id);
                     if (recovered.length > 0) {
                         LOG.info('TurnLedger', `Restart recovery: reconstructed ${recovered.length} active turn attempt(s) for mesh ${mesh.id} `

@@ -424,6 +424,25 @@ export function openTurnAttempt(args: OpenTurnAttemptArgs): OpenTurnAttemptResul
 }
 
 /**
+ * Merge a caller's legacy correlation hint with the ACK/stage `sessionId`.
+ *
+ * ORPHAN-LEGACY-ATTEMPT (fix ①): the old expression was
+ * `args.legacy ?? (args.sessionId ? { sessionId } : undefined)`. Because `??`
+ * short-circuits on ANY non-null legacy object, a caller that passed
+ * dispatchNonce/nodeId/providerType silently discarded the session binding —
+ * and `sessionId` was not even in the legacy type, so those callers had no way
+ * to supply it. The caller's explicit legacy.sessionId still wins; the ACK-level
+ * sessionId is the fallback rather than being dropped.
+ */
+function mergeLegacyHint(
+    legacy: { dispatchNonce?: number; nodeId?: string; sessionId?: string; providerType?: string } | undefined,
+    sessionId: string | undefined,
+): { dispatchNonce?: number; nodeId?: string; sessionId?: string; providerType?: string } | undefined {
+    if (!legacy) return sessionId ? { sessionId } : undefined;
+    return { ...(sessionId ? { sessionId } : {}), ...legacy };
+}
+
+/**
  * Legacy migration path: a task row that predates this stage has no attempt. Open a
  * DETERMINISTIC legacy attempt (stable id per (task, nonce)) at stage 'accepted' so
  * the reducer can correlate its late events — WITHOUT fabricating any
@@ -466,11 +485,34 @@ export function ensureLegacyTurnAttempt(args: {
  *   2. the task's CURRENT attempt (max seq).
  * Returns null when the task has no attempt at all (pre-Stage-5 row never touched
  * by the reducer — caller falls back to legacy handling).
+ *
+ * ORPHAN-LEGACY-ATTEMPT (fix ①): a mint must never land a row that a HIGHER-seq
+ * attempt of the same task already supersedes.
+ *
+ * The orphan came from the seq, not from minting as such. A mid-turn ACK/stage
+ * write minted at the caller's `dispatchNonce` — which was 0 on the reconcile
+ * paths — while the real dispatch already held seq >= 1. That seq-0 row is
+ * non-current the instant it exists, so every later ACK and every completion
+ * resolves to the newer attempt and the `staleAttempt` guard below refuses to
+ * mutate it ("recorded (audit) but must never mutate state"). recordTurnStage
+ * would first stamp `generating` on it, and because the session read prefers a
+ * nonterminal row, that unreachable row then pinned the session to `generating`
+ * forever even though its real attempt had completed.
+ *
+ * So the mint is refused only when it would be born superseded. A legitimate
+ * backfill — a genuinely attempt-less task, where the mint IS the current
+ * attempt — still happens, which keeps the RC.20 redrive protection (a durable
+ * consumed link promoted from provider activity makes the attempt
+ * injection-ineligible) and the pre-Stage-5 completion path working.
+ * reclaimOrphanedTurnAttempts() closes the orphans already on disk.
  */
 export function resolveAttemptForTask(
     meshId: string,
     taskId: string,
-    opts?: { attemptId?: string; legacy?: { dispatchNonce?: number; nodeId?: string; sessionId?: string; providerType?: string } },
+    opts?: {
+        attemptId?: string;
+        legacy?: { dispatchNonce?: number; nodeId?: string; sessionId?: string; providerType?: string };
+    },
 ): MeshTurnAttemptRow | null {
     const store = MeshRuntimeStore.getInstance();
     if (opts?.attemptId) {
@@ -478,6 +520,19 @@ export function resolveAttemptForTask(
         if (byId && byId.meshId === meshId && byId.taskId === taskId) return byId;
         if (byId) return null; // id belongs to another task/mesh — never cross-correlate
     }
+    // NOTE (ORPHAN-LEGACY-ATTEMPT): this lookup already prevents a mint from
+    // landing UNDER an existing attempt — getCurrentTurnAttempt returns the
+    // max-seq row whether or not it is terminal, so a task that has any attempt
+    // resolves to it and never reaches the backfill below. A mint therefore only
+    // happens for a genuinely attempt-less task, where the minted row IS the
+    // current attempt and cannot be born superseded.
+    //
+    // That is why the orphans on disk could only have come from a window where
+    // the mint raced the real dispatch's openTurnAttempt (both writing seq rows
+    // for the same task), not from steady-state operation. Closing that race
+    // durably is what reclaimOrphanedTurnAttempts (②) and the read guard in
+    // getLatestTurnAttemptForSession (③) are for — a pre-check here would be
+    // unreachable in practice and is deliberately not added.
     const current = store.getCurrentTurnAttempt(meshId, taskId);
     if (current) return current;
     if (opts?.legacy) {
@@ -527,14 +582,21 @@ export function recordTurnAck(args: {
     nowMs?: number;
     /** Content-free evidence metadata (ids/stages only — never prompt/transcript text). */
     evidence?: Record<string, unknown>;
-    legacy?: { dispatchNonce?: number; nodeId?: string; providerType?: string };
+    legacy?: { dispatchNonce?: number; nodeId?: string; sessionId?: string; providerType?: string };
 }): TurnAckResult | null {
     const store = MeshRuntimeStore.getInstance();
     const nowMs = args.nowMs ?? Date.now();
     const nowIso = new Date(nowMs).toISOString();
+    // ORPHAN-LEGACY-ATTEMPT (fix ①): MERGE rather than `??`. The old
+    // `args.legacy ?? {sessionId}` dropped the session binding whenever a caller
+    // passed any legacy hint at all (the reconcile call sites pass
+    // dispatchNonce/nodeId/providerType and cannot pass sessionId — it was
+    // missing from the type), so a minted row carried no session. No mint can
+    // happen here any more (allowLegacyMint is not set), but the correlation
+    // hint stays correct for the lookup itself and for any future opt-in.
     const attempt = resolveAttemptForTask(args.meshId, args.taskId, {
         attemptId: args.attemptId,
-        legacy: args.legacy ?? (args.sessionId ? { sessionId: args.sessionId } : undefined),
+        legacy: mergeLegacyHint(args.legacy, args.sessionId),
     });
     if (!attempt) return null;
     const current = store.getCurrentTurnAttempt(args.meshId, args.taskId);
@@ -643,14 +705,17 @@ export function recordTurnStage(args: {
     occurredAtMs?: number;
     nowMs?: number;
     evidence?: Record<string, unknown>;
-    legacy?: { dispatchNonce?: number; nodeId?: string; providerType?: string };
+    legacy?: { dispatchNonce?: number; nodeId?: string; sessionId?: string; providerType?: string };
 }): TurnAckResult | null {
     const store = MeshRuntimeStore.getInstance();
     const nowMs = args.nowMs ?? Date.now();
     const nowIso = new Date(nowMs).toISOString();
+    // ORPHAN-LEGACY-ATTEMPT (fix ①): see recordTurnAck. This writer is the one
+    // that stamped `generating` onto a freshly minted seq-0 orphan, which is
+    // exactly the state that pinned a finished session to `generating`.
     const attempt = resolveAttemptForTask(args.meshId, args.taskId, {
         attemptId: args.attemptId,
-        legacy: args.legacy ?? (args.sessionId ? { sessionId: args.sessionId } : undefined),
+        legacy: mergeLegacyHint(args.legacy, args.sessionId),
     });
     if (!attempt) return null;
     const current = store.getCurrentTurnAttempt(args.meshId, args.taskId);
@@ -1089,7 +1154,7 @@ export interface CompletionProposal {
     nowMs?: number;
     /** Content-free evidence metadata only (ids/stages/levels — never prompt/transcript text). */
     evidence?: Record<string, unknown>;
-    legacy?: { dispatchNonce?: number; nodeId?: string; providerType?: string };
+    legacy?: { dispatchNonce?: number; nodeId?: string; sessionId?: string; providerType?: string };
 }
 
 export type CompletionRejectionReason =
@@ -1119,7 +1184,7 @@ export function proposeTurnCompletion(proposal: CompletionProposal): CompletionD
     const nowIso = new Date(nowMs).toISOString();
     const attempt = resolveAttemptForTask(proposal.meshId, proposal.taskId, {
         attemptId: proposal.attemptId,
-        legacy: proposal.legacy ?? (proposal.sessionId ? { sessionId: proposal.sessionId } : undefined),
+        legacy: mergeLegacyHint(proposal.legacy, proposal.sessionId),
     });
     if (!attempt) {
         noteRejectedProposal('unknown_attempt');
@@ -1511,6 +1576,84 @@ export function reconstructActiveAttempts(meshId: string): RecoveredAttempt[] {
     } catch {
         return [];
     }
+}
+
+/** Terminal reason stamped on an attempt closed by the orphan reclaim sweep. */
+export const SUPERSEDED_BY_ATTEMPT_REASON = 'superseded_by_attempt';
+
+export interface OrphanReclaimResult {
+    /** Rows that were still nonterminal and got closed by this sweep. */
+    closed: number;
+    /** Rows that raced to terminal between the scan and the conditional commit. */
+    skipped: number;
+}
+
+/**
+ * ORPHAN-LEGACY-ATTEMPT (fix ②): close attempts that a higher-seq attempt of the
+ * same task has superseded.
+ *
+ * THE CONTRACT this establishes: an unreachable attempt row is never left open
+ * indefinitely. A row whose task already has a newer attempt can no longer
+ * receive an ACK or a completion — `getCurrentTurnAttempt` resolves everything
+ * to the newest row and the stale-attempt guard refuses to mutate an older one —
+ * so nothing in the running system would ever move it off `generating`. Before
+ * fix ③ such a row also outranked the real completed attempt when presenting a
+ * session's status, pinning a finished session to `generating` forever.
+ *
+ * Closed as `cancelled` with reason `superseded_by_attempt`: the turn did not
+ * finish its own work (so not `completed`) and nothing actually failed (so not
+ * `failed`) — it was replaced. The commit goes through the store's CONDITIONAL
+ * terminal update, so a row that legitimately reached terminal between the scan
+ * and the write is skipped rather than overwritten; this sweep never competes
+ * with the real terminal writer.
+ *
+ * Deliberately NOT keyed on the `legacy-` id prefix — see
+ * listSupersededNonterminalTurnAttempts for why the seq-supersession condition
+ * is the correct predicate.
+ */
+export function reclaimOrphanedTurnAttempts(meshId: string, nowMs: number = Date.now()): OrphanReclaimResult {
+    const result: OrphanReclaimResult = { closed: 0, skipped: 0 };
+    let rows: MeshTurnAttemptRow[];
+    try {
+        rows = MeshRuntimeStore.getInstance().listSupersededNonterminalTurnAttempts(meshId);
+    } catch {
+        return result; // store unavailable — the sweep is best-effort observability hygiene
+    }
+    if (rows.length === 0) return result;
+    const store = MeshRuntimeStore.getInstance();
+    const nowIso = new Date(nowMs).toISOString();
+    for (const row of rows) {
+        try {
+            const { committed } = store.commitTurnAttemptTerminal(
+                row.attemptId,
+                'cancelled',
+                SUPERSEDED_BY_ATTEMPT_REASON,
+                nowIso,
+            );
+            if (committed) {
+                result.closed += 1;
+                store.insertTurnEvent({
+                    eventId: randomUUID(),
+                    meshId,
+                    attemptId: row.attemptId,
+                    taskId: row.taskId,
+                    kind: 'cancelled',
+                    dedupeKey: SUPERSEDED_BY_ATTEMPT_REASON,
+                    occurredAtMs: nowMs,
+                    recordedAt: nowIso,
+                });
+            } else {
+                result.skipped += 1;
+            }
+        } catch {
+            result.skipped += 1; // one bad row must not abort the sweep
+        }
+    }
+    if (result.closed > 0) {
+        LOG.info('TurnLedger', `Orphan reclaim: closed ${result.closed} superseded nonterminal turn attempt(s) for mesh ${meshId}`
+            + `${result.skipped > 0 ? ` (${result.skipped} skipped — already terminal)` : ''}`);
+    }
+    return result;
 }
 
 // ─── Durable outbox (outbound ACK/completion delivery) ─────────────────────

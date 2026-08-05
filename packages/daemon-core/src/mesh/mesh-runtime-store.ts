@@ -2739,11 +2739,44 @@ export class MeshRuntimeStore {
      * Stage 6's presentation layer resolves sessions (not tasks) — read_chat,
      * session status, dashboard and the restart gate all key on sessionId.
      */
+    /**
+     * The attempt that governs a session's presented execution status.
+     *
+     * A nonterminal attempt is preferred (an in-flight turn outranks a finished
+     * one), but ONLY when it is its task's CURRENT attempt — i.e. no higher
+     * attempt_seq exists for the same task.
+     *
+     * ORPHAN-LEGACY-ATTEMPT (fix ③): without that restriction, a stranded
+     * lower-seq row (classically a `legacy-<taskId>-0` minted mid-turn while the
+     * real dispatch already held seq >= 1) outranks the real, COMPLETED attempt
+     * purely because it is nonterminal. Such a row is unreachable by
+     * construction — every ACK and every completion targets the current attempt,
+     * and the reducer's stale-attempt guard refuses to mutate a non-current row —
+     * so it stays `generating` forever and pins the session's presented status to
+     * `generating` even though its turn finished. Fixes ① (no new orphans) and ②
+     * (close the existing ones) address the rows themselves; this guard is the
+     * read-side safety net for any that still slip through, e.g. mid-flight
+     * before the reclaim sweep runs.
+     *
+     * `attempt_seq DESC` is the final tie-break, not decoration: attempts of one
+     * task are routinely written inside the same millisecond, so `updated_at`
+     * alone leaves ties that SQLite may resolve either way — which would make
+     * the selection (and therefore the presented session status) flap between
+     * runs. Preferring the newer attempt is the correct resolution.
+     */
     getLatestTurnAttemptForSession(sessionId: string): MeshTurnAttemptRow | null {
         const row = this.db.prepare(`
-            SELECT * FROM mesh_turn_attempts
-            WHERE session_id = ?
-            ORDER BY (terminal_outcome IS NULL) DESC, updated_at DESC LIMIT 1
+            SELECT a.* FROM mesh_turn_attempts a
+            WHERE a.session_id = ?
+            ORDER BY
+                (a.terminal_outcome IS NULL AND NOT EXISTS (
+                    SELECT 1 FROM mesh_turn_attempts b
+                    WHERE b.mesh_id = a.mesh_id AND b.task_id = a.task_id
+                      AND b.attempt_seq > a.attempt_seq
+                )) DESC,
+                a.updated_at DESC,
+                a.attempt_seq DESC
+            LIMIT 1
         `).get(sessionId) as Record<string, unknown> | undefined;
         return row ? meshTurnAttemptFromRow(row) : null;
     }
@@ -2759,6 +2792,37 @@ export class MeshRuntimeStore {
         const rows = this.db.prepare(`
             SELECT * FROM mesh_turn_attempts WHERE mesh_id = ? AND task_id = ? ORDER BY attempt_seq ASC
         `).all(meshId, taskId) as Array<Record<string, unknown>>;
+        return rows.map(meshTurnAttemptFromRow);
+    }
+
+    /**
+     * ORPHAN-LEGACY-ATTEMPT (fix ②): nonterminal attempts that a HIGHER-seq
+     * attempt of the same task has superseded.
+     *
+     * Such a row is unreachable by construction: `getCurrentTurnAttempt` returns
+     * the max-seq row, so every ACK and every completion proposal resolves to the
+     * newer attempt and the reducer's stale-attempt guard explicitly refuses to
+     * mutate the older one. Nothing in the system can ever move it to terminal —
+     * it would sit at `generating` indefinitely, and (before fix ③) outrank the
+     * real completed attempt when presenting the session's status.
+     *
+     * Deliberately keyed on seq supersession rather than on the `legacy-` id
+     * prefix: the id form is a symptom of one known minting path, whereas
+     * "a newer attempt exists for this task" is the actual unreachability
+     * condition and covers any future path that strands a row the same way.
+     */
+    listSupersededNonterminalTurnAttempts(meshId: string): MeshTurnAttemptRow[] {
+        const rows = this.db.prepare(`
+            SELECT a.* FROM mesh_turn_attempts a
+            WHERE a.mesh_id = ?
+              AND a.terminal_outcome IS NULL
+              AND EXISTS (
+                  SELECT 1 FROM mesh_turn_attempts b
+                  WHERE b.mesh_id = a.mesh_id AND b.task_id = a.task_id
+                    AND b.attempt_seq > a.attempt_seq
+              )
+            ORDER BY a.created_at ASC
+        `).all(meshId) as Array<Record<string, unknown>>;
         return rows.map(meshTurnAttemptFromRow);
     }
 
