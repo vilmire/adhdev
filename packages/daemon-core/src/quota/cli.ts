@@ -7,9 +7,19 @@
  * duplicated per CLI host.
  */
 
+import * as fs from 'node:fs';
 import chalk from 'chalk';
 import type { ProviderQuota, QuotaWindow } from './types.js';
 import type { InstallResult, UninstallResult, StatuslineStatus } from './statusline/install.js';
+
+/**
+ * Why Claude alone needs an install step, in one line — shared by the "not
+ * set up" error addendum and `claude:status`'s not-installed summary so the
+ * two surfaces never drift apart.
+ */
+const CLAUDE_NO_API_LINE = 'Claude has no quota API — adhdev borrows your statusLine to read it.';
+/** What install actually does to the user's config, in one line. */
+const CLAUDE_WRAP_NOT_REPLACE_LINE = 'Install wraps (not replaces) your statusline, so nothing is lost.';
 
 function formatWindow(label: string, window: QuotaWindow | null): string {
     if (!window) {
@@ -46,6 +56,18 @@ function truncate(value: string, max: number): string {
     return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
+/** "3m ago" / "2h 14m ago" — the past-time counterpart to formatRelative. */
+function formatAgo(atMs: number): string {
+    const deltaMs = Date.now() - atMs;
+    if (deltaMs <= 0) return 'just now';
+    const minutes = Math.round(deltaMs / 60_000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ${minutes % 60}m ago`;
+    return `${Math.floor(hours / 24)}d ${hours % 24}h ago`;
+}
+
 /** Render one provider's quota block: "5 hour"/"7 day" bars + any error line. */
 export function printQuota(name: string, quota: ProviderQuota): void {
     console.log();
@@ -57,6 +79,17 @@ export function printQuota(name: string, quota: ProviderQuota): void {
     if (quota.error) {
         const tone = quota.status === 'unavailable' ? chalk.gray : chalk.yellow;
         console.log(`  ${tone(quota.error)}`);
+        // Claude is the one provider that needs a setup step, and the reason is
+        // not obvious from the one-line error alone (a coordinator misread this
+        // as "install overwrites your statusline" on 2026-08-05 — it wraps it).
+        // Matched on the install-command mention specifically, not just
+        // provider+unavailable, so the OTHER claude-cli unavailable message
+        // ("no snapshot yet" — already installed, just needs a session) does not
+        // get this addendum it doesn't need.
+        if (quota.provider === 'claude-cli' && quota.error.includes('claude:install')) {
+            console.log(`  ${chalk.gray(CLAUDE_NO_API_LINE)}`);
+            console.log(`  ${chalk.gray(CLAUDE_WRAP_NOT_REPLACE_LINE)}`);
+        }
     }
     console.log();
 }
@@ -111,12 +144,27 @@ export function printClaudeStatuslineStatus(status: StatuslineStatus): void {
                     : '  You had no statusline before install.',
             ),
         );
-        console.log(chalk.gray(`  Snapshot: ${status.paths.snapshotFile}`));
+        console.log(chalk.gray(`  Wrapper: ${status.paths.wrapperFile}`));
+        console.log(chalk.gray(`  Backup: ${status.paths.backupFile}`));
+        let snapshotMtimeMs: number | null = null;
+        try {
+            snapshotMtimeMs = fs.statSync(status.paths.snapshotFile).mtimeMs;
+        } catch {
+            // No snapshot yet — a Claude Code session has not run since install.
+        }
+        console.log(chalk.gray(
+            snapshotMtimeMs === null
+                ? '  Last snapshot: none yet — open a Claude Code session to record one'
+                : `  Last snapshot: ${formatAgo(snapshotMtimeMs)} (${status.paths.snapshotFile})`,
+        ));
+        console.log(chalk.gray('  Undo with `adhdev quota claude:uninstall`.'));
     } else {
         console.log(chalk.yellow('• Not installed'));
         if (status.foreignStatusLine) {
             console.log(chalk.gray('  You have your own statusLine configured; install would wrap it.'));
         }
+        console.log(chalk.gray(`  ${CLAUDE_NO_API_LINE}`));
+        console.log(chalk.gray(`  ${CLAUDE_WRAP_NOT_REPLACE_LINE}`));
         console.log(chalk.gray('  Set up with `adhdev quota claude:install`.'));
     }
     console.log();
