@@ -137,6 +137,30 @@ describe('fetchKimiQuota', () => {
         expect(stub.calls).toEqual([]);
     });
 
+    // REGRESSION (owner-reported false guidance): an expired ACCESS token with
+    // a still-valid refresh_token is not a broken login — Kimi issues 15-minute
+    // access tokens by design, and the CLI's own file-locked refresh handles it
+    // on next use. The old message ("session expired — run kimi ... to
+    // refresh") implied the login itself was invalid and that the user had to
+    // launch an interactive session to fix it; neither is true, and there is
+    // nothing for the user to do here. Locks the message so that false
+    // guidance cannot silently return.
+    it('does not claim the session/login expired or ask the user to take action, even with a valid refresh_token present', async () => {
+        const home = makeKimiHome({
+            access_token: 'tok', expires_at: Math.floor(NOW / 1000) - 1,
+            refresh_token: 'still-valid-refresh-token', scope: 'usages', token_type: 'Bearer',
+        });
+        const stub = stubFetch(jsonResponse({}));
+
+        const quota = await fetchKimiQuota(deps(home, stub.fetch));
+
+        expect(quota.metadata?.failureKind).toBe('expired-token');
+        expect(stub.calls).toEqual([]); // still never refreshes/calls out itself
+        expect(quota.error).not.toMatch(/session expired|run kimi|log ?in/i);
+        expect(quota.error).toMatch(/access token/i);
+        expect(quota.error).toMatch(/refresh/i); // still explains recovery is automatic
+    });
+
     it('classifies 401 as unauthorized', async () => {
         const home = makeKimiHome({ access_token: 'tok', expires_at: FRESH_EXPIRY });
         const quota = await fetchKimiQuota(deps(home, stubFetch(jsonResponse({}, 401)).fetch));

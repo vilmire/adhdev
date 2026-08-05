@@ -246,7 +246,7 @@ export async function fetchKimiQuota(overrides: QuotaFetchDeps = {}): Promise<Pr
         return quotaFailure(
             'kimi',
             'error',
-            'Kimi session expired — run kimi on this machine to refresh, then retry',
+            'Kimi access token expired (they last ~15 min) — the kimi CLI refreshes it on next use; quota will report again after that.',
             { source: 'oauth', failureKind: 'expired-token' },
         );
     }
