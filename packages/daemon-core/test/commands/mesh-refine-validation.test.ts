@@ -9,6 +9,36 @@ import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
 import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, runMeshReconcileTick } from '../../src/mesh/mesh-events'
 import { computeStaleInputsDigest } from '../../src/mesh/worktree-bootstrap-config'
 
+/**
+ * Remove a temp repo, tolerating git's background writes.
+ *
+ * These tests init REAL git repos, and git may still be materialising
+ * `.git/objects/pack/**` (gc, index-pack) when the test body returns. A plain
+ * recursive rmSync then races it and throws ENOTEMPTY on the pack directory —
+ * from a `finally`, which turns a passing test into a failure. Seen on CI as:
+ *
+ *   ENOTEMPTY: directory not empty, rmdir '/tmp/adhdev-refine-dryrun-XXX/repo/.git/objects/pack'
+ *
+ * `force: true` does not help: it suppresses ENOENT, not ENOTEMPTY. Node's
+ * rmSync already retries internally on Windows only, so retry explicitly here.
+ * Cleanup failure is never the thing under test — after the retries we give up
+ * silently and leave the temp dir to the OS rather than fail an unrelated
+ * assertion.
+ */
+function rmTempRepo(root: string): void {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+            rmSync(root, { recursive: true, force: true })
+            return
+        } catch {
+            // Busy-wait briefly: this is sync teardown, so there is no await to
+            // yield with, and the window we are waiting out is milliseconds.
+            const until = Date.now() + 50
+            while (Date.now() < until) { /* spin */ }
+        }
+    }
+}
+
 function createRouter(meshId?: string, messages?: string[], statusInstanceId?: string) {
   const coordinator = meshId && messages
     ? {
@@ -276,7 +306,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   })
 
@@ -329,7 +359,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -379,7 +409,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -420,7 +450,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -459,7 +489,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -502,7 +532,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -547,7 +577,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -630,7 +660,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -738,7 +768,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -841,7 +871,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -936,7 +966,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -989,7 +1019,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -1046,7 +1076,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -1129,7 +1159,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -1190,7 +1220,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -1226,7 +1256,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -1264,7 +1294,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -1297,7 +1327,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -1339,7 +1369,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -1376,7 +1406,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -1414,7 +1444,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -1454,7 +1484,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -1480,7 +1510,7 @@ describe('refine_mesh_node validation gate', () => {
       expect(result.validationPlan.note).toContain('heuristics are suggestions only')
       expect(readFileSync(join(repo, 'README.md'), 'utf-8')).toBe('base\n')
     } finally {
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   })
 
@@ -1525,7 +1555,7 @@ describe('refine_mesh_node validation gate', () => {
       })
       expect(executed).toMatchObject({ success: true, async: true, status: 'accepted' })
     } finally {
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   })
 
@@ -1564,7 +1594,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -1609,7 +1639,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
@@ -1638,7 +1668,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
-      rmSync(root, { recursive: true, force: true })
+      rmTempRepo(root)
     }
   }, 90000)
 
