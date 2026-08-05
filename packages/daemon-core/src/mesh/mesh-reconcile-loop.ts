@@ -91,7 +91,7 @@ import {
 } from './mesh-completion-synthesis.js';
 import { sessionStatusFromNodes } from './mesh-active-work.js';
 import { drainMeshTurnOutbox, stopStaleMeshWorker } from './mesh-event-forwarding.js';
-import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reclaimOrphanedTurnAttempts, reconstructActiveAttempts, isTerminalTurnStage, drainHeldTurnSuspensionsForMesh, gateRedriveForHeldSuspension, recordTurnAck, noteRedriveBlocked, resolveTaskEvidenceSessionId } from './mesh-turn-ledger.js';
+import { evaluateRedrive, markAttemptRedriven, proposeTurnCompletion, reclaimOrphanedTurnAttempts, reclaimQueueTerminatedTurnAttempts, reconstructActiveAttempts, isTerminalTurnStage, drainHeldTurnSuspensionsForMesh, gateRedriveForHeldSuspension, recordTurnAck, noteRedriveBlocked, resolveTaskEvidenceSessionId } from './mesh-turn-ledger.js';
 import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
@@ -3005,6 +3005,13 @@ export function setupMeshReconcileLoop(components: DaemonComponents): ReconcileL
                     const reclaimed = reclaimOrphanedTurnAttempts(mesh.id);
                     if (reclaimed.closed > 0) {
                         LOG.info('TurnLedger', `Restart recovery: reclaimed ${reclaimed.closed} orphaned (superseded) turn attempt(s) for mesh ${mesh.id}`);
+                    }
+                    // STORE-CONTRAST-CLOSURE: runs AFTER the seq-supersession sweep
+                    // above, so a stale non-current sibling row is already closed by
+                    // the time this scans — see reclaimQueueTerminatedTurnAttempts.
+                    const queueReclaimed = reclaimQueueTerminatedTurnAttempts(mesh.id);
+                    if (queueReclaimed.closed > 0) {
+                        LOG.info('TurnLedger', `Restart recovery: reclaimed ${queueReclaimed.closed} nonterminal turn attempt(s) whose queue row already finished for mesh ${mesh.id}`);
                     }
                     const recovered = reconstructActiveAttempts(mesh.id);
                     if (recovered.length > 0) {

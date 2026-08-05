@@ -2826,6 +2826,54 @@ export class MeshRuntimeStore {
         return rows.map(meshTurnAttemptFromRow);
     }
 
+    /**
+     * QUEUE-TERMINAL-ATTEMPT: nonterminal attempts whose task's `mesh_queue` row
+     * is ALREADY terminal (`completed` / `failed` / `cancelled`).
+     *
+     * The queue row is an independent writer from the turn-ledger reducer — see
+     * Stage 5's rollout gate (some paths, e.g. mission cascade / requeueTask auto-
+     * fail, flip the queue row through the legacy/shadow path without ever
+     * routing a completion proposal through the reducer). When the queue has
+     * already recorded a terminal outcome for a task, that is independent proof
+     * the work is done, so an attempt row still sitting nonterminal is not a live
+     * turn being protected — it is a finished task that was never told. Closing
+     * it cannot kill a real in-flight turn: a genuinely active turn has its queue
+     * row still `pending`/`assigned`, which this predicate excludes by
+     * construction (only `completed`/`failed`/`cancelled` queue rows qualify).
+     *
+     * `EXISTS` (not a JOIN) so a task_id with NO matching queue row — nothing to
+     * compare against — is excluded rather than treated as a false match; a NULL
+     * comparison in a JOIN would silently drop or wrongly include such rows
+     * depending on the join type, which is exactly the ambiguity this predicate
+     * must not have. Measured on the live ledger (RCA 2b3d260d): 14 of 735
+     * nonterminal attempts match, 2 of 721 `delivered`-stage rows — a live turn
+     * is essentially never caught by this condition.
+     *
+     * Deliberately independent of `attempt_seq` / current-vs-superseded: unlike
+     * listSupersededNonterminalTurnAttempts, this predicate targets the SOLE
+     * (and therefore trivially "current") attempt of a task just as often as a
+     * stale one — a task with only ONE attempt whose queue row is terminal is
+     * exactly the residue class this exists to close (confirmed case: a
+     * `waiting_choice` attempt whose queue row already reads `cancelled`).
+     * `reclaimOrphanedTurnAttempts` (seq supersession) runs first in the same
+     * restart-recovery sweep, so a stale non-current sibling row is already
+     * closed by the time this predicate's SELECT runs.
+     */
+    listQueueTerminatedNonterminalTurnAttempts(meshId: string): MeshTurnAttemptRow[] {
+        const rows = this.db.prepare(`
+            SELECT a.* FROM mesh_turn_attempts a
+            WHERE a.mesh_id = ?
+              AND a.terminal_outcome IS NULL
+              AND EXISTS (
+                  SELECT 1 FROM mesh_queue q
+                  WHERE q.mesh_id = a.mesh_id AND q.id = a.task_id
+                    AND q.status IN ('completed', 'failed', 'cancelled')
+              )
+            ORDER BY a.created_at ASC
+        `).all(meshId) as Array<Record<string, unknown>>;
+        return rows.map(meshTurnAttemptFromRow);
+    }
+
     /** Nonterminal attempts — the restart-recovery reconstruction set. */
     listActiveTurnAttempts(meshId: string): MeshTurnAttemptRow[] {
         const rows = this.db.prepare(`

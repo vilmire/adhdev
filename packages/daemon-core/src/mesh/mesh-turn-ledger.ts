@@ -1656,6 +1656,101 @@ export function reclaimOrphanedTurnAttempts(meshId: string, nowMs: number = Date
     return result;
 }
 
+/**
+ * Terminal reason stamped on an attempt closed because its task's queue row
+ * already recorded a terminal outcome. Deliberately distinct from
+ * SUPERSEDED_BY_ATTEMPT_REASON — that sweep closes a row superseded by a NEWER
+ * ATTEMPT of the same task (seq evidence); this one closes a row whose QUEUE
+ * independently proved the task is done (no seq evidence involved, and the row
+ * closed is routinely the task's only/current attempt).
+ */
+export const SUPERSEDED_BY_QUEUE_TERMINAL_REASON = 'superseded_by_queue_terminal';
+
+/**
+ * STORE-CONTRAST-CLOSURE (RCA 2b3d260d): close attempts that are nonterminal
+ * while their task's `mesh_queue` row already reads `completed` / `failed` /
+ * `cancelled`.
+ *
+ * THE CONTRACT: a queue row that reached terminal is an INDEPENDENT witness the
+ * task finished — some writers (mission cascade, `requeueTask` auto-fail; see
+ * the Stage 5 shadow/compat rollout gate) flip the queue row through a legacy
+ * path without ever routing a completion proposal through the turn-ledger
+ * reducer, so the attempt row can be stranded nonterminal even though the work
+ * is genuinely over. This is "marked not-done when it is actually done" — the
+ * opposite failure mode of a false-positive closure, so closing it cannot kill
+ * a live turn.
+ *
+ * SAFETY, by construction of `listQueueTerminatedNonterminalTurnAttempts`:
+ *   - no matching queue row (task_id not found) → excluded (EXISTS, not a JOIN
+ *     — nothing to contrast against, so no verdict is made);
+ *   - queue row still `pending` / `assigned` (or any non-terminal status) →
+ *     excluded — a live turn's queue row is never terminal while it runs;
+ *   - the write is the store's CONDITIONAL `commitTurnAttemptTerminal` (`WHERE
+ *     terminal_outcome IS NULL`), so a row that legitimately reached terminal
+ *     between the scan and this write is skipped, never overwritten.
+ *
+ * Closed as `cancelled` (not mapped to the queue's specific outcome): this
+ * routine has no ATTEMPT-level completion evidence of its own — only the
+ * external queue signal that the task is over — so the honest attempt-level
+ * verdict is "this attempt did not itself prove its outcome; something else
+ * already settled the task," which is exactly what `cancelled` +
+ * `superseded_by_queue_terminal` means for a reader, mirroring how
+ * reclaimOrphanedTurnAttempts already uses `cancelled` for a row it has no
+ * completion evidence for either.
+ *
+ * Runs from the SAME restart-recovery setImmediate as
+ * `reclaimOrphanedTurnAttempts`, AFTER it: a stale non-current sibling row
+ * superseded by a newer attempt is closed by that sweep first, so by the time
+ * this sweep's SELECT runs, only the surviving (current) row for that task can
+ * still match here — the two sweeps are independent conditions that
+ * nonetheless compose safely under call order alone, no additional
+ * coordination needed.
+ */
+export function reclaimQueueTerminatedTurnAttempts(meshId: string, nowMs: number = Date.now()): OrphanReclaimResult {
+    const result: OrphanReclaimResult = { closed: 0, skipped: 0 };
+    let rows: MeshTurnAttemptRow[];
+    try {
+        rows = MeshRuntimeStore.getInstance().listQueueTerminatedNonterminalTurnAttempts(meshId);
+    } catch {
+        return result; // store unavailable — the sweep is best-effort observability hygiene
+    }
+    if (rows.length === 0) return result;
+    const store = MeshRuntimeStore.getInstance();
+    const nowIso = new Date(nowMs).toISOString();
+    for (const row of rows) {
+        try {
+            const { committed } = store.commitTurnAttemptTerminal(
+                row.attemptId,
+                'cancelled',
+                SUPERSEDED_BY_QUEUE_TERMINAL_REASON,
+                nowIso,
+            );
+            if (committed) {
+                result.closed += 1;
+                store.insertTurnEvent({
+                    eventId: randomUUID(),
+                    meshId,
+                    attemptId: row.attemptId,
+                    taskId: row.taskId,
+                    kind: 'cancelled',
+                    dedupeKey: SUPERSEDED_BY_QUEUE_TERMINAL_REASON,
+                    occurredAtMs: nowMs,
+                    recordedAt: nowIso,
+                });
+            } else {
+                result.skipped += 1;
+            }
+        } catch {
+            result.skipped += 1; // one bad row must not abort the sweep
+        }
+    }
+    if (result.closed > 0) {
+        LOG.info('TurnLedger', `Queue-terminal reclaim: closed ${result.closed} nonterminal turn attempt(s) whose queue row already finished for mesh ${meshId}`
+            + `${result.skipped > 0 ? ` (${result.skipped} skipped — already terminal)` : ''}`);
+    }
+    return result;
+}
+
 // ─── Durable outbox (outbound ACK/completion delivery) ─────────────────────
 
 export type TurnOutboxKind = 'coordinator_completion' | 'coordinator_ack';
