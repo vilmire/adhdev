@@ -80,6 +80,35 @@ export function describeQuotaFailure(quota: MeshNodeFactsProviderQuota): string 
     return quota.status === 'unavailable' ? 'not available on this node' : 'could not read quota'
 }
 
+export type QuotaEntry = {
+    provider: string
+    quota: MeshNodeFactsProviderQuota
+}
+
+/**
+ * Turn a machine-scoped quota map into a stable display list.
+ *
+ * The machine detail page (`get_machine_runtime_stats` → `machine.quota`) and
+ * the session-info dialog (`get_session_info` → `quota`) both receive a plain
+ * `Record<string, MeshNodeFactsProviderQuota>` keyed by provider id, unlike the
+ * mesh Status tab whose input is a RepoMeshNodeStatus. This is the shared
+ * map→list step for those two.
+ *
+ * Returns [] for an absent/empty/malformed map, so a caller can render NOTHING
+ * rather than an empty heading — "the machine never reported quota" must not be
+ * dressed up as a quota display with no rows in it. Sorted by display label so
+ * providers do not reshuffle between refreshes.
+ */
+export function collectQuotaEntries(quota: unknown): QuotaEntry[] {
+    if (!quota || typeof quota !== 'object' || Array.isArray(quota)) return []
+    const entries: QuotaEntry[] = []
+    for (const [provider, value] of Object.entries(quota as Record<string, unknown>)) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+        entries.push({ provider, quota: value as MeshNodeFactsProviderQuota })
+    }
+    return entries.sort((a, b) => quotaProviderLabel(a.provider).localeCompare(quotaProviderLabel(b.provider)))
+}
+
 /**
  * Age of the facts bundle this quota rode in on. Deliberately derived from the
  * bundle's existing `reportedAt` rather than any TTL field: refresh cadence is

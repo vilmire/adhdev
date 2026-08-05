@@ -23,6 +23,15 @@ import {
     type SessionInfoConversation,
 } from './session-info-data'
 import Dialog from '../ui/Dialog'
+import {
+    collectQuotaEntries,
+    describeQuotaFailure,
+    formatQuotaWindow,
+    quotaProviderLabel,
+    quotaUsageTone,
+} from '../../utils/quota-format'
+// Type-only, from the dependency-free mesh-shared leaf.
+import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
 
 export type { SessionInfoConversation } from './session-info-data'
 
@@ -68,6 +77,14 @@ interface SessionInfoResponse {
     error?: string
     session?: SessionInfoSession
     coordinator?: SessionInfoCoordinator | null
+    /**
+     * Plan quota of the MACHINE hosting this session — the daemon this dialog
+     * already queries owns the session, so no join is needed. Absent until that
+     * machine's 15-minute quota refresh has ticked, in which case no quota rows
+     * render at all.
+     */
+    quota?: Record<string, MeshNodeFactsProviderQuota>
+    machineNickname?: string | null
 }
 
 interface Props {
@@ -211,6 +228,31 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                 <Row k={t('sessionInfo.rowWorkspace')} v={<Mono>{conv.workspacePath}</Mono>} />
                             )}
                             {conv?.machineName && <Row k={t('sessionInfo.rowMachine')} v={conv.machineName} />}
+                            {/* Plan quota of the host machine — one Row per provider,
+                                deliberately WITHOUT the freshness stamp or the card
+                                chrome the mesh Status tab uses: those only carry
+                                meaning when comparing machines side by side, and this
+                                dialog is a label/value list about one session. */}
+                            {collectQuotaEntries(data.quota).map(({ provider, quota }) => {
+                                const session = formatQuotaWindow(quota.session)
+                                const weekly = formatQuotaWindow(quota.weekly)
+                                return (
+                                    <Row
+                                        key={provider}
+                                        k={quotaProviderLabel(provider)}
+                                        v={
+                                            session || weekly ? (
+                                                <span className="inline-flex flex-wrap items-center gap-1.5">
+                                                    {session && <QuotaChip label={`5h ${session}`} tone={quotaUsageTone(quota.session?.usedPercent ?? NaN)} />}
+                                                    {weekly && <QuotaChip label={`7d ${weekly}`} tone={quotaUsageTone(quota.weekly?.usedPercent ?? NaN)} />}
+                                                </span>
+                                            ) : (
+                                                <span className="text-text-secondary">{describeQuotaFailure(quota)}</span>
+                                            )
+                                        }
+                                    />
+                                )
+                            })}
                             {conv?.connectionState && <Row k={t('sessionInfo.rowConnection')} v={conv.connectionState} />}
                             {conv?.git && (
                                 <Row
@@ -369,6 +411,15 @@ function Row({ k, v }: { k: string; v: React.ReactNode }) {
 
 function Mono({ children }: { children: React.ReactNode }) {
     return <code className="font-mono text-xs">{children}</code>
+}
+
+/** Small usage pill for the quota rows — same 70/90% tone vocabulary as the CLI. */
+function QuotaChip({ label, tone }: { label: string; tone: string }) {
+    const toneClass = tone === 'danger' ? 'bg-red-500/10 text-red-500'
+        : tone === 'warn' ? 'bg-amber-500/10 text-amber-500'
+        : tone === 'good' ? 'bg-emerald-500/10 text-emerald-500'
+        : 'bg-white/5 text-text-secondary'
+    return <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${toneClass}`}>{label}</span>
 }
 
 /**

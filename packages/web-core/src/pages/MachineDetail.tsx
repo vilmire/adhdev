@@ -190,6 +190,10 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         release: machineEntry.machine?.release || '',
         cdpConnected: !!machineEntry.cdpConnected,
         machineNickname: machineEntry.machineNickname || null,
+        // Pass through only when present: absent means the machine's quota
+        // refresh has not ticked yet, and the Overview tab must stay silent
+        // rather than imply a reading exists.
+        ...(machineEntry.machine?.quota ? { quota: machineEntry.machine.quota } : {}),
         p2p: machineEntry.p2p
             ? { screenshotActive: false, ...machineEntry.p2p }
             : { available: false, state: 'unavailable', peers: 0, screenshotActive: false },

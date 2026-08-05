@@ -2739,6 +2739,12 @@
         },
         "managedWorkspaces": {
             "remove": "Eliminar"
+        },
+        "quota": {
+            "title": "Cuota del plan",
+            "sessionHint": "Ventana móvil de 5 horas del plan reportada por esta máquina",
+            "weeklyHint": "Ventana móvil de 7 días del plan reportada por esta máquina",
+            "failureHint": "Esta máquina informó que no pudo leer la cuota de este proveedor"
         }
     },
     "settings": {

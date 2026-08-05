@@ -3,6 +3,9 @@
  */
 
 import type { SessionEntry, RuntimeWriteOwner, RuntimeAttachedClient, AvailableProviderInfo, DaemonData } from '../../types'
+// Type-only, from the dependency-free mesh-shared leaf — never a value import
+// from the daemon-core barrel, which would drag Node builtins into the browser.
+import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
 
 // ─── Types ───────────────────────────────────────────
 export interface IdeSessionEntry {
@@ -39,6 +42,13 @@ export interface MachineData {
     id: string; hostname: string; platform: string; arch: string
     cpus: number; totalMem: number; freeMem?: number; availableMem?: number; loadavg?: number[]
     uptime?: number; release: string; cdpConnected: boolean; machineNickname: string | null
+    /**
+     * Provider plan quota reported by this machine (MachineInfo.quota — cache
+     * only, never a live fetch). Absent until the machine's 15-minute refresh
+     * loop has ticked at least once, which is why the Overview tab renders
+     * nothing at all rather than an empty section when it is missing.
+     */
+    quota?: Record<string, MeshNodeFactsProviderQuota>
     p2p: { available: boolean; state: string; peers: number; screenshotActive: boolean }
     detectedIdes: { type: string; id?: string; name: string; running: boolean; path?: string }[]
     workspaces: WorkspaceRow[]

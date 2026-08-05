@@ -2739,6 +2739,12 @@
         },
         "managedWorkspaces": {
             "remove": "削除"
+        },
+        "quota": {
+            "title": "プラン使用量",
+            "sessionHint": "このマシンが報告した5時間ローリングのプラン枠",
+            "weeklyHint": "このマシンが報告した7日間ローリングのプラン枠",
+            "failureHint": "このマシンはこのプロバイダーの使用量を読み取れなかったと報告しました"
         }
     },
     "settings": {

@@ -2739,6 +2739,12 @@
         },
         "managedWorkspaces": {
             "remove": "Remove"
+        },
+        "quota": {
+            "title": "Plan quota",
+            "sessionHint": "Rolling 5-hour plan window reported by this machine",
+            "weeklyHint": "Rolling 7-day plan window reported by this machine",
+            "failureHint": "This machine reported that it could not read this provider's quota"
         }
     },
     "settings": {

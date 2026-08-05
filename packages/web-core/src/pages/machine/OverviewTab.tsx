@@ -4,12 +4,82 @@
  * Workspaces are handled by the dedicated Workspace tab — this view stays
  * focused on the host (uptime, memory) and session counts.
  */
+import { useTranslation } from 'react-i18next'
 import { formatUptime, formatBytes } from '../../utils/daemon-utils'
 import ProgressBar from '../../components/ProgressBar'
 import StatCard from '../../components/StatCard'
 import Card from '../../components/Card'
 import { IconClock, IconMonitor, IconTerminal, IconBot } from '../../components/Icons'
+import {
+    collectQuotaEntries,
+    describeQuotaFailure,
+    formatQuotaWindow,
+    quotaProviderLabel,
+    quotaUsageTone,
+} from '../../utils/quota-format'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
+
+/** Badge tone → the page's existing colour vocabulary. */
+const QUOTA_TONE_CLASS: Record<string, string> = {
+    good: 'bg-emerald-500/10 text-emerald-500',
+    warn: 'bg-amber-500/10 text-amber-500',
+    danger: 'bg-red-500/10 text-red-500',
+    default: 'bg-white/5 text-text-secondary',
+    info: 'bg-blue-500/10 text-blue-500',
+}
+
+function QuotaChip({ label, tone, title }: { label: string; tone: string; title?: string }) {
+    return (
+        <span title={title} className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${QUOTA_TONE_CLASS[tone] ?? QUOTA_TONE_CLASS.default}`}>
+            {label}
+        </span>
+    )
+}
+
+/**
+ * Plan quota for this machine (MachineInfo.quota — the same cache the
+ * `adhdev quota` CLI reads, so the two agree).
+ *
+ * Renders NOTHING when the machine has reported no quota at all: that is the
+ * normal state for a daemon whose 15-minute refresh has not ticked yet, and an
+ * empty "Plan quota" card would imply a reading exists. A provider the machine
+ * DID report but could not read still shows, with its failureKind — "never told
+ * us" and "looked and could not tell" are different facts.
+ */
+function PlanQuotaCard({ machine }: { machine: MachineData }) {
+    const { t } = useTranslation('common')
+    const entries = collectQuotaEntries(machine.quota)
+    if (entries.length === 0) return null
+    return (
+        <Card padding="lg" className="mb-5">
+            <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-3">
+                {t('machine.quota.title')}
+            </div>
+            <div className="flex flex-col gap-2">
+                {entries.map(({ provider, quota }) => {
+                    const session = formatQuotaWindow(quota.session)
+                    const weekly = formatQuotaWindow(quota.weekly)
+                    return (
+                        <div key={provider} className="flex flex-wrap items-center gap-2">
+                            <span className="text-[12px] text-text-primary min-w-[92px]">{quotaProviderLabel(provider)}</span>
+                            {session && (
+                                <QuotaChip label={`5h ${session}`} tone={quotaUsageTone(quota.session?.usedPercent ?? NaN)} title={t('machine.quota.sessionHint')} />
+                            )}
+                            {weekly && (
+                                <QuotaChip label={`7d ${weekly}`} tone={quotaUsageTone(quota.weekly?.usedPercent ?? NaN)} title={t('machine.quota.weeklyHint')} />
+                            )}
+                            {!session && !weekly && (
+                                <span className="text-[11px] text-text-secondary" title={t('machine.quota.failureHint')}>
+                                    {describeQuotaFailure(quota)}
+                                </span>
+                            )}
+                        </div>
+                    )
+                })}
+            </div>
+        </Card>
+    )
+}
 
 interface OverviewTabProps {
     machine: MachineData
@@ -50,6 +120,9 @@ export default function OverviewTab({
                     <ProgressBar value={memUsedPct} max={100} label="Memory" color="#3b82f6" detail={hasRuntimeStats ? `${formatBytes(machine.totalMem - memAvail)} / ${formatBytes(machine.totalMem)}${machine.platform === 'darwin' ? ' (approx.)' : ''}` : `Polled from machine page · ${formatBytes(machine.totalMem)} total`} />
                 </div>
             </Card>
+
+            {/* Plan quota — self-hiding when this machine has reported none. */}
+            <PlanQuotaCard machine={machine} />
 
             {/*
               * Workspaces live in the dedicated Workspace tab. Keeping a copy

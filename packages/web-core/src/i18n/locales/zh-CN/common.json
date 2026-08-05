@@ -2739,6 +2739,12 @@
         },
         "managedWorkspaces": {
             "remove": "移除"
+        },
+        "quota": {
+            "title": "套餐用量",
+            "sessionHint": "该机器上报的 5 小时滚动套餐窗口",
+            "weeklyHint": "该机器上报的 7 天滚动套餐窗口",
+            "failureHint": "该机器报告无法读取此提供程序的用量"
         }
     },
     "settings": {
