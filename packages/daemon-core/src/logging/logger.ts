@@ -7,7 +7,9 @@
  * 1. daemonLog(category, msg, level) — explicit per-category logging
  * 2. installGlobalInterceptor() — Auto-intercept console.log (once on daemon start)
  * 3. Recent log ring buffer — for remote transmission via P2P/WS
- * 4. File logging — ~/.adhdev/logs/daemon-YYYY-MM-DD.log (date-based rolling)
+ * 4. File logging — ~/.adhdev/logs/daemon-YYYY-MM-DD.log (date-based rolling);
+ *    a daemon serving a non-default port writes daemon-<port>-YYYY-MM-DD.log
+ *    instead (see setLogInstancePort), so co-running daemons never interleave.
  * 
  * use:
  * import { daemonLog, LOG } from './daemon-logger';
@@ -21,6 +23,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { AsyncBatchWriter } from './async-batch-writer.js';
+import { DEFAULT_DAEMON_PORT } from '../ipc-protocol.js';
 
 // ─── Log Level ──────────────────────────────
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -83,12 +86,53 @@ function getDateStr(): string {
     return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
+// ─── Per-instance log file naming ─────────────────────────
+// Several daemons can share one log dir: a second `adhdev daemon --port 19223`
+// started against ~/.adhdev, or any daemon pinned to the same ADHDEV_CONFIG_DIR.
+// Without an instance tag they all append to the same daemon-YYYY-MM-DD.log and
+// their lines interleave, which has repeatedly sent diagnosis down the wrong
+// daemon. The daemon entrypoint therefore declares the port it serves (before
+// installGlobalInterceptor runs), and a non-default port moves the file to
+// daemon-<port>-YYYY-MM-DD.log.
+//
+// Why port as the tag:
+// - stable across restarts (a PID changes every launch and would proliferate
+//   files faster than the 7-day sweep drains them);
+// - unique among co-running daemons (two daemons cannot bind the same port);
+// - already known at daemon startup, unlike any mesh/instance id.
+// The DEFAULT_DAEMON_PORT instance keeps the legacy daemon-YYYY-MM-DD.log name —
+// the same convention as the PID file (daemon.pid vs daemon-<port>.pid in
+// daemon-cloud's daemon-pid.ts) — so every existing reader (mesh
+// get_mesh_node_logs, diagnostics get_logs, docs, runbooks) keeps working for
+// the primary daemon unchanged.
+let logInstanceTag: string | null = null;
+
+export function setLogInstancePort(port: number): void {
+    const next = Number.isFinite(port) && port > 0 && port !== DEFAULT_DAEMON_PORT
+        ? String(Math.floor(port))
+        : null;
+    if (next === logInstanceTag) return;
+    logInstanceTag = next;
+    // Re-point the active file immediately so the very next write (including the
+    // startup banner from installGlobalInterceptor) lands in the tagged file.
+    currentLogFile = path.join(currentLogDir, daemonLogFileName(currentDate));
+}
+
+/** The port tag currently baked into the log file name, if any. */
+export function getLogInstanceTag(): string | null { return logInstanceTag; }
+
+function daemonLogFileName(dateStr: string): string {
+    return logInstanceTag
+        ? `daemon-${logInstanceTag}-${dateStr}.log`
+        : `daemon-${dateStr}.log`;
+}
+
 // Cached resolution of the ACTIVE log file. `currentLogDir` is retained next to
 // it so a change of ADHDEV_CONFIG_DIR is detectable without re-deriving the path
 // on every single write.
 let currentDate = getDateStr();
 let currentLogDir = resolveLogDir();
-let currentLogFile = path.join(currentLogDir, `daemon-${currentDate}.log`);
+let currentLogFile = path.join(currentLogDir, daemonLogFileName(currentDate));
 
 export function getDaemonLogDir(): string {
     // Callers treat the returned dir as ready to read/write (log-tail-reader
@@ -101,7 +145,7 @@ export function getDaemonLogDir(): string {
 }
 
 export function getCurrentDaemonLogPath(date = new Date()): string {
-    return path.join(getDaemonLogDir(), `daemon-${date.toISOString().slice(0, 10)}.log`);
+    return path.join(getDaemonLogDir(), daemonLogFileName(date.toISOString().slice(0, 10)));
 }
 
 /**
@@ -119,7 +163,7 @@ function refreshCurrentLogFile(): boolean {
     currentDate = today;
     currentLogDir = dir;
     currentLogDirEnv = process.env.ADHDEV_CONFIG_DIR;
-    currentLogFile = path.join(dir, `daemon-${today}.log`);
+    currentLogFile = path.join(dir, daemonLogFileName(today));
     // A new directory gets its full one-time preparation (create + sweep +
     // legacy-layout migration); a same-directory date rollover only needs the
     // retention sweep, which is what the original code did here.
@@ -149,7 +193,10 @@ function cleanOldLogs(logDir: string): void {
         cutoff.setDate(cutoff.getDate() - MAX_LOG_DAYS);
         const cutoffStr = cutoff.toISOString().slice(0, 10);
         for (const file of files) {
-            const dateMatch = file.match(/daemon-(\d{4}-\d{2}-\d{2})/);
+            // Matches both the legacy daemon-YYYY-MM-DD.log and the per-instance
+            // daemon-<port>-YYYY-MM-DD.log layouts (plus their .N size-rotation
+            // backups), so tagged files age out on the same 7-day retention.
+            const dateMatch = file.match(/^daemon-(?:\d+-)?(\d{4}-\d{2}-\d{2})/);
             if (dateMatch && dateMatch[1] < cutoffStr) {
                 try { fs.unlinkSync(path.join(logDir, file)); } catch { }
             }

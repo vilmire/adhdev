@@ -34,6 +34,7 @@ import {
 
 import {
   LOG,
+  setLogInstancePort,
   initDaemonComponents,
   startDaemonDevSupport,
   shutdownDaemonComponents,
@@ -740,6 +741,10 @@ class StandaloneServer {
       saveStandaloneBindHostPreference(persistedStandaloneBindHost);
     }
     const port = options.port || DEFAULT_PORT;
+    // Tag the daemon-core file logger with this server's port so its
+    // daemon-<port>-YYYY-MM-DD.log never interleaves with another daemon
+    // sharing the same log dir (e.g. an explicit shared ADHDEV_CONFIG_DIR).
+    setLogInstancePort(port);
     // Repo Mesh coordinators launched from standalone must talk back to this
     // standalone HTTP daemon, not the user's global cloud-daemon IPC port.
     process.env.ADHDEV_COORDINATOR_MCP_TRANSPORT = 'local';
