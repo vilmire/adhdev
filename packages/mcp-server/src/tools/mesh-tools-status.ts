@@ -204,7 +204,9 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             // Rides the same git_status envelope as the rest of the node-facts
             // bundle — the daemon fills it from a cached snapshot on its own
             // refresh timer, so reading it here costs this probe nothing extra.
-            // OBSERVATION ONLY: no routing/scheduling gate consumes this.
+            // This surface is the observation copy; the ROUTING consumer
+            // (daemon-core mesh-quota-routing.ts gate/spread) reads the same
+            // bundle on the coordinator side, so keep the shape intact.
             const reportedQuota = extractReporterNodeFactsQuota(statusResult);
             if (reportedQuota) entry.quota = reportedQuota;
             // Submodule out-of-sync warning

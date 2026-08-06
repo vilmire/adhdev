@@ -17,9 +17,10 @@ import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmu
 import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveCoordinatorIdlePushPolicy } from '../repo-mesh-types.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshDeclarativeConfig } from '../config/mesh-json-config.js';
-import type { RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
+import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
+import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider } from './mesh-quota-routing.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
@@ -1214,7 +1215,8 @@ const AUTO_LAUNCH_LEDGER_DEDUP_MAX = 2000;
 // for a dispatch that can never happen. We now actively surface those — and ONLY those — as a
 // pending coordinator event carrying a "why + how to act" message, routed to the originating
 // coordinator (sourceCoordinator*). Transient/back-pressure skips (cooldown, in-progress,
-// awaiting-claim, parallel/session caps, node not yet launch-ready, an active assignment) are
+// awaiting-claim, parallel/session caps, node not yet launch-ready, an active assignment,
+// provider quota below threshold) are
 // deliberately excluded: they clear on their own and would only spam the coordinator every 4s.
 const ACTIONABLE_SKIP_REASON_PREFIXES = [
     'target_node_id_unmatched',
@@ -1233,6 +1235,10 @@ const ACTIONABLE_SKIP_REASON_PREFIXES = [
     // busy counterpart SLOT_MODEL_BUSY_SKIP_REASON is deliberately NOT listed:
     // that one clears on its own when the slot goes idle.
     SLOT_MODEL_ABSENT_SKIP_REASON,
+    // QUOTA GATE: 'provider_quota_session_low' / 'provider_quota_weekly_low' are
+    // deliberately NOT listed either — an exhausted quota window RESETS, so the
+    // block self-resolves exactly like the slot-busy case; the task waits in the
+    // queue and the coordinator is not paged (mesh-quota-routing.ts).
 ];
 
 // FALSE-BLOCKER-CLONE-QUEUE: the TRANSIENT counterpart of 'target_node_id_unmatched'. A
@@ -1786,7 +1792,7 @@ export function __orderEligibleNodesForTests(
     meshId: string,
     strategy: RepoMeshSchedulingStrategy,
     nodes: RankableNode[],
-    opts?: { bumpCursor?: boolean; task?: { difficulty?: string; requiredTags?: string[] } },
+    opts?: { bumpCursor?: boolean; task?: { difficulty?: string; requiredTags?: string[] }; quotaRouting?: RepoMeshQuotaRoutingPolicy | null },
 ): RankableNode[] {
     return orderEligibleNodes(meshId, strategy, nodes, opts);
 }
@@ -1866,8 +1872,17 @@ interface FitnessTask {
  * (no declared difficulty) is a valid fallback; a slot whose capability tags cover
  * the task's requiredTags gets a capability bonus. Never negative — the worst a
  * slot does is score 0 (still selectable as a last-resort fallback).
+ *
+ * `quotaBonus` is the QUOTA SPREAD axis (mesh-quota-routing.ts): a bounded
+ * 0..spreadBonusMax headroom preference for the slot's provider, computed by
+ * the CALLER from the node's reported facts and passed in as a plain number.
+ * The scorer stays pure and synchronous — it never reads node facts itself and
+ * can never trigger a quota fetch. The default cap (30) sits below the exact
+ * difficulty-match bonus (+100), so quota can rank equally-fit slots but can
+ * never overturn a difficulty match. Callers pass 0 (or omit it) when no fresh
+ * quota reading exists, which reproduces the pre-feature scores exactly.
  */
-function scoreSlotForTask(slot: NodeCapabilitySlot, task: FitnessTask): number {
+function scoreSlotForTask(slot: NodeCapabilitySlot, task: FitnessTask, quotaBonus = 0): number {
     let score = 1; // base: any slot can run the task (fallback floor)
     const diff = isMeshTaskDifficulty(task.difficulty) ? task.difficulty as MeshTaskDifficulty : undefined;
     if (diff) {
@@ -1883,24 +1898,25 @@ function scoreSlotForTask(slot: NodeCapabilitySlot, task: FitnessTask): number {
         const covered = req.every(t => cap.has(t));
         score += covered ? 30 : 0; // capability coverage bonus (hard filter is applied elsewhere)
     }
+    score += quotaBonus; // quota-headroom preference (0 when unknown/stale — see mesh-quota-routing.ts)
     return score;
 }
 
 /** Best (slot, score) for a task on a node, or null when the node has no slots. */
-function bestSlotForTask(node: any, task: FitnessTask, meshId?: string): { slot: NodeCapabilitySlot; score: number } | null {
+function bestSlotForTask(node: any, task: FitnessTask, meshId?: string, quotaBonusByProvider?: Record<string, number>): { slot: NodeCapabilitySlot; score: number } | null {
     const slots = resolveNodeCapabilitySlots(node, meshId);
     if (!slots.length) return null;
     let best: { slot: NodeCapabilitySlot; score: number } | null = null;
     for (const slot of slots) {
-        const score = scoreSlotForTask(slot, task);
+        const score = scoreSlotForTask(slot, task, quotaBonusByProvider?.[slot.provider] ?? 0);
         if (!best || score > best.score) best = { slot, score };
     }
     return best;
 }
 
 /** Node-level fitness for a task = its best slot's score (0 when the node has no slots). */
-function nodeFitnessForTask(node: any, task: FitnessTask, meshId?: string): number {
-    return bestSlotForTask(node, task, meshId)?.score ?? 0;
+function nodeFitnessForTask(node: any, task: FitnessTask, meshId?: string, quotaBonusByProvider?: Record<string, number>): number {
+    return bestSlotForTask(node, task, meshId, quotaBonusByProvider)?.score ?? 0;
 }
 
 /**
@@ -1959,7 +1975,7 @@ function orderEligibleNodes(
     meshId: string,
     strategy: RepoMeshSchedulingStrategy,
     nodes: RankableNode[],
-    opts?: { bumpCursor?: boolean; task?: FitnessTask },
+    opts?: { bumpCursor?: boolean; task?: FitnessTask; quotaRouting?: RepoMeshQuotaRoutingPolicy | null },
 ): RankableNode[] {
     if (strategy === 'first_eligible' || nodes.length <= 1) {
         return nodes;
@@ -1968,11 +1984,23 @@ function orderEligibleNodes(
     // Fitness strategy: rank by task→slot fit first (when a task is in scope —
     // auto-launch drains per-task), then fall through to priority/load/rotation for
     // ties. Without a task (idle-session drain ranks task-independently) fitness is
-    // inert and this behaves like least_loaded.
+    // inert and this behaves like least_loaded. The QUOTA SPREAD axis rides the
+    // fitness score here: each node's per-provider headroom bonus is computed once
+    // per pass from its reported facts (fail-open: missing/stale quota scores the
+    // pre-feature 0) and folded in via nodeFitnessForTask.
     if (strategy === 'fitness' && opts?.task) {
         const task = opts.task;
+        const bonusCache = new Map<string, Record<string, number>>();
+        const bonusFor = (c: RankableNode): Record<string, number> => {
+            let bonus = bonusCache.get(c.nodeId);
+            if (!bonus) {
+                bonus = quotaSpreadBonusByProvider(c.node, opts.quotaRouting);
+                bonusCache.set(c.nodeId, bonus);
+            }
+            return bonus;
+        };
         return [...nodes].sort((a, b) => {
-            const fitDelta = nodeFitnessForTask(b.node, task, meshId) - nodeFitnessForTask(a.node, task, meshId);
+            const fitDelta = nodeFitnessForTask(b.node, task, meshId, bonusFor(b)) - nodeFitnessForTask(a.node, task, meshId, bonusFor(a));
             if (fitDelta !== 0) return fitDelta; // higher fitness first
             const prioDelta = resolveNodeSchedulingPriority(b.node?.policy) - resolveNodeSchedulingPriority(a.node?.policy);
             if (prioDelta !== 0) return prioDelta;
@@ -2340,6 +2368,7 @@ async function resolveUsableProvider(
     meshId: string | undefined,
     requiredTags?: string[],
     task?: FitnessTask,
+    quotaRouting?: RepoMeshQuotaRoutingPolicy | null,
 ): Promise<{ providerType?: string; model?: string; thinkingLevel?: string; slot?: NodeCapabilitySlot; reason?: string }> {
     const providerLoader = components.providerLoader;
     if (!providerLoader) return { reason: 'provider_loader_unavailable' };
@@ -2348,10 +2377,15 @@ async function resolveUsableProvider(
     // slots by task→slot fitness (difficulty/requiredTags) so the best-fit slot's
     // provider is tried first, and its model/thinkingLevel ride along. Falls back
     // to the legacy providerPriority-derived slots when no explicit slots exist.
+    // The QUOTA SPREAD bonus folds into the fitness score as a per-provider number
+    // computed HERE (the caller side) so scoreSlotForTask itself stays pure.
     const slots = resolveNodeCapabilitySlots(node, meshId);
     if (!slots.length) return { reason: 'missing_provider_priority' };
+    const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting) : undefined;
     const orderedSlots = task
-        ? [...slots].sort((a, b) => scoreSlotForTask(b, task) - scoreSlotForTask(a, task))
+        ? [...slots].sort((a, b) =>
+            scoreSlotForTask(b, task, quotaBonusByProvider?.[b.provider] ?? 0)
+            - scoreSlotForTask(a, task, quotaBonusByProvider?.[a.provider] ?? 0))
         : slots;
 
     const failed: string[] = [];
@@ -2436,6 +2470,16 @@ export function __decideSlotForModelForTests(
 /** Test hook: is a skip reason one that pages the coordinator? */
 export function __isActionableSkipReasonForTests(reason: string): boolean {
     return isActionableSkipReason(reason);
+}
+
+/** Test hook: the pure task→slot fitness scorer, including the quota-spread
+ *  axis, exposed so tests can pin the bonus ordering/cap without a live daemon. */
+export function __scoreSlotForTaskForTests(
+    slot: NodeCapabilitySlot,
+    task: { difficulty?: string; requiredTags?: string[] },
+    quotaBonus = 0,
+): number {
+    return scoreSlotForTask(slot, task, quotaBonus);
 }
 
 // Canonical mesh node-id normalization. A node may arrive from the local config
@@ -2765,8 +2809,10 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     .map((node: any, index: number) => ({ nodeId: readMeshNodeId(node), node, index }))
                     .filter((c: RankableNode) => c.nodeId),
                 // Auto-launch drains one task at a time, so the task IS in scope here —
-                // pass it through for the 'fitness' strategy's task→slot ranking.
-                { bumpCursor: true, task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags } },
+                // pass it through for the 'fitness' strategy's task→slot ranking. The
+                // mesh's quotaRouting thresholds ride along so the fitness score can
+                // include the quota-headroom spread bonus (fail-open when unset).
+                { bumpCursor: true, task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, quotaRouting: mesh?.policy?.quotaRouting ?? null },
             ).map((c: RankableNode) => c.node);
 
         // LEDGER-TASK-TRACEABILITY (A): accumulate the candidate nodes that were
@@ -2856,9 +2902,24 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
 
             autoLaunchInProgress.add(launchKey);
             try {
-                const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags });
+                const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null);
                 if (!resolved.providerType) {
                     markSkip(nodeId, resolved.reason || 'provider_unusable');
+                    continue;
+                }
+                // QUOTA GATE: the (node, provider) pair is now definitive — the only
+                // point where a per-provider quota verdict can be applied. A fresh,
+                // 'ok' snapshot showing the session/weekly window below the mesh's
+                // quotaRouting threshold skips the pair. This is WAIT semantics (the
+                // window resets, so the block clears on its own): the reason is NOT
+                // actionable, the task stays queued, and the coordinator is not
+                // paged. Missing/unreadable/STALE snapshots fail OPEN — routing on
+                // an old reading would exclude nodes on data that no longer
+                // describes them (see mesh-quota-routing.ts).
+                const quotaBlock = evaluateProviderQuotaGate(node, resolved.providerType, mesh?.policy?.quotaRouting ?? null);
+                if (quotaBlock) {
+                    LOG.info('MeshQueue', `QUOTA GATE: provider '${resolved.providerType}' on node ${nodeId} has ${quotaBlock.remainingPercent.toFixed(1)}% ${quotaBlock.window} quota remaining (< ${quotaBlock.thresholdPercent}% threshold, task ${task.id}); leaving the task queued until the window resets`);
+                    markSkip(nodeId, quotaBlock.reason, { providerType: resolved.providerType });
                     continue;
                 }
                 // Slot-derived model/thinking precedence (see resolveLaunchAxis):
@@ -3052,7 +3113,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 const requiredTags = Array.isArray(task.requiredTags) ? task.requiredTags.filter((t): t is string => !!t) : [];
                 const routingDecision: MeshTaskRoutingDecision = {
                     source: 'autoLaunch',
-                    fitnessScore: nodeFitnessForTask(node, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, meshId),
+                    fitnessScore: nodeFitnessForTask(node, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, meshId, quotaSpreadBonusByProvider(node, mesh?.policy?.quotaRouting ?? null)),
                     ...(skippedCandidates.length ? { skippedCandidates } : {}),
                     requiredTagsResult: {
                         required: requiredTags,

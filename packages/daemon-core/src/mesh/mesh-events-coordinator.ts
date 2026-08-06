@@ -15,6 +15,7 @@ export {
     __orderEligibleNodesForTests,
     __resolveSchedulingStrategyForTests,
     __resetIdleAutoFastForwardForTests,
+    __scoreSlotForTaskForTests,
     activeReadonlyAssignedCount,
     activeWriteAssignedCount,
     isSessionActivelyGenerating,

@@ -4,8 +4,10 @@ import test from 'node:test';
 import { compactMeshStatusNode, minimalCompactNode, summarizeNodeQuota } from '../src/tools/mesh-compact.js';
 import { extractReporterNodeFactsQuota } from '../src/tools/mesh-tools-internal.js';
 
-// Provider quota is OBSERVATION ONLY — nothing routes on it. These tests pin the
-// two properties that make it useful anyway: it must survive the compact fold
+// Provider quota now feeds ROUTING as well as observation (daemon-core
+// mesh-quota-routing.ts consumes the same bundle these surfaces project).
+// These tests pin the two properties that make the projection trustworthy:
+// it must survive the compact fold
 // (including on quiet nodes, which are exactly the idle machines with headroom
 // worth knowing about), and a node that FAILED to read a quota must stay
 // distinguishable from a node that never reported one.

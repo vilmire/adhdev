@@ -446,6 +446,56 @@ export interface RepoMeshPolicy {
      * for the node's lifetime.
      */
     worktreeBaseDir?: string;
+    /**
+     * Quota-aware routing thresholds (QUOTA ROUTING GATE / SPREAD). The daemon
+     * consumes the per-provider quota snapshots riding each node's nodeFacts
+     * bundle in two places: a launch GATE that skips a (node, provider) whose
+     * remaining session/weekly window is below the threshold, and a bounded
+     * SPREAD bonus in task→slot fitness that prefers providers with more
+     * headroom. Both fail OPEN on missing or stale data — an old reading must
+     * never exclude a node. All fields default when unset (see
+     * DEFAULT_QUOTA_ROUTING_POLICY); persist only explicit overrides.
+     *
+     * This is a ROUTING policy (coordinator-side), distinct from the
+     * machine-local quota PROBE on/off (machineProviders) — the probe decides
+     * whether a node measures its quota at all, this decides how the
+     * coordinator routes on whatever was reported.
+     */
+    quotaRouting?: RepoMeshQuotaRoutingPolicy;
+}
+
+/**
+ * Quota-aware routing thresholds (RepoMeshPolicy.quotaRouting). Every field is
+ * optional; a missing field resolves to DEFAULT_QUOTA_ROUTING_POLICY.
+ */
+export interface RepoMeshQuotaRoutingPolicy {
+    /**
+     * Age past which a reported quota snapshot is judged STALE and ignored
+     * (fail-open). Defaults to 30 min — two quota refresh cycles
+     * (QUOTA_REFRESH_INTERVAL_MS = 15 min), generous enough to absorb reporter↔
+     * coordinator clock skew.
+     */
+    staleAfterMs?: number;
+    /**
+     * Skip a (node, provider) whose SESSION window (the short ~5h rolling
+     * window) has less than this percent remaining. Defaults to 10 — the short
+     * window recovers quickly, so the bar is low.
+     */
+    sessionMinRemainingPercent?: number;
+    /**
+     * Skip a (node, provider) whose WEEKLY window (the ~7d rolling window) has
+     * less than this percent remaining. Defaults to 15 — an exhausted weekly
+     * window strands the node for days, so the bar is more conservative.
+     */
+    weeklyMinRemainingPercent?: number;
+    /**
+     * Upper bound of the quota-headroom bonus added to a slot's task-fitness
+     * score, proportional to remaining quota. Defaults to 30 — deliberately
+     * below the exact-difficulty-match bonus (+100) and level with the
+     * requiredTags coverage bonus (+30), so quota can express a PREFERENCE
+     * among equally-fit slots but can never overturn a difficulty match.
+     */
+    spreadBonusMax?: number;
 }
 
 export interface RepoMeshRelatedRepo {
@@ -596,6 +646,72 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     // are never affected — see coordinatorIdlePushPolicy).
     coordinatorIdlePushPolicy: 'always',
 };
+
+/**
+ * Defaults for the quota-routing thresholds (RepoMeshPolicy.quotaRouting).
+ * Rationale per field lives on RepoMeshQuotaRoutingPolicy. Kept next to
+ * DEFAULT_MESH_POLICY so all policy defaults share one home.
+ */
+export const DEFAULT_QUOTA_ROUTING_POLICY: Required<RepoMeshQuotaRoutingPolicy> = {
+    staleAfterMs: 30 * 60 * 1000,
+    sessionMinRemainingPercent: 10,
+    weeklyMinRemainingPercent: 15,
+    spreadBonusMax: 30,
+};
+
+/**
+ * Resolve the effective quota-routing thresholds from a mesh policy, filling
+ * every unset/invalid field from DEFAULT_QUOTA_ROUTING_POLICY. The launch gate
+ * and the fitness spread bonus both read through here so they can never
+ * disagree on what the thresholds are.
+ */
+export function resolveQuotaRoutingPolicy(
+    value?: RepoMeshQuotaRoutingPolicy | null,
+): Required<RepoMeshQuotaRoutingPolicy> {
+    const staleAfterMs = Number(value?.staleAfterMs);
+    const sessionMin = Number(value?.sessionMinRemainingPercent);
+    const weeklyMin = Number(value?.weeklyMinRemainingPercent);
+    const spreadMax = Number(value?.spreadBonusMax);
+    const clampPercentField = (n: number, fallback: number) =>
+        Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : fallback;
+    return {
+        staleAfterMs: Number.isFinite(staleAfterMs) && staleAfterMs >= 0
+            ? Math.floor(staleAfterMs)
+            : DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs,
+        sessionMinRemainingPercent: clampPercentField(sessionMin, DEFAULT_QUOTA_ROUTING_POLICY.sessionMinRemainingPercent),
+        weeklyMinRemainingPercent: clampPercentField(weeklyMin, DEFAULT_QUOTA_ROUTING_POLICY.weeklyMinRemainingPercent),
+        spreadBonusMax: Number.isFinite(spreadMax) && spreadMax >= 0
+            ? spreadMax
+            : DEFAULT_QUOTA_ROUTING_POLICY.spreadBonusMax,
+    };
+}
+
+/**
+ * Normalize a quotaRouting sub-policy for persistence. Returns undefined when
+ * the value is absent or every field resolves to its default, so an untouched
+ * meshes.json stays byte-for-byte the same (same persistence-economy rule as
+ * schedulingStrategy); otherwise returns only the explicitly non-default,
+ * valid fields.
+ */
+export function normalizeQuotaRoutingPolicy(value: unknown): RepoMeshQuotaRoutingPolicy | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const record = value as Record<string, unknown>;
+    const resolved = resolveQuotaRoutingPolicy(record as RepoMeshQuotaRoutingPolicy);
+    const out: RepoMeshQuotaRoutingPolicy = {};
+    if (record.staleAfterMs !== undefined && resolved.staleAfterMs !== DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs) {
+        out.staleAfterMs = resolved.staleAfterMs;
+    }
+    if (record.sessionMinRemainingPercent !== undefined && resolved.sessionMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY.sessionMinRemainingPercent) {
+        out.sessionMinRemainingPercent = resolved.sessionMinRemainingPercent;
+    }
+    if (record.weeklyMinRemainingPercent !== undefined && resolved.weeklyMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY.weeklyMinRemainingPercent) {
+        out.weeklyMinRemainingPercent = resolved.weeklyMinRemainingPercent;
+    }
+    if (record.spreadBonusMax !== undefined && resolved.spreadBonusMax !== DEFAULT_QUOTA_ROUTING_POLICY.spreadBonusMax) {
+        out.spreadBonusMax = resolved.spreadBonusMax;
+    }
+    return Object.keys(out).length ? out : undefined;
+}
 
 /**
  * TTL for the one-shot silent-idle-push arm (settings.silentNextIdlePushArmedAt).
@@ -820,6 +936,15 @@ export function mergeAndNormalizePolicy(
         policy.coordinatorIdlePushPolicy = 'auto_silent_on_dispatch';
     } else {
         delete policy.coordinatorIdlePushPolicy;
+    }
+    // Quota routing: normalize + persistence economy — persist only explicit
+    // non-default overrides so an untouched meshes.json stays byte-for-byte the
+    // same. Readers resolve the effective thresholds via resolveQuotaRoutingPolicy.
+    const quotaRouting = normalizeQuotaRoutingPolicy(policy.quotaRouting);
+    if (quotaRouting) {
+        policy.quotaRouting = quotaRouting;
+    } else {
+        delete policy.quotaRouting;
     }
     return policy;
 }

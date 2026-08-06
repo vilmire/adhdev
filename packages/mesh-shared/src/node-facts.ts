@@ -92,13 +92,18 @@ export interface MeshNodeFacts {
     machineNickname?: string
     /**
      * Per-provider quota snapshots, keyed by QuotaProvider id ('claude-cli',
-     * 'codex-cli', 'kimi'). OBSERVATION ONLY — nothing routes on this yet.
+     * 'codex-cli', 'kimi'). Consumed by ROUTING as well as observation: the
+     * coordinator's quota gate / spread bonus (daemon-core mesh-quota-routing.ts,
+     * thresholds in RepoMeshPolicy.quotaRouting) reads exactly this shape, so
+     * field renames here are a routing-contract change, not a cosmetic one.
+     * Both consumers fail open on missing/stale data.
      *
      * Freshness is `Date.now() - reportedAt` (the bundle stamp) plus each
      * entry's own `updatedAt`; there is deliberately NO ttl/expiry field here,
      * because refresh cadence is owned by the reporting node and the delivery
      * cadence by whoever calls git_status. Neither end is in a position to
-     * assert a TTL, so readers judge age themselves.
+     * assert a TTL, so readers judge age themselves (the routing consumer's
+     * rule: quotaSnapshotAgeMs in daemon-core mesh-quota-routing.ts).
      */
     quota?: Record<string, MeshNodeFactsProviderQuota>
     /** Future fields ride through opaquely — do not enumerate them in relays. */

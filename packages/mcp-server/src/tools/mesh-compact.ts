@@ -66,8 +66,11 @@ const MESH_COMPACT_PRESERVED_MARKER_FIELDS = ['dataFreshness', 'quota'] as const
 /**
  * Fold a node's reported quota bundle into a terse per-provider marker.
  *
- * OBSERVATION ONLY — nothing routes on this; it exists so a coordinator can see
- * which machine still has headroom before deciding where to send work by hand.
+ * This fold is the coordinator-facing observation view; routing itself
+ * (daemon-core mesh-quota-routing.ts) consumes the raw bundle on the daemon
+ * side, so this summary must stay a faithful projection of it — a coordinator
+ * comparing what it sees here against where work actually lands is debugging
+ * through exactly this string.
  *
  * Compact shape is one short string per provider ("38%/12%" = session/weekly,
  * or a bare status word when the node could not read one) because the raw
