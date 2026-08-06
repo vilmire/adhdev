@@ -210,24 +210,27 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     });
 
     // Boot-time auto-sync is intentionally limited to the bounded first-sync
-    // below (empty channel store + installed providers only). Beyond that,
-    // the user picks which providers to install via the dashboard onboarding
-    // / Providers tab; the daemon ships empty and only contains what the user
-    // explicitly installs. Manual sync is still available via the install /
+    // below (empty channel store only). A fresh install has an empty store
+    // AND an empty .upstream, so the first-sync bootstraps the whole verified
+    // channel from the registry — the earlier "daemon ships empty, user
+    // installs via dashboard" design left new users at 0 providers and unable
+    // to run anything. After the bootstrap, the user still picks which
+    // additional providers to install via the dashboard onboarding /
+    // Providers tab. Manual sync is still available via the install /
     // check_provider_updates commands (and the REST endpoint at
     // /api/v1/providers/updates).
     providerLoader.loadAll();
     providerLoader.registerToDetector();
 
-    // 2.1 Verified-channel first sync (rc.20 preview activation gap). When
-    // the resolved provider channel has an EMPTY store but providers are
-    // installed (.upstream), run one bounded verified sync so channel
-    // switch/upgrade/setup/restart paths — which all converge on this boot —
-    // activate the channel without any manual step. Gated inside
-    // maybeFirstSyncVerifiedChannel: non-empty stores (last-known-good) and
-    // upstream-less installs never touch the network here, and no status
-    // path performs network calls. Fail-closed: errors keep the previous
-    // (possibly empty) store and retry on next boot.
+    // 2.1 Verified-channel first sync. When the resolved provider channel has
+    // an EMPTY store, run one bounded verified sync so channel
+    // switch/upgrade/setup/restart/fresh-install paths — which all converge
+    // on this boot — activate the channel without any manual step. Gated
+    // inside maybeFirstSyncVerifiedChannel: non-empty stores (last-known-good)
+    // never touch the network here, and no status path performs network calls.
+    // Fire-and-forget so a slow/unreachable registry never delays boot.
+    // Fail-closed: errors keep the previous (possibly empty) store and retry
+    // on next boot.
     void providerLoader.maybeFirstSyncVerifiedChannel()
         .then((report) => {
             if (!report) return;

@@ -640,7 +640,11 @@ export class ProviderLoader {
  * 3. ~/.adhdev/providers/ (excluding .upstream) — user-authored customs,
  *    always wins
  * Highest priority listed last (overwrites earlier loads).
- * If .upstream/ is empty, call fetchLatest() before loadAll().
+ * Empty .upstream/ is normal: verified channel activations (step 1.5) are
+ * the primary source on a fresh install, bootstrapped from the registry by
+ * maybeFirstSyncVerifiedChannel() at boot — fetchLatest() is NOT the
+ * production path (gated behind providerAllowUnverifiedTarball, off by
+ * default).
  */
   loadAll(): void {
     this.providers.clear();
@@ -798,11 +802,16 @@ export class ProviderLoader {
   * (providers installed into .upstream via the dashboard install flow, plus
   * everything already activated on this channel).
   *
+  * `bootstrapAll: true` (fresh-install bootstrap) instead targets every
+  * activatable entry on the channel — used when a clean machine has an empty
+  * .upstream AND an empty channel store, so there is no installed set to diff
+  * against. Digest verification is unchanged: only verified entries activate.
+  *
   * Fail-closed / last-known-good: on any metadata or transport failure
   * nothing new is activated and the previous active objects keep loading.
   * Reloads providers when at least one activation changed.
   */
-  async syncVerifiedChannel(): Promise<ChannelSyncReport> {
+  async syncVerifiedChannel(options?: { bootstrapAll?: boolean }): Promise<ChannelSyncReport> {
     if (!this.channelStore) {
       return {
         channel: this.channel,
@@ -820,7 +829,7 @@ export class ProviderLoader {
       ...this.channelSyncIO,
     });
     const targetTypes = collectSyncTargetTypes(this.upstreamDir, this.channelStore, this.channel);
-    const report = await runtime.sync({ channel: this.channel, targetTypes });
+    const report = await runtime.sync({ channel: this.channel, targetTypes, bootstrapAll: options?.bootstrapAll });
     for (const skip of report.skipped) {
       this.log(`⚠ Verified channel skip: ${skip.reason}`);
     }
@@ -849,12 +858,20 @@ export class ProviderLoader {
  /**
   * Bounded one-shot first sync for an empty verified channel store.
   *
-  * Closes the rc.20 preview activation gap: a daemon whose provider channel
-  * newly derives to a channel with an EMPTY store (e.g. updateChannel=preview
-  * while providerChannel defaulted to stable) would otherwise sit at 0 active
-  * providers until a manual check_provider_updates. Runs at most one
-  * verified sync per call, only when the resolved channel has no pointers
-  * AND there are installed (.upstream) providers to sync. Fail-closed: any
+  * Two empty-store cases, one gate (channel has no active pointers):
+  *
+  *   1. Providers installed into .upstream (upgrade / channel-switch paths —
+  *      the rc.20 preview activation gap): targeted sync of the installed set.
+  *   2. Fresh install — .upstream empty AND store empty (the "daemon ships
+  *      empty" design left new users at 0 providers and unable to run
+  *      anything): bootstrap sync. The registry channel listing itself is the
+  *      target set, so the daemon self-populates the whole verified channel
+  *      on first boot. Only digest-verified entries activate;
+  *      legacy-unverified rows stay typed skips.
+  *
+  * Runs at most one verified sync per call and ONLY while the resolved
+  * channel has zero pointers — once anything is activated the gate
+  * short-circuits forever (no re-bootstrap, no network). Fail-closed: any
   * registry/transport failure activates nothing (last-known-good preserved)
   * and is retried on the next boot or via check_provider_updates. Never
   * invoked from any status path.
@@ -864,8 +881,13 @@ export class ProviderLoader {
   async maybeFirstSyncVerifiedChannel(): Promise<ChannelSyncReport | null> {
     if (!this.channelStore) return null;
     if (this.countVerifiedChannelPointers() > 0) return null;
-    if (!this.hasUpstream()) return null;
-    return this.syncVerifiedChannel();
+    if (this.hasUpstream()) return this.syncVerifiedChannel();
+    // Fresh-install bootstrap: nothing installed, nothing activated. Make
+    // sure the providers dir exists (nothing else creates it on this path —
+    // the store's own mkdirs only cover providers/.store) and pull the whole
+    // verified channel from the registry.
+    try { fs.mkdirSync(this.defaultProvidersDir, { recursive: true }); } catch { /* best-effort */ }
+    return this.syncVerifiedChannel({ bootstrapAll: true });
   }
 
  /**

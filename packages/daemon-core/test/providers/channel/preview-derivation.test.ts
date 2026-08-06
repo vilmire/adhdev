@@ -12,8 +12,10 @@
  *   2. Otherwise the provider channel derives from updateChannel
  *      (preview → preview, stable → stable) — stable stays byte-compatible.
  *   3. Every restart converges on boot; boot runs ONE bounded verified
- *      first-sync when the resolved channel store is empty and providers are
- *      installed (first sync → N, then idempotent 0, no status-path network).
+ *      first-sync when the resolved channel store is empty — targeting the
+ *      installed (.upstream) set, or bootstrapping the whole channel from the
+ *      registry on a fresh install (first sync → N, then idempotent 0, no
+ *      status-path network).
  *   4. Fail-closed: registry outage preserves last-known-good pointers;
  *      legacy NULL-digest rows stay non-activatable.
  */
@@ -245,11 +247,18 @@ describe('Verified channel first-sync (M1/Linux-like empty store)', () => {
     expect(manual.activated).toHaveLength(0);
   });
 
-  it('skips the first-sync gate when no providers are installed (no network)', async () => {
+  it('empty .upstream no longer skips the gate — it bootstraps from the registry', async () => {
+    // Behavior change (fresh-install bootstrap): before, an empty .upstream
+    // short-circuited the first-sync gate and the daemon stayed at 0
+    // providers forever. Now the registry channel listing itself is the
+    // target set, so a clean machine self-populates on first boot.
     rmSync(upstreamDir, { recursive: true, force: true });
     const loader = newPreviewLoader();
-    expect(await loader.maybeFirstSyncVerifiedChannel()).toBeNull();
-    expect(fetchCount).toBe(0);
+    const report = await loader.maybeFirstSyncVerifiedChannel();
+    expect(report?.status).toBe('activated');
+    expect(report?.activated).toHaveLength(PREVIEW_COUNT);
+    expect(loader.countVerifiedChannelPointers()).toBe(PREVIEW_COUNT);
+    expect(fetchCount).toBeGreaterThan(0);
   });
 
   it('registry outage fails closed and preserves last-known-good pointers', async () => {

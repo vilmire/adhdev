@@ -159,12 +159,19 @@ export class ProviderChannelRuntime {
   /**
    * Sync the verified channel activations for `targetTypes`.
    *
+   * `bootstrapAll: true` (fresh-install bootstrap) widens the target set to
+   * EVERY activatable entry on the channel, ignoring `targetTypes`: a clean
+   * machine has nothing in `.upstream` and no pointers, so there is no
+   * installed set to diff against — the channel listing itself is the desired
+   * end state. Only digest-verified entries activate; legacy-unverified /
+   * unknown-algorithm rows stay typed skips exactly as in a targeted sync.
+   *
    * Never throws for expected failure modes: every failure is reported as a
    * typed error in the returned report and the previous activations stay
    * live (last-known-good). Unexpected programming errors still throw.
    */
-  async sync(options: { channel: ProviderChannel; targetTypes: ReadonlySet<string> }): Promise<ChannelSyncReport> {
-    const { channel, targetTypes } = options;
+  async sync(options: { channel: ProviderChannel; targetTypes: ReadonlySet<string>; bootstrapAll?: boolean }): Promise<ChannelSyncReport> {
+    const { channel, targetTypes, bootstrapAll } = options;
     const report: ChannelSyncReport = {
       channel,
       status: 'up-to-date',
@@ -189,7 +196,7 @@ export class ProviderChannelRuntime {
     //    malformed digest are typed skips, never activated).
     const { activatable, skipped } = partitionChannelEntries(entries);
     report.skipped = skipped;
-    const targets = activatable.filter((e) => targetTypes.has(e.providerType));
+    const targets = bootstrapAll ? activatable : activatable.filter((e) => targetTypes.has(e.providerType));
 
     // 3. Diff against active pointers.
     const pending: ActivatableEntry[] = [];
