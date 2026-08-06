@@ -64,6 +64,28 @@ export function buildDashboardProviderLaunchPayload(
   return payload
 }
 
+export interface MeshCoordinatorLaunchOptions {
+  initialModel?: string | null
+  initialThinkingLevel?: string | null
+  settings?: { autoApprove?: boolean; autoApproveMode?: string }
+}
+
+export function buildMeshCoordinatorLaunchPayload(
+  meshId: string,
+  cliType: string,
+  opts?: MeshCoordinatorLaunchOptions,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = { meshId: meshId.trim() }
+  if (cliType.trim()) payload.cliType = cliType.trim()
+  const initialModel = opts?.initialModel?.trim()
+  const initialThinkingLevel = opts?.initialThinkingLevel?.trim()
+  if (initialModel) payload.initialModel = initialModel
+  if (initialThinkingLevel) payload.initialThinkingLevel = initialThinkingLevel
+  if (opts?.settings?.autoApproveMode) payload.autoApproveMode = opts.settings.autoApproveMode
+  else if (typeof opts?.settings?.autoApprove === 'boolean') payload.autoApprove = opts.settings.autoApprove
+  return payload
+}
+
 export interface MeshLaunchOption {
   id: string
   name: string
@@ -223,11 +245,7 @@ export function useDashboardCommandActions({
     machineId: string,
     meshId: string,
     cliType: string,
-    opts?: {
-      initialModel?: string | null
-      initialThinkingLevel?: string | null
-      settings?: { autoApprove?: boolean; autoApproveMode?: string }
-    },
+    opts?: MeshCoordinatorLaunchOptions,
   ): Promise<LaunchResult> => {
     if (!meshId.trim()) return { ok: false, error: 'Choose a mesh first.' }
     // Cloud override
@@ -237,14 +255,7 @@ export function useDashboardCommandActions({
     // Standalone/local-only
     const startedAt = Date.now()
     try {
-      const launchPayload: Record<string, unknown> = { meshId: meshId.trim() }
-      if (cliType.trim()) launchPayload.cliType = cliType.trim()
-      const initialModel = opts?.initialModel?.trim()
-      const initialThinkingLevel = opts?.initialThinkingLevel?.trim()
-      if (initialModel) launchPayload.initialModel = initialModel
-      if (initialThinkingLevel) launchPayload.initialThinkingLevel = initialThinkingLevel
-      if (opts?.settings?.autoApproveMode) launchPayload.autoApproveMode = opts.settings.autoApproveMode
-      else if (typeof opts?.settings?.autoApprove === 'boolean') launchPayload.autoApprove = opts.settings.autoApprove
+      const launchPayload = buildMeshCoordinatorLaunchPayload(meshId, cliType, opts)
       const raw: any = await sendDaemonCommand(machineId, 'launch_mesh_coordinator', launchPayload)
       const result = raw?.result ?? raw
       if (result?.success === false || raw?.success === false) {
