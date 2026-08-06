@@ -88,7 +88,12 @@ export type NpmExecOptions = { shell: boolean; windowsHide?: boolean };
 // writes one instance's upgrade log/notice into another's directory. The
 // default parameter is getConfigDir(), which the helper child inherits pinned
 // via ADHDEV_CONFIG_DIR (see buildUpgradeHelperChildEnv).
-function getUpgradeLogPath(configDir: string = getConfigDir()): string {
+// Exported so the daemon_upgrade / daemon_restart responses can hand the
+// caller the exact diagnosis path — the detached helper's outcome (install /
+// health-gate / rollback) lands HERE, never in the daemon's own log, so a
+// caller that only saw the schedule-time response otherwise has no way to
+// learn why the daemon came back on the old version.
+export function getUpgradeLogPath(configDir: string = getConfigDir()): string {
   fs.mkdirSync(configDir, { recursive: true });
   return path.join(configDir, 'daemon-upgrade.log');
 }
@@ -519,6 +524,35 @@ export function emitUpgradeFailureNotice(lines: string[], configDir: string = ge
     fs.writeFileSync(getUpgradeFailureNoticePath(configDir), `[${new Date().toISOString()}]\n${body}\n`, 'utf8');
   } catch {
     // noop
+  }
+}
+
+export interface UpgradeFailureNotice {
+  /** Path of the durable failure-notice file (`daemon-upgrade-last-error.txt`). */
+  noticePath: string;
+  /** Path of the full install/health trace (`daemon-upgrade.log`). */
+  logPath: string;
+  /** The actionable notice body the helper left behind. */
+  notice: string;
+}
+
+/**
+ * Read the durable upgrade-failure notice, if one is present. The helper
+ * deletes this file only after a successful install/re-spawn, so a surviving
+ * notice means the LAST upgrade attempt failed and the daemon was rolled back
+ * to (or left on) the previous version — the signal that lets a re-spawned
+ * daemon and status callers observe a failure the schedule-time response
+ * could not have known about. Returns null when there is nothing to report.
+ */
+export function readUpgradeFailureNotice(configDir: string = getConfigDir()): UpgradeFailureNotice | null {
+  try {
+    const noticePath = getUpgradeFailureNoticePath(configDir);
+    if (!fs.existsSync(noticePath)) return null;
+    const notice = fs.readFileSync(noticePath, 'utf8').trim();
+    if (!notice) return null;
+    return { noticePath, logPath: getUpgradeLogPath(configDir), notice };
+  } catch {
+    return null;
   }
 }
 

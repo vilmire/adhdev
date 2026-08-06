@@ -35,6 +35,7 @@ import {
     DEFAULT_CDP_SCAN_INTERVAL_MS,
 } from '../runtime-defaults.js';
 import { loadConfig } from '../config/config.js';
+import { readUpgradeFailureNotice } from '../commands/upgrade-helper.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { IdeProviderInstance } from '../providers/ide-provider-instance.js';
 import { createDefaultGitCommandServices } from '../git/git-commands.js';
@@ -192,6 +193,19 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // 1. Global log interceptor
     installGlobalInterceptor();
     loadMeshCoordinatorRegistry();
+
+    // 1.5 Post-restart rollback visibility. The detached upgrade helper leaves
+    // `daemon-upgrade-last-error.txt` on failure and removes it only after a
+    // successful install/re-spawn, so a notice still present at boot means the
+    // LAST upgrade attempt failed and THIS daemon was rolled back to (or left
+    // on) the previous version. Say so loudly: the schedule-time command
+    // response went out long before the helper failed, so this boot log (plus
+    // get_status_metadata.upgradeFailure) is the only in-band signal that the
+    // "upgrade" never actually happened.
+    const upgradeFailureNotice = readUpgradeFailureNotice();
+    if (upgradeFailureNotice) {
+        LOG.warn('Upgrade', `Previous daemon upgrade FAILED and was rolled back — this daemon is running the previous version. Notice (${upgradeFailureNotice.noticePath}):\n${upgradeFailureNotice.notice}`);
+    }
 
     // 2. ProviderLoader (provider source mode + channel from config.json)
     const appConfig = loadConfig();

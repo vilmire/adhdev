@@ -8,6 +8,7 @@
  * touch the router's inline-mesh cache or other instance state.
  */
 import { loadConfig, updateConfig } from '../../config/config.js';
+import { readUpgradeFailureNotice } from '../upgrade-helper.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../../status/snapshot.js';
 import { getDaemonBuildInfo } from '../../build-info.js';
 import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
@@ -41,7 +42,14 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
         // can detect a running daemon that predates a just-merged fix and
         // is awaiting deploy/restart. Sibling of `status` to avoid
         // perturbing the dashboard status snapshot shape.
-        return { success: true, status: snapshot, daemonBuild: getDaemonBuildInfo() };
+        //
+        // `upgradeFailure` is the post-hoc observability half of the
+        // intent-vs-result contract (see daemon-lifecycle daemon_upgrade):
+        // the schedule-time response cannot know the detached helper's
+        // outcome, so a failed/rolled-back upgrade is reported HERE via the
+        // durable notice the helper leaves behind. null = no failed upgrade
+        // on record.
+        return { success: true, status: snapshot, daemonBuild: getDaemonBuildInfo(), upgradeFailure: readUpgradeFailureNotice() };
     },
 
     get_machine_runtime_stats: async (_ctx: LowFamilyContext, _args: any) => {

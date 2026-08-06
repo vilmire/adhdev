@@ -16,7 +16,7 @@
  */
 import { loadConfig, updateConfig, setQuotaShowAccountEmail } from '../../config/config.js';
 import { installClaudeStatusline } from '../../quota/statusline/install.js';
-import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from '../upgrade-helper.js';
+import { execNpmCommandSync, getUpgradeLogPath, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from '../upgrade-helper.js';
 import { LOG } from '../../logging/logger.js';
 import { IDENTITY, TRACK } from '../../track-identity.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
@@ -59,7 +59,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 : null;
             if (currentInstalled === latest && runningVersion === latest) {
                 LOG.info('Upgrade', `Already on ${TRACK} track version v${latest}; skipping install`);
-                return { success: true, upgraded: false, alreadyLatest: true, version: latest, channel: TRACK, npmTag };
+                return { success: true, upgraded: false, alreadyLatest: true, outcome: 'already_latest', version: latest, targetVersion: latest, channel: TRACK, npmTag };
             }
             if (currentInstalled === latest && runningVersion && runningVersion !== latest) {
                 LOG.info('Upgrade', `Installed package is v${latest}, but running daemon is v${runningVersion}; scheduling restart`);
@@ -81,7 +81,27 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 process.exit(0);
             }, 3000);
 
-            return { success: true, upgraded: true, version: latest, restarting: true, channel: TRACK, npmTag };
+            // INTENT vs RESULT: this response goes out seconds before the daemon
+            // exits; the detached helper decides the real outcome (npm install,
+            // staged verification, health gate, rollback) tens of seconds to
+            // ~120s LATER, with no channel back to this caller. So `upgraded`/
+            // `version` (kept verbatim for existing callers) mean "scheduled
+            // towards this TARGET version", NOT "now running it". The honest
+            // signal is `outcome: 'scheduled'` + `targetVersion`, and the only
+            // place the actual result lands is upgradeLogPath (and, on failure,
+            // the durable notice surfaced via get_status_metadata.upgradeFailure).
+            return {
+                success: true,
+                upgraded: true,
+                version: latest,
+                restarting: true,
+                channel: TRACK,
+                npmTag,
+                outcome: 'scheduled',
+                targetVersion: latest,
+                upgradeLogPath: getUpgradeLogPath(),
+                clientHint: `Upgrade to v${latest} SCHEDULED, not completed — the detached helper installs and restarts the daemon after this response, and a failure rolls back to the previous version. Check upgradeLogPath (or get_status_metadata.upgradeFailure after the restart) for the actual outcome.`,
+            };
         } catch (e: any) {
             LOG.error('Upgrade', `Failed: ${e.message}`);
             return { success: false, error: e.message };
@@ -122,7 +142,20 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 process.exit(0);
             }, 3000);
 
-            return { success: true, restarted: true, restarting: true, mode: 'restart', killSessionHost };
+            // Same intent-vs-result contract as daemon_upgrade above: the
+            // response only confirms the restart-only helper was SCHEDULED;
+            // the detached re-spawn (and its trace in upgradeLogPath) is the
+            // actual outcome.
+            return {
+                success: true,
+                restarted: true,
+                restarting: true,
+                mode: 'restart',
+                killSessionHost,
+                outcome: 'scheduled',
+                upgradeLogPath: getUpgradeLogPath(),
+                clientHint: 'Restart SCHEDULED, not completed — the detached helper re-spawns the daemon after this response. Check upgradeLogPath for the actual outcome.',
+            };
         } catch (e: any) {
             LOG.error('Restart', `Failed: ${e.message}`);
             return { success: false, error: e.message };

@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   execNpmCommandSync: vi.fn<(args: string[], options?: Record<string, unknown>, surface?: Record<string, unknown>) => string>(),
   resolveCurrentGlobalInstallSurface: vi.fn(() => ({ npmExecutable: 'npm', npmArgsPrefix: [], packageRoot: null, installPrefix: null, execOptions: { shell: false } })),
   spawnDetachedDaemonUpgradeHelper: vi.fn(),
+  getUpgradeLogPath: vi.fn(() => '/tmp/adhdev-test-config/daemon-upgrade.log'),
   loadConfig: vi.fn(() => ({ updateChannel: 'stable', serverUrl: 'https://api.adhf.dev' })),
   saveConfig: vi.fn(),
   updateConfig: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock('../../src/commands/upgrade-helper.js', () => ({
   execNpmCommandSync: mocks.execNpmCommandSync,
   resolveCurrentGlobalInstallSurface: mocks.resolveCurrentGlobalInstallSurface,
   spawnDetachedDaemonUpgradeHelper: mocks.spawnDetachedDaemonUpgradeHelper,
+  getUpgradeLogPath: mocks.getUpgradeLogPath,
 }))
 
 vi.mock('../../src/config/config.js', async (importOriginal) => {
