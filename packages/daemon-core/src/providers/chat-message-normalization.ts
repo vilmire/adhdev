@@ -136,24 +136,141 @@ export function extractFinalAssistantSummaryEvidence(
  * transcript (a committed generating→idle FSM transition, a self-attributing final_summary_json,
  * or a continuous-idle streak) are enforced by the callers (the CLI completion gate, the reconcile
  * grace gate) on top of this structural check.
+ *
+ * KIMI-CHROME-TAIL — the ONE narrow exception to the no-walk-back rule above: when the latest
+ * user-facing assistant bubble's ENTIRE text is PTY chrome (see isTranscriptChromeOnlyText), the
+ * selector skips it and accepts the immediately preceding substantive assistant bubble, bounded
+ * by FINAL_SUMMARY_CHROME_FALLBACK_MAX_DEPTH. Why this does NOT reintroduce Defect-B:
+ *   - Defect-B is about walking back past evidence that the producing turn has not answered yet
+ *     (an EMPTY streaming bubble, or a user message holding the last word) and echoing a PRIOR
+ *     task's tail. Both guards are untouched: an empty bubble still returns null immediately and
+ *     any user-facing user message still ends the scan with null, so the fallback can NEVER cross
+ *     a dispatched user prompt into a previous turn's history.
+ *   - A chrome-only bubble is not turn content at all — it is TUI rendering debris (status bar,
+ *     collapsed Todo panel) serialized into the transcript in the SAME flush as the real answer
+ *     (observed: kimi session fee1dc98, where the chrome tail and the genuine 6,120-char report
+ *     carry an identical timestamp). Skipping it moves WITHIN one flush, not across a turn.
+ *   - The trigger is a whole-bubble pattern match, never a length/shortness heuristic, and the
+ *     depth is capped, so an arbitrary non-empty tail still qualifies exactly as before.
  */
 export function selectFinalAssistantTurnEndMessage(
   messages: ChatMessage[] | null | undefined,
 ): ChatMessage | null {
   if (!Array.isArray(messages) || messages.length === 0) return null;
+  let chromeFallbacks = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (!msg) continue;
     const classification = classifyChatMessageVisibility(msg);
     if (!classification.isUserFacing) continue; // skip tool/thought/status activity + internal
     if (msg.role === 'assistant' || msg.role === 'model') {
-      // The latest user-facing assistant bubble: it is the turn end iff it has real text.
-      return flattenContent(msg.content).trim() ? msg : null;
+      const text = flattenContent(msg.content).trim();
+      // The Defect-B guard, unchanged: an EMPTY latest bubble means the turn is still in
+      // flight — never walk back past it.
+      if (!text) return null;
+      // KIMI-CHROME-TAIL: a wholly-chrome bubble is PTY debris, not the turn's answer. Skip it
+      // (bounded); anything else is the turn end exactly as before.
+      if (chromeFallbacks < FINAL_SUMMARY_CHROME_FALLBACK_MAX_DEPTH && isTranscriptChromeOnlyText(text)) {
+        chromeFallbacks++;
+        continue;
+      }
+      return msg;
     }
     // A user (or other role) had the last user-facing word → the assistant turn is not complete.
     return null;
   }
   return null;
+}
+
+/**
+ * KIMI-CHROME-TAIL — maximum number of chrome-only assistant bubbles
+ * selectFinalAssistantTurnEndMessage will skip. The observed leak writes ONE chrome tail per
+ * flush; two allows a duplicated capture. Uncapped skipping would be the Defect-B walk-back.
+ */
+export const FINAL_SUMMARY_CHROME_FALLBACK_MAX_DEPTH = 2;
+
+/**
+ * HARD PTY-chrome line signatures (terminal-UI fragments, never assistant prose). A line
+ * matching one of these anchors a chrome block; matching lines are skippable anywhere in the
+ * upward scan. Kept provider-agnostic: status bars, collapsed-panel hints, keybinding hints,
+ * spinner frames, and box rules as observed across PTY-captured CLI transcripts.
+ */
+const TRANSCRIPT_CHROME_HARD_LINE_PATTERNS: readonly RegExp[] = [
+  // Bottom status bar: "auto  K3 thinking: high  ~/Work/adhdev  main [±]"
+  /\bauto\s+K\d+\s+thinking:\s*\S+/i,
+  // Bottom status bar (older kimi-for-coding form) / context meter
+  /\bkimi-for-coding(?:-highspeed)?\s+(?:thinking|idle)\b/i,
+  /\bcontext:\s*\d+(?:\.\d+)?%/,
+  // Collapsed-panel hints: "… +3 more (2 done) · ctrl+t to expand",
+  // "(12 more lines, ctrl+o to expand)", "... (248 earlier lines)"
+  /\bctrl\+t to expand\b/i,
+  /\bctrl\+o to expand\b/i,
+  /\(\d+\s+earlier lines\)/i,
+  // Keybinding hints: "Press Ctrl+B to run in background", "↑ to edit · ctrl-s to steer immediately"
+  /\bPress Ctrl\+B to run in background\b/i,
+  /↑\s*to edit\b/,
+  /\bctrl-s to steer\b/i,
+  // Spinner frames: braille "⠦ thinking..." / moon-phase "🌕 · Tip: …"
+  // (`u` flag: the moon glyphs are astral code points — a bare class only matches one
+  // surrogate half and never fires)
+  /^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*\S/u,
+  /^\s*[🌑🌒🌓🌔🌕🌖🌗🌘]\s*·\s*Tip:/u,
+  // Pure box-drawing horizontal rule framing a panel
+  /^\s*[─━═]{8,}\s*$/,
+];
+
+/**
+ * SOFT Todo-panel lines. On their own "✓ shipped it" can be genuine list prose, so these are
+ * only skippable when they sit inside a block already anchored by a HARD chrome line.
+ */
+const TRANSCRIPT_CHROME_PANEL_LINE_PATTERNS: readonly RegExp[] = [
+  /^\s*Todo\s*$/i,
+  /^\s*[○✓✗◌◯☐☑✔]\s+\S/,
+];
+
+/**
+ * A captured Todo panel can drop the marker glyph of its first visible item (fee1dc98 tail:
+ * the topmost captured todo line has no ○ marker). At most ONE such unmarked orphan line is
+ * tolerated, and only when it sits directly above a marked panel line — never above a hard
+ * chrome line, where it could be a one-line genuine answer glued to a status-bar capture.
+ */
+const TRANSCRIPT_CHROME_MAX_ORPHAN_LINES = 1;
+
+/**
+ * True when the ENTIRE bubble text is PTY transcript chrome (status bar / Todo panel /
+ * spinner / keybinding hints), i.e. the bubble carries zero assistant prose. Scanning upward:
+ * every line must be a hard chrome line, a panel line below already-seen hard chrome, or the
+ * single tolerated panel orphan. A bubble with no hard chrome line at all is never chrome —
+ * this is a pattern-anchored judgement, deliberately NOT a "short tail" heuristic.
+ */
+export function isTranscriptChromeOnlyText(text: string | null | undefined): boolean {
+  const lines = (typeof text === 'string' ? text : '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length === 0) return false;
+  let sawHardChrome = false;
+  let previousWasPanelLine = false;
+  let orphanLines = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i] as string;
+    if (TRANSCRIPT_CHROME_HARD_LINE_PATTERNS.some((pattern) => pattern.test(line))) {
+      sawHardChrome = true;
+      previousWasPanelLine = false;
+      continue;
+    }
+    if (sawHardChrome && TRANSCRIPT_CHROME_PANEL_LINE_PATTERNS.some((pattern) => pattern.test(line))) {
+      previousWasPanelLine = true;
+      continue;
+    }
+    if (sawHardChrome && previousWasPanelLine && orphanLines < TRANSCRIPT_CHROME_MAX_ORPHAN_LINES) {
+      orphanLines++;
+      previousWasPanelLine = false;
+      continue;
+    }
+    return false;
+  }
+  return sawHardChrome;
 }
 
 /**

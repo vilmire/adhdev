@@ -12,8 +12,10 @@ import {
   DEFAULT_FINAL_SUMMARY_MAX_CHARS,
   extractFinalAssistantSummaryEvidence,
   extractFinalSummaryFromMessages,
+  FINAL_SUMMARY_CHROME_FALLBACK_MAX_DEPTH,
   filterUserFacingChatMessages,
   isBuiltinChatMessageKind,
+  isTranscriptChromeOnlyText,
   isUserFacingChatMessage,
   normalizeChatMessage,
   normalizeChatMessageKind,
@@ -298,5 +300,106 @@ describe('hasTrailingToolActivityAfterFinalAssistant — EARLY-IDLE-COMPLETION-F
       { role: 'user', content: 'new task, no reply yet' },
     ] as any)).toBe(false);
     expect(hasTrailingToolActivityAfterFinalAssistant([] as any)).toBe(false);
+  });
+});
+
+// KIMI-CHROME-TAIL: a trailing assistant bubble whose ENTIRE text is PTY chrome (status bar,
+// Todo panel, spinner frames, keybinding hints) is TUI debris captured in the same flush as the
+// real answer — not the turn's content. The selector skips it (bounded depth) and takes the
+// immediately preceding substantive bubble. This is the narrow, pattern-anchored exception to
+// the Defect-B no-walk-back rule; the empty-bubble and user-last-word guards are untouched.
+describe('selectFinalAssistantTurnEndMessage — chrome-only tail fallback (KIMI-CHROME-TAIL)', () => {
+  // Real capture from kimi session fee1dc98 (last stored bubble, 128 chars, pure chrome).
+  const KIMI_CHROME_TAIL = [
+    '루트 version-bump 1.0.36 (재실행, 검증 진행 중)',
+    '○ 루트 push + Cloudflare prod 배포 확인',
+    '○ 최종 보고',
+    'auto  K3 thinking: high  ~/Work/adhdev  main [±]',
+  ].join('\n');
+
+  it('isTranscriptChromeOnlyText matches observed chrome shapes, and only those', () => {
+    expect(isTranscriptChromeOnlyText(KIMI_CHROME_TAIL)).toBe(true);
+    // Collapsed todo hint + status bar
+    expect(isTranscriptChromeOnlyText('… +5 more (3 done) · ctrl+t to expand\nauto  K3 thinking: high  ~/repo  main')).toBe(true);
+    // Status bar alone
+    expect(isTranscriptChromeOnlyText('auto  K3 thinking: high  [1 task running]  ~/Work/adhdev  main [+1 -1]')).toBe(true);
+    // Box rule + Todo panel + status bar
+    expect(isTranscriptChromeOnlyText('────────────────────────────────────────\nTodo\n✓ task one\n✓ task two\nauto  K3 thinking: high  ~/repo  main')).toBe(true);
+    // Spinner + tip
+    expect(isTranscriptChromeOnlyText('🌕 · Tip: /web: use the Web UI for a better experience')).toBe(true);
+    // NOT chrome: genuine prose, even when short
+    expect(isTranscriptChromeOnlyText('Done — implemented and committed.')).toBe(false);
+    // NOT chrome: checkmark list without any hard chrome anchor
+    expect(isTranscriptChromeOnlyText('✓ first done\n✓ second done')).toBe(false);
+    // NOT chrome: a one-line genuine answer glued above a status bar (orphan must sit above a
+    // PANEL line; above a HARD line it is treated as real content)
+    expect(isTranscriptChromeOnlyText('배포 완료했습니다.\nauto  K3 thinking: high  ~/repo  main')).toBe(false);
+    // NOT chrome: substantive report with a chrome tail (whole-bubble rule)
+    expect(isTranscriptChromeOnlyText('Final report: all checks passed.\n──────\nTodo\n✓ done\nauto  K3 thinking: high  ~/repo  main')).toBe(false);
+    expect(isTranscriptChromeOnlyText('')).toBe(false);
+    expect(isTranscriptChromeOnlyText(null)).toBe(false);
+  });
+
+  it('falls back to the previous substantive bubble when the latest assistant bubble is chrome-only', () => {
+    const messages = [
+      { role: 'user', content: 'task' },
+      { role: 'assistant', content: 'the real final report' },
+      { role: 'assistant', content: KIMI_CHROME_TAIL },
+    ] as any;
+    expect(selectFinalAssistantTurnEndMessage(messages)?.content).toBe('the real final report');
+    expect(extractFinalAssistantSummaryEvidence(messages).finalSummary).toBe('the real final report');
+  });
+
+  it('does NOT fall back when the latest assistant bubble is substantive', () => {
+    const messages = [
+      { role: 'user', content: 'task' },
+      { role: 'assistant', content: 'auto  K3 thinking: high  ~/repo  main' },
+      { role: 'assistant', content: 'the real final report' },
+    ] as any;
+    expect(selectFinalAssistantTurnEndMessage(messages)?.content).toBe('the real final report');
+  });
+
+  it('skips two consecutive chrome bubbles (within the depth cap)', () => {
+    const messages = [
+      { role: 'user', content: 'task' },
+      { role: 'assistant', content: 'the real final report' },
+      { role: 'assistant', content: KIMI_CHROME_TAIL },
+      { role: 'assistant', content: 'auto  K3 thinking: high  ~/repo  main' },
+    ] as any;
+    expect(FINAL_SUMMARY_CHROME_FALLBACK_MAX_DEPTH).toBe(2);
+    expect(selectFinalAssistantTurnEndMessage(messages)?.content).toBe('the real final report');
+  });
+
+  it('accepts the chrome bubble as-is beyond the depth cap (no unbounded walk-back)', () => {
+    const messages = [
+      { role: 'user', content: 'task' },
+      { role: 'assistant', content: 'the real final report' },
+      { role: 'assistant', content: 'auto  K3 thinking: high  ~/repo  main' },
+      { role: 'assistant', content: 'auto  K3 thinking: high  ~/repo  main' },
+      { role: 'assistant', content: KIMI_CHROME_TAIL },
+    ] as any;
+    expect(selectFinalAssistantTurnEndMessage(messages)?.content).toBe('auto  K3 thinking: high  ~/repo  main');
+  });
+
+  it('Defect-B guards intact: chrome fallback never crosses a user message or an empty bubble', () => {
+    // User dispatch after the chrome tail → the assistant did not have the last word.
+    expect(selectFinalAssistantTurnEndMessage([
+      { role: 'assistant', content: 'prior task answer' },
+      { role: 'assistant', content: KIMI_CHROME_TAIL },
+      { role: 'user', content: 'new task, no reply yet' },
+    ] as any)).toBeNull();
+    // Chrome tail, then the turn's (still empty) streaming bubble → in flight, no promotion.
+    expect(selectFinalAssistantTurnEndMessage([
+      { role: 'user', content: 'task' },
+      { role: 'assistant', content: 'mid-turn narration' },
+      { role: 'assistant', content: KIMI_CHROME_TAIL },
+      { role: 'assistant', content: '' },
+    ] as any)).toBeNull();
+    // Chrome tail with NO substantive bubble before it in this turn → null, never the prior turn.
+    expect(selectFinalAssistantTurnEndMessage([
+      { role: 'assistant', content: 'prior task answer' },
+      { role: 'user', content: 'new task' },
+      { role: 'assistant', content: KIMI_CHROME_TAIL },
+    ] as any)).toBeNull();
   });
 });
