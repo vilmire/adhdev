@@ -22,7 +22,9 @@
 
 export {
     MONTHLY_WINDOW_MINUTES,
+    QUOTA_TRANSIENT_RETRY_DELAY_MS,
     SESSION_WINDOW_MINUTES,
+    TRANSIENT_QUOTA_FAILURE_KINDS,
     WEEKLY_WINDOW_MINUTES,
     clampPercent,
     quotaFailure,
@@ -48,15 +50,20 @@ export {
 
 export {
     QUOTA_ACTIVITY_WINDOW_MS,
+    QUOTA_EVENT_REFRESH_DEBOUNCE_MS,
+    QUOTA_FAILURE_MAX_RETRIES,
     QUOTA_REFRESH_INTERVAL_MS,
     clearQuotaCache,
     hasRecentCliActivity,
+    isFailureRetryDue,
     quotaProviderEnabledFromLoader,
     readQuotaCache,
     refreshQuotaCacheOnBoot,
     refreshQuotaCacheOnce,
+    setupQuotaEventRefresh,
     setupQuotaRefreshLoop,
     startQuotaRefreshLoop,
+    type QuotaEventRefreshOptions,
     type QuotaProviderEnabled,
     type QuotaRefreshLoopHandle,
     type QuotaRefreshLoopOptions,

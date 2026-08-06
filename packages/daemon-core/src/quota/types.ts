@@ -47,6 +47,44 @@ export type QuotaFailureKind =
     | 'unsupported'
     | 'unknown';
 
+/**
+ * Failure kinds where another fetch shortly after has a real chance of
+ * succeeding — the condition resolves itself without user action:
+ *  - `expired-token`  — the owning CLI refreshes its token on next use (Kimi's
+ *                       tokens last ~15 min while the refresh cadence is 15 min,
+ *                       so a failure here is almost always the parse-vs-refresh
+ *                       race, resolved seconds later by the CLI itself)
+ *  - `unauthorized`   — the same race surfacing server-side (token expired
+ *                       between the daemon's local expiry check and the request)
+ *  - `network`        — connectivity blips
+ *  - `server`         — 5xx from the provider
+ *  - `rate-limited`   — 429; the server may additionally dictate the retry time
+ *                       via Retry-After (callers pass that as retryAtMs, which
+ *                       quotaFailure then leaves untouched)
+ *
+ * Everything else is treated as PERSISTENT and gets NO short retry: retrying
+ * `missing-credentials`, `cli-unavailable` or `unsupported` re-learns the same
+ * answer until the user acts; `parse` re-reads the same bytes; `unknown` marks
+ * a fetcher that broke its never-throw contract — broken code, not a transient
+ * condition — and fast-retrying it would just spin.
+ */
+export const TRANSIENT_QUOTA_FAILURE_KINDS: ReadonlySet<QuotaFailureKind> = new Set([
+    'expired-token',
+    'unauthorized',
+    'network',
+    'server',
+    'rate-limited',
+]);
+
+/**
+ * How soon a transient failure is worth retrying. Sized to the Kimi token
+ * race: the CLI refreshes an expired token on its next run, which lands within
+ * seconds of the failure the daemon recorded — so a retry a couple of minutes
+ * later almost always reads a fresh token. Persistent failures deliberately
+ * get nothing here and wait for the normal refresh cadence instead.
+ */
+export const QUOTA_TRANSIENT_RETRY_DELAY_MS = 2 * 60 * 1000;
+
 /** One rolling usage window. */
 export interface QuotaWindow {
     /** Percentage of the window consumed, clamped to 0–100. */
@@ -161,20 +199,36 @@ export function windowFromPercent(
     return { usedPercent: clampPercent(usedPercent), windowMinutes, resetsAt };
 }
 
-/** A failure snapshot with no usable windows. */
+/**
+ * A failure snapshot with no usable windows.
+ *
+ * Transient failures (see TRANSIENT_QUOTA_FAILURE_KINDS) are stamped with a
+ * `retryAtMs` so the refresh loop knows this entry is worth re-fetching long
+ * before the normal cadence would — the failure cache is what turns a
+ * seconds-long token-refresh race into a 15-minute stale error otherwise. A
+ * caller-supplied `retryAtMs` (e.g. an HTTP Retry-After) always wins over the
+ * default delay.
+ */
 export function quotaFailure(
     provider: QuotaProvider,
     status: Extract<QuotaStatus, 'error' | 'unavailable'>,
     error: string,
     metadata?: QuotaMetadata,
 ): ProviderQuota {
+    const now = Date.now();
+    const resolvedMetadata = metadata
+        && metadata.failureKind
+        && TRANSIENT_QUOTA_FAILURE_KINDS.has(metadata.failureKind)
+        && metadata.retryAtMs === undefined
+        ? { ...metadata, retryAtMs: now + QUOTA_TRANSIENT_RETRY_DELAY_MS }
+        : metadata;
     return {
         provider,
         session: null,
         weekly: null,
-        updatedAt: Date.now(),
+        updatedAt: now,
         error,
         status,
-        ...(metadata ? { metadata } : {}),
+        ...(resolvedMetadata ? { metadata: resolvedMetadata } : {}),
     };
 }

@@ -22,6 +22,7 @@
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import type { ProviderQuota, QuotaProvider } from './types.js';
+import { QUOTA_TRANSIENT_RETRY_DELAY_MS } from './types.js';
 import { fetchClaudeQuota } from './fetchers/claude.js';
 import { fetchCodexQuota } from './fetchers/codex.js';
 import { fetchKimiQuota } from './fetchers/kimi.js';
@@ -137,6 +138,10 @@ export function clearQuotaCache(): void {
     cache.clear();
     hydratedOnly.clear();
     hydrated = false;
+    for (const state of failureRetries.values()) {
+        if (state.timer) clearTimeout(state.timer);
+    }
+    failureRetries.clear();
 }
 
 /**
@@ -213,6 +218,7 @@ export async function refreshQuotaCacheOnce(
             if (!isEnabled(provider)) {
                 cache.delete(provider);
                 hydratedOnly.delete(provider);
+                cancelFailureRetry(provider);
             }
         }
     }
@@ -238,12 +244,120 @@ export async function refreshQuotaCacheOnce(
             }
         }),
     );
+    // Transient-failure retry bookkeeping, driven by what this tick actually
+    // recorded (success resets, persistent failure cancels, transient failure
+    // schedules a bounded retry — see updateFailureRetry).
+    for (const { provider, fetch } of active) {
+        updateFailureRetry(provider, fetch, isEnabled);
+    }
     // Persist whatever this tick produced, including per-provider failures —
     // "looked and could not read" is a state worth surviving a restart, exactly
     // like a successful reading. saveQuotaCache never throws, so a cache that
     // cannot be written leaves the in-memory result untouched.
     const snapshot = readQuotaCache();
     if (snapshot) saveQuotaCache(snapshot);
+}
+
+/**
+ * Bounded retries for TRANSIENT failures (see TRANSIENT_QUOTA_FAILURE_KINDS in
+ * ./types.ts — those carry a `retryAtMs` stamp).
+ *
+ * Why this exists: Kimi's access tokens live ~15 minutes and the refresh loop
+ * ticks every 15 minutes, so a daemon that reads the token file in the seconds
+ * before the CLI refreshes it records `expired-token` and would otherwise
+ * report that stale error for a whole tick even though the token was renewed
+ * moments later. A failure whose kind can resolve itself is therefore retried
+ * on a short fuse instead of waiting for the next cadenced tick.
+ *
+ * Why it cannot run away: each consecutive transient failure doubles the delay
+ * (2m → 4m → 8m → 15m, capped at the normal refresh interval), and after
+ * QUOTA_FAILURE_MAX_RETRIES consecutive failures the scheduler stops entirely
+ * — the entry keeps its (past) retryAtMs but `isFailureRetryDue` then reports
+ * false, so the loop's backfill gate stops firing on it too. Recovery from
+ * that state comes from the ordinary activity-gated tick or an event-driven
+ * refresh, both of which reset the counter on success. A persistent failure
+ * (no retryAtMs) never schedules anything, matching the pre-existing "a
+ * recorded failure counts as a snapshot" rule. At steady state the worst case
+ * is one extra fetch per normal interval — never a storm, and an idle machine
+ * with a permanently failing provider pays at most a handful of fetches per
+ * failure episode.
+ */
+export const QUOTA_FAILURE_MAX_RETRIES = 4;
+
+interface FailureRetryState {
+    /** Consecutive transient failures since the last success. */
+    failures: number;
+    timer: NodeJS.Timeout | null;
+}
+
+const failureRetries = new Map<string, FailureRetryState>();
+
+function cancelFailureRetry(provider: QuotaProvider): void {
+    const state = failureRetries.get(provider);
+    if (state?.timer) clearTimeout(state.timer);
+    failureRetries.delete(provider);
+}
+
+/**
+ * True when the cached entry is a transient failure whose retry time has
+ * passed AND its retry budget is not exhausted. The loop's backfill gate uses
+ * this so a cached failure no longer masquerades as a usable snapshot
+ * (`cache.has()` alone could not tell the two apart), while an exhausted
+ * budget still counts as "has a snapshot" and stays on the normal cadence.
+ */
+export function isFailureRetryDue(provider: QuotaProvider, now: number = Date.now()): boolean {
+    const entry = cache.get(provider);
+    if (!entry || entry.status === 'ok') return false;
+    const retryAtMs = entry.metadata?.retryAtMs;
+    if (typeof retryAtMs !== 'number' || retryAtMs > now) return false;
+    return (failureRetries.get(provider)?.failures ?? 0) <= QUOTA_FAILURE_MAX_RETRIES;
+}
+
+/**
+ * Reconcile the retry schedule with the entry this refresh just recorded.
+ * Called once per refreshed provider from refreshQuotaCacheOnce so every
+ * refresh path — boot, periodic tick, event-driven, retry itself — funnels
+ * through the same bookkeeping. The retry re-uses the SAME fetch function
+ * that produced the failure, so injected test fetchers stay injected.
+ */
+function updateFailureRetry(
+    provider: QuotaProvider,
+    fetch: () => Promise<ProviderQuota>,
+    isEnabled?: QuotaProviderEnabled,
+): void {
+    const entry = cache.get(provider);
+    const retryAtMs = entry && entry.status !== 'ok' ? entry.metadata?.retryAtMs : undefined;
+    if (typeof retryAtMs !== 'number') {
+        // Success, or a persistent failure: nothing to retry soon.
+        cancelFailureRetry(provider);
+        return;
+    }
+    const previous = failureRetries.get(provider);
+    if (previous?.timer) clearTimeout(previous.timer);
+    const failures = (previous?.failures ?? 0) + 1;
+    if (failures > QUOTA_FAILURE_MAX_RETRIES) {
+        failureRetries.set(provider, { failures, timer: null });
+        LOG.info('Quota', `${provider}: transient failure persists after ${QUOTA_FAILURE_MAX_RETRIES} retries — back to the normal refresh cadence`);
+        return;
+    }
+    const backoffMs = Math.min(
+        QUOTA_TRANSIENT_RETRY_DELAY_MS * 2 ** (failures - 1),
+        QUOTA_REFRESH_INTERVAL_MS,
+    );
+    // A server-dictated retry time (HTTP Retry-After) wins when it is later.
+    const delayMs = Math.max(retryAtMs - Date.now(), backoffMs, 0);
+    const timer = setTimeout(() => {
+        const state = failureRetries.get(provider);
+        if (state) state.timer = null;
+        // The enable gate is re-evaluated at fire time: a provider disabled
+        // since the failure was recorded is never re-probed.
+        if (isEnabled && !isEnabled(provider)) return;
+        void refreshQuotaCacheOnce([{ provider, fetch }], isEnabled)
+            .catch((e: any) => LOG.warn('Quota', `${provider}: scheduled retry failed: ${e?.message || e}`));
+    }, delayMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    failureRetries.set(provider, { failures, timer });
+    LOG.info('Quota', `${provider}: transient failure — retry scheduled in ${Math.round(delayMs / 1000)}s (attempt ${failures}/${QUOTA_FAILURE_MAX_RETRIES})`);
 }
 
 /**
@@ -337,12 +451,23 @@ export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRe
             active = false;
         }
         // Backfill exception to the idle gate: an ENABLED provider with no
-        // snapshot at all (typically one enabled after the boot refresh ran)
-        // has a real quota number we have simply never read, so one fetch is
-        // worth it even on an idle machine. A recorded failure counts as a
-        // snapshot, so a failing fetcher cannot re-trigger this every tick.
+        // USABLE snapshot has a real quota number we have simply never read,
+        // so one fetch is worth it even on an idle machine. "No usable
+        // snapshot" covers two states:
+        //   - no entry at all (typically a provider enabled after the boot
+        //     refresh ran), and
+        //   - a cached TRANSIENT failure whose retry time has passed — the
+        //     scheduled short-fuse retry (updateFailureRetry) is the primary
+        //     path, and this is the safety net for a timer lost to process
+        //     sleep. cache.has() alone could not tell that failure from a
+        //     real measurement, which is what pinned the expired-token race
+        //     error for a full 15-minute tick.
+        // A PERSISTENT failure (no retryAtMs) or an exhausted retry budget
+        // still counts as a snapshot, so a failing fetcher cannot re-trigger
+        // this every tick.
         const needsBackfill = options.isEnabled
-            ? fetchers.some(({ provider }) => options.isEnabled!(provider) && !cache.has(provider))
+            ? fetchers.some(({ provider }) =>
+                options.isEnabled!(provider) && (!cache.has(provider) || isFailureRetryDue(provider)))
             : false;
         if (!active && !needsBackfill) return;
         running = true;
@@ -430,4 +555,84 @@ export function refreshQuotaCacheOnBoot(isEnabled?: QuotaProviderEnabled): void 
 /** Test seam: reset the boot-refresh in-flight flag so cases start clean. */
 export function __resetQuotaBootRefreshForTests(): void {
     bootRefreshInFlight = false;
+}
+
+/**
+ * Minimum gap between two event-triggered refreshes of the SAME provider. A
+ * busy session can complete many turns a minute; quota moves on the scale of
+ * a 5-hour window, so anything finer than this buys nothing but fetch cost.
+ */
+export const QUOTA_EVENT_REFRESH_DEBOUNCE_MS = 60_000;
+
+export interface QuotaEventRefreshOptions {
+    debounceMs?: number;
+    /** Injectable for tests; defaults to Date.now. */
+    now?: () => number;
+}
+
+/**
+ * Event-driven quota refresh: re-read ONE provider's quota right after one of
+ * its agents finishes a turn (`agent:generating_completed`) — the moment the
+ * numbers are guaranteed to have just moved. The periodic loop alone leaves
+ * the post-turn reading up to 15 minutes stale; the boot refresh obviously
+ * cannot help mid-session either.
+ *
+ * This is deliberately a COMPLEMENT to the transient-failure retry above, not
+ * a fix for the token race: the completion event can fire in the same turn
+ * whose token expired, i.e. BEFORE the CLI renewed it, so an event-triggered
+ * refetch may still record `expired-token`. The retry scheduler is what
+ * recovers from that; this path is what keeps successful readings fresh.
+ *
+ * Selectivity rules:
+ *  - only the provider the event belongs to is refetched (a kimi turn never
+ *    spends a codex app-server spawn);
+ *  - a provider with no fetcher (or a non-quota provider type) is ignored;
+ *  - the machine enable gate is consulted per event, so a disabled provider
+ *    is never probed;
+ *  - per-provider debounce bounds a turn-heavy session to one fetch per
+ *    QUOTA_EVENT_REFRESH_DEBOUNCE_MS.
+ *
+ * Disk persistence is NOT reimplemented here: every refresh funnels through
+ * refreshQuotaCacheOnce, which already persists via ./persist.ts.
+ */
+export function setupQuotaEventRefresh(
+    components: {
+        instanceManager: {
+            onEvent(listener: (event: { event?: unknown; providerType?: unknown }) => void): void;
+        };
+        providerLoader?: {
+            isMachineProviderEnabled(providerType: string): boolean;
+            isMachineQuotaEnabled?(providerType: string): boolean;
+        };
+    },
+    options: QuotaEventRefreshOptions = {},
+): QuotaRefreshLoopHandle {
+    const isEnabled = components.providerLoader
+        ? quotaProviderEnabledFromLoader(components.providerLoader)
+        : undefined;
+    const debounceMs = options.debounceMs ?? QUOTA_EVENT_REFRESH_DEBOUNCE_MS;
+    const now = options.now ?? Date.now;
+    const lastRefreshAt = new Map<string, number>();
+    let stopped = false;
+    components.instanceManager.onEvent((event) => {
+        if (stopped) return;
+        if (event.event !== 'agent:generating_completed') return;
+        const refresher = typeof event.providerType === 'string'
+            ? REFRESHERS.find(({ provider }) => provider === event.providerType)
+            : undefined;
+        if (!refresher) return; // not a quota-reporting provider
+        if (isEnabled && !isEnabled(refresher.provider)) return;
+        const at = now();
+        if (at - (lastRefreshAt.get(refresher.provider) ?? -Infinity) < debounceMs) return;
+        lastRefreshAt.set(refresher.provider, at);
+        void refreshQuotaCacheOnce([refresher], isEnabled)
+            .catch((e: any) => LOG.warn('Quota', `Event-driven quota refresh failed: ${e?.message || e}`));
+    });
+    LOG.info('Quota', `Event-driven quota refresh armed (agent:generating_completed, ${debounceMs}ms debounce)`);
+    return {
+        stop() {
+            stopped = true;
+            LOG.info('Quota', 'Event-driven quota refresh stopped');
+        },
+    };
 }

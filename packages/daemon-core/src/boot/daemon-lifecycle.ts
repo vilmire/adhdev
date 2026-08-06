@@ -40,7 +40,7 @@ import type { IdeProviderInstance } from '../providers/ide-provider-instance.js'
 import { createDefaultGitCommandServices } from '../git/git-commands.js';
 import { setupMeshEventForwarding } from '../mesh/mesh-events.js';
 import { setupMeshReconcileLoop } from '../mesh/mesh-reconcile-loop.js';
-import { setupQuotaRefreshLoop, refreshQuotaCacheOnBoot, hydrateQuotaCacheFromDisk, quotaProviderEnabledFromLoader } from '../quota/refresh.js';
+import { setupQuotaRefreshLoop, setupQuotaEventRefresh, refreshQuotaCacheOnBoot, hydrateQuotaCacheFromDisk, quotaProviderEnabledFromLoader } from '../quota/refresh.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
 import { applyProcessHardening } from './process-hardening.js';
@@ -147,6 +147,10 @@ export interface DaemonComponents {
     // node-facts bundle without charging a codex app-server spawn to every
     // git_status. Skips ticks entirely while this machine is idle.
     quotaRefreshLoop?: { stop(): void };
+    // Event-driven quota refresh handle (agent:generating_completed → refetch
+    // just that provider, debounced). Complements the periodic loop: the
+    // post-turn reading lands within seconds instead of up to one interval.
+    quotaEventRefresh?: { stop(): void };
     // Canonical status/daemon identity (e.g. `standalone_<machineId>` /
     // `daemon_<machineId>`). This is the SAME id the MCP layer stamps as a
     // worker's meshCoordinatorDaemonId (ctx.localDaemonId, sourced from
@@ -478,6 +482,10 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // Writes the cache that buildLocalNodeFacts reads; the builder never
     // fetches, so mesh_status stays as cheap as it was.
     components.quotaRefreshLoop = setupQuotaRefreshLoop(components);
+    // 11b-2. Event-driven complement: refetch JUST the provider whose agent
+    // finished a turn, so the post-turn reading lands within seconds instead
+    // of up to one refresh interval. Same enable gate as the periodic loop.
+    components.quotaEventRefresh = setupQuotaEventRefresh(components);
     // 11c. Restore the last persisted snapshots, then fire the one-shot boot
     // refresh. Both are deferred past this function's return and neither is
     // awaited — a ~900ms codex app-server spawn must not add to daemon startup
@@ -546,7 +554,7 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     const {
         poller, cdpInitializer, agentStreamManager,
         cliManager, instanceManager, cdpManagers,
-        meshReconcileLoop, quotaRefreshLoop,
+        meshReconcileLoop, quotaRefreshLoop, quotaEventRefresh,
     } = components;
 
     // 1. Stop timers
@@ -554,6 +562,7 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     cdpInitializer.stop();
     try { meshReconcileLoop?.stop(); } catch { /* noop */ }
     try { quotaRefreshLoop?.stop(); } catch { /* noop */ }
+    try { quotaEventRefresh?.stop(); } catch { /* noop */ }
 
     // 2. Dispose agent stream
     try {
