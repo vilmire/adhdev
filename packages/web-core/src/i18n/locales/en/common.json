@@ -2852,7 +2852,10 @@
         "noMatchingHistory": "No saved history matches these filters.",
         "noRecentChats": "No recent chat sessions found.",
         "refreshHistory": "Refresh History",
-        "refreshing": "⌛ Refreshing..."
+        "refreshing": "⌛ Refreshing...",
+        "confirmSwitchTitle": "Switch session?",
+        "confirmSwitchDescription": "Switch to \"{{target}}\"? This will leave your current view.",
+        "confirmSwitchAction": "Switch"
     },
     "landing": {
         "nav": {

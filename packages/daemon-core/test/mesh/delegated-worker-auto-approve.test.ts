@@ -162,6 +162,73 @@ describe('resolveDelegatedWorkerAutoApprove', () => {
       delegatedWorkerDangerousModeAllow: false,
     });
   });
+
+  // ── Per-launch override (coordinator-launch dialog approval-mode picker) ──
+  it('a per-launch mode override wins over the repo mesh.json providerDefaults mode', () => {
+    // override='danger' beats repoConfig('accept-edits'); 'danger' carries a known-dangerous
+    // launchArg, so without delegatedWorkerDangerousModeAllow it downgrades to the safe
+    // pty-parse fallback ('parsed') rather than silently falling through to 'accept-edits'.
+    expect(
+      resolveDelegatedWorkerAutoApprove(
+        DEFAULT_MESH_POLICY, undefined, modeProvider, repoConfig('accept-edits'), 'claude-cli', 'danger',
+      ),
+    ).toBe('parsed');
+    // With machine-local opt-in, the override-selected dangerous mode is honored.
+    expect(
+      resolveDelegatedWorkerAutoApprove(
+        { ...DEFAULT_MESH_POLICY, delegatedWorkerDangerousModeAllow: true },
+        undefined, modeProvider, repoConfig('accept-edits'), 'claude-cli', 'danger',
+      ),
+    ).toBe('danger');
+  });
+
+  it('a per-launch mode override selects a specific declared mode over the provider spec default', () => {
+    expect(
+      resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined, modeProvider, undefined, undefined, 'accept-edits'),
+    ).toBe('accept-edits');
+    // No override, no repo config, no providerType → provider spec default.
+    expect(resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined, modeProvider)).toBe('parsed');
+  });
+
+  it('an unknown per-launch override mode id falls back to the provider default (fail-closed)', () => {
+    expect(
+      resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined, modeProvider, undefined, undefined, 'does-not-exist'),
+    ).toBe('parsed');
+  });
+
+  it('PRIORITY INVERSION GUARD: node/mesh ENABLE=false wins over a per-launch mode override too', () => {
+    expect(
+      resolveDelegatedWorkerAutoApprove(
+        { delegatedWorkerAutoApprove: false }, undefined, modeProvider, undefined, undefined, 'accept-edits',
+      ),
+    ).toBe(false);
+  });
+
+  it('delegatedWorkerAutoApproveSettings threads the mode override through to the settings envelope', () => {
+    expect(delegatedWorkerAutoApproveSettings(
+      DEFAULT_MESH_POLICY, undefined, modeProvider, undefined, undefined, 'accept-edits',
+    )).toEqual({
+      autoApprove: undefined,
+      autoApproveMode: 'accept-edits',
+      delegatedWorkerDangerousModeAllow: false,
+    });
+  });
+
+  it('a per-launch legacy boolean override is honored for providers with no declared modes', () => {
+    // No provider.autoApproveModes → legacy boolean branch.
+    expect(resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined, null, undefined, undefined, undefined, false)).toBe(false);
+    expect(resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined, null, undefined, undefined, undefined, true)).toBe(true);
+    // Omitted override → defaults to enabled (existing behavior).
+    expect(resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined, null)).toBe(true);
+  });
+
+  it('the legacy boolean override is ignored once the provider declares modes', () => {
+    // overrideLegacyAutoApprove=false must NOT suppress a mode-based provider — only
+    // overrideModeId (or repo/provider defaults) govern mode selection.
+    expect(
+      resolveDelegatedWorkerAutoApprove(DEFAULT_MESH_POLICY, undefined, modeProvider, undefined, undefined, undefined, false),
+    ).toBe('parsed');
+  });
 });
 
 describe('delegated worker launch envelope → shouldAutoApprove() precedence', () => {

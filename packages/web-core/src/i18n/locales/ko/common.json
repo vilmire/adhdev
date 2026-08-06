@@ -2852,7 +2852,10 @@
         "noMatchingHistory": "이 필터와 일치하는 저장 기록이 없습니다.",
         "noRecentChats": "최근 채팅 세션이 없습니다.",
         "refreshHistory": "기록 새로고침",
-        "refreshing": "⌛ 새로고침 중..."
+        "refreshing": "⌛ 새로고침 중...",
+        "confirmSwitchTitle": "세션을 전환할까요?",
+        "confirmSwitchDescription": "\"{{target}}\"(으)로 전환하시겠습니까? 현재 화면에서 벗어납니다.",
+        "confirmSwitchAction": "전환"
     },
     "landing": {
         "nav": {

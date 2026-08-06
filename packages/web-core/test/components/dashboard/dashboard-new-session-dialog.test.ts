@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
@@ -7,6 +9,13 @@ import {
   DangerousAutoApproveModeDialog,
 } from '../../../src/components/dashboard/AutoApproveModeSelector'
 import type { DaemonData } from '../../../src/types'
+
+function readDialogSource(): string {
+  return fs.readFileSync(
+    path.join(import.meta.dirname, '../../../src/components/dashboard/DashboardNewSessionDialog.tsx'),
+    'utf8',
+  )
+}
 
 function createMachine(index = 1): DaemonData {
   return {
@@ -179,5 +188,30 @@ describe('DashboardNewSessionDialog', () => {
     expect(html).toContain('CLI')
     expect(html).toContain('IDE')
     expect(html).toContain('ACP')
+  })
+
+  it('renders the auto-approve mode picker for mesh coordinator launches too, not just workspace launches', () => {
+    const source = readDialogSource()
+
+    // The auto-approve LaunchSectionCard must render when workspaceMode is 'mesh' with a
+    // target selected, matching the workspace-launch condition (activeKind === 'cli').
+    expect(source).toContain("((workspaceMode === 'mesh' && !!selectedTarget) || (workspaceMode !== 'mesh' && activeKind === 'cli'))")
+  })
+
+  it('passes the selected auto-approve settings into onLaunchMeshCoordinator', () => {
+    const source = readDialogSource()
+
+    const meshLaunchCallMatch = source.match(/onLaunchMeshCoordinator\(selectedMachine\.id, selectedMeshId, selectedTarget, \{[^}]*settings: launchAutoApproveSettings,[^}]*\}\)/)
+    expect(meshLaunchCallMatch).not.toBeNull()
+  })
+
+  it('defaults the coordinator auto-approve mode using the same resolver as the workspace flow', () => {
+    const source = readDialogSource()
+
+    // Both flows share selectedAutoApproveModeId/legacyAutoApprove state, seeded once from
+    // resolveInitialAutoApproveModeId — there is no separate "mesh default" branch.
+    expect(source).toContain('resolveInitialAutoApproveModeId(autoApproveModes)')
+    const resetEffectMatches = [...source.matchAll(/setSelectedAutoApproveModeId\(initialAutoApproveModeId\)/g)]
+    expect(resetEffectMatches.length).toBe(1)
   })
 })

@@ -39,7 +39,11 @@ export interface DashboardMeshOverrides {
         machineId: string,
         meshId: string,
         cliType: string,
-        opts?: { initialModel?: string | null; initialThinkingLevel?: string | null },
+        opts?: {
+            initialModel?: string | null
+            initialThinkingLevel?: string | null
+            settings?: { autoApprove?: boolean; autoApproveMode?: string }
+        },
     ) => Promise<LaunchResult>
 }
 

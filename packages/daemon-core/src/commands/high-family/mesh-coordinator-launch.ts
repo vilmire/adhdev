@@ -113,6 +113,16 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                 const initialThinkingLevel = typeof args?.initialThinkingLevel === 'string' && args.initialThinkingLevel.trim()
                     ? args.initialThinkingLevel.trim()
                     : null;
+                // Optional per-launch approval-mode override, picked in the new-coordinator
+                // dialog. Takes precedence over the repo-declared providerDefaults inside
+                // delegatedWorkerAutoApproveSettings, same precedence rule as a delegated
+                // worker's per-task override reserves.
+                const autoApproveModeOverride = typeof args?.autoApproveMode === 'string' && args.autoApproveMode.trim()
+                    ? args.autoApproveMode.trim()
+                    : null;
+                // Legacy (no declared modes) providers use a plain boolean toggle instead —
+                // mirrors LegacyAutoApproveToggle in the workspace dialog.
+                const legacyAutoApproveOverride = typeof args?.autoApprove === 'boolean' ? args.autoApprove : null;
                 if (!meshId) return { success: false, error: 'meshId required' };
 
                 try {
@@ -501,6 +511,8 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                                     providerMeta,
                                     repoMeshConfigLoad.config,
                                     cliType,
+                                    autoApproveModeOverride,
+                                    legacyAutoApproveOverride,
                                 ),
                             },
                             ...(initialModel ? { initialModel } : {}),
@@ -740,6 +752,8 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                                 providerMeta,
                                 repoMeshConfigLoad.config,
                                 cliType,
+                                autoApproveModeOverride,
+                                legacyAutoApproveOverride,
                             ),
                         },
                         ...(initialModel ? { initialModel } : {}),

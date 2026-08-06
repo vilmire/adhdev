@@ -2852,7 +2852,10 @@
         "noMatchingHistory": "没有符合这些筛选条件的已保存历史记录。",
         "noRecentChats": "未找到最近的聊天会话。",
         "refreshHistory": "刷新历史记录",
-        "refreshing": "⌛ 正在刷新…"
+        "refreshing": "⌛ 正在刷新…",
+        "confirmSwitchTitle": "切换会话?",
+        "confirmSwitchDescription": "切换到“{{target}}”？这将离开当前视图。",
+        "confirmSwitchAction": "切换"
     },
     "landing": {
         "nav": {

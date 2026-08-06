@@ -223,7 +223,11 @@ export function useDashboardCommandActions({
     machineId: string,
     meshId: string,
     cliType: string,
-    opts?: { initialModel?: string | null; initialThinkingLevel?: string | null },
+    opts?: {
+      initialModel?: string | null
+      initialThinkingLevel?: string | null
+      settings?: { autoApprove?: boolean; autoApproveMode?: string }
+    },
   ): Promise<LaunchResult> => {
     if (!meshId.trim()) return { ok: false, error: 'Choose a mesh first.' }
     // Cloud override
@@ -239,6 +243,8 @@ export function useDashboardCommandActions({
       const initialThinkingLevel = opts?.initialThinkingLevel?.trim()
       if (initialModel) launchPayload.initialModel = initialModel
       if (initialThinkingLevel) launchPayload.initialThinkingLevel = initialThinkingLevel
+      if (opts?.settings?.autoApproveMode) launchPayload.autoApproveMode = opts.settings.autoApproveMode
+      else if (typeof opts?.settings?.autoApprove === 'boolean') launchPayload.autoApprove = opts.settings.autoApprove
       const raw: any = await sendDaemonCommand(machineId, 'launch_mesh_coordinator', launchPayload)
       const result = raw?.result ?? raw
       if (result?.success === false || raw?.success === false) {

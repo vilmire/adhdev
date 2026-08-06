@@ -80,7 +80,11 @@ interface DashboardNewSessionDialogProps {
         machineId: string,
         meshId: string,
         cliType: string,
-        opts?: { initialModel?: string | null; initialThinkingLevel?: string | null },
+        opts?: {
+            initialModel?: string | null
+            initialThinkingLevel?: string | null
+            settings?: { autoApprove?: boolean; autoApproveMode?: string }
+        },
     ) => Promise<LaunchResult>
     onListSavedSessions: (machineId: string, providerType: string) => Promise<SavedSessionOption[]>
 }
@@ -649,6 +653,7 @@ export default function DashboardNewSessionDialog({
             const result = await onLaunchMeshCoordinator(selectedMachine.id, selectedMeshId, selectedTarget, {
                 initialModel: initialModel.trim() ? initialModel.trim() : null,
                 initialThinkingLevel: initialThinkingLevel.trim() ? initialThinkingLevel.trim() : null,
+                settings: launchAutoApproveSettings,
             })
             setBusy(false)
             if (!result.ok) {
@@ -1021,7 +1026,7 @@ export default function DashboardNewSessionDialog({
                             </LaunchSectionCard>
                         )}
 
-                        {workspaceMode !== 'mesh' && activeKind === 'cli' && (
+                        {((workspaceMode === 'mesh' && !!selectedTarget) || (workspaceMode !== 'mesh' && activeKind === 'cli')) && (
                             <LaunchSectionCard title={t('newSession.autoApproveMode')}>
                                 {autoApproveModes ? (
                                     <AutoApproveModeSelector

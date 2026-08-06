@@ -2852,7 +2852,10 @@
         "noMatchingHistory": "Ningún historial guardado coincide con estos filtros.",
         "noRecentChats": "No se encontraron sesiones de chat recientes.",
         "refreshHistory": "Actualizar historial",
-        "refreshing": "⌛ Actualizando..."
+        "refreshing": "⌛ Actualizando...",
+        "confirmSwitchTitle": "¿Cambiar de sesión?",
+        "confirmSwitchDescription": "¿Cambiar a \"{{target}}\"? Esto abandonará la vista actual.",
+        "confirmSwitchAction": "Cambiar"
     },
     "landing": {
         "nav": {

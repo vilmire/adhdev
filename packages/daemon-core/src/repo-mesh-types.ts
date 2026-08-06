@@ -983,6 +983,13 @@ export function resolveDelegatedWorkerAutoApprove(
     // providerType is needed to look up the repo-declared requested mode; it is
     // separate from `provider` because the caller resolves the spec independently.
     providerType?: string | null,
+    // Per-launch mode override (e.g. a mode explicitly chosen at coordinator-launch
+    // time). Wins over repoConfig.providerDefaults when set to a mode ID the spec knows.
+    overrideModeId?: string | null,
+    // Per-launch boolean override for legacy providers with no declared modes
+    // (AutoApproveModesConfig absent) — mirrors the workspace dialog's
+    // LegacyAutoApproveToggle. Ignored when the provider declares modes.
+    overrideLegacyAutoApprove?: boolean | null,
 ): boolean | string {
     // ── ① ENABLE gate — machine-local only. false short-circuits before mode. ──
     let enabled = true;
@@ -994,15 +1001,18 @@ export function resolveDelegatedWorkerAutoApprove(
     if (!enabled) return false;
 
     const modes = provider?.autoApproveModes;
-    if (!modes) return true;
+    if (!modes) return typeof overrideLegacyAutoApprove === 'boolean' ? overrideLegacyAutoApprove : true;
 
-    // ── ② MODE selection (enabled only). Repo providerDefaults MAY override the
-    //     provider spec default here — but only with a mode ID the spec knows. ──
-    // Future: a per-task override would slot in ahead of the repo default; the
-    // signature reserves that precedence but no task override is wired yet.
-    const requestedModeRaw = typeof providerType === 'string'
-        ? repoConfig?.providerDefaults?.autoApproveModes?.[providerType.trim()]
-        : undefined;
+    // ── ② MODE selection (enabled only). A per-launch override (e.g. a mode picked
+    //     in the new-coordinator dialog) takes precedence over the repo-declared
+    //     providerDefaults, which in turn may override the provider spec default —
+    //     but only with a mode ID the spec knows. ──
+    const overrideModeIdTrimmed = typeof overrideModeId === 'string' ? overrideModeId.trim() : '';
+    const requestedModeRaw = overrideModeIdTrimmed
+        ? overrideModeIdTrimmed
+        : typeof providerType === 'string'
+            ? repoConfig?.providerDefaults?.autoApproveModes?.[providerType.trim()]
+            : undefined;
     const requestedModeId = typeof requestedModeRaw === 'string' && requestedModeRaw.trim()
         ? requestedModeRaw.trim()
         : '';
@@ -1040,12 +1050,16 @@ export function delegatedWorkerAutoApproveSettings(
     provider?: Pick<ProviderModule, 'autoApproveModes'> | null,
     repoConfig?: RepoMeshDeclarativeConfig | null,
     providerType?: string | null,
+    // Per-launch mode override — see resolveDelegatedWorkerAutoApprove.
+    overrideModeId?: string | null,
+    // Per-launch legacy boolean override — see resolveDelegatedWorkerAutoApprove.
+    overrideLegacyAutoApprove?: boolean | null,
 ): {
     autoApprove: boolean | undefined;
     autoApproveMode: string | undefined;
     delegatedWorkerDangerousModeAllow: boolean;
 } {
-    const resolved = resolveDelegatedWorkerAutoApprove(meshPolicy, nodePolicy, provider, repoConfig, providerType);
+    const resolved = resolveDelegatedWorkerAutoApprove(meshPolicy, nodePolicy, provider, repoConfig, providerType, overrideModeId, overrideLegacyAutoApprove);
     const delegatedWorkerDangerousModeAllow = resolveDelegatedWorkerDangerousModeAllow(meshPolicy, nodePolicy);
     return typeof resolved === 'string'
         ? { autoApprove: undefined, autoApproveMode: resolved, delegatedWorkerDangerousModeAllow }

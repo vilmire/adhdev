@@ -71,6 +71,10 @@ export interface HistoryModalProps {
     onResumeSavedSession?: (session: SavedSessionHistoryEntry) => void;
 }
 
+type PendingSwitchTarget =
+    | { kind: 'chat'; id: string; title: string; timestamp?: number }
+    | { kind: 'saved'; session: SavedSessionHistoryEntry };
+
 export default function HistoryModal({
     activeConv, ides, isCreatingChat, isRefreshingHistory,
     savedSessions = [], isSavedSessionsLoading = false, isResumingSavedSessionId = null,
@@ -83,6 +87,7 @@ export default function HistoryModal({
     const activeChatId = ideEntry?.activeChat?.id;
     const isSavedSessionMode = isCliConv(activeConv) && !isAcpConv(activeConv);
     const [localFilters, setLocalFilters] = useState<SavedHistoryFilterState>(() => createSavedHistoryFilterState());
+    const [pendingSwitch, setPendingSwitch] = useState<PendingSwitchTarget | null>(null);
     const filters = savedHistoryFilters || localFilters;
     const normalizedMissingWorkspaceResumePath = String(missingWorkspaceResumePath || '').trim();
     const setFilters = (next: SavedHistoryFilterState) => {
@@ -198,7 +203,7 @@ export default function HistoryModal({
                                         type="button"
                                         onClick={() => {
                                             if (isDisabled || !onResumeSavedSession) return;
-                                            onResumeSavedSession(session);
+                                            setPendingSwitch({ kind: 'saved', session });
                                         }}
                                         disabled={isDisabled}
                                         className={`w-full text-left p-4 rounded-xl mb-2 border transition-all ${
@@ -251,7 +256,10 @@ export default function HistoryModal({
                     ) : chats.map((chat: any) => (
                         <div
                             key={chat.id}
-                            onClick={() => { onSwitchSession(activeConv.routeId, chat.id); onClose(); }}
+                            onClick={() => {
+                                if (chat.id === activeChatId) return;
+                                setPendingSwitch({ kind: 'chat', id: chat.id, title: chat.title || t('historyModal.untitledSession') });
+                            }}
                             className={`p-4 rounded-xl mb-2 cursor-pointer border transition-all ${
                                 activeChatId === chat.id
                                     ? 'bg-[var(--bg-glass-hover)] border-accent'
@@ -301,6 +309,58 @@ export default function HistoryModal({
                     </button>
                 </div>
             </div>
+
+            {pendingSwitch && (
+                <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center p-4">
+                    <div onClick={() => setPendingSwitch(null)} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+                    <div
+                        role="dialog"
+                        aria-modal="true"
+                        className="card fade-in relative w-full sm:w-[min(92vw,420px)] max-w-[420px] flex flex-col overflow-hidden rounded-[24px] sm:rounded-[18px] shadow-[0_20px_40px_rgba(0,0,0,0.4)]"
+                    >
+                        <div className="px-4 py-4 md:px-6 md:py-5 border-b border-border-subtle bg-bg-primary">
+                            <h3 className="m-0 text-base md:text-lg font-extrabold">{t('historyModal.confirmSwitchTitle')}</h3>
+                            <div className="mt-1 text-[13px] md:text-sm text-text-muted leading-relaxed">
+                                {t('historyModal.confirmSwitchDescription', {
+                                    target: pendingSwitch.kind === 'chat'
+                                        ? pendingSwitch.title
+                                        : (pendingSwitch.session.title || t('historyModal.untitledSession')),
+                                })}
+                            </div>
+                            {pendingSwitch.kind === 'saved' && (
+                                <div className="mt-2 text-[11px] text-text-muted font-mono truncate">
+                                    {pendingSwitch.session.workspace || t('historyModal.workspaceUnknown')}
+                                    {pendingSwitch.session.lastMessageAt ? ` · ${formatSavedSessionTime(pendingSwitch.session.lastMessageAt)}` : ''}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="px-4 py-4 md:px-6 md:py-5 bg-bg-primary flex flex-col gap-2.5">
+                            <button
+                                onClick={() => {
+                                    const target = pendingSwitch;
+                                    setPendingSwitch(null);
+                                    if (target.kind === 'chat') {
+                                        onSwitchSession(activeConv.routeId, target.id);
+                                        onClose();
+                                    } else if (onResumeSavedSession) {
+                                        onResumeSavedSession(target.session);
+                                    }
+                                }}
+                                className="btn btn-primary w-full justify-center min-h-[42px]"
+                            >
+                                {t('historyModal.confirmSwitchAction')}
+                            </button>
+                            <button
+                                onClick={() => setPendingSwitch(null)}
+                                className="btn btn-secondary w-full justify-center min-h-[42px]"
+                            >
+                                {t('common.cancel')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 

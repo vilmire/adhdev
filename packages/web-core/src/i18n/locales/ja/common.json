@@ -2852,7 +2852,10 @@
         "noMatchingHistory": "これらのフィルターに一致する保存済み履歴はありません。",
         "noRecentChats": "最近のチャットセッションが見つかりません。",
         "refreshHistory": "履歴を更新",
-        "refreshing": "⌛ 更新中..."
+        "refreshing": "⌛ 更新中...",
+        "confirmSwitchTitle": "セッションを切り替えますか?",
+        "confirmSwitchDescription": "「{{target}}」に切り替えますか?現在の画面から移動します。",
+        "confirmSwitchAction": "切り替え"
     },
     "landing": {
         "nav": {
