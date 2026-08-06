@@ -4,10 +4,10 @@
  * Manages launcher config, machine auth, and user preferences.
  */
 
-import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'fs';
 import { randomUUID } from 'crypto';
+import { resolveConfigDir } from './config-dir.js';
 import type { WorkspaceEntry } from './workspaces.js';
 export type { WorkspaceEntry } from './workspaces.js';
 export type { RecentActivityEntry } from './recent-activity.js';
@@ -363,11 +363,12 @@ function ensureMachineId(config: ADHDevConfig): { config: ADHDevConfig; changed:
 }
 
 /**
- * Get the config directory path
+ * Get the config directory path. The resolution rule itself lives in
+ * config-dir.ts (resolveConfigDir); this adds the mkdir side effect callers
+ * historically relied on.
  */
 export function getConfigDir(): string {
-    const override = process.env.ADHDEV_CONFIG_DIR;
-    const dir = override && override.trim() ? override.trim() : join(homedir(), '.adhdev');
+    const dir = resolveConfigDir();
     if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
     }

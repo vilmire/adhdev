@@ -12,21 +12,16 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
+import { resolveConfigLogsDir } from '../config/config-dir.js';
 
 // ─── Config ──────────────────────────────────
 // Command history lives under the unified ADHDev home (~/.adhdev/logs/) next to
-// the daemon log, on every platform. Honor ADHDEV_CONFIG_DIR for isolated homes.
-// Keep this in sync with logger.ts LOG_DIR.
-const ADHDEV_HOME = process.env.ADHDEV_CONFIG_DIR && process.env.ADHDEV_CONFIG_DIR.trim()
-    ? process.env.ADHDEV_CONFIG_DIR.trim()
-    : path.join(os.homedir(), '.adhdev');
-const LOG_DIR = path.join(ADHDEV_HOME, 'logs');
-
+// the daemon log, on every platform. The directory is resolved LAZILY through
+// the shared config-dir helper: a module-level snapshot froze the dir at import
+// time, so an ADHDEV_CONFIG_DIR assigned after load (tests, daemon boot
+// ordering) was silently ignored and entries landed in the wrong instance home.
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const MAX_DAYS = 7;
-
-try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch { }
 
 // ─── Types ───────────────────────────────────
 export interface CommandLogEntry {
@@ -74,29 +69,41 @@ function getDateStr(): string {
     return new Date().toISOString().slice(0, 10);
 }
 
-let currentDate = getDateStr();
-let currentFile = path.join(LOG_DIR, `commands-${currentDate}.jsonl`);
+let currentDate = '';
+let currentDir = '';
+let currentFile = '';
 let writeCount = 0;
 
-function checkRotation(): void {
+/**
+ * Re-point the active file when the date rolled over or ADHDEV_CONFIG_DIR
+ * changed. Cheap: two string compares when nothing moved, so callers invoke it
+ * on every access instead of trusting an import-time snapshot. A new directory
+ * gets created and retention-swept once.
+ */
+function refreshCurrentFile(): void {
     const today = getDateStr();
-    if (today !== currentDate) {
-        currentDate = today;
-        currentFile = path.join(LOG_DIR, `commands-${currentDate}.jsonl`);
+    const dir = resolveConfigLogsDir();
+    if (today === currentDate && dir === currentDir) return;
+    const dirChanged = dir !== currentDir;
+    currentDate = today;
+    currentDir = dir;
+    currentFile = path.join(dir, `commands-${today}.jsonl`);
+    if (dirChanged) {
+        try { fs.mkdirSync(dir, { recursive: true }); } catch { }
         cleanOldFiles();
     }
 }
 
 function cleanOldFiles(): void {
     try {
-        const files = fs.readdirSync(LOG_DIR).filter(f => f.startsWith('commands-') && f.endsWith('.jsonl'));
+        const files = fs.readdirSync(currentDir).filter(f => f.startsWith('commands-') && f.endsWith('.jsonl'));
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - MAX_DAYS);
         const cutoffStr = cutoff.toISOString().slice(0, 10);
         for (const file of files) {
             const dateMatch = file.match(/commands-(\d{4}-\d{2}-\d{2})/);
             if (dateMatch && dateMatch[1] < cutoffStr) {
-                try { fs.unlinkSync(path.join(LOG_DIR, file)); } catch { }
+                try { fs.unlinkSync(path.join(currentDir, file)); } catch { }
             }
         }
     } catch { }
@@ -136,10 +143,10 @@ export function shouldLogCommand(cmd: string): boolean {
  */
 export function logCommand(entry: CommandLogEntry): void {
     if (!shouldLogCommand(entry.cmd)) return;
-    
+
     try {
+        refreshCurrentFile();
         if (++writeCount % 500 === 0) {
-            checkRotation();
             checkSize();
         }
         
@@ -163,6 +170,7 @@ export function logCommand(entry: CommandLogEntry): void {
  */
 export function getRecentCommands(count = 50): CommandLogEntry[] {
     try {
+        refreshCurrentFile();
         if (!fs.existsSync(currentFile)) return [];
         const content = fs.readFileSync(currentFile, 'utf-8');
         const lines = content.trim().split('\n').filter(Boolean);
@@ -189,7 +197,7 @@ export function getRecentCommands(count = 50): CommandLogEntry[] {
 }
 
 /** Current command log file path */
-export function getCommandLogPath(): string { return currentFile; }
-
-// Initial cleanup
-cleanOldFiles();
+export function getCommandLogPath(): string {
+    refreshCurrentFile();
+    return currentFile;
+}

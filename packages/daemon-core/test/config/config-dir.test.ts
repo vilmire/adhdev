@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { getConfigDir } from '../../src/config/config.js';
+import { resolveConfigDir, resolveConfigLogsDir } from '../../src/config/config-dir.js';
 
 const ORIGINAL_ENV = {
   ADHDEV_CONFIG_DIR: process.env.ADHDEV_CONFIG_DIR,
@@ -55,5 +56,49 @@ describe('getConfigDir', () => {
 
     expect(getConfigDir()).toBe(expected);
     expect(existsSync(expected)).toBe(true);
+  });
+});
+
+describe('resolveConfigDir / resolveConfigLogsDir (shared pure helper)', () => {
+  beforeEach(() => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'adhdev-config-dir-'));
+    fakeHome = join(tempRoot, 'home');
+    overrideDir = join(tempRoot, 'override-config');
+    process.env.HOME = fakeHome;
+    delete process.env.ADHDEV_CONFIG_DIR;
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_ENV.ADHDEV_CONFIG_DIR === undefined) {
+      delete process.env.ADHDEV_CONFIG_DIR;
+    } else {
+      process.env.ADHDEV_CONFIG_DIR = ORIGINAL_ENV.ADHDEV_CONFIG_DIR;
+    }
+    if (ORIGINAL_ENV.HOME === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = ORIGINAL_ENV.HOME;
+    }
+    if (tempRoot && existsSync(tempRoot)) {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+    tempRoot = '';
+    fakeHome = '';
+    overrideDir = '';
+  });
+
+  it('matches the getConfigDir rule but performs NO mkdir', () => {
+    expect(resolveConfigDir()).toBe(join(fakeHome, '.adhdev'));
+    expect(existsSync(join(fakeHome, '.adhdev'))).toBe(false);
+
+    process.env.ADHDEV_CONFIG_DIR = overrideDir;
+    expect(resolveConfigDir()).toBe(overrideDir);
+    expect(existsSync(overrideDir)).toBe(false);
+  });
+
+  it('resolves logs/ under the same base and re-reads the env on every call', () => {
+    expect(resolveConfigLogsDir()).toBe(join(fakeHome, '.adhdev', 'logs'));
+    process.env.ADHDEV_CONFIG_DIR = overrideDir;
+    expect(resolveConfigLogsDir()).toBe(join(overrideDir, 'logs'));
   });
 });

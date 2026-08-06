@@ -21,9 +21,9 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import { AsyncBatchWriter } from './async-batch-writer.js';
 import { DEFAULT_DAEMON_PORT } from '../ipc-protocol.js';
+import { resolveConfigLogsDir } from '../config/config-dir.js';
 
 // ─── Log Level ──────────────────────────────
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -69,9 +69,10 @@ export function getLogLevel(): LogLevel { return currentLevel; }
 // later. `getDaemonLogDir()` / `getCurrentDaemonLogPath()` resolve on each call;
 // they are diagnostic accessors, not hot paths.
 function resolveLogDir(): string {
-    const override = process.env.ADHDEV_CONFIG_DIR;
-    const home = override && override.trim() ? override.trim() : path.join(os.homedir(), '.adhdev');
-    return path.join(home, 'logs');
+    // Single source of truth: config/config-dir.ts (ADHDEV_CONFIG_DIR override,
+    // else ~/.adhdev, then logs/). Pure resolution — the write path prepares the
+    // dir via prepareLogDirOnce / getDaemonLogDir.
+    return resolveConfigLogsDir();
 }
 
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB per day
