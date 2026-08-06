@@ -21,6 +21,7 @@ import { registerIDEDefinition } from '../detection/ide-detector.js';
 import { sha256Hex } from '../system/hash.js';
 import { LOG } from '../logging/logger.js';
 import { VersionArchive } from './version-archive.js';
+import { extractTarballGz } from './extract-tarball.js';
 import type {
   ProviderCompatibilityEntry,
   ProviderControlDef,
@@ -436,7 +437,7 @@ export class ProviderLoader {
     /**
      * Test seam: inject the verified channel sync transport I/O
      * (metadata fetch / tarball download / extraction) instead of the
-     * default HTTPS + tar implementation. Never set in production.
+     * default HTTPS + Node-native tarball extraction. Never set in production.
      */
     channelSyncIO?: {
       fetchJson?: (url: string) => Promise<any>;
@@ -2116,9 +2117,6 @@ export class ProviderLoader {
       return { updated: false, error: msg };
     }
     const https = require('https') as typeof import('https');
-    const { exec } = require('child_process') as typeof import('child_process');
-    const { promisify } = require('util');
-    const execAsync = promisify(exec);
 
     const metaPath = path.join(this.upstreamDir, ProviderLoader.META_FILE);
     let prevEtag = '';
@@ -2214,9 +2212,9 @@ export class ProviderLoader {
  // Download tarball
       await this.downloadFile(tarballTarget.url, tmpTar);
 
- // Extract
+ // Extract (Node-native: zlib gunzip + tar-fs — no external `tar` binary)
       fs.mkdirSync(tmpExtract, { recursive: true });
-      await execAsync(`tar -xzf "${tmpTar}" -C "${tmpExtract}"`, { timeout: 30000 });
+      await extractTarballGz(tmpTar, tmpExtract);
 
  // Tarball internal structure: adhdev-providers-main/ide/... → strip 1 level
       const extracted = fs.readdirSync(tmpExtract);

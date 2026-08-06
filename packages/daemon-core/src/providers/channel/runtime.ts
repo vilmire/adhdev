@@ -44,6 +44,7 @@ import {
 } from './contract.js';
 import { computeProviderTreeDigest } from './tree-digest.js';
 import type { ActivationRef, ProviderChannelStore } from './store.js';
+import { extractTarballGz } from '../extract-tarball.js';
 
 export interface ChannelSyncError {
   code: ProviderChannelErrorCode;
@@ -69,7 +70,7 @@ export interface ProviderChannelRuntimeOptions {
   fetchJson?: (url: string) => Promise<any>;
   /** Injectable file download (tests). Defaults to a redirect-following https wrapper. */
   downloadFile?: (url: string, destPath: string) => Promise<void>;
-  /** Injectable tarball extraction (tests). Defaults to system `tar -xzf`. */
+  /** Injectable tarball extraction (tests). Defaults to Node-native zlib + tar-fs extraction (no external `tar` binary). */
   extractTarball?: (tarPath: string, destDir: string) => Promise<void>;
 }
 
@@ -229,7 +230,7 @@ export class ProviderChannelRuntime {
       } catch (e: any) {
         report.errors.push({ code: 'TRANSPORT_FAILED', message: `provider tarball transport failed: ${e?.message || e}` });
         report.status = 'error';
-        this.log(`sync aborted (TRANSPORT_FAILED): ${e?.message || e}`);
+        this.log(`sync aborted (TRANSPORT_FAILED): ${e?.message || e} [${pathEnvDiagnostic()}]`);
         return report;
       }
 
@@ -427,7 +428,24 @@ export function collectSyncTargetTypes(
   return targets;
 }
 
-// ─── Default I/O (no new dependencies — same style as the existing loader) ─
+// ─── Default I/O (no new dependencies beyond tar-fs — same style as the existing loader) ─
+
+/**
+ * Compact PATH diagnostic for transport-failure logs. The daemon process once
+ * diverged from the login shell on Windows (System32 missing from
+ * process.env.PATH even though the user shell had it, so spawned `tar.exe`
+ * was not found), and the daemon never logged its own PATH — leaving no way
+ * to confirm that failure class from logs. The full PATH is intentionally NOT
+ * logged (long, noisy, and carries user directory names); the entry count +
+ * System32 presence answer the actual question if an external-command PATH
+ * failure ever recurs.
+ */
+function pathEnvDiagnostic(): string {
+  const raw = process.env.PATH ?? '';
+  const entries = raw.split(path.delimiter).filter((e) => e.length > 0);
+  const hasSystem32 = entries.some((e) => /system32$/i.test(e.replace(/[\\/]+$/, '')));
+  return `platform=${process.platform} pathEntries=${entries.length} system32InPath=${hasSystem32}`;
+}
 
 function defaultFetchJson(url: string): Promise<any> {
   const https = require('https') as typeof import('https');
@@ -484,8 +502,6 @@ function defaultDownloadFile(url: string, destPath: string): Promise<void> {
 }
 
 async function defaultExtractTarball(tarPath: string, destDir: string): Promise<void> {
-  const { exec } = require('child_process') as typeof import('child_process');
-  const { promisify } = require('util');
-  const execAsync = promisify(exec);
-  await execAsync(`tar -xzf "${tarPath}" -C "${destDir}"`, { timeout: 60000 });
+  // Node-native extraction (zlib gunzip + tar-fs) — no external `tar` binary.
+  await extractTarballGz(tarPath, destDir);
 }
