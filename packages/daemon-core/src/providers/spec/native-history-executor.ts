@@ -204,6 +204,34 @@ function enumerateJsonlSessions(src: NativeHistoryJsonlSource, input: NativeHist
 }
 
 /**
+ * Normalize `\` separators to `/` so path templates stay in posix space.
+ *
+ * spec.json templates are always posix, but `os.homedir()` and `${ENV}`
+ * values reintroduce `\` on win32. Every string decomposition in this file
+ * (split / lastIndexOf on '/') operates in posix template space; native
+ * separators are only materialized where fs is actually touched (the
+ * path.join calls at the readdir/stat sites).
+ */
+export function toPosixPath(p: string): string {
+    return p.replace(/\\/g, '/');
+}
+
+/**
+ * Split an expanded (posix-space) path template into its directory portion
+ * and trailing leaf segment — the decomposition `enumerateSessionFiles`
+ * needs before globbing. The input MUST be toPosixPath-normalized: on win32
+ * a naive `lastIndexOf('/')` over a backslash path misses every separator
+ * and collapses the directory template to '' (the walk then scans the drive
+ * root and matches nothing — the win32 "session list always empty" bug).
+ */
+export function splitTemplateDirLeaf(expandedRoot: string): { dirPart: string; leaf: string } {
+    const idx = expandedRoot.lastIndexOf('/');
+    return idx >= 0
+        ? { dirPart: expandedRoot.slice(0, idx), leaf: expandedRoot.slice(idx + 1) }
+        : { dirPart: '', leaf: expandedRoot };
+}
+
+/**
  * Resolve the source `path` template into every concrete transcript file on
  * disk. Per-session template vars ({session_id}, {cwd*}, {yyyy}/{mm}/{dd})
  * collapse to a `*` wildcard so the walk spans all sessions/workspaces/days;
@@ -225,9 +253,7 @@ function enumerateSessionFiles(src: NativeHistoryJsonlSource, input: NativeHisto
         dirTemplate = templateVarsToGlob(expandedRoot);
         fileRegex = globToRegex(src.file_pattern);
     } else {
-        const idx = expandedRoot.lastIndexOf('/');
-        const dirPart = idx >= 0 ? expandedRoot.slice(0, idx) : '';
-        const leaf = idx >= 0 ? expandedRoot.slice(idx + 1) : expandedRoot;
+        const { dirPart, leaf } = splitTemplateDirLeaf(expandedRoot);
         dirTemplate = templateVarsToGlob(dirPart);
         fileRegex = globToRegex(templateVarsToGlob(leaf));
     }
@@ -245,17 +271,25 @@ function enumerateSessionFiles(src: NativeHistoryJsonlSource, input: NativeHisto
  * substituting per-session vars, so the caller can decide which of those become
  * enumeration wildcards. Mirrors the head of `expandPath` (tilde + env) but
  * leaves `{...}` template markers intact.
+ *
+ * The result is always in posix template space (toPosixPath-normalized):
+ * tilde expansion joins with '/' instead of path.join, which on win32 would
+ * reintroduce '\' and break every '/'-based decomposition downstream.
  */
-function expandTemplateRootForEnumeration(template: string, input: NativeHistoryInput): string {
+export function expandTemplateRootForEnumeration(template: string, input: NativeHistoryInput): string {
     if (!template) return '';
+    const posixHome = () => toPosixPath(os.homedir());
     let out = template;
-    if (out.startsWith('~/') || out === '~') out = path.join(os.homedir(), out.slice(2));
+    if (out === '~') out = posixHome();
+    else if (out.startsWith('~/')) out = `${posixHome()}/${out.slice(2)}`;
     out = out.replace(/\$\{([A-Z_][A-Z0-9_]*)(?::-(.*?))?\}/g, (_m, name, fallback) => {
         const v = input.envOverrides?.[name] ?? process.env[name];
         return v != null && v !== '' ? v : (fallback ?? '');
     });
-    if (out.startsWith('~/')) out = path.join(os.homedir(), out.slice(2));
-    return out;
+    // Re-expand ~ in case the fallback used it.
+    if (out === '~') out = posixHome();
+    else if (out.startsWith('~/')) out = `${posixHome()}/${out.slice(2)}`;
+    return toPosixPath(out);
 }
 
 /** Turn every remaining `{var}` template marker into a `*` glob segment. */
@@ -1258,19 +1292,32 @@ function claudeProjectDirName(workspace: string): string {
  * e.g. `~/.claude/projects/{cwd_claude_project}/{session_id}.jsonl` → scan
  * `~/.claude/projects`. Returns the matching file path, or null.
  */
+/**
+ * Derive the concrete base directory for the projects-root scan: the leading
+ * static segments of a path template (everything before the first segment
+ * containing a template var or wildcard), in posix template space. Returns ''
+ * when the template has no static head. The input is toPosixPath-normalized
+ * first — on win32 the tilde expansion above yields a '\'-separated head and
+ * a naive split('/') would keep the whole path as one segment, deriving a
+ * garbage base dir.
+ */
+export function staticTemplateBase(templateHead: string): string {
+    const segs = toPosixPath(templateHead).split('/');
+    const baseParts: string[] = [];
+    for (const seg of segs) {
+        if (/[{}*?]/.test(seg)) break;
+        baseParts.push(seg);
+    }
+    return baseParts.join('/');
+}
+
 function scanProjectsRootForSessionFile(template: string, input: NativeHistoryInput, requestedSessionId: string): string | null {
     if (!requestedSessionId) return null;
     // Resolve the leading static portion of the template (everything before the
     // first {var} segment) into a concrete base directory.
     let head = template;
     if (head.startsWith('~/') || head === '~') head = path.join(os.homedir(), head.slice(2));
-    const segs = head.split('/');
-    const baseParts: string[] = [];
-    for (const seg of segs) {
-        if (/[{}*?]/.test(seg)) break;
-        baseParts.push(seg);
-    }
-    const base = baseParts.join('/');
+    const base = staticTemplateBase(head);
     if (!base) return null;
     let baseStat: fs.Stats | null = null;
     try { baseStat = fs.statSync(base); } catch { return null; }
@@ -1311,17 +1358,37 @@ function globToRegex(pattern: string): RegExp {
 }
 
 /**
+ * Split a path template into a root seed and its remaining segments, in posix
+ * template space (toPosixPath-normalized). Seeds: posix-absolute → '/', win32
+ * drive ('C:/…', the normalized form of 'C:\…') → 'C:/', otherwise the first
+ * segment (relative template). The seed is handed to fs as-is — both '/' and
+ * 'C:/' are valid roots for node fs on their respective platforms — while
+ * deeper segments join natively via path.join at the call site.
+ */
+export function splitTemplateRoot(template: string): { root: string; segments: string[] } {
+    const parts = toPosixPath(template).split('/');
+    if (parts[0] === '') return { root: '/', segments: parts.slice(1) };
+    // A bare drive letter must seed the DRIVE ROOT ('C:/'), not the relative
+    // segment 'C:' (which win32 resolves against the process cwd on that
+    // drive — the same collapse class as the enumeration bug).
+    if (/^[A-Za-z]:$/.test(parts[0])) return { root: `${parts[0]}/`, segments: parts.slice(1) };
+    return { root: parts[0], segments: parts.slice(1) };
+}
+
+/**
  * Resolve a path with `*` segments to all concrete directories that match,
  * then pick the newest file inside any of them. `*` matches one path
  * component (no slashes); `**` matches zero or more components. Filenames
  * are matched against `pattern`, not the glob — file_pattern is the right
  * place for the leaf match.
+ *
+ * Accepts posix- or native-separated templates; decomposition happens in
+ * posix template space via splitTemplateRoot.
  */
 function expandDirGlob(template: string): string[] {
-    const parts = template.split('/');
-    let dirs: string[] = parts[0] === '' ? ['/'] : [parts[0]];
-    for (let i = 1; i < parts.length; i += 1) {
-        const seg = parts[i];
+    const { root, segments } = splitTemplateRoot(template);
+    let dirs: string[] = [root];
+    for (const seg of segments) {
         if (!seg) continue;
         const next: string[] = [];
         if (seg === '**') {
