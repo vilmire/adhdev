@@ -60,7 +60,9 @@ describe('daemon update policy helpers', () => {
         channel: 'preview',
         npmTag: 'next',
         targetVersion: '0.9.76-rc.2',
-        updateCommand: 'adhdev update --channel preview',
+        // Phase 3: the derived fallback command no longer carries --channel —
+        // the installed binary's build stamp pins the track.
+        updateCommand: 'adhdev update',
       },
     })
   })
@@ -184,14 +186,18 @@ describe('buildDaemonUpgradeLabel', () => {
     expect(buildDaemonUpgradeLabel(daemon, { targetVersion: '1.0.28-rc.20' })).toBe('Update to v1.0.28-rc.20')
   })
 
-  it('labels a channel switch only when the node channel differs from the policy channel', () => {
+  it('never labels a channel switch — tracks are build-time identities since Phase 3', () => {
+    // A stable binary shown a preview policy used to get a 'Switch to preview'
+    // button. An upgrade can no longer switch channels (the build stamp pins
+    // the track), so even a mismatched node/policy channel pair is labeled as
+    // a plain version update.
     const daemon: DaemonData = {
       ...base,
       updateChannel: 'stable',
       updatePolicy: { channel: 'preview', npmTag: 'next', targetVersion: '1.0.28-rc.20' },
     }
 
-    expect(buildDaemonUpgradeLabel(daemon, { targetVersion: '1.0.28-rc.20' })).toBe('Switch to preview')
+    expect(buildDaemonUpgradeLabel(daemon, { targetVersion: '1.0.28-rc.20' })).toBe('Update to v1.0.28-rc.20')
   })
 
   it('falls back to the version-update label when the node channel is unknown', () => {

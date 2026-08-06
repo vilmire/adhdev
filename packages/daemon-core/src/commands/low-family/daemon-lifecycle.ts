@@ -1,45 +1,25 @@
 /**
  * RF-ROUTER LOW family — daemon self-upgrade + machine-settings commands.
  *
- * Extracted verbatim from DaemonCommandRouter.executeDaemonCommand. The
- * release-channel helpers (ReleaseChannel / CHANNEL_* / normalizeReleaseChannel /
- * resolveUpgradeChannel) were router module-locals used only by daemon_upgrade, so
- * they are relocated here unchanged. Handlers read only ctx.deps.packageName /
- * ctx.deps.statusVersion plus process-global config + npm/upgrade helpers, and
- * return the same CommandRouterResult the inlined cases did.
+ * Extracted verbatim from DaemonCommandRouter.executeDaemonCommand. Handlers
+ * read only ctx.deps.packageName / ctx.deps.statusVersion plus process-global
+ * config + npm/upgrade helpers, and return the same CommandRouterResult the
+ * inlined cases did.
+ *
+ * Phase 3: the release channel is a build-time identity (track-identity.ts),
+ * not a runtime switch. daemon_upgrade always targets THIS build's npm
+ * dist-tag (IDENTITY.npmTag) and never rewrites updateChannel/serverUrl —
+ * channel hints from pre-Phase-3 callers (dashboard updatePolicy payloads,
+ * mesh restart_daemon_node / mesh_restart_daemon args) are accepted and
+ * ignored so a stale payload can never retarget the daemon to another
+ * environment, and a self-hoster's custom serverUrl is never clobbered.
  */
 import { loadConfig, updateConfig, setQuotaShowAccountEmail } from '../../config/config.js';
 import { installClaudeStatusline } from '../../quota/statusline/install.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from '../upgrade-helper.js';
 import { LOG } from '../../logging/logger.js';
+import { IDENTITY, TRACK } from '../../track-identity.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
-
-type ReleaseChannel = 'stable' | 'preview';
-const CHANNEL_NPM_TAG: Record<ReleaseChannel, 'latest' | 'next'> = { stable: 'latest', preview: 'next' };
-const CHANNEL_SERVER_URL: Record<ReleaseChannel, string> = {
-    stable: 'https://api.adhf.dev',
-    preview: 'https://api-preview.adhf.dev',
-};
-// Vendor-managed serverUrls. A serverUrl equal to one of these (or unset) is
-// steered to the channel default on upgrade; any other value is a user-set
-// custom/self-host URL that must be preserved across upgrades.
-const VENDOR_SERVER_URLS = new Set<string>(Object.values(CHANNEL_SERVER_URL));
-
-function normalizeReleaseChannel(value: unknown): ReleaseChannel | null {
-    if (typeof value !== 'string') return null;
-    const normalized = value.trim().toLowerCase();
-    if (normalized === 'stable' || normalized === 'latest') return 'stable';
-    if (normalized === 'preview' || normalized === 'next') return 'preview';
-    return null;
-}
-
-function resolveUpgradeChannel(args: any): ReleaseChannel {
-    return normalizeReleaseChannel(args?.channel)
-        || normalizeReleaseChannel(args?.updatePolicy?.channel)
-        || normalizeReleaseChannel(args?.npmTag)
-        || normalizeReleaseChannel(loadConfig().updateChannel)
-        || 'stable';
-}
 
 export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
     daemon_upgrade: async (ctx: LowFamilyContext, args: any) => {
@@ -50,22 +30,17 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 || process.argv[1]?.includes('daemon-standalone');
             const pkgName = isStandalone ? '@adhdev/daemon-standalone' : 'adhdev';
             const npmSurface = resolveCurrentGlobalInstallSurface({ packageName: pkgName });
-            const channel = resolveUpgradeChannel(args);
-            const npmTag = CHANNEL_NPM_TAG[channel];
+            // Deprecated channel hints (args.channel / args.updatePolicy.channel /
+            // args.npmTag) are accepted and ignored: the upgrade target is this
+            // binary's build track, full stop.
+            if (args?.channel || args?.updatePolicy?.channel || args?.npmTag) {
+                LOG.info('Upgrade', 'Ignoring deprecated channel hint — upgrade target is the build track');
+            }
+            const npmTag = IDENTITY.npmTag;
 
-            // Check channel-pinned dist-tag and resolve it to a concrete install version.
+            // Check the build track's dist-tag and resolve it to a concrete install version.
             const latest = String(execNpmCommandSync(['view', `${pkgName}@${npmTag}`, 'version'], { encoding: 'utf-8', timeout: 10000 }, npmSurface)).trim();
             LOG.info('Upgrade', `Latest ${pkgName}@${npmTag}: v${latest}`);
-            // Only steer serverUrl to the channel's vendor default when the current
-            // value is unset or already a vendor default. A self-hoster's custom
-            // serverUrl must survive the upgrade instead of being clobbered.
-            const currentServerUrl = typeof loadConfig().serverUrl === 'string' ? loadConfig().serverUrl.trim() : '';
-            const useVendorServerUrl = currentServerUrl === '' || VENDOR_SERVER_URLS.has(currentServerUrl);
-            updateConfig(
-                useVendorServerUrl
-                    ? { updateChannel: channel, serverUrl: CHANNEL_SERVER_URL[channel] } as any
-                    : { updateChannel: channel } as any,
-            );
             let currentInstalled: string | null = null;
             try {
                 const currentJson = String(execNpmCommandSync(['ls', '-g', pkgName, '--depth=0', '--json'], {
@@ -83,8 +58,8 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 ? ctx.deps.statusVersion.trim().replace(/^v/, '')
                 : null;
             if (currentInstalled === latest && runningVersion === latest) {
-                LOG.info('Upgrade', `Already on ${channel} channel version v${latest}; skipping install`);
-                return { success: true, upgraded: false, alreadyLatest: true, version: latest, channel, npmTag };
+                LOG.info('Upgrade', `Already on ${TRACK} track version v${latest}; skipping install`);
+                return { success: true, upgraded: false, alreadyLatest: true, version: latest, channel: TRACK, npmTag };
             }
             if (currentInstalled === latest && runningVersion && runningVersion !== latest) {
                 LOG.info('Upgrade', `Installed package is v${latest}, but running daemon is v${runningVersion}; scheduling restart`);
@@ -98,7 +73,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 cwd: process.cwd(),
                 sessionHostAppName: process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev',
             });
-            LOG.info('Upgrade', `Scheduled detached ${channel} upgrade to v${latest}`);
+            LOG.info('Upgrade', `Scheduled detached ${TRACK} upgrade to v${latest}`);
 
             // Exit after the command response has been sent so the helper can replace the package cleanly.
             setTimeout(() => {
@@ -106,7 +81,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 process.exit(0);
             }, 3000);
 
-            return { success: true, upgraded: true, version: latest, restarting: true, channel, npmTag };
+            return { success: true, upgraded: true, version: latest, restarting: true, channel: TRACK, npmTag };
         } catch (e: any) {
             LOG.error('Upgrade', `Failed: ${e.message}`);
             return { success: false, error: e.message };

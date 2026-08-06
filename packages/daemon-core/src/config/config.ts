@@ -8,7 +8,7 @@ import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { resolveConfigDir } from './config-dir.js';
-import { IDENTITY } from '../track-identity.js';
+import { IDENTITY, TRACK } from '../track-identity.js';
 import type { WorkspaceEntry } from './workspaces.js';
 export type { WorkspaceEntry } from './workspaces.js';
 export type { RecentActivityEntry } from './recent-activity.js';
@@ -188,7 +188,12 @@ export interface ADHDevConfig {
      */
     providerAllowUnverifiedTarball?: boolean;
 
-    /** Preferred daemon update channel. Defaults to stable/latest. */
+    /**
+     * DEPRECATED (Phase 3): legacy runtime update channel. The channel is now
+     * a build-time identity (track-identity.ts) — this field is read-only for
+     * the provider-channel derivation union and ignored by every upgrade path.
+     * Absent/unknown values resolve to the build track.
+     */
     updateChannel?: ReleaseChannel;
 
     /**
@@ -339,7 +344,17 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
         providerTarballUrl: asOptionalString(parsed.providerTarballUrl),
         providerChannel: asOptionalString(parsed.providerChannel),
         providerAllowUnverifiedTarball: asBoolean(parsed.providerAllowUnverifiedTarball, false),
-        updateChannel: parsed.updateChannel === 'preview' ? 'preview' : 'stable',
+        // Phase 3: legacy runtime channel field, read-only and never written
+        // anymore (channel is a build-time identity — track-identity.ts). An
+        // explicit preview/next value is still honored so the provider-channel
+        // derivation union (providers/channel/contract.ts) stays
+        // behavior-neutral for stale configs; anything absent or unknown
+        // resolves to THIS binary's build track instead of failing.
+        updateChannel: parsed.updateChannel === 'preview' || parsed.updateChannel === 'next'
+            ? 'preview'
+            : parsed.updateChannel === 'stable' || parsed.updateChannel === 'latest'
+                ? 'stable'
+                : TRACK,
         terminalSizingMode: parsed.terminalSizingMode === 'fit' ? 'fit' : 'measured',
     };
 }

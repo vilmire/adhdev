@@ -48,7 +48,10 @@ export function getDaemonUpdatePolicy(daemon: DaemonData): WebVersionUpdatePolic
         || undefined
     const minVersion = normalizeVersion(raw.minVersion) || undefined
     const updateCommand = normalizeVersion(raw.updateCommand)
-        || (channel ? `adhdev update --channel ${channel}` : undefined)
+        // Phase 3: --channel is retired on the CLI (accept-and-ignore); the
+        // binary's build stamp already pins the track, so the fallback
+        // command is track-agnostic.
+        || (channel ? 'adhdev update' : undefined)
 
     return {
         ...(channel ? { channel } : {}),
@@ -97,24 +100,16 @@ export function getDaemonCurrentChannel(daemon: DaemonData): WebReleaseChannel |
 }
 
 /**
- * Label for the one-click upgrade action. The action targets the server-pushed
- * policy channel: when the node's current channel already IS that channel this
- * is a plain version update ('Update to v{target}'); only when the channels
- * actually differ is it a channel switch ('Switch to preview' / 'Switch to
- * stable'). When the node's channel is unknown we can't prove a switch, so we
- * fall back to the version-update label.
+ * Label for the one-click upgrade action. Since Phase 3 the release channel
+ * is a build-time identity of the installed binary, an upgrade can NEVER
+ * switch channels — so this is always a plain version-update label; the
+ * policy channel only selects the target version. To move between tracks the
+ * user installs the other binary (adhdev vs adhdev-preview), not this button.
  */
 export function buildDaemonUpgradeLabel(
-    daemon: DaemonData,
+    _daemon: DaemonData,
     opts: { targetVersion?: string | null; required?: boolean; fallback?: string } = {},
 ): string {
-    const policyChannel = daemon.updatePolicy && typeof daemon.updatePolicy === 'object'
-        ? normalizeChannel((daemon.updatePolicy as WebVersionUpdatePolicy).channel)
-        : null
-    const currentChannel = getDaemonCurrentChannel(daemon)
-    if (policyChannel && currentChannel && policyChannel !== currentChannel) {
-        return `Switch to ${policyChannel}`
-    }
     const targetVersion = normalizeVersion(opts.targetVersion)
     if (targetVersion) return `Update to v${targetVersion}`
     return opts.fallback || (opts.required ? 'Update now' : 'Upgrade')

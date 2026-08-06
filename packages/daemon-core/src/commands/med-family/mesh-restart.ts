@@ -14,7 +14,9 @@
  * Modes and gate overrides (all opt-in; a bare call behaves exactly like v1):
  *
  * - mode: 'upgrade' (default) reuses daemon_upgrade verbatim — update to the
- *   latest published version on the resolved channel, then detached-restart.
+ *   latest published version on this build's track dist-tag (Phase 3: the
+ *   release channel is a build-time identity; any channel arg in args is
+ *   accepted and ignored), then detached-restart.
  *   Already-latest is a no-op (no restart), matching the dashboard button.
  *   mode: 'restart' uses daemon_restart — a pure re-spawn with no npm
  *   reinstall, so it restarts even when already latest and the downtime is

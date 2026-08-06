@@ -303,12 +303,12 @@ export const MESH_RESTART_DAEMON_TOOL = {
         + 'when_idle=true schedules the restart to run automatically once the daemon goes idle (the safest path — no queue loss); cancel_when_idle=true cancels it and every response reports the schedule under deferredRestart. '
         + 'kill_session_host=true additionally stops the session-host process, destroying ALL hosted CLI sessions (hard refresh; this is what Windows already does on every upgrade). Default off. '
         + 'Note: on Windows any daemon restart/upgrade terminates all hosted sessions regardless of options; on POSIX hosted sessions survive a plain restart and rebind on next boot. '
-        + 'Passing channel switches the daemon\'s release channel (and server URL) before restarting; omit it to keep the daemon on its configured channel.',
+        + 'The channel parameter is DEPRECATED and ignored: since Phase 3 the release channel is a build-time identity of the installed binary (stable = adhdev/@latest, preview = adhdev-preview/@next), so an upgrade always targets the daemon\'s own build track and can never switch channels.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             node_id: { type: 'string', description: 'Target node ID — the daemon that owns this node is restarted (and updated, in upgrade mode).' },
-            channel: { type: 'string', enum: ['stable', 'preview'], description: 'Optional release channel to update from (upgrade mode only). Defaults to the daemon\'s configured updateChannel. Setting it also repoints the daemon\'s server URL to that channel.' },
+            channel: { type: 'string', enum: ['stable', 'preview'], description: 'DEPRECATED and ignored (upgrade mode only). Since Phase 3 the release channel is a build-time identity of the installed binary, so the daemon always upgrades on its own build track. Kept optional so older callers do not break.' },
             mode: { type: 'string', enum: ['upgrade', 'restart'], description: 'upgrade (default): update to latest on channel, then restart (already-latest is a no-op). restart: pure re-spawn, no reinstall — restarts even when already latest.' },
             force: { type: 'boolean', description: 'Bypass the idle-gate entirely. Destructive: in-flight turns are killed and the in-memory pendingOutboundQueue is permanently lost. Default false.' },
             self_only: { type: 'boolean', description: 'Waive only this mesh\'s own coordinator session when it blocks the restart (the coordinator self-deadlock). Other nodes\' active sessions still refuse. Default false.' },

@@ -162,10 +162,12 @@ export async function meshRestartDaemon(
 
     try {
         // inlineMesh lets the owning daemon resolve this node for the
-        // remote-forward guard; channel is forwarded only when explicitly set so
-        // an unset call keeps the daemon on its configured channel. The opt-in
-        // gate overrides are forwarded only when set so a bare call is
-        // byte-identical to the pre-extension behavior.
+        // remote-forward guard; channel is forwarded only when explicitly set.
+        // Since Phase 3 the daemon accepts-and-ignores it (the release channel
+        // is a build-time identity), but forwarding keeps pre-Phase-3 daemons
+        // in a mixed fleet working. The opt-in gate overrides are forwarded
+        // only when set so a bare call is byte-identical to the pre-extension
+        // behavior.
         const result = await commandForNode(ctx, node, 'restart_daemon_node', {
             meshId: ctx.mesh.id,
             nodeId: node.id,

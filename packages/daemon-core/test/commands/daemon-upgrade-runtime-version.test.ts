@@ -106,29 +106,32 @@ describe('daemon_upgrade runtime version handling', () => {
     }))
   })
 
-  it('uses the preview npm dist-tag when requested', async () => {
-    const router = createRouter('0.9.13')
+  it('ignores a deprecated channel arg and upgrades on the build track (Phase 3)', async () => {
+    // Pre-Phase-3 callers may still pass channel:'preview'. The release
+    // channel is now a build-time identity, so the arg is accepted and
+    // ignored: the upgrade targets THIS build's dist-tag (@latest under the
+    // test env's stable track) and never rewrites updateChannel/serverUrl.
+    const router = createRouter('0.9.12')
 
     const result = await router.execute('daemon_upgrade', { channel: 'preview' })
 
-    expect(result).toMatchObject({ success: true, upgraded: true, version: '0.9.14', restarting: true, channel: 'preview', npmTag: 'next' })
+    expect(result).toMatchObject({ success: true, upgraded: true, version: '0.9.13', restarting: true, channel: 'stable', npmTag: 'latest' })
     expect(mocks.execNpmCommandSync).toHaveBeenCalledWith(
-      ['view', 'adhdev@next', 'version'],
+      ['view', 'adhdev@latest', 'version'],
       expect.objectContaining({ encoding: 'utf-8', timeout: 10000 }),
       expect.objectContaining({ npmExecutable: 'npm' }),
     )
     expect(mocks.spawnDetachedDaemonUpgradeHelper).toHaveBeenCalledWith(expect.objectContaining({
       packageName: 'adhdev',
-      targetVersion: '0.9.14',
+      targetVersion: '0.9.13',
     }))
-    expect(mocks.updateConfig).toHaveBeenCalledWith({
-      updateChannel: 'preview',
-      serverUrl: 'https://api-preview.adhf.dev',
-    })
+    // The removed persist path must stay removed: no updateChannel/serverUrl
+    // write — a self-hoster's custom serverUrl can never be clobbered here.
+    expect(mocks.updateConfig).not.toHaveBeenCalled()
   })
 
-  it('uses updatePolicy.channel from dashboard one-click upgrade payload', async () => {
-    const router = createRouter('0.9.13')
+  it('ignores updatePolicy.channel from a stale dashboard one-click upgrade payload', async () => {
+    const router = createRouter('0.9.12')
 
     const result = await router.execute('daemon_upgrade', {
       updatePolicy: {
@@ -139,47 +142,39 @@ describe('daemon_upgrade runtime version handling', () => {
       },
     })
 
-    expect(result).toMatchObject({ success: true, upgraded: true, version: '0.9.14', restarting: true, channel: 'preview', npmTag: 'next' })
+    expect(result).toMatchObject({ success: true, upgraded: true, version: '0.9.13', restarting: true, channel: 'stable', npmTag: 'latest' })
     expect(mocks.execNpmCommandSync).toHaveBeenCalledWith(
-      ['view', 'adhdev@next', 'version'],
+      ['view', 'adhdev@latest', 'version'],
       expect.objectContaining({ encoding: 'utf-8', timeout: 10000 }),
       expect.objectContaining({ npmExecutable: 'npm' }),
     )
     expect(mocks.spawnDetachedDaemonUpgradeHelper).toHaveBeenCalledWith(expect.objectContaining({
       packageName: 'adhdev',
-      targetVersion: '0.9.14',
+      targetVersion: '0.9.13',
     }))
-    expect(mocks.updateConfig).toHaveBeenCalledWith({
-      updateChannel: 'preview',
-      serverUrl: 'https://api-preview.adhf.dev',
-    })
+    expect(mocks.updateConfig).not.toHaveBeenCalled()
   })
 
   it('preserves a user-configured custom serverUrl (self-host) across upgrade', async () => {
     // Self-hoster pinned a custom API endpoint; upgrade must not clobber it.
     mocks.loadConfig.mockReturnValue({ updateChannel: 'stable', serverUrl: 'https://adhdev.internal.example.com' })
-    const router = createRouter('0.9.13')
+    const router = createRouter('0.9.12')
 
-    const result = await router.execute('daemon_upgrade', { channel: 'preview' })
+    const result = await router.execute('daemon_upgrade', {})
 
-    expect(result).toMatchObject({ success: true, upgraded: true, version: '0.9.14', channel: 'preview' })
-    // updateChannel still flips, but serverUrl is left untouched (no serverUrl key).
-    expect(mocks.updateConfig).toHaveBeenCalledWith({ updateChannel: 'preview' })
-    for (const call of mocks.updateConfig.mock.calls) {
-      expect(call[0]).not.toHaveProperty('serverUrl')
-    }
+    expect(result).toMatchObject({ success: true, upgraded: true, version: '0.9.13', channel: 'stable' })
+    expect(mocks.updateConfig).not.toHaveBeenCalled()
   })
 
-  it('steers serverUrl to the channel vendor default when the current value is a vendor default', async () => {
-    // Default (non-self-host) users keep the existing behavior: serverUrl follows the channel.
+  it('never steers serverUrl to a vendor default on upgrade (Phase 3)', async () => {
+    // Default (non-self-host) users: the old path rewrote serverUrl to the
+    // channel vendor default. That write path is gone — serverUrl config is
+    // owned by setup/env, not by upgrades.
     mocks.loadConfig.mockReturnValue({ updateChannel: 'stable', serverUrl: 'https://api.adhf.dev' })
-    const router = createRouter('0.9.13')
+    const router = createRouter('0.9.12')
 
-    await router.execute('daemon_upgrade', { channel: 'preview' })
+    await router.execute('daemon_upgrade', {})
 
-    expect(mocks.updateConfig).toHaveBeenCalledWith({
-      updateChannel: 'preview',
-      serverUrl: 'https://api-preview.adhf.dev',
-    })
+    expect(mocks.updateConfig).not.toHaveBeenCalled()
   })
 })
