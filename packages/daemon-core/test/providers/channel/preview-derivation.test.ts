@@ -59,6 +59,7 @@ describe('Provider channel derivation (rc.20 gap)', () => {
   let tmpRoot = '';
   let configDirBefore: string | undefined;
   let envChannelBefore: string | undefined;
+  let buildChannelBefore: string | undefined;
 
   beforeEach(() => {
     tmpRoot = makeTmp('adhdev-channel-derive-');
@@ -66,6 +67,10 @@ describe('Provider channel derivation (rc.20 gap)', () => {
     process.env.ADHDEV_CONFIG_DIR = tmpRoot;
     envChannelBefore = process.env.ADHDEV_PROVIDER_CHANNEL;
     delete process.env.ADHDEV_PROVIDER_CHANNEL;
+    // The build track stamp is a second preview signal (contract.ts); pin it
+    // out of these cases so updateChannel stays the variable under test.
+    buildChannelBefore = process.env.ADHDEV_BUILD_CHANNEL;
+    delete process.env.ADHDEV_BUILD_CHANNEL;
   });
 
   afterEach(() => {
@@ -73,6 +78,8 @@ describe('Provider channel derivation (rc.20 gap)', () => {
     else process.env.ADHDEV_CONFIG_DIR = configDirBefore;
     if (envChannelBefore === undefined) delete process.env.ADHDEV_PROVIDER_CHANNEL;
     else process.env.ADHDEV_PROVIDER_CHANNEL = envChannelBefore;
+    if (buildChannelBefore === undefined) delete process.env.ADHDEV_BUILD_CHANNEL;
+    else process.env.ADHDEV_BUILD_CHANNEL = buildChannelBefore;
     if (tmpRoot && existsSync(tmpRoot)) rmSync(tmpRoot, { recursive: true, force: true });
     tmpRoot = '';
   });
@@ -136,6 +143,7 @@ describe('Verified channel first-sync (M1/Linux-like empty store)', () => {
   let tmpRoot = '';
   let configDirBefore: string | undefined;
   let envChannelBefore: string | undefined;
+  let buildChannelBefore: string | undefined;
   let store: ProviderChannelStore;
   let upstreamDir = '';
   let specs: FixtureProviderSpec[];
@@ -149,6 +157,9 @@ describe('Verified channel first-sync (M1/Linux-like empty store)', () => {
     process.env.ADHDEV_CONFIG_DIR = tmpRoot;
     envChannelBefore = process.env.ADHDEV_PROVIDER_CHANNEL;
     delete process.env.ADHDEV_PROVIDER_CHANNEL;
+    // Keep the build track stamp out of these cases (see the first describe).
+    buildChannelBefore = process.env.ADHDEV_BUILD_CHANNEL;
+    delete process.env.ADHDEV_BUILD_CHANNEL;
 
     store = new ProviderChannelStore(ProviderChannelStore.defaultRoot());
     upstreamDir = join(tmpRoot, 'providers', '.upstream');
@@ -173,6 +184,8 @@ describe('Verified channel first-sync (M1/Linux-like empty store)', () => {
     else process.env.ADHDEV_CONFIG_DIR = configDirBefore;
     if (envChannelBefore === undefined) delete process.env.ADHDEV_PROVIDER_CHANNEL;
     else process.env.ADHDEV_PROVIDER_CHANNEL = envChannelBefore;
+    if (buildChannelBefore === undefined) delete process.env.ADHDEV_BUILD_CHANNEL;
+    else process.env.ADHDEV_BUILD_CHANNEL = buildChannelBefore;
     for (const dir of [tmpRoot, repoRoot]) {
       if (dir && existsSync(dir)) rmSync(dir, { recursive: true, force: true });
     }

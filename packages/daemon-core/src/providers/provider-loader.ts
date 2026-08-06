@@ -415,7 +415,9 @@ export class ProviderLoader {
      * Daemon release/update channel (config.updateChannel). Only used to
      * derive the provider channel when no explicit `channel` /
      * ADHDEV_PROVIDER_CHANNEL is configured — an explicit provider channel
-     * always wins. Absent/ambiguous → 'stable'.
+     * always wins, and the build track stamp (track-identity.ts) is also
+     * consulted: a preview build derives preview even when this is stable.
+     * Absent/ambiguous → 'stable'.
      */
     updateChannel?: string;
     /**

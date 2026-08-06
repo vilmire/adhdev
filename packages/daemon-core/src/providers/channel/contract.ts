@@ -6,11 +6,13 @@
  * Stage 1B (packages/server registry channel reads):
  *
  * - An explicit provider channel (config / env) always wins. When none is
- *   configured, the provider channel is DERIVED from the daemon release
- *   channel (config.updateChannel): preview → preview, otherwise stable.
+ *   configured, the provider channel is DERIVED from the build track stamp
+ *   (track-identity.ts — a preview build never silently activates stable
+ *   providers) or the daemon release channel (config.updateChannel):
+ *   preview on either axis → preview, otherwise stable.
  *   Absent or ambiguous configuration still resolves to 'stable'; stable
- *   never falls through to preview without an explicit preview release
- *   channel.
+ *   never falls through to preview without an explicit preview build stamp
+ *   or release channel.
  * - Every channel entry carries a typed, versioned digest algorithm
  *   (`digestAlgorithm`) and a content digest (`bundleDigest`). The runtime
  *   verifies the downloaded artifact tree against that digest BEFORE
@@ -25,6 +27,8 @@
  * verified artifact, registry failure or a NULL/legacy-unverified row must
  * never activate new bytes. The last-known-good active object stays live.
  */
+
+import { resolveBuildTrack } from '../../track-identity.js';
 
 /** Explicit provider channels. */
 export type ProviderChannel = 'stable' | 'preview';
@@ -109,18 +113,26 @@ export function isPreviewReleaseChannel(releaseChannel?: string | null): boolean
  *   1. Explicit config value (`config.providerChannel`): 'preview' → preview;
  *      any other non-empty value → stable (ambiguous stays conservative).
  *   2. `ADHDEV_PROVIDER_CHANNEL` env var, same rule.
- *   3. Daemon release/update channel (`config.updateChannel`): a preview
- *      daemon derives providerChannel=preview; stable (or absent) derives
- *      stable. This is what activates the immutable preview provider channel
- *      when a daemon is upgraded/switched to the preview release channel
- *      without an explicit providerChannel setting.
- *   4. Default: 'stable'.
+ *   3. Build track stamp (track-identity.ts `resolveBuildTrack` —
+ *      `__ADHDEV_BUILD_CHANNEL__` build-time injection > `ADHDEV_BUILD_CHANNEL`
+ *      env > stable): a preview BUILD derives providerChannel=preview even
+ *      when the machine's config.json still says stable — without this, a
+ *      preview build on a stable-configured machine silently activates the
+ *      STABLE provider channel (the silent regression this coupling exists
+ *      to prevent).
+ *   4. Daemon release/update channel (`config.updateChannel`): a preview
+ *      daemon derives providerChannel=preview. Kept alongside the build
+ *      stamp so existing runtime channel switches stay behavior-neutral on
+ *      stable builds (preview is the union of the two preview signals;
+ *      either one is sufficient, neither is required when explicit config
+ *      exists).
+ *   5. Default: 'stable'.
  *
  * Existing stable installs are byte-compatible: with no explicit
- * providerChannel and updateChannel=stable (the default), resolution still
- * yields 'stable', and stable legacy NULL-digest rows stay non-activatable.
- * Preview is only ever derived from an explicit preview release channel —
- * never from ambiguous configuration.
+ * providerChannel, a stable build stamp and updateChannel=stable (the
+ * default), resolution still yields 'stable', and stable legacy NULL-digest
+ * rows stay non-activatable. Preview is only ever derived from an explicit
+ * preview build stamp or release channel — never from ambiguous configuration.
  */
 export function resolveProviderChannel(
   configured?: string | null,
@@ -129,7 +141,8 @@ export function resolveProviderChannel(
 ): ProviderChannel {
   const raw = (configured && configured.trim()) || (env[PROVIDER_CHANNEL_ENV_VAR] ?? '').trim();
   if (raw) return raw === 'preview' ? 'preview' : 'stable';
-  return isPreviewReleaseChannel(releaseChannel) ? 'preview' : DEFAULT_PROVIDER_CHANNEL;
+  const previewByBuildTrack = resolveBuildTrack(env) === 'preview';
+  return previewByBuildTrack || isPreviewReleaseChannel(releaseChannel) ? 'preview' : DEFAULT_PROVIDER_CHANNEL;
 }
 
 /**

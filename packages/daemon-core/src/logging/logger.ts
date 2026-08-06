@@ -70,8 +70,8 @@ export function getLogLevel(): LogLevel { return currentLevel; }
 // they are diagnostic accessors, not hot paths.
 function resolveLogDir(): string {
     // Single source of truth: config/config-dir.ts (ADHDEV_CONFIG_DIR override,
-    // else ~/.adhdev, then logs/). Pure resolution — the write path prepares the
-    // dir via prepareLogDirOnce / getDaemonLogDir.
+    // else the running track's home config dir, then logs/). Pure resolution —
+    // the write path prepares the dir via prepareLogDirOnce / getDaemonLogDir.
     return resolveConfigLogsDir();
 }
 

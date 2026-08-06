@@ -32,6 +32,17 @@ export const DEFAULT_CONFIG_DIR_NAME = '.adhdev';
  * Resolve the instance config dir from the environment: ADHDEV_CONFIG_DIR
  * when set (trimmed), else `<homeDir>/.adhdev`. Mirrors daemon-core's
  * getConfigDir() source rule without the mkdir side effect.
+ *
+ * NOTE (track identity): the no-env fallback here stays the LEGACY stable
+ * default `.adhdev` — session-host-core is a pure leaf package that
+ * daemon-core depends on, so it cannot import daemon-core's track-identity
+ * (dependency direction) and its separately-built dist never sees the
+ * `__ADHDEV_BUILD_CHANNEL__` build stamp. This is safe because every tracked
+ * runtime path pins ADHDEV_CONFIG_DIR explicitly: the daemon spawns the
+ * session-host child with `env.ADHDEV_CONFIG_DIR = instance().configDir`
+ * (managed-host.ts buildEnv), and the installer/service pins it for preview.
+ * The track-aware no-env default lives in daemon-core (getConfigDir /
+ * resolveInstanceContext), which is the authority for daemon-side paths.
  */
 export function resolveInstanceConfigDir(
     env: NodeJS.ProcessEnv = process.env,

@@ -443,6 +443,14 @@ export { buildSessionEntries, findCdpManager, hasCdpManager, isCdpConnected, isC
 export { buildStatusSnapshot, buildMachineInfo, buildAvailableProviders, getLastDisplayMessage } from './status/snapshot.js';
 export { getDaemonBuildInfo } from './build-info.js';
 export type { DaemonBuildInfo } from './build-info.js';
+export {
+    TRACK,
+    IDENTITY,
+    BUILD_CHANNEL_ENV_VAR,
+    getTrackIdentity,
+    resolveBuildTrack,
+} from './track-identity.js';
+export type { BuildTrack, TrackIdentity } from './track-identity.js';
 export { normalizeManagedStatus, isManagedStatusWorking, isManagedStatusWaiting, normalizeActiveChatData } from './status/normalize.js';
 export type { ManagedStatus } from './status/normalize.js';
 export type { StatusSnapshotOptions, StatusSnapshot } from './status/snapshot.js';

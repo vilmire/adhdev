@@ -37,5 +37,10 @@ export function daemonBuildDefine(opts = {}) {
         __DAEMON_BUILD_COMMIT_SHORT__: JSON.stringify(commitShort),
         __DAEMON_BUILD_VERSION__: JSON.stringify(version),
         __DAEMON_BUILD_AT__: JSON.stringify(builtAt),
+        // Build track stamp (stable|preview) read by src/track-identity.ts.
+        // Same ADHDEV_BUILD_CHANNEL axis the web build already uses; an unset
+        // env stamps '' which track-identity treats as "no stamp" (env
+        // fallback, then stable) — never a build failure.
+        __ADHDEV_BUILD_CHANNEL__: JSON.stringify(process.env.ADHDEV_BUILD_CHANNEL || ''),
     };
 }

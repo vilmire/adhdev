@@ -8,6 +8,7 @@ import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { resolveConfigDir } from './config-dir.js';
+import { IDENTITY } from '../track-identity.js';
 import type { WorkspaceEntry } from './workspaces.js';
 export type { WorkspaceEntry } from './workspaces.js';
 export type { RecentActivityEntry } from './recent-activity.js';
@@ -199,7 +200,10 @@ export interface ADHDevConfig {
 }
 
 const DEFAULT_CONFIG: ADHDevConfig = {
-    serverUrl: 'https://api.adhf.dev',
+    // Track-stamped default origin: identical to the historical literal on
+    // stable builds ('https://api.adhf.dev'); preview builds default to the
+    // preview API instead of silently pinning stable.
+    serverUrl: IDENTITY.serverUrl,
     allowServerApiProxy: false,
     quotaShowAccountEmail: true,
     selectedIde: null,

@@ -5,7 +5,9 @@
  *
  * Identity rule: the instance IS its config dir. `ADHDEV_CONFIG_DIR` (pinned
  * by the installer/service for preview, or set explicitly) selects it;
- * absent/blank resolves to the default stable instance `<home>/.adhdev`.
+ * absent/blank resolves to the running build track's home config dir
+ * (`<home>/.adhdev` stable, `<home>/.adhdev-preview` preview — see
+ * track-identity.ts).
  * Every mutable path (config/state, providers store, mesh/runtime stores,
  * logs, pids, session-host socket/pid/state, upgrade handoff) lives under or
  * is derived from this one resolution — consumers must NOT re-derive ad hoc.
@@ -21,6 +23,7 @@ import {
     isDefaultInstanceConfigDir,
     resolveSessionHostIpcKey,
 } from '@adhdev/session-host-core';
+import { resolveConfigDir } from './config-dir.js';
 import { resolveSessionHostAppName } from '../session-host/app-name.js';
 
 export interface InstanceContext {
@@ -84,7 +87,7 @@ export function resolveInstanceContext(options: ResolveInstanceContextOptions = 
         );
     }
 
-    const configDir = explicitDir || envDir || path.join(homeDir, '.adhdev');
+    const configDir = explicitDir || resolveConfigDir(env, homeDir);
     const trimmed = configDir.replace(/[\\/]+$/, '');
     return {
         configDir,
