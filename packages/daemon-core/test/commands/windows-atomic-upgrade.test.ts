@@ -364,6 +364,54 @@ describe('Windows installer-managed atomic upgrade', () => {
     expect(passedEnv['Path']).toMatch(/^\/tools\/node22;/)
   })
 
+  // Windows env keys are case-insensitive and conventionally spelled `Path`.
+  // The install hook must prepend the portable Node dir to THAT existing key —
+  // setting a separate `PATH` would leave two competing keys with an
+  // indeterminate winner, and a system Node 24 could still shadow portable 22
+  // for adhdev's win32 Node-version preinstall guard (which resolves bare
+  // `node` from PATH). These tests pin the single-key, prepend-first contract.
+  it('prepends the portable Node dir to an existing win32-style `Path` key without duplicating it', () => {
+    const execMock = child_process.execFileSync as unknown as ReturnType<typeof vi.fn>
+    execMock.mockClear()
+    execMock.mockReturnValueOnce('' as any)
+    const atomicHooks = createDefaultWindowsAtomicHooks({
+      packageName: 'adhdev',
+      targetVersion: '1.0.18-rc.4',
+      npmCliPath: '/tools/node22/npm-cli.js',
+      restartArgv: [],
+      cwd: '/',
+      env: { Path: '/win/system32:/program-files/nodejs' },
+      log: () => {},
+    })
+    atomicHooks.install('/staged/prefix', '/tools/node22/node.exe')
+    expect(execMock).toHaveBeenCalledTimes(1)
+    const passedEnv = execMock.mock.calls[0][2]?.env as NodeJS.ProcessEnv
+    // Portable Node first, prior entries preserved behind it — a system node
+    // further down PATH must never win the guard's bare `node` resolution.
+    expect(passedEnv['Path']).toBe('/tools/node22;/win/system32:/program-files/nodejs')
+    expect(Object.keys(passedEnv).filter((key) => key.toLowerCase() === 'path')).toEqual(['Path'])
+  })
+
+  it('prepends the portable Node dir to an existing all-caps `PATH` key without duplicating it', () => {
+    const execMock = child_process.execFileSync as unknown as ReturnType<typeof vi.fn>
+    execMock.mockClear()
+    execMock.mockReturnValueOnce('' as any)
+    const atomicHooks = createDefaultWindowsAtomicHooks({
+      packageName: 'adhdev',
+      targetVersion: '1.0.18-rc.4',
+      npmCliPath: '/tools/node22/npm-cli.js',
+      restartArgv: [],
+      cwd: '/',
+      env: { PATH: '/usr/bin' },
+      log: () => {},
+    })
+    atomicHooks.install('/staged/prefix', '/tools/node22/node.exe')
+    expect(execMock).toHaveBeenCalledTimes(1)
+    const passedEnv = execMock.mock.calls[0][2]?.env as NodeJS.ProcessEnv
+    expect(passedEnv['PATH']).toBe('/tools/node22;/usr/bin')
+    expect(Object.keys(passedEnv).filter((key) => key.toLowerCase() === 'path')).toEqual(['PATH'])
+  })
+
   describe('createDefaultWindowsAtomicHooks().waitForHealth version gate', () => {
     let server: http.Server | null = null
     let boundPort = 0
