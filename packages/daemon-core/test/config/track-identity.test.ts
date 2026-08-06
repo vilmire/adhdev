@@ -109,6 +109,20 @@ describe('track identity', () => {
     expect((await importIdentity()).TRACK).toBe('stable');
   });
 
+  it('install origin: stable keeps the historical adhf.dev host (behavior-neutral)', async () => {
+    const { getInstallOrigin } = await importIdentity();
+    // The exact host every pre-track-axis reinstall guidance hardcoded.
+    expect(getInstallOrigin()).toBe('https://adhf.dev');
+    expect(getInstallOrigin('stable')).toBe('https://adhf.dev');
+  });
+
+  it('install origin: preview tracks to dev.adhf.dev so reinstall advice cannot cross tracks', async () => {
+    process.env.ADHDEV_BUILD_CHANNEL = 'preview';
+    const { getInstallOrigin } = await importIdentity();
+    expect(getInstallOrigin()).toBe('https://dev.adhf.dev');
+    expect(getInstallOrigin('preview')).toBe('https://dev.adhf.dev');
+  });
+
   it('config dir: no env resolves the stable home dir (code default)', () => {
     expect(getConfigDir()).toBe(join(fakeHome, '.adhdev'));
   });

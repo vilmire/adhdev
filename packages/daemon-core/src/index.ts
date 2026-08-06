@@ -448,6 +448,7 @@ export {
     IDENTITY,
     BUILD_CHANNEL_ENV_VAR,
     getTrackIdentity,
+    getInstallOrigin,
     resolveBuildTrack,
 } from './track-identity.js';
 export type { BuildTrack, TrackIdentity } from './track-identity.js';

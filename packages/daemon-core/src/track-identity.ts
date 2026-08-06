@@ -107,3 +107,18 @@ export function getTrackIdentity(track: BuildTrack = TRACK): TrackIdentity {
 
 /** Process-wide track identity, snapshotted at module load. */
 export const IDENTITY: TrackIdentity = getTrackIdentity(TRACK);
+
+/**
+ * User-facing installer origin for the track — the host that serves
+ * install.ps1 / install shell scripts and the dashboard:
+ * 'https://adhf.dev' (stable) / 'https://dev.adhf.dev' (preview).
+ *
+ * Derived from the track, NOT from serverUrl: a custom/self-host serverUrl
+ * must never reroute the vendor installer advice. Reinstall guidance that
+ * prints `irm https://adhf.dev/...` on a preview track would silently
+ * downgrade the user onto the stable track — the two tracks are separate
+ * installs with separate config dirs and ports.
+ */
+export function getInstallOrigin(track: BuildTrack = TRACK): string {
+    return track === 'preview' ? 'https://dev.adhf.dev' : 'https://adhf.dev';
+}
