@@ -45,11 +45,12 @@ const COORDINATOR_PROMPT_CMDS = ['coordinator_prompt_preview', 'list_coordinator
 const NOTIFICATION_CMDS = ['mark_session_seen', 'delete_notification', 'mark_notification_unread']
 // Order matters: the assertions below compare against Object.keys(handlers),
 // so these must stay in the handler object's declaration order. The quota
-// account-label pair was appended to daemonLifecycleHandlers and so belongs at
-// the end here too.
+// account-label pair and the quota provider-toggle pair were appended to
+// daemonLifecycleHandlers and so belong at the end here too.
 const DAEMON_LIFECYCLE_CMDS = [
   'daemon_upgrade', 'daemon_restart', 'set_machine_nickname',
   'get_quota_account_label', 'set_quota_account_label',
+  'get_quota_provider_enabled', 'set_quota_provider_enabled',
 ]
 const MESH_LEDGER_CMDS = ['get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes', 'record_mesh_note', 'forget_mesh_note', 'import_mesh_ledger_slice']
 const MESH_NODE_LOGS_CMDS = ['get_mesh_node_logs']

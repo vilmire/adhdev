@@ -13,6 +13,13 @@ import type { ProviderSettingsEntry, ProviderInfo } from './types'
  * something those providers cannot deliver.
  */
 const QUOTA_ACCOUNT_PROVIDERS = new Set(['codex-cli'])
+
+/**
+ * Providers with a shipped quota fetcher — exactly REFRESHERS in
+ * daemon-core's quota/refresh.ts. The toggle switches a probe, so offering it
+ * for a provider with no fetcher would promise a switch that does nothing.
+ */
+const QUOTA_PROVIDERS = new Set(['claude-cli', 'codex-cli', 'kimi'])
 import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './providerSettings'
 import { extractProviderSourceConfigPayload, normalizeProviderDirInput, type ProviderSourceConfigPayload } from './providerSourceConfig'
 import ProviderCloneModal from './ProviderCloneModal'
@@ -33,6 +40,10 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
     // pair (get/set_quota_account_label) rather than riding the provider-manifest
     // settings payload. Rendered on the provider whose quota carries the label.
     const [quotaAccountLabel, setQuotaAccountLabel] = useState<boolean | undefined>(undefined)
+    // Per-provider quota probe switch — machine-level config like the account
+    // label, so it rides its own get/set_quota_provider_enabled pair. Keys are
+    // QUOTA_PROVIDERS members; a missing key renders as ON (absent = enabled).
+    const [quotaEnabled, setQuotaEnabled] = useState<Record<string, boolean>>({})
     const [pins, setPins] = useState<Record<string, ProviderPinInfo>>({})
     const [loading, setLoading] = useState(false)
     const [savingKey, setSavingKey] = useState<string | null>(null)
@@ -97,6 +108,34 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
         }
     }, [machineId, sendDaemonCommand, fetchQuotaAccountLabel])
 
+    const fetchQuotaEnabled = useCallback(async () => {
+        if (!machineId) return
+        await Promise.all([...QUOTA_PROVIDERS].map(async (providerType) => {
+            try {
+                const res = await sendDaemonCommand(machineId, 'get_quota_provider_enabled', { providerType })
+                // Standalone returns the raw response, cloud wraps it as
+                // { success, result } — accept both, as the transport docs require.
+                const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as { enabled?: unknown } | undefined
+                if (typeof body?.enabled === 'boolean') {
+                    setQuotaEnabled(prev => ({ ...prev, [providerType]: body.enabled as boolean }))
+                }
+            } catch { /* leave unset — renders as ON, which is also the config default */ }
+        }))
+    }, [machineId, sendDaemonCommand])
+
+    const handleQuotaToggle = useCallback(async (providerType: string, enabled: boolean) => {
+        if (!machineId) return
+        setQuotaEnabled(prev => ({ ...prev, [providerType]: enabled })) // optimistic: the switch responds immediately
+        try {
+            const res = await sendDaemonCommand(machineId, 'set_quota_provider_enabled', { providerType, enabled })
+            const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as { success?: boolean; error?: unknown } | undefined
+            if (body?.success === false && typeof body.error === 'string') console.warn(`set_quota_provider_enabled failed: ${body.error}`)
+        } finally {
+            // Reconcile with what the daemon actually stored.
+            await fetchQuotaEnabled()
+        }
+    }, [machineId, sendDaemonCommand, fetchQuotaEnabled])
+
     /**
      * Verified-channel pins + what the channel currently offers.
      *
@@ -151,6 +190,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
         if (settings.length === 0) fetchSettings()
         if (!sourceConfig) fetchSourceConfig()
         if (quotaAccountLabel === undefined) fetchQuotaAccountLabel()
+        fetchQuotaEnabled()
         fetchPins()
     }, [])
 
@@ -332,6 +372,8 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                             onResetCommand={handleResetProviderCommand}
                             quotaAccountLabelEnabled={QUOTA_ACCOUNT_PROVIDERS.has(prov.type) ? quotaAccountLabel : undefined}
                             onQuotaAccountLabelToggle={QUOTA_ACCOUNT_PROVIDERS.has(prov.type) ? handleQuotaAccountLabelToggle : undefined}
+                            quotaEnabled={QUOTA_PROVIDERS.has(prov.type) ? (quotaEnabled[prov.type] ?? true) : undefined}
+                            onQuotaToggle={QUOTA_PROVIDERS.has(prov.type) ? handleQuotaToggle : undefined}
                             pin={pins[prov.type]}
                             onActivateUpdate={handleActivatePins}
                             onRollbackUpdate={() => handleRollbackPin(prov.type)}

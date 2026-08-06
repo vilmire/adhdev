@@ -77,6 +77,15 @@ interface InstalledProviderRowProps {
     quotaAccountLabelEnabled?: boolean
     onQuotaAccountLabelToggle?: (enabled: boolean) => Promise<void>
     /**
+     * Per-provider quota probe switch. Also machine-level, so passed in like
+     * the account label above — but it is an INDEPENDENT axis from the
+     * machine-use Enable button: a machine can use a provider and still not
+     * want its quota read here. `undefined` for providers with no shipped
+     * quota fetcher (then nothing renders).
+     */
+    quotaEnabled?: boolean
+    onQuotaToggle?: (providerType: string, enabled: boolean) => Promise<void>
+    /**
      * Verified-channel PIN for this provider — the manifest the daemon actually
      * loads, which is NOT the same as the CLI binary version shown above it.
      * `undefined` while loading or when this provider has no pin.
@@ -117,6 +126,8 @@ export default function InstalledProviderRow({
     onResetCommand,
     quotaAccountLabelEnabled,
     onQuotaAccountLabelToggle,
+    quotaEnabled,
+    onQuotaToggle,
     pin,
     onActivateUpdate,
     onRollbackUpdate,
@@ -128,6 +139,11 @@ export default function InstalledProviderRow({
     // action a user reaches for when an update just broke something — putting a
     // dialog in front of that is friction at the worst moment.
     const [confirmActivate, setConfirmActivate] = useState(false)
+    // Turning Claude's quota tracking ON installs a wrapper into the user's
+    // ~/.claude/settings.json (the only quota path Claude Code offers), so it
+    // asks first. Disabling, and codex/kimi in both directions, never confirm —
+    // only claude has a user-file side effect.
+    const [confirmQuotaEnable, setConfirmQuotaEnable] = useState(false)
     const { t } = useTranslation('common')
     const STATUS_LABEL_I18N: Record<string, string> = {
         detected: t('machine.providerRow.statusDetected'),
@@ -187,6 +203,46 @@ export default function InstalledProviderRow({
             {/* Expanded body */}
             {expanded && (
                 <div className="border-t border-border-subtle px-4 py-3 flex flex-col gap-3">
+                    {/* Quota tracking — per-provider probe switch, independent
+                        of the machine-use Enable button above. Only offered for
+                        providers with a shipped fetcher; enabling claude asks
+                        first because it installs the statusLine wrapper. */}
+                    {onQuotaToggle && quotaEnabled !== undefined && (
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                                <div className="text-[11px] text-text-secondary font-medium">{t('machine.providerRow.quotaTracking')}</div>
+                                <div className="text-[10px] text-text-muted">{t('machine.providerRow.quotaTrackingHint')}</div>
+                            </div>
+                            {confirmQuotaEnable ? (
+                                <div className="flex flex-col items-end gap-1.5 shrink-0">
+                                    <div className="text-[11px] font-medium text-amber-400">{t('machine.providerRow.quotaClaudeConfirmTitle')}</div>
+                                    <div className="text-[10px] text-text-muted max-w-[420px] text-right">{t('machine.providerRow.quotaClaudeConfirmBody')}</div>
+                                    <div className="flex gap-1.5">
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); setConfirmQuotaEnable(false); void onQuotaToggle(prov.type, true) }}
+                                            className="machine-btn text-[10px] px-2 py-0.5 text-amber-400 border-amber-500/25"
+                                        >{t('machine.providerRow.quotaClaudeConfirmOk')}</button>
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); setConfirmQuotaEnable(false) }}
+                                            className="machine-btn text-[10px] px-2 py-0.5"
+                                        >{t('machine.providerRow.quotaClaudeConfirmCancel')}</button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation()
+                                        // Only claude enabling confirms: it is the
+                                        // one direction with a user-file side effect
+                                        // (the statusLine wrapper install).
+                                        if (prov.type === 'claude-cli' && !quotaEnabled) setConfirmQuotaEnable(true)
+                                        else void onQuotaToggle(prov.type, !quotaEnabled)
+                                    }}
+                                    className={`machine-btn text-[10px] px-2 py-0.5 shrink-0 ${quotaEnabled ? 'text-green-400 border-green-500/25' : 'text-text-muted'}`}
+                                >{quotaEnabled ? t('machine.providerRow.quotaTrackingOn') : t('machine.providerRow.quotaTrackingOff')}</button>
+                            )}
+                        </div>
+                    )}
                     {/* Quota account label — machine-level, but shown on the
                         provider whose quota carries it. Only offered for
                         providers that actually report an account (codex today);

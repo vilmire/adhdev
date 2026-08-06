@@ -62,14 +62,25 @@ const REFRESHERS: ReadonlyArray<{ provider: QuotaProvider; fetch: () => Promise<
 export type QuotaProviderEnabled = (provider: QuotaProvider) => boolean;
 
 /**
- * Adapt the machine provider-enable authority to the quota predicate. Defined
- * once here so the loop, the boot refresh and hydration all share one mapping
- * instead of each re-deriving "enabled" from the loader their own way.
+ * Adapt the machine provider-enable authorities to the quota predicate.
+ * Defined once here so the loop, the boot refresh and hydration all share one
+ * mapping instead of each re-deriving "enabled" from the loader their own way.
+ *
+ * Two INDEPENDENT axes must BOTH pass: `isMachineProviderEnabled` says "this
+ * machine uses provider X" and gates launching, mesh claims and quota probes;
+ * `isMachineQuotaEnabled` gates ONLY the probe (a machine can use a provider
+ * and still not want its quota read here). The quota method is optional in the
+ * structural type so loaders written before the axis existed (and minimal test
+ * doubles) behave as quota-enabled — absent means enabled, same as the config
+ * default.
  */
 export function quotaProviderEnabledFromLoader(loader: {
     isMachineProviderEnabled(providerType: string): boolean;
+    isMachineQuotaEnabled?(providerType: string): boolean;
 }): QuotaProviderEnabled {
-    return (provider) => loader.isMachineProviderEnabled(provider);
+    return (provider) =>
+        loader.isMachineProviderEnabled(provider)
+        && (loader.isMachineQuotaEnabled ? loader.isMachineQuotaEnabled(provider) : true);
 }
 
 /**
@@ -356,7 +367,10 @@ export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRe
  */
 export function setupQuotaRefreshLoop(components: {
     instanceManager: { collectHotChatSessionStates(): Array<{ status?: unknown; lastMessageAt?: unknown }> };
-    providerLoader?: { isMachineProviderEnabled(providerType: string): boolean };
+    providerLoader?: {
+        isMachineProviderEnabled(providerType: string): boolean;
+        isMachineQuotaEnabled?(providerType: string): boolean;
+    };
 }): QuotaRefreshLoopHandle {
     return startQuotaRefreshLoop({
         hasRecentCliActivity: () => hasRecentCliActivity(components.instanceManager.collectHotChatSessionStates()),

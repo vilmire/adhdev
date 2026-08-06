@@ -38,6 +38,13 @@ export interface MachineProviderCheckResult {
 
 export interface MachineProviderConfig {
     enabled?: boolean;
+    /**
+     * Per-provider quota probe switch. INDEPENDENT of `enabled`, which gates
+     * launching instances and mesh claims: a machine can use a provider and
+     * still not want its quota probed here. Absent = enabled (backwards
+     * compatible); only `false` is meaningful.
+     */
+    quotaEnabled?: boolean;
     executable?: string;
     args?: string[];
     lastDetection?: MachineProviderCheckResult;
@@ -277,6 +284,7 @@ function normalizeMachineProviders(value: unknown): Record<string, MachineProvid
         if (!isPlainObject(raw)) continue;
         const entry: MachineProviderConfig = {};
         if (raw.enabled === true) entry.enabled = true;
+        if (typeof raw.quotaEnabled === 'boolean') entry.quotaEnabled = raw.quotaEnabled;
         if (typeof raw.executable === 'string' && raw.executable.trim()) {
             entry.executable = raw.executable.trim();
         }

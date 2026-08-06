@@ -9,6 +9,7 @@
  * return the same CommandRouterResult the inlined cases did.
  */
 import { loadConfig, updateConfig, setQuotaShowAccountEmail } from '../../config/config.js';
+import { installClaudeStatusline } from '../../quota/statusline/install.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from '../upgrade-helper.js';
 import { LOG } from '../../logging/logger.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
@@ -182,5 +183,72 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
         }
         setQuotaShowAccountEmail(args.enabled);
         return { success: true, enabled: args.enabled };
+    },
+
+    /**
+     * Read the per-provider quota probe switch for the machine page toggle.
+     * Independent of the machine-use flag (`enabled`), which gates launching
+     * and mesh claims: a machine can use a provider and still not want its
+     * quota read here. Absent = enabled.
+     */
+    get_quota_provider_enabled: async (_ctx: LowFamilyContext, args: any) => {
+        const providerType = args?.providerType;
+        if (typeof providerType !== 'string' || !providerType) {
+            return { success: false, error: 'providerType (string) is required' };
+        }
+        return { success: true, enabled: loadConfig().machineProviders?.[providerType]?.quotaEnabled !== false };
+    },
+
+    /**
+     * Set it. Takes effect on the next quota tick with no restart: the refresh
+     * predicate re-reads the config through the loader on every probe.
+     *
+     * Enabling CLAUDE installs the statusline wrapper FIRST. Claude Code has
+     * no quota API — the statusLine wrapper is the only collection path, so
+     * enabling without installing it would silently collect nothing. The
+     * install runs here (not on any daemon boot path, which may never call
+     * install — see quota/statusline/install.ts) because this is a
+     * human-triggered command handler: the UI has already shown the user the
+     * confirm dialog before calling. If the install throws, the config is NOT
+     * written, so the toggle never claims a probe that cannot deliver.
+     *
+     * DISABLING does not uninstall the wrapper: uninstalling destroys the
+     * backup of the user's original statusLine, which nothing here was asked
+     * to do. It stays removable via `adhdev quota claude:uninstall`.
+     *
+     * codex-cli and kimi need nothing extra (codex spawns `codex app-server`,
+     * kimi reads a token — no user-file side effects), so their toggle applies
+     * immediately.
+     */
+    set_quota_provider_enabled: async (_ctx: LowFamilyContext, args: any) => {
+        const providerType = args?.providerType;
+        if (typeof providerType !== 'string' || !providerType) {
+            return { success: false, error: 'providerType (string) is required' };
+        }
+        if (typeof args?.enabled !== 'boolean') {
+            return { success: false, error: 'enabled (boolean) is required' };
+        }
+        const enabled = args.enabled;
+
+        let statusline: string | undefined;
+        if (providerType === 'claude-cli' && enabled) {
+            try {
+                statusline = installClaudeStatusline().outcome;
+            } catch (e: any) {
+                LOG.error('Quota', `Claude statusline install failed: ${e?.message || e}`);
+                return { success: false, error: e?.message || String(e) };
+            }
+        }
+
+        // updateConfig merges shallowly, so the per-provider entry is merged
+        // here. Unset IS enabled — enabling removes the key rather than
+        // storing an explicit `true`.
+        const config = loadConfig();
+        const entry = { ...(config.machineProviders?.[providerType] ?? {}) };
+        if (enabled) delete entry.quotaEnabled;
+        else entry.quotaEnabled = false;
+        updateConfig({ machineProviders: { ...(config.machineProviders ?? {}), [providerType]: entry } });
+
+        return { success: true, enabled, ...(statusline ? { statusline } : {}) };
     },
 };

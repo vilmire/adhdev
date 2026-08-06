@@ -96,6 +96,13 @@ export interface MachineProviderCheckResult {
 
 export interface MachineProviderConfig {
   enabled?: boolean;
+  /**
+   * Per-provider quota probe switch. INDEPENDENT of `enabled`, which gates
+   * launching instances and mesh claims: a machine can use a provider and
+   * still not want its quota probed here. Absent = enabled (backwards
+   * compatible); only `false` is meaningful.
+   */
+  quotaEnabled?: boolean;
   executable?: string;
   args?: string[];
   lastDetection?: MachineProviderCheckResult;
@@ -1156,6 +1163,18 @@ export class ProviderLoader {
     return config?.machineProviders?.[providerType]?.enabled === true;
   }
 
+  /**
+   * Whether this provider's quota is probed on this machine. An INDEPENDENT
+   * axis from isMachineProviderEnabled (which gates launching and mesh
+   * claims): a machine can use a provider and still opt out of quota reads.
+   * Absent = enabled, so configs written before this axis existed keep
+   * probing; only an explicit `false` stops the probe.
+   */
+  isMachineQuotaEnabled(type: string): boolean {
+    const providerType = this.resolveAlias(type);
+    return this.readConfig()?.machineProviders?.[providerType]?.quotaEnabled !== false;
+  }
+
   getMachineProviderConfig(type: string): MachineProviderConfig {
     const providerType = this.resolveAlias(type);
     const raw = this.readConfig()?.machineProviders?.[providerType];
@@ -1163,6 +1182,7 @@ export class ProviderLoader {
     const executable = typeof raw.executable === 'string' && raw.executable.trim() ? raw.executable.trim() : undefined;
     return {
       ...(raw.enabled === true ? { enabled: true } : {}),
+      ...(typeof raw.quotaEnabled === 'boolean' ? { quotaEnabled: raw.quotaEnabled } : {}),
       ...(executable ? { executable } : {}),
       ...(Array.isArray(raw.args) ? { args: raw.args.filter((arg: unknown): arg is string => typeof arg === 'string') } : {}),
       ...(raw.lastDetection && typeof raw.lastDetection === 'object' ? { lastDetection: raw.lastDetection } : {}),
@@ -1193,6 +1213,13 @@ export class ProviderLoader {
         if (Array.isArray(patch.args)) next.args = patch.args.filter((arg): arg is string => typeof arg === 'string');
         else delete next.args;
       }
+      if ('quotaEnabled' in patch) {
+        // Unset IS enabled — storing an explicit `true` would be noise, so
+        // enabling removes the key. This axis changes no launch behaviour, so
+        // lastDetection/lastVerification are deliberately left alone.
+        if (patch.quotaEnabled === false) next.quotaEnabled = false;
+        else delete next.quotaEnabled;
+      }
       if (enabledChanged || executableChanged || argsChanged) {
         delete next.lastDetection;
         delete next.lastVerification;
@@ -1220,6 +1247,10 @@ export class ProviderLoader {
 
   setMachineProviderEnabled(type: string, enabled: boolean): boolean {
     return this.setMachineProviderConfig(type, { enabled });
+  }
+
+  setMachineQuotaEnabled(type: string, enabled: boolean): boolean {
+    return this.setMachineProviderConfig(type, { quotaEnabled: enabled });
   }
 
   private getEffectiveProviderAvailability(type: string): ProviderAvailabilityState | undefined {
