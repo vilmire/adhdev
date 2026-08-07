@@ -4,6 +4,7 @@ import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/se
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import { LOG } from '../logging/logger.js'
 import { shortHash } from '../system/hash.js'
+import { IDENTITY } from '../track-identity.js'
 import type {
   MeshCoordinatorMcpConfigFormat,
   MeshCoordinatorSystemPromptInjection,
@@ -60,7 +61,11 @@ export interface ResolveMeshCoordinatorSetupOptions {
 }
 
 const DEFAULT_SERVER_NAME = 'adhdev-mesh'
-const DEFAULT_ADHDEV_MCP_COMMAND = 'adhdev'
+// Track-scoped binary ('adhdev' stable / 'adhdev-preview' preview). Hardcoding
+// 'adhdev' made every PREVIEW install generate a coordinator MCP config that
+// launches the STABLE binary, which then connects to the stable daemon's IPC —
+// so preview coordinators either failed to start or drove the wrong daemon.
+const DEFAULT_ADHDEV_MCP_COMMAND = IDENTITY.binaryName
 const HERMES_CLI_TYPE = 'hermes-cli'
 const HERMES_MCP_CONFIG_PATH = '~/.hermes/config.yaml'
 
@@ -308,12 +313,23 @@ function resolveMcpTransport(explicitTransport?: 'local' | 'ipc'): 'local' | 'ip
   return envTransport === 'local' ? 'local' : 'ipc'
 }
 
+/**
+ * Resolve the IPC port to stamp into the generated MCP args.
+ *
+ * Falls back to the track default (19222 stable / 19223 preview) rather than
+ * `undefined`. Returning undefined omitted `--port` entirely, leaving the
+ * mcp-server to apply its own default — which is how a preview coordinator
+ * ended up driving the stable daemon. Stamping the port explicitly makes the
+ * generated config self-describing instead of track-ambiguous.
+ */
 function resolveMcpPort(explicitPort?: number): number | undefined {
   if (typeof explicitPort === 'number' && Number.isInteger(explicitPort) && explicitPort > 0) return explicitPort
   const raw = process.env.ADHDEV_COORDINATOR_MCP_PORT?.trim()
-  if (!raw) return undefined
-  const parsed = Number(raw)
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
+  if (raw) {
+    const parsed = Number(raw)
+    if (Number.isInteger(parsed) && parsed > 0) return parsed
+  }
+  return IDENTITY.defaultPort
 }
 
 /**

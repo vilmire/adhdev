@@ -8,6 +8,7 @@ import {
 } from '@adhdev/session-host-core';
 import type { HostedCliRuntimeDescriptor } from '../commands/cli-manager.js';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../runtime-defaults.js';
+import { resolveSessionHostAppName } from './app-name.js';
 
 const STARTUP_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
 const STARTUP_POLL_MS = 200;
@@ -89,7 +90,7 @@ export async function ensureSessionHostReady(options: {
     timeoutMs?: number;
     requiredRequestTypes?: readonly SessionHostRequestType[];
 }): Promise<SessionHostEndpoint> {
-    const endpoint = options.endpoint || getDefaultSessionHostEndpoint(options.appName || 'adhdev');
+    const endpoint = options.endpoint || getDefaultSessionHostEndpoint(options.appName || resolveSessionHostAppName());
     const requiredRequestTypes = options.requiredRequestTypes || [];
     if (await canConnect(endpoint, requiredRequestTypes)) return endpoint;
     options.spawnHost();

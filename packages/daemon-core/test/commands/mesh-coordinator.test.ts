@@ -96,7 +96,9 @@ describe('resolveMeshCoordinatorSetup', () => {
       configFormat: 'claude_mcp_json',
       mcpServer: {
         command: 'adhdev',
-        args: ['mcp', '--mode', 'ipc', '--repo-mesh', 'mesh_123'],
+        // --port is stamped explicitly from the build track (19222 stable /
+        // 19223 preview) so the generated config is not track-ambiguous.
+        args: ['mcp', '--mode', 'ipc', '--repo-mesh', 'mesh_123', '--port', '19222'],
       },
     })
   })
@@ -153,7 +155,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       kind: 'auto_import',
       mcpServer: {
         command: '/custom/bin/adhdev',
-        args: ['mcp', '--mode', 'ipc', '--repo-mesh', 'mesh_custom_command'],
+        args: ['mcp', '--mode', 'ipc', '--repo-mesh', 'mesh_custom_command', '--port', '19222'],
       },
     })
   })
@@ -223,7 +225,7 @@ describe('resolveMeshCoordinatorSetup', () => {
     expect(result.kind).toBe('cli_command')
     if (result.kind !== 'cli_command') throw new Error('expected cli_command')
     expect(result.serverName).toBe('adhdev-mesh')
-    expect(result.command).toBe('agy mcp add adhdev-mesh -- adhdev mcp --mode ipc --repo-mesh mesh_agy_coord')
+    expect(result.command).toBe('agy mcp add adhdev-mesh -- adhdev mcp --mode ipc --repo-mesh mesh_agy_coord --port 19222')
     expect(result.requiresRestart).toBe(true)
     expect(result.instructions).toContain('agy mcp add')
   })
@@ -477,11 +479,11 @@ describe('resolveMeshCoordinatorSetup', () => {
     expect(buildMeshCoordinatorRegistrationPlan(
       'antigravity-cli',
       'adhdev-mesh',
-      'agy mcp add adhdev-mesh -- adhdev mcp --mode ipc --repo-mesh mesh_agy',
+      'agy mcp add adhdev-mesh -- adhdev mcp --mode ipc --repo-mesh mesh_agy --port 19222',
     )).toEqual([
       {
         command: 'agy',
-        args: ['mcp', 'add', 'adhdev-mesh', '--', 'adhdev', 'mcp', '--mode', 'ipc', '--repo-mesh', 'mesh_agy'],
+        args: ['mcp', 'add', 'adhdev-mesh', '--', 'adhdev', 'mcp', '--mode', 'ipc', '--repo-mesh', 'mesh_agy', '--port', '19222'],
         required: true,
         label: 'register',
       },
@@ -776,7 +778,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       const mcpConfig = JSON.parse(readFileSync(join(workspace, '.mcp.json'), 'utf-8'))
       expect(mcpConfig.mcpServers['adhdev-mesh']).toEqual({
         command: 'adhdev',
-        args: ['mcp', '--mode', 'ipc', '--repo-mesh', 'mesh_123'],
+        args: ['mcp', '--mode', 'ipc', '--repo-mesh', 'mesh_123', '--port', '19222'],
         env: {
           ADHDEV_INLINE_MESH: JSON.stringify(inlineMesh),
           ADHDEV_MCP_TRANSPORT: 'ipc',

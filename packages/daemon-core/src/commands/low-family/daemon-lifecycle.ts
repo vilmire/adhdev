@@ -19,6 +19,7 @@ import { installClaudeStatusline } from '../../quota/statusline/install.js';
 import { execNpmCommandSync, getUpgradeLogPath, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from '../upgrade-helper.js';
 import { LOG } from '../../logging/logger.js';
 import { IDENTITY, TRACK } from '../../track-identity.js';
+import { resolveSessionHostAppName } from '../../session-host/app-name.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 
 export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
@@ -71,7 +72,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 parentPid: process.pid,
                 restartArgv: process.argv.slice(1),
                 cwd: process.cwd(),
-                sessionHostAppName: process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev',
+                sessionHostAppName: resolveSessionHostAppName(),
             });
             LOG.info('Upgrade', `Scheduled detached ${TRACK} upgrade to v${latest}`);
 
@@ -130,7 +131,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 parentPid: process.pid,
                 restartArgv: process.argv.slice(1),
                 cwd: process.cwd(),
-                sessionHostAppName: process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev',
+                sessionHostAppName: resolveSessionHostAppName(),
                 skipInstall: true,
                 killSessionHost,
             });

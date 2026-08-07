@@ -10,7 +10,12 @@
  * per request.
  */
 
-const DEFAULT_IPC_PORT = 19222;
+import { IDENTITY } from '@adhdev/daemon-core';
+
+// Track-scoped default (19222 stable / 19223 preview). A hardcoded 19222 here
+// made a PREVIEW coordinator silently drive the STABLE daemon whenever the
+// caller omitted --port, because nothing downstream re-derived the track.
+const DEFAULT_IPC_PORT = IDENTITY.defaultPort;
 const DEFAULT_IPC_PATH = '/ipc';
 const DEFAULT_IPC_COMMAND_TIMEOUT_MS = 15_000;
 // IPC (layer-1) is the OUTERMOST deadline. For a REMOTE node the coordinator wraps

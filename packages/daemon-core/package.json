@@ -61,7 +61,7 @@
     "conf": "^13.0.0",
     "js-yaml": "^4.1.1",
     "node-pty": "^1.2.0-beta.12",
-    "tar-fs": "^2.1.4",
+    "tar-fs": "^3.1.0",
     "ws": "^8.19.0"
   },
   "optionalDependencies": {

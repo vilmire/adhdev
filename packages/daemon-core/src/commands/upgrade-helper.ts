@@ -18,6 +18,7 @@ import {
   waitForPidExit,
 } from './process-lifecycle.js';
 import { canonicalizeInstancePath } from '@adhdev/session-host-core';
+import { resolveSessionHostAppName } from '../session-host/app-name.js';
 import { getConfigDir } from '../config/config.js';
 
 const UPGRADE_HELPER_ENV = 'ADHDEV_DAEMON_UPGRADE_HELPER';
@@ -672,7 +673,11 @@ export function buildUpgradeHelperChildEnv(
 
 async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Promise<void> {
   const restartArgv = Array.isArray(payload.restartArgv) ? payload.restartArgv : [];
-  const sessionHostAppName = payload.sessionHostAppName || process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev';
+  // Falls back to THIS build's namespace, not a hardcoded 'adhdev'. This value
+  // feeds stopSessionHostProcesses() below — a preview upgrade that lost
+  // ADHDEV_SESSION_HOST_NAME would otherwise kill the STABLE install's session
+  // host (and every session hosted in it).
+  const sessionHostAppName = payload.sessionHostAppName || resolveSessionHostAppName();
   const installCommand = buildPinnedGlobalInstallCommand({
     packageName: payload.packageName,
     targetVersion: payload.targetVersion,
