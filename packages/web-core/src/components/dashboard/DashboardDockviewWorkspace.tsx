@@ -187,6 +187,7 @@ function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDo
                     hasRegisteredMachines={ctx.hasRegisteredMachines}
                     onOpenNewSession={ctx.onOpenNewSession}
                     suppressGuide={ctx.hasDetachedConversationPanels}
+                    isLoading={!ctx.initialDataLoaded}
                 />
             </div>
         )
@@ -870,6 +871,7 @@ export default function DashboardDockviewWorkspace({
         ides,
         isStandalone,
         hasRegisteredMachines,
+        initialDataLoaded,
         onOpenNewSession,
         liveSessionInboxState,
             sendDaemonCommand,
@@ -892,6 +894,7 @@ export default function DashboardDockviewWorkspace({
         ides,
         isStandalone,
         hasRegisteredMachines,
+        initialDataLoaded,
         onOpenNewSession,
         liveSessionInboxState,
             sendDaemonCommand,

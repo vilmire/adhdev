@@ -31,6 +31,8 @@ export interface DashboardDockviewContextValue {
     ides: DaemonData[]
     isStandalone: boolean
     hasRegisteredMachines: boolean
+    /** False while the first daemon snapshot is still in flight (see PaneGroupEmptyState). */
+    initialDataLoaded: boolean
     onOpenNewSession?: () => void
     liveSessionInboxState: Map<string, LiveSessionInboxState>
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
@@ -124,6 +126,7 @@ export function DashboardDockviewWatermark() {
                 hasRegisteredMachines={ctx.hasRegisteredMachines}
                 onOpenNewSession={ctx.onOpenNewSession}
                 suppressGuide={ctx.hasDetachedConversationPanels}
+                isLoading={!ctx.initialDataLoaded}
             />
         </div>
     )

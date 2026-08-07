@@ -368,6 +368,8 @@
         "defaultWorkspace": "기본 워크스페이스"
     },
     "mobileInbox": {
+        "loading": "불러오는 중...",
+        "loadingSubtitle": "머신과 세션을 가져오는 중입니다.",
         "machines": "머신",
         "chats": "채팅",
         "networkOffline": "네트워크 오프라인",
@@ -1148,6 +1150,7 @@
         "dropImage": "여기에 이미지를 놓으세요"
     },
     "paneGroup": {
+        "loadingSessions": "세션을 불러오는 중...",
         "noConversations": "아직 대화가 없습니다",
         "waitingForDaemon": "데몬을 기다리는 중",
         "connectYourMachines": "머신을 연결하세요",

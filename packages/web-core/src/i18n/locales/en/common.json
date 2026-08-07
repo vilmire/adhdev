@@ -368,6 +368,8 @@
         "defaultWorkspace": "Default workspace"
     },
     "mobileInbox": {
+        "loading": "Loading...",
+        "loadingSubtitle": "Fetching your machines and sessions.",
         "machines": "Machines",
         "chats": "Chats",
         "networkOffline": "Network offline",
@@ -1148,6 +1150,7 @@
         "dropImage": "Drop image here"
     },
     "paneGroup": {
+        "loadingSessions": "Loading sessions...",
         "noConversations": "No conversations yet",
         "waitingForDaemon": "Waiting for your daemon",
         "connectYourMachines": "Connect your machines",

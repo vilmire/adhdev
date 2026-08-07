@@ -17,6 +17,8 @@ interface DashboardPaneWorkspaceProps {
     setActionLogs: React.Dispatch<React.SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
     hasRegisteredMachines: boolean
+    /** False while the first daemon snapshot is still in flight (see PaneGroupEmptyState). */
+    initialDataLoaded: boolean
     userName?: string
     focusedGroup: number
     focusGroup: (groupIndex: number) => void
@@ -47,6 +49,7 @@ export default function DashboardPaneWorkspace({
     setActionLogs,
     isStandalone,
     hasRegisteredMachines,
+    initialDataLoaded,
     userName,
     focusedGroup,
     focusGroup,
@@ -98,6 +101,7 @@ export default function DashboardPaneWorkspace({
                             setActionLogs={setActionLogs}
                             isStandalone={isStandalone}
                             hasRegisteredMachines={hasRegisteredMachines}
+                            initialDataLoaded={initialDataLoaded}
                             userName={userName}
                             groupIndex={groupIndex}
                             isFocused={isSplitMode && focusedGroup === groupIndex}

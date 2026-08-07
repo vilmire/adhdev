@@ -368,6 +368,8 @@
         "defaultWorkspace": "デフォルトのワークスペース"
     },
     "mobileInbox": {
+        "loading": "読み込んでいます...",
+        "loadingSubtitle": "マシンとセッションを取得しています。",
         "machines": "マシン",
         "chats": "チャット",
         "networkOffline": "ネットワークがオフラインです",
@@ -1148,6 +1150,7 @@
         "dropImage": "ここに画像をドロップ"
     },
     "paneGroup": {
+        "loadingSessions": "セッションを読み込んでいます...",
         "noConversations": "会話はまだありません",
         "waitingForDaemon": "デーモンを待機中",
         "connectYourMachines": "マシンを接続",

@@ -54,6 +54,8 @@ interface DashboardMobileChatModeProps {
     onStopCli?: (conversation?: ActiveConversation) => void | Promise<void>
     wsStatus?: string
     isConnected?: boolean
+    /** False while the first daemon snapshot is still in flight (see DashboardMobileChatInbox). */
+    initialDataLoaded?: boolean
     onShowAllHiddenConversations: () => void
     onHideConversation?: (conversation: ActiveConversation) => void
     onOpenMeshGraph?: (conversation: ActiveConversation) => void
@@ -88,6 +90,7 @@ export default function DashboardMobileChatMode({
     onStopCli,
     wsStatus,
     isConnected,
+    initialDataLoaded = true,
     onShowAllHiddenConversations,
     onHideConversation,
     onOpenMeshGraph,
@@ -355,6 +358,7 @@ export default function DashboardMobileChatMode({
                     onSectionChange={setSection}
                     wsStatus={wsStatus}
                     isConnected={isConnected}
+                    initialDataLoaded={initialDataLoaded}
                     isStandalone={isStandalone}
                     isConversationMuted={isConversationMuted}
                     onToggleMuteConversation={toggleMute}

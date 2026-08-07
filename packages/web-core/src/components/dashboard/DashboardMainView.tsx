@@ -603,6 +603,7 @@ export default function DashboardMainView({
                     onStopCli={onStopCli}
                     wsStatus={wsStatus}
                     isConnected={isConnected}
+                    initialDataLoaded={initialDataLoaded}
                     onShowAllHiddenConversations={onShowAllHiddenConversations}
                     onHideConversation={onHideConversation}
                     onOpenMeshGraph={handleOpenMeshGraph}
@@ -623,6 +624,7 @@ export default function DashboardMainView({
                     setActionLogs={setActionLogs}
                     isStandalone={isStandalone}
                     hasRegisteredMachines={machineEntries.length > 0}
+                    initialDataLoaded={initialDataLoaded}
                     userName={userName}
                     focusedGroup={focusedGroup}
                     focusGroup={focusGroup}

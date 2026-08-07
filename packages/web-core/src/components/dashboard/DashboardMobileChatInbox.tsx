@@ -38,6 +38,14 @@ interface DashboardMobileChatInboxProps {
     onOpenSettings: () => void
     onSectionChange: (section: DashboardMobileSection) => void
     wsStatus?: string
+    /**
+     * False while the first daemon snapshot is still in flight. `wsStatus` alone
+     * does not cover this: the socket reports 'connected' as soon as it is up,
+     * but the machine/session lists stay empty until the snapshot lands — which
+     * is exactly the window where the empty states claimed "no machines" / "no
+     * conversations" against data that had not arrived yet.
+     */
+    initialDataLoaded?: boolean
     isConnected?: boolean
     isStandalone?: boolean
     onCollectChatDebugBundle?: MobileInboxDebugBundleCollector
@@ -386,6 +394,7 @@ export default function DashboardMobileChatInbox({
     onOpenSettings,
     onSectionChange,
     wsStatus = 'connected',
+    initialDataLoaded = true,
     isStandalone = false,
     onCollectChatDebugBundle,
     isConversationMuted,
@@ -394,6 +403,8 @@ export default function DashboardMobileChatInbox({
     const { t } = useTranslation()
     const [hideConfirmConversation, setHideConfirmConversation] = useState<ActiveConversation | null>(null)
     const isDisconnected = wsStatus === 'disconnected' || wsStatus === 'reconnecting' || wsStatus === 'offline' || wsStatus === 'auth_failed'
+    // Distinct from isDisconnected: the socket is up, the data just is not here yet.
+    const isBootstrapping = !isDisconnected && !initialDataLoaded
     const hasMachines = machineCards.length > 0
     const hasAnyConversation = attentionItems.length > 0 || unreadItems.length > 0 || workingItems.length > 0 || completedItems.length > 0
     const inboxTitle = section === 'machines'
@@ -491,6 +502,12 @@ export default function DashboardMobileChatInbox({
                                             ? t('mobileInbox.pleaseLogInAgain')
                                             : t('mobileInbox.restoringConnection')
                                 }
+                            />
+                        ) : isBootstrapping ? (
+                            <MobileEmptyHero
+                                icon={<MobileSpinner />}
+                                title={t('mobileInbox.loading')}
+                                subtitle={t('mobileInbox.loadingSubtitle')}
                             />
                         ) : machineCards.length === 0 ? (
                             <MobileEmptyHero
@@ -662,6 +679,12 @@ export default function DashboardMobileChatInbox({
                                     icon={<MobileSpinner size={28} />}
                                     title={t('mobileInbox.connecting')}
                                     subtitle={t('mobileInbox.connectingSubtitle')}
+                                />
+                            ) : isBootstrapping ? (
+                                <MobileEmptyHero
+                                    icon={<MobileSpinner size={28} />}
+                                    title={t('mobileInbox.loading')}
+                                    subtitle={t('mobileInbox.loadingSubtitle')}
                                 />
                             ) : !hasMachines ? (
                                 <MobileEmptyHero

@@ -368,6 +368,8 @@
         "defaultWorkspace": "默认工作区"
     },
     "mobileInbox": {
+        "loading": "正在加载...",
+        "loadingSubtitle": "正在获取你的机器和会话。",
         "machines": "机器",
         "chats": "聊天",
         "networkOffline": "网络已离线",
@@ -1148,6 +1150,7 @@
         "dropImage": "将图片拖放到此处"
     },
     "paneGroup": {
+        "loadingSessions": "正在加载会话...",
         "noConversations": "尚无对话",
         "waitingForDaemon": "正在等待你的守护进程",
         "connectYourMachines": "连接你的机器",

@@ -9,6 +9,14 @@ interface PaneGroupEmptyStateProps {
     hasRegisteredMachines?: boolean
     suppressGuide?: boolean
     onOpenNewSession?: () => void
+    /**
+     * False while the first daemon snapshot is still in flight. Until it flips,
+     * "zero conversations" is indistinguishable from "not loaded yet", so the
+     * empty state would otherwise assert "No conversations yet" (or, worse, the
+     * install CTA) against data that has not arrived. Defaults to false so call
+     * sites that do not track load state keep their current behaviour.
+     */
+    isLoading?: boolean
 }
 
 export default function PaneGroupEmptyState({
@@ -18,10 +26,23 @@ export default function PaneGroupEmptyState({
     hasRegisteredMachines = false,
     suppressGuide = false,
     onOpenNewSession,
+    isLoading = false,
 }: PaneGroupEmptyStateProps) {
     const { t } = useTranslation('common')
     if (suppressGuide) {
         return <div className="text-sm text-text-muted opacity-0 select-none" aria-hidden="true">No active agent</div>
+    }
+
+    if (isLoading) {
+        return (
+            <div className="empty-dashboard flex-1 flex flex-col items-center justify-center gap-3 -mt-8 text-text-muted">
+                <div
+                    className="w-7 h-7 rounded-full animate-spin border-[2.5px] border-accent-primary/20 border-t-accent-primary-light"
+                    aria-hidden="true"
+                />
+                <p className="text-sm">{t('paneGroup.loadingSessions')}</p>
+            </div>
+        )
     }
 
     const shouldShowInstallCta = !isStandalone && !hasRegisteredMachines

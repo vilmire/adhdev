@@ -368,6 +368,8 @@
         "defaultWorkspace": "Espacio de trabajo predeterminado"
     },
     "mobileInbox": {
+        "loading": "Cargando...",
+        "loadingSubtitle": "Obteniendo tus máquinas y sesiones.",
         "machines": "Máquinas",
         "chats": "Chats",
         "networkOffline": "Red sin conexión",
@@ -1148,6 +1150,7 @@
         "dropImage": "Suelta la imagen aquí"
     },
     "paneGroup": {
+        "loadingSessions": "Cargando sesiones...",
         "noConversations": "Aún no hay conversaciones",
         "waitingForDaemon": "Esperando a tu daemon",
         "connectYourMachines": "Conecta tus máquinas",

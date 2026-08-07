@@ -33,6 +33,8 @@ export interface PaneGroupProps {
     setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>;
     isStandalone: boolean;
     hasRegisteredMachines?: boolean;
+    /** False while the first daemon snapshot is still in flight (see PaneGroupEmptyState). */
+    initialDataLoaded?: boolean;
     userName?: string;
     /** Group identity */
     groupIndex: number;
@@ -67,7 +69,7 @@ export default function PaneGroup({
     clearedTabs,
     actionLogs,
     sendDaemonCommand, setActionLogs,
-    isStandalone, hasRegisteredMachines, userName,
+    isStandalone, hasRegisteredMachines, initialDataLoaded = true, userName,
     groupIndex, onFocus,
     isSplitMode, numGroups, onMoveTab, onReceiveTab,
     style: styleProp,
@@ -215,6 +217,7 @@ export default function PaneGroup({
                             isStandalone={isStandalone}
                             hasRegisteredMachines={hasRegisteredMachines}
                             onOpenNewSession={onOpenNewSession}
+                            isLoading={!initialDataLoaded}
                         />
                     </div>
                 ) : (
