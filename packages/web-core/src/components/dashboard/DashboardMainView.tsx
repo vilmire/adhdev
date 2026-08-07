@@ -16,6 +16,7 @@ import { useActionShortcuts, getDefaultShortcut, type DashboardActionShortcutDef
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { IconX } from '../Icons'
+import ModalPortal from '../ui/ModalPortal'
 import type { DashboardNotificationRecord } from '../../utils/dashboard-notifications'
 import type { DashboardLayoutProfile } from '../../utils/dashboardLayoutStorage'
 import { useDashboardMainViewUiState, type DashboardMainViewShortcutSectionId } from '../../hooks/useDashboardMainViewUiState'
@@ -694,6 +695,7 @@ export default function DashboardMainView({
                 />
             )}
             {shortcutHelpOpen && (
+                <ModalPortal>
                 <div
                     className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50"
                     style={{ backdropFilter: 'blur(2px)' }}
@@ -884,6 +886,7 @@ export default function DashboardMainView({
                         )}
                     </div>
                 </div>
+                </ModalPortal>
             )}
         </>
     )

@@ -8,6 +8,7 @@ import ChatPane from './ChatPane'
 import RemoteView from '../RemoteView'
 import IDEChatTabs from '../ide/IDEChatTabs'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
+import ModalPortal from '../ui/ModalPortal'
 import { useIdeRemoteStream } from '../../hooks/useIdeRemoteStream'
 import { useIdeConversations } from '../../hooks/useIdeConversations'
 import { useSessionModalSubscription } from '../../hooks/useSessionModalSubscription'
@@ -180,6 +181,7 @@ export default function DashboardRemoteDialog({
     }, [])
 
     return (
+        <ModalPortal>
         <div className="fixed inset-0 z-[var(--z-modal-backdrop)] flex items-center justify-center p-0 md:p-3 bg-black/60 backdrop-blur-md" onClick={onClose}>
             <div
                 className="w-full h-[100dvh] md:h-[calc(100vh-24px)] md:w-[calc(100vw-24px)] flex flex-col overflow-hidden md:rounded-[14px] md:border border-border-default bg-surface-primary shadow-[0_24px_80px_rgba(2,6,23,0.32)]"
@@ -281,5 +283,6 @@ export default function DashboardRemoteDialog({
                 </div>
             </div>
         </div>
+        </ModalPortal>
     )
 }

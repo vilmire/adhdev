@@ -12,6 +12,7 @@ import { eventManager } from '../../managers/EventManager'
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
 import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands'
 import GitStatusPill from '../git/GitStatusPill'
+import ModalPortal from '../ui/ModalPortal'
 
 type MobileInboxDebugBundleCollector = (conversation: ActiveConversation) => void | Promise<void>
 
@@ -107,6 +108,7 @@ function HideConversationConfirmDialog({
     const title = getConversationTitle(conversation)
 
     return (
+        <ModalPortal>
         <div className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4">
             <div onClick={onCancel} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
             <div
@@ -138,6 +140,7 @@ function HideConversationConfirmDialog({
                 </div>
             </div>
         </div>
+        </ModalPortal>
     )
 }
 

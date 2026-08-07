@@ -3,6 +3,7 @@ import { useTransport } from '../../context/TransportContext'
 import type { ActiveConversation } from './types'
 import SpecFormBuilder, { type SpecModel, type FsmCond, type PreviewMap, type SectionDefModel, type SectionPreviewState } from './SpecFormBuilder'
 import { normalizeSpecSnapshot } from './spec-debug-normalize'
+import ModalPortal from '../ui/ModalPortal'
 
 interface StateHistoryEntry {
     stateId: string
@@ -471,6 +472,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
     }
 
     return (
+        <ModalPortal>
         <div
             role="dialog"
             aria-modal="true"
@@ -901,5 +903,6 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                 )}
             </div>
         </div>
+        </ModalPortal>
     )
 }

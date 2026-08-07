@@ -8,6 +8,7 @@ import {
 } from '../../interactive-prompt/interactive-prompt-utils'
 import type { InteractiveQuestion } from '../../interactive-prompt/types'
 import { IconCheckCircle, IconWarning, IconX } from '../Icons'
+import ModalPortal from '../ui/ModalPortal'
 
 // Ignore Submit clicks fired in this window right after a prompt renders. Without it, a
 // stray click/keypress left over from the previous view (or a just-dismissed prompt) can
@@ -161,6 +162,7 @@ export default function InteractivePromptModal({
   const answerPreview = buildInteractivePromptResponse(promptSession.prompt, selection)
 
   return (
+    <ModalPortal>
     <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 px-4 pt-[calc(24px+env(safe-area-inset-top,0px))] pb-[calc(24px+env(safe-area-inset-bottom,0px))]">
       <div className="flex max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-48px)] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border-default bg-surface-primary shadow-2xl">
         {/* Header */}
@@ -274,5 +276,6 @@ export default function InteractivePromptModal({
         </div>
       </div>
     </div>
+    </ModalPortal>
   )
 }

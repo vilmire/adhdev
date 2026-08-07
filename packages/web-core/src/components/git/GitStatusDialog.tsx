@@ -7,6 +7,7 @@ import { readGitDiffFileCommandResponse, useWorkspaceGitStatus } from '../../hoo
 import { IconX } from '../Icons'
 import GitChangeList from './GitChangeList'
 import GitDiffPreview from './GitDiffPreview'
+import ModalPortal from '../ui/ModalPortal'
 
 export interface GitStatusDialogProps {
     daemonId: string
@@ -170,6 +171,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
         : null
 
     return (
+        <ModalPortal>
         <div
             className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/60 px-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))] pt-[calc(16px+env(safe-area-inset-top,0px))]"
             onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
@@ -411,5 +413,6 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
             )}
             </div>
         </div>
+        </ModalPortal>
     )
 }

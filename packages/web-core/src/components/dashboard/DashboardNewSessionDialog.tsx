@@ -18,6 +18,7 @@ import { modelOptionsForProvider, thinkingOptionsForProvider } from '../../utils
 import type { LaunchResult, MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
 import MeshCoordinatorManualSetupPanel from '../MeshCoordinatorManualSetupPanel'
 import { buildManualCoordinatorSetup, type MeshCoordinatorManualSetup } from '../../utils/mesh-coordinator-setup'
+import ModalPortal from '../ui/ModalPortal'
 import { LAUNCH_CATEGORY_LABELS } from './launch-category-labels'
 import {
     AutoApproveModeSelector,
@@ -753,6 +754,7 @@ export default function DashboardNewSessionDialog({
 
     return (
         <>
+            <ModalPortal>
             <div
                 className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
                 role="dialog"
@@ -1163,6 +1165,7 @@ export default function DashboardNewSessionDialog({
                     </div>
                 </div>
             </div>
+            </ModalPortal>
 
             {browseDialogOpen && (
                 <WorkspaceBrowseDialog

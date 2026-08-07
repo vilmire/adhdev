@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { IconChevronLeft, IconFolder, IconX } from '../Icons'
 import type { BrowseDirectoryEntry } from './workspaceBrowse'
 import { getParentBrowsePath } from './workspaceBrowse'
+import ModalPortal from '../ui/ModalPortal'
 
 interface WorkspaceBrowseDialogProps {
     title: string
@@ -40,6 +41,7 @@ export default function WorkspaceBrowseDialog({
     const trimmedPathInput = pathInput.trim()
 
     return (
+        <ModalPortal>
         <div
             className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
             role="dialog"
@@ -157,5 +159,6 @@ export default function WorkspaceBrowseDialog({
                 </div>
             </div>
         </div>
+        </ModalPortal>
     )
 }

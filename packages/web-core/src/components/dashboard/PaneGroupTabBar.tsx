@@ -13,6 +13,7 @@ import {
 } from './conversation-presenters'
 import { IconMesh } from '../Icons'
 import GitStatusPill from '../git/GitStatusPill'
+import ModalPortal from '../ui/ModalPortal'
 
 const preventContextMenuButtonFocus = (event: React.MouseEvent<HTMLButtonElement>) => {
     // Keep context-menu clicks from moving focus into the fixed menu overlay,
@@ -420,6 +421,7 @@ export default function PaneGroupTabBar({
             )}
 
             {allowTabShortcuts && shortcutListening && (
+                <ModalPortal>
                 <div
                     className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50"
                     style={{ backdropFilter: 'blur(2px)' }}
@@ -439,6 +441,7 @@ export default function PaneGroupTabBar({
                         <div className="text-[10px] text-text-muted mt-3">{t('paneGroup.pressEscToCancel')}</div>
                     </div>
                 </div>
+                </ModalPortal>
             )}
         </>
     )

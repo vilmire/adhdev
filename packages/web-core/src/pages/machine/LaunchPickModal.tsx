@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next'
 import type { MachineData } from './types'
 import type { LaunchPickState } from './useMachineActions'
 import type { useMachineActions } from './useMachineActions'
+import ModalPortal from '../../components/ui/ModalPortal'
 
 interface LaunchPickModalProps {
     machine: MachineData
@@ -27,6 +28,7 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
     }, [setLaunchPick])
 
     return (
+        <ModalPortal>
         <div
             className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto bg-black/55 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
             role="dialog"
@@ -111,5 +113,6 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                 </div>
             </div>
         </div>
+        </ModalPortal>
     )
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { IconX } from './Icons'
+import ModalPortal from './ui/ModalPortal'
 
 interface OnboardingModalProps {
   onClose: () => void
@@ -74,6 +75,7 @@ export default function OnboardingModal({ onClose, standalone = false }: Onboard
   }, [onClose])
 
   return (
+    <ModalPortal>
     <div
       className="onboarding-overlay"
       style={{
@@ -190,5 +192,6 @@ export default function OnboardingModal({ onClose, standalone = false }: Onboard
         @keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
       `}</style>
     </div>
+    </ModalPortal>
   )
 }

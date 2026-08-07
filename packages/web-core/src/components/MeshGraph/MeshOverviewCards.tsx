@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { useTranslation } from 'react-i18next'
 import { describeQueueTaskMessage } from '../../utils/queue-task-label'
 import { installTopModalEscapeHandler } from '../../utils/modal-escape'
+import ModalPortal from '../ui/ModalPortal'
 import type {
     MeshMissionStatus,
     MeshMissionSummary,
@@ -499,6 +500,7 @@ export function MeshOverviewDetailModal({ meshTheme, detail, onClose, daemonId, 
         : 'border-slate-200 bg-white md:bg-white/98 shadow-[0_28px_120px_rgba(148,163,184,0.3)]'
 
     return (
+        <ModalPortal>
         <div
             className={`fixed inset-0 z-[var(--z-modal)] flex items-stretch justify-center p-0 md:items-center md:p-4 ${overlayClass}`}
             role="dialog"
@@ -550,6 +552,7 @@ export function MeshOverviewDetailModal({ meshTheme, detail, onClose, daemonId, 
                 </div>
             </div>
         </div>
+        </ModalPortal>
     )
 }
 
