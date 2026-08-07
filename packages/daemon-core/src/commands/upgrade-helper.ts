@@ -357,6 +357,70 @@ export function execNpmCommandSync(
   );
 }
 
+/**
+ * Ask the registry which concrete version a dist-tag or exact version resolves
+ * to: `npm view <pkg>@<tagOrVersion> version`.
+ *
+ * This is the single "what version would we install?" query. It previously
+ * existed three times — the CLI `update` path, the IPC `daemon_upgrade`
+ * handler, and the mandatory-update verifier — each with slightly different
+ * exec plumbing, which is exactly the drift this collapses. The installation
+ * side was already unified here (resolveCurrentGlobalInstallSurface /
+ * buildPinnedGlobalInstallCommand); this closes the lookup side.
+ *
+ * The three call sites' genuine differences are preserved as parameters rather
+ * than flattened, so no caller's behavior changes:
+ *   - `timeout`: defaults to 10s (the IPC + mandatory value). The CLI passed
+ *     none; it opts out explicitly with `timeout: undefined`, since an
+ *     interactive `adhdev update` blocking on a slow registry is preferable to
+ *     failing the command outright.
+ *   - `stdio`: the mandatory path pipes all three streams so npm's stderr never
+ *     leaks onto the daemon's console; others keep execFileSync's default.
+ *   - `execFileSync`: injectable so the mandatory-update tests can assert the
+ *     exact argv without touching the network.
+ *
+ * Returns the trimmed stdout — the resolved version string. Verifying that it
+ * matches what the caller asked for is the caller's job (only the mandatory
+ * path requires exact equality; a dist-tag lookup by definition returns
+ * something different from the tag it was given).
+ */
+export function resolveNpmPublishedVersion(
+  packageName: string,
+  tagOrVersion: string,
+  surface?: Pick<CurrentGlobalInstallSurface, 'npmExecutable' | 'npmArgsPrefix' | 'execOptions'>,
+  options: {
+    /** Milliseconds; explicitly pass `undefined` for no timeout. Defaults to 10_000. */
+    timeout?: number;
+    stdio?: ExecFileSyncOptions['stdio'];
+    /** Injection seam for tests; defaults to the shared execNpmCommandSync path. */
+    execFileSync?: (file: string, args: readonly string[], options: Record<string, unknown>) => string | Buffer;
+  } = {},
+): string {
+  const args = ['view', `${packageName}@${tagOrVersion}`, 'version'];
+  const execOptions: ExecFileSyncOptions = {
+    encoding: 'utf-8',
+    ...('timeout' in options ? (options.timeout === undefined ? {} : { timeout: options.timeout }) : { timeout: 10_000 }),
+    ...(options.stdio ? { stdio: options.stdio } : {}),
+  };
+
+  if (options.execFileSync) {
+    // Mirror execNpmCommandSync's argv/option assembly so an injected runner
+    // observes exactly what the real one would have executed.
+    const runnerOptions = surface?.execOptions || getNpmExecOptions();
+    return String(options.execFileSync(
+      surface?.npmExecutable || 'npm',
+      [...(surface?.npmArgsPrefix || []), ...args],
+      {
+        ...execOptions,
+        ...runnerOptions,
+        ...(process.platform === 'win32' ? { windowsHide: true } : {}),
+      },
+    )).trim();
+  }
+
+  return String(execNpmCommandSync(args, execOptions, surface)).trim();
+}
+
 function isManagedSessionHostPid(pid: number): boolean {
   const commandLine = getProcessCommandLine(pid);
   return !!commandLine && /session-host-daemon/i.test(commandLine);

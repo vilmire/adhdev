@@ -21,6 +21,24 @@ vi.mock('child_process', async (importOriginal) => {
 
 vi.mock('../../src/commands/upgrade-helper.js', () => ({
   execNpmCommandSync: mocks.execNpmCommandSync,
+  // The published-version lookup is shared with the CLI + mandatory-update
+  // paths. Mirror the real helper's argv/options assembly on top of the
+  // execNpmCommandSync mock, so the `npm view` argv assertions below keep
+  // exercising the actual contract rather than the mock's own shape.
+  resolveNpmPublishedVersion: (
+    packageName: string,
+    tagOrVersion: string,
+    surface?: Record<string, unknown>,
+    options: { timeout?: number; stdio?: unknown } = {},
+  ) => String(mocks.execNpmCommandSync(
+    ['view', `${packageName}@${tagOrVersion}`, 'version'],
+    {
+      encoding: 'utf-8',
+      ...('timeout' in options ? (options.timeout === undefined ? {} : { timeout: options.timeout }) : { timeout: 10_000 }),
+      ...(options.stdio ? { stdio: options.stdio } : {}),
+    },
+    surface,
+  )).trim(),
   resolveCurrentGlobalInstallSurface: mocks.resolveCurrentGlobalInstallSurface,
   spawnDetachedDaemonUpgradeHelper: mocks.spawnDetachedDaemonUpgradeHelper,
   getUpgradeLogPath: mocks.getUpgradeLogPath,

@@ -16,7 +16,7 @@
  */
 import { loadConfig, updateConfig, setQuotaShowAccountEmail } from '../../config/config.js';
 import { installClaudeStatusline } from '../../quota/statusline/install.js';
-import { execNpmCommandSync, getUpgradeLogPath, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from '../upgrade-helper.js';
+import { execNpmCommandSync, getUpgradeLogPath, resolveCurrentGlobalInstallSurface, resolveNpmPublishedVersion, spawnDetachedDaemonUpgradeHelper } from '../upgrade-helper.js';
 import { LOG } from '../../logging/logger.js';
 import { IDENTITY, TRACK } from '../../track-identity.js';
 import { resolveSessionHostAppName } from '../../session-host/app-name.js';
@@ -40,7 +40,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
             const npmTag = IDENTITY.npmTag;
 
             // Check the build track's dist-tag and resolve it to a concrete install version.
-            const latest = String(execNpmCommandSync(['view', `${pkgName}@${npmTag}`, 'version'], { encoding: 'utf-8', timeout: 10000 }, npmSurface)).trim();
+            const latest = resolveNpmPublishedVersion(pkgName, npmTag, npmSurface);
             LOG.info('Upgrade', `Latest ${pkgName}@${npmTag}: v${latest}`);
             let currentInstalled: string | null = null;
             try {

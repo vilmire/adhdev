@@ -428,6 +428,7 @@ export {
   resolveInstanceDir,
   buildPinnedGlobalInstallCommand,
   execNpmCommandSync,
+  resolveNpmPublishedVersion,
   getNpmExecOptions,
 } from './commands/upgrade-helper.js';
 export type {

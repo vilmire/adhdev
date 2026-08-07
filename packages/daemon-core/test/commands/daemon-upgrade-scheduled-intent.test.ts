@@ -36,6 +36,22 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../src/commands/upgrade-helper.js', () => ({
   execNpmCommandSync: mocks.execNpmCommandSync,
+  // Mirrors the real helper's argv/options assembly on top of the
+  // execNpmCommandSync mock (see daemon-upgrade-runtime-version.test.ts).
+  resolveNpmPublishedVersion: (
+    packageName: string,
+    tagOrVersion: string,
+    surface?: Record<string, unknown>,
+    options: { timeout?: number; stdio?: unknown } = {},
+  ) => String(mocks.execNpmCommandSync(
+    ['view', `${packageName}@${tagOrVersion}`, 'version'],
+    {
+      encoding: 'utf-8',
+      ...('timeout' in options ? (options.timeout === undefined ? {} : { timeout: options.timeout }) : { timeout: 10_000 }),
+      ...(options.stdio ? { stdio: options.stdio } : {}),
+    },
+    surface,
+  )).trim(),
   resolveCurrentGlobalInstallSurface: mocks.resolveCurrentGlobalInstallSurface,
   spawnDetachedDaemonUpgradeHelper: mocks.spawnDetachedDaemonUpgradeHelper,
   getUpgradeLogPath: mocks.getUpgradeLogPath,
