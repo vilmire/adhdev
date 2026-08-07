@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { DaemonCommandRouter } from '../../src/commands/router'
 import { createWorktree, resolveWorktreePath, getDefaultWorktreeBaseDir } from '../../src/git/git-worktree'
+import { resolveConfigDir } from '../../src/config/config-dir'
 import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger'
 
 const execFileAsync = promisify(execFile)
@@ -1053,10 +1054,10 @@ describe('mesh session cleanup', () => {
 })
 
 describe('worktree base directory (home default + override + legacy back-compat)', () => {
-  it('defaults the managed worktree base to <home>/.adhdev/worktrees', async () => {
+  it('defaults the managed worktree base to <configDir>/worktrees', async () => {
     const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-wt-default-base-')
-    // Unique mesh name so this real-home test never collides across runs; the
-    // finally block defensively removes + prunes the home-based worktree.
+    // Unique mesh name so this test never collides across runs; the finally
+    // block defensively removes + prunes the resulting worktree.
     const meshName = `default-base-mesh-${process.pid}-${dir.length}`
     const branch = 'feat/default-base'
     let created: Awaited<ReturnType<typeof createWorktree>> | undefined
@@ -1065,7 +1066,12 @@ describe('worktree base directory (home default + override + legacy back-compat)
       // The physical worktree lives under the home base, NOT under the repo parent.
       expect(created.worktreePath).toBe(resolveWorktreePath(repoRoot, meshName, branch))
       expect(created.worktreePath.startsWith(getDefaultWorktreeBaseDir())).toBe(true)
-      expect(created.worktreePath).toContain(join('.adhdev', 'worktrees', meshName, 'feat-default-base'))
+      // Track/config-dir-derived, not the literal '.adhdev': the base now
+      // honours ADHDEV_CONFIG_DIR, which setup-env.ts pins to a temp dir for
+      // every test. Asserting '.adhdev' here previously only passed because the
+      // base ignored that isolation and wrote into the developer's real ~/.adhdev.
+      expect(created.worktreePath).toContain(join('worktrees', meshName, 'feat-default-base'))
+      expect(created.worktreePath.startsWith(join(resolveConfigDir(), 'worktrees'))).toBe(true)
       // Cleanup via remove_mesh_node accepts and removes the home-based worktree.
       const inlineMesh = {
         id: 'mesh-default-base',

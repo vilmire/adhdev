@@ -6,18 +6,20 @@
  *
  * Worktrees are placed under a home-directory base (outside every source repo)
  * to avoid .gitignore pollution and submodule conflicts:
- *   <home>/.adhdev/worktrees/<meshName>/<branch>/
+ *   <configDir>/worktrees/<meshName>/<branch>/
+ * where <configDir> is track-aware (`~/.adhdev` stable, `~/.adhdev-preview`
+ * preview), so the two tracks never share a worktree tree.
  *
  * The base can be overridden per-clone via `worktreeBaseDir` (mesh policy);
  * see resolveWorktreeBaseDir / resolveWorktreePath.
  */
 
 import * as path from 'node:path';
-import * as os from 'node:os';
 import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveConfigDir } from '../config/config-dir.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -25,12 +27,27 @@ const execFileAsync = promisify(execFile);
 const WORKTREE_DIR_NAME = 'worktrees';
 
 /**
- * Default base directory that holds all managed mesh worktrees.
- * `os.homedir()` is cross-platform (%USERPROFILE% on win32), and `path.join`
- * emits the platform-native separator, so this is correct on win32 too.
+ * Default base directory that holds all managed mesh worktrees:
+ * `<configDir>/worktrees`, where the config dir is the TRACK's dir
+ * (`.adhdev` stable / `.adhdev-preview` preview) — never a hard-coded
+ * `.adhdev`.
+ *
+ * This used to join `.adhdev` literally, which quietly put a preview daemon's
+ * worktrees inside the STABLE config dir. Nothing errored — the directory
+ * exists on both tracks — so both tracks' worktrees piled into one tree and
+ * the per-track isolation that separate config dirs are meant to provide was
+ * silently defeated. Observed live: a preview daemon (port 19223) had created
+ * every one of its mesh worktrees under `~/.adhdev/worktrees/`.
+ *
+ * Delegates to resolveConfigDir() so this honors ADHDEV_CONFIG_DIR too: a
+ * daemon pointed at a custom config dir now keeps its worktrees with the rest
+ * of its state instead of stranding them in `~/.adhdev`. Resolved per call
+ * (not a module-load snapshot) for the same reason config-dir.ts does it —
+ * homedir()/env are read at call time. `path.join` emits the platform-native
+ * separator, so this stays correct on win32 (%USERPROFILE%).
  */
 export function getDefaultWorktreeBaseDir(): string {
-    return path.join(os.homedir(), '.adhdev', WORKTREE_DIR_NAME);
+    return path.join(resolveConfigDir(), WORKTREE_DIR_NAME);
 }
 const GIT_TIMEOUT_MS = 30_000;
 const GIT_MAX_BUFFER = 4 * 1024 * 1024;
@@ -52,7 +69,7 @@ export interface WorktreeCreateOptions {
     /**
      * Base directory under which the worktree is placed as
      * `<worktreeBaseDir>/<meshName>/<branch>`. When omitted (or blank), defaults
-     * to `<home>/.adhdev/worktrees` (see getDefaultWorktreeBaseDir). Ignored when
+     * to `<configDir>/worktrees` (see getDefaultWorktreeBaseDir). Ignored when
      * `targetDir` is given.
      */
     worktreeBaseDir?: string;
@@ -155,7 +172,7 @@ export function resolveWorktreeBaseDir(worktreeBaseDir?: string): string {
 /**
  * Resolve the target directory for a new worktree.
  * Places worktrees at: <worktreeBaseDir>/<meshName>/<branch>/, where
- * `worktreeBaseDir` defaults to `<home>/.adhdev/worktrees` (getDefaultWorktreeBaseDir).
+ * `worktreeBaseDir` defaults to `<configDir>/worktrees` (getDefaultWorktreeBaseDir).
  * The mesh-name namespacing keeps multi-repo / multi-branch clones from colliding.
  */
 export function resolveWorktreePath(repoRoot: string, meshName: string, branch: string, worktreeBaseDir?: string): string {

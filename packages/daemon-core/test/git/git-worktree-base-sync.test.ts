@@ -7,6 +7,7 @@ import {
   resolveWorktreeBaseDir,
   getDefaultWorktreeBaseDir,
 } from '../../src/git/git-worktree'
+import { resolveConfigDir } from '../../src/config/config-dir'
 
 type ExecResult = {
   stdout?: string
@@ -153,8 +154,10 @@ describe('createWorktree stale-base resolution', () => {
 })
 
 describe('resolveWorktreePath base directory', () => {
-  it('defaults the base to <home>/.adhdev/worktrees, namespaced by mesh + branch', () => {
-    expect(getDefaultWorktreeBaseDir()).toBe(path.join(os.homedir(), '.adhdev', 'worktrees'))
+  it('defaults the base to <configDir>/worktrees, namespaced by mesh + branch', () => {
+    // Derived from resolveConfigDir, not a literal '.adhdev': asserting the
+    // literal here is what let the track bug (below) sit unnoticed.
+    expect(getDefaultWorktreeBaseDir()).toBe(path.join(resolveConfigDir(), 'worktrees'))
     // The base is home-derived, NOT dirname(repoRoot) as in the legacy layout.
     const resolved = resolveWorktreePath('/some/deep/repo', 'my mesh', 'feat/auth')
     expect(resolved).toBe(path.join(getDefaultWorktreeBaseDir(), 'my mesh', 'feat-auth'))
@@ -181,5 +184,64 @@ describe('resolveWorktreePath base directory', () => {
     expect(resolveWorktreeBaseDir('')).toBe(getDefaultWorktreeBaseDir())
     expect(resolveWorktreeBaseDir('   ')).toBe(getDefaultWorktreeBaseDir())
     expect(resolveWorktreeBaseDir('/x/y')).toBe('/x/y')
+  })
+})
+
+describe('worktree base directory follows the build track', () => {
+  // The base joined '.adhdev' literally, so a PREVIEW daemon put its worktrees
+  // in the STABLE config dir. Nothing errored (the dir exists on both tracks),
+  // so both tracks' worktrees silently pooled in one tree — observed live on a
+  // preview daemon (19223) whose worktrees all sat under ~/.adhdev/worktrees.
+  //
+  // getDefaultWorktreeBaseDir() reads process.env per call, so the track is
+  // selected by env here — no production code is bent for the test.
+  const withEnv = <T>(vars: Record<string, string | undefined>, fn: () => T): T => {
+    const saved: Record<string, string | undefined> = {}
+    for (const [k, v] of Object.entries(vars)) {
+      saved[k] = process.env[k]
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+    try {
+      return fn()
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
+    }
+  }
+
+  // ADHDEV_CONFIG_DIR outranks the track in resolveConfigDir, so it must be
+  // cleared for these to measure the track rather than an ambient override.
+  const onTrack = (track: string) =>
+    withEnv({ ADHDEV_BUILD_CHANNEL: track, ADHDEV_CONFIG_DIR: undefined }, () => getDefaultWorktreeBaseDir())
+
+  it('uses the preview config dir on the preview track (the regression: it used the stable dir)', () => {
+    expect(onTrack('preview')).toBe(path.join(os.homedir(), '.adhdev-preview', 'worktrees'))
+  })
+
+  it('uses the stable config dir on the stable track', () => {
+    expect(onTrack('stable')).toBe(path.join(os.homedir(), '.adhdev', 'worktrees'))
+  })
+
+  it('keeps the two tracks in separate trees', () => {
+    // The actual isolation property, independent of the literal dir names.
+    expect(onTrack('preview')).not.toBe(onTrack('stable'))
+  })
+
+  it('agrees with resolveConfigDir on each track rather than restating dir names', () => {
+    for (const track of ['preview', 'stable']) {
+      const expected = withEnv({ ADHDEV_BUILD_CHANNEL: track, ADHDEV_CONFIG_DIR: undefined }, () =>
+        path.join(resolveConfigDir(), 'worktrees'),
+      )
+      expect(onTrack(track)).toBe(expected)
+    }
+  })
+
+  it('honors ADHDEV_CONFIG_DIR so worktrees stay with the rest of the daemon state', () => {
+    const custom = path.join(os.tmpdir(), 'adhdev-cfg-probe')
+    expect(withEnv({ ADHDEV_CONFIG_DIR: custom, ADHDEV_BUILD_CHANNEL: 'preview' }, getDefaultWorktreeBaseDir))
+      .toBe(path.join(custom, 'worktrees'))
   })
 })
