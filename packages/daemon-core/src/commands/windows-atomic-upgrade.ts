@@ -2,11 +2,33 @@ import { execFileSync, spawn, spawnSync, type ChildProcess } from 'child_process
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
+import { getTrackIdentity, resolveBuildTrack } from '../track-identity.js';
 import { stopOwnedProcessesForPrefixes } from './process-lifecycle.js';
 
 const POINTER_NAME = '.adhdev-current';
 const STABLE_FILES = [POINTER_NAME, 'adhdev.cmd', 'adhdev.ps1', 'adhdev'] as const;
-const DEFAULT_HEALTH_PORT = 19222;
+
+/**
+ * Default loopback port the health gate probes: the CURRENT TRACK's daemon port
+ * (19222 stable / 19223 preview), never a hard-coded literal.
+ *
+ * This was `const DEFAULT_HEALTH_PORT = 19222`, the stable-track value, while no
+ * call site passes `healthPort` — so on preview the gate probed 19222, found no
+ * daemon (preview listens on 19223), and `alive` stayed false for the whole
+ * 120s budget. `waitForHealth` then reported a timeout and rolled back an
+ * upgrade whose replacement daemon had actually booted in under a second. Live
+ * Windows preview logs showed three consecutive rollbacks this way (237 probes,
+ * zero of them hitting a listening socket).
+ *
+ * Resolved per call rather than at module load: `track-identity`'s exported
+ * `IDENTITY` is a load-time snapshot, and the upgrade path can run in a process
+ * whose track is only settled later (and tests must be able to select a track
+ * without re-importing the module graph). `config-dir.ts` resolves the config
+ * dir the same way for the same reason.
+ */
+export function resolveDefaultHealthPort(env: NodeJS.ProcessEnv = process.env): number {
+  return getTrackIdentity(resolveBuildTrack(env)).defaultPort;
+}
 
 // How long to wait for the replacement daemon to report the target version
 // before deterministically rolling back. status.version only appears AFTER the
@@ -518,12 +540,12 @@ export function createDefaultWindowsAtomicHooks(options: {
   cwd: string;
   env: NodeJS.ProcessEnv;
   log: (message: string) => void;
-  /** Loopback IPC port to probe for health/version. Defaults to the daemon's local IPC port. */
+  /** Loopback IPC port to probe for health/version. Defaults to the current track's daemon port (19222 stable / 19223 preview). */
   healthPort?: number;
   /** How long to poll for the replacement daemon to report the target version. */
   healthTimeoutMs?: number;
 }): WindowsAtomicUpgradeHooks {
-  const healthPort = options.healthPort ?? DEFAULT_HEALTH_PORT;
+  const healthPort = options.healthPort ?? resolveDefaultHealthPort(options.env);
   const healthTimeoutMs = options.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
   return {
     install: (stagedPrefix, portableNode) => {

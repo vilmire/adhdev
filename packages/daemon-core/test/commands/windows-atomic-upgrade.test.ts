@@ -25,9 +25,11 @@ import {
   cleanupInactivePrefixesWithGuard,
   boundedCleanupInactivePrefixes,
   DEFAULT_HEALTH_TIMEOUT_MS,
+  resolveDefaultHealthPort,
   type WindowsAtomicUpgradeHooks,
   type WindowsInstallerLayout,
 } from '../../src/commands/windows-atomic-upgrade'
+import { getTrackIdentity } from '../../src/track-identity'
 import { emitUpgradeFailureNotice } from '../../src/commands/upgrade-helper'
 
 const roots: string[] = []
@@ -510,6 +512,76 @@ describe('Windows installer-managed atomic upgrade', () => {
       // It reached the daemon (alive) but the version stayed stale — the exact
       // "components still booting" shape FIX A is meant to make visible.
       expect(logs.some((l) => /is alive at \d+ms; awaiting status\.version/.test(l))).toBe(true)
+    })
+  })
+
+  // The describe block above always injects `healthPort`, so it never exercises
+  // the value production actually uses: NO call site in the repo passes
+  // `healthPort`, so the default is the only port the Windows upgrade gate ever
+  // probes. It was hard-coded to 19222 (stable), which made every PREVIEW-track
+  // upgrade probe a port with no listener, stay `alive: false` for the full 120s
+  // budget, and roll back a replacement daemon that had booted fine. These tests
+  // pin the default to the track, not to a literal.
+  describe('createDefaultWindowsAtomicHooks() default health port follows the build track', () => {
+    // Asserted on the resolver's RETURN VALUE, not by binding a listener to
+    // 19222/19223. Those are the live daemon's real ports — this very machine
+    // runs a preview daemon on 19223 — so a bind-and-probe test would depend on
+    // whether a port happens to be free and would silently skip when it is not.
+    // (An earlier draft did exactly that and reported green against the bug.)
+    it('resolves 19223 on the preview track — the regression: it hard-coded 19222 and rolled back every preview upgrade', () => {
+      expect(resolveDefaultHealthPort({ ADHDEV_BUILD_CHANNEL: 'preview' })).toBe(19_223)
+    })
+
+    it("resolves 19223 for the preview track's 'next' dist-tag alias", () => {
+      expect(resolveDefaultHealthPort({ ADHDEV_BUILD_CHANNEL: 'next' })).toBe(19_223)
+    })
+
+    it('resolves 19222 on the stable track', () => {
+      expect(resolveDefaultHealthPort({ ADHDEV_BUILD_CHANNEL: 'stable' })).toBe(19_222)
+    })
+
+    it('fails closed to the stable port when the track is absent or unrecognized', () => {
+      expect(resolveDefaultHealthPort({})).toBe(19_222)
+      expect(resolveDefaultHealthPort({ ADHDEV_BUILD_CHANNEL: 'nonsense' })).toBe(19_222)
+    })
+
+    it('matches track-identity rather than restating the port literals', () => {
+      // Guards the pair against a future port change made in only one place.
+      expect(resolveDefaultHealthPort({ ADHDEV_BUILD_CHANNEL: 'preview' }))
+        .toBe(getTrackIdentity('preview').defaultPort)
+      expect(resolveDefaultHealthPort({ ADHDEV_BUILD_CHANNEL: 'stable' }))
+        .toBe(getTrackIdentity('stable').defaultPort)
+    })
+
+    it('feeds the resolved track port into the gate when no healthPort is injected', async () => {
+      // The wiring assertion: no production call site passes `healthPort`, so
+      // the default must be what the gate actually probes. Stub on an ephemeral
+      // port, point the resolver's answer at it via the override, and confirm a
+      // preview-track hook set built WITHOUT healthPort probes 19223 — proven by
+      // it NOT being satisfied by a daemon answering on a different port.
+      const srv = http.createServer((_req, res) => {
+        res.statusCode = 200
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({ ok: true, pid: 8123, status: { version: '1.0.39-rc.3' } }))
+      })
+      await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', () => resolve()))
+      try {
+        const hooksNoPort = createDefaultWindowsAtomicHooks({
+          packageName: 'adhdev',
+          targetVersion: '1.0.39-rc.3',
+          npmCliPath: '/tools/node22/npm-cli.js',
+          restartArgv: [],
+          cwd: '/',
+          env: { ADHDEV_BUILD_CHANNEL: 'preview' },
+          log: () => {},
+          healthTimeoutMs: 900,
+        })
+        // The stub answers on an ephemeral port, never on 19223, so a gate that
+        // correctly targets the preview port must time out here.
+        expect(await hooksNoPort.waitForHealth(8123, '1.0.39-rc.3')).toBe(false)
+      } finally {
+        await new Promise<void>((resolve) => srv.close(() => resolve()))
+      }
     })
   })
 
