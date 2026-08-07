@@ -27,19 +27,14 @@ describe('daemon update policy helpers', () => {
       },
     }
 
+    // The policy accessors stay authoritative — the version-mismatch banner,
+    // machine-list sorting and the upgrade label all read them.
     expect(getDaemonUpdateChannel(daemon)).toBe('preview')
     expect(getDaemonUpdateTargetVersion(daemon, '0.9.75')).toBe('0.9.76-rc.2')
-    expect(buildDaemonUpgradePayload(daemon)).toEqual({
-      channel: 'preview',
-      npmTag: 'next',
-      targetVersion: '0.9.76-rc.2',
-      updatePolicy: {
-        channel: 'preview',
-        npmTag: 'next',
-        targetVersion: '0.9.76-rc.2',
-        updateCommand: 'adhdev update --channel preview',
-      },
-    })
+    // The COMMAND payload, by contrast, carries nothing: the daemon upgrades
+    // along its own build track and discards every channel hint it is sent.
+    // A resolvable channel only gates whether the command is sent at all.
+    expect(buildDaemonUpgradePayload(daemon)).toEqual({})
   })
 
   it('falls back to releaseChannel/serverVersion when compact payload lacks full policy', () => {
@@ -52,19 +47,10 @@ describe('daemon update policy helpers', () => {
       serverVersion: '0.9.76-rc.2',
     }
 
-    expect(buildDaemonUpgradePayload(daemon)).toEqual({
-      channel: 'preview',
-      npmTag: 'next',
-      targetVersion: '0.9.76-rc.2',
-      updatePolicy: {
-        channel: 'preview',
-        npmTag: 'next',
-        targetVersion: '0.9.76-rc.2',
-        // Phase 3: the derived fallback command no longer carries --channel —
-        // the installed binary's build stamp pins the track.
-        updateCommand: 'adhdev update',
-      },
-    })
+    // A channel IS resolvable here (from releaseChannel), so the command is
+    // allowed to go out — with an empty payload.
+    expect(getDaemonUpdateChannel(daemon)).toBe('preview')
+    expect(buildDaemonUpgradePayload(daemon)).toEqual({})
   })
 
   it('labels a behind-target daemon on its current channel as a version update, not a channel switch', () => {
@@ -151,7 +137,7 @@ describe('buildDaemonUpgradePayload fail-closed behavior', () => {
     expect(buildDaemonUpgradePayload(undefined)).toBeNull()
   })
 
-  it('carries the explicit channel when the policy is present', () => {
+  it('sends an empty payload — never a channel hint — when the policy is present', () => {
     const daemon: DaemonData = {
       id: 'machine-7',
       type: 'adhdev-daemon',
@@ -160,11 +146,16 @@ describe('buildDaemonUpgradePayload fail-closed behavior', () => {
       updatePolicy: { channel: 'preview', npmTag: 'next', targetVersion: '1.0.28-rc.20' },
     }
 
-    expect(buildDaemonUpgradePayload(daemon)).toMatchObject({
-      channel: 'preview',
-      npmTag: 'next',
-      targetVersion: '1.0.28-rc.20',
-    })
+    const payload = buildDaemonUpgradePayload(daemon)
+    expect(payload).toEqual({})
+    // Guard the intent explicitly: the daemon ignores these fields (see
+    // daemon-core commands/low-family/daemon-lifecycle.ts), and shipping them
+    // anyway implies the dashboard can retarget a node's release channel. It
+    // cannot — the channel is a build-time identity of the installed binary.
+    expect(payload).not.toHaveProperty('channel')
+    expect(payload).not.toHaveProperty('npmTag')
+    expect(payload).not.toHaveProperty('targetVersion')
+    expect(payload).not.toHaveProperty('updatePolicy')
   })
 })
 

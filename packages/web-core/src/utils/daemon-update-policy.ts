@@ -72,21 +72,35 @@ export function getDaemonUpdateChannel(daemon: DaemonData): WebReleaseChannel | 
 
 /**
  * Build the `daemon_upgrade` payload from the node's server-pushed update
- * policy. Returns null when no channel is resolvable: sending an empty payload
- * makes the daemon fall back to its saved config or 'stable', which can
- * silently downgrade the node and retarget it to another channel. Callers must
- * treat null as "do not send the command".
+ * policy.
+ *
+ * Returns null when no channel is resolvable, and the caller must treat that as
+ * "do not send the command". This null-gate is the ONLY load-bearing behavior
+ * here: an unresolvable channel means we don't know enough about the node to
+ * ask it to upgrade, so we refuse rather than fire a command whose outcome we
+ * can't predict.
+ *
+ * The payload itself is deliberately EMPTY. Since Phase 3 the release channel
+ * is a build-time identity of the installed binary (track-identity.ts), so the
+ * daemon always upgrades along its own build track and explicitly ignores every
+ * channel hint a dashboard sends: commands/low-family/daemon-lifecycle.ts logs
+ * `args.channel` / `args.updatePolicy.channel` / `args.npmTag` and drops them.
+ * Assembling channel/npmTag/targetVersion/updatePolicy here therefore produced
+ * a payload that no consumer read — and worse, one that LOOKED authoritative,
+ * inviting the belief that a dashboard can retarget a node's channel. It
+ * cannot. Regression coverage for the daemon side lives in daemon-core's
+ * test/commands/daemon-upgrade-runtime-version.test.ts ("ignores
+ * updatePolicy.channel from a stale dashboard one-click upgrade payload").
+ *
+ * NOTE: this concerns the RELEASE (npm dist-tag) channel axis only. The
+ * PROVIDER channel axis is separate and still reads `config.updateChannel` as a
+ * legacy fallback (providers/channel/contract.ts) — untouched by this.
  */
 export function buildDaemonUpgradePayload(daemon: DaemonData | null | undefined): Record<string, unknown> | null {
     if (!daemon) return null
-    const policy = getDaemonUpdatePolicy(daemon)
-    if (!policy.channel) return null
-    return {
-        channel: policy.channel,
-        ...(policy.npmTag ? { npmTag: policy.npmTag } : {}),
-        ...(policy.targetVersion ? { targetVersion: policy.targetVersion } : {}),
-        updatePolicy: policy,
-    }
+    // Resolve purely to decide whether we may send the command at all.
+    if (!getDaemonUpdatePolicy(daemon).channel) return null
+    return {}
 }
 
 /**
