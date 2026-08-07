@@ -886,7 +886,18 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         // Non-fatal: pending events are best-effort.
     }
 
-    return JSON.stringify(response, null, 2);
+    // Serialized WITHOUT indentation, deliberately.
+    //
+    // Two reasons. (1) Cost: this payload is consumed by an LLM coordinator, so
+    // every indent byte is a billed token. Measured on a 23-node mesh, 2-space
+    // indent was ~29% of the string — pure waste, zero information.
+    // (2) Correctness: the node byte-budget above costs nodes with
+    // `JSON.stringify(n).length` (no indent). While this returned indented JSON,
+    // the budget undercounted the real wire size by that same ~29%, so the code
+    // believed it was inside the cap at the moment the actual payload had already
+    // blown past it. Budget accounting and final serialization must use the SAME
+    // format; keep them in sync if either changes.
+    return JSON.stringify(response);
 }
 
 export async function meshListNodes(ctx: MeshContext): Promise<string> {
