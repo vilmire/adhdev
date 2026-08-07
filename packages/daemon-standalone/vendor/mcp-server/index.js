@@ -937,7 +937,7 @@ function isLocalControlPlaneNode(ctx, node) {
 // src/tools/mesh-tool-schemas.ts
 var MESH_STATUS_TOOL = {
   name: "mesh_status",
-  description: "Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version}); when a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning \u2014 meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.",
+  description: `Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version}); when a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning \u2014 meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). When a daemon has a durable failed-upgrade notice on record it adds daemonUpgradeFailures{daemonId \u2192 {summary, recordedAt, ageLabel, targetVersion, noticePath, logPath}} + daemonUpgradeFailureWarning \u2014 meaning that daemon's LAST upgrade attempt failed and was rolled back, so it is still on the PREVIOUS version (an upgrade/restart response only ever reports "scheduled", never success). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.`,
   inputSchema: {
     type: "object",
     properties: {
@@ -1884,7 +1884,7 @@ function summarizeCompactSubmodules(submodules) {
     ...outOfSync.length > 0 ? { outOfSyncPaths: outOfSync } : {}
   };
 }
-var MESH_COMPACT_PRESERVED_MARKER_FIELDS = ["dataFreshness", "quota"];
+var MESH_COMPACT_PRESERVED_MARKER_FIELDS = ["dataFreshness", "quota", "isLocalWorktree"];
 function summarizeNodeQuota(quota) {
   if (!quota || typeof quota !== "object" || Array.isArray(quota)) return void 0;
   const out = {};
@@ -1959,6 +1959,27 @@ function compactNodeSeverity(entry) {
   if (entry.branchConvergence?.needsConvergence === true) return 2;
   if (entry.staleDaemonBuild || entry.submodulesOutOfSync || entry.recoveryHints) return 1;
   return 0;
+}
+function pinnedRepresentativeNodeIds(compacted) {
+  const byDaemon = /* @__PURE__ */ new Map();
+  for (const n of compacted) {
+    if (!n || typeof n !== "object") continue;
+    const daemonId = typeof n.daemonId === "string" && n.daemonId ? n.daemonId : "";
+    if (!daemonId) continue;
+    const current = byDaemon.get(daemonId);
+    if (!current) {
+      byDaemon.set(daemonId, n);
+      continue;
+    }
+    if (current.isLocalWorktree === true && n.isLocalWorktree !== true) {
+      byDaemon.set(daemonId, n);
+    }
+  }
+  const pinned = /* @__PURE__ */ new Set();
+  for (const n of byDaemon.values()) {
+    if (n?.nodeId !== void 0) pinned.add(String(n.nodeId));
+  }
+  return pinned;
 }
 function isNoteworthyCompactNode(entry) {
   if (!entry || typeof entry !== "object") return true;
@@ -2832,8 +2853,8 @@ function assignFullGitSnapshot(entry, status) {
   if (!status || typeof status !== "object" || Array.isArray(status)) return;
   entry.git = status;
 }
-var COMPACT_DETAILED_NODES_BYTE_BUDGET = 9e3;
-var COMPACT_NODES_TOTAL_BYTE_BUDGET = 11500;
+var COMPACT_DETAILED_NODES_BYTE_BUDGET = 32e3;
+var COMPACT_NODES_TOTAL_BYTE_BUDGET = 4e4;
 var COMPACT_MISSIONS_BYTE_BUDGET = 6e3;
 function extractLaunchPayload(value) {
   return findNestedPayload(value, (payload) => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
@@ -3348,11 +3369,34 @@ async function collectLiveStatusProbe(ctx, node) {
     const statusResult = await commandForNode(ctx, node, "get_status_metadata", {}, { statusProbe: true });
     return {
       sessions: extractStatusMetadataSessions(statusResult),
-      daemonBuild: extractDaemonBuildInfo(statusResult)
+      daemonBuild: extractDaemonBuildInfo(statusResult),
+      upgradeFailure: extractUpgradeFailureSummary(statusResult)
     };
   } catch {
     return { sessions: [] };
   }
+}
+var UPGRADE_FAILURE_SUMMARY_MAX_CHARS = 200;
+function extractUpgradeFailureSummary(value) {
+  const payload = unwrapCommandPayload(value);
+  const raw = payload?.upgradeFailure && typeof payload.upgradeFailure === "object" ? payload.upgradeFailure : value?.upgradeFailure && typeof value.upgradeFailure === "object" ? value.upgradeFailure : void 0;
+  if (!raw) return void 0;
+  const notice = readString(raw.notice) || "";
+  const noticePath = readString(raw.noticePath) || "";
+  if (!notice && !noticePath) return void 0;
+  const bodyLine = notice.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !/^\[[^\]\n]+\]$/.test(line)) || "";
+  const summary = bodyLine.length > UPGRADE_FAILURE_SUMMARY_MAX_CHARS ? `${bodyLine.slice(0, UPGRADE_FAILURE_SUMMARY_MAX_CHARS)}\u2026` : bodyLine;
+  const recordedAt = readString(raw.recordedAt);
+  const ageLabel = readString(raw.ageLabel);
+  const targetVersion = readString(raw.targetVersion);
+  return {
+    summary,
+    ...recordedAt ? { recordedAt } : {},
+    ...ageLabel ? { ageLabel } : {},
+    ...targetVersion ? { targetVersion } : {},
+    noticePath,
+    logPath: readString(raw.logPath) || ""
+  };
 }
 function extractDaemonBuildInfo(value) {
   const payload = unwrapCommandPayload(value);
@@ -3787,6 +3831,10 @@ async function meshStatus(ctx, args = {}) {
       machine: buildNodeMachineIdentity(ctx, node),
       daemonId: readNodeDaemonId(node),
       machineId: readNodeMachineId(node),
+      // Needed by the compact fold to distinguish a machine (repo-root) node
+      // from a worktree node: the per-daemon representative pin keeps machine
+      // nodes out of the fold so a deploy roster can never lose a machine.
+      isLocalWorktree: node.isLocalWorktree === true,
       ...getNodeLaunchReadiness(node),
       ...buildNodeCapabilityExposure(node)
     };
@@ -3896,6 +3944,7 @@ async function meshStatus(ctx, args = {}) {
     const statusProbe = await collectLiveStatusProbe(ctx, node);
     const liveSessions = statusProbe.sessions;
     if (statusProbe.daemonBuild) entry.daemonBuild = statusProbe.daemonBuild;
+    if (statusProbe.upgradeFailure) entry.upgradeFailure = statusProbe.upgradeFailure;
     if (liveSessions.length > 0) {
       entry.sessions = liveSessions.map((s) => {
         const coordinatorMeshId = typeof s.coordinator?.meshId === "string" ? s.coordinator.meshId : void 0;
@@ -3993,6 +4042,21 @@ async function meshStatus(ctx, args = {}) {
       daemonBuilds[daemonId] = entry.daemonBuild;
     }
   }
+  const daemonMachines = {};
+  const daemonQuotas = {};
+  for (const entry of results) {
+    const daemonId = typeof entry?.daemonId === "string" && entry.daemonId ? entry.daemonId : "";
+    if (!daemonId) continue;
+    if (entry?.machine && !(daemonId in daemonMachines)) daemonMachines[daemonId] = entry.machine;
+    if (entry?.quota && !(daemonId in daemonQuotas)) daemonQuotas[daemonId] = entry.quota;
+  }
+  const daemonUpgradeFailures = {};
+  for (const entry of results) {
+    const daemonId = typeof entry?.daemonId === "string" && entry.daemonId ? entry.daemonId : "";
+    if (daemonId && entry?.upgradeFailure && !(daemonId in daemonUpgradeFailures)) {
+      daemonUpgradeFailures[daemonId] = entry.upgradeFailure;
+    }
+  }
   const staleDaemonBuilds = [];
   const seenStale = /* @__PURE__ */ new Set();
   for (const entry of results) {
@@ -4055,20 +4119,36 @@ async function meshStatus(ctx, args = {}) {
         if (!includeSessions) delete next.sessions;
       }
       if (next.daemonBuild !== void 0) delete next.daemonBuild;
+      if (next.machine && typeof next.machine === "object") {
+        const m = next.machine;
+        next.machine = {
+          daemonId: m.daemonId,
+          displayName: m.displayName,
+          sameMachine: m.sameMachine,
+          seeDaemonMachines: true
+        };
+      }
+      if (next.upgradeFailure !== void 0) delete next.upgradeFailure;
       return next;
     });
+    const pinnedIds = pinnedRepresentativeNodeIds(compacted);
     const noteworthy = compacted.filter((n) => n && typeof n === "object" && isNoteworthyCompactNode(n));
-    const ranked = [...noteworthy].sort((a, b) => compactNodeSeverity(b) - compactNodeSeverity(a));
+    const bySeverityDesc = (a, b) => compactNodeSeverity(b) - compactNodeSeverity(a);
+    const isPinned = (n) => pinnedIds.has(String(n?.nodeId));
+    const ranked = [
+      ...compacted.filter((n) => n && typeof n === "object" && isPinned(n)).sort(bySeverityDesc),
+      ...noteworthy.filter((n) => !isPinned(n)).sort(bySeverityDesc)
+    ];
     const detailedIds = /* @__PURE__ */ new Set();
     let detailSpent = 0;
     for (const n of ranked) {
       const cost = JSON.stringify(n).length + 1;
-      if (detailedIds.size === 0 || detailSpent + cost <= COMPACT_DETAILED_NODES_BYTE_BUDGET) {
+      if (detailedIds.size === 0 || isPinned(n) || detailSpent + cost <= COMPACT_DETAILED_NODES_BYTE_BUDGET) {
         detailedIds.add(String(n.nodeId));
         detailSpent += cost;
       }
     }
-    const stubOrder = [...compacted].filter((n) => n && typeof n === "object").sort((a, b) => compactNodeSeverity(b) - compactNodeSeverity(a));
+    const stubOrder = [...compacted].filter((n) => n && typeof n === "object").sort(bySeverityDesc);
     const keptIds = new Set(detailedIds);
     let totalSpent = detailSpent;
     for (const n of stubOrder) {
@@ -4141,6 +4221,14 @@ async function meshStatus(ctx, args = {}) {
     ...compact && foldedNodesSummary ? { foldedNodes: foldedNodesSummary } : {},
     ...compact && Object.keys(daemonSessions).length > 0 ? { daemonSessions } : {},
     ...Object.keys(daemonBuilds).length > 0 ? { daemonBuilds } : {},
+    // Per-daemon machine identity / provider quota, recorded once per daemonId
+    // instead of repeated on every node sharing that daemon. Both modes.
+    ...Object.keys(daemonMachines).length > 0 ? { daemonMachines } : {},
+    ...Object.keys(daemonQuotas).length > 0 ? { daemonQuotas } : {},
+    ...Object.keys(daemonUpgradeFailures).length > 0 ? {
+      daemonUpgradeFailures,
+      daemonUpgradeFailureWarning: `One or more daemons have a failed-upgrade notice on record: that daemon's LAST upgrade failed and rolled back, so it is still on the PREVIOUS version. An upgrade/restart response only reports "scheduled", never success \u2014 do not read a prior success as proof the version changed. The notice persists until a later upgrade succeeds, so check targetVersion/recordedAt: a target other than the running version is a stale earlier attempt. Full body at noticePath, trace at logPath.`
+    } : {},
     ...staleDaemonBuilds.length > 0 ? { staleDaemonBuilds } : {},
     ...daemonAffectingStaleBuilds.length > 0 ? {
       staleDaemonBuildWarning: "One or more live daemons were built from a commit behind the workspace HEAD with daemon-runtime package changes. Merged refinery/mesh-tool fixes are NOT live on those daemons until they are rebuilt/redeployed and restarted \u2014 a local daemon-core dist rebuild does not update a cloud daemon. Do not assume a just-merged fix is active."
@@ -4271,7 +4359,7 @@ async function meshStatus(ctx, args = {}) {
     }
   } catch {
   }
-  return JSON.stringify(response, null, 2);
+  return JSON.stringify(response);
 }
 async function meshListNodes(ctx) {
   await refreshMeshFromDaemon(ctx);
