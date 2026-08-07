@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { createPortal } from 'react-dom'
 import { IconPlay, IconX } from '../Icons'
 import type { LaunchWorkspaceOption } from '../../pages/machine/types'
 
@@ -48,7 +49,7 @@ export default function LaunchConfirmDialog({
     const resolvedBusyLabel = busyLabel ?? t('machine.launchConfirm.launching')
     const selectedWorkspace = workspaceOptions?.find(option => option.key === selectedWorkspaceKey)
 
-    return (
+    const tree = (
         <div
             className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
             role="dialog"
@@ -165,4 +166,7 @@ export default function LaunchConfirmDialog({
             </div>
         </div>
     )
+
+    if (typeof document === 'undefined') return tree
+    return createPortal(tree, document.body)
 }
