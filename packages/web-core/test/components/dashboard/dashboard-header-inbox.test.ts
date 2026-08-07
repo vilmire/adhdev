@@ -183,12 +183,19 @@ describe('DashboardHeader inbox notifications', () => {
     expect(allConnected.subtitleKey).toBeNull()
   })
 
-  it('reports a zero counter while no machine has connected yet', () => {
+  // Cloud case: a daemon is known but the platform itself is not ready
+  // (isConnected: false) and zero P2P activity has happened at all — not even
+  // a 'connecting' entry. usesP2P is explicit (true) so this stays pinned to
+  // the cloud interpretation regardless of the getDashboardHeaderConnectionState
+  // default, and is distinct from the standalone case below, which shares the
+  // same empty `p2pStates` shape but must NOT go yellow.
+  it('reports a zero counter while no machine has connected yet (cloud, P2P layer present)', () => {
     expect(getDashboardHeaderConnectionState({
       wsStatus: 'connected',
       isConnected: false,
       daemonCount: 1,
       p2pStates: {},
+      usesP2P: true,
     })).toEqual({
       tone: 'limited',
       titleKey: 'connection.connectedToDashboard',
@@ -197,8 +204,59 @@ describe('DashboardHeader inbox notifications', () => {
     })
   })
 
-  // Standalone has one implicit daemon, no P2P layer, and leaves isConnected at
-  // its `true` default — the machine-count branch must not drag it to yellow.
+  // Standalone has one implicit daemon (daemonCount: 1, matching its real live
+  // state — see StandaloneDaemonContext) and no P2P layer at all (usesP2P:
+  // false, matching its real connectionOverrides), and leaves isConnected at
+  // its `true` default. This is the exact shape of the regression: `p2pStates`
+  // is empty here for the same reason it is empty in the cloud case above
+  // ("no P2P activity"), but the *reason* differs (platform never has one, vs.
+  // platform has one but nothing has dialled yet) — usesP2P is what tells
+  // these two apart instead of the empty object being guessed at.
+  it('keeps the standalone header green even though a daemon is enumerated (no P2P layer)', () => {
+    expect(getDashboardHeaderConnectionState({
+      wsStatus: 'connected',
+      isConnected: true,
+      daemonCount: 1,
+      p2pStates: {},
+      usesP2P: false,
+    }).tone).toBe('connected')
+  })
+
+  // Same standalone shape, but the platform itself is not ready yet
+  // (isConnected: false) — isConnected must remain authoritative, not just a
+  // fallback that always reads true.
+  it('reflects a not-yet-ready standalone daemon as limited, not connected', () => {
+    expect(getDashboardHeaderConnectionState({
+      wsStatus: 'connected',
+      isConnected: false,
+      daemonCount: 1,
+      p2pStates: {},
+      usesP2P: false,
+    }).tone).toBe('limited')
+  })
+
+  // Cloud regression guard: with usesP2P defaulted (true) and machines known
+  // but zero P2P entries at all (not even 'connecting') — the shape standalone
+  // also produces — cloud must still go yellow with an honest 0/N counter, not
+  // green. This is the divergence point between the two platforms for the
+  // identical `p2pStates: {}` input.
+  it('stays yellow for cloud when machines are known but none have any P2P state yet', () => {
+    expect(getDashboardHeaderConnectionState({
+      wsStatus: 'connected',
+      isConnected: true,
+      daemonCount: 2,
+      p2pStates: {},
+    })).toEqual({
+      tone: 'limited',
+      titleKey: 'connection.connectedToDashboard',
+      subtitleKey: 'connection.machinesConnectedCount',
+      subtitleParams: { connected: 0, total: 2 },
+    })
+  })
+
+  // Standalone has no daemons enumerated at all (daemonCount === 0, e.g. before
+  // the first status poll lands) — the pre-existing daemonCount===0 fallback,
+  // untouched by the usesP2P fix.
   it('keeps the standalone default green when no daemons are enumerated', () => {
     expect(getDashboardHeaderConnectionState({
       wsStatus: 'connected',
