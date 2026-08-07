@@ -50,7 +50,7 @@
     },
     "dashboard": {
         "header": {
-            "title": "대시보드",
+            "title": "Dashboard",
             "guide": "대시보드 가이드",
             "guideOpen": "대시보드 가이드 열기",
             "guideShort": "가이드",
@@ -1440,7 +1440,7 @@
             "frozenFeatureTitle": "동결됨 — 이 기능은 일시 중지되어 사용할 수 없습니다. docs/FROZEN_SURFACES.md 참고"
         },
         "billing": {
-            "title": "결제",
+            "title": "Billing",
             "subtitle": "구독 및 플랜 관리",
             "currentPlan": "현재 플랜:",
             "statusTrial": "체험판",
@@ -1563,30 +1563,30 @@
             }
         },
         "layout": {
-            "navDashboard": "대시보드",
+            "navDashboard": "Dashboard",
             "navBurrows": "Burrows",
-            "navNotifications": "알림",
+            "navNotifications": "Notifications",
             "navMesh": "Mesh",
-            "navMarketplace": "마켓플레이스",
-            "navTeam": "팀",
+            "navMarketplace": "Marketplace",
+            "navTeam": "Team",
             "navApi": "API",
-            "navWebhooks": "웹훅",
-            "navAccount": "계정",
-            "navSettings": "설정",
-            "navDocs": "문서",
-            "navAbout": "소개",
-            "adminSection": "관리자",
-            "adminOverview": "개요",
-            "adminUsers": "사용자",
-            "adminAuditLogs": "감사 로그",
-            "adminSystem": "시스템",
-            "adminEntry": "관리자",
+            "navWebhooks": "Webhooks",
+            "navAccount": "Account",
+            "navSettings": "Settings",
+            "navDocs": "Docs",
+            "navAbout": "About",
+            "adminSection": "Admin",
+            "adminOverview": "Overview",
+            "adminUsers": "Users",
+            "adminAuditLogs": "Audit Logs",
+            "adminSystem": "System",
+            "adminEntry": "Admin",
             "footerPlanTitle": "현재 플랜: {{plan}} — 관리 또는 업그레이드",
-            "expandSidebar": "사이드바 펼치기",
-            "collapseSidebar": "사이드바 접기",
-            "collapse": "접기",
+            "expandSidebar": "Expand sidebar",
+            "collapseSidebar": "Collapse sidebar",
+            "collapse": "Collapse",
             "logoutConfirm": "정말 로그아웃하시겠습니까?",
-            "logout": "로그아웃",
+            "logout": "Logout",
             "machineLimitBanner": "Free 플랜 머신 한도({{count}}개{{plural}})에 도달했습니다. 더 추가하려면 업그레이드하세요.",
             "upgradeArrow": "업그레이드 →",
             "machineLimitBadge": "머신 한도",
@@ -1644,7 +1644,7 @@
             "logCountFiltered": " ({{total}}개에서 필터됨)"
         },
         "webhooks": {
-            "title": "웹훅",
+            "title": "Webhooks",
             "subtitle": "실시간 이벤트 알림",
             "addWebhook": "+ 웹훅 추가",
             "eventDaemonConnect": "데몬 연결됨",
@@ -1743,7 +1743,7 @@
             "frozenFeatureTitle": "동결됨 — 이 기능은 일시 중지되었습니다. docs/FROZEN_SURFACES.md 참고"
         },
         "auditLogs": {
-            "title": "감사 로그",
+            "title": "Audit Logs",
             "subtitle": "보안 이벤트 및 API 기록",
             "refresh": "새로고침",
             "filterPlaceholder": "작업, 리소스 또는 소스로 필터...",
@@ -2882,7 +2882,11 @@
             "anywhere": "어디서든",
             "subtitleLand": "완료된 작업은 자동으로 main에 착지합니다.",
             "axes": {
-                "os": ["Mac", "Windows PC", "Linux 머신"],
+                "os": [
+                    "Mac",
+                    "Windows PC",
+                    "Linux 머신"
+                ],
                 "place": [
                     "지하철",
                     "카페",
@@ -2897,8 +2901,18 @@
                     "달",
                     "서버 랙"
                 ],
-                "device": ["데스크톱", "노트북", "태블릿", "휴대폰"],
-                "verb": ["디버그", "빌드", "테스트", "리뷰"]
+                "device": [
+                    "데스크톱",
+                    "노트북",
+                    "태블릿",
+                    "휴대폰"
+                ],
+                "verb": [
+                    "디버그",
+                    "빌드",
+                    "테스트",
+                    "리뷰"
+                ]
             },
             "selectOs": "OS 선택",
             "osUnix": "macOS / Linux",

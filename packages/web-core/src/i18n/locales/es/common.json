@@ -50,7 +50,7 @@
     },
     "dashboard": {
         "header": {
-            "title": "Panel",
+            "title": "Dashboard",
             "guide": "Guía del panel",
             "guideOpen": "Abrir la guía del panel",
             "guideShort": "Guía",
@@ -1440,7 +1440,7 @@
             "frozenFeatureTitle": "Congelado — esta función está en pausa y no está disponible. Consulta docs/FROZEN_SURFACES.md"
         },
         "billing": {
-            "title": "Facturación",
+            "title": "Billing",
             "subtitle": "Gestiona tu suscripción y tu plan",
             "currentPlan": "Plan actual:",
             "statusTrial": "Prueba",
@@ -1563,30 +1563,30 @@
             }
         },
         "layout": {
-            "navDashboard": "Panel",
+            "navDashboard": "Dashboard",
             "navBurrows": "Burrows",
-            "navNotifications": "Notificaciones",
+            "navNotifications": "Notifications",
             "navMesh": "Mesh",
             "navMarketplace": "Marketplace",
-            "navTeam": "Equipo",
+            "navTeam": "Team",
             "navApi": "API",
             "navWebhooks": "Webhooks",
-            "navAccount": "Cuenta",
-            "navSettings": "Ajustes",
-            "navDocs": "Documentación",
-            "navAbout": "Acerca de",
-            "adminSection": "Administración",
-            "adminOverview": "Resumen",
-            "adminUsers": "Usuarios",
-            "adminAuditLogs": "Registros de auditoría",
-            "adminSystem": "Sistema",
-            "adminEntry": "Administración",
+            "navAccount": "Account",
+            "navSettings": "Settings",
+            "navDocs": "Docs",
+            "navAbout": "About",
+            "adminSection": "Admin",
+            "adminOverview": "Overview",
+            "adminUsers": "Users",
+            "adminAuditLogs": "Audit Logs",
+            "adminSystem": "System",
+            "adminEntry": "Admin",
             "footerPlanTitle": "Plan actual: {{plan}} — gestionar o mejorar",
-            "expandSidebar": "Expandir barra lateral",
-            "collapseSidebar": "Contraer barra lateral",
-            "collapse": "Contraer",
+            "expandSidebar": "Expand sidebar",
+            "collapseSidebar": "Collapse sidebar",
+            "collapse": "Collapse",
             "logoutConfirm": "¿Seguro que quieres cerrar sesión?",
-            "logout": "Cerrar sesión",
+            "logout": "Logout",
             "machineLimitBanner": "Has alcanzado el límite de {{count}} máquina{{plural}} del plan Free. Mejora para añadir más.",
             "upgradeArrow": "Mejorar →",
             "machineLimitBadge": "Máquinas llenas",
@@ -1743,7 +1743,7 @@
             "frozenFeatureTitle": "Congelado — esta función está en pausa. Consulta docs/FROZEN_SURFACES.md"
         },
         "auditLogs": {
-            "title": "Registros de auditoría",
+            "title": "Audit Logs",
             "subtitle": "Eventos de seguridad e historial de API",
             "refresh": "Actualizar",
             "filterPlaceholder": "Filtrar por acción, recurso u origen...",
@@ -2882,7 +2882,11 @@
             "anywhere": "donde sea",
             "subtitleLand": "El trabajo terminado aterriza en main automáticamente.",
             "axes": {
-                "os": ["Mac", "PC con Windows", "máquina Linux"],
+                "os": [
+                    "Mac",
+                    "PC con Windows",
+                    "máquina Linux"
+                ],
                 "place": [
                     "el metro",
                     "una cafetería",
@@ -2897,8 +2901,18 @@
                     "la luna",
                     "un rack de servidores"
                 ],
-                "device": ["ordenador de escritorio", "portátil", "tablet", "móvil"],
-                "verb": ["depurar", "compilar", "probar", "revisar"]
+                "device": [
+                    "ordenador de escritorio",
+                    "portátil",
+                    "tablet",
+                    "móvil"
+                ],
+                "verb": [
+                    "depurar",
+                    "compilar",
+                    "probar",
+                    "revisar"
+                ]
             },
             "selectOs": "Seleccionar SO",
             "osUnix": "macOS / Linux",

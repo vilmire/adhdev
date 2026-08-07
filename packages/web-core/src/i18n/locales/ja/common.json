@@ -50,7 +50,7 @@
     },
     "dashboard": {
         "header": {
-            "title": "ダッシュボード",
+            "title": "Dashboard",
             "guide": "ダッシュボードガイド",
             "guideOpen": "ダッシュボードガイドを開く",
             "guideShort": "ガイド",
@@ -1440,7 +1440,7 @@
             "frozenFeatureTitle": "凍結中 — この機能は一時停止されており利用できません。docs/FROZEN_SURFACES.md を参照してください"
         },
         "billing": {
-            "title": "お支払い",
+            "title": "Billing",
             "subtitle": "サブスクリプションとプランを管理します",
             "currentPlan": "現在のプラン:",
             "statusTrial": "トライアル",
@@ -1563,30 +1563,30 @@
             }
         },
         "layout": {
-            "navDashboard": "ダッシュボード",
+            "navDashboard": "Dashboard",
             "navBurrows": "Burrows",
-            "navNotifications": "通知",
+            "navNotifications": "Notifications",
             "navMesh": "Mesh",
-            "navMarketplace": "マーケットプレイス",
-            "navTeam": "チーム",
+            "navMarketplace": "Marketplace",
+            "navTeam": "Team",
             "navApi": "API",
             "navWebhooks": "Webhooks",
-            "navAccount": "アカウント",
-            "navSettings": "設定",
-            "navDocs": "ドキュメント",
-            "navAbout": "概要",
-            "adminSection": "管理",
-            "adminOverview": "概要",
-            "adminUsers": "ユーザー",
-            "adminAuditLogs": "監査ログ",
-            "adminSystem": "システム",
-            "adminEntry": "管理",
+            "navAccount": "Account",
+            "navSettings": "Settings",
+            "navDocs": "Docs",
+            "navAbout": "About",
+            "adminSection": "Admin",
+            "adminOverview": "Overview",
+            "adminUsers": "Users",
+            "adminAuditLogs": "Audit Logs",
+            "adminSystem": "System",
+            "adminEntry": "Admin",
             "footerPlanTitle": "現在のプラン: {{plan}} — 管理またはアップグレード",
-            "expandSidebar": "サイドバーを展開",
-            "collapseSidebar": "サイドバーを折りたたむ",
-            "collapse": "折りたたむ",
+            "expandSidebar": "Expand sidebar",
+            "collapseSidebar": "Collapse sidebar",
+            "collapse": "Collapse",
             "logoutConfirm": "ログアウトしてもよろしいですか？",
-            "logout": "ログアウト",
+            "logout": "Logout",
             "machineLimitBanner": "Free プランの上限である {{count}} 台{{plural}}のマシンに達しました。追加するにはアップグレードしてください。",
             "upgradeArrow": "アップグレード →",
             "machineLimitBadge": "マシン上限",
@@ -1644,7 +1644,7 @@
             "logCountFiltered": " ({{total}} 件中を絞り込み)"
         },
         "webhooks": {
-            "title": "Webhook",
+            "title": "Webhooks",
             "subtitle": "リアルタイムのイベント通知",
             "addWebhook": "+ Webhook を追加",
             "eventDaemonConnect": "デーモン接続",
@@ -1743,7 +1743,7 @@
             "frozenFeatureTitle": "凍結中 — この機能は一時停止しています。docs/FROZEN_SURFACES.md を参照してください"
         },
         "auditLogs": {
-            "title": "監査ログ",
+            "title": "Audit Logs",
             "subtitle": "セキュリティイベントと API 履歴",
             "refresh": "更新",
             "filterPlaceholder": "アクション、リソース、ソースで絞り込み...",
@@ -2882,7 +2882,11 @@
             "anywhere": "どこでも",
             "subtitleLand": "完了した作業は自動で main に着地します。",
             "axes": {
-                "os": ["Mac", "Windows PC", "Linux マシン"],
+                "os": [
+                    "Mac",
+                    "Windows PC",
+                    "Linux マシン"
+                ],
                 "place": [
                     "地下鉄",
                     "カフェ",
@@ -2897,8 +2901,18 @@
                     "月",
                     "サーバーラック"
                 ],
-                "device": ["デスクトップ", "ノートPC", "タブレット", "スマホ"],
-                "verb": ["デバッグ", "ビルド", "テスト", "レビュー"]
+                "device": [
+                    "デスクトップ",
+                    "ノートPC",
+                    "タブレット",
+                    "スマホ"
+                ],
+                "verb": [
+                    "デバッグ",
+                    "ビルド",
+                    "テスト",
+                    "レビュー"
+                ]
             },
             "selectOs": "OS を選択",
             "osUnix": "macOS / Linux",

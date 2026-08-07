@@ -50,7 +50,7 @@
     },
     "dashboard": {
         "header": {
-            "title": "仪表板",
+            "title": "Dashboard",
             "guide": "仪表板指南",
             "guideOpen": "打开仪表板指南",
             "guideShort": "指南",
@@ -1440,7 +1440,7 @@
             "frozenFeatureTitle": "已冻结 — 此功能已暂停，暂不可用。请参阅 docs/FROZEN_SURFACES.md"
         },
         "billing": {
-            "title": "账单",
+            "title": "Billing",
             "subtitle": "管理你的订阅和套餐",
             "currentPlan": "当前套餐：",
             "statusTrial": "试用",
@@ -1563,30 +1563,30 @@
             }
         },
         "layout": {
-            "navDashboard": "仪表盘",
+            "navDashboard": "Dashboard",
             "navBurrows": "Burrows",
-            "navNotifications": "通知",
+            "navNotifications": "Notifications",
             "navMesh": "Mesh",
-            "navMarketplace": "市场",
-            "navTeam": "团队",
+            "navMarketplace": "Marketplace",
+            "navTeam": "Team",
             "navApi": "API",
             "navWebhooks": "Webhooks",
-            "navAccount": "账户",
-            "navSettings": "设置",
-            "navDocs": "文档",
-            "navAbout": "关于",
-            "adminSection": "管理",
-            "adminOverview": "概览",
-            "adminUsers": "用户",
-            "adminAuditLogs": "审计日志",
-            "adminSystem": "系统",
-            "adminEntry": "管理",
+            "navAccount": "Account",
+            "navSettings": "Settings",
+            "navDocs": "Docs",
+            "navAbout": "About",
+            "adminSection": "Admin",
+            "adminOverview": "Overview",
+            "adminUsers": "Users",
+            "adminAuditLogs": "Audit Logs",
+            "adminSystem": "System",
+            "adminEntry": "Admin",
             "footerPlanTitle": "当前套餐：{{plan}} — 管理或升级",
-            "expandSidebar": "展开侧边栏",
-            "collapseSidebar": "折叠侧边栏",
-            "collapse": "折叠",
+            "expandSidebar": "Expand sidebar",
+            "collapseSidebar": "Collapse sidebar",
+            "collapse": "Collapse",
             "logoutConfirm": "确定要退出登录吗？",
-            "logout": "退出登录",
+            "logout": "Logout",
             "machineLimitBanner": "您已达到 Free 套餐 {{count}} 台机器{{plural}}的上限。升级以添加更多。",
             "upgradeArrow": "升级 →",
             "machineLimitBadge": "机器已满",
@@ -1644,7 +1644,7 @@
             "logCountFiltered": "（从 {{total}} 条中筛选）"
         },
         "webhooks": {
-            "title": "Webhook",
+            "title": "Webhooks",
             "subtitle": "实时事件通知",
             "addWebhook": "+ 添加 Webhook",
             "eventDaemonConnect": "守护进程已连接",
@@ -1743,7 +1743,7 @@
             "frozenFeatureTitle": "已冻结 — 此功能已暂停。请参阅 docs/FROZEN_SURFACES.md"
         },
         "auditLogs": {
-            "title": "审计日志",
+            "title": "Audit Logs",
             "subtitle": "安全事件与 API 历史",
             "refresh": "刷新",
             "filterPlaceholder": "按操作、资源或来源筛选...",
@@ -2882,7 +2882,11 @@
             "anywhere": "随处",
             "subtitleLand": "完成的工作会自动落地到 main。",
             "axes": {
-                "os": ["Mac", "Windows 电脑", "Linux 机器"],
+                "os": [
+                    "Mac",
+                    "Windows 电脑",
+                    "Linux 机器"
+                ],
                 "place": [
                     "地铁",
                     "咖啡馆",
@@ -2897,8 +2901,18 @@
                     "月球",
                     "服务器机架"
                 ],
-                "device": ["台式机", "笔记本电脑", "平板电脑", "手机"],
-                "verb": ["调试", "构建", "测试", "审查"]
+                "device": [
+                    "台式机",
+                    "笔记本电脑",
+                    "平板电脑",
+                    "手机"
+                ],
+                "verb": [
+                    "调试",
+                    "构建",
+                    "测试",
+                    "审查"
+                ]
             },
             "selectOs": "选择操作系统",
             "osUnix": "macOS / Linux",
