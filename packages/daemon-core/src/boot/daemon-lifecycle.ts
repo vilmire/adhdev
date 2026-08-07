@@ -202,9 +202,29 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // response went out long before the helper failed, so this boot log (plus
     // get_status_metadata.upgradeFailure) is the only in-band signal that the
     // "upgrade" never actually happened.
+    //
+    // The notice is durable and NOT self-expiring, so this line re-prints on
+    // EVERY boot until an upgrade succeeds and clears it. Without age, a
+    // days-old failure reads exactly like one that just happened — a reader who
+    // has already recovered sees this warning and concludes the upgrade failed
+    // AGAIN. So state when it was recorded and which version it targeted, and
+    // say plainly when that target is not the version now running: that
+    // combination is the signal that this is stale evidence, not a new failure.
     const upgradeFailureNotice = readUpgradeFailureNotice();
     if (upgradeFailureNotice) {
-        LOG.warn('Upgrade', `Previous daemon upgrade FAILED and was rolled back — this daemon is running the previous version. Notice (${upgradeFailureNotice.noticePath}):\n${upgradeFailureNotice.notice}`);
+        const age = upgradeFailureNotice.ageLabel
+            ? `${upgradeFailureNotice.ageLabel}, recorded ${upgradeFailureNotice.recordedAt}`
+            : 'recorded at an unknown time';
+        const target = upgradeFailureNotice.targetVersion
+            ? `, attempted target v${upgradeFailureNotice.targetVersion}`
+            : '';
+        const running = (config.statusVersion || '').trim().replace(/^v/, '');
+        const supersededHint = upgradeFailureNotice.targetVersion
+            && running
+            && upgradeFailureNotice.targetVersion.replace(/^v/, '') !== running
+            ? ` This notice targets a DIFFERENT version than the one now running (v${running}) — it is most likely a stale record of an earlier attempt, not a report about this boot.`
+            : '';
+        LOG.warn('Upgrade', `Previous daemon upgrade FAILED and was rolled back — this daemon is running the previous version. Notice (${age}${target}) at ${upgradeFailureNotice.noticePath}:\n${upgradeFailureNotice.notice}${supersededHint}`);
     }
 
     // 2. ProviderLoader (provider source mode + channel from config.json)
