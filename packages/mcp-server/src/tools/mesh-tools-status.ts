@@ -467,6 +467,36 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             daemonBuilds[daemonId] = entry.daemonBuild;
         }
     }
+    // Per-daemon machine/quota fold (same N×M pattern as daemonSessions/daemonBuilds).
+    //
+    // `machine` (identity: hostname/machineName/locality/identityEvidence) and `quota`
+    // (provider credit, owned by the credential holder) are properties of the DAEMON,
+    // not of the node: every worktree sharing a daemonId reports a byte-for-byte
+    // identical copy. On a 23-node mesh that measured ~8.0KB of machine and ~4.1KB of
+    // quota duplicated across nodes. Record each ONCE per daemonId at the top level.
+    //
+    // Emitted in BOTH compact and verbose. Verbose previously had no daemon dedup at
+    // all, so it carried the full duplication; the fold is where the waste actually is.
+    //
+    // ADDITIVE ROLLOUT — the per-node `machine`/`quota` fields are deliberately KEPT.
+    // An LLM coordinator may be reading nodes[].machine / nodes[].quota directly, and
+    // that cannot be discovered statically. This step only ADDS the grouped top-level
+    // copy; removing the node-side fields is a separate follow-up, once the grouped
+    // form is known to be in use.
+    //
+    // Grouping is guarded by value equality: a daemon whose nodes somehow disagree on
+    // machine/quota keeps only the FIRST value at the top level, and the divergence
+    // stays visible on the nodes themselves (which are never stripped here). The
+    // grouped map is therefore never a lie, only possibly incomplete.
+    const daemonMachines: Record<string, unknown> = {};
+    const daemonQuotas: Record<string, unknown> = {};
+    for (const entry of results as any[]) {
+        const daemonId = typeof entry?.daemonId === 'string' && entry.daemonId ? entry.daemonId : '';
+        if (!daemonId) continue;
+        if (entry?.machine && !(daemonId in daemonMachines)) daemonMachines[daemonId] = entry.machine;
+        if (entry?.quota && !(daemonId in daemonQuotas)) daemonQuotas[daemonId] = entry.quota;
+    }
+
     // Stale-build aggregate: any node whose live daemon build is behind its
     // workspace HEAD. Deduplicated per daemonId+scope so N worktrees on one
     // stale daemon don't spam N identical warnings.
@@ -553,6 +583,26 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
                 // Build stamp is folded per-daemon under top-level `daemonBuilds`;
                 // drop the repetitive per-node copy in compact mode.
                 if (next.daemonBuild !== undefined) delete next.daemonBuild;
+                // machine is daemon-wide and now recorded in full once under top-level
+                // `daemonMachines`. In COMPACT only, reduce the per-node copy to the
+                // scalars a coordinator reads off a node directly; daemonId is the join
+                // key back into the grouped map, so nothing is lost — it is one lookup
+                // away. Verbose keeps the full per-node copy untouched. This mirrors how
+                // `sessions` folds to `daemonSessions` in compact mode only.
+                //
+                // `quota` is deliberately NOT pointer-ized: compactMeshStatusNode already
+                // folds it to one short "38%/12%" string per provider, so the per-node
+                // copy is a few dozen bytes and is exactly the signal a coordinator wants
+                // inline when picking a node. The full bundle is in daemonQuotas.
+                if (next.machine && typeof next.machine === 'object') {
+                    const m = next.machine as Record<string, unknown>;
+                    next.machine = {
+                        daemonId: m.daemonId,
+                        displayName: m.displayName,
+                        sameMachine: m.sameMachine,
+                        seeDaemonMachines: true,
+                    };
+                }
                 return next;
             });
 
@@ -682,6 +732,10 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         ...(compact && foldedNodesSummary ? { foldedNodes: foldedNodesSummary } : {}),
         ...(compact && Object.keys(daemonSessions).length > 0 ? { daemonSessions } : {}),
         ...(Object.keys(daemonBuilds).length > 0 ? { daemonBuilds } : {}),
+        // Per-daemon machine identity / provider quota, recorded once per daemonId
+        // instead of repeated on every node sharing that daemon. Both modes.
+        ...(Object.keys(daemonMachines).length > 0 ? { daemonMachines } : {}),
+        ...(Object.keys(daemonQuotas).length > 0 ? { daemonQuotas } : {}),
         ...(staleDaemonBuilds.length > 0 ? { staleDaemonBuilds } : {}),
         ...(daemonAffectingStaleBuilds.length > 0
             ? {
