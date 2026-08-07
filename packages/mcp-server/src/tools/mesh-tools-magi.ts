@@ -929,7 +929,7 @@ export function buildMagiFanoutPlan(
 
         // Health gate (PRIMARY FIX). A slot is available by capability tags, but a node
         // whose P2P/git health is not launch-ready (degraded / offline) is refused by the
-        // daemon's auto-launch gate (isLaunchableNode → node_not_launch_ready): the replica
+        // daemon's auto-launch gate (isLaunchableNode → node_health_not_launchable): the replica
         // task would be assigned yet never launch, parking in `pending` forever with no
         // re-assignment or cancellation — the MAGI infinite-wait defect. So exclude such a
         // slot UP FRONT, exactly as the git-stale gate does. Prefer routing to a launch-ready

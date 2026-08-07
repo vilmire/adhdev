@@ -113,7 +113,7 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — auto-launch excludes a node mid workt
       await triggerMeshQueue(components, meshId)
 
       expect(launchCliCalls(components)).toBe(0)
-      expect(autoLaunchReason(meshId, task.id)).toBe('node_not_launch_ready')
+      expect(autoLaunchReason(meshId, task.id)).toBe('node_health_not_launchable')
       // No orphan session: the task stays pending for the real bootstrap-driven claim to pick up.
       expect(getQueue(meshId).find(t => t.id === task.id)?.status).toBe('pending')
     } finally {
@@ -131,7 +131,7 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — auto-launch excludes a node mid workt
       await triggerMeshQueue(components, meshId)
 
       expect(launchCliCalls(components)).toBe(1)
-      expect(autoLaunchReason(meshId, task.id)).not.toBe('node_not_launch_ready')
+      expect(autoLaunchReason(meshId, task.id)).not.toBe('node_health_not_launchable')
     } finally {
       cleanup(meshId)
     }
@@ -147,7 +147,7 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — auto-launch excludes a node mid workt
       await triggerMeshQueue(components, meshId)
 
       expect(launchCliCalls(components)).toBe(1)
-      expect(autoLaunchReason(meshId, task.id)).not.toBe('node_not_launch_ready')
+      expect(autoLaunchReason(meshId, task.id)).not.toBe('node_health_not_launchable')
     } finally {
       cleanup(meshId)
     }
@@ -168,7 +168,7 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — auto-launch excludes a node mid workt
 
       // The bootstrap exclusion must hold regardless of a requiredTags provider pin — no bypass.
       expect(launchCliCalls(components)).toBe(0)
-      expect(autoLaunchReason(meshId, task.id)).toBe('node_not_launch_ready')
+      expect(autoLaunchReason(meshId, task.id)).toBe('node_health_not_launchable')
     } finally {
       cleanup(meshId)
     }

@@ -954,7 +954,7 @@ export function resolveEffectiveMeshNodeHealth(node: any): string {
  * 'unknown' (and an absent/empty health, treated as unknown) pass — we never block on
  * missing telemetry; every other resolved health ('degraded', 'offline', 'dirty',
  * 'wrong_branch') is NOT launchable. A task assigned to a non-launchable node parks in
- * `pending` forever (isLaunchableNode skips it → node_not_launch_ready) with no
+ * `pending` forever (isLaunchableNode skips it → node_health_not_launchable) with no
  * re-assignment, so the MAGI planner must exclude such nodes UP FRONT rather than emit a
  * replica that can never run.
  */

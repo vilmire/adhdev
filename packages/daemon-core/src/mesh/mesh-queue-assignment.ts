@@ -2849,7 +2849,18 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 continue;
             }
             if (!isLaunchableNode(node)) {
-                markSkip(nodeId, 'node_not_launch_ready');
+                // Names the HEALTH gate specifically (isMeshNodeHealthLaunchable:
+                // resolved health must be 'online' or 'unknown'). Deliberately NOT
+                // called `node_not_launch_ready`: that read as the negation of the
+                // node status field `launchReady`, which answers an entirely
+                // different question — finalizeMeshNodeStatus computes it from
+                // daemonId + machineStatus/connection + worktree bootstrap, and
+                // never consults health. A node can therefore legitimately report
+                // `launchReady: true` while being skipped here for degraded/dirty/
+                // wrong_branch health, which looked like a contradiction rather
+                // than two independent gates. Matches the self-describing style of
+                // the sibling reasons (dirty_workspace, node_stale_behind_upstream).
+                markSkip(nodeId, 'node_health_not_launchable');
                 continue;
             }
             // FRESHNESS gate (distinct from the health gate above): a clean-tree node that
