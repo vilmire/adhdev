@@ -14,7 +14,19 @@ import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mes
 // worktree nodes / sessions / queued tasks a mesh has. The live regression that
 // motivated this was mesh_status ~76KB and mesh_view_queue ~73KB exceeding the MCP
 // token cap. Compact must stay well under the cap; verbose stays unbounded/full.
-const COMPACT_BUDGET = 25_000;
+//
+// Raised 25_000 -> 60_000 alongside the node byte budgets. There is no hard byte
+// limit in the MCP SDK or the IPC transport — this is token-cost self-regulation,
+// and the old 25KB forced the fold to evict nodes on a 23-node mesh (20 worktrees +
+// 3 machines), which is the real operating shape. Folding costs more than the bytes
+// it saves: a folded node keeps only its id, losing the daemonId a deploy roster
+// needs. 60_000 leaves headroom over the measured 23-node worst case (~45KB).
+const COMPACT_BUDGET = 60_000;
+
+// The operating target: 20 worktrees + 3 machines must render with ZERO folding.
+const TARGET_WORKTREES = 20;
+const TARGET_MACHINES = 3;
+const TARGET_NODES = TARGET_WORKTREES + TARGET_MACHINES;
 
 // A realistic ~300-char stale-daemon-build warning that previously appeared
 // verbatim on EVERY node in compact mode.
@@ -88,6 +100,196 @@ function buildManyNodeCtx(meshId: string, nodeCount: number) {
   transport.meshCommand = async (_daemonId: string, command: string) => responder(command);
   return { ctx: { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-A', coordinatorHostname: 'coord-host' }, mesh };
 }
+
+// Worst-case build of the real operating shape: 3 machine (repo-root) nodes, one per
+// daemon, plus 20 worktree nodes spread across those same daemons — with every
+// worktree DIRTY and carrying a stale daemon build + an out-of-sync submodule, so
+// every worktree is maximally "noteworthy" and competes hardest for the byte budget.
+// A clean mesh is strictly cheaper than this.
+function buildMachinesAndWorktreesCtx(meshId: string) {
+  const daemons = ['daemon-A', 'daemon-B', 'daemon-C'];
+  const nodes: any[] = [];
+  for (let i = 0; i < TARGET_MACHINES; i++) {
+    nodes.push({
+      id: `node-machine-${i}`, workspace: `/Users/dev/Work/adhdev`, repoRoot: `/Users/dev/Work/adhdev`,
+      daemonId: daemons[i], machineId: `machine-${i}`, isLocalWorktree: false,
+      userOverrides: {}, policy: { providerPriority: ['claude-code', 'hermes-cli'] },
+    });
+  }
+  for (let i = 0; i < TARGET_WORKTREES; i++) {
+    nodes.push({
+      id: `node-wt-${i}`,
+      workspace: `/Users/dev/Work/.adhdev-worktrees/adhdev/feature-branch-${i}`,
+      repoRoot: `/Users/dev/Work/.adhdev-worktrees/adhdev/feature-branch-${i}`,
+      daemonId: daemons[i % daemons.length], machineId: `machine-${i % daemons.length}`,
+      isLocalWorktree: true, worktreeBranch: `fix/some-long-feature-branch-name-${i}`,
+      userOverrides: {}, policy: { providerPriority: ['claude-code', 'hermes-cli'] },
+    });
+  }
+  const mesh = {
+    id: meshId, name: 'Fleet Mesh', repoIdentity: 'vilmire/adhdev', policy: {}, coordinator: {},
+    defaultBranch: 'main',
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), nodes,
+  };
+  const transport = new IpcTransport() as any;
+  const responder = (command: string, payload?: any) => {
+    // Only worktrees are dirty — machine nodes stay quiet, which is exactly the
+    // condition under which severity ranking used to fold them out first.
+    const isWorktree = String(payload?.workspace ?? '').includes('worktrees');
+    if (command === 'get_mesh') return { success: true, mesh };
+    if (command === 'get_pending_mesh_events') return { events: [] };
+    if (command === 'mesh_forward_event') return { success: true, forwarded: 0 };
+    if (command === 'git_status') {
+      return {
+        success: true,
+        status: {
+          isGitRepo: true, isDirty: isWorktree, branch: 'fix/some-long-feature-branch-name',
+          headCommit: 'abcdef1234567890', upstream: 'origin/fix/some-long-feature-branch-name',
+          upstreamStatus: 'ahead', ahead: 3, behind: 0,
+          changedFiles: Array.from({ length: 8 }, (_, i) => `packages/server/src/some/path/file-${i}.ts`),
+          submodules: [
+            { path: 'oss', commit: '4b8e5bbbaaaa1111', outOfSync: true, status: 'modified', branch: 'main' },
+            { path: 'oss/packages/adhdev-providers', commit: 'deadbeef99887766', outOfSync: false, status: 'clean', branch: 'main' },
+          ],
+          daemonBuildBehind: {
+            scope: 'oss/daemon-core', buildCommit: 'f6b15b05aaaa', buildCommitShort: 'f6b15b05', head: '79d5793caaaa',
+            isDaemonAffecting: true, affectedPackages: ['@adhdev/daemon-core', '@adhdev/mcp-server'], warning: STALE_WARNING,
+          },
+        },
+        reporterNodeFacts: {
+          quota: {
+            'claude-code': { status: 'ok', session: { usedPercent: 38 }, weekly: { usedPercent: 12 } },
+            'codex-cli': { status: 'ok', session: { usedPercent: 4 }, weekly: { usedPercent: 61 } },
+          },
+        },
+      };
+    }
+    if (command === 'get_status_metadata') {
+      return { success: true, status: {
+        daemonBuild: { commit: 'f6b15b05aaaa1111', commitShort: 'f6b15b05', version: '0.5.267' },
+        sessions: Array.from({ length: 4 }, (_, i) => ({
+          id: `sess-${i}`, instanceId: `sess-${i}`, providerType: 'claude-code',
+          status: i === 0 ? 'generating' : 'idle',
+          settings: { meshNodeFor: meshId, meshCoordinatorDaemonId: 'daemon-A' },
+        })),
+      } };
+    }
+    return { success: true };
+  };
+  transport.command = async (command: string, payload?: any) => responder(command, payload);
+  transport.meshCommand = async (_daemonId: string, command: string, payload?: any) => responder(command, payload);
+  return { ctx: { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-0', coordinatorHostname: 'coord-host' } };
+}
+
+test('mesh_status compact renders 20 worktrees + 3 machines with zero folding', async () => {
+  const meshId = 'mesh-status-23-node-target';
+  cleanupMesh(meshId);
+  const { ctx } = buildMachinesAndWorktreesCtx(meshId);
+  try {
+    const compactStr = await meshStatus(ctx as any);
+    const compact = JSON.parse(compactStr);
+
+    // The headline contract: the real operating shape folds NOTHING.
+    assert.equal(
+      compact.foldedNodes, undefined,
+      `23-node mesh must not fold any node; folded ${compact.foldedNodes?.count} (${JSON.stringify(compact.foldedNodes?.nodeIds)})`,
+    );
+    assert.equal(compact.nodes.length, TARGET_NODES, 'every node must be present in the array');
+    assert.ok(
+      compactStr.length < COMPACT_BUDGET,
+      `compact 23-node mesh_status must stay under ${COMPACT_BUDGET} bytes; got ${compactStr.length}`,
+    );
+
+    // Budget accounting must measure the SAME format that is actually returned.
+    // While mesh_status returned indented JSON, the node budget (which costs with
+    // JSON.stringify(n).length) undercounted the wire size by ~29%.
+    assert.equal(
+      compactStr, JSON.stringify(compact),
+      'mesh_status must serialize without indentation so the node byte budget measures the real wire size',
+    );
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
+test('mesh_status compact never folds a machine node before a worktree', async () => {
+  // Regression: severity ranking folds the QUIETEST node first. Machine nodes are
+  // quiet by nature (clean, idle, nothing to converge), so noisy worktrees sharing
+  // their daemon evicted them from nodes[] — and a folded node keeps only its id,
+  // losing the daemonId a deploy roster needs. One representative per daemon is now
+  // pinned ahead of severity.
+  const meshId = 'mesh-status-machine-pin';
+  cleanupMesh(meshId);
+  const { ctx } = buildMachinesAndWorktreesCtx(meshId);
+  try {
+    const compact = JSON.parse(await meshStatus(ctx as any));
+    const present = new Set((compact.nodes ?? []).map((n: any) => String(n.nodeId)));
+
+    for (let i = 0; i < TARGET_MACHINES; i++) {
+      assert.ok(present.has(`node-machine-${i}`), `machine node node-machine-${i} must stay in the node array`);
+    }
+    // And each machine keeps full detail, not a minimal stub.
+    for (const n of compact.nodes) {
+      if (String(n.nodeId).startsWith('node-machine-')) {
+        assert.notEqual(n.folded, true, `${n.nodeId} must keep full detail, not fold to a stub`);
+      }
+    }
+    // Every daemon is represented by at least one detailed node.
+    const detailedDaemons = new Set(
+      (compact.nodes ?? []).filter((n: any) => n.folded !== true).map((n: any) => String(n.daemonId)),
+    );
+    for (const d of ['daemon-A', 'daemon-B', 'daemon-C']) {
+      assert.ok(detailedDaemons.has(d), `daemon ${d} must keep at least one detailed representative node`);
+    }
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
+test('mesh_status groups daemon-wide machine/quota without dropping the per-node copy', async () => {
+  const meshId = 'mesh-status-daemon-grouping';
+  cleanupMesh(meshId);
+  const { ctx } = buildMachinesAndWorktreesCtx(meshId);
+  try {
+    const compact = JSON.parse(await meshStatus(ctx as any));
+    const verbose = JSON.parse(await meshStatus(ctx as any, { verbose: true }));
+
+    // Grouped once per daemonId — not once per node — in BOTH modes.
+    for (const payload of [compact, verbose]) {
+      assert.deepEqual(
+        Object.keys(payload.daemonMachines ?? {}).sort(), ['daemon-A', 'daemon-B', 'daemon-C'],
+        'daemonMachines must be keyed by daemonId',
+      );
+      assert.deepEqual(
+        Object.keys(payload.daemonQuotas ?? {}).sort(), ['daemon-A', 'daemon-B', 'daemon-C'],
+        'daemonQuotas must be keyed by daemonId',
+      );
+    }
+
+    // Additive rollout: the per-node fields must NOT be removed yet, since an LLM
+    // coordinator may still read nodes[].machine / nodes[].quota directly.
+    for (const n of verbose.nodes) {
+      assert.ok(n.machine && typeof n.machine === 'object', `verbose ${n.nodeId} must keep its per-node machine`);
+    }
+    // Detailed compact nodes keep a per-node machine too. (Minimal stubs never
+    // carried `machine` — that predates this grouping and is unchanged here.)
+    const detailed = compact.nodes.filter((n: any) => n.folded !== true);
+    assert.ok(detailed.length > 0, 'expected at least one detailed compact node');
+    for (const n of detailed) {
+      assert.ok(n.machine && typeof n.machine === 'object', `compact ${n.nodeId} must keep a per-node machine`);
+      // daemonId is the join key back into the grouped map.
+      assert.ok(typeof n.machine.daemonId === 'string', `compact ${n.nodeId}.machine must keep daemonId as the join key`);
+    }
+    // Stubs stay joinable to the grouped maps via their top-level daemonId.
+    for (const n of compact.nodes.filter((x: any) => x.folded === true)) {
+      assert.ok(typeof n.daemonId === 'string' && n.daemonId, `stub ${n.nodeId} must keep daemonId to join daemonMachines`);
+    }
+    // Verbose keeps the FULL machine bundle per node (the dashboard-grade shape).
+    assert.ok(Array.isArray(verbose.nodes[0].machine.identityEvidence), 'verbose keeps machine.identityEvidence');
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
 
 test('mesh_status compact payload stays under the token budget with many nodes/sessions/stale-builds', async () => {
   const meshId = 'mesh-status-compact-budget';

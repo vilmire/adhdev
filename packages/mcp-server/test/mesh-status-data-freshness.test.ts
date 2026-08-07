@@ -24,6 +24,13 @@ function buildCtx() {
       { id: 'node-live', workspace: '/live', repoRoot: '/live', daemonId: 'daemon-B', machineId: 'machine-B', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] } },
       // Remote peer whose probe throws (no held truth) → dataSource 'unreachable'.
       { id: 'node-unreach', workspace: '/unreachable', repoRoot: '/unreachable', daemonId: 'daemon-C', machineId: 'machine-C', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] } },
+      // A second quiet peer on daemon-A. The per-daemon representative pin keeps ONE
+      // node per daemon in full detail, so this one is what actually reaches the
+      // minimal stub — the surface this test needs in order to prove the stub carries
+      // dataFreshness through. (It is deliberately not a worktree: a clean online
+      // worktree gets a "merge to base" nextStepHint, which makes it noteworthy and
+      // therefore detailed.)
+      { id: 'node-quiet', workspace: '/quiet', repoRoot: '/quiet', daemonId: 'daemon-A', machineId: 'machine-A', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] } },
     ],
   };
   const cleanGit = { isGitRepo: true, isDirty: false, branch: 'main', headCommit: 'abc', ahead: 0, behind: 0, submodules: [] };
@@ -58,10 +65,20 @@ test('compact mesh_status stamps dataFreshness on every node — including quiet
   const live = findNode(compact.nodes, 'node-live');
   const unreach = findNode(compact.nodes, 'node-unreach');
 
-  // The clean, online, non-worktree self/live nodes are "quiet" → folded to the
-  // minimal stub. The bug was that minimalCompactNode dropped dataFreshness, so
-  // exactly these nodes read as null on the coordinator. Assert the stub keeps it.
-  assert.equal(self.folded, true, 'quiet self node is folded to the minimal stub');
+  // The bug this guards: minimalCompactNode dropped dataFreshness, so quiet nodes
+  // read as null on the coordinator. The marker must survive at BOTH detail levels.
+  //
+  // Which nodes reach the stub changed with the per-daemon representative pin: one
+  // representative per daemon is now kept in full detail so a deploy roster can never
+  // lose a machine, and the second quiet peer on daemon-A (node-quiet) is what folds
+  // instead. The stub contract is asserted there; self/live are asserted as detailed.
+  const quiet = findNode(compact.nodes, 'node-quiet');
+  assert.equal(quiet.folded, true, 'the quiet non-representative node is folded to the minimal stub');
+  assert.equal(quiet.dataFreshness?.dataSource, 'self', 'the minimal stub must carry dataFreshness through');
+  assert.equal(quiet.dataFreshness?.probeOk, true);
+  assert.equal(quiet.dataFreshness?.staleness, 'fresh');
+
+  assert.notEqual(self.folded, true, 'the daemon-A machine node is pinned to full detail');
   // A self node is direct-peer-truth by construction (isSelfNode short-circuits the
   // probe), and only a 'cached' dataSource projects as 'cached' — self projects
   // live_or_absent. Both fields are part of the freshness contract, so the stub must
@@ -77,7 +94,7 @@ test('compact mesh_status stamps dataFreshness on every node — including quiet
     staleness: 'fresh',
   });
 
-  assert.equal(live.folded, true, 'quiet live node is folded to the minimal stub');
+  assert.notEqual(live.folded, true, 'the daemon-B machine node is pinned to full detail');
   assert.equal(live.dataFreshness?.dataSource, 'live');
   assert.equal(live.dataFreshness?.probeOk, true);
   assert.equal(live.dataFreshness?.reachable, true);
