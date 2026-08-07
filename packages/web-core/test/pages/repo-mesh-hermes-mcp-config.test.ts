@@ -123,8 +123,9 @@ describe('RepoMesh graph detail affordances', () => {
 
     // IA cleanup: MeshNodeList still detects worktree nodes, but now FILTERS them out
     // of the static settings list rather than rendering worktree-local policy warnings.
+    // isWorktreeNode's own classification behavior is covered by
+    // test/components/repo-mesh/is-worktree-node.test.ts, not asserted here as source text.
     const nodeListSource = readSource('pages/repo-mesh/MeshNodeList.tsx')
-    expect(nodeListSource).toContain('function isWorktreeNode(node: MeshNode): boolean')
     expect(nodeListSource).toContain('nodes.filter(n => !isWorktreeNode(n))')
     expect(nodeListSource).not.toContain('Provider priority saved here is node-local and disappears when removed.')
   })
