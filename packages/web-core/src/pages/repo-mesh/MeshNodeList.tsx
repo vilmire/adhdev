@@ -16,6 +16,7 @@ import {
 } from '../../utils/provider-priority'
 import { IconTrash, IconPlus, NodeHealthBadge } from './icons'
 import { buildProvidersByDaemonId, resolveNodeAvailableProviders } from './node-providers'
+import { shortMachineKey } from '../../components/MeshGraph/MeshObservabilitySurface/meshSurfaceHelpers'
 import NodeTagEditor from './NodeTagEditor'
 import type { MeshNode, MeshNodeListFeatures, MeshQueueEntry, NodeCapabilitySlot } from './types'
 
@@ -51,7 +52,7 @@ function describeNodeProviderPriority(node: MeshNode): { configured: boolean; la
     return { configured: true, label: pp.join(' → ') }
 }
 
-function isWorktreeNode(node: MeshNode): boolean {
+export function isWorktreeNode(node: { isLocalWorktree?: boolean }): boolean {
     return node.isLocalWorktree === true
 }
 
@@ -73,7 +74,11 @@ function getNodeActiveSessions(node: MeshNode, daemon: RepoMeshDaemonEntry | und
 
 function daemonLabel(daemon: RepoMeshDaemonEntry | undefined): string {
     if (!daemon) return 'Unknown'
-    return daemon.machineNickname || daemon.nickname || daemon.hostname || daemon.id || 'Unknown'
+    // Never fall back to the raw full-length daemon.id as the TITLE — the id
+    // is still shown as the subtitle below (short, monospace) for disambiguation,
+    // but a hash reading as the primary name looks like broken UI. shortMachineKey
+    // mirrors resolveMachineLabel's identical last-resort truncation.
+    return daemon.machineNickname || daemon.nickname || daemon.hostname || (daemon.id ? shortMachineKey(daemon.id) : undefined) || 'Unknown'
 }
 
 function daemonOwnerLabel(daemon: RepoMeshDaemonEntry | undefined, fallback?: string): string {

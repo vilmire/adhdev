@@ -28,6 +28,7 @@ import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import { buildProviderOptionMap, type AvailableCliProviderOption } from '../../utils/provider-priority'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
+import { isWorktreeNode } from '../../pages/repo-mesh/MeshNodeList'
 
 /**
  * Static provider fallback used when no live mesh node reports any provider
@@ -68,6 +69,8 @@ interface LiveNode {
     machineLabel?: string
     providers?: string[]
     providerPriority?: string[]
+    isLocalWorktree?: boolean
+    worktreeBranch?: string
 }
 
 // ─── Draft editor state (string-form for inputs) ────────────────────────────
@@ -154,10 +157,31 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
     const [savingKind, setSavingKind] = useState<MagiTaskKind | null>(null)
 
     const liveNodes: LiveNode[] = useMemo(
-        () => (status?.nodes ?? []).map(n => ({ nodeId: n.nodeId, machineLabel: n.machineLabel, providers: n.providers, providerPriority: n.providerPriority })),
+        () => (status?.nodes ?? []).map(n => ({
+            nodeId: n.nodeId,
+            machineLabel: n.machineLabel,
+            providers: n.providers,
+            providerPriority: n.providerPriority,
+            isLocalWorktree: n.isLocalWorktree,
+            worktreeBranch: n.worktreeBranch,
+        })),
         [status?.nodes],
     )
     const knownNodeIds = useMemo(() => (status?.nodes ?? []).map(n => n.nodeId), [status?.nodes])
+    // Ephemeral worktree nodes are excluded from MAGI slot assignment (kind→panel
+    // bindings are a persistent config concept; a worktree can vanish on cleanup).
+    // Kept SELECTABLE-disabled rather than removed from the list: an operator must
+    // still be able to see (and clear) a slot that was assigned to one before this
+    // guard existed, and a hidden option would make an already-bound worktree nodeId
+    // look unresolvable in the dropdown.
+    const worktreeNodeIds = useMemo(
+        () => new Set(liveNodes.filter(isWorktreeNode).map(n => n.nodeId)),
+        [liveNodes],
+    )
+    const worktreeBranchByNodeId = useMemo(
+        () => Object.fromEntries(liveNodes.filter(isWorktreeNode).map(n => [n.nodeId, n.worktreeBranch])),
+        [liveNodes],
+    )
 
     // Friendly display label per nodeId (raw id stays the option value). Falls back
     // to the raw nodeId when the normalized machineLabel is unavailable.
@@ -344,7 +368,17 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                                                 <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>{t('meshGraph.magiKind.machine')}</span>
                                                 <select className={inputClass} value={s.nodeId} onChange={e => updateSlot(kind, idx, { nodeId: e.target.value })} title={t('meshGraph.magiKind.machineTitle')}>
                                                     <option value="">{t('meshGraph.magiKind.anyMachine')}</option>
-                                                    {knownNodeIds.map(id => <option key={id} value={id}>{nodeLabelById[id] ?? id}</option>)}
+                                                    {knownNodeIds.map(id => {
+                                                        const isWorktree = worktreeNodeIds.has(id)
+                                                        const label = isWorktree
+                                                            ? t('meshGraph.magiKind.worktreeSuffix', { label: nodeLabelById[id] ?? id, branch: worktreeBranchByNodeId[id] || t('meshGraph.magiKind.worktreeUnknownBranch') })
+                                                            : (nodeLabelById[id] ?? id)
+                                                        // Ephemeral worktree nodes are disabled (not removed) so a slot
+                                                        // already assigned to one still renders correctly; disabled
+                                                        // options only block NEW selection, browsers keep a disabled
+                                                        // selected <option> visible and its value submits normally.
+                                                        return <option key={id} value={id} disabled={isWorktree} title={isWorktree ? t('meshGraph.magiKind.worktreeDisabledTitle') : undefined}>{label}</option>
+                                                    })}
                                                     {s.nodeId && !knownNodeIds.includes(s.nodeId) && <option value={s.nodeId}>{t('meshGraph.magiKind.offlineSuffix', { label: nodeLabelById[s.nodeId] ?? s.nodeId })}</option>}
                                                 </select>
                                             </label>
