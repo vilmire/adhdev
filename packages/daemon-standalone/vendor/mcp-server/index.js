@@ -2404,14 +2404,32 @@ function findNode(mesh, nodeId) {
 }
 var DUPLICATE_DISPATCH_WINDOW_MS = 6e4;
 async function refreshMeshFromDaemon(ctx) {
+  const settledNodeIds = /* @__PURE__ */ new Set();
   try {
     const result = await ctx.transport.command("get_mesh", { meshId: ctx.mesh.id });
-    if (!result?.success || !Array.isArray(result.mesh?.nodes)) return;
+    if (!result?.success || !Array.isArray(result.mesh?.nodes)) return { settledNodeIds };
     const refreshedNodes = result.mesh.nodes.filter((n) => n?.id).map((n) => n);
-    ctx.mesh.nodes.splice(0, ctx.mesh.nodes.length, ...refreshedNodes);
+    const merged = [...refreshedNodes];
+    for (const existing of ctx.mesh.nodes) {
+      const existingId = existing?.id;
+      if (!existingId) continue;
+      if (merged.some((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, existingId))) continue;
+      if (isLocalControlPlaneNode(ctx, existing)) {
+        settledNodeIds.add(existingId);
+        continue;
+      }
+      const clonedFromNodeId = readString(existing?.clonedFromNodeId) || readString(existing?.cloned_from_node_id);
+      if (clonedFromNodeId && refreshedNodes.some((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, clonedFromNodeId))) {
+        settledNodeIds.add(existingId);
+        continue;
+      }
+      merged.push(existing);
+    }
+    ctx.mesh.nodes.splice(0, ctx.mesh.nodes.length, ...merged);
     ctx.mesh.updatedAt = result.mesh.updatedAt ?? ctx.mesh.updatedAt;
   } catch {
   }
+  return { settledNodeIds };
 }
 async function syncCoordinatorDaemonMeshCache(ctx) {
   if (!(ctx.transport instanceof IpcTransport)) return;
@@ -2423,19 +2441,71 @@ async function syncCoordinatorDaemonMeshCache(ctx) {
   } catch {
   }
 }
+async function resolveNodeFromOwningDaemons(ctx, nodeId) {
+  const transport = ctx.transport;
+  if (typeof transport?.meshCommand !== "function") return { node: null, ownerUnreachable: false };
+  const localDaemonId = ctx.localDaemonId;
+  const candidates = [];
+  const pushCandidate = (id) => {
+    if (typeof id !== "string" || !id.trim()) return;
+    if (localDaemonId && id === localDaemonId) return;
+    if (!candidates.includes(id)) candidates.push(id);
+  };
+  for (const node of ctx.mesh.nodes) pushCandidate(node?.daemonId);
+  pushCandidate(ctx.mesh?.meshHost?.hostDaemonId);
+  if (candidates.length === 0) return { node: null, ownerUnreachable: false };
+  let ownerUnreachable = false;
+  for (const daemonId of candidates) {
+    let result;
+    try {
+      result = await transport.meshCommand(daemonId, "get_mesh", { meshId: ctx.mesh.id });
+    } catch {
+      ownerUnreachable = true;
+      continue;
+    }
+    const nodes = result?.mesh?.nodes ?? result?.result?.mesh?.nodes;
+    if (!result?.success || !Array.isArray(nodes)) {
+      if (result && result.success === false) ownerUnreachable = true;
+      continue;
+    }
+    const found = nodes.find((n) => n?.id && (0, import_daemon_core4.meshNodeIdMatches)(n, nodeId));
+    if (!found) continue;
+    const existingIndex = ctx.mesh.nodes.findIndex((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, nodeId));
+    if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = found;
+    else ctx.mesh.nodes.push(found);
+    return { node: found, ownerUnreachable: false };
+  }
+  return { node: null, ownerUnreachable };
+}
 async function findNodeWithRefresh(ctx, nodeId) {
   const hit = ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, nodeId));
   if (hit && !hit.isLocalWorktree) return hit;
-  await refreshMeshFromDaemon(ctx);
+  const { settledNodeIds } = await refreshMeshFromDaemon(ctx);
   const refreshed = ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, nodeId));
-  if (!refreshed) throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
-  return refreshed;
+  if (refreshed) return refreshed;
+  if (settledNodeIds.has(nodeId)) {
+    throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
+  }
+  const owned = await resolveNodeFromOwningDaemons(ctx, nodeId);
+  if (owned.node) return owned.node;
+  if (owned.ownerUnreachable) {
+    const err = new Error(
+      `Node '${nodeId}' could not be resolved: the daemon that owns it is unreachable. This is NOT proof of non-membership \u2014 retry once the owning daemon is online.`
+    );
+    err.code = "mesh_node_owner_unreachable";
+    throw err;
+  }
+  throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
 }
 async function findOptionalNodeWithRefresh(ctx, nodeId) {
   const hit = ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, nodeId));
   if (hit && !hit.isLocalWorktree) return hit;
-  await refreshMeshFromDaemon(ctx);
-  return ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, nodeId)) ?? null;
+  const { settledNodeIds } = await refreshMeshFromDaemon(ctx);
+  const refreshed = ctx.mesh.nodes.find((n) => (0, import_daemon_core4.meshNodeIdMatches)(n, nodeId));
+  if (refreshed) return refreshed;
+  if (settledNodeIds.has(nodeId)) return null;
+  const owned = await resolveNodeFromOwningDaemons(ctx, nodeId);
+  return owned.node;
 }
 function hasRecentDuplicateDispatch(ctx, args) {
   const now = Date.now();

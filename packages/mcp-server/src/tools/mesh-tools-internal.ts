@@ -548,17 +548,69 @@ export const DUPLICATE_DISPATCH_WINDOW_MS = 60_000;
  * Refresh the MCP process's mesh snapshot from the daemon inline mesh cache.
  * This is required for status/list tools when a previous MCP process already
  * created or removed worktree nodes through clone_mesh_node/remove_mesh_node.
+ *
+ * REMOTE-WORKTREE-MEMBERSHIP-RESOLVE: the merge is OWNERSHIP-SCOPED rather than
+ * a blind replace. `get_mesh` here goes to the LOCAL daemon, which authoritatively
+ * knows only the daemons it actually speaks for. A worktree cloned on a REMOTE
+ * daemon lives in that remote daemon's cache, so a wholesale splice erased it from
+ * the coordinator's own snapshot — after which every membership-resolving op
+ * ("is not a member of mesh") hard-failed while mesh_list_nodes still showed it,
+ * and the worktree stayed on disk as an orphan.
+ *
+ * The rule: daemon truth WINS for every node it reports, and absence is a genuine
+ * REMOVAL only for nodes the local daemon is actually authoritative about — its
+ * OWN (local-worktree / local-daemon-owned) nodes. A node owned by a different
+ * daemon is preserved when the payload omits it, because the local daemon merely
+ * relays what it has been told about peers and its silence is not evidence of
+ * deletion. This keeps stale-worktree revalidation intact (a removed LOCAL
+ * worktree still disappears, so callers correctly fall back to removed-node
+ * recovery) while no longer discarding remote-owned membership.
+ *
+ * Cross-daemon removals stay correct through the paths that actually observe
+ * them: the explicit remove path splices the node out directly, and the
+ * owner-daemon fallback below re-checks with the owner on a real cache miss.
  */
-export async function refreshMeshFromDaemon(ctx: MeshContext): Promise<void> {
+export async function refreshMeshFromDaemon(ctx: MeshContext): Promise<{ settledNodeIds: Set<string> }> {
+    // Node ids the local daemon is authoritative about and did NOT report — their
+    // removal is settled, so callers must not escalate to the owning daemon.
+    const settledNodeIds = new Set<string>();
     try {
         const result = await ctx.transport.command('get_mesh', { meshId: ctx.mesh.id }) as any;
-        if (!result?.success || !Array.isArray(result.mesh?.nodes)) return;
+        if (!result?.success || !Array.isArray(result.mesh?.nodes)) return { settledNodeIds };
         const refreshedNodes = result.mesh.nodes
             .filter((n: any) => n?.id)
             .map((n: any) => n as LocalMeshNodeEntry);
-        (ctx.mesh.nodes as LocalMeshNodeEntry[]).splice(0, ctx.mesh.nodes.length, ...refreshedNodes);
+
+        const merged: LocalMeshNodeEntry[] = [...refreshedNodes];
+        for (const existing of ctx.mesh.nodes as LocalMeshNodeEntry[]) {
+            const existingId = (existing as any)?.id;
+            if (!existingId) continue;
+            if (merged.some(n => meshNodeIdMatches(n as any, existingId))) continue;
+
+            // The local daemon is authoritative for a node when this payload proves it
+            // knows that node's context:
+            //  (a) it is a node the local control plane owns outright, or
+            //  (b) it is a worktree whose clonedFrom SOURCE node the payload still
+            //      reports — the daemon demonstrably tracks this worktree's lineage,
+            //      so omitting the worktree means it was genuinely removed.
+            // Either way the node must drop out: that is the stale-worktree
+            // revalidation callers depend on to fall back to removed-node recovery.
+            if (isLocalControlPlaneNode(ctx, existing)) { settledNodeIds.add(existingId); continue; }
+            const clonedFromNodeId = readString((existing as any)?.clonedFromNodeId)
+                || readString((existing as any)?.cloned_from_node_id);
+            if (clonedFromNodeId && refreshedNodes.some((n: LocalMeshNodeEntry) => meshNodeIdMatches(n as any, clonedFromNodeId))) {
+                settledNodeIds.add(existingId);
+                continue;
+            }
+
+            // Remote-owned node the local daemon said nothing about — preserve it.
+            merged.push(existing);
+        }
+
+        (ctx.mesh.nodes as LocalMeshNodeEntry[]).splice(0, ctx.mesh.nodes.length, ...merged);
         ctx.mesh.updatedAt = result.mesh.updatedAt ?? ctx.mesh.updatedAt;
     } catch { /* refresh is best-effort; callers still report their original status/errors */ }
+    return { settledNodeIds };
 }
 
 export async function syncCoordinatorDaemonMeshCache(ctx: MeshContext): Promise<void> {
@@ -573,24 +625,114 @@ export async function syncCoordinatorDaemonMeshCache(ctx: MeshContext): Promise<
     }
 }
 
+/**
+ * REMOTE-WORKTREE-MEMBERSHIP-RESOLVE: last-resort membership resolution for a
+ * node the local daemon does not know about.
+ *
+ * There is no surface that enumerates the daemons participating in a mesh
+ * without a node object (node ids are opaque UUIDs and LocalMeshEntry carries
+ * no participant list), so this cannot fan out blindly. Instead it asks the
+ * OWNING daemons we can actually name — the distinct daemonIds already present
+ * in the snapshot, plus the pinned mesh host — reusing the existing
+ * `mesh_relay_command` path (transport.meshCommand, the same one commandForNode
+ * uses). This only runs on a genuine cache miss, and the winning payload is
+ * merged back into ctx.mesh so repeat lookups hit cache instead of re-querying.
+ *
+ * Returns the resolved node, or a marker distinguishing "no owner reachable"
+ * from "definitively not a member".
+ */
+async function resolveNodeFromOwningDaemons(
+    ctx: MeshContext,
+    nodeId: string,
+): Promise<{ node: LocalMeshNodeEntry | null; ownerUnreachable: boolean }> {
+    const transport = ctx.transport as any;
+    if (typeof transport?.meshCommand !== 'function') return { node: null, ownerUnreachable: false };
+
+    const localDaemonId = (ctx as any).localDaemonId;
+    const candidates: string[] = [];
+    const pushCandidate = (id: unknown) => {
+        if (typeof id !== 'string' || !id.trim()) return;
+        if (localDaemonId && id === localDaemonId) return; // already asked via the local refresh
+        if (!candidates.includes(id)) candidates.push(id);
+    };
+    for (const node of ctx.mesh.nodes as any[]) pushCandidate(node?.daemonId);
+    pushCandidate((ctx.mesh as any)?.meshHost?.hostDaemonId);
+
+    if (candidates.length === 0) return { node: null, ownerUnreachable: false };
+
+    let ownerUnreachable = false;
+    for (const daemonId of candidates) {
+        let result: any;
+        try {
+            result = await transport.meshCommand(daemonId, 'get_mesh', { meshId: ctx.mesh.id });
+        } catch {
+            // The owner may simply be offline — that is NOT evidence of non-membership.
+            ownerUnreachable = true;
+            continue;
+        }
+        const nodes = result?.mesh?.nodes ?? result?.result?.mesh?.nodes;
+        if (!result?.success || !Array.isArray(nodes)) {
+            if (result && result.success === false) ownerUnreachable = true;
+            continue;
+        }
+        const found = nodes.find((n: any) => n?.id && meshNodeIdMatches(n as any, nodeId));
+        if (!found) continue;
+
+        // Cache the resolution so subsequent lookups short-circuit locally.
+        const existingIndex = ctx.mesh.nodes.findIndex(n => meshNodeIdMatches(n as any, nodeId));
+        if (existingIndex >= 0) (ctx.mesh.nodes as any[])[existingIndex] = found;
+        else (ctx.mesh.nodes as any[]).push(found);
+        return { node: found as LocalMeshNodeEntry, ownerUnreachable: false };
+    }
+    return { node: null, ownerUnreachable };
+}
+
 export async function findNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry> {
     const hit = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
     if (hit && !hit.isLocalWorktree) return hit;
 
-    await refreshMeshFromDaemon(ctx);
+    const { settledNodeIds } = await refreshMeshFromDaemon(ctx);
 
     const refreshed = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
-    if (!refreshed) throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
-    return refreshed;
+    if (refreshed) return refreshed;
+
+    // The local daemon was authoritative and dropped it — a settled removal, so do
+    // not escalate to the owning daemon (that would turn a known removal into a
+    // spurious "owner unreachable" and add a pointless remote round-trip).
+    if (settledNodeIds.has(nodeId)) {
+        throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
+    }
+
+    const owned = await resolveNodeFromOwningDaemons(ctx, nodeId);
+    if (owned.node) return owned.node;
+    if (owned.ownerUnreachable) {
+        // "Owner unreachable" is a transport condition, not a membership verdict —
+        // callers must not treat it as proof the node is gone (and must not clean
+        // up on the strength of it).
+        const err = new Error(
+            `Node '${nodeId}' could not be resolved: the daemon that owns it is unreachable. `
+            + `This is NOT proof of non-membership — retry once the owning daemon is online.`,
+        ) as Error & { code?: string };
+        err.code = 'mesh_node_owner_unreachable';
+        throw err;
+    }
+    throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
 }
 
 export async function findOptionalNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry | null> {
     const hit = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
     if (hit && !hit.isLocalWorktree) return hit;
 
-    await refreshMeshFromDaemon(ctx);
+    const { settledNodeIds } = await refreshMeshFromDaemon(ctx);
 
-    return ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId)) ?? null;
+    const refreshed = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
+    if (refreshed) return refreshed;
+
+    // Settled removal (see findNodeWithRefresh) — report absence without escalating.
+    if (settledNodeIds.has(nodeId)) return null;
+
+    const owned = await resolveNodeFromOwningDaemons(ctx, nodeId);
+    return owned.node;
 }
 
 export function hasRecentDuplicateDispatch(ctx: MeshContext, args: { node_id: string; session_id?: string; message: string }): { duplicate: boolean; entry?: any; source?: 'ledger' | 'queue' } {
