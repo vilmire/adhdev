@@ -12,6 +12,7 @@ import { useSessionHostDiagnosticsSubscription } from '../../hooks/useSessionHos
 import { IconRefresh, IconServer, IconTerminal, IconUsers, IconWarning, IconX } from '../Icons'
 import type { MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
+import ModalPortal from '../ui/ModalPortal'
 
 interface SessionHostAttachedClient {
     clientId: string
@@ -427,9 +428,10 @@ export default function DashboardMobileSessionHostSheet({
     }
 
     return (
-        // pt-[env(safe-area-inset-top)] keeps the bottom sheet's top edge below
-        // the iOS installed-PWA status bar (viewport-fit=cover); dvh keeps the
-        // sheet sized against the dynamic viewport instead of the static vh.
+        <ModalPortal>
+        {/* pt-[env(safe-area-inset-top)] keeps the bottom sheet's top edge below
+            the iOS installed-PWA status bar (viewport-fit=cover); dvh keeps the
+            sheet sized against the dynamic viewport instead of the static vh. */}
         <div className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center bg-black/55 backdrop-blur-[2px] pt-[env(safe-area-inset-top,0px)] md:items-center md:p-4" onClick={onClose}>
             <div
                 className="w-full max-h-[88dvh] overflow-hidden rounded-t-[28px] border border-border-subtle bg-bg-primary shadow-[0_-20px_60px_rgba(0,0,0,0.35)] md:max-w-3xl md:rounded-[28px] md:shadow-[0_20px_60px_rgba(0,0,0,0.35)]"
@@ -630,5 +632,6 @@ export default function DashboardMobileSessionHostSheet({
                 </div>
             </div>
         </div>
+        </ModalPortal>
     )
 }

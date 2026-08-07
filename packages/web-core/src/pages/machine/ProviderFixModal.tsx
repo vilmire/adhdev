@@ -11,6 +11,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProviderInfo } from './types'
+import ModalPortal from '../../components/ui/ModalPortal'
 
 const SCRIPTS = [
     'openPanel', 'sendMessage', 'readChat', 'newSession',
@@ -114,6 +115,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
     }
 
     return (
+        <ModalPortal>
         <div className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-sm px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4" onClick={onClose}>
             <div
                 className="w-full max-w-[560px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[85vh] overflow-hidden rounded-[24px] sm:rounded-2xl bg-bg-primary border border-border-subtle shadow-2xl flex flex-col"
@@ -278,5 +280,6 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                 </div>
             </div>
         </div>
+        </ModalPortal>
     )
 }
