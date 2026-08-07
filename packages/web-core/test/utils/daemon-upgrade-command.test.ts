@@ -30,7 +30,7 @@ describe('runDaemonUpgradeCommand', () => {
     expect(result.state).toBe('error')
   })
 
-  it('sends the upgrade with the explicit policy channel when the policy is present', async () => {
+  it('sends the upgrade — with no channel hint — when the policy resolves a channel', async () => {
     const sendDaemonCommand = vi.fn().mockResolvedValue({ result: { upgraded: true, version: '1.0.28-rc.20' } })
     const machine: DaemonData = {
       id: 'machine-1',
@@ -43,11 +43,10 @@ describe('runDaemonUpgradeCommand', () => {
 
     const result = await runDaemonUpgradeCommand(sendDaemonCommand, 'machine-1', machine)
 
-    expect(sendDaemonCommand).toHaveBeenCalledWith('machine-1', 'daemon_upgrade', expect.objectContaining({
-      channel: 'preview',
-      npmTag: 'next',
-      targetVersion: '1.0.28-rc.20',
-    }))
+    // A resolvable channel gates whether we send at all; the payload itself is
+    // empty because the daemon upgrades along its own build track and discards
+    // any channel hint (see buildDaemonUpgradePayload).
+    expect(sendDaemonCommand).toHaveBeenCalledWith('machine-1', 'daemon_upgrade', {})
     expect(result.state).toBe('done')
   })
 
