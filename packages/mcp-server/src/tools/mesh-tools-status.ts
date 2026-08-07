@@ -317,6 +317,10 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         // raw field is kept on the node so verbose callers and self-coordinator
         // shape stay intact.
         if (statusProbe.daemonBuild) entry.daemonBuild = statusProbe.daemonBuild;
+        // Failed/rolled-back upgrade on this node's daemon. Folded per-daemonId at
+        // the response level (top-level `daemonUpgradeFailures`) and dropped from
+        // the node in compact mode — same treatment as daemonBuild.
+        if (statusProbe.upgradeFailure) entry.upgradeFailure = statusProbe.upgradeFailure;
         if (liveSessions.length > 0) {
             // Slim to essential fields only — full session objects are expensive in coordinator context.
             entry.sessions = liveSessions
@@ -497,6 +501,21 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         if (entry?.quota && !(daemonId in daemonQuotas)) daemonQuotas[daemonId] = entry.quota;
     }
 
+    // Per-daemon failed-upgrade fold. A detached daemon upgrade answers
+    // "scheduled" seconds before it runs, and its real outcome — install /
+    // health gate / rollback — lands tens of seconds later with no channel back
+    // to the caller. The durable failure notice was already readable via a
+    // per-node get_status_metadata probe, but nothing surfaced it HERE, so a
+    // coordinator watching mesh_status saw a silently-failed upgrade as success.
+    // Folded once per daemonId (the probe is daemon-wide, identical across a
+    // daemon's nodes) and summarized, not raw — see MeshUpgradeFailureSummary.
+    const daemonUpgradeFailures: Record<string, unknown> = {};
+    for (const entry of results as any[]) {
+        const daemonId = typeof entry?.daemonId === 'string' && entry.daemonId ? entry.daemonId : '';
+        if (daemonId && entry?.upgradeFailure && !(daemonId in daemonUpgradeFailures)) {
+            daemonUpgradeFailures[daemonId] = entry.upgradeFailure;
+        }
+    }
     // Stale-build aggregate: any node whose live daemon build is behind its
     // workspace HEAD. Deduplicated per daemonId+scope so N worktrees on one
     // stale daemon don't spam N identical warnings.
@@ -603,6 +622,9 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
                         seeDaemonMachines: true,
                     };
                 }
+                // Same fold as daemonBuild: available per-daemon at the top level
+                // under `daemonUpgradeFailures`.
+                if (next.upgradeFailure !== undefined) delete next.upgradeFailure;
                 return next;
             });
 
@@ -736,6 +758,12 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         // instead of repeated on every node sharing that daemon. Both modes.
         ...(Object.keys(daemonMachines).length > 0 ? { daemonMachines } : {}),
         ...(Object.keys(daemonQuotas).length > 0 ? { daemonQuotas } : {}),
+        ...(Object.keys(daemonUpgradeFailures).length > 0
+            ? {
+                daemonUpgradeFailures,
+                daemonUpgradeFailureWarning: 'One or more daemons have a failed-upgrade notice on record: that daemon\'s LAST upgrade failed and rolled back, so it is still on the PREVIOUS version. An upgrade/restart response only reports "scheduled", never success — do not read a prior success as proof the version changed. The notice persists until a later upgrade succeeds, so check targetVersion/recordedAt: a target other than the running version is a stale earlier attempt. Full body at noticePath, trace at logPath.',
+            }
+            : {}),
         ...(staleDaemonBuilds.length > 0 ? { staleDaemonBuilds } : {}),
         ...(daemonAffectingStaleBuilds.length > 0
             ? {

@@ -2035,14 +2035,19 @@ async function collectLiveStatusSessionsVerified(
 
 
 /**
- * One get_status_metadata probe → both the live session list and the daemon's
- * build stamp. Used by mesh_status so a single daemon-wide probe yields the
- * sessions AND the `daemonBuild` field (commit/version of the running daemon).
+ * One get_status_metadata probe → the live session list, the daemon's build
+ * stamp, and any failed-upgrade notice. Used by mesh_status so a single
+ * daemon-wide probe yields the sessions, the `daemonBuild` field
+ * (commit/version of the running daemon) AND `upgradeFailure`.
  */
 export async function collectLiveStatusProbe(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
-): Promise<{ sessions: any[]; daemonBuild?: { commit: string; commitShort: string; version: string; builtAt?: string } }> {
+): Promise<{
+    sessions: any[];
+    daemonBuild?: { commit: string; commitShort: string; version: string; builtAt?: string };
+    upgradeFailure?: MeshUpgradeFailureSummary;
+}> {
     try {
         // OFFLINE-NODE-STATUS-REFRESH: part of the mesh_status per-node assembly — mark it
         // status-origin so the relay to an offline peer uses the SHORT connect-wait budget.
@@ -2050,10 +2055,70 @@ export async function collectLiveStatusProbe(
         return {
             sessions: extractStatusMetadataSessions(statusResult),
             daemonBuild: extractDaemonBuildInfo(statusResult),
+            upgradeFailure: extractUpgradeFailureSummary(statusResult),
         };
     } catch {
         return { sessions: [] };
     }
+}
+
+/**
+ * Coordinator-facing summary of a failed/rolled-back daemon upgrade.
+ *
+ * Deliberately NOT the raw notice: that body carries a full npm/health trace
+ * (lock-holder pids, command lines, recovery commands) and can run to many
+ * lines. mesh_status is a payload-budgeted surface, so this keeps the fields a
+ * coordinator needs to DECIDE — did an upgrade fail, when, targeting what — plus
+ * a truncated first line for recognizability, and points at the existing full
+ * paths for the detail.
+ */
+export interface MeshUpgradeFailureSummary {
+    /** First line of the notice body, truncated. Enough to recognize the failure class. */
+    summary: string;
+    /** ISO timestamp the notice was recorded, when parseable. */
+    recordedAt?: string;
+    /** Human age at probe time (`3h ago`), when parseable. */
+    ageLabel?: string;
+    /** Version the failed attempt targeted, when the notice carries the marker. */
+    targetVersion?: string;
+    /** Durable notice file — read it for the full body. */
+    noticePath: string;
+    /** Full install/health trace. */
+    logPath: string;
+}
+
+/** Cap on the notice excerpt carried in mesh_status (see MeshUpgradeFailureSummary). */
+const UPGRADE_FAILURE_SUMMARY_MAX_CHARS = 200;
+
+export function extractUpgradeFailureSummary(value: any): MeshUpgradeFailureSummary | undefined {
+    const payload = unwrapCommandPayload(value);
+    const raw = payload?.upgradeFailure && typeof payload.upgradeFailure === 'object'
+        ? payload.upgradeFailure
+        : (value?.upgradeFailure && typeof value.upgradeFailure === 'object' ? value.upgradeFailure : undefined);
+    if (!raw) return undefined;
+    const notice = readString(raw.notice) || '';
+    const noticePath = readString(raw.noticePath) || '';
+    if (!notice && !noticePath) return undefined;
+    // Skip the `[ISO]` header line — the timestamp is already a structured field
+    // — and take the first line of actual prose as the summary.
+    const bodyLine = notice
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find((line) => line && !/^\[[^\]\n]+\]$/.test(line)) || '';
+    const summary = bodyLine.length > UPGRADE_FAILURE_SUMMARY_MAX_CHARS
+        ? `${bodyLine.slice(0, UPGRADE_FAILURE_SUMMARY_MAX_CHARS)}…`
+        : bodyLine;
+    const recordedAt = readString(raw.recordedAt);
+    const ageLabel = readString(raw.ageLabel);
+    const targetVersion = readString(raw.targetVersion);
+    return {
+        summary,
+        ...(recordedAt ? { recordedAt } : {}),
+        ...(ageLabel ? { ageLabel } : {}),
+        ...(targetVersion ? { targetVersion } : {}),
+        noticePath,
+        logPath: readString(raw.logPath) || '',
+    };
 }
 
 export function extractDaemonBuildInfo(value: any): { commit: string; commitShort: string; version: string; builtAt?: string } | undefined {
