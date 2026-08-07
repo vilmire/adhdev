@@ -227,6 +227,7 @@ export {
     compactNodeSeverity,
     isNoteworthyCompactNode,
     minimalCompactNode,
+    pinnedRepresentativeNodeIds,
     summarizeNodeSessions,
 } from './mesh-compact.js';
 export {

@@ -61,7 +61,7 @@ function summarizeCompactSubmodules(submodules: any): Record<string, unknown> | 
 // was silently dropped by the allowlist-based minimal stub, so it read null on
 // exactly the quiet nodes a coordinator most needs the marker for. Add a new marker
 // field HERE once and both fold paths preserve it; never hand-list it in two places.
-const MESH_COMPACT_PRESERVED_MARKER_FIELDS = ['dataFreshness', 'quota'] as const;
+const MESH_COMPACT_PRESERVED_MARKER_FIELDS = ['dataFreshness', 'quota', 'isLocalWorktree'] as const;
 
 /**
  * Fold a node's reported quota bundle into a terse per-provider marker.
@@ -201,6 +201,45 @@ export function compactNodeSeverity(entry: any): number {
     if (entry.branchConvergence?.needsConvergence === true) return 2;
     if (entry.staleDaemonBuild || entry.submodulesOutOfSync || entry.recoveryHints) return 1;
     return 0;
+}
+
+// Per-daemon representative pin.
+//
+// The byte-budget fold ranks by severity, so a QUIET node folds first. That is the
+// right instinct for worktrees and exactly wrong for machine nodes: a healthy,
+// idle, nothing-to-converge machine is precisely the node a deploy/restart roster
+// must enumerate, and severity ranking pushed it out of `nodes[]` first — the whole
+// machine silently vanished from the roster (it remained only as a bare id under
+// foldedNodes.nodeIds, which carries no daemonId, so it could not even be mapped
+// back to its daemon).
+//
+// So before severity is consulted, pin ONE representative node per daemonId: the
+// non-worktree (machine/repo-root) node when the daemon has one, else the daemon's
+// first node so a worktree-only daemon is still represented. Pinned nodes are
+// awarded detail first; everything else — worktrees included — competes for what
+// remains and folds first. Every daemon therefore keeps at least one full-detail
+// node no matter how noisy the worktrees on it are.
+export function pinnedRepresentativeNodeIds(compacted: any[]): Set<string> {
+    const byDaemon = new Map<string, any>();
+    for (const n of compacted) {
+        if (!n || typeof n !== 'object') continue;
+        const daemonId = typeof n.daemonId === 'string' && n.daemonId ? n.daemonId : '';
+        if (!daemonId) continue;
+        const current = byDaemon.get(daemonId);
+        if (!current) {
+            byDaemon.set(daemonId, n);
+            continue;
+        }
+        // A machine node always outranks a worktree as the daemon's representative.
+        if (current.isLocalWorktree === true && n.isLocalWorktree !== true) {
+            byDaemon.set(daemonId, n);
+        }
+    }
+    const pinned = new Set<string>();
+    for (const n of byDaemon.values()) {
+        if (n?.nodeId !== undefined) pinned.add(String(n.nodeId));
+    }
+    return pinned;
 }
 
 export function isNoteworthyCompactNode(entry: any): boolean {

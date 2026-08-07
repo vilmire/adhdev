@@ -43,6 +43,7 @@ import {
     getSessionRecoveryContext,
     isGitStatusDirty,
     isNoteworthyCompactNode,
+    pinnedRepresentativeNodeIds,
     minimalCompactNode,
     readLedgerEntries,
     readNodeDaemonId,
@@ -147,6 +148,10 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             machine: buildNodeMachineIdentity(ctx, node),
             daemonId: readNodeDaemonId(node),
             machineId: readNodeMachineId(node),
+            // Needed by the compact fold to distinguish a machine (repo-root) node
+            // from a worktree node: the per-daemon representative pin keeps machine
+            // nodes out of the fold so a deploy roster can never lose a machine.
+            isLocalWorktree: node.isLocalWorktree === true,
             ...getNodeLaunchReadiness(node),
             ...buildNodeCapabilityExposure(node),
         };
@@ -559,13 +564,26 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             //     beyond that is fully folded into the foldedNodes id-list summary.
             // Nodes that survive in the array keep their ORIGINAL order. Every node id is
             // either in the array (detail or stub) or listed in foldedNodes.nodeIds.
+            // Per-daemon representative pin (see pinnedRepresentativeNodeIds): one
+            // machine node per daemon is awarded detail BEFORE severity ranking, so a
+            // quiet machine can never be folded out from under a deploy roster by
+            // noisier worktrees on the same daemon. Worktrees fold first by design.
+            const pinnedIds = pinnedRepresentativeNodeIds(compacted);
             const noteworthy = compacted.filter((n: any) => n && typeof n === 'object' && isNoteworthyCompactNode(n));
-            const ranked = [...noteworthy].sort((a, b) => compactNodeSeverity(b) - compactNodeSeverity(a));
+            const bySeverityDesc = (a: any, b: any) => compactNodeSeverity(b) - compactNodeSeverity(a);
+            const isPinned = (n: any) => pinnedIds.has(String(n?.nodeId));
+            // Pinned first (severity-ordered among themselves), then the rest by severity.
+            const ranked = [
+                ...compacted.filter((n: any) => n && typeof n === 'object' && isPinned(n)).sort(bySeverityDesc),
+                ...noteworthy.filter((n: any) => !isPinned(n)).sort(bySeverityDesc),
+            ];
             const detailedIds = new Set<string>();
             let detailSpent = 0;
             for (const n of ranked) {
                 const cost = JSON.stringify(n).length + 1;
-                if (detailedIds.size === 0 || detailSpent + cost <= COMPACT_DETAILED_NODES_BYTE_BUDGET) {
+                // A pinned representative is never dropped for budget: the roster
+                // guarantee is what this pin exists to provide.
+                if (detailedIds.size === 0 || isPinned(n) || detailSpent + cost <= COMPACT_DETAILED_NODES_BYTE_BUDGET) {
                     detailedIds.add(String(n.nodeId));
                     detailSpent += cost;
                 }
@@ -574,7 +592,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             // severity order for awarding the remaining total budget to stubs
             const stubOrder = [...compacted]
                 .filter((n: any) => n && typeof n === 'object')
-                .sort((a, b) => compactNodeSeverity(b) - compactNodeSeverity(a));
+                .sort(bySeverityDesc);
             const keptIds = new Set<string>(detailedIds);
             let totalSpent = detailSpent;
             for (const n of stubOrder) {
