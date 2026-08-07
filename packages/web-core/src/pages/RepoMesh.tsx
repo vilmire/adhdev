@@ -109,6 +109,7 @@ export default function RepoMesh() {
         newMeshDaemonId, setNewMeshDaemonId,
         newMeshWorkspace, setNewMeshWorkspace,
         createPickerWorkspaces, createOnboardingPlan, createPlanLoading,
+        creating, createWarning, setCreateWarning,
         loadMeshes, handleCreate, handleDelete, cancelCreate,
     } = useMeshList({
         daemons,
@@ -656,6 +657,9 @@ export default function RepoMesh() {
                 createPickerWorkspaces={createPickerWorkspaces}
                 createOnboardingPlan={createOnboardingPlan}
                 createPlanLoading={createPlanLoading}
+                creating={creating}
+                createWarning={createWarning}
+                onDismissCreateWarning={() => setCreateWarning(null)}
                 onSelectMesh={setSelectedMeshId}
                 onCreate={handleCreate}
                 onCancelCreate={cancelCreate}

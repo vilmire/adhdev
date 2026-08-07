@@ -803,6 +803,7 @@
             "repoIdentityHint": "For a repo with no remote, or when the URL differs per machine. e.g. github.com/user/repo",
             "advancedIdentityToggle": "Advanced: set identity manually",
             "create": "Create",
+            "creating": "Creating…",
             "cancel": "Cancel",
             "loading": "Loading meshes...",
             "emptyTitle": "No Repo Meshes",

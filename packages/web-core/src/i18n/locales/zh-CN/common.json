@@ -803,6 +803,7 @@
             "repoIdentityHint": "当仓库没有远程，或每台机器的 URL 不同时手动填写。例如：github.com/user/repo",
             "advancedIdentityToggle": "高级：手动设置标识",
             "create": "创建",
+            "creating": "创建中…",
             "cancel": "取消",
             "loading": "正在加载网格...",
             "emptyTitle": "没有 Repo Mesh",

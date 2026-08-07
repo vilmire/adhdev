@@ -803,6 +803,7 @@
             "repoIdentityHint": "리모트가 없거나 머신마다 URL이 다를 때 직접 입력하세요. 예: github.com/user/repo",
             "advancedIdentityToggle": "고급: 식별자 직접 지정",
             "create": "생성",
+            "creating": "생성 중…",
             "cancel": "취소",
             "loading": "메시 불러오는 중...",
             "emptyTitle": "No Repo Meshes",

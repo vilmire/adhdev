@@ -19,6 +19,127 @@ import type { MeshEntry } from './types'
 // 'Loading meshes...' cold paint. Mirrors the graph cache in useMeshGraph.ts.
 const meshListCache = new Map<string, MeshEntry[]>()
 
+/**
+ * Outcome of the mesh-create sequence.
+ *
+ * `meshCreated` is the load-bearing field: it is true as soon as the daemon has
+ * persisted the mesh, INDEPENDENT of whether the follow-up node attach worked. The
+ * caller uses it to decide whether to refresh the list and close the form — see
+ * runMeshCreateSequence's contract note.
+ */
+export interface MeshCreateOutcome {
+    /** True once `create_mesh` succeeded — the mesh exists on the daemon. */
+    meshCreated: boolean
+    /** Id of the created mesh, when the daemon returned one. */
+    meshId: string
+    /** Fatal failure: nothing was created. Mutually exclusive with meshCreated. */
+    error: string | null
+    /** Non-fatal: mesh created, but attaching its first workspace failed. */
+    warning: string | null
+    /** The onboarding plan the daemon returned, for the caller to render. */
+    plan: any
+}
+
+export interface RunMeshCreateSequenceOptions {
+    targetDaemonId: string
+    name: string
+    repoRemoteUrl: string
+    repoIdentity: string
+    workspace: string
+    /** Whether to attach the workspace as the first node after creating. */
+    attachWorkspace: boolean
+    machineId?: string
+    providerPriority: string[]
+    meshInventory: unknown
+    sendCommand: RepoMeshContextValue['sendCommand']
+    unwrapResult: RepoMeshContextValue['unwrapResult']
+}
+
+/**
+ * Drive plan → create_mesh → add_mesh_node and report what actually happened.
+ *
+ * MESH-CREATE-LIST-REFRESH — the two writes have DIFFERENT failure semantics and must
+ * not share one all-or-nothing failure path:
+ *
+ *   `create_mesh` persists the mesh synchronously and unconditionally (daemon-core
+ *   mesh-config.ts createMesh → saveMeshConfig, no caching layer). Once it reports
+ *   success the mesh EXISTS on the daemon — there is nothing the browser can roll
+ *   back, and `list_meshes` reports it on the very next read.
+ *
+ *   `add_mesh_node` is a SEPARATE write that can legitimately fail against an
+ *   already-created mesh: duplicate workspace, the 10-node cap, or the mesh-host
+ *   mutation-owner gate (daemon-core commands/med-family/mesh-crud.ts).
+ *
+ * Treating an add failure as a create failure is what produced the reported bug: the
+ * failure aborted the caller before it refreshed the list or closed the create form,
+ * so the operator was left in the form looking at an error while the mesh they had
+ * just created sat persisted on the daemon and missing from the on-screen list.
+ *
+ * Contract: whenever `meshCreated` is true the caller MUST refresh its list and close
+ * the form, and surface `warning` separately rather than as a create failure. This
+ * mirrors the MCP path, which already reports `add_current_error` while keeping the
+ * create itself successful (mcp-server/src/tools/mesh-tools-crud.ts).
+ */
+export async function runMeshCreateSequence(opts: RunMeshCreateSequenceOptions): Promise<MeshCreateOutcome> {
+    const { sendCommand, unwrapResult } = opts
+    const base: MeshCreateOutcome = { meshCreated: false, meshId: '', error: null, warning: null, plan: null }
+    try {
+        const planRaw = await sendCommand(opts.targetDaemonId, 'plan_mesh_onboarding', {
+            workspace: opts.workspace || undefined,
+            operation: 'auto',
+            meshInventory: opts.meshInventory,
+        })
+        const plan = unwrapResult(planRaw)
+        base.plan = plan
+        if (plan?.success === false) {
+            return { ...base, error: `${plan.code || 'onboarding_blocked'}: ${plan.error}${plan.action ? ` ${plan.action}` : ''}` }
+        }
+        if (plan?.plan?.kind !== 'create_mesh_and_onboard') {
+            return { ...base, error: plan?.plan?.summary || 'A compatible mesh already exists; add this workspace to it instead of creating a duplicate mesh.' }
+        }
+        const payload: any = { name: opts.name.trim() }
+        if (opts.repoRemoteUrl || plan?.discovery?.origin?.urls?.[0]) payload.repoRemoteUrl = opts.repoRemoteUrl || plan.discovery.origin.urls[0]
+        if (opts.repoIdentity || plan?.discovery?.repoIdentity) payload.repoIdentity = opts.repoIdentity || plan.discovery.repoIdentity
+        if (plan?.discovery?.defaultBranch) payload.defaultBranch = plan.discovery.defaultBranch
+
+        const raw = await sendCommand(opts.targetDaemonId, 'create_mesh', payload)
+        const result = unwrapResult(raw)
+        if (result?.success === false) return { ...base, error: result.error || 'Create failed' }
+
+        // ─── The mesh is persisted from here on. Nothing below may turn this into a
+        // failed create; the worst outcome is created-with-warning. ───
+        const meshId = typeof result?.mesh?.id === 'string' ? result.mesh.id : ''
+        const created: MeshCreateOutcome = { ...base, meshCreated: true, meshId }
+        if (!meshId || !opts.attachWorkspace || !opts.workspace) return created
+
+        try {
+            const addRaw = await sendCommand(opts.targetDaemonId, 'add_mesh_node', {
+                meshId,
+                daemonId: opts.targetDaemonId,
+                machineId: opts.machineId,
+                workspace: plan?.discovery?.repoRoot || opts.workspace,
+                repoRoot: plan?.discovery?.repoRoot,
+                isLocalWorktree: plan?.discovery?.isLinkedWorktree === true,
+                role: 'host',
+                providerPriority: opts.providerPriority,
+            })
+            const addResult = unwrapResult(addRaw)
+            if (addResult?.success === false) {
+                return { ...created, warning: attachFailureMessage(addResult.error || 'add_mesh_node failed') }
+            }
+            return created
+        } catch (addError: any) {
+            return { ...created, warning: attachFailureMessage(addError?.message || 'add_mesh_node failed') }
+        }
+    } catch (e: any) {
+        return { ...base, error: e?.message || 'Create failed' }
+    }
+}
+
+function attachFailureMessage(detail: string): string {
+    return `Mesh created, but attaching the workspace failed: ${detail}. Add the workspace from the mesh's node list.`
+}
+
 interface UseMeshListOptions {
     daemons: RepoMeshDaemonEntry[]
     primaryDaemonId: string
@@ -60,6 +181,16 @@ export function useMeshList({
 
     // Create form
     const [showCreate, setShowCreate] = useState(false)
+    // In-flight guard for handleCreate. The create flow is a multi-command sequence
+    // (plan → create_mesh → add_mesh_node) with awaits between each step, so a
+    // double-click would start a SECOND create before the first persisted its mesh —
+    // the daemon then holds two meshes for one operator intent, and the second call's
+    // "already exists"/duplicate-workspace error is what the user sees.
+    const [creating, setCreating] = useState(false)
+    // Non-fatal create warning: the mesh WAS created but a follow-up step (attaching
+    // the first workspace) failed. Kept separate from `error` so the create is not
+    // reported as a failure it wasn't, and so the message is never silently dropped.
+    const [createWarning, setCreateWarning] = useState<string | null>(null)
     const [createName, setCreateName] = useState('')
     const [createRepoIdentity, setCreateRepoIdentity] = useState('')
     const [createRepoRemoteUrl, setCreateRepoRemoteUrl] = useState('')
@@ -183,47 +314,42 @@ export function useMeshList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [daemonIdsKey, primaryDaemonId, sendCommand, unwrapResult, normalizeMesh, features.createDaemonPicker])
 
+    /**
+     * Create a mesh, then attach the picked workspace as its first node.
+     *
+     * The sequence and its failure semantics live in `runMeshCreateSequence`; this is
+     * the state binding. The key rule it enforces: `meshCreated` — not the absence of
+     * a warning — decides whether the list refreshes and the form closes.
+     */
     async function handleCreate() {
         const targetDaemonId = features.createDaemonPicker ? newMeshDaemonId : primaryDaemonId
         if (!targetDaemonId || !createName.trim()) return
         const remoteUrl = createRepoRemoteUrl.trim()
         const identity = createRepoIdentity.trim()
         if (!remoteUrl && !identity) return
+        // Double-submit guard: a second click must not start a parallel create.
+        if (creating) return
+        setCreating(true)
+        setCreateWarning(null)
         try {
-            const planRaw = await sendCommand(targetDaemonId, 'plan_mesh_onboarding', {
-                workspace: newMeshWorkspace || undefined,
-                operation: 'auto',
+            const outcome = await runMeshCreateSequence({
+                targetDaemonId,
+                name: createName,
+                repoRemoteUrl: remoteUrl,
+                repoIdentity: identity,
+                workspace: newMeshWorkspace,
+                attachWorkspace: features.createDaemonPicker,
+                machineId: selectedCreateDaemon?.machineId,
+                providerPriority: defaultProviderPriorityFromInventory(createPickerProviders),
                 meshInventory: meshes,
+                sendCommand,
+                unwrapResult,
             })
-            const plan = unwrapResult(planRaw)
-            setCreateOnboardingPlan(plan)
-            if (plan?.success === false) {
-                throw new Error(`${plan.code || 'onboarding_blocked'}: ${plan.error}${plan.action ? ` ${plan.action}` : ''}`)
-            }
-            if (plan?.plan?.kind !== 'create_mesh_and_onboard') {
-                throw new Error(plan?.plan?.summary || 'A compatible mesh already exists; add this workspace to it instead of creating a duplicate mesh.')
-            }
-            const payload: any = { name: createName.trim() }
-            if (remoteUrl || plan?.discovery?.origin?.urls?.[0]) payload.repoRemoteUrl = remoteUrl || plan.discovery.origin.urls[0]
-            if (identity || plan?.discovery?.repoIdentity) payload.repoIdentity = identity || plan.discovery.repoIdentity
-            if (plan?.discovery?.defaultBranch) payload.defaultBranch = plan.discovery.defaultBranch
-            const raw = await sendCommand(targetDaemonId, 'create_mesh', payload)
-            const result = unwrapResult(raw)
-            if (result?.success === false) throw new Error(result.error || 'Create failed')
-            const meshId = typeof result?.mesh?.id === 'string' ? result.mesh.id : ''
-            if (meshId && features.createDaemonPicker && newMeshWorkspace) {
-                const addRaw = await sendCommand(targetDaemonId, 'add_mesh_node', {
-                    meshId,
-                    daemonId: targetDaemonId,
-                    machineId: selectedCreateDaemon?.machineId,
-                    workspace: plan?.discovery?.repoRoot || newMeshWorkspace,
-                    repoRoot: plan?.discovery?.repoRoot,
-                    isLocalWorktree: plan?.discovery?.isLinkedWorktree === true,
-                    role: 'host',
-                    providerPriority: defaultProviderPriorityFromInventory(createPickerProviders),
-                })
-                const addResult = unwrapResult(addRaw)
-                if (addResult?.success === false) throw new Error(addResult.error || 'Mesh created but failed to attach workspace')
+            if (outcome.plan !== null) setCreateOnboardingPlan(outcome.plan)
+            if (outcome.warning) setCreateWarning(outcome.warning)
+            if (!outcome.meshCreated) {
+                setError(outcome.error || 'Create failed')
+                return
             }
             setShowCreate(false)
             setCreateName('')
@@ -231,8 +357,10 @@ export function useMeshList({
             setCreateRepoRemoteUrl('')
             setNewMeshWorkspace('')
             await loadMeshes()
-            if (result?.mesh?.id) setSelectedMeshId(result.mesh.id)
-        } catch (e: any) { setError(e?.message || 'Create failed') }
+            if (outcome.meshId) setSelectedMeshId(outcome.meshId)
+        } finally {
+            setCreating(false)
+        }
     }
 
     async function handleDelete(meshId: string) {
@@ -254,6 +382,7 @@ export function useMeshList({
         setCreateName('')
         setCreateRepoIdentity('')
         setCreateRepoRemoteUrl('')
+        setCreateWarning(null)
     }
 
     return {
@@ -268,6 +397,9 @@ export function useMeshList({
         // create form
         showCreate,
         setShowCreate,
+        creating,
+        createWarning,
+        setCreateWarning,
         createName,
         setCreateName,
         createRepoIdentity,

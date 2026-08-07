@@ -39,6 +39,15 @@ interface Props {
     createPickerWorkspaces: Array<{ id?: string; path: string; label?: string | null }>
     createOnboardingPlan: any
     createPlanLoading: boolean
+    /** True while a create is in flight — blocks double-submit. */
+    creating: boolean
+    /**
+     * Non-fatal create outcome: the mesh WAS created but attaching its first
+     * workspace failed. Rendered as a warning next to the (now present) mesh, never
+     * as a create failure.
+     */
+    createWarning: string | null
+    onDismissCreateWarning: () => void
 
     onSelectMesh: (id: string) => void
     onCreate: () => void
@@ -67,6 +76,9 @@ export function MeshListView({
     createPickerWorkspaces,
     createOnboardingPlan,
     createPlanLoading,
+    creating,
+    createWarning,
+    onDismissCreateWarning,
     onSelectMesh,
     onCreate,
     onCancelCreate,
@@ -93,6 +105,7 @@ export function MeshListView({
                 </AlertBanner>
             )}
             {error && <AlertBanner variant="error" onDismiss={onDismissError} className="mb-4">{error}</AlertBanner>}
+            {createWarning && <AlertBanner variant="warning" onDismiss={onDismissCreateWarning} className="mb-4">{createWarning}</AlertBanner>}
 
             {showCreate && (
                 <Section className="mb-5 border-accent/40 animate-[fadeIn_0.3s_ease-out]">
@@ -163,10 +176,10 @@ export function MeshListView({
 
                     <div className="flex gap-2 mt-3">
                         <button className="btn btn-primary btn-sm" onClick={onCreate}
-                            disabled={createPlanLoading || createOnboardingPlan?.success === false || (createOnboardingPlan?.success === true && createOnboardingPlan?.plan?.kind !== 'create_mesh_and_onboard') || !createName.trim() || (!createRepoRemoteUrl.trim() && !createRepoIdentity.trim()) || (features.createDaemonPicker && (!newMeshDaemonId || !newMeshWorkspace))}>
-                            {t('repoMesh.list.create')}
+                            disabled={creating || createPlanLoading || createOnboardingPlan?.success === false || (createOnboardingPlan?.success === true && createOnboardingPlan?.plan?.kind !== 'create_mesh_and_onboard') || !createName.trim() || (!createRepoRemoteUrl.trim() && !createRepoIdentity.trim()) || (features.createDaemonPicker && (!newMeshDaemonId || !newMeshWorkspace))}>
+                            {creating ? t('repoMesh.list.creating') : t('repoMesh.list.create')}
                         </button>
-                        <button className="btn btn-secondary btn-sm" onClick={onCancelCreate}>{t('repoMesh.list.cancel')}</button>
+                        <button className="btn btn-secondary btn-sm" onClick={onCancelCreate} disabled={creating}>{t('repoMesh.list.cancel')}</button>
                     </div>
                 </Section>
             )}
