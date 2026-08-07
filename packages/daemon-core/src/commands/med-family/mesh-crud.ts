@@ -1093,6 +1093,9 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             }
 
             let worktreeCleanup: Record<string, unknown> | undefined;
+            // Set only when the worktree was removed by its owning remote daemon and
+            // this coordinator is reconciling its own membership copy afterwards.
+            let remoteForwardedResult: Record<string, unknown> | undefined;
             if (node?.isLocalWorktree) {
                 const nodeDaemonId = typeof node.daemonId === 'string' ? node.daemonId.trim() : undefined;
                 // daemonIdsEquivalent: an equivalent-form daemonId is this machine —
@@ -1106,7 +1109,36 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                         ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
                         _meshDirectDispatch: true,
                     });
-                    return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
+                    const forwardedResult = (forwarded ?? { success: false, error: 'no response from remote node' }) as Record<string, unknown>;
+                    // MESH-REMOTE-REMOVE-MEMBERSHIP-DESYNC: the owning daemon ran this
+                    // same handler and has already fixed ITS meshes.json. What it cannot
+                    // do is fix OUR copy — this coordinator holds an independent
+                    // membership record for the same node. Returning here (as this code
+                    // used to) skipped the shared membership block below entirely, so the
+                    // node stayed in the coordinator's meshes.json / inline cache and
+                    // reappeared on the next mesh_status. Any in-memory splice a caller
+                    // applied (e.g. mcp-server's optimistic one) was silently undone by
+                    // the next read from the untouched persistent layer.
+                    //
+                    // Only the COORDINATOR-side membership is reconciled here; we never
+                    // re-instruct the remote daemon, whose own removal already succeeded.
+                    //
+                    // Gating on explicit success: a forwarded failure (refusal, dirty
+                    // worktree, transport error, no response) means the node is still
+                    // alive on the owning machine. Splicing it out of the coordinator's
+                    // membership then would hide a node that genuinely still exists —
+                    // strictly worse than the desync we are fixing, because the operator
+                    // loses the handle needed to retry. `removed !== false` mirrors the
+                    // local path's own treatment of an already-absent node as removed.
+                    const forwardedRemoved = forwardedResult.success === true && forwardedResult.removed !== false;
+                    if (!forwardedRemoved) return forwardedResult as CommandRouterResult;
+                    // Fall through to the shared membership/ledger/cache-invalidation
+                    // block with the remote daemon's own cleanup detail preserved, so
+                    // local and forwarded removals converge on identical bookkeeping.
+                    remoteForwardedResult = forwardedResult;
+                    worktreeCleanup = forwardedResult.worktreeCleanup !== null && typeof forwardedResult.worktreeCleanup === 'object'
+                        ? forwardedResult.worktreeCleanup as Record<string, unknown>
+                        : undefined;
                 }
                 const cleanupResult = await ctx.cleanupLocalWorktreeNode({ mesh, node, nodeId, force: args?.force === true });
                 // De-gating: membership removal is NOT gated on the worktree
@@ -1197,6 +1229,10 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                         nodeId,
                         payload: {
                             worktree: !!node?.isLocalWorktree,
+                            // Distinguish a removal executed by a remote owning daemon
+                            // (this entry records only the coordinator-side membership
+                            // reconciliation) from a fully local one.
+                            ...(remoteForwardedResult ? { removedByRemoteDaemon: true } : {}),
                             sessionCleanupMode,
                             workspace: typeof node?.workspace === 'string' ? node.workspace : undefined,
                             daemonId: typeof node?.daemonId === 'string' ? node.daemonId : undefined,
@@ -1240,6 +1276,10 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                     + `Run mesh_cleanup_sessions with mode:'stop_and_delete' and sessionIds:[${skippedLiveSessionIds.map(id => `'${id}'`).join(', ')}] to release them.`
                 : undefined;
             return {
+                // Remote-forwarded removal: start from the owning daemon's own response
+                // so its detail fields survive, then overlay this coordinator's
+                // membership bookkeeping (removed/ledger/cache) computed above.
+                ...(remoteForwardedResult ?? {}),
                 success: true,
                 removed,
                 ...(residueWarning ? { residueWarning } : {}),
