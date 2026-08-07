@@ -17,6 +17,20 @@ import {
     type JsonRecord,
 } from '@adhdev/mesh-shared'
 
+/**
+ * `daemon_mach_1b46842a…` → `mach_1b46842a` — same truncation shape as
+ * meshSurfaceHelpers.ts's shortMachineKey, duplicated here rather than
+ * imported: this file is individually whitelisted into web-cloud's narrow
+ * tsconfig.app.json `include` list (a consumer-boundary leaf that otherwise
+ * only depends on @adhdev/daemon-core / @adhdev/mesh-shared), and importing
+ * a src-internal web-core file would pull its whole transitive graph into
+ * that allowlist.
+ */
+function shortMachineKey(machineKey: string): string {
+    const core = machineKey.replace(/^(daemon_|standalone_)/, '')
+    return core.length <= 20 ? core : `${core.slice(0, 17)}…`
+}
+
 // JSON primitives, git-status normalizers (normalizeGitStatus / readGitSubmodules /
 // hasGitStatusEvidence / scoreGitStatusCandidate / pickBestTransitGitStatus), the
 // upstream-freshness score, and the session normalizer all moved to
@@ -247,7 +261,13 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
 
     return {
         nodeId,
-        machineLabel: readString(record.machineLabel, record.machine_label, record.hostname, record.daemonId, record.daemon_id, record.machineId, record.machine_id, nodeId) || nodeId,
+        // No named field (nickname/hostname) present → fall back to a SHORT id
+        // (shortMachineKey), never the raw full-length daemonId/machineId/nodeId
+        // hash. A raw hash reads as broken UI ("what is daemon_mach_4462a753...?"),
+        // while the short form still lets an operator tell two unnamed machines
+        // apart — see resolveMachineLabel's identical raw-id-carries-no-info logic.
+        machineLabel: readString(record.machineLabel, record.machine_label, record.hostname)
+            || shortMachineKey(readString(record.daemonId, record.daemon_id, record.machineId, record.machine_id, nodeId) || nodeId),
         workspace: readString(record.workspace, git?.workspace) || '',
         ...(readString(record.repoRoot, record.repo_root, git?.repoRoot) ? { repoRoot: readString(record.repoRoot, record.repo_root, git?.repoRoot) } : {}),
         ...(readString(record.daemonId, record.daemon_id) ? { daemonId: readString(record.daemonId, record.daemon_id) } : {}),
