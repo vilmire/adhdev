@@ -762,6 +762,33 @@ const ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS = 25_000;
 // evidence) resets/bypasses the grace — see recoverStrandedAssignedDispatches.
 const RECLAIM_UNKNOWN_GRACE_TICKS = 3;
 
+// QUEUE-HOLD-HARD-DEADLINE: the absolute ceiling on how long a row may sit 'assigned'
+// while an UNBOUNDED hold gate keeps deferring its reclaim. The gates this bounds
+// (live awaiting_approval/awaiting_choice, an unresolved held waiting_* suspension,
+// and the RC.20 active-attempt-stage gate) all hold on a LIVE signal and never accrue
+// the UNKNOWN streak — so if that signal is itself stale (the worker finished but the
+// queue row's status write was lost: turnStage 'completed' while the row stays
+// 'assigned'), the row is held FOREVER and, because hasActiveNodeAssignment reads it,
+// the whole node stops claiming any further task.
+//
+// Measured live 2026-08-07 on a linux node: task 4c0fe026 held 116min and 0452c30f
+// held 55min in exactly this state, each time blocking every subsequent claim on that
+// node (autoLaunch skipped with node_has_active_assignment) until the coordinator
+// mistook it for a slow node.
+//
+// 90min is deliberately conservative — 6x DELIVERED_NO_TURN_DEADLINE_MS (15min) and
+// 3x ZOMBIE_ASSIGNED_MIN_AGE_MS (30min), comfortably above both the longest realistic
+// single worker turn and a genuine human approval wait, so this NEVER pre-empts a
+// legitimate hold; it only guarantees the hold is finite. Measured against the row's
+// dispatchTimestamp (the same anchor every other deadline in this phase uses).
+const QUEUE_HOLD_HARD_DEADLINE_MS = 90 * 60_000;
+
+// QUEUE-HOLD-HARD-DEADLINE audit dedupe, keyed `${meshId}::${taskId}::${gate}`. The ceiling
+// yield itself is unconditional every tick; this only suppresses repeat log/ledger records
+// while the reclaim converges. Pruned alongside the streak maps to the currently-assigned
+// rows, so it cannot grow unbounded and a re-used task id audits afresh.
+const queueHoldHardDeadlineAudited = new Set<string>();
+
 // Per-row consecutive-UNKNOWN streak for delivered-no-turn reclaim, keyed `${meshId}::${taskId}`.
 // In-memory (per process); pruned each pass to the set of currently-assigned rows so a
 // completed/reclaimed/claimed-elsewhere row's counter is dropped (no unbounded growth).
@@ -802,6 +829,7 @@ export function __resetReclaimUnknownStreakForTests(): void {
     deliveredNoTurnUnknownStreak.clear();
     deliveredUnconsumedUnknownStreak.clear();
     assignedIdleFinalAssistantSince.clear();
+    queueHoldHardDeadlineAudited.clear();
 }
 
 // APPROVAL-INBOX-BLINDSPOT (Fix A.3): true when the assigned row's bound session is, per the
@@ -829,6 +857,71 @@ function assignedRowLiveStatusIsAwaitingApproval(
     } catch {
         return false;
     }
+}
+
+/**
+ * QUEUE-HOLD-HARD-DEADLINE: the single arbiter for whether an unbounded hold gate has
+ * exhausted its absolute ceiling. Every caller is a gate that would otherwise `continue`
+ * on a LIVE signal without ever accruing the bounded UNKNOWN streak — so this is the only
+ * thing standing between a stale live signal and an infinite hold.
+ *
+ * Returns true on EVERY tick past QUEUE_HOLD_HARD_DEADLINE_MS (measured from the row's
+ * dispatch) — the yield itself must not be one-shot, or a row whose reclaim needs several
+ * ticks (the approval gate falls into the 3-tick UNKNOWN grace) would be re-held on tick 2.
+ * The AUDIT record, by contrast, is emitted once per (task, gate) per process: a warn log
+ * plus a `queue_hold_hard_deadline` ledger entry naming the gate, so the next occurrence is
+ * diagnosable from the ledger alone rather than re-derived from symptoms (the failure mode
+ * that made the 116min stranding read as "the linux node is slow") — without the repeated
+ * entries that spamming every tick would produce.
+ *
+ * Deliberately NOT a cancellation of the held state: the caller falls through to its
+ * ordinary reclaim path, which is the same bounded recovery a proven-dead worker gets.
+ */
+function queueHoldHardDeadlineExceeded(
+    meshId: string,
+    row: { id: string; assignedNodeId?: string; assignedSessionId?: string; assignedProviderType?: string },
+    gate: 'live_awaiting_approval' | 'held_suspension' | 'active_attempt_stage',
+    dispatchedAtMs: number,
+    nowMs: number,
+    detail?: string,
+): boolean {
+    const heldMs = nowMs - dispatchedAtMs;
+    if (!Number.isFinite(heldMs) || heldMs < QUEUE_HOLD_HARD_DEADLINE_MS) return false;
+    // Audit once per (mesh, task, gate) — the yield above is unconditional, only the record
+    // is deduped. Pruned with the streak maps so a re-used task id records again.
+    const auditKey = `${meshId}::${row.id}::${gate}`;
+    if (queueHoldHardDeadlineAudited.has(auditKey)) return true;
+    queueHoldHardDeadlineAudited.add(auditKey);
+    const heldMin = Math.round(heldMs / 60_000);
+    LOG.warn('MeshReconcile', `Queue-hold HARD DEADLINE exceeded for task ${row.id} on mesh ${meshId}: `
+        + `gate '${gate}'${detail ? ` (${detail})` : ''} held the row 'assigned' for ${heldMin}min `
+        + `(> ${Math.round(QUEUE_HOLD_HARD_DEADLINE_MS / 60_000)}min ceiling) on node=${row.assignedNodeId ?? '?'} `
+        + `session=${row.assignedSessionId ?? '?'} — the hold signal is presumed stale (a lost queue-status write), `
+        + `forcing the bounded reclaim so the node can claim again`);
+    try {
+        appendLedgerEntry(meshId, {
+            kind: 'queue_hold_hard_deadline',
+            nodeId: row.assignedNodeId,
+            sessionId: row.assignedSessionId,
+            providerType: row.assignedProviderType,
+            payload: {
+                taskId: row.id,
+                reason: 'queue_hold_hard_deadline',
+                gate,
+                heldMs,
+                ceilingMs: QUEUE_HOLD_HARD_DEADLINE_MS,
+                ...(detail ? { detail } : {}),
+            },
+        });
+    } catch { /* best-effort audit record — the reclaim below still proceeds */ }
+    traceMeshEventStage('queue_hold_hard_deadline', {
+        taskId: row.id,
+        sessionId: row.assignedSessionId,
+        nodeId: row.assignedNodeId,
+        meshId,
+        event: 'agent:generating_completed',
+    }, `${gate} held ${heldMin}min > ceiling — forcing reclaim`);
+    return true;
 }
 
 /**
@@ -1224,6 +1317,13 @@ async function recoverStrandedAssignedDispatches(
     for (const key of [...assignedIdleFinalAssistantSince.keys()]) {
         if (key.startsWith(meshKeyPrefix) && !assignedKeys.has(key)) assignedIdleFinalAssistantSince.delete(key);
     }
+    // QUEUE-HOLD-HARD-DEADLINE audit keys carry a trailing `::${gate}`, so match on the
+    // task prefix rather than the exact assigned key.
+    for (const key of [...queueHoldHardDeadlineAudited]) {
+        if (!key.startsWith(meshKeyPrefix)) continue;
+        const taskKey = key.slice(0, key.lastIndexOf('::'));
+        if (!assignedKeys.has(taskKey)) queueHoldHardDeadlineAudited.delete(key);
+    }
     for (const row of assigned) {
         // RESTART-REBOUND ENVELOPE: re-derive a rebound LOCAL worker's lost
         // in-memory mesh envelope from the durable row + current attempt BEFORE
@@ -1513,12 +1613,17 @@ async function recoverStrandedAssignedDispatches(
                 }
                 if (verdict === 'IDLE_CONFIRMED') {
                     deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
-                } else if (assignedRowLiveStatusIsAwaitingApproval(mesh, row.assignedNodeId, evidenceSessionId)) {
+                } else if (assignedRowLiveStatusIsAwaitingApproval(mesh, row.assignedNodeId, evidenceSessionId)
+                    && !queueHoldHardDeadlineExceeded(meshId, row, 'live_awaiting_approval', dispatchedAtMs, nowMs, 'short_redrive')) {
                     // APPROVAL-INBOX-BLINDSPOT (Fix A.3): the UNKNOWN (remote) worker is live and
                     // sitting at an approval modal — it is legitimately paused awaiting the
                     // coordinator's mesh_approve, NOT a lost delivery. HOLD without advancing the
                     // streak so a genuine approval-blocked worker is never re-driven out from
                     // under its pending approval.
+                    // QUEUE-HOLD-HARD-DEADLINE: bounded above. This gate reads a LIVE node snapshot
+                    // and never accrues the UNKNOWN streak, so a snapshot that is itself stale would
+                    // hold the row (and the node) forever. Past the ceiling the guard yields and the
+                    // ordinary redrive below runs.
                     traceMeshEventDrop('short_redrive_deferred_awaiting_approval', {
                         taskId: row.id,
                         sessionId: row.assignedSessionId,
@@ -1568,7 +1673,14 @@ async function recoverStrandedAssignedDispatches(
                     sessionProvenDead: verdict === 'UNKNOWN', // the bounded UNKNOWN grace just exhausted above
                     nowMs,
                 });
-                if (suspensionGate.kind === 'recovered' || suspensionGate.kind === 'blocked') {
+                // QUEUE-HOLD-HARD-DEADLINE: a 'blocked' gate holds indefinitely while the session
+                // stays UNKNOWN-but-not-proven-dead. Past the ceiling, stop honouring the block and
+                // let the redrive below close the attempt. ('recovered' is NOT bounded away — it is
+                // a positive resolution that advances the FSM, not an open-ended hold.)
+                const suspensionHoldExpired = suspensionGate.kind === 'blocked'
+                    && queueHoldHardDeadlineExceeded(meshId, row, 'held_suspension', dispatchedAtMs, nowMs,
+                        `short_redrive; stages ${suspensionGate.stages.join('/')}`);
+                if (!suspensionHoldExpired && (suspensionGate.kind === 'recovered' || suspensionGate.kind === 'blocked')) {
                     deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
                     traceMeshEventDrop(suspensionGate.kind === 'recovered' ? 'suspension_consumed_recovered' : 'redrive_blocked_by_suspension', {
                         taskId: row.id,
@@ -1730,13 +1842,18 @@ async function recoverStrandedAssignedDispatches(
             if (verdict === 'IDLE_CONFIRMED') {
                 deliveredNoTurnUnknownStreak.delete(streakKey);
                 reclaimReason = 'delivered_no_turn_deadline';
-            } else if (assignedRowLiveStatusIsAwaitingApproval(mesh, row.assignedNodeId, evidenceSessionId)) {
+            } else if (assignedRowLiveStatusIsAwaitingApproval(mesh, row.assignedNodeId, evidenceSessionId)
+                && !queueHoldHardDeadlineExceeded(meshId, row, 'live_awaiting_approval', dispatchedAtMs, nowMs, 'delivered_no_turn')) {
                 // APPROVAL-INBOX-BLINDSPOT (Fix A.3): the UNKNOWN (remote) worker is live and
                 // sitting at an approval modal — legitimately paused awaiting the coordinator's
                 // mesh_approve, NOT a delivered-but-lost completion. HOLD without advancing the
                 // streak so a genuine approval-blocked worker is never reclaimed at the
                 // delivered-no-turn deadline. The reclaim resumes normally once the approval
                 // clears (the live status leaves waiting_approval).
+                // QUEUE-HOLD-HARD-DEADLINE: bounded above — see the short-redrive twin. Past the
+                // ceiling this guard yields and control falls into the UNKNOWN branch below, so the
+                // recovery is the ORDINARY bounded reclaim (streak grace still applies), never an
+                // immediate tear-off.
                 traceMeshEventDrop('reclaim_deferred_awaiting_approval', {
                     taskId: row.id,
                     sessionId: row.assignedSessionId,
@@ -1781,7 +1898,12 @@ async function recoverStrandedAssignedDispatches(
                 sessionProvenDead: verdict === 'UNKNOWN', // the bounded UNKNOWN grace just exhausted above
                 nowMs,
             });
-            if (suspensionGate.kind === 'recovered' || suspensionGate.kind === 'blocked') {
+            // QUEUE-HOLD-HARD-DEADLINE: bounded above — see the short-redrive twin. Only the
+            // open-ended 'blocked' hold is bounded; 'recovered' resolves the FSM and stands.
+            const suspensionHoldExpired = suspensionGate.kind === 'blocked'
+                && queueHoldHardDeadlineExceeded(meshId, row, 'held_suspension', dispatchedAtMs, nowMs,
+                    `delivered_no_turn; stages ${suspensionGate.stages.join('/')}`);
+            if (!suspensionHoldExpired && (suspensionGate.kind === 'recovered' || suspensionGate.kind === 'blocked')) {
                 deliveredNoTurnUnknownStreak.delete(streakKey);
                 traceMeshEventDrop(suspensionGate.kind === 'recovered' ? 'suspension_consumed_recovered' : 'redrive_blocked_by_suspension', {
                     taskId: row.id,
@@ -1881,9 +2003,16 @@ async function recoverStrandedAssignedDispatches(
                 try { return store.getCurrentTurnAttempt(meshId, row.id); } catch { return null; }
             })();
             const attemptStage = readNonEmptyString(currentAttempt?.stage);
+            // QUEUE-HOLD-HARD-DEADLINE: this gate holds on a DURABLE attempt stage that only the
+            // completion path clears — precisely the write that goes missing in the observed
+            // defect. It never accrues the UNKNOWN streak, so a stage stuck at 'generating' /
+            // 'waiting_*' pins the row (and the node) indefinitely. Past the ceiling, yield to the
+            // bounded reclaim below.
             if (currentAttempt && !currentAttempt.terminalOutcome
                 && (attemptStage === 'generating' || attemptStage === 'waiting_approval'
-                    || attemptStage === 'waiting_choice' || attemptStage === 'finalizing')) {
+                    || attemptStage === 'waiting_choice' || attemptStage === 'finalizing')
+                && !queueHoldHardDeadlineExceeded(meshId, row, 'active_attempt_stage', dispatchedAtMs, nowMs,
+                    `attempt ${currentAttempt.attemptId} stage ${attemptStage}`)) {
                 deliveredNoTurnUnknownStreak.delete(streakKey);
                 noteRedriveBlocked('active_attempt_stage');
                 traceMeshEventDrop('redrive_blocked_active_attempt', {

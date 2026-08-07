@@ -113,6 +113,15 @@ export type MeshLedgerKind =
     // unresolved entry within the dedupe window suppresses the repeat).
     // payload: { worktreePath, branch?, head?, reason: 'no_matching_live_node', state: 'cleanup_candidate' }
     | 'worktree_cleanup_candidate'
+    // QUEUE-HOLD-HARD-DEADLINE: an unbounded reconcile hold gate (live
+    // awaiting_approval/awaiting_choice, an unresolved held waiting_* suspension, or the
+    // RC.20 active-attempt-stage gate) kept a row 'assigned' past the absolute ceiling and
+    // was forced to yield to the ordinary bounded reclaim. Deliberately its OWN kind rather
+    // than a task_reclaimed: the breach is a diagnostic about WHICH gate went stale, and
+    // folding it into task_reclaimed would inflate reclaim counts with non-reclaims. Emitted
+    // at most once per (task, gate) per process — see queueHoldHardDeadlineExceeded.
+    // payload: { taskId, reason: 'queue_hold_hard_deadline', gate, heldMs, ceilingMs, detail? }
+    | 'queue_hold_hard_deadline'
     ;
 
 export interface MeshLedgerEntry {
@@ -148,6 +157,7 @@ const TASK_LIFECYCLE_LEDGER_KINDS: ReadonlySet<MeshLedgerKind> = new Set<MeshLed
     'task_question_pending',
     'p2p_dispatch_failed',
     'dispatch_duplicate_rebound',
+    'queue_hold_hard_deadline',
 ]);
 
 /** Resolve the taskId for a ledger entry, preferring the base field and falling

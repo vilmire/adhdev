@@ -4675,6 +4675,200 @@ describe('runMeshReconcileTick', () => {
         cleanup(meshId)
       }
     })
+
+    // ── QUEUE-HOLD-HARD-DEADLINE ────────────────────────────────────────────────
+    // The unbounded hold gates (live awaiting_approval/awaiting_choice, an unresolved
+    // held waiting_* suspension, the RC.20 active-attempt-stage gate) all defer on a
+    // LIVE signal and never accrue the UNKNOWN streak. When that signal is itself stale
+    // — the worker finished but the queue-status write was lost — the row sits 'assigned'
+    // forever and hasActiveNodeAssignment locks the whole node out of claiming anything
+    // else (measured live 2026-08-07: 116min and 55min). QUEUE_HOLD_HARD_DEADLINE_MS
+    // (90min) is the absolute ceiling: past it every gate yields to the ordinary bounded
+    // reclaim and records WHICH gate blew the ceiling.
+    const QUEUE_HOLD_HARD_DEADLINE_MS = 90 * 60_000
+    // Comfortably past the ceiling — the 116min live stranding.
+    const PAST_HARD_DEADLINE_MS = 116 * 60_000
+    // Past the 15min delivered-no-turn deadline (so the hold gates are reached at all)
+    // but well INSIDE the 90min ceiling — the "normal hold still honoured" case.
+    const WITHIN_HARD_DEADLINE_MS = 20 * 60_000
+
+    /**
+     * Drive the turn ledger to a NONTERMINAL attempt wedged at stage 'generating' — the exact
+     * state the RC.20 active-attempt gate holds on, and the one the observed defect leaves
+     * behind when the completion write that would clear it is lost.
+     */
+    function wedgeAttemptAtGenerating(meshId: string, nodeId: string, taskId: string, sessionId: string) {
+      const store = MeshRuntimeStore.getInstance()
+      const entry = store.findQueueEntryById(meshId, taskId)!
+      const { attempt } = openTurnAttempt({ meshId, taskId, dispatchNonce: entry.dispatchNonce ?? 0, nodeId, sessionId })
+      entry.attemptId = attempt.attemptId
+      store.updateQueueEntry(entry)
+      recordTurnAck({ meshId, taskId, kind: 'delivered', attemptId: attempt.attemptId, sessionId })
+      recordTurnAck({ meshId, taskId, kind: 'consumed', attemptId: attempt.attemptId, sessionId })
+      recordTurnStage({ meshId, taskId, stage: 'generating', attemptId: attempt.attemptId, sessionId })
+      // Precondition of both attempt-stage cases: the gate only holds a NONTERMINAL attempt
+      // sitting on a live-turn stage. If this drifts, the tests below assert nothing.
+      const wedged = store.getCurrentTurnAttempt(meshId, taskId)!
+      expect(wedged.stage).toBe('generating')
+      expect(wedged.terminalOutcome).toBeFalsy()
+      return attempt
+    }
+
+    /** A remote worker (no local instance → UNKNOWN verdict) whose live node snapshot is at an approval modal. */
+    function awaitingApprovalFixture(meshId: string, nodeId: string, sessionId: string, ageMs: number) {
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+      backdateDispatch(meshId, claimed.id, ageMs)
+      createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+      const readChat = vi.fn(async () => ({ success: true, status: 'waiting_approval', messages: [] }))
+      const components = {
+        instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+        commandHandler: { handle: readChat },
+      } as any
+      const mesh = {
+        id: meshId,
+        nodes: [{
+          id: nodeId,
+          workspace: '/repo/w',
+          sessions: [{ id: sessionId, providerType: 'antigravity-cli', status: 'waiting_approval' }],
+        }],
+      }
+      meshConfigMocks.listMeshes.mockReturnValue([mesh])
+      meshConfigMocks.getMesh.mockReturnValue(mesh)
+      return { claimed, components, readChat }
+    }
+
+    // CASE 3 (normal hold preserved): a genuine approval wait INSIDE the ceiling must still
+    // hold on every tick, exactly as before this fix. This is the guard against the hard
+    // deadline being set so aggressive that it cancels legitimate approval waits.
+    it('QUEUE-HOLD-HARD-DEADLINE: an awaiting_approval hold WITHIN the ceiling is still honoured on every tick', async () => {
+      const meshId = `mesh_hard_deadline_within_${Date.now()}`
+      try {
+        const { claimed, components } = awaitingApprovalFixture(meshId, 'node_w', 'sess-approval-within', WITHIN_HARD_DEADLINE_MS)
+
+        // Far more ticks than the 3-tick UNKNOWN grace — the gate must hold on all of them.
+        for (let i = 0; i < 5; i++) await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe('sess-approval-within')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+        // Nothing recorded a hard-deadline breach — the ceiling was never reached.
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'queue_hold_hard_deadline')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    // CASE 2 (the fix): past the ceiling the same approval hold yields, the row is reclaimed,
+    // and the audit record names the gate that blew the ceiling.
+    it('QUEUE-HOLD-HARD-DEADLINE: an awaiting_approval hold PAST the ceiling is force-reclaimed and recorded', async () => {
+      const meshId = `mesh_hard_deadline_past_${Date.now()}`
+      try {
+        const { claimed, components } = awaitingApprovalFixture(meshId, 'node_w', 'sess-approval-past', PAST_HARD_DEADLINE_MS)
+
+        // The gate yields immediately, but the recovery is the ORDINARY bounded path — control
+        // falls into the UNKNOWN branch, so the 3-tick grace still applies before the reclaim.
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+
+        const entries = readLedgerEntries(meshId)
+        // The hard-deadline breach is recorded, naming the gate — this is what makes the next
+        // occurrence diagnosable from the ledger instead of being mistaken for a slow node.
+        // Recorded EXACTLY once despite the yield firing on all 3 ticks: the audit is deduped
+        // per (task, gate) so a multi-tick convergence does not spam the ledger.
+        const breach = entries.filter(e => e.kind === 'queue_hold_hard_deadline')
+        expect(breach).toHaveLength(1)
+        expect((breach[0].payload as any).gate).toBe('live_awaiting_approval')
+        expect((breach[0].payload as any).taskId).toBe(claimed.id)
+        expect((breach[0].payload as any).ceilingMs).toBe(QUEUE_HOLD_HARD_DEADLINE_MS)
+        expect((breach[0].payload as any).heldMs).toBeGreaterThanOrEqual(QUEUE_HOLD_HARD_DEADLINE_MS)
+        // The breach is its OWN kind, never folded into task_reclaimed — reclaim counts stay honest.
+        expect(entries.filter(e => e.kind === 'task_reclaimed').every(
+          e => (e.payload as any)?.reason !== 'queue_hold_hard_deadline',
+        )).toBe(true)
+        // And the row actually got reclaimed — the node is unblocked, not merely logged about.
+        expect(entries.some(
+          e => e.kind === 'task_reclaimed' && (e.payload as any)?.reason === 'reclaim_after_unknown_grace',
+        )).toBe(true)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    // CASE 2b: the RC.20 active-attempt-stage gate — the site matching the observed defect most
+    // directly. The durable attempt stage stays 'generating' because the completion write that
+    // would clear it is exactly what went missing, so this gate pins the row indefinitely.
+    it('QUEUE-HOLD-HARD-DEADLINE: an active-attempt-stage hold PAST the ceiling is force-reclaimed and recorded', async () => {
+      const meshId = `mesh_hard_deadline_attempt_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-attempt-stuck'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        backdateDispatch(meshId, claimed.id, PAST_HARD_DEADLINE_MS)
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+        // A durable attempt wedged at 'generating' — nonterminal, so the RC.20 gate holds it.
+        wedgeAttemptAtGenerating(meshId, nodeId, claimed.id, sessionId)
+
+        // Remote worker: no local instance (UNKNOWN) and the live node snapshot is NOT at an
+        // approval, so the approval gate is not what holds this row — the attempt stage is.
+        // The transcript read yields no terminal evidence, so nothing short-circuits earlier.
+        const readChat = vi.fn(async () => ({ success: true, status: 'generating', messages: [] }))
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w', sessions: [{ id: sessionId, status: 'idle' }] }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        for (let i = 0; i < 4; i++) await runMeshReconcileTick(components)
+
+        const breach = readLedgerEntries(meshId).filter(e => e.kind === 'queue_hold_hard_deadline')
+        expect(breach).toHaveLength(1)
+        expect((breach[0].payload as any).gate).toBe('active_attempt_stage')
+        expect((breach[0].payload as any).taskId).toBe(claimed.id)
+        // And the row actually got reclaimed — the node is unblocked, not merely logged about.
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(true)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    // CASE 3b (normal hold preserved, attempt-stage twin): the same wedged attempt stage INSIDE
+    // the ceiling must still suppress the reclaim — a genuinely long turn is not torn off.
+    it('QUEUE-HOLD-HARD-DEADLINE: an active-attempt-stage hold WITHIN the ceiling still suppresses the reclaim', async () => {
+      const meshId = `mesh_hard_deadline_attempt_within_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-attempt-working'
+      try {
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
+        backdateDispatch(meshId, claimed.id, WITHIN_HARD_DEADLINE_MS)
+        createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+        wedgeAttemptAtGenerating(meshId, nodeId, claimed.id, sessionId)
+
+        const readChat = vi.fn(async () => ({ success: true, status: 'generating', messages: [] }))
+        const components = {
+          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          commandHandler: { handle: readChat },
+        } as any
+        const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w', sessions: [{ id: sessionId, status: 'idle' }] }] }
+        meshConfigMocks.listMeshes.mockReturnValue([mesh])
+        meshConfigMocks.getMesh.mockReturnValue(mesh)
+
+        for (let i = 0; i < 5; i++) await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'queue_hold_hard_deadline')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
   })
 })
 
