@@ -1222,7 +1222,12 @@ export function assignFullGitSnapshot(entry: Record<string, unknown>, status: an
 // severity first); when the budget is exceeded the lowest-priority detailed nodes
 // degrade to the same minimal stub so even a mesh of all-noteworthy nodes can't
 // blow the cap. No node is ever dropped — only its detail level is reduced.
-export const COMPACT_DETAILED_NODES_BYTE_BUDGET = 9000;
+//
+// Raised 9000 -> 32000; see the sizing rationale on
+// COMPACT_NODES_TOTAL_BYTE_BUDGET below (measured 23-node zero-fold target).
+// One representative node per daemon is pinned ahead of this budget entirely
+// (pinnedRepresentativeNodeIds), so a machine node is never folded for bytes.
+export const COMPACT_DETAILED_NODES_BYTE_BUDGET = 32000;
 
 // Total byte budget for the whole compact node array (detail + minimal stubs).
 // Nodes that don't fit even as a stub are folded into a counts+id-list summary so
@@ -1231,14 +1236,25 @@ export const COMPACT_DETAILED_NODES_BYTE_BUDGET = 9000;
 //
 // This must leave headroom for the compact payload's FIXED top-level overhead
 // (branchConvergenceSummary, staleDaemonBuild* aggregates, activeWork*/ledger/
-// scheduling summaries, sourceOfTruth/hints — ~12KB with a large stale mesh) so the
-// whole compact string stays under the MCP token cap even for an all-noteworthy mesh
-// (the contract asserted by mesh-compact-payload-budget.test.ts). That top-level
-// overhead grew as compact aggregates were added, so 13000 here let a 12-node stale
-// mesh tip the whole payload to ~25.2KB — over the 25KB budget. 11500 restores the
-// margin (nodes + overhead ≈ 24KB) while still keeping the highest-severity nodes in
-// detail and every node id discoverable (array stub or foldedNodes.nodeIds).
-export const COMPACT_NODES_TOTAL_BYTE_BUDGET = 11500;
+// scheduling summaries, sourceOfTruth/hints) so the whole compact string stays
+// within the payload target even for an all-noteworthy mesh (the contract asserted
+// by mesh-compact-payload-budget.test.ts).
+//
+// Raised 11500 -> 40000 (with the detail budget 9000 -> 32000) to hit the operating
+// target of 20 worktrees + 3 machines = 23 nodes with ZERO folding. The old values
+// were sized against a 25KB self-imposed cap that dated from a live mesh_status of
+// ~76KB; there is no hard byte limit in the MCP SDK or the IPC transport, so that
+// number was cost self-regulation, not a protocol constraint. Folding a node is far
+// more expensive than the bytes it saves — a folded node loses its daemonId, so a
+// whole machine could disappear from a deploy roster.
+//
+// Chosen by measurement, not estimate. On a synthetic worst-case 23-node mesh (3
+// machines + 20 DIRTY worktrees, each with a stale daemon build and an out-of-sync
+// submodule), the zero-fold threshold is detail=30000/total=37000 at ~43.7KB;
+// 32000/40000 clears it with margin at 44,784B and still degrades gracefully (a
+// 30-node mesh folds 5 rather than blowing up). Realistic meshes — where most
+// worktrees are clean and therefore stubbed, not detailed — sit far below this.
+export const COMPACT_NODES_TOTAL_BYTE_BUDGET = 40000;
 
 
 // Byte budget for the whole compact `missions` array (live active/paused missions).
