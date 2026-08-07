@@ -88,17 +88,28 @@ type DashboardHeaderConnectionState = {
  * to yellow forever. The known trade-off is that a machine deliberately powered
  * off shows yellow while it is still within the TTL window; the N/M counter in
  * the subtitle exists so that state reads as information rather than as an error.
+ *
+ * `usesP2P` gates all of the above: standalone has no P2P layer, so its
+ * `p2pStates` is permanently `{}` — indistinguishable in shape from cloud's own
+ * transient "no daemon dialled yet" boot state. Inferring platform from the
+ * empty object would either strand standalone on yellow forever or flash cloud
+ * green before its first P2P attempt, so the platform passes `usesP2P`
+ * explicitly instead of it being inferred from `p2pStates`. When false,
+ * `isConnected` (the platform's own readiness flag) is authoritative and P2P
+ * counting is skipped entirely.
  */
 export function getDashboardHeaderConnectionState({
     wsStatus,
     isConnected,
     daemonCount,
     p2pStates = {},
+    usesP2P = true,
 }: {
     wsStatus: string;
     isConnected: boolean;
     daemonCount: number;
     p2pStates?: Record<string, string>;
+    usesP2P?: boolean;
 }): DashboardHeaderConnectionState {
     if (wsStatus !== 'connected') {
         return {
@@ -106,6 +117,14 @@ export function getDashboardHeaderConnectionState({
             titleKey: 'connection.disconnected',
             subtitleKey: null,
         };
+    }
+
+    if (daemonCount > 0 && !usesP2P) {
+        // Platform has no P2P layer (standalone) — its own readiness flag is
+        // the authoritative signal, same as the daemonCount===0 fallback below.
+        return isConnected
+            ? { tone: 'connected', titleKey: 'connection.connected', subtitleKey: null }
+            : { tone: 'limited', titleKey: 'connection.connectedToDashboard', subtitleKey: null };
     }
 
     const p2pValues = Object.values(p2pStates);
@@ -238,7 +257,7 @@ export default function DashboardHeader({
     onOpenMeshGraph,
 }: DashboardHeaderProps) {
     const { t } = useTranslation();
-    const { ides, p2pStates = {} } = useBaseDaemons();
+    const { ides, p2pStates = {}, usesP2P = true } = useBaseDaemons();
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
     const isAcpActive = !!activeConv && isAcpConv(activeConv);
     const meshGraphAvailable = !!activeConv?.daemonId && !!activeConv?.coordinator?.meshId
@@ -255,6 +274,7 @@ export default function DashboardHeader({
         isConnected,
         daemonCount: daemons.length,
         p2pStates,
+        usesP2P,
     });
     const connectionTitle = t(connectionState.titleKey);
     const statusText = connectionState.subtitleKey

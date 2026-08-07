@@ -514,6 +514,10 @@ export function StandaloneDaemonProvider({ children }: { children: ReactNode }) 
             wsStatus: wsConnStatus,
             isConnected: isConn,
             connectionStates: states,
+            // Standalone has no P2P layer at all — tell DashboardHeader so it
+            // treats an empty p2pStates as "not applicable" rather than "zero
+            // connected" (see getDashboardHeaderConnectionState in web-core).
+            usesP2P: false,
         }
     }, [wsConnStatus, knownDaemonId])
 

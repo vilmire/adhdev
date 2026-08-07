@@ -57,6 +57,12 @@ export interface BaseDaemonContextValue {
     isP2PActive?: boolean
     /** Per-daemon P2P connection state map */
     p2pStates?: Record<string, string>
+    /**
+     * Whether this platform has a P2P layer at all. Cloud uses P2P (default
+     * true); standalone has no P2P concept and sets this false so the header
+     * knows an empty `p2pStates` means "not applicable", not "zero connected".
+     */
+    usesP2P?: boolean
     /** User role for admin gating */
     userRole?: string
     /** Per-daemon P2P reconnect status (blocked after exhausting auto budget) */
@@ -88,6 +94,7 @@ const BaseDaemonCtx = createContext<BaseDaemonContextValue>({
     setUserName: () => {},
     isP2PActive: false,
     p2pStates: {},
+    usesP2P: true,
     userRole: undefined,
     connectionRetryStatuses: undefined,
 })
@@ -419,6 +426,7 @@ export interface ConnectionOverrides {
     connectionLoginUrl?: string
     isP2PActive?: boolean
     p2pStates?: Record<string, string>
+    usesP2P?: boolean
     userRole?: string
     /** Per-daemon P2P reconnect status (blocked after exhausting auto budget) */
     connectionRetryStatuses?: Record<string, { attempts: number; maxAttempts: number; blocked: boolean; nextRetryAt?: number }>
@@ -493,6 +501,7 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
         // Cloud-specific
         isP2PActive: co?.isP2PActive ?? false,
         p2pStates: co?.p2pStates ?? {},
+        usesP2P: co?.usesP2P ?? true,
         userRole: co?.userRole,
         connectionRetryStatuses: co?.connectionRetryStatuses,
         userName,
@@ -512,6 +521,7 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
         co?.connectionLoginUrl,
         co?.isP2PActive,
         co?.p2pStates,
+        co?.usesP2P,
         co?.userRole,
         co?.connectionRetryStatuses,
         userName,
