@@ -131,7 +131,8 @@ describe('DashboardHeader inbox notifications', () => {
     })).toEqual({
       tone: 'limited',
       titleKey: 'connection.connectedToDashboard',
-      subtitleKey: 'connection.connectingToMachine',
+      subtitleKey: 'connection.machinesConnectedCount',
+      subtitleParams: { connected: 0, total: 1 },
     })
 
     expect(getDashboardHeaderConnectionState({
@@ -146,27 +147,74 @@ describe('DashboardHeader inbox notifications', () => {
     })
   })
 
-  it('shows transitional machine connection copy only before any P2P connection is established', () => {
-    expect(getDashboardHeaderConnectionState({
-      wsStatus: 'connected',
-      isConnected: false,
-      daemonCount: 1,
-      p2pStates: { 'machine-1': 'connecting' },
-    }).subtitleKey).toBe('connection.connectingToMachine')
-
-    expect(getDashboardHeaderConnectionState({
+  // Green must mean "every visible machine is reachable", not "at least one is".
+  // These cases are the regression guard for the header showing green while part
+  // of the fleet was unreachable.
+  it('stays limited until every visible machine is connected over P2P', () => {
+    const partial = getDashboardHeaderConnectionState({
       wsStatus: 'connected',
       isConnected: true,
-      daemonCount: 1,
-      p2pStates: { 'machine-1': 'connected' },
-    }).subtitleKey).toBeNull()
+      daemonCount: 2,
+      p2pStates: { 'machine-1': 'connected', 'machine-2': 'connecting' },
+    })
+    expect(partial.tone).toBe('limited')
+    expect(partial.subtitleKey).toBe('connection.machinesConnectedCount')
+    expect(partial.subtitleParams).toEqual({ connected: 1, total: 2 })
 
+    // The regression that motivated this: the second machine had not been dialled
+    // yet, so it had no p2pStates key at all. The old rule required at least one
+    // 'connecting' peer to report a partial state, so this went straight to green.
+    const notDialledYet = getDashboardHeaderConnectionState({
+      wsStatus: 'connected',
+      isConnected: true,
+      daemonCount: 2,
+      p2pStates: { 'machine-1': 'connected' },
+    })
+    expect(notDialledYet.tone).toBe('limited')
+    expect(notDialledYet.subtitleParams).toEqual({ connected: 1, total: 2 })
+
+    const allConnected = getDashboardHeaderConnectionState({
+      wsStatus: 'connected',
+      isConnected: true,
+      daemonCount: 2,
+      p2pStates: { 'machine-1': 'connected', 'machine-2': 'connected' },
+    })
+    expect(allConnected.tone).toBe('connected')
+    expect(allConnected.subtitleKey).toBeNull()
+  })
+
+  it('reports a zero counter while no machine has connected yet', () => {
     expect(getDashboardHeaderConnectionState({
       wsStatus: 'connected',
       isConnected: false,
       daemonCount: 1,
       p2pStates: {},
-    }).subtitleKey).toBeNull()
+    })).toEqual({
+      tone: 'limited',
+      titleKey: 'connection.connectedToDashboard',
+      subtitleKey: 'connection.machinesConnectedCount',
+      subtitleParams: { connected: 0, total: 1 },
+    })
+  })
+
+  // Standalone has one implicit daemon, no P2P layer, and leaves isConnected at
+  // its `true` default — the machine-count branch must not drag it to yellow.
+  it('keeps the standalone default green when no daemons are enumerated', () => {
+    expect(getDashboardHeaderConnectionState({
+      wsStatus: 'connected',
+      isConnected: true,
+      daemonCount: 0,
+      p2pStates: {},
+    }).tone).toBe('connected')
+  })
+
+  it('reports disconnected regardless of how many machines are connected', () => {
+    expect(getDashboardHeaderConnectionState({
+      wsStatus: 'reconnecting',
+      isConnected: true,
+      daemonCount: 2,
+      p2pStates: { 'machine-1': 'connected', 'machine-2': 'connected' },
+    }).tone).toBe('disconnected')
   })
 
   it('renders the connection dot in the title row so it aligns with the Dashboard text baseline', () => {

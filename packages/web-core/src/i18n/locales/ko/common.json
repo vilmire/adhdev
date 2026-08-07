@@ -7,6 +7,7 @@
         "cancel": "취소"
     },
     "connection": {
+        "machinesConnectedCount": "머신 {{connected}}/{{total}}개 연결됨",
         "disconnected": "연결 끊김",
         "connected": "연결됨",
         "connectedToDashboard": "대시보드에 연결됨",

@@ -60,8 +60,35 @@ type DashboardHeaderConnectionState = {
     titleKey: string;
     /** i18n key for the connection subtitle, or null when absent. */
     subtitleKey: string | null;
+    /**
+     * Interpolation values for `subtitleKey`, when the subtitle is a counter.
+     * Present only on the partial-connection ('limited') tone.
+     */
+    subtitleParams?: { connected: number; total: number };
 };
 
+/**
+ * Resolve the header connection indicator.
+ *
+ * Green means *every* visible machine is reachable over P2P — not "at least one
+ * is". The distinction matters because the indicator is the only place the user
+ * learns that a machine they expect to be usable is not: with an any-one rule, a
+ * 2-machine account showed green while half the fleet was unreachable, and the
+ * failure only surfaced later as a command that did not run.
+ *
+ * The comparison deliberately ignores whether the unconnected machines have
+ * entered 'connecting' yet. The previous rule required `p2pConnecting > 0`, so a
+ * machine that had not yet been dialled at all — no key in `p2pStates` — counted
+ * as fine and the header went straight to green. Absence of a state is the least
+ * connected a machine can be, not the most.
+ *
+ * "Every machine" is scoped to `daemonCount`, the daemons currently in `ides`,
+ * i.e. those that have reported recently. Machines that stay offline age out of
+ * that list via the server's TTL, so a long-dead machine does not pin the header
+ * to yellow forever. The known trade-off is that a machine deliberately powered
+ * off shows yellow while it is still within the TTL window; the N/M counter in
+ * the subtitle exists so that state reads as information rather than as an error.
+ */
 export function getDashboardHeaderConnectionState({
     wsStatus,
     isConnected,
@@ -83,16 +110,28 @@ export function getDashboardHeaderConnectionState({
 
     const p2pValues = Object.values(p2pStates);
     const p2pConnected = p2pValues.filter(state => state === 'connected').length;
-    const p2pConnecting = p2pValues.filter(state => state === 'connecting' || state === 'new' || state === 'checking').length;
 
-    if (daemonCount > 0 && p2pConnecting > 0 && p2pConnected === 0) {
+    if (daemonCount > 0) {
+        if (p2pConnected >= daemonCount) {
+            return {
+                tone: 'connected',
+                titleKey: 'connection.connected',
+                subtitleKey: null,
+            };
+        }
         return {
             tone: 'limited',
             titleKey: 'connection.connectedToDashboard',
-            subtitleKey: 'connection.connectingToMachine',
+            // Counter rather than "Connecting to machine...": the partial state can
+            // persist (a machine that is simply off), so it has to say how many.
+            subtitleKey: 'connection.machinesConnectedCount',
+            subtitleParams: { connected: p2pConnected, total: daemonCount },
         };
     }
 
+    // No machines visible yet — fall back to the platform's own readiness flag.
+    // Standalone leaves `isConnected` at its `true` default and has no P2P layer,
+    // so this keeps its header green exactly as before.
     if (isConnected) {
         return {
             tone: 'connected',
@@ -218,7 +257,9 @@ export default function DashboardHeader({
         p2pStates,
     });
     const connectionTitle = t(connectionState.titleKey);
-    const statusText = connectionState.subtitleKey ? t(connectionState.subtitleKey) : null;
+    const statusText = connectionState.subtitleKey
+        ? t(connectionState.subtitleKey, connectionState.subtitleParams)
+        : null;
     const dotColor = connectionState.tone === 'connected'
         ? '#22c55e'
         : connectionState.tone === 'limited'

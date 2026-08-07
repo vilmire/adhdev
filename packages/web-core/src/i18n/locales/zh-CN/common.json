@@ -7,6 +7,7 @@
         "cancel": "取消"
     },
     "connection": {
+        "machinesConnectedCount": "已连接 {{connected}}/{{total}} 台机器",
         "disconnected": "已断开连接",
         "connected": "已连接",
         "connectedToDashboard": "已连接到仪表板",

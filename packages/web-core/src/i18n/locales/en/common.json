@@ -7,6 +7,7 @@
         "cancel": "Cancel"
     },
     "connection": {
+        "machinesConnectedCount": "{{connected}}/{{total}} machines connected",
         "disconnected": "Disconnected",
         "connected": "Connected",
         "connectedToDashboard": "Connected to dashboard",
