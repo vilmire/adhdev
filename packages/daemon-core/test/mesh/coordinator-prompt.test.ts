@@ -27,7 +27,7 @@ describe('Repo Mesh coordinator prompt', () => {
     // The mesh-wide cap defaults high (200) but resolveMaxParallelTasks clamps the
     // rendered value to MESH_MAX_PARALLEL_TASKS_MAX (64). The cap is de-emphasized
     // now that real limits live per capability slot (ORCHESTRATION_NODE_SLOTS.md).
-    expect(prompt).toContain('Maximum **64** tasks running in parallel')
+    expect(prompt).toContain('Maximum **64** concurrent WRITE tasks')
     expect(prompt).toContain('Hermes → `hermes-cli`')
     expect(prompt).toContain('Never substitute the coordinator')
     expect(prompt).toContain('Coordinator runtime is not a delegation default')
@@ -372,15 +372,78 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('exempt from the one-active-per-node invariant')
     expect(prompt).toContain('the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed')
 
-    // The parallelism rule must bound DUPLICATE load, not independent work — the
-    // old "Start with 1-2 tasks; scale only on success" anchored coordinators to
-    // serial dispatch before the release condition was ever read.
-    expect(prompt).toContain('**Bound duplicate/overlapping load, not independent work.**')
-    expect(prompt).toContain('Never launch a second session onto work already in flight for the same issue')
+    // The parallelism rule must reflect the ACTUAL scheduler semantics (per-kind
+    // caps + per-node write limit), not a blanket "start small". The old "Start
+    // with 1-2 tasks; scale only on success" anchored coordinators to serial
+    // dispatch before the release condition was ever read.
+    expect(prompt).toContain('**Match concurrency to task kind.**')
+    expect(prompt).toContain('dispatch every independent read-only task at once')
+    expect(prompt).toContain('limited to ONE active task per node, so N parallel write tasks need N nodes')
     expect(prompt).not.toContain('Start with 1–2 tasks; scale only on success')
 
-    // The cap is a ceiling, not a target to approach cautiously from below.
-    expect(prompt).toContain('this is a ceiling, not a target')
+    // The duplicate-session guard must survive the rewrite.
+    expect(prompt).toContain('Never launch a second session onto work already in flight for the same issue')
+
+    // Caps are ceilings, not targets to approach cautiously from below.
+    expect(prompt).toContain('ceilings, not targets')
+
+    // Worktree affinity must not read as "avoid making new worktrees" — it is a
+    // routing rule for a branch's OWN follow-ups. Stated in both places it appears.
+    expect(prompt).toContain('it is never a reason to avoid creating a NEW worktree for independent work')
+    expect(prompt).toContain('never let that discourage cloning a NEW worktree for independent work')
+  })
+
+  it('renders the read-only parallel cap, which is larger than the write cap', () => {
+    // resolveMaxReadonlyParallelTasks (repo-mesh-types.ts) gives read-only tasks
+    // their own cap = write cap x DEFAULT_MESH_READONLY_MULTIPLIER (floor 2), and
+    // mesh-scheduling-runtime enforces it — but the prompt used to render only the
+    // write cap, so the coordinator could not know the extra capacity existed.
+    // The write number must stay the CLAMPED one (mergeAndNormalizePolicy caps at
+    // MESH_MAX_PARALLEL_TASKS_MAX=64) so prompt and scheduler cannot disagree.
+    const mk = (policy?: unknown) => buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [{ id: 'node_1', workspace: '/repo', daemonId: 'daemon_1', userOverrides: {}, policy: {} }],
+        policy,
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    // Default policy declares maxParallelTasks: 200, clamped to 64 → 128 read-only.
+    expect(mk()).toContain('Maximum **64** concurrent WRITE tasks; **128** concurrent READ-ONLY tasks')
+    // Doubling tracks a configured cap.
+    expect(mk({ maxParallelTasks: 4 })).toContain('Maximum **4** concurrent WRITE tasks; **8** concurrent READ-ONLY tasks')
+    // Floor of 2 applies when doubling would drop below it.
+    expect(mk({ maxParallelTasks: 1 })).toContain('Maximum **1** concurrent WRITE tasks; **2** concurrent READ-ONLY tasks')
+
+    // The per-node write limit is what forces worktrees for parallel writes.
+    expect(mk()).toContain('Write tasks are limited to **one active task per node**')
+    expect(mk()).toContain('Read-only tasks are exempt and may stack on a node that is already busy')
+  })
+
+  it('exempts a genuinely new subject from idle-session reuse', () => {
+    // "Reuse idle sessions" listed exceptions (a)-(d), none of which covered a
+    // NEW topic — so a coordinator would append unrelated work to an idle session,
+    // where it can be dropped or re-run as the previous task. The discriminator is
+    // subject continuity, which is also what keeps this consistent with 3f
+    // (investigation → its own fix is the SAME subject and stays in-session).
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [{ id: 'node_1', workspace: '/repo', daemonId: 'daemon_1', userOverrides: {}, policy: {} }],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    expect(prompt).toContain('the delta is a genuinely NEW subject rather than a continuation')
+    expect(prompt).toContain('can be dropped or re-run as the previous task')
+    expect(prompt).toContain('The test is subject continuity, not timing')
   })
 
   it('prefers reusing idle sessions and concise delta instructions for same-issue continuations', () => {
