@@ -290,8 +290,11 @@ describe('Repo Mesh coordinator prompt', () => {
     // Over-handoff guard: a "do not change this" finding is a completed task.
     expect(prompt).toContain('**Never convert an investigation whose own conclusion was "do not change this"**')
 
-    // The upfront-dispatch tip must carry its tradeoff, not just the shortcut.
-    expect(prompt).toContain('drops the guardrail that stops a worker fixing something prematurely')
+    // The upfront-dispatch option must carry its tradeoff, not just the
+    // shortcut — otherwise the coordinator dispatches every investigation as an
+    // ordinary task and loses the guard against fixing before diagnosing.
+    expect(prompt).toContain('drops the guardrail against premature fixes')
+    expect(prompt).toContain('keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all')
 
     // Must not contradict the parallelism rule: independent work runs side by
     // side, sequential stages of ONE line of work stay in one session.
@@ -388,9 +391,12 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('ceilings, not targets')
 
     // Worktree affinity must not read as "avoid making new worktrees" — it is a
-    // routing rule for a branch's OWN follow-ups. Stated in both places it appears.
+    // routing rule for a branch's OWN follow-ups. Stated once, at Workflow 3b1:
+    // that is the dispatch-time step where the coordinator actually decides
+    // whether to clone, so a misread surfaces there. The Rules entry is the
+    // scannable invariant and stays terse (Rules restating a Workflow step is
+    // the file's normal pattern — cf. "Converge branches" vs step 7).
     expect(prompt).toContain('it is never a reason to avoid creating a NEW worktree for independent work')
-    expect(prompt).toContain('never let that discourage cloning a NEW worktree for independent work')
   })
 
   it('renders the read-only parallel cap, which is larger than the write cap', () => {
