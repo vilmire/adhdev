@@ -266,12 +266,21 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // Fail-closed: errors keep the previous (possibly empty) store and retry
     // on next boot.
     void providerLoader.maybeFirstSyncVerifiedChannel()
-        .then((report) => {
+        .then(async (report) => {
             if (!report) return;
             if (report.status === 'error') {
                 LOG.warn('Init', `Verified channel first-sync failed (last-known-good preserved): ${report.errors.map((e) => e.code).join(', ') || 'unknown'}`);
             } else if (report.activated.length > 0) {
                 LOG.info('Init', `Verified channel first-sync activated ${report.activated.length} providers (${providerLoader.channel})`);
+                // The sync's own loadAll() (provider-loader.ts) just cleared
+                // providerAvailability, so any provider enabled before this
+                // sync landed with no lastDetection yet reads back as
+                // 'enabled_unchecked' until the next manual/dev re-detect.
+                // Re-run detection now so first-boot enables resolve to
+                // detected/not_detected instead of sitting unchecked forever.
+                providerLoader.registerToDetector();
+                await refreshProviderAvailability();
+                config.onStatusChange?.();
             }
         })
         .catch((e: any) => LOG.warn('Init', `Verified channel first-sync error: ${e?.message || e}`));
